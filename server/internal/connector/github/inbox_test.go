@@ -147,14 +147,16 @@ func TestNotificationsBecomeThings(t *testing.T) {
 	pr := got["example-org/example-repo#12"]
 	if pr.Kind != "review_requested" || pr.Label != "请你 review" || pr.Tier != "action" || pr.Done != "" || !pr.CanReply ||
 		pr.Sender != "bob" || pr.Preview != "请看一下示例" || pr.URL != "https://github.com/example-org/example-repo/pull/12" ||
-		pr.ReplyTo != "评论到 example-org/example-repo#12（仓库可见的人都能看到）" || pr.Last != t1 || pr.Why != "规则：请你 review" {
+		pr.ReplyTo != "评论到 example-org/example-repo#12（仓库可见的人都能看到）" || pr.Last != fixtureAt(8*time.Hour+59*time.Minute) ||
+		pr.Why != "规则：请你 review" {
 		t.Errorf("review request: %+v", pr)
 	}
 	if !strings.Contains(pr.Context, "GitHub PR example-org/example-repo#12：Add the example") || !strings.Contains(pr.Context, "等这些人 review：me") ||
 		!strings.Contains(pr.Context, "bob：\n请看一下示例") {
 		t.Errorf("context:\n%s", pr.Context)
 	}
-	if is := got["example-org/example-repo#7"]; is.Kind != "assign" || is.Sender != "bob" || is.Preview != "出错了" || is.Tier != "action" {
+	if is := got["example-org/example-repo#7"]; is.Kind != "assign" || is.Sender != "bob" || is.Preview != "出错了" || is.Tier != "action" ||
+		is.Last != t1 { // no comment or review yet: the notification names the move
 		t.Errorf("assignment: %+v", is)
 	}
 
@@ -254,5 +256,42 @@ func TestReplyComments(t *testing.T) {
 		if err := c.Reply(context.Background(), connector.InboxReply{Thread: bad, Text: "x"}); err == nil {
 			t.Errorf("%s was replied to", bad)
 		}
+	}
+}
+
+// A push or an edit bumps a PR's notification but adds no comment or review: the thing keeps its Last, so the hub
+// takes no new message from it (#7471); a new review moves Last.
+func TestPushOrEditIsNoNewMessage(t *testing.T) {
+	f := notificationsFixture()
+	reviewAt := fixtureAt(9*time.Hour + 10*time.Minute)
+	f.comments["/repos/example-org/example-repo/pulls/12/reviews"] = `[{"user":{"login":"carol"},"state":"COMMENTED",` +
+		`"body":"Automated review found 2 issues.","submitted_at":"` + reviewAt + `"}]`
+	f.notifications = "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, t1) + "]"
+	c := f.server(t)
+	c.poll(context.Background())
+	pr := things(t, c)["example-org/example-repo#12"]
+	if pr.Last != reviewAt || pr.Preview != "评审了 Automated review found 2 issues." {
+		t.Fatalf("after the review: %+v", pr)
+	}
+
+	// The author pushes a commit and edits the body: a later notification, no new comment or review.
+	f.prs[api12] = strings.Replace(openPR(""), "示例描述", "示例描述（改过）", 1)
+	f.notifications = "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, t2) + "]"
+	c.inbox.fullAt = time.Time{}
+	c.poll(context.Background())
+	if again := things(t, c)["example-org/example-repo#12"]; again.Last != pr.Last || !strings.Contains(again.Context, "示例描述（改过）") {
+		t.Fatalf("a push or edit counted as a new message: Last %q → %q\n%s", pr.Last, again.Last, again.Context)
+	}
+
+	// A new review is a new message.
+	newer := fixtureAt(9*time.Hour + 40*time.Minute)
+	f.comments["/repos/example-org/example-repo/pulls/12/reviews"] = `[{"user":{"login":"carol"},"state":"COMMENTED",` +
+		`"body":"Automated review found 2 issues.","submitted_at":"` + reviewAt + `"},{"user":{"login":"carol"},"state":"APPROVED",` +
+		`"body":"Looks good now.","submitted_at":"` + newer + `"}]`
+	f.notifications = "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, fixtureAt(9*time.Hour+41*time.Minute)) + "]"
+	c.inbox.fullAt = time.Time{}
+	c.poll(context.Background())
+	if last := things(t, c)["example-org/example-repo#12"]; last.Last != newer {
+		t.Fatalf("a new review kept Last %q", last.Last)
 	}
 }
