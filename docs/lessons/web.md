@@ -3,7 +3,7 @@
 ## A folded sidebar group kept every row mounted (web usability audit, 2026-11-14)
 
 `Collapse` keeps its children unless it is `lazy`, and the sidebar's folds were not: with 400 Agents the rows under
-folded groups stayed in the DOM, inert, about 8,800 elements that every page switch laid out again (230–290 ms long
+folded groups stayed in the DOM, inert, about 8,800 elements that every page switch laid out again (230–310 ms long
 tasks on a 4x-throttled phone, none with 74 Agents). Sidebar folds are lazy by default now, so a test that looks for a
 folded group's rows (to check they are inert) opens the group first. Two smaller costs hid behind the big DOM: each
 group heading read its height in a layout effect (`getBoundingClientRect`), and one set a custom property on the

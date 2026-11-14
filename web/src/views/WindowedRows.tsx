@@ -1,9 +1,9 @@
 // The complete Agents list's long groups, drawn a part at a time (the sidebar and the phone's Agents page). With 400
 // Agents in one group the list drew every row at once: about 8,000 elements, 170–230 ms of a mid-range phone's main
 // thread each time the page opened, laid out again on every page switch. A short list (up to `windowHead + windowPart`
-// rows) is drawn as it always was; a long one by WindowedParts (its own chunk, off the first screen: loaded once the
-// browser is idle after start, or the first time a list is that long), and while that chunk is on its way, by its
-// first `windowHead` rows and an empty box for the rest, so nothing below jumps when it comes in.
+// rows) is drawn as it always was; a long one by WindowedParts (its own chunk, off the first screen: loaded once a list
+// holds that many Agents, preloadWindowed, or the first time a list is that long), and while that chunk is on its way,
+// by its first `windowHead` rows and an empty box for the rest, so nothing below jumps when it comes in.
 import { Suspense, type ComponentType, type ReactNode } from "react";
 import { lazyPage } from "../lib/lazy-page";
 import { SESSION_LIST_METRICS } from "../ui/list-metrics";
@@ -22,8 +22,16 @@ export type WindowedProps<T> = {
 /** Whether a list of `n` rows is drawn a part at a time. */
 export const windowed = (n: number) => n > HEAD + PART && typeof IntersectionObserver !== "undefined";
 
-// at idle too: opening an Agent deep in a folded long group draws its part in the same frame, so the list can scroll to it
-const Parts = lazyPage(() => import("./WindowedParts").then((m) => m.WindowedParts as ComponentType<WindowedProps<unknown>>), { idle: true });
+const load = () => import("./WindowedParts").then((m) => m.WindowedParts as ComponentType<WindowedProps<unknown>>);
+const Parts = lazyPage(load);
+let asked = false;
+/** Loads the parts' chunk ahead of the first long group, once a list holds that many Agents (`n`): an Agent opened
+ *  deep in a folded group is then drawn as the group opens, and the list can scroll to it. */
+export function preloadWindowed(n: number) {
+  if (asked || !windowed(n)) return;
+  asked = true;
+  void load().catch(() => (asked = false));
+}
 
 export function WindowedRows<T>(p: WindowedProps<T>) {
   if (!windowed(p.items.length)) return <>{p.items.map((item) => p.render(item))}</>;

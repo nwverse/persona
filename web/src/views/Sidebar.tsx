@@ -68,7 +68,7 @@ import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu,
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
-import { WindowedRows } from "./WindowedRows";
+import { preloadWindowed, WindowedRows } from "./WindowedRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
@@ -747,6 +747,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [ownIds, sidebarMachines]);
   const { sessions: every, loaded } = useFullAgentSessions();
   const all = useScoped(every);
+  // with this many Agents a group may be long: its parts' code comes now, before a group opens on one deep in it
+  useEffect(() => preloadWindowed(all.length), [all.length]);
   const mutes = useStore((s) => s.mutes);
   const pins = useStore((s) => s.pins);
   const interactions = useStore((s) => s.interactions);

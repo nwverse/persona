@@ -294,7 +294,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 192 B on top of #7339's.
 // A folded-search retry now clears its partial warning only after every requested fold has loaded; real failures and
 // budget caps still show it (#7389). Measured: en 476,854 B, ja 480,545 B, zh-Hans 477,834 B. The budget moves by 51 B.
-export const FIRST_SCREEN_BUDGET = 480_545;
+// The complete Agents list with hundreds of Agents (the web usability audit of 2026-11-14): folded sidebar groups mount
+// no rows, group headings take their heights from a ResizeObserver, and a long group is drawn a part at a time through
+// views/WindowedRows.tsx (the call sites, the head-rows fallback and the preload once a list is long; the parts
+// themselves, views/WindowedParts.tsx, are a chunk of their own, loaded only then). 328 B more in each language against
+// main at d42dde380 (ja 480,516 B to 480,844 B; en 476,825 B to 477,153 B, zh-Hans 477,805 B to 478,133 B); the idle
+// tier does not change. The budget moves by the same 328 B, keeping main's 29 B room.
+export const FIRST_SCREEN_BUDGET = 480_873;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
