@@ -204,6 +204,11 @@ func (h *Hub) fsWatchSync(m *Machine) {
 	m.fswMu.Lock()
 	defer m.fswMu.Unlock()
 	if err != nil {
+		// A reconnect used to leave fswSent set on this path, so the next empty set tried again. Consuming fswForce
+		// must not lose that recovery when the node may have kept the previous hub's watches.
+		if force {
+			m.fswSent = true
+		}
 		if !m.fswWarned {
 			m.fswWarned = true
 			h.logf("[%s] fs.watch: %v", m.cfg.ID, err)

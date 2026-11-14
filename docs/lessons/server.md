@@ -126,7 +126,8 @@ and leaves. Record the browser's set in its read loop, then use one worker per m
 request. The worker reads the union when its turn comes, so a burst makes at most the call in flight and one latest
 call. Disconnect cleanup and reconnect resends use that queue too. A reconnect sets a forced-resend flag rather than
 only `fswSent`: an earlier empty call can clear `fswSent` before the trailing reconnect runs, and the new node still
-needs that empty set (`server/internal/hub/fswatch_report_readloop_test.go`).
+needs that empty set. A failed forced resend leaves `fswSent` set, so the next empty set retries it as before
+(`server/internal/hub/fswatch_report_readloop_test.go`).
 
 A manager bus read loop has the same rule for its store. `extensions.report` keeps its in-memory report and broadcasts
 in bus order, but one worker persists only the latest pending report, with a bounded context for each write. A failed

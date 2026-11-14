@@ -19,11 +19,12 @@ import (
 
 // heldFSNode answers fs.watch like a node, but keeps the first answer back until the test releases it.
 type heldFSNode struct {
-	mu      sync.Mutex
-	calls   []fsWatchParam
-	entered chan fsWatchParam
-	held    chan struct{}
-	once    sync.Once
+	mu        sync.Mutex
+	calls     []fsWatchParam
+	entered   chan fsWatchParam
+	held      chan struct{}
+	once      sync.Once
+	failFirst bool
 }
 
 func newHeldFSNode() *heldFSNode {
@@ -49,6 +50,9 @@ func (n *heldFSNode) handle(ctx context.Context, method string, raw json.RawMess
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+	if call == 0 && n.failFirst {
+		return nil, errors.New("test fs watch failure")
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -189,6 +193,27 @@ func TestFSWatchReconnectsCoalesceWithoutLosingTheForcedEmptySet(t *testing.T) {
 	waitHubWorkers(t, f.hub)
 	if calls := f.node.snapshot(); len(calls) != 2 {
 		t.Fatalf("two reconnects produced %d calls, want the held one and the trailing forced one", len(calls))
+	}
+}
+
+// Before the queue, a failed reconnect left fswSent set, so the next empty set tried the release again. Keep that
+// recovery: consuming a one-shot force flag must not turn a failed resend into a watch the node keeps forever.
+func TestFSWatchReconnectFailureIsRetriedByTheNextEmptySet(t *testing.T) {
+	f := newFSReadLoopFixture(t)
+	defer f.node.release()
+	f.node.failFirst = true
+	f.hub.fsWatchReconnected(f.machine)
+	f.node.next(t)
+	f.node.release()
+	waitHubWorkers(t, f.hub)
+
+	f.hub.queueFSWatchSync(f.machine)
+	if p := f.node.next(t); len(p.Dirs) != 0 || len(p.Git) != 0 {
+		t.Fatalf("the retry sent %+v, want an empty set", p)
+	}
+	waitHubWorkers(t, f.hub)
+	if calls := f.node.snapshot(); len(calls) != 2 {
+		t.Fatalf("a failed reconnect and an empty set made %d calls, want the failure and one retry", len(calls))
 	}
 }
 

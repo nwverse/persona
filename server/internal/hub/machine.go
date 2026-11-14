@@ -76,7 +76,8 @@ type Machine struct {
 	nodeWatch map[string]nodeWatchState
 	// The web panels' open folders on this machine (fswatch.go): fswMu guards the fields below. One worker syncs the
 	// node at a time, with fswPending coalescing changes made while it is out; fswForce resends even an empty set on a
-	// new connection. fswSent says the node was given a non-empty set, fswWarned that a failure was logged.
+	// new connection. fswSent says an empty set must still be sent (the node has a non-empty one, or a forced one
+	// failed), fswWarned that a failure was logged.
 	fswMu      sync.Mutex
 	fswSent    bool
 	fswWarned  bool
