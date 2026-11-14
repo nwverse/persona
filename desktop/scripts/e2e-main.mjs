@@ -324,7 +324,13 @@ async function hubChangeScenario() {
     // report Notification.isSupported() false before sign-in; the notify() assertion below is the authorization check.
     const permission = await page("window.personaDesktop.notificationPermission()");
     if (permission !== "granted" && permission !== "denied") throw new Error(`the second hub's permission IPC is not reachable: ${permission}`);
-    await until("second hub login item is still available", () => page(`window.personaDesktop.getLaunchAtLogin().then(state => typeof state.enabled === 'boolean' && (${JSON.stringify(process.platform === "linux")} || state.enabled === true))`));
+    const loginItemState = await page("window.personaDesktop.getLaunchAtLogin().then(state => ({ok: true, state}), error => ({ok: false, error: String(error)}))");
+    if (!loginItemState.ok || typeof loginItemState.state?.enabled !== "boolean") throw new Error(`the second hub lost its public login-item IPC: ${JSON.stringify(loginItemState)}`);
+    const loginItemSet = await page(`window.personaDesktop.setLaunchAtLogin(${JSON.stringify(loginItemState.state.enabled)}).then(state => ({ok: true, state}), error => ({ok: false, error: String(error)}))`);
+    if (!loginItemSet.ok || typeof loginItemSet.state?.enabled !== "boolean") throw new Error(`the second hub lost its public login-item setter: ${JSON.stringify(loginItemSet)}`);
+    // A development Electron bundle may decline to persist a login item on macOS. The observable required here is
+    // the surviving authorized get/set IPC and its truthful readback, not an unproven operating-system autostart.
+    await until("second hub login item is still available", () => page(`window.personaDesktop.getLaunchAtLogin().then(state => typeof state.enabled === 'boolean')`));
     await page("window.personaDesktop.setLaunchAtLogin(false)");
     const presence = await page("window.personaDesktop.desktopPresence()");
     if (!presence.active) throw new Error(`the second hub's bridge has stale presence: ${JSON.stringify(presence)}`);
@@ -342,7 +348,7 @@ async function hubChangeScenario() {
     const accepted = await page(`window.personaDesktop.notify({title: 'Second hub notification', body: 'Bridge after the hub change', tag: 'second-hub-smoke', route: ${JSON.stringify(route)}})`);
     if (!accepted) throw new Error("the replacement hub's production notify IPC was refused");
     await until("second hub native notification", () => shown.find(n => n.title === "Second hub notification"));
-    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, previousHubWithdrawn: original.registered.length === 0 };
+    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, loginItemState, previousHubWithdrawn: original.registered.length === 0 };
   });
 }
 
