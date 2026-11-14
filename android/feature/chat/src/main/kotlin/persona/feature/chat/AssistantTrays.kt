@@ -315,7 +315,11 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                 when (entry) {
                                     is RunningEntry.Task -> {
                                         val row = progressByTodo[entry.todo.id] ?: TrayProgress("todo:${entry.todo.id}", entry.todo.title, todo = entry.todo)
-                                        TrayProgressRow(row, activity = entry.activity, waiting = entry.waiting,
+                                        // Entry membership already excludes requests owned by another task (#7531).
+                                        // The full task projection can still see that shared Agent waiting on the user.
+                                        TrayProgressRow(row.copy(blocked = false,
+                                            stopped = entry.status == TriageStatus.Unread || entry.status == TriageStatus.FollowUp),
+                                            activity = entry.activity, waiting = entry.waiting,
                                             working = entry.status == TriageStatus.Working, onClick = { openTask(host, entry.todo) })
                                     }
                                     is RunningEntry.Agent -> {
