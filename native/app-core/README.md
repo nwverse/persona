@@ -155,7 +155,8 @@ The patch also carries `verified` (the chat's items are known complete, the rule
 client), and `acked` (a host's acknowledgement watermark, so an applied no-op is visible). `Action::HubChanged`
 settles as if a gap were found, iOS's `settle(.fill)`. Folds are keyed by id and independent: different folds open
 and complete in either order, with `fold_id` on the range request, event and payload; a caller that sends no id keeps
-the older single-opening behaviour.
+the older single-opening behaviour. `RangeFailed { fold_id: None }` cancels **every** opening, so a transport failure
+for one of several keyed folds must report its id or the other folds are cancelled too.
 
 Nothing here was executed on iOS. The rules were read from the Swift sources and from swift-foundation's
 `JSONDecoder`; the wire cases' expectations are derived from the iOS sources as well (`derived: true`) and are checked
