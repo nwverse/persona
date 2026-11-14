@@ -160,7 +160,7 @@ func TestFirstMessageHeldByADialogGoesInOnceItIsAnswered(t *testing.T) {
 	if p, ok := n.lostFirst.get(id); !ok || p.why != lostDialogHeld {
 		t.Fatalf("lost mark %+v %v", p, ok)
 	}
-	time.Sleep(200 * time.Millisecond) // the dialog stays a while: nothing pressed, nothing typed
+	heldPolls(t, f, 5) // the dialog stays a while: nothing pressed, nothing typed
 	if got := f.trace("pane.send_keys", "agent.prompt"); len(got) != 0 {
 		t.Fatalf("pressed or typed while the dialog was open: %v", got)
 	}
@@ -191,7 +191,7 @@ func TestHeldFirstMessageGivesWayToAnotherMessage(t *testing.T) {
 		"prompt": "fix the build"}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	heldPolls(t, f, 2)
 	writeUserLine(t, home, cwd, startedID(f), "something else")
 	f.setScreens("w1:p2", screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi"))
 	startHerdr(f, "w1:p2", proto.StatusIdle)
@@ -244,5 +244,17 @@ func TestHeldFirstMessageRechecksTheBoxUnderTheTypingLock(t *testing.T) {
 	n.dialogWait.Wait()
 	if got := f.trace("agent.prompt"); len(got) != 0 {
 		t.Errorf("held first message typed after another one: %v", got)
+	}
+}
+
+// heldPolls waits until herdr has been asked calls more things since now: the held first message looks at the pane
+// every firstAfterDialogPoll, so this lets a few of its polls go by without a fixed sleep.
+func heldPolls(t *testing.T, f *fakeHerdr, calls int) {
+	t.Helper()
+	from := len(f.calls())
+	for deadline := time.Now().Add(5 * time.Second); len(f.calls()) < from+calls; runtime.Gosched() {
+		if time.Now().After(deadline) {
+			t.Fatal("the held first message stopped looking at the pane")
+		}
 	}
 }
