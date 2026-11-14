@@ -1,4 +1,5 @@
 import Foundation
+import PersonaCore
 import PersonaCoreTestSupport
 @testable import Persona
 
