@@ -39,23 +39,33 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 		close(oldDone)
 	}()
 
-	deadline := time.Now().Add(3 * time.Second)
-	var stack string
-	if !holdsBy(deadline, func() bool {
+	// One absolute deadline shared by all three polls: the second and third phases only get the time left in the
+	// original three-second budget, as in the baseline loops. The ticker stands in for the baseline's millisecond
+	// sleep because this file has no fixed-sleep allowance in scripts/ci/sleep_baseline.json.
+	end := time.Now().Add(3 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		buf := make([]byte, 1<<20)
 		n := runtime.Stack(buf, true)
-		stack = string(buf[:n])
+		stack := string(buf[:n])
+		blocked := false
 		for _, gr := range strings.Split(stack, "\n\n") {
 			if strings.Contains(gr, "sync.Mutex.Lock") &&
 				strings.Contains(gr, "hub.(*Machine).snapshot") &&
 				strings.Contains(gr, "hub.(*Hub).broadcastMachines") {
-				return true
+				blocked = true
+				break
 			}
 		}
-		return false
-	}) {
-		unlockM2()
-		t.Fatalf("old broadcast did not reach m2:\n%s", stack)
+		if blocked {
+			break
+		}
+		if !time.Now().Before(end) {
+			unlockM2()
+			t.Fatalf("old broadcast did not reach m2:\n%s", stack)
+		}
+		<-tick.C
 	}
 
 	goneDone := make(chan struct{})
@@ -63,9 +73,12 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 		h.machineGone("m2")
 		close(goneDone)
 	}()
-	if !holdsBy(deadline, func() bool { return len(h.machinesNow()) == 1 }) {
-		unlockM2()
-		t.Fatal("machineGone did not remove m2")
+	for len(h.machinesNow()) != 1 {
+		if !time.Now().Before(end) {
+			unlockM2()
+			t.Fatal("machineGone did not remove m2")
+		}
+		<-tick.C
 	}
 
 	reportDone := make(chan struct{})
@@ -75,13 +88,18 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 		}}})
 		close(reportDone)
 	}()
-	if !holdsBy(deadline, func() bool {
+	for {
 		m1.mu.Lock()
-		defer m1.mu.Unlock()
-		return m1.online
-	}) {
-		unlockM2()
-		t.Fatal("manager report did not bring m1 online")
+		online := m1.online
+		m1.mu.Unlock()
+		if online {
+			break
+		}
+		if !time.Now().Before(end) {
+			unlockM2()
+			t.Fatal("manager report did not bring m1 online")
+		}
+		<-tick.C
 	}
 	unlockM2()
 
@@ -121,20 +139,4 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 	if len(last) != 1 || last[0].ID != "m1" || !last[0].Online {
 		t.Fatalf("final machine list is stale: %+v", last)
 	}
-}
-
-// holdsBy reports whether ok holds by deadline, checking it every millisecond.
-func holdsBy(deadline time.Time, ok func() bool) bool {
-	expire := time.NewTimer(time.Until(deadline))
-	defer expire.Stop()
-	tick := time.NewTicker(time.Millisecond)
-	defer tick.Stop()
-	for !ok() {
-		select {
-		case <-expire.C:
-			return ok()
-		case <-tick.C:
-		}
-	}
-	return true
 }
