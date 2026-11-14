@@ -133,7 +133,7 @@ each count is its rows:
   lists asks under one of them, the task the hub ties its session to (`Session.todo`), else the first that lists it. Its
   cards are that task's row alone and are counted once; the other tasks do not wait on the user for them and are In
   progress, unless a decision of their own keeps them in Needs you (without the Agent's cards). Before, each task listing
-  the Agent showed and counted the same approval. Android and the Apple clients split the old way until they adopt it.
+  the Agent showed and counted the same approval. Android and the Apple clients split the old way until they adopt it (the whole-client rule is #5974's).
 
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
 `assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`
