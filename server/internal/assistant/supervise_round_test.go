@@ -19,7 +19,7 @@ import (
 // The background supervisor's rounds start clean (#7315, supervise_round.go). i18n-ignore: the supervision message's
 // own words (prompts/assistant/supervise.md).
 const (
-	roundHeader   = "这一轮从干净的上下文开始"
+	roundHeader   = "这一轮通常从干净的上下文开始"
 	roundStopped  = "- 停下没做完 / 在等回答的："
 	roundReviewed = "- 等你验收的："
 )

@@ -138,9 +138,10 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
-	// BackgroundSupervisorKeepsContext: the background supervisor is one long conversation that sees every earlier round,
-	// as before #7315. nil is off (the default): each round starts from its first turn with only that round's rules and
-	// tools (supervise_round.go).
+	// BackgroundSupervisorKeepsContext: the background supervisor is one long conversation again from its next round,
+	// keeping each later round in context, as before #7315 (rounds already run from the first turn stay on their own
+	// branches). nil is off (the default): each round starts from its first turn with only that round's rules and tools
+	// (supervise_round.go).
 	BackgroundSupervisorKeepsContext *bool `json:"background_supervisor_keeps_context,omitempty"`
 	// BackgroundSupervisor is the background supervisor's conversation, on BackgroundSupervisorMachineID, started at
 	// BackgroundSupervisorAt: made on first use, "" until then. BackgroundSupervisorAnnounced: the main conversation

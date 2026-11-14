@@ -25,7 +25,7 @@ const (
 	ruleDownstream = "- 做完还有下游的事"
 	ruleOnTask     = "- 先确认 Agent 最后这一轮在推进本任务"
 	ruleFinish     = "- 只把要用户决定的事和已验收的结果告诉用户。"
-	freshHeader    = "这一轮从干净的上下文开始"
+	freshHeader    = "这一轮通常从干净的上下文开始"
 	lastReview     = "上次结论（"
 )
 

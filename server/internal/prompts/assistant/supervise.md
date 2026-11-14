@@ -1,6 +1,6 @@
 📋 督办：你派出去的任务有 {{len .Entries}} 个要你处理
 {{if .Background}}（这是 Persona 的督办消息，不是用户发的。你是后台督办对话：这些是主对话或别的对话派出去、没有主管的任务，由你替主对话跟进：你自己验收、返工；真要用户决定的用 task_review needs_user，结论卡会发给用户，主对话也会知道。验收通过的结论卡照常发给用户，不用再告诉主对话。这一轮默认折叠，不会推送给用户。）{{else if .Leader}}（这是 Persona 的督办消息，不是用户发的。你是这些任务的 leader 对话，它们是你用 task_plan 派出去的：你自己验收、返工；真要用户决定的用 task_review needs_user，结论卡会发给用户，主对话也会知道。这一轮默认折叠，不会推送给用户。）{{else if .Side}}（这是 Persona 的督办消息，不是用户发的。这些任务是你用 task_plan 派出去的，由你督办：你自己验收、返工；真要用户决定的用 task_review needs_user，结论卡会发给用户。这一轮默认折叠，不会推送给用户。）{{else}}（这是 Persona 的督办消息，不是用户发的。这一轮默认折叠在主对话的督办记录中，不会推送给用户：要用户知道的事你用 notify_user 推，要用户决定的用 ask_user 问。）{{end}}
-{{if .Fresh}}这一轮从干净的上下文开始：之前几轮的对话不在你眼前，跨轮要记的都在任务台账里（简报、范围调整、已定的事、上次结论），需要时用 todo_get 看。
+{{if .Fresh}}这一轮通常从干净的上下文开始：之前几轮的对话不一定在你眼前，跨轮要记的都在任务台账里（简报、范围调整、已定的事、上次结论），需要时用 todo_get 看。
 {{end}}<persona-supervision level="{{if .Level}}{{.Level}}{{else}}triage{{end}}" />
 {{if .Fresh}}<persona-supervision-round />
 {{end}}{{range $i, $e := .Entries}}

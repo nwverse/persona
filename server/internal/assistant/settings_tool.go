@@ -185,8 +185,10 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "off (the default): each round of the background supervisor starts from its first turn, in the same conversation: " +
 				"it reads its start brief and that round's supervision message, with only the rules for that round's kinds of " +
 				"signal and only the tools supervision uses; what earlier rounds settled is on the tasks (brief, scope changes, " +
-				"decisions, the last review). on: one long conversation that sees every earlier round, with every rule and all " +
-				"of the assistant's tools, as before. Applies from the next round (one already running finishes as it is)",
+				"decisions, the last review). on: from the next round, one long conversation again that keeps each later round " +
+				"in context, with every rule and all of the assistant's tools, as before (rounds already run from the first " +
+				"turn stay on their own branches, out of that context). Applies from the next round (one already running " +
+				"finishes as it is)",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) {
 				return fmt.Sprint(backgroundKeepsContext(s.settings(ctx))), nil
