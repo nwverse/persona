@@ -75,6 +75,9 @@ const (
 	// stream of its own instead of inside the bus message (#6574). The hub sends a large body that way only to a
 	// manager that names it; any other gets MethodHTTP as before.
 	CapabilityHTTPBodyStream = "http_body_stream"
+	// CapabilityMCPWait: the manager accepts enum-only mcp.wait updates through devices.notify for an explicitly
+	// opted-in MCP call. The hub sends them only when this capability and the call's opaque id are both present.
+	CapabilityMCPWait = "mcp_wait_v1"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
@@ -235,6 +238,11 @@ var Routes = []string{
 	"POST /api/v1/assistant/places",
 	"PUT /api/v1/assistant/places/{id}",
 	"DELETE /api/v1/assistant/places/{id}",
+	"GET /api/v1/assistant/saved-prompts",
+	"POST /api/v1/assistant/saved-prompts",
+	"PUT /api/v1/assistant/saved-prompts/order",
+	"PUT /api/v1/assistant/saved-prompts/{id}",
+	"DELETE /api/v1/assistant/saved-prompts/{id}",
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",
