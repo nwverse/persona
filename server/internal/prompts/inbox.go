@@ -67,7 +67,10 @@ func RenderInboxSettledInput(in InboxSettledInput) string { return render("inbox
 
 // InboxGroupInput is one batch as the model reads it, with the tool calls made so far (inbox/group_input).
 type InboxGroupInput struct {
-	Thread  string
+	Thread string
+	// Kind is who the other side of a direct chat is, in the connector's words (its kind_descriptions: a person, a bot
+	// or an app); "" for a group, whose messages carry their own mention markers.
+	Kind    string
 	New     []string // the new messages' ids
 	Context string   // their text, as the connector wrote it
 	Events  string   // the events tool's answer without a query (JSON)

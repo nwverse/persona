@@ -414,5 +414,32 @@ func TestGoldenInboxSettled(t *testing.T) {
 	golden(t, "inbox_settled.system", prompts.RenderInboxSettled(prompts.InboxSettled{Owner: "示例用户"}))
 	golden(t, "inbox_settled.user", prompts.RenderInboxSettledInput(prompts.InboxSettledInput{Title: "示例：问部署时间", Summary: "丙问什么时候部署",
 		Context: "飞书群「示例」里的一件事：\n[11-10 09:05] 丙：什么时候部署？ (id=m1051)",
-		Later: []prompts.InboxSettledLine{{At: "11-10 09:20", Sender: "丁", Text: "已经部署好了"}, {Sender: "我", Text: "好的", Mine: true}}}))
+		Later:   []prompts.InboxSettledLine{{At: "11-10 09:20", Sender: "丁", Text: "已经部署好了"}, {Sender: "我", Text: "好的", Mine: true}}}))
+}
+
+// Grouping is told who the other side of a direct chat is (the connector's words for the kind): a bot's "在问你" is not
+// a person asking. A group batch gets no such line; its messages carry their mention markers.
+func TestInboxGroupInputNamesTheDirectChat(t *testing.T) {
+	for _, kind := range []string{KindBot, KindGroup} {
+		t.Run(kind, func(t *testing.T) {
+			g := &groupLark{batch: groupBatch(), placed: map[string]bool{}}
+			model, client := newGroupModel(t, groupAnswerOK)
+			h, _ := groupHub(t, g, client)
+			setGroupConversationKind(g, h, kind)
+			h.inbox.srcMu.Lock()
+			h.inbox.kinds["lark/"+KindBot] = "示例：机器人或应用发来的私聊"
+			h.inbox.kinds["lark/"+KindGroup] = "示例：群消息"
+			h.inbox.srcMu.Unlock()
+			h.collectInbox(context.Background(), roundPoll)
+			h.waitGrouping()
+			calls := model.asked()
+			if len(calls) == 0 {
+				t.Fatal("no grouping call")
+			}
+			named := strings.Contains(calls[0].User, "会话：chat:F1（示例：机器人或应用发来的私聊）")
+			if named != (kind == KindBot) || strings.Contains(calls[0].User, "示例：群消息") {
+				t.Fatalf("input:\n%s", calls[0].User)
+			}
+		})
+	}
 }
