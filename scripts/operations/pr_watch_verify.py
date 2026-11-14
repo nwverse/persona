@@ -43,7 +43,8 @@ def run_check(name, argv, worktree, timeout, environ=None):
     result = run(argv, cwd=worktree, timeout=timeout, environ=environ)
     return {"name": name, "command": argv, "ok": result.returncode == 0,
             "summary": "" if result.returncode == 0 else result_summary(result),
-            "stdout": result.stdout, "stderr": result.stderr}
+            "stdout": result.stdout if result.returncode else "",
+            "stderr": result.stderr if result.returncode else ""}
 
 
 def load_paths(worktree):
