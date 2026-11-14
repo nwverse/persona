@@ -298,6 +298,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		b.waitForOtherSide(it, follow, ViaAssistant, now, loc, true)
 		if keepAgent {
 			// The follow is this turn's outcome, but the current Agent still owns the matter until it stops.
+			it.Agent.Back = HandlingWaiting
 			b.setHandling(it, HandlingAgent, "", now)
 		}
 	}
