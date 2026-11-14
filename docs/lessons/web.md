@@ -1,5 +1,27 @@
 # Lessons: web UI and interactions
 
+## A date field's change fires per typed segment; a list hidden under a narrow detail drops the focus (web audit, 2026-11-14)
+
+- `<input type="date">`, `time` and `datetime-local` fire `input` (React's `onChange`) whenever the typed segments make
+  a valid value: the "1" of a day "15" is already the 1st. A field that saves on `onChange` and disables itself while
+  saving stores the half-typed day and takes the focus away before the next digit. Save typed changes on blur or Enter
+  and a change with no key before it (the browser's picker) at once, and never disable a field mid-edit
+  (`PlanField` in `web/src/views/Todos.tsx`). A half-typed field reads `""` with `validity.badInput`: go back to the
+  saved value, do not clear it. Chrome's first Tab out of the last segment stops on the picker button. Playwright's
+  `fill` sends no keys, so a test needs real `keyboard.type` (`web/e2e/todos-keyboard-layout.mjs`).
+- A list hidden with `display: none` under a phone-width detail takes the focused row with it: the focus falls to
+  `<body>`. Move it to the detail's Back when a row opens it, and back to that row on the way back (Back, Esc, the
+  browser's Back). Chrome keeps a hidden scroller's offset but reads `scrollTop` as 0 while hidden and fires a scroll
+  event, so a scroll memory that saves on every event can store 0.
+- A count shown under one name ("Done") must come from the rule that fills the section of that name, in every
+  grouping: the header counting closed to-dos by `done_at` disagreed with the Done section (seen or 24 hours old) and
+  with a failed start the sections show open. Count a merged row's to-dos under the row's section, as the section titles
+  do, not each under its own.
+- A grouping drawn from a hub list that holds only some to-dos (the pinned directions' tree lists only open ones,
+  `server/internal/assistant/direction_tree.go`) must still place the ones it leaves out: a to-do moved out of the
+  page's Done fold vanished from 常驻 and was counted as "open, under no direction". Check every grouping for each
+  to-do state a rule change moves.
+
 ## A read that only handles the expected failure loads forever (2026-11-14, workflow board)
 
 The board's switch started as "not answered yet" (`enabled: null`) and its read handled only 404; a 500 left it null,
