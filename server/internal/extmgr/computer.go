@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lcuconfirm"
+	"github.com/nwverse/persona/server/internal/mcpwait"
 	"github.com/nwverse/persona/server/internal/protectedapps"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -362,7 +363,7 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
-	session := "persona-" + convID(sessionID)
+	session := cuaConversationLabel(sessionID)
 	lcu := h.callBackend(m) == "lcu"
 	declined := func(what string) proto.ToolResult {
 		h.logf("[%s] %s declined on the phone (%s)", m.cfg.ID, name, what)
@@ -412,40 +413,37 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	default:
 		return proto.TextResult("give script (run_script) or steps (run_steps)", true)
 	}
-	// Never System Settings or a permission prompt (#4336, computer_protected.go), before any card.
+	// Never System Settings or a permission prompt (#4336, #7560, computer_protected.go), before any card.
 	if a.Script != "" && !whole {
 		h.logf("[%s] computer_run refused: a script whose apps cannot all be read", m.cfg.ID)
 		return proto.TextResult(protectedapps.UnreadableScript, true)
 	}
 	var known []protectedapps.App
-	if !lcu {
-		known = h.knownApps(ctx, m)
-	}
-	for _, x := range h.appsOn(ctx, m, apps, known) {
-		if protectedApp(x) {
-			h.logf("[%s] computer_run refused: protected app %s", m.cfg.ID, strings.TrimPrefix(x.BundleID, "name:"))
-			return proto.TextResult(refusedText(m.name(), "it would operate "+x.Name), true)
+	// guard checks this call, or one of its steps alone, on the Mac as it is now (protectedapps.Look.Check). LCU asks
+	// before touching any app, and those questions are refused for these (computer_lcu.go): it only checks names here.
+	guard := func(string, map[string]any) protectedapps.Verdict { return protectedapps.Verdict{} }
+	if lcu {
+		for _, x := range h.appsOn(ctx, m, apps, nil) {
+			if protectedApp(x) {
+				h.logf("[%s] computer_run refused: protected app %s", m.cfg.ID, strings.TrimPrefix(x.BundleID, "name:"))
+				return proto.TextResult(refusedText(m.name(), "it would operate "+x.Name), true)
+			}
+		}
+	} else {
+		guard = func(tool string, in map[string]any) protectedapps.Verdict {
+			raw, _ := json.Marshal(in)
+			look := h.protectedLook(ctx, m, known)
+			v := look.Check(m.name(), tool, raw)
+			known = look.Apps()
+			return v
 		}
 	}
-	// LCU asks before touching any app, and those questions are refused for these (computer_lcu.go).
-	onScreen := func() *proto.ToolResult {
-		found, ok := h.protectedOnScreen(ctx, m, &known)
-		switch {
-		case !ok:
-			h.logf("[%s] computer_run refused: the windows could not be read", m.cfg.ID)
-			res := proto.TextResult(protectedapps.Unchecked, true)
-			return &res
-		case len(found) > 0:
-			h.logf("[%s] computer_run refused: protected app on screen", m.cfg.ID)
-			res := proto.TextResult(refusedText(m.name(), strings.Join(found, ", ")+" is open on its screen"), true)
-			return &res
-		}
-		return nil
+	refuse := func(v protectedapps.Verdict) proto.ToolResult {
+		h.logf("[%s] computer_run refused (%s): %s", m.cfg.ID, v.Rule, v.App)
+		return proto.TextResult(v.Why, true)
 	}
-	if !lcu {
-		if res := onScreen(); res != nil {
-			return *res
-		}
+	if v := guard(tool, in); v.Why != "" {
+		return refuse(v)
 	}
 	what := computerSummary(h.userLang(), m.name(), tool, a.Script, a.Steps)
 	asked, ok := h.approveApps(ctx, m, h.assistantAsker(sessionID, m.cfg.ID), name, apps, whole, args, known)
@@ -453,16 +451,18 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	if refused {
 		return declined(computerLogWhat(tool, a.Script, a.Steps))
 	}
-	if !lcu && (asked || h.cua().Confirm) { // a card may have waited minutes: look again
-		if res := onScreen(); res != nil {
-			return *res
+	if asked || h.cua().Confirm { // a card may have waited minutes: look again
+		if v := guard(tool, in); v.Why != "" {
+			return refuse(v)
 		}
 	}
 	start := time.Now()
 	var res *proto.ComputerResult
 	var stopped string
 	if !lcu && tool == "run_steps" && unnamedSteps(a.App, a.Steps) {
-		res, stopped, err = h.runStepsOneByOne(ctx, m, session, sessionID, a.Steps, a.Observe, &known)
+		res, stopped, err = h.runStepsOneByOne(ctx, m, session, sessionID, a.Steps, a.Observe, func(step json.RawMessage) protectedapps.Verdict {
+			return guard("run_steps", map[string]any{"steps": []json.RawMessage{step}})
+		})
 	} else {
 		res, err = h.computerCall(ctx, m, session, sessionID, tool, in)
 	}
@@ -472,8 +472,7 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 		return proto.TextResult(err.Error(), true)
 	}
 	if stopped != "" {
-		h.logf("[%s] computer_run refused partway: protected app on screen", m.cfg.ID)
-		return proto.TextResult(refusedText(m.name(), stopped), true)
+		return proto.TextResult(stopped, true)
 	}
 	return computerResult(res)
 }
@@ -579,15 +578,25 @@ func (h *Manager) callBackend(m *Machine) string {
 	}
 }
 
-// computerCall runs one computer-use tool on m's node.
-func (h *Manager) computerCall(ctx context.Context, m *Machine, session, conversation, tool string, args map[string]any) (*proto.ComputerResult, error) {
+// computerCallOnce runs one computer-use tool on m's node, as it is (computerCall handles a session that ended).
+func (h *Manager) computerCallOnce(ctx context.Context, m *Machine, session, conversation, tool string, args map[string]any) (*proto.ComputerResult, error) {
 	var res proto.ComputerResult
 	s := h.cua()
 	backend := h.callBackend(m)
-	if err := m.callBuiltin(ctx, "computer.call", map[string]any{
+	params := map[string]any{
 		"session": session, "conversation": conversation, "tool": tool, "args": args,
 		"backend": backend, "keep_awake": s.awake(), "click_sound": s.ClickSound,
-	}, &res); err != nil {
+	}
+	capable := m.mcpWaitCapable()
+	if callID := mcpwait.CallFrom(ctx); capable && proto.ValidMCPWaitCallID(callID) {
+		params["call_id"] = callID
+	}
+	if !capable {
+		// The old target cannot echo call_id with a nested elicitation. While it owns the RPC, say only that the wait
+		// state is unknown; resolution restores whatever manager-owned card or base state is still open.
+		defer mcpwait.Push(ctx, proto.MCPWaitUnknown)()
+	}
+	if err := m.callBuiltin(ctx, "computer.call", params, &res); err != nil {
 		if backend == "lcu" && strings.Contains(err.Error(), "is not a tool") {
 			return nil, errors.New(i18n.T(h.userLang(), "hub-computer.err_outdated_lcu"))
 		}
