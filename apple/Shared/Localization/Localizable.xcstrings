@@ -115775,6 +115775,29 @@
         }
       }
     },
+    "Question closed without an answer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Question closed without an answer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答せずに質問を閉じました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭提问，未回复"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Question [Ask Persona Intent 33a861]" : {
       "localizations" : {
         "en" : {
@@ -137415,6 +137438,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona 启动的 Agent 自带的技能"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Skip [Question Card]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skip"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过"
           }
         }
       },
