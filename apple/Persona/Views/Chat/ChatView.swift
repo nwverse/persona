@@ -10,6 +10,7 @@ import UIKit
 #if DEBUG
 import notify
 #endif
+import PersonaWire
 
 enum ChatStyle {
     /// Develop: every step visible, tab bar hidden.
@@ -1471,8 +1472,11 @@ struct ChatView: View {
         case .row(let r):
             if r.errorCandidate != nil, let card = turnErrorCard(line, raw: r.errorCandidate?.text) { card } else { rowView(r, isLatest: false, live: true, showsSource: line.showsSource, hidesPrompt: line.hidesPrompt) }
         case .answerPart(let item, let part, let index, let count):
-            AssistantTextPart(item: item, part: part, index: index, count: count).equatable()
-                .chatMark(index == 0 ? "chat.answer." + item.id : "chat.answer.\(item.id).\(index)")
+            VStack(alignment: .leading, spacing: 0) {
+                AssistantTextPart(item: item, part: part, index: index, count: count).equatable()
+                    .chatMark(index == 0 ? "chat.answer." + item.id : "chat.answer.\(item.id).\(index)")
+                if index == count - 1 { ReplyUsageFooter(item: item) }
+            }
         case .feed(let item): FeedLine(item: item, group: shownKey.group)
         case .quick(let result): QuickResultCard(result: result)
         case .placeMap(let result): PlaceMapCard(result: result)
@@ -1988,6 +1992,15 @@ struct ChatView: View {
         return status.isActive || awaiting.turnID == t.id ? t.id : nil
     }
 
+    /// The live turn's reply, while it is still at work: no cost under it until the turn stops. Waiting on you, the
+    /// reply is in, so the cost shows (#5470).
+    private var hiddenUsageAnswer: String? {
+        guard let id = liveTurnID, session?.state != .needsYou,
+              case .turn(let turn) = store.blocks.last, turn.id == id,
+              case .assistant(let item) = turn.answer else { return nil }
+        return item.id
+    }
+
     /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
     /// strip shows them).
     private var shownPending: [PendingMessage] { pendingPlacement.chat }
@@ -2196,6 +2209,16 @@ struct ChatView: View {
             switchTo(next)
         }
         .environment(\.chatLayout, layout)
+        .modifier(ReplyUsageLoader(
+            items: store.items,
+            lines: currentLines(),
+            persona: style == .assistant,
+            hideAnswerID: hiddenUsageAnswer,
+            canAsk: model.api(shownKey.group) != nil,
+            catalog: { ids in
+                guard let api = model.api(shownKey.group) else { throw CancellationError() }
+                return try await api.catalogPrices(ids)
+            }))
         .environment(\.openSubagent, actions.openSubagent)
         .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
@@ -4764,7 +4787,11 @@ struct ChatView: View {
     @ViewBuilder private func rowView(_ row: ChatRow, isLatest: Bool, live: Bool, showsSource: Bool = true, hidesPrompt: Bool = false) -> some View {
         switch row {
         case .user(let i): userRow(i, showsSource: showsSource, hidesPrompt: hidesPrompt).chatMark("chat.user." + i.id)
-        case .assistant(let i): AssistantText(item: i).equatable().chatMark("chat.answer." + i.id)
+        case .assistant(let i):
+            VStack(alignment: .leading, spacing: 0) {
+                AssistantText(item: i).equatable().chatMark("chat.answer." + i.id)
+                ReplyUsageFooter(item: i)
+            }
         case .thinking(let i):
             if style == .dev && live { ThinkingRow(item: i) }
         case .tools(let steps):
@@ -6291,6 +6318,7 @@ struct QueueStrip: View {
     @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
     private static let visibleRows: CGFloat = 3
 
     var body: some View {
@@ -6305,11 +6333,24 @@ struct QueueStrip: View {
             .padding(.top, Theme.Space.sm)
         } label: {
             Group {
-                HStack(spacing: Theme.Space.sm) {
-                    tray
-                    title.lineLimit(1)
-                    Spacer(minLength: 0)
-                    sendNowButton
+                if typeSize >= Theme.interfaceLargestTypeSize {
+                    // At the interface's largest size, where the accessibility sizes land too, Send Now (which keeps its
+                    // width) left the title a few characters and took the tap that opens the strip (#4846, #7730):
+                    // unless both fit on one line, the title wraps and Send Now has the line under it. Smaller sizes
+                    // keep the one line, the title cut short where it must be.
+                    ViewThatFits(in: .horizontal) {
+                        oneLine
+                        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                                tray
+                                title.multilineTextAlignment(.leading) // the label centers wrapped lines
+                            }
+                            sendNowButton
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
+                    oneLine
                 }
             }
             .font(Theme.Font.labelStrong)
@@ -6334,6 +6375,16 @@ struct QueueStrip: View {
 
     private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }
     private var title: Text { Text("\(total) queued · \(agent) will handle them in order [Queue Strip]") }
+
+    /// The tray, the title on one line and Send Now at the end.
+    private var oneLine: some View {
+        HStack(spacing: Theme.Space.sm) {
+            tray
+            title.lineLimit(1)
+            Spacer(minLength: 0)
+            sendNowButton
+        }
+    }
 
     /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
     /// handed over.

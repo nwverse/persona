@@ -99,6 +99,11 @@ fun ChatScreen(
     historySession: Session? = null,
 ) {
     PersonaTheme(darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+        LaunchedEffect(sessionKey, chrome.childSessionId) {
+            chrome.childSessionId?.let {
+                persona.core.navigation.MessageJumps.request(sessionKey.machineId, sessionKey.sessionId, persona.core.domain.lines.ChildSessionCards.call(it))
+            }
+        }
         val storage = repository as? ChatLocalStorage
         val local by (storage?.localStorage ?: remember { kotlinx.coroutines.flow.MutableStateFlow<ChatStorageSnapshot?>(null) })
             .collectAsStateWithLifecycle()
@@ -335,8 +340,9 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
+    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
     val pageLines = rememberChatPageLines(key, renderStyle, snapshot, session, foldsBackground, tasks, taskTodos, search,
-        openWork, projection, feed, taskPlans, taskCardProjection)
+        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList())
     var jumpItem by pageLines.jumpItem
     val assistantPresentation = pageLines.assistantPresentation
     val subagentCards = pageLines.subagentCards
@@ -575,6 +581,9 @@ private fun ChatPage(
     val pageSubagents = rememberChatPageSubagents(key, chrome, readOnly, session)
     val subagentLinks = pageSubagents.subagentLinks
     val subagentFolds = pageSubagents.subagentFolds
+    LaunchedEffect(chrome.childSessionId, subagentFolds) {
+        chrome.childSessionId?.let { subagentFolds.open(persona.core.domain.lines.ChildSessionCards.call(it)) }
+    }
     val workflowCards = pageSubagents.workflowCards
     var viewer by remember { mutableStateOf<ViewerRequest?>(null) }
     val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
@@ -797,7 +806,7 @@ private fun ChatPage(
             try { repository.loadOlder(key) } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
         })
-    ChatSearchNavigation(search, chatList, lines)
+    ChatSearchNavigation(search, chatList, lines, foldErrors.keys)
     ChatMessageJump(key, repository, chatList, lines, snapshot.hasOlder, snapshot.loading || snapshot.loadingOlder, search,
         onItem = { jumpItem = it }, onNotice = { notice = it })
     LaunchedEffect(list, chrome.covered, search.visible, search.pending, search.returning, chatList.restored, chatList.programmaticScroll, overlay, chromeOverlay, fullText, linkVisible, statusSheet, terminalHelp, taskPageVisible, lifecycle, snapshot.verified) {
@@ -828,10 +837,17 @@ private fun ChatPage(
     val callJumps = pageLinks.callJumps
     val toolNames = pageLinks.toolNames
     val linkManager = pageLinks.linkManager
+    // The live turn's reply says nothing about cost until the turn stops, unless it is waiting on you (its reply is in).
+    val liveAnswerId = if (live && !waitingOnYou) projection.liveTurnId?.let { id ->
+        projection.turns.firstOrNull { it.id == id }?.answer?.item?.id
+    } else null
+    val replyUsage = rememberReplyUsage(snapshot.items, projection.lines,
+        persona = renderStyle == ChatRenderStyle.Assistant, hideAnswerId = liveAnswerId, catalog = actionsService)
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
-        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames) {
+        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames,
+        LocalReplyUsage provides replyUsage, LocalChatChildren provides childCards) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
             .then(if (embedded) Modifier else Modifier.imePadding())
@@ -1263,7 +1279,7 @@ private fun ChatPage(
                 }
             }
             if (search.visible) ChatSearchScreen(search, searchableItems, projection.turns.size, snapshot.hasOlder,
-                repository, key, onClose = { search.close(chatList) })
+                repository, key, snapshot.history, onClose = { search.close(chatList) })
             if (terminalHelp) TerminalHelpDialog { terminalHelp = false }
             if (activitySheet) session?.takeIf(ChatActivity::shown)?.let { s ->
                 ChatActivitySheet(s, onStop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),
