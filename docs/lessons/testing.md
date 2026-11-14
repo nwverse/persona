@@ -152,6 +152,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - `-race` reports reads/writes without a happens-before relationship; a test's own lock can hide a race (2026-11-05, #2955). `startAsync` reads the launch record's session after `go func()`; a fast background failure changes it in `finish` under a lock. Existing tests read, then wait through the `startLog` lock; `finish` acquires that lock next, so the detector sees the read before the write. It reports only if the caller is preempted just after `go` (one occasional full-suite `-race` failure). Regression `TestStartAsyncAnswersBeforeAFastFailure` waits only on the record's `done` channel and reports every time before the fix. Race-test result waiting must not share a lock with the code under test.
 
+- Taking a sleep out of a race test can leave the detector with nothing to see: a channel orders two goroutines as a lock does (2026-11-14, #1273). `TestSearchesWhileTheIndexIsUpdatedAndRemoved` (`server/internal/kb`) is there for a data race between a search that reads the index again and an update under way. Its first version without sleeps stopped the update at a hook, removed the directory, waited for a search to run and only then let the update go on: every wait was a channel between the two sides, so the update's read came after the search's write for the detector too. With the race put back in a scratch copy, that moment reported nothing in 30 runs of 4 removals each; the test with the sleeps reported it in 20 of 20. Keep the two sides unordered at the moment under test: let the stopped side go on before the other starts, and make whatever comes next wait instead (here the following update), which reported 40 of 40 runs with one removal each. A test whose assertion is the `-race` run is checked by putting the race back and counting runs, per moment, not by passing.
+
 - A fixture goroutine that reads a shared field when it runs races a test that swaps the field, and a socket orders nothing for the race detector (2026-11-11, #3918). `withFakeHub` started `go func() { _ = n.peer.Serve(…) }()`, which reads `n.peer` whenever the goroutine gets to it; `TestCodexRemoteTurnBegunBeforeJoining` then put its own hub in front with `n.peer = …`. `TestOutsideClaudeSendNotTaken` set the fake inbox's `mode` without its lock after the accept loop had started; the node connecting over the Unix socket afterwards gave the connection's goroutine no happens-before edge to that write. Both failed only under `-race`, which the CI node shard does not use. Have a goroutine serve the value the fixture created (a local variable), and change state a running fake reads through a setter under the fake's own lock (`fakeInbox.setMode`).
 
 - When testing fixed interactive-shell scripts, isolate `HOME`, `USERPROFILE`, and `ZDOTDIR` first (2026-11-05, #3120). Replacing only the update command still reads the user's shell startup files, mixing toolchain notices into `CombinedOutput` and failing exact-output assertions. Point all three directories at a test temp directory; retain success, failure, and unknown-action rejection assertions without changing production shell behavior or user configuration.
@@ -716,6 +718,22 @@ Retain allow/deny assertions for data directories, private tmp, and proxy. Negat
 - `swift test` output arrives only after completion. Find hung cases with file traces or `sample <pid>`; Swift Testing `.timeLimit` cannot stop uncancellable waits.
 - System `.alert` buttons cannot be clicked through accessibility activation; `personactl.py tap` falls back to idb (not installed locally). Use XCUITest for alert-click flows (`app.alerts[...].buttons[...]`).
 
+## Home Screen widgets on a simulator (2026-11-14, #6946)
+
+- **A widget can be placed without touching the Home Screen**: with the simulator shut down, add an entry to
+  SpringBoard's `data/Library/SpringBoard/IconState.plist` (a page in `iconLists`: `elementType` `widget`,
+  `widgetIdentifier` the kind, `containerBundleIdentifier` the app, `bundleIdentifier` the widget extension, `gridSize`
+  `small` / `medium` / `large`, `iconType` `custom`, two fresh UUIDs), delete `DesiredIconState.plist`, then boot. A
+  widget with a static configuration draws from the App Group as on a phone (`-showHomeWidgetSample YES` fills it).
+- **Widgets with Edit Widget options (`AppIntentConfiguration`) never draw on the iOS 27 simulators here**, placed that
+  way or opened in Edit Widget, slim or stock: the extension logs "Unable to get LNAction from intent" after
+  `com.apple.siri.VoiceShortcuts.xpc` answers "No such process", WidgetKit gets no views (`CHSErrorDomain` 1101) and
+  keeps the placeholder entry, and the widget's buttons do nothing. The Agents widget shows the same, so it is not the
+  widget's code. Draw those widgets with the app's gallery (`-showHomeWidgets`, docs/apple/home-widgets.md
+  "Screenshots") and check their buttons on a device.
+- The gallery's rows (light and dark side by side) need a screen wider than an iPhone's: an iPad simulator made for
+  the shots and deleted after them.
+
 ## Verify nonempty udid before deleting simulators (2026-11-03)
 
 Reading udid from a file, then `xcrun simctl delete $SIM`: if the file is missing, `$SIM` is empty. This time it only printed usage, but `delete "$SIM" all` could delete everybody's simulators.
@@ -805,6 +823,29 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 - **Prove the timing in the app, not the test**: a test cannot read the list during the glide without waiting for it.
   The app counts ↓ taps made while its scroll view `isDecelerating` (probe `glideTaps`), and the test asserts the count
   went up; `-scrollTrace YES` shows the frames.
+
+## On an iPad, XCTest can wait a minute before every step once a keyboard animation loses a stop (2026-11-14, #6100)
+
+- **What it looks like**: from one step on, every tap, `typeText` and orientation change logs "App animations complete
+  notification not received, will attempt to continue" after 60 s, until the app is relaunched. If the app is still
+  running when the next test turns the device, that test waits once too. `TodoCalendarTests/testCalendarShowsOpensAndAdds`
+  hit it in about 1 run in 4 on iPad Pro 11-inch and 13-inch simulators in landscape (iOS 27.0, Xcode 27.1): while
+  XCTest typed into the New To-Do sheet, or as the sheet closed with the keyboard up. The same path walked through the
+  runtime CLI never did.
+- **Why**: XCTest's idle check counts UIKit's view-animation callbacks (`UIViewAnimationState`'s `animationDidStart:` and
+  `animationDidStop:finished:`). In every stuck run one of the keyboard's animations (`_animationFactory` is a
+  `_UIInputViewAnimationFactory`, 0.3833 s, about 200 layer animations: the keyboard and what moves with it) was released
+  with 1 to 3 of its layer animations never reporting a stop, though UIKit marked it finished. The app is idle: a live
+  dump showed no `UIViewAnimationState` left and nothing presented. XCTest's iPad typing makes the software keyboard
+  step aside and come back, one more keyboard animation.
+- **Finding it**: `heap -q --addresses=UIViewAnimationState <app pid>` while it waits (no animation state alive means
+  the count, not the app, is stuck). lldb breakpoints on `-[UIViewAnimationState animationDidStart:]`,
+  `animationDidStop:finished:` and `.cxx_destruct` that only read registers catch the state released with more starts
+  than stops; a breakpoint on every `-[CALayer addAnimation:forKey:]` slowed the app enough that it stopped happening.
+- **In a test**: there is no public switch for the wait. Put the keyboard steps last, wait for what they should do (the
+  sheet gone, the mock's record, the row on screen), and `app.terminate()` before turning the device back. After
+  `typeText` on an iPad (Pinyin keyboard), also wait for the field's `value` and the button's `isEnabled` before the
+  tap: the keyboard can hold the words a moment, and a tap on the still-disabled Add did nothing.
 
 ## Local port discovery probes fake model servers in tests (2026-11-04)
 
@@ -1064,10 +1105,9 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Under Xcode 26.0 (Swift 6.2), `xcrun swift test` copies `Localizable.xcstrings` into `Bundle.module` as-is
   (`Copying Localizable.xcstrings`) without generating `.lproj` directories, whereas newer toolchains and `xcodebuild`
   (`scripts/app/mac-link.sh`) compile it at build time.
-- SwiftPM tests that point a bundle override at `<language>.lproj`
-  (`apple/PersonaLink/Tests/PersonaLinkTests/LinkTextTests.swift`) fall back to compiling `Localizable.xcstrings` on
-  demand with `/usr/bin/xcrun xcstringstool compile`, and cover that path with a synthetic uncompiled `.bundle` test so
-  newer local Xcode versions still exercise it.
+- SwiftPM tests that point a bundle override at `<language>.lproj` may need to compile `Localizable.xcstrings` on
+  demand with `/usr/bin/xcrun xcstringstool compile`. The retired menu bar's `LinkTextTests.swift` demonstrated this
+  fallback and its synthetic uncompiled-bundle case; its source is preserved in the history of the removed target.
 
 ## A throw-away HOME also hides the login keychain from codesign (2026-11-13, #6368)
 

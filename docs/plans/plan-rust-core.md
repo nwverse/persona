@@ -51,7 +51,7 @@ fixtures first, then each implementation.
   possible later and needs its own issue.
 - **The Go hub** keeps its implementations (`attention`, `triage`, `fold-changes`, the continuity corpus) and keeps
   replaying the fixtures.
-- **The frozen Mac app** links the core only where shared Swift code requires it, to keep building (`docs/apple/mac.md`).
+- **The retired native Mac app** is removed with its target; it does not acquire a new core binding. The Electron desktop keeps its existing web implementation and is not a new Rust binding target (#6770).
 - **Persona Link and the watch.**
 
 ### The iOS reference
@@ -297,14 +297,128 @@ Phase 1 (#6871) lands in several PRs.
   - The new `core` CI lane runs these checks.
   - Size, for orientation only: the stripped x86_64 release library is 678 KB (322 KB gzipped). The go / no-go numbers
     come from the device ABIs.
+- **Apple binding and iOS-reference replay.**
+  - `apple/Packages/PersonaCore` holds the generated Swift codecs, the C adapter and the XCFramework builder. Only the
+    iOS app and `PersonaTests` link it; no binary is committed. The iOS production `ChatStore` is unchanged apart from
+    restoring the existing `supervision_user` Codable key, and no screen changes.
+  - The shared continuity corpus now has 38 cases (94 steps), including immediate fill, a complete repeated-item
+    `ListOp.Update`, the `from_seq == covered + 1` boundary, opened-fold retention and supervision promotion.
+    Real-C XCTest and a native-Store XCTest replay the same JSON and effects/patches; macOS `swift test` exercises the
+    same C binding under Swift 6 strict concurrency. Local verification used Xcode 27.2, so Xcode 26.0 is not verified.
+- **Android ABI packaging and real packaged-JNI replay.**
+  - `:core:rustcore-android` packages stripped arm64-v8a and x86_64 libraries with separate symbols, exact Cargo
+    notices, R8 keeps and uncompressed 16 KiB-aligned APK entries. The JVM/JNI and actual x86_64 emulator replays each
+    pass all 38 cases / 94 steps. arm64 hardware and a 16 KiB-kernel device remain unmeasured.
+  - Per-ABI stripped/package increments are 651,600 B (arm64-v8a) and 713,952 B (x86_64), with stripped gzip sizes
+    323,071 B and 343,371 B. These are not store download deltas. Emulator performance exceeded the p99 budgets:
+    dispatch 13,100.597 µs and drain+decode+apply 17,271.624 µs over 1,000 samples, so performance is not accepted.
+  - **Android boundary profiling, no production optimization yet.** The original optimized span and 100 warm-up +
+    1,000-sample protocol now retain raw nanosecond samples and explicit 50 µs / 1 ms assertions. On the same owned,
+    software-accelerated x86_64 API 35 / 4 KiB-kernel emulator, the final repeat run measured dispatch p99 883.312 µs
+    and drain+decode+apply p99 3,414.419 µs (p50 126.169 / 761.306 µs): both still fail. Earlier raw runs reached
+    16,400.210 / 8,534.626 µs, illustrating the environment's large variation rather than an improvement to accept.
+    Separate opt-in attribution and low-overhead controls are not substitute benchmark results. The final attribution
+    (nonce `9198f0c2c237463caedafa69c014f4c6`) uses a named tail of 11 samples: the p99 sample at sorted index 989
+    and the 10 samples slower than it. This is not the 10 samples above p99; the report never calls that set "top 1%".
+    It found no actual `try_lock` contention and no overlapping GC events in those 11 samples. Caller scheduler
+    switches occurred in 11 / 11 dispatch and 9 / 11 frame samples; worker TID was measured independently. Real patch
+    lock acquisition without `/proc` reads totaled 30,274 ns across those 11 frame samples, versus 53,047,659 ns
+    including those reads; work while holding that lock was separately 3,321,555 ns, Kotlin decode 75,033,476 ns and
+    apply 10,582,298 ns. Thus these measurements do not isolate a production lock or codec defect.
+    A low-overhead control with the original two-loop order still failed both budgets (dispatch 2,112.881 µs,
+    frame 3,989.433 µs); its lock/JNI-free CPU loop had a 1,012.698 µs maximum despite 0.662 µs p50 (an earlier control
+    reached 10,099.827 µs). This supports instrumentation and software-emulator scheduling as important contributors,
+    not a claim that the original failure is waived or that physical arm64 meets a budget. There is no evidence-backed
+    production codec/allocation/synchronization correction from these emulator runs; those implementations and
+    continuity behavior remain unchanged. Physical arm64 / 16 KiB measurements remain required.
+  - **Android string decode and failing-report capture, after #7274.** Kotlin's generated `BinaryDeserializer` now
+    decodes a bounds-checked string range directly, retaining strict UTF-8 validation and cursor behavior while avoiding
+    its temporary `ByteArray`. Typegen owns the change and checks an independent Rust/bincode golden plus malformed,
+    truncated, trailing and excessive-length inputs. No wire type, runtime queue/lock, registry lease or original
+    benchmark span/budget changed. The runner preserves the real nonzero JUnit output before enforcing its failure;
+    the physical arm64 / 16 KiB cells remain **blocked: no physical device** by the maintainer's 2026-11-14 decision,
+    not passes. Raw emulator A/B evidence and its limits belong in the linked PR, not a claim of device acceptance.
+- **HarmonyOS binding, with device acceptance pending.**
+  - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
+    The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.
+    Its host registry replays all 38 cases / 94 steps, and the runtime emits one Update rather than remove/reinsert
+    for a changed full item. The `coreReplay` ohosTest is ready to replay that same corpus through the real NAPI handle.
+  - The API 26 native SDK, HAP link, installed HAP and physical-device replay were not available in this environment;
+    no device or performance claim is made. Its exact 38-package / 71-notice runtime closure is checked on the host.
+- **HarmonyOS host checks (#7414).**
+  - The core lane failed on every clean checkout: its HarmonyOS notices step compared against a build output only
+    the device build writes. It now writes that output itself (38 locked registry packages, 71 notice files).
+  - The lane adds the `aarch64-unknown-linux-ohos` Rust target and lints the binding with its `ohos` feature, so the
+    NAPI code is compiled by CI for the first time. Nothing is linked and no SDK is used.
+  - `build-ohos.sh` now exports `OHOS_NDK_HOME`, without which the binding's build script panicked before compiling.
+    Checked with a stub SDK layout only: the release closure compiles and the build stops at the link step.
+  - Still open in #7414: the NAPI callbacks pass a leading error argument and effects as a number array, which the
+    ArkTS declaration and adapter do not expect. The Node tests' fake hides it; it would fail on a device.
+- **ArkTS codec against the real core on the host (#7450, #7485).**
+  - A host replay drives the real runtime through `persona-core-ohos`'s registry with the generated ArkTS codec
+    encoding actions and decoding effects and patches: all 38 cases / 94 steps, plus 35 independently built values
+    whose ArkTS and Rust bytes must match in both directions. The core lane builds the helper and runs it with the
+    two existing ArkTS core tests; a missing helper fails rather than skips.
+  - It immediately caught a real defect the self-round-trip test could not see: `u32` wire fields were written and
+    read as 8 bytes, so the codec could not decode a real patch. Typegen now emits every integer at its own width;
+    Kotlin and Swift are unchanged.
+  - This is host evidence only: no NAPI library, thread-safe callbacks, HAP or device. `coreReplay` stays blocked.
 - **Still to come.**
-  - iOS: the `PersonaCore` package and its XCTest replay.
-  - HarmonyOS: the NAPI module and the on-device replay.
-  - Android: device libraries, 16 KB page alignment and per-ABI size measurements.
-  - Continuity: compare the initial port with the iOS reference, add the missing boundary fixture and correct any
-    differences before calling the slice three-platform consistent.
+  - iOS: physical-device performance, launch, memory and download-size evidence remains open; Xcode 26.0 is not verified.
+  - HarmonyOS: the API 26 `.so`, HAP build and on-device replay.
+  - Android: physical arm64, 16 KiB-kernel evidence and an iOS-referenced performance comparison.
+  - Continuity: both Apple bindings and Android's host/emulator replay pass the same corpus. HarmonyOS's native replay
+    must still run before calling the slice three-platform consistent.
   - The go / no-go measurements, with the iOS baseline named for every comparative measurement.
-  - License notices, with the first build that ships the library in an app.
+
+Phase 2 lands in several PRs.
+
+- **Continuity payloads decoded in the core (#7385): pure decoding only.**
+  - `persona_core::transport` decodes the latest / older page, the catch-up page, an opened fold's page and the
+    WebSocket `items` frame from raw bytes into `continuity`'s inputs, keeping each item's JSON byte for byte.
+    Acceptance follows iOS's `ItemsResponse`, `NewerResponse`, `foldedWork`'s `Range` and `ServerEvent.decode`.
+  - `cargo test` replays the 17 wire cases those decoders own, all accepted payloads, and rebuilds the continuity
+    corpus's 78 payload steps from bytes, with the same step and state as the hand-built batches. The corpus's three
+    `http_latest` steps without `has_more` are not wire pages; the decoder refuses them, as iOS's `ItemsResponse`
+    would. The refusal rules rest on the crate's unit tests, which try every key a decoder reads with every kind of
+    wrong value.
+  - At the time of that PR no boundary action carried bytes; the follow-up below adds them. Each client still
+    decodes natively in production.
+  - Not full parity: envelope keys only other events use and nested structs the core does not read are not
+    checked, and whole numbers must be integer literals, the only spelling the hub writes
+    (`native/app-core/README.md`, "Transport decoding").
+  - Not executed on iOS: the rules were read from the Swift sources and swift-foundation's `JSONDecoder`, and the
+    wire cases' expectations are derived from the iOS sources too (checked by the hub's golden test and the Android
+    replay). No shared wire case was added for the refusal rules, which wait for an iOS run to confirm them.
+- **Byte-carrying actions, and the wire corpus through the JNI and ArkTS boundaries (#7385 scope 3).**
+  - `Action::WirePayload` carries one response body or WebSocket frame as received, with the variant naming the
+    request it answers. The worker decodes it with `persona_core::transport`; `dispatch` only queues the bytes. A
+    frame of another type is ignored, and a frame iOS would drop is dropped without an error.
+  - Replays of the same 17 wire cases, with the JSON exactly as the files hold it: through the runtime (32 items
+    byte for byte; every case except the opened-fold range page is also compared with the equivalent hand-built
+    `ChatEvent`, and separate tests drive a range page into an opened fold and an older page into history), through
+    the real JNI binding and through ArkTS plus the transport decoder on the host. The generated Kotlin, Swift and
+    ArkTS codecs gain the new variant; no client uses it yet.
+  - Host measurement (best of 8, debug build): dispatching a 200 KB page costs about 21 µs against 1.8 µs for a
+    small action, i.e. a copy, not a decode. The optimized Android benchmark and its budgets are unchanged.
+  - Also fixed here: `ItemError`'s message quoted serde's error text, which repeats the offending value, so a
+    malformed cached item could put message text into diagnostics. It now carries a context and a line/column
+    position only, with a test.
+  - Still not done: no production client sends bytes; the Swift XCTest replay needs macOS and follows #7401; the
+    on-device cells stay blocked: no physical device.
+
+- **The core boundary's missing contracts (#7554).**
+  - `ChatPatch.verified` carries whether the chat's items are known complete, the rule Android used to derive per
+    client (`gap == None && (backlog || already verified)`), so no client re-implements the reducer's gap logic.
+  - `Action::Ack` echoes a host's sequence number in the patch, so an applied no-op is distinguishable from a
+    pending action. `Action::HubChanged` settles as if a gap were found, iOS's `settle(.fill)`.
+  - Folds are keyed by id and independent: different folds open and complete in either order, as on iOS, and
+    `Request::FetchRange`, `ChatEvent::Range` / `RangeFailed` and `Payload::Range` carry an optional `fold_id`.
+    Callers that send no id keep the older single-opening behaviour.
+  - The three codecs are regenerated; the existing 38-case / 94-step corpus still passes, with new tests for the
+    verified rule, hub-changed input, acknowledgement and two folds completing in either order. The Android host
+    JNI and ArkTS host replays cover the new fields.
+  - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
 
 ### Migration rules (each domain)
 
