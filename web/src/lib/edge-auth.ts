@@ -41,14 +41,16 @@ function safeStorage(): Storage | undefined {
 
 let probing = false;
 /** After the live socket failed: one request to the hub that follows no redirect. An interception reloads the page;
- *  anything else (the hub answered, or the network is down) changes nothing. */
-export async function probeEdge(fetcher: typeof fetch = fetch): Promise<boolean> {
+ *  a network failure changes nothing. When the hub itself answered, it refused the socket rather than being out of
+ *  reach, and `answered` runs (store.ts asks whether this browser's credential still works); its promise is awaited. */
+export async function probeEdge(fetcher: typeof fetch = fetch, answered?: () => Promise<unknown>): Promise<boolean> {
   if (probing) return false;
   probing = true;
   try {
     const r = await fetcher(`${BASE}/api/v1/health`, { redirect: "manual", cache: "no-store" });
-    if (!intercepted(r)) return false;
-    return reloadForSignIn();
+    if (intercepted(r)) return reloadForSignIn();
+    await answered?.();
+    return false;
   } catch {
     return false;
   } finally {
