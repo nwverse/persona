@@ -2,7 +2,7 @@
 // agents"): never the user's bubble. A message on its own is one folded line on the left (SentLine); a task's card lists
 // the hand-off sent together with a task's card is not drawn on its own (lib/feed takenIn).
 // Persona writes them in Markdown: the folded line is its first line without the marks, the opened text is drawn as
-// Markdown, never with its ** and ` showing.
+// Markdown, never with its ** and ` showing, and line by line as it was written, as Persona's replies are (`lineBreaks`).
 import { useState } from "react";
 import { field, type FeedItem } from "../../lib/feed";
 import { plainMarkdown } from "../../lib/plain-markdown";
@@ -56,12 +56,13 @@ export function SentLine({ item, title, onOpenTask }: { item: FeedItem; title: s
   );
 }
 
-/** The whole text Persona sent, drawn as Markdown and selectable, with Copy (its words as written) under it. */
+/** The whole text Persona sent, drawn as Markdown and selectable, with Copy (its words as written) under it. A single line
+ *  break stays one, as in Persona's replies: its hand-offs and rework notes are written a line per point. */
 function SentText({ text, className }: { text: string; className?: string }) {
   return (
     <div data-testid="sent-detail" className={cx("flex flex-col gap-2", className)}>
       <div className="min-w-0 text-ink select-text [overflow-wrap:anywhere]">
-        <Markdown text={text} compact />
+        <Markdown text={text} compact lineBreaks />
       </div>
       <button
         type="button"
