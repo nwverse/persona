@@ -320,8 +320,10 @@ async function hubChangeScenario() {
     if (targetURL !== otherHub.href || targetSession === previousSession) throw new Error(`wrong replacement window or session: ${JSON.stringify({ targetURL, expected: otherHub.href, previousSession, targetSession })}`);
     if (!win.webContents.getURL().startsWith(otherHub.href)) throw new Error("the replacement still shows the previous hub");
     await until("second hub sign-in page", () => page("!!document.querySelector('input[type=password]') || document.body.innerText.includes('Let this browser in from a device')"));
+    // This call returning either platform value proves the new window's production IPC is reachable. macOS may
+    // report Notification.isSupported() false before sign-in; the notify() assertion below is the authorization check.
     const permission = await page("window.personaDesktop.notificationPermission()");
-    if (permission !== "granted") throw new Error(`the second hub's bridge is not authorized: ${permission}`);
+    if (permission !== "granted" && permission !== "denied") throw new Error(`the second hub's permission IPC is not reachable: ${permission}`);
     await until("second hub login item is still available", () => page(`window.personaDesktop.getLaunchAtLogin().then(state => typeof state.enabled === 'boolean' && (${JSON.stringify(process.platform === "linux")} || state.enabled === true))`));
     await page("window.personaDesktop.setLaunchAtLogin(false)");
     const presence = await page("window.personaDesktop.desktopPresence()");
