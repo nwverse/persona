@@ -269,10 +269,11 @@ Every client follows this document with its own copy of the rules, each with the
 
 The shared cases in `spec/fixtures/triage` are read by the web app (`web/src/lib/todo-triage-fixture.test.ts`) and the
 hub; a rule change adds or changes a case there first. The concern exceptions, standalone open-concern rows and neutral
-Concern row tag are implemented on the hub and web (#3582). iOS and Android follow in their own PRs; they are not claimed
-here.
+Concern row tag are a staged new capability under #3582, implemented on the hub and web here. iOS and Android follow in
+their own PRs; until then they keep the documented compatibility behavior and show a concern as an ordinary to-do, so no
+existing native triage rule changes in this step.
 
-A change to the rules changes all of them in the same PR. Native differences: iOS / Mac keep restores in the device's
+A change to an existing rule changes all of them in the same PR. Native differences: iOS / Mac keep restores in the device's
 `UserDefaults` (`todos.restored`) and Android in its local preferences, as the web keeps them per browser; the iOS list
 has no Status | Folder switch (it had no folder view), and the Mac shows a merged row's members as a disclosure under the
 lead. The iOS list draws a row's "N related" inside the lead's row, under its words (Android's card already had it). iOS and
