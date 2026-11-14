@@ -1231,6 +1231,14 @@ palette section that holds a space, project or computer name then shows "weather
 typed. Give those headings their text as written (`Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`) and
 keep the label style for label words.
 
+## A reload another tab asks for waits for a calm page
+
+A `storage` listener that reloads the page (a language picked in another tab) runs whatever the page holds: a half-typed
+dialog or field is lost, and a page with a `beforeunload` guard pops a leave-page prompt from a background tab. Reuse
+the calm test a new build waits for (`mayReload(pageCalm())` in `web/src/lib/new-version.ts`: no draft, no open dialog or
+menu, the page hidden or left alone) and offer the reload in a toast meanwhile (`web/src/lib/language-sync.ts`). Its
+words come from the catalog's rest, which `main.tsx`'s own imports do not wait for: wait for `i18nRest()` before `t()`.
+
 ## Testing Web Push in Playwright needs a real profile (2026-11-14, #7459)
 
 - Chrome has no push messaging in an incognito-like context, and every `browser.newContext()` is one: `pushManager.subscribe` fails with "AbortError: Registration failed - permission denied" whatever permissions are granted, headless or not. `chromium.launchPersistentContext(<temp dir>)` gives a real profile, where headless Chrome subscribes at FCM and receives pushes; drop `--disable-background-networking` from Playwright's default switches (`ignoreDefaultArgs`), which push needs.
