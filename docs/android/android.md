@@ -669,6 +669,34 @@ iOS app.
   every notification (ongoing, needs you, finished, phone tools, lock-screen test) and tile uses it. When iOS changes its icon, these two PNGs must be re-exported (as in #1136: `magick icon.png -resize 432x432 -virtual-pixel edge -set option:distort:viewport 648x648-108-108 -distort SRT 0`).
 - Installing on a device: turn on USB debugging, connect the phone to the computer and run `./scripts/app/android.sh`, or send the APK to the phone and install it directly.
 
+## Build commit
+
+Settings › About shows the commit an APK was built from, below the version name and version code. The value is explicit build
+metadata; the app never guesses it.
+
+- **Resource**: `defaultConfig.resValue("string", "persona_build_commit", …)` in `android/app/build.gradle.kts` (with `buildFeatures.resValues`
+  on). It is not `BuildConfig` and not manifest metadata, and not localized text. `feature:settings` cannot reference the app's `R`, so
+  `AboutBuildCommit.kt` reads the merged resource by name (`getIdentifier` under the running package); a missing resource, an empty
+  value, `unknown` or anything that is not a commit counts as no metadata.
+- **Input**: the Gradle property `-PpersonaBuildCommit`, then the environment variable `PERSONA_BUILD_COMMIT`, then `unknown`. An empty value is
+  the same as not set. Any other value must be 7 to 64 hex digits (stored lowercase) or `unknown`; otherwise the build fails, so a branch
+  name, a path or a stray space never reaches the APK. Gradle does not run git and reads no private configuration for this.
+- **Who passes it**: `scripts/ci/android.sh` (`PERSONA_BUILD_COMMIT`, else the runner's public `GITHUB_SHA`, else `unknown`);
+  `scripts/release/android_release_worker.py` (the full sha of the checkout it builds, for main and version-tag builds alike);
+  `scripts/app/android.sh release` (this repository's `HEAD`, `unknown` when it cannot be read). Debug, test, lint and shots builds
+  pass nothing and show Unknown, unless the caller sets the property or variable. A working tree with uncommitted changes still shows
+  its `HEAD`; the local release does not add a dirty mark. CI passes it on its one Gradle invocation, which runs lint, tests and
+  `:app:assembleDebug` together, so it is not injected only where the APK is produced; doing that would take a second invocation per
+  lane. Whether the changing value costs build or configuration cache hits is not measured.
+- **About**: the row's title is Commit. With a commit it shows the first 12 characters in the code font on one line (no chevron);
+  tapping the row copies the whole commit through `rememberCopy()`, with a "Build commit copied" notice. Without one it shows the
+  localized Unknown and does nothing on tap. Strings: `strings_about.xml` in `values`, `values-zh`, `values-ja`.
+- **Checking an APK**: read `persona_build_commit` from the built APK's resources (`aapt2 dump resources <apk>`) and compare it with the
+  commit that was injected; an uninjected build must carry `unknown`. For a release APK `scripts/release/check_android_build_commit.py <apk> <sha>`
+  does this and exits 1 on a missing, different or unknown value (the release worker runs it).
+- **Guard test**: `scripts/ci/test_android_build_commit.py` holds only the commit's own statements to these rules (never `BuildConfig` or
+  the manifest, no git read in its block). Another change turning on `buildFeatures { buildConfig = true }` in the same file does not fail it.
+
 ## Cache size budgets
 
 `cacheBudgets = CacheBudgets(...)` in `HubDataStore` sets separate budgets, in bytes, for items, chat images and Inbox files. The defaults are 32 MiB, 128 MiB and 128 MiB respectively; these are an initial policy, **not measured**, and do not represent actual memory use or an assessment of device capacity.
