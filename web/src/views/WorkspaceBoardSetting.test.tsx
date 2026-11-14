@@ -10,11 +10,19 @@ vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
+import { resetManagerChoice, settleRosterDefault } from "../lib/manager-choice";
 import { getWorkspaceBoardSetting, resetWorkspaceBoardSettingForTest } from "../lib/workspace-board-setting";
 import { AgentGroup } from "./settings/AgentGroup";
 import { Sidebar } from "./Sidebar";
 import { WorkspaceBoard } from "./WorkspaceBoard";
 import { CATALOG_POLL_MS } from "../lib/workspace-catalog";
+
+// the hub's pushes, by type, as the pages listen for them (each still reaches the real listeners too)
+const pushes = vi.hoisted(() => new Map<string, (msg: Record<string, unknown>) => void>());
+vi.mock("../lib/store", async (orig) => {
+  const store = await orig<typeof import("../lib/store")>();
+  return { ...store, onHubEvent: (type: string, l: (msg: Record<string, unknown>) => void) => { pushes.set(type, l); return store.onHubEvent(type, l); } };
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -61,6 +69,7 @@ afterEach(() => {
   host.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  resetManagerChoice();
 });
 
 describe("the workflow board switch", () => {
@@ -148,8 +157,12 @@ describe("when the hub can't give the switch or the board", () => {
     stubHub((path) => (path.startsWith("/api/v1/workspace-board") ? notFound() : undefined));
     act(() => root.render(<><AgentGroup /><WorkspaceBoard /></>));
     await flush();
-    expect(host.textContent).toContain("更新 hub 后才能用工作流看板");
-    expect(host.textContent?.match(/还用不了工作流看板/g)).toHaveLength(1); // said once
+    // what to do once, in the title; the body only says why
+    const title = [...host.querySelectorAll("h2")].find((h) => h.textContent === "更新 hub 后才能用工作流看板");
+    expect(title).toBeDefined();
+    expect(title!.nextElementSibling?.textContent).toBe("这个 hub 的版本太旧，或者没开看板存储。");
+    expect(host.textContent).not.toContain("还用不了工作流看板");
+    expect(host.textContent).not.toContain("先更新 hub");
     expect(host.textContent).not.toContain("看板暂不可用");
     expect(buttons("重试")).toHaveLength(0); // retrying can't help
     // nothing that would change nothing: search, machine filter, archived, manual / auto, the auto view's promo
@@ -185,6 +198,23 @@ describe("when the hub can't give the switch or the board", () => {
     await flush();
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(host.querySelector('section[aria-label="待办"]')).not.toBeNull();
+  });
+
+  it("a push after a switch read that failed: Settings offers the switch, and doesn't call the device read-only", async () => {
+    stubHub((path) => (path === "/api/v1/workspace-board/settings" ? json({ error: "database is down", code: "internal" }, 500) : undefined));
+    act(() => root.render(<AgentGroup />));
+    await flush();
+    act(() => settleRosterDefault()); // the roster names the default manager, whose pushes count
+    await flush();
+    expect(host.textContent).toContain("读不到工作流看板的开关");
+    const reads = settingReads();
+    act(() => pushes.get("workspace_board_settings")!({ type: "workspace_board_settings", enabled: true })); // another device turned it on
+    await flush();
+    expect(settingReads()).toBe(reads + 1); // who may change it: asked again (and still failing here)
+    const sw = host.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="工作流看板"]')!;
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    expect(sw.disabled).toBe(false);
+    expect(host.textContent).not.toContain("只读设备");
   });
 
   it("a read-only device is still told it is read-only", async () => {

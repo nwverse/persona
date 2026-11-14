@@ -91,8 +91,10 @@ describe("Link to to-do", () => {
     expect(first.split(" · ")[0]).toBe("未开始");
   });
 
-  it("has no search for a short list, and one that narrows a long list by title", async () => {
-    await open([todo("a", "整理发布说明"), todo("b", "选缓存方案")]);
+  it("has no search for a list its box shows whole, and one that narrows a longer list by title", async () => {
+    // the box shows five two-line rows: a list that needs no scrolling needs no search
+    expect(LINK_SEARCH_FROM).toBe(6);
+    await open(Array.from({ length: LINK_SEARCH_FROM - 1 }, (_, i) => todo(`s${i}`, `待办 ${i}`)));
     expect(dialog()!.querySelector('input[placeholder="搜索未完成的待办"]')).toBeNull();
     act(() => root.unmount());
     root = createRoot(host);
@@ -106,6 +108,22 @@ describe("Link to to-do", () => {
     type(search, "没有这个");
     expect(rows()).toHaveLength(0);
     expect(dialog()!.textContent).toContain("没有符合的待办");
+  });
+
+  it("Escape in the search empties it and keeps the dialog; with nothing typed, Escape closes the dialog", async () => {
+    await open([...Array.from({ length: LINK_SEARCH_FROM }, (_, i) => todo(`t${i}`, `待办 ${i}`)), todo("blog", "博客迁移到 Astro")]);
+    const search = dialog()!.querySelector<HTMLInputElement>('input[placeholder="搜索未完成的待办"]')!;
+    type(search, "astro");
+    expect(rows()).toHaveLength(1);
+
+    escape(search);
+    expect(closed).toBe(0);
+    expect(dialog()).not.toBeNull();
+    expect(search.value).toBe("");
+    expect(rows()).toHaveLength(LINK_SEARCH_FROM + 1);
+
+    escape(search);
+    expect(closed).toBe(1);
   });
 });
 

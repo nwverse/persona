@@ -2,7 +2,18 @@
 // switch is flipped, or a write overtaken by the next flip, does not put the old value back.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
+import { resetManagerChoice, settleRosterDefault } from "./manager-choice";
 import { getWorkspaceBoardSetting, refreshWorkspaceBoardSetting, resetWorkspaceBoardSettingForTest, setWorkspaceBoardEnabled } from "./workspace-board-setting";
+
+// the hub's pushes, by type, as the switch's module listens for them
+const pushes = vi.hoisted(() => new Map<string, (msg: Record<string, unknown>) => void>());
+vi.mock("./store", async (orig) => ({
+  ...(await orig<typeof import("./store")>()),
+  onHubEvent: (type: string, l: (msg: Record<string, unknown>) => void) => {
+    pushes.set(type, l);
+    return () => {};
+  },
+}));
 
 interface Held {
   method: string;
@@ -154,5 +165,44 @@ describe("workspace board switch: a read that fails", () => {
     await read;
     expect(getWorkspaceBoardSetting()).toMatchObject({ enabled: true, canWrite: false });
     expect((getWorkspaceBoardSetting().error as ApiError).status).toBe(404);
+  });
+});
+
+describe("workspace board switch: a push after a read that failed", () => {
+  const settled = async () => {
+    for (let i = 0; i < 5; i++) await settle();
+  };
+  afterEach(() => resetManagerChoice());
+
+  it("takes on or off from the push, but not that this device can't change it, and reads the switch again for that", async () => {
+    const held = heldHub();
+    settleRosterDefault(); // the roster names the default manager, whose switch the page reads
+    await settled();
+    expect(held).toHaveLength(1);
+    held[0].answer({ error: "database is down", code: "internal" }, 500);
+    await settled();
+    expect(getWorkspaceBoardSetting().enabled).toBeNull();
+
+    pushes.get("workspace_board_settings")!({ type: "workspace_board_settings", enabled: true }); // another device turned it on
+    expect(getWorkspaceBoardSetting().enabled).toBe(true);
+    // who may change it is still unknown: the failure stays, so Settings doesn't call this device read-only
+    expect((getWorkspaceBoardSetting().error as ApiError).status).toBe(500);
+    await settled();
+    expect(held.map((h) => h.method)).toEqual(["GET", "GET"]);
+    held[1].answer({ enabled: true, can_write: true });
+    await settled();
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: true });
+  });
+
+  it("after a read that worked, a push changes only on or off and reads nothing more", async () => {
+    const held = heldHub();
+    settleRosterDefault();
+    await settled();
+    held[0].answer({ enabled: false, can_write: false });
+    await settled();
+    pushes.get("workspace_board_settings")!({ type: "workspace_board_settings", enabled: true });
+    await settled();
+    expect(held).toHaveLength(1);
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: false });
   });
 });

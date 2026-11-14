@@ -29,8 +29,9 @@ import { Icon } from "../ui/icons";
 import { SearchField } from "../ui/SearchField";
 import { t } from "../i18n";
 
-/** From this many open to-dos the list gets a search field: more than its box shows at once. */
-export const LINK_SEARCH_FROM = 8;
+/** From this many open to-dos the list gets a search field: its box shows five two-line rows whole (and a peek of the
+ *  sixth, so a longer list is seen to scroll), so from six one has to be scrolled to. */
+export const LINK_SEARCH_FROM = 6;
 
 /** The open to-dos whose title, notes or project name hold `query` (all of them for an empty one). */
 export function matchTodos(todos: readonly Todo[], query: string, project: (slug: string) => string = (slug) => slug): Todo[] {
@@ -193,7 +194,7 @@ export function LinkTodoDialog({
         <div className="text-[12.5px] text-ink-3">{description}</div>
 
         {uncompleted.length === 0 ? (
-          <div className="py-4 text-center text-[13px] text-ink-3">{t("linktododialog.empty")}</div>
+          <div className="py-4 text-center text-meta text-ink-3">{t("linktododialog.empty")}</div>
         ) : (
           <TodoChoices todos={uncompleted} currentTodoId={currentTodoId} busy={busy} onPick={(todo) => void handleSelect(todo)} />
         )}
@@ -280,12 +281,24 @@ function TodoChoices({ todos, currentTodoId, busy, onPick }: { todos: Todo[]; cu
   return (
     <>
       {searchable && (
-        <SearchField tone="inset" autoFocus={hasFinePointer()} value={query} onChange={setQuery} placeholder={t("linktododialog.search")} />
+        <SearchField
+          tone="inset"
+          autoFocus={hasFinePointer()}
+          value={query}
+          onChange={setQuery}
+          onKeyDown={(e) => {
+            // Escape empties the search first (the dialog stays); with nothing typed it reaches the dialog and closes it
+            if (e.key !== "Escape" || !query || composing(e.nativeEvent)) return;
+            e.stopPropagation();
+            setQuery("");
+          }}
+          placeholder={t("linktododialog.search")}
+        />
       )}
       {shown.length === 0 ? (
-        <div className="py-4 text-center text-[13px] text-ink-3">{t("linktododialog.no_match")}</div>
+        <div className="py-4 text-center text-meta text-ink-3">{t("linktododialog.no_match")}</div>
       ) : (
-        <div className="flex max-h-64 flex-col gap-1 overflow-y-auto rounded-control border border-line p-1" data-link-todos>
+        <div className="flex max-h-72 flex-col gap-1 overflow-y-auto rounded-control border border-line p-1" data-link-todos>
           {shown.map((todo) => {
             const isCurrent = todo.id === currentTodoId;
             const status = todoStatus(todo, lookup);
@@ -303,7 +316,7 @@ function TodoChoices({ todos, currentTodoId, busy, onPick }: { todos: Todo[]; cu
                 )}
               >
                 <span className="min-w-0 flex-1">
-                  <span className={cx("block truncate text-[13px]", isCurrent && "font-medium")}>{todo.title}</span>
+                  <span className={cx("block truncate text-meta", isCurrent && "font-medium")}>{todo.title}</span>
                   <span className="block truncate text-xs text-ink-3">
                     <span className={TODO_TONE_CLASS[tone]}>{todoStatusLabel(todo, status)}</span>
                     {where.map((part) => ` · ${part}`).join("")}

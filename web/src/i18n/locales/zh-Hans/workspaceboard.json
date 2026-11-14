@@ -93,6 +93,7 @@
   "work_open_todo": "打开待办",
   "switch_failed": "读不到工作流看板的开关",
   "unsupported_title": "更新 hub 后才能用工作流看板",
+  "unsupported_body": "这个 hub 的版本太旧，或者没开看板存储。",
   "open_hub_settings": "打开 hub 设置",
   "setting_failed": "读不到工作流看板的开关：{error}",
   "setting_unsupported": "这个 hub 的版本还没有这个开关。更新 hub 后，就能在这里打开或关闭看板。"

@@ -11,7 +11,9 @@ export function AgentGroup() {
   const toggle = (on: boolean) => void setWorkspaceBoardEnabled(on).catch((e) => toast(errorText(e), "error"));
   // a hub from before the switch (404) has none to show: what to do about it, not a switch that can't move
   const missing = board.error instanceof ApiError && board.error.status === 404;
-  const readonly = board.enabled !== null && !board.canWrite && !missing;
+  // read-only only when the hub said so: after a read that failed, a push says on or off but not who may change it
+  // (the switch is read again; a write the hub refuses is put back and says why)
+  const readonly = board.enabled !== null && !board.canWrite && !board.error;
   return (
     <Group title={t("workspace-board.setting_group")} anchor="agent-group">
       {board.enabled === null && board.error ? (

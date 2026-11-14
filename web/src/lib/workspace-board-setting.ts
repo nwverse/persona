@@ -10,11 +10,13 @@ export interface WorkspaceBoardSetting {
   /** null until the hub answered: nothing shows the board (or says it is off) before that. */
   enabled: boolean | null;
   canWrite: boolean;
-  /** Why the switch could not be read, kept while it decides what the pages show; unset once the hub answers:
+  /** Why the switch could not be read, kept while it decides what the pages show; unset once a read or a write answers:
    *  - while nothing is known yet, the board page and Settings say why (errorText) with Retry instead of loading
    *    forever; the next hello reads it again too;
    *  - a 404 is a hub from before the switch, which showed the board to everyone: the board shows, and Settings says
-   *    only updating the hub brings the switch, rather than "read-only device". */
+   *    only updating the hub brings the switch, rather than "read-only device";
+   *  - a push after such a read says on or off but not whether this device may change it (canWrite is still unknown):
+   *    it stays, so Settings offers the switch rather than calling the device read-only, and the switch is read again. */
   error?: unknown;
 }
 
@@ -96,6 +98,8 @@ onHubEvent("workspace_board_settings", (e) => {
   if (typeof e.enabled !== "boolean" || !defaultKnown() || !fromDefaultManager(e)) return;
   rev++;
   set({ ...state, enabled: e.enabled });
+  // the last read failed, so who may change it is still unknown: ask (its answer is newer than this push)
+  if (state.error !== undefined) void refreshWorkspaceBoardSetting();
 });
 // the default became known or moved: its switch, which may have changed while its pushes were left out
 onDefaultManager(() => void refreshWorkspaceBoardSetting());

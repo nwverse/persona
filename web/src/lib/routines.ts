@@ -1,5 +1,6 @@
 // The assistant's scheduled tasks (docs/assistant/assistant.md "Scheduled tasks", docs/protocol/protocol.md `/assistant/tasks`): the wire types,
-// how a task is said in words (the iOS app's AssistantScheduleText), what the editor checks, and the body it saves.
+// how a task is said in words (the iOS app's AssistantScheduleText, except that a daily rule's time is 24-hour here, as
+// its next run is; iOS still writes it in 12-hour time, #7499), what the editor checks, and the body it saves.
 // Pure functions of their arguments (`now` passed in), so they are tested without a DOM.
 import { formatDate, t } from "../i18n";
 import { launcherTitle, type Named } from "./provider-names";

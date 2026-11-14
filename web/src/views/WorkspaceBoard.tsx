@@ -164,8 +164,9 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   };
   // This hub has no board (an older one, or one without board storage): one message and where to update it, none of
   // the board's controls (they would change nothing) and no Retry (the page reads again by itself, so an update shows it).
+  // The title says what to do, so the body gives only why (state.error, the inline line's words, says to update again).
   if (state.unsupported && !board) return <BoardPage onToggleSidebar={onToggleSidebar}>
-    <BoardNotice title={t("workspaceboard.unsupported_title")} body={state.error}
+    <BoardNotice title={t("workspaceboard.unsupported_title")} body={t("workspaceboard.unsupported_body")}
       action={<Button tone="primary" icon="gear" className="whitespace-nowrap" onClick={openHubSettings}>{t("workspaceboard.open_hub_settings")}</Button>} />
   </BoardPage>;
   return <div className="@container flex h-full flex-col bg-page">
