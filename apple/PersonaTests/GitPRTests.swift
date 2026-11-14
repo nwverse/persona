@@ -69,8 +69,9 @@ struct GitPRTests {
         // a detached HEAD reads nothing and shows nothing
         await model.read(try Self.status(branch: nil), machine: "mac", cwd: "/w", deps: deps)
         #expect(reads == 3 && model.answer == nil)
-        #expect(GitPRModel.pushedAll(try Self.status()) && !GitPRModel.pushedAll(try Self.status(ahead: 1))
-                && !GitPRModel.pushedAll(try Self.status(upstream: nil)) && !GitPRModel.pushedAll(try Self.status(gone: true)))
+        let pushed = try Self.status(), ahead = try Self.status(ahead: 1), bare = try Self.status(upstream: nil), gone = try Self.status(gone: true)
+        #expect(GitPRModel.pushedAll(pushed))
+        #expect(!GitPRModel.pushedAll(ahead) && !GitPRModel.pushedAll(bare) && !GitPRModel.pushedAll(gone))
     }
 
     @Test func aReadRefusalKeepsItsCodeAndTheQuietOnesShowNothing() async throws {
