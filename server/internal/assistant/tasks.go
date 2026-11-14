@@ -214,13 +214,15 @@ type tasksState struct {
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
 	// however many turns the wait's wakes end.
 	limitLooks map[SessionRef]time.Time
-	// sentBy: by agent (machine, session), the conversation that last sent it text for a task, when, the accepted task
-	// that send asks for more, and the send while it is out (noteAgentSend: agent_send, agent_interrupt with then, the
-	// owner's message on a task's card). A task its supervisor accepted opens again only after its own conversation
-	// (its supervisor, the background supervisor acting for it) sent its agent more (closedTurnReopens, #6726). The
-	// send reopens it once its answer is in, and that is stored (agentSendNote.sent, #7539); a turn that starts while
-	// it is out waits for that answer. In memory only: a restart while a send is out loses its reopen.
-	sentBy map[[2]string]agentSent
+	// sendsOut: by agent (machine, session), the sends of more for its accepted task from a conversation that may ask
+	// for it (noteAgentSend: agent_send, agent_interrupt with then, the owner's message on a task's card), while each
+	// still counts, and a turn of the agent held for them (closedTurnHeld). A task its supervisor accepted opens again
+	// only for those (closedTurnReopens, #6726, #7539). Kept in the database too (sendsOutKey, tasks_sends_out.go): a
+	// manager that restarts with one out takes it as a send whose answer is unknown. sendsSaving orders reading and
+	// writing them, the latest state last; sendsLoaded: what the manager before kept was read.
+	sendsOut    map[[2]string]*sendsOut
+	sendsSaving sync.Mutex
+	sendsLoaded bool
 	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
 	retrying map[string]bool
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).
@@ -251,7 +253,7 @@ type tasksState struct {
 func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]bool{},
-		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, sentBy: map[[2]string]agentSent{},
+		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, sendsOut: map[[2]string]*sendsOut{},
 		turns: turnsState{again: map[string]bool{}, looked: map[string]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
 			retry:   map[string]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}

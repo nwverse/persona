@@ -38,9 +38,11 @@ type fakeHub struct {
 	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
 	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
 	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list was
-	// answered. No lock held.
+	// answered. No lock held. sendHangs: session.send is never answered while the link stays up, and ends with the
+	// call's context, after beforeSend (a request that went out).
 	beforeSend    func()
 	afterList     map[string]func()
+	sendHangs     bool
 	hello         Hello
 	settings      *Settings
 	launcherList  []proto.Launcher                   // the nodes' launchers.list (nil: the list fails, so it can't be told)
@@ -219,11 +221,15 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	}
 	if p.Method == DeviceSessionSend {
 		f.mu.Lock()
-		hook := f.beforeSend
+		hook, hangs := f.beforeSend, f.sendHangs
 		f.beforeSend = nil
 		f.mu.Unlock()
 		if hook != nil {
 			hook()
+		}
+		if hangs {
+			<-ctx.Done()
+			return nil, ctx.Err()
 		}
 	}
 	if p.Method != DeviceSessionItems {

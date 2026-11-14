@@ -10,13 +10,16 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // #7539, the explicit reopens of an accepted task: whoever may ask it for more (its conversation, its supervisor, the
 // background supervisor acting for the main conversation) opens it again with what it sends the task's agent, and that
-// holds across a manager restart between the send and the turn it queued. Everyone else's sends, a bare /exit or /quit,
-// a card message for another task, and a send that definitely failed (even when a turn of the agent started while it
-// was out) leave it closed.
+// holds across a manager restart between the send and the turn it queued, also one before the send's answer came back.
+// Everyone else's sends (the background supervisor's for a task a side conversation supervises included), a bare /exit
+// or /quit, a card message for another task, a send that definitely failed or never went out (even when a turn of the
+// agent started while it was out), one whose answer never came with no turn of the agent soon after, and a card
+// message whose new agent did not start leave it closed.
 
 // longAgent is the session id of the agent a plannedTask runs on: long enough for the agent tools to find it.
 const longAgent = "s100001"
@@ -45,15 +48,20 @@ func plannedTask(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
 	return s, f, todo
 }
 
-// longTurn is agentTurn for the agent longAgent.
-func longTurn(s *Service, f *fakeHub, status, text string) {
-	ctx := context.Background()
+// longRow lists the agent longAgent on box with status and its last words text, as its node does.
+func longRow(f *fakeHub, status, text string) {
 	st := proto.StateUnread
 	if status == proto.StatusWorking {
 		st = proto.StateWorking
 	}
 	f.setSessions("box", proto.Session{SessionID: longAgent, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status,
 		State: st, LastText: text, UpdatedAt: time.Now()})
+}
+
+// longTurn is agentTurn for the agent longAgent.
+func longTurn(s *Service, f *fakeHub, status, text string) {
+	ctx := context.Background()
+	longRow(f, status, text)
 	if status == proto.StatusWorking {
 		s.taskWorking(ctx, "box", longAgent)
 	} else {
@@ -130,6 +138,28 @@ func beforeSend(f *fakeHub, fn func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.beforeSend = fn
+}
+
+// failSends has every session.send f gets next fail with err (nil: answered).
+func failSends(f *fakeHub, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failSend = err
+}
+
+// shortSends makes a live send wait at most wait, and a send of more for an accepted task count grace past its own
+// wait, for this test.
+func shortSends(t *testing.T, wait, grace time.Duration) {
+	t.Helper()
+	oldWait, oldGrace := liveSendWait, sendGrace
+	liveSendWait, sendGrace = wait, grace
+	t.Cleanup(func() { liveSendWait, sendGrace = oldWait, oldGrace })
+}
+
+// clockPast waits until the clock is past at.
+func clockPast(t *testing.T, at time.Time) {
+	t.Helper()
+	waitFor(t, "the clock to pass "+at.Format(time.RFC3339Nano), func() bool { return time.Now().After(at) })
 }
 
 // The background supervisor accepts the main conversation's plan-started task (its ledger keeps the main conversation
@@ -224,35 +254,46 @@ func TestMoreForAnAcceptedTaskSurvivesARestart(t *testing.T) {
 }
 
 // A turn of the agent starts while a send of more for its accepted task is out (its own wakeup, say, or the send's
-// own turn coming in before the node's answer). The turn waits for that answer: when the send definitely failed, it
+// own turn coming in before the node's answer). The turn waits for that answer. When the send definitely failed (the
+// node refused it, or it never went out: cancelled, or its wait ran out while the node refused it as restarting), it
 // was other work, and the task stays closed through it and its end, with nothing judged, receipted or told. When the
-// node took the send, the task opens and the turn is the task's: its done end waits for review, also when that end
-// came before the answer.
+// node took the send, or its answer never came, the task opens and the turn is the task's: its done end waits for
+// review, also when that end came before the answer.
 func TestATurnDuringASendWaitsForItsAnswer(t *testing.T) {
+	outcomes := []struct {
+		name string
+		err  error // the send's (nil: taken)
+		// failed: the send definitely asked for nothing; ended: the turn's end comes before the answer
+		failed, ended bool
+	}{
+		{"failed", errors.New("the input box holds a draft; nothing was typed"), true, false},
+		{"never went out, cancelled", rpc.NotSent(context.Canceled), true, false},
+		{"never went out, its wait ran out", rpc.NotSent(context.DeadlineExceeded), true, false},
+		{"no answer", context.DeadlineExceeded, false, false},
+		{"no answer, ended first", context.DeadlineExceeded, false, true},
+		{"sent", nil, false, false},
+		{"sent, ended first", nil, false, true},
+	}
 	for _, via := range []string{"agent_send", "agent_interrupt", "card"} {
-		for _, outcome := range []string{"failed", "sent", "sent, ended first"} {
-			t.Run(via+", "+outcome, func(t *testing.T) {
+		for _, o := range outcomes {
+			t.Run(via+", "+o.name, func(t *testing.T) {
 				s, f, accepted := acceptedPlanTask(t, nil)
 				before, judged, receipted := supervisionOf(s, f, accepted.ID), judgeCalls(f), receiptCount(t, s)
-				if outcome == "failed" {
-					f.mu.Lock()
-					f.failSend = errors.New("the input box holds a draft; nothing was typed")
-					f.mu.Unlock()
-				}
+				failSends(f, o.err)
 				beforeSend(f, func() {
 					longTurn(s, f, proto.StatusWorking, "")
 					if got := todoNow(s, accepted.ID); got.DoneAt == nil {
 						t.Errorf("reopened by a turn before the send's answer: %+v", got)
 					}
-					if outcome == "sent, ended first" {
+					if o.ended {
 						longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
 					}
 				})
 				err := sendVia(t, s, via, "conv1", accepted.ID, "Please cover the landscape case too")
-				if outcome == "failed" {
-					if err == nil {
-						t.Fatal("the send did not fail")
-					}
+				if (err != nil) != (o.err != nil) {
+					t.Fatalf("the send: %v, want %v", err, o.err)
+				}
+				if o.failed {
 					closedUnchanged(t, s, accepted)
 					longTurn(s, f, proto.StatusDone, "The other dashboard looks fine")
 					closedUnchanged(t, s, accepted)
@@ -265,19 +306,274 @@ func TestATurnDuringASendWaitsForItsAnswer(t *testing.T) {
 					nothingToldAfter(t, s, f, accepted.ID, before)
 					return
 				}
-				if err != nil {
-					t.Fatalf("the send: %v", err)
-				}
 				if got := todoNow(s, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
-					t.Fatalf("the send was taken, and the task stayed closed: %+v", got)
+					t.Fatalf("the send was taken or may have been, its turn started, and the task stayed closed: %+v", got)
 				}
-				if outcome == "sent" {
+				if !o.ended {
 					longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
 				}
 				waitFor(t, "the review again", func() bool { return todoNow(s, accepted.ID).Supervision.State == reviewPending })
 				waitFor(t, "the next review message", func() bool { return supervisionOf(s, f, accepted.ID).notices > before.notices })
 			})
 		}
+	}
+}
+
+// A send of more whose answer never came (the wait ran out, the link dropped) may still reach the agent. The accepted
+// task stays closed until a turn of the agent starts while the send still counts (its own wait and a grace after it):
+// that turn opens the task and is the task's. When no turn starts by then, the text never arrived as far as the task
+// goes: a later turn leaves it closed, and its supervisor hears nothing.
+func TestAnUnknownSendReopensOnlyForATurnSoonAfter(t *testing.T) {
+	for _, via := range []string{"agent_send", "card"} {
+		for _, late := range []bool{false, true} {
+			name := via + ", its turn starts soon after"
+			if late {
+				name = via + ", no turn before it stops counting"
+			}
+			t.Run(name, func(t *testing.T) {
+				if late {
+					shortSends(t, 200*time.Millisecond, 100*time.Millisecond)
+				}
+				s, f, accepted := acceptedPlanTask(t, nil)
+				before := supervisionOf(s, f, accepted.ID)
+				failSends(f, context.DeadlineExceeded)
+				if err := sendVia(t, s, via, "conv1", accepted.ID, "Please cover the landscape case too"); err == nil {
+					t.Fatal("the send's answer came")
+				}
+				returned := time.Now()
+				closedUnchanged(t, s, accepted) // nothing arrived yet
+				if late {
+					clockPast(t, returned.Add(liveSendWait+sendGrace))
+					longTurn(s, f, proto.StatusWorking, "")
+					closedUnchanged(t, s, accepted)
+					longTurn(s, f, proto.StatusDone, "The other dashboard looks fine")
+					closedUnchanged(t, s, accepted)
+					nothingToldAfter(t, s, f, accepted.ID, before)
+					return
+				}
+				longTurn(s, f, proto.StatusWorking, "")
+				if got := todoNow(s, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+					t.Fatalf("the turn soon after a send with no answer left the task closed: %+v", got)
+				}
+				longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+				waitFor(t, "the review again", func() bool { return todoNow(s, accepted.ID).Supervision.State == reviewPending })
+				waitFor(t, "the next review message", func() bool { return supervisionOf(s, f, accepted.ID).notices > before.notices })
+			})
+		}
+	}
+}
+
+// A live agent's node never answers agent_send while its link stays up (a runtime's tool call has no deadline of its
+// own). The send still ends with its own wait, as one whose answer never came, and a turn of the agent held for that
+// answer meanwhile is the task's: the task opens, and the turn's done end waits for review, whether it came before the
+// wait ran out or after.
+func TestALiveSendNeverAnsweredEndsWithItsWait(t *testing.T) {
+	for _, ended := range []bool{false, true} {
+		name := "the turn ends after the wait"
+		if ended {
+			name = "the turn ends during the wait"
+		}
+		t.Run(name, func(t *testing.T) {
+			shortSends(t, 300*time.Millisecond, time.Minute)
+			s, f, accepted := acceptedPlanTask(t, nil)
+			before := supervisionOf(s, f, accepted.ID)
+			f.mu.Lock()
+			f.sendHangs = true
+			f.mu.Unlock()
+			beforeSend(f, func() {
+				longTurn(s, f, proto.StatusWorking, "")
+				if ended {
+					longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+				}
+			})
+			done := make(chan error, 1)
+			go func() { done <- sendTo(t, s, "agent_send", "conv1", "Please cover the landscape case too") }()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("the send no node answered: %v, want its wait run out", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the send no node answered never ended")
+			}
+			if got := todoNow(s, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+				t.Fatalf("the turn held for the send left the task closed: %+v", got)
+			}
+			if !ended {
+				longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+			}
+			waitFor(t, "the review again", func() bool { return todoNow(s, accepted.ID).Supervision.State == reviewPending })
+			waitFor(t, "the next review message", func() bool { return supervisionOf(s, f, accepted.ID).notices > before.notices })
+		})
+	}
+}
+
+// Two sends to the agent overlap: a turn of the agent starts while the first, of more for the accepted task, is out,
+// and is held for its answer; a second send is made before the turn ends (another conversation's, or more for the task
+// again); the turn ends before either answer. The second send does not hide the held turn: once the task opens, the
+// turn and its end are the task's, and the task waits for review again. When the first send fails, the second one,
+// for the task too, takes the turn up.
+func TestOverlappingSendsKeepTheHeldTurn(t *testing.T) {
+	failed := errors.New("the input box holds a draft; nothing was typed")
+	for _, c := range []struct {
+		name, second  string // the conversation the second send is from
+		first, latter error  // how each went
+	}{
+		{"another conversation's send meanwhile, which fails", "conv7", nil, failed},
+		{"more for the task again meanwhile", "conv1", nil, nil},
+		{"the first fails, the second for the task is taken", "conv1", failed, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, f, accepted := acceptedPlanTask(t, nil)
+			before := supervisionOf(s, f, accepted.ID)
+			first := s.noteAgentSend(ctx, "conv1", "box", longAgent, "", "Please cover the landscape case too")
+			longTurn(s, f, proto.StatusWorking, "") // held for the first send's answer
+			closedUnchanged(t, s, accepted)
+			second := s.noteAgentSend(ctx, c.second, "box", longAgent, "", "And the portrait case")
+			longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged") // put off
+			closedUnchanged(t, s, accepted)
+			first.sent(ctx, c.first)
+			second.sent(ctx, c.latter)
+			if got := todoNow(s, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+				t.Fatalf("a send for the task was taken, and the task stayed closed: %+v", got)
+			}
+			waitFor(t, "the review again", func() bool { return todoNow(s, accepted.ID).Supervision.State == reviewPending })
+			waitFor(t, "the next review message", func() bool { return supervisionOf(s, f, accepted.ID).notices > before.notices })
+		})
+	}
+}
+
+// More for an accepted task reaches its live agent, and the manager restarts before the node's answer to the send came
+// back (the node had queued the text). The restarted manager takes the kept send as one whose answer is unknown: the
+// agent's turn that starts while it counts is the task's (open, followed, judged, waiting for review), and one that
+// starts after it stopped counting leaves the task closed. A turn that started while the send was out, before the
+// restart, is the task's too once the manager starts (recoverSendsOut, as Run does), also when it ended before.
+func TestMoreForAnAcceptedTaskSurvivesARestartBeforeItsAnswer(t *testing.T) {
+	for _, c := range []struct {
+		name, via string
+		// before: what the agent did while the send was out, before the restart: "" nothing, "started" a turn,
+		// "ended" a turn that started and ended
+		before string
+		late   bool // the turn starts after the send stopped counting
+	}{
+		{"card", "card", "", false},
+		{"agent_send", "agent_send", "", false},
+		{"agent_interrupt", "agent_interrupt", "", false},
+		{"agent_send, a turn started before the restart", "agent_send", "started", false},
+		{"card, a turn started and ended before the restart", "card", "ended", false},
+		{"agent_send, its turn starts after the send stopped counting", "agent_send", "", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if c.late {
+				shortSends(t, 200*time.Millisecond, 100*time.Millisecond)
+			}
+			ctx := context.Background()
+			database := taskRecoveryDatabase(t)
+			s, f, accepted := acceptedPlanTask(t, database)
+			out, gone, answered := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+			beforeSend(f, func() {
+				if c.before != "" {
+					longTurn(s, f, proto.StatusWorking, "")
+				}
+				if c.before == "ended" {
+					longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+				}
+				close(out)
+				<-gone // the manager that sent it stopped: it never reads the answer
+			})
+			go func() { answered <- sendVia(t, s, c.via, "conv1", accepted.ID, "Please cover the landscape case too") }()
+			defer func() { // the old manager's call ends, as one that failed, once this test is done with it
+				failSends(f, errors.New("the manager that sent it stopped"))
+				close(gone)
+				<-answered
+			}()
+			<-out
+			sent := time.Now()
+			closedUnchanged(t, s, accepted)
+
+			// The manager restarts while the send is out.
+			restarted, hub := newQuietServiceOn(t, database)
+			hub.judge = `{"verdict":"done","reason":"merged"}`
+			switch c.before {
+			case "started":
+				longRow(hub, proto.StatusWorking, "")
+			case "ended":
+				longRow(hub, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+			}
+			restarted.recoverSendsOut(ctx) // as Run does when the manager starts
+			if c.before == "" {
+				closedUnchanged(t, restarted, accepted) // the restart alone opens nothing
+				if c.late {
+					clockPast(t, sent.Add(liveSendWait+sendGrace))
+					longTurn(restarted, hub, proto.StatusWorking, "")
+					closedUnchanged(t, restarted, accepted)
+					return
+				}
+				longTurn(restarted, hub, proto.StatusWorking, "")
+			}
+			if got := todoNow(restarted, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+				t.Fatalf("after the restart, the turn its %s queued left the task closed: %+v", c.via, got)
+			}
+			if c.before != "ended" {
+				longTurn(restarted, hub, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+			}
+			waitFor(t, "the review again", func() bool { return todoNow(restarted, accepted.ID).Supervision.State == reviewPending })
+			waitFor(t, "the review message after the restart", func() bool { return supervisionOf(restarted, hub, accepted.ID).notices == 1 })
+		})
+	}
+}
+
+// The background supervisor stands in for the main conversation only. A task a side conversation supervises sends that
+// conversation its review signals; once accepted, the background supervisor's agent_send or agent_interrupt to its
+// agent, and the agent's turn after it, leave it closed.
+func TestBackgroundSupervisorLeavesASideConversationsTaskClosed(t *testing.T) {
+	for _, tool := range []string{"agent_send", "agent_interrupt"} {
+		t.Run(tool, func(t *testing.T) {
+			s, f, todo, bg := acceptedByBackground(t)
+			side := todo
+			ledger := *todo.Supervision
+			side.Origin, ledger.Supervisor, side.Supervision = "side1", "side1", &ledger
+			putTodo(s, side)
+			if !s.backgroundSupervises(context.Background(), bg, side) {
+				t.Fatal("the background supervisor may not review the side conversation's task")
+			}
+			if err := sendTo(t, s, tool, bg, "Add the landscape case to the tests"); err != nil {
+				t.Fatalf("%s from the background supervisor: %v", tool, err)
+			}
+			closedUnchanged(t, s, side)
+			longTurn(s, f, proto.StatusWorking, "")
+			closedUnchanged(t, s, side)
+		})
+	}
+}
+
+// The owner's message on the card of an accepted task whose agents have all stopped starts a new agent for it. When
+// that start definitely fails (the agent's computer is unreachable, its launcher is refused), nothing was asked of the
+// task: it stays exactly as accepted, and its supervisor hears nothing of it.
+func TestACardMessageWhoseNewAgentFailsLeavesTheTaskClosed(t *testing.T) {
+	for _, why := range []string{"computer unreachable", "launcher refused"} {
+		t.Run(why, func(t *testing.T) {
+			ctx := context.Background()
+			s, f, todo := doneAndReviewed(t)
+			accepted := reviewAndWait(t, s, todo.ID, reviewAccepted)
+			before := supervisionOf(s, f, todo.ID)
+			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+				LastText: "Fixed it: PR https://github.com/o/r/pull/77 is merged", Status: proto.StatusOffline, State: proto.StateOffline,
+				UpdatedAt: time.Now(), Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}, ReadOnlyReason: "stopped"})
+			f.mu.Lock()
+			if why == "computer unreachable" {
+				f.devices = []Device{{ID: "box", Name: "box", Online: true, Reachable: false}}
+			} else {
+				f.failStart = errors.New("launcher not found")
+			}
+			f.mu.Unlock()
+			if _, err := s.routeToTask(ctx, "conv1", todo.ID, "Please cover the landscape case too"); err == nil {
+				t.Fatal("the new agent started")
+			}
+			closedUnchanged(t, s, accepted)
+			nothingToldAfter(t, s, f, todo.ID, before)
+		})
 	}
 }
 

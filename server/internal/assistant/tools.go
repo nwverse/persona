@@ -338,10 +338,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			params["text"] = withAttachments(text, handed)
 		}
 		sending, _ := params["text"].(string)
-		note := s.noteAgentSend(ctx, self, am.ID, c.SessionID, "", sending) // more from its task's conversation reopens an accepted task (#6726, #7539)
 		if c.Status != proto.StatusOffline {
-			err := s.call(ctx, am.ID, DeviceSessionSend, params, nil)
-			note.sent(ctx, err) // an unknown answer counts as sent: it may still arrive and start the turn
+			// A running agent takes it at once: bounded however long the caller waits (a runtime's tool call has no
+			// deadline), so the send is answered, and a turn held for it is not held for good.
+			lctx, cancel := context.WithTimeout(ctx, liveSendWait)
+			defer cancel()
+			note := s.noteAgentSend(lctx, self, am.ID, c.SessionID, "", sending) // more from its task's conversation reopens an accepted task (#6726, #7539)
+			err := s.call(lctx, am.ID, DeviceSessionSend, params, nil)
+			note.sent(lctx, err) // an unknown answer counts for a turn that starts soon: it may still arrive
 			if err != nil {
 				return "", task.sendFailed(ctx, s, err)
 			}
@@ -352,6 +356,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
+		note := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", sending)
 		err = s.call(sctx, am.ID, DeviceSessionSend, params, nil)
 		note.sent(sctx, err)
 		if err != nil {
@@ -647,6 +652,17 @@ func startResultUnknown(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
+
+// sendUnknown: a session.send whose answer never came back, though it may have reached the node (startResultUnknown),
+// unless the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait ran out, or the
+// connection closed, before it was written, or the node's not-started refusals outlasted the retries).
+func sendUnknown(err error) bool {
+	return startResultUnknown(err) && !errors.Is(err, rpc.ErrNotSent)
+}
+
+// liveSendWait bounds a send to an agent that runs (agent_send, the owner's message on a task's card): its node types
+// it in at once. A var so tests shorten it.
+var liveSendWait = 90 * time.Second
 
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
 // built (not present before the start) adopts and links it like an answered start; otherwise (or when the pre-start
