@@ -20494,8 +20494,9 @@ def zrle_rect(px, W, x, y, w, h, z):
     return struct.pack(">I", len(comp)) + comp
 
 
-# MOCK_SCREEN_VIDEO=1|missing (#3954): MacBook's node offers the live screen's video channel (`screen_video`; =missing:
-# Screen Recording isn't granted for Persona Screen), and …/screen/video/connect?pair=… plays
+# MOCK_SCREEN_VIDEO=1|missing|denied (#3954): MacBook's node offers the live screen's video channel (`screen_video`;
+# =missing: Screen Recording isn't granted for Persona Screen and macOS hasn't asked yet; =denied: not granted, asked
+# once already, so Persona Screen is in System Settings' list), and …/screen/video/connect?pair=… plays
 # scripts/mock/screen_video/fixture.bin (HEVC) or fixture-h264.bin (a made-up desktop; make_fixture.sh makes them again),
 # picked as the helper picks its codec: the first of the `start`'s codecs there is a fixture for, else H.264 (#6558: a
 # browser without HEVC offers only H.264), round and round at 30 fps:
@@ -20549,7 +20550,7 @@ def screen_video_connect(h, mid):
     if not pair: return h.send_json({"error": "a pair is required"}, 400)
     if pair not in SCREEN_VIDEO["pairs"]:
         return h.send_json({"error": "the paired screen-sharing stream has not signed in"}, 403)
-    if SCREEN_VIDEO["refuse"] or SCREEN_VIDEO["mode"] == "missing":
+    if SCREEN_VIDEO["refuse"] or SCREEN_VIDEO["mode"] in ("missing", "denied"):
         return h.send_json({"error": "no live-screen video helper on this node"}, 503)
     key = h.headers.get("Sec-WebSocket-Key", "")
     accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
@@ -21725,7 +21726,8 @@ def computer_of(machine_id, enabled):
         c["displays"] = FAKE_NODE_DISPLAYS  # MOCK_SCREEN_DISPLAYS=2:node
     if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_VIDEO["mode"]:  # MOCK_SCREEN_VIDEO (#3954)
         c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
-                             "permission": "missing" if SCREEN_VIDEO["mode"] == "missing" else "granted"}
+                             "permission": "missing" if SCREEN_VIDEO["mode"] in ("missing", "denied") else "granted"}
+        if SCREEN_VIDEO["mode"] == "denied": c["screen_video"]["asked"] = True
     return c
 
 

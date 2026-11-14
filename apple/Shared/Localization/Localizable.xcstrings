@@ -149331,6 +149331,29 @@
       },
       "extractionState" : "manual"
     },
+    "That Mac will show a window: choose Open System Settings, then turn on Persona Screen." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That Mac will show a window: choose Open System Settings, then turn on Persona Screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その Mac にウインドウが表示されます。「システム設定を開く」を選んでから、Persona Screen をオンにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那台 Mac 上会弹一个窗口，点「打开系统设置」，然后打开 Persona Screen。"
+          }
+        }
+      }
+    },
     "That commit isn't in this repository" : {
       "localizations" : {
         "en" : {
