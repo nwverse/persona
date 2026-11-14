@@ -114,5 +114,6 @@
   "card_progress": "進捗",
   "card_of_goal": "{done} {value} / 目標 {goal}",
   "card_over": "超過",
-  "card_other": "その他"
+  "card_other": "その他",
+  "omp_stopped": "この omp セッションは停止しています。今はコンピューターでのみ続けられます（omp --resume）。ここからはまだメッセージを送れません。"
 }

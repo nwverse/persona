@@ -68,5 +68,6 @@
   "space_gone": "このコンピューターのどのエンジンにも、このスペースはもうありません。更新してからもう一度お試しください。",
   "assistant_service_tier_start_only": "Fast は新しい会話の最初のメッセージでのみ選択できます。既存の会話では速度を変更してください。",
   "assistant_service_tier_unsupported": "最初のメッセージから Fast を利用できるのは、Fast を提供する Codex モデルだけです。メッセージは送信されていません。",
-  "assistant_service_tier_refused": "Codex は最初のメッセージの前に Fast を適用できませんでした。メッセージは送信されていません。もう一度試すか、Standard を選んでください。"
+  "assistant_service_tier_refused": "Codex は最初のメッセージの前に Fast を適用できませんでした。メッセージは送信されていません。もう一度試すか、Standard を選んでください。",
+  "omp_resume_unknown": "この omp セッションは、まだ Persona から再開できません。コンピューターで omp --resume を使って続けてください。何も送信していません。"
 }

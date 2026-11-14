@@ -68,5 +68,6 @@
   "space_gone": "这台电脑上已经没有引擎列出这个空间了。刷新后再试。",
   "assistant_service_tier_start_only": "Fast 只能在新建对话时随第一条消息选择。已有对话请直接调整速度。",
   "assistant_service_tier_unsupported": "只有提供 Fast 的 Codex 模型才能从第一条消息起使用 Fast。这次没有发送。",
-  "assistant_service_tier_refused": "Codex 没能在第一条消息前启用 Fast。这次没有发送，请重试或改用 Standard。"
+  "assistant_service_tier_refused": "Codex 没能在第一条消息前启用 Fast。这次没有发送，请重试或改用 Standard。",
+  "omp_resume_unknown": "Persona 还不能从这里恢复这个 omp 会话，请在电脑上用 omp --resume 接着它。这次没有发送。"
 }

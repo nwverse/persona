@@ -68,5 +68,6 @@
   "space_gone": "No engine on this computer lists this space any more. Refresh and try again.",
   "assistant_service_tier_start_only": "Fast can be chosen only when starting a new conversation. Change it in the existing conversation instead.",
   "assistant_service_tier_unsupported": "Fast from the first message is available only for Codex models that offer it. Nothing was sent.",
-  "assistant_service_tier_refused": "Codex couldn’t apply Fast before the first message. Nothing was sent; try again or choose Standard."
+  "assistant_service_tier_refused": "Codex couldn’t apply Fast before the first message. Nothing was sent; try again or choose Standard.",
+  "omp_resume_unknown": "Persona can’t resume this omp session from here yet. Continue it on the computer with omp --resume. Nothing was sent."
 }
