@@ -491,13 +491,14 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
     no frame reordering, `MaxFrameDelayCount` 0, capture queue depth 3, NV12 straight into the encoder; ≈5 ms p50 and
     ≈10 ms p95 from a screen change to an encoded frame at 1080p60). The picture's long edge is at most `start.max_size`
     (never upscaled, even sides), the frame rate 1–60, and a keyframe comes at least every 10 s and whenever asked.
-  - **Messages**: `start` gets `hello` (codec, display, size), then `format` and a keyframe; `format` again whenever the
+  - **Messages**: `start` gets `hello` (codec, display, size, and `features` from a helper that has more, `tiers` for #6396's
+    quality tiers), then `format` and a keyframe; `format` again whenever the
     parameter sets change. A still screen gives no frames, so a `heartbeat` goes out each second nothing did. Each
     second frames did, `timing` carries the helper's medians for the phone's Connection Stats (`TimingWindow`):
     capture (display time to ScreenCaptureKit's callback, about 0), encode (VideoToolbox in to out) and network (half
     the round trip from a frame going out to the phone's report on it, so no clocks need to agree), and what went out.
-    `update` changes the bitrate cap and frame rate in place; a new display, size or codec restarts capture with a
-    fresh `hello`, `format` and keyframe. `paused` says why capture stopped (`permission`, `locked`, `login_window`,
+    `update` changes the bitrate cap, the frame rate and the size in place (a new size gets a new encoder, then `format`
+    and a keyframe; no new `hello`); a new display or codec restarts capture with a fresh `hello`, `format` and keyframe. `paused` says why capture stopped (`permission`, `locked`, `login_window`,
     `display_gone`, `busy`); when the Mac unlocks it sends `resumed` and starts again. The stream closing ends the
     helper.
 - **Node** (`screen.dial {id, pair, keep_awake}`, `node/screen.go`, `node/screenhelper.go`): starts the helper and
@@ -525,7 +526,7 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   (`…/ports/5900/connect?pair=…`, `RFBWebSocket`): 16 random bytes in hex, a new one each connection, so no other
   stream can bind video to it by guessing. Hubs and nodes from before the video channel ignore the parameter.
 - **Wire** (length-prefixed messages: u32 big-endian length, u8 type, body). Helper → phone: `hello`, `format`,
-  `frame`, `heartbeat`, `paused`, `resumed`, `timing`. Phone → helper: `start`, `report`, `keyframe`, `update`. Unknown types
+  `frame`, `heartbeat`, `paused`, `resumed`, `timing`, `encoding`. Phone → helper: `start`, `report`, `keyframe`, `update`. Unknown types
   are skipped by length, so either side may add more. `PersonaScreenKit` (`apple/Packages/PersonaScreenKit`, its own
   package for macOS and iOS) is the codec, shared by the helper and the app's client. `update.path`
   `{kind, via, min_rtt_ms}` (#6398) says the stream moved to another network route, so the helper can start its delay
@@ -539,6 +540,20 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   250 ms, so reports keep saying when the queue has drained. A stream starts at the phone's cap but at most 4 Mbit/s,
   and never goes below 0.2. The phone caps it: 12 Mbit/s
   on Wi-Fi, 4 on cellular, 1.5 in Low Data Mode; 15 fps in Low Power Mode or a serious thermal state.
+- **Quality tiers (#6396, the helper's side)**: a helper that can is a `hello` with `features: ["tiers"]` and the
+  display's size in `points` and `pixels`. A phone that picks tiers then adds the tier to `start` and `update`:
+  `scale` (pixels per point to encode at, never past the display's pixels, still capped by `max_size`), `min_kbps` (the
+  bitrate band's floor; `max_kbps` is its ceiling) and `target_kbps` (the bitrate to go to now). The helper applies a
+  new size or frame rate to the running capture and answers with `encoding` (type 8: width, height, fps, scale, band)
+  once it took effect, and after `hello`. With a band set, `RateController` keeps the bitrate inside it, a cut goes to
+  85% of the rate the last second's reports say arrived (30% down when they say too little), and the first 10 s raise
+  25% after each calm second until the first cut; the phone moves to another tier when the band no longer fits.
+  `update.path` (with or without a band) starts the 10 s delay floor, the delivered rate and the calm stretch over
+  (`RateController.pathChanged`): the new route's one-way delay is its own, not a queue.
+  `timing` adds `target_kbps` (the bitrate asked of the encoder; `kbps` is what went out), `skipped` (frames left out
+  over the 500 ms queue), `blocked_ms` (time frames waited to be written to the stream) and `pending` (the most frames
+  the encoder held at once). An app without tiers sends none of the new fields and gets the adaptation above unchanged;
+  apps and helpers before it skip `encoding` by length and ignore the new JSON keys.
 - **Switching**: RFB signs in first and shows until the first video frame decodes; the phone then stops asking RFB for
   updates (Screen Sharing encodes nothing meanwhile). It returns to RFB within about a second on any of: the stream
   closes, no frame or heartbeat for 3 s, a decoding error, or the Mac locks (`paused`), then retries video after 30 s
@@ -551,7 +566,8 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   signed in, shows its pictures in a layer over RFB's on the same display (`hello.rect`, else the display shown; RFB's layer is
   hidden meanwhile, so a picture of another shape leaves black, not a stale frame), and holds RFB's update requests while
   they show; the request held goes out when video stops, so RFB's picture catches up.
-  Video is chosen by default on a Mac that offers it (⋯ › Picture, kept per Mac) and runs only while one display is
+  Video is chosen by default on a Mac that offers it (⋯ › Picture, kept per Mac; ⋯ › Quality appears only once the
+  helper's `hello.features` has `tiers`, since before #6396 it would change nothing) and runs only while one display is
   shown: the Mac's only one, or one picked from several the node numbered; all of several displays at once stay RFB.
   It pauses while Picture in Picture shows the screen or the app is in the background (RFB carries the picture then).
   When VNC shows instead, a line under the bars says why in plain words: the video stopped, the Mac is locked, or the
@@ -615,6 +631,15 @@ iPhone's side comes next.
   `TCP_CONNECTION_INFO`, Linux `TCP_INFO`), the phone's measure of loss. When macOS's application firewall is on and the
   node isn't explicitly allowed through it (read with `socketfilterfw`, at most once a minute, never changed), the node
   doesn't listen and `paths` says `unavailable: "firewall"`, so no prompt appears on the Mac.
+- **The phone's side** (`PersonaScreenKit`, pure and tested with `swift test`): `ScreenLinkMessage` frames the wire
+  exactly as the node does (both check `spec/fixtures/screen-link`); `LinkReceiver` / `LinkSender` keep each channel's
+  offsets (bytes once and in order, what the node hasn't acknowledged kept within a window); `VideoMessageAssembler`
+  hands the decoder whole video messages only and drops a partial one on `reset`; `LinkMeter` turns pongs into
+  `LinkStats`; `RouteEligibility` names the phone interface a candidate may be dialed on (a LAN address only from
+  Wi-Fi or Ethernet on its subnet, a Tailscale address only through the phone's own Tailscale tunnel, never cellular,
+  another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
+  relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
+  route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
