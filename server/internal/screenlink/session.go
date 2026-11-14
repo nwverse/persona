@@ -134,6 +134,7 @@ type transport struct {
 type Registry struct {
 	limits Limits
 	logf   func(string, ...any)
+	direct *Direct // the direct routes' listener; nil: relays only
 
 	mu     sync.Mutex
 	byPair map[string]*Session
@@ -154,6 +155,13 @@ func (r *Registry) Get(pair string) *Session {
 	return r.byPair[pair]
 }
 
+// EnableDirect has the registry's sessions offer direct routes through d.
+func (r *Registry) EnableDirect(d *Direct) {
+	r.mu.Lock()
+	r.direct = d
+	r.mu.Unlock()
+}
+
 // Len is how many sessions are live (tests, logs).
 func (r *Registry) Len() int {
 	r.mu.Lock()
@@ -170,22 +178,30 @@ func (r *Registry) Open(pair string, rfb io.ReadWriteCloser) (*Session, io.ReadW
 	s := &Session{pair: pair, token: newToken(), limits: r.limits, logf: r.logf, now: time.Now,
 		chans: map[byte]*channel{}, ts: map[*transport]bool{}, done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
+	r.mu.Lock()
+	r.byPair[pair] = s
+	direct := r.direct
+	r.mu.Unlock()
 	s.onEnd = func() {
 		r.mu.Lock()
 		if r.byPair[pair] == s {
 			delete(r.byPair, pair)
 		}
 		r.mu.Unlock()
+		if direct != nil {
+			direct.leave(s)
+		}
 	}
-	r.mu.Lock()
-	r.byPair[pair] = s
-	r.mu.Unlock()
+	paths := Paths{Version: 1, Token: s.token, Candidates: []Candidate{}}
+	if direct != nil {
+		paths = direct.join(s)
+	}
+	body, _ := json.Marshal(paths)
 	s.mu.Lock()
 	ch := s.addChannelLocked(RFB, rfb, s.limits.WindowRFB)
 	relay := s.addTransportLocked(true, RFB, false)
 	ch.active, ch.home = relay, relay
-	paths, _ := json.Marshal(Paths{Version: 1, Token: s.token, Candidates: []Candidate{}})
-	relay.ctl = append(relay.ctl, frame(TypePaths, paths))
+	relay.ctl = append(relay.ctl, frame(TypePaths, body))
 	s.mu.Unlock()
 	go s.watch()
 	return s, s.startTransport(relay)
@@ -261,6 +277,58 @@ func (s *Session) Reattach(video bool) (io.ReadWriteCloser, bool) {
 	return s.startTransport(t), true
 }
 
+// setPaths tells the phone the direct routes changed (the node's addresses moved, or the firewall changed), on the
+// transport carrying RFB.
+func (s *Session) setPaths(p Paths) {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended {
+		return
+	}
+	t := s.chans[RFB].active
+	if t == nil || t.dead || t.pending {
+		for c := range s.ts {
+			if !c.dead && !c.pending {
+				t = c
+				break
+			}
+		}
+	}
+	if t == nil {
+		return
+	}
+	t.ctl = append(t.ctl, frame(TypePaths, body))
+	s.cond.Broadcast()
+}
+
+// addDirect is a direct connection that attached with this session's token (Direct.handshake): one more transport,
+// reading on with r. False when the session ended or has maxDirect already.
+func (s *Session) addDirect(conn net.Conn, r *reader, counter func() (uint32, uint32)) bool {
+	s.mu.Lock()
+	n := 0
+	for t := range s.ts {
+		if !t.relay && !t.dead {
+			n++
+		}
+	}
+	if s.ended || n >= maxDirect {
+		s.mu.Unlock()
+		return false
+	}
+	t := &transport{conn: conn, acks: map[byte]uint64{}, counter: counter}
+	t.ctl = append(t.ctl, frame(TypeAttached))
+	s.ts[t] = true
+	s.cond.Broadcast()
+	s.mu.Unlock()
+	go s.writeLoop(t)
+	go s.readFrom(t, r)
+	return true
+}
+
 // End ends the session: every transport and channel closes. Safe to call more than once.
 func (s *Session) End() {
 	s.mu.Lock()
@@ -323,7 +391,7 @@ func (s *Session) startTransport(t *transport) io.ReadWriteCloser {
 	t.conn = mine
 	s.mu.Unlock()
 	go s.writeLoop(t)
-	go s.readLoop(t)
+	go s.readFrom(t, newReader(mine))
 	if t.pending {
 		time.AfterFunc(s.limits.AttachWait, func() {
 			s.mu.Lock()
@@ -549,8 +617,7 @@ func (s *Session) dropBacklogLocked(ch *channel) {
 
 // MARK: phone → node
 
-func (s *Session) readLoop(t *transport) {
-	r := newReader(t.conn)
+func (s *Session) readFrom(t *transport, r *reader) {
 	for {
 		typ, body, err := r.next()
 		if err != nil {

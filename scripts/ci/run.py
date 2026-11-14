@@ -12,32 +12,38 @@ import time
 WINDOWS = os.name == "nt"
 
 
-def signal_tree(process, hard):
-    """Stops the command and what it started: its process group, or on Windows (no process groups here) its tree."""
+def resolve(command):
+    """On Windows, launchers such as npm are `.cmd` shims that CreateProcess finds only by their full path."""
+    if not WINDOWS:
+        return command
+    found = shutil.which(command[0])
+    return [found, *command[1:]] if found else command
+
+
+def terminate(process):
+    """Stop the command and everything it started: a process group on POSIX, the process tree on Windows."""
     if WINDOWS:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False)
-    else:
-        os.killpg(process.pid, signal.SIGKILL if hard else signal.SIGTERM)
+        process.wait()
+        return
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
 
 
 def run(label, seconds, command):
     started = time.monotonic()
     print(f"::group::{label}", flush=True)
-    if WINDOWS:
-        # CreateProcess does not look up npm.cmd for "npm" as a shell does: resolve the name through PATHEXT first.
-        command = [shutil.which(command[0]) or command[0], *command[1:]]
     try:
-        process = subprocess.Popen(command, start_new_session=True)
+        process = subprocess.Popen(resolve(command), start_new_session=not WINDOWS)
     except OSError as error:
         print(f"::endgroup::\nFAIL {label} (could not start command: {error})", flush=True)
         return 127
     def stop(signum, frame):
-        signal_tree(process, False)
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            signal_tree(process, True)
-            process.wait()
+        terminate(process)
         print(f"INTERRUPTED {label}", flush=True)
         raise SystemExit(128 + signum)
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -46,12 +52,7 @@ def run(label, seconds, command):
         code = process.wait(timeout=seconds)
         verdict = "PASS" if code == 0 else "FAIL"
     except subprocess.TimeoutExpired:
-        signal_tree(process, False)
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            signal_tree(process, True)
-            process.wait()
+        terminate(process)
         code, verdict = 124, "TIMEOUT"
     elapsed = time.monotonic() - started
     print(f"::endgroup::\n{verdict} {label} ({elapsed:.1f}s, exit {code})", flush=True)
