@@ -1,5 +1,11 @@
 # Lessons: hub / node and networking
 
+## On macOS a process holds inheritable sockets nobody meant to hand on (2026-11-14, #7489)
+
+Sealing what a process was handed (`osproc.SealInherited`, `claimInherited` in `server/internal/hub/listen.go`) does not cover what it makes later, and on macOS two kinds of socket are inheritable without anyone clearing close-on-exec. Go's `accept` there makes the new connection close-on-exec only after the call returns, without `syscall.ForkLock` (`src/internal/poll/sys_cloexec.go` in Go; Linux uses `accept4` with `SOCK_CLOEXEC`): a child started at that moment holds the connection too, and sealing it there keeps it open. The first lookup through the system resolver, Go's default on macOS, leaves a `com.apple.netsrc` kernel control socket open for the life of the process, never close-on-exec: every child started afterwards holds it (`lsof` shows `[ctl com.apple.netsrc …]`).
+
+A test process that has run other tests holds the servers and connections they left, so a test of what a child inherits must not depend on what that process holds: have the process that starts the child seal first, as the real one does, and hand it a stray descriptor of its own to show that it does. `TestPassedSocketsReachNoChild`'s exec helper took only the listeners before its exec and failed now and then in a full `go test ./internal/hub/` on a Mac (`a child got sockets [26]`); with a server accepting in a loop beside it, about one run in 1,500.
+
 ## An empty list sent as null means "no change" to an optional field (2026-11-14)
 
 The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.
