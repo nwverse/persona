@@ -816,7 +816,8 @@ func TestOwnerPresenceAndMainSupervisionQueue(t *testing.T) {
 	if n := s.queuedFor("conv1"); n != 2 || f.sentTo("conv1") != 1 {
 		t.Fatalf("while the owner writes there: %d queued, %d sent", n, f.sentTo("conv1"))
 	}
-	waitFor(t, "the first held message once the owner is quiet", func() bool { return f.sentTo("conv1") == 2 })
+	// Quiet again: one goes in per turn, and the one that waits on a decision goes before the one that came first.
+	waitFor(t, "the first held message once the owner is quiet", func() bool { return f.sentTo("conv1") == 2 && s.queuedFor("conv1") == 1 })
 	b := &s.relays
 	b.mu.Lock()
 	left := slices.Clone(b.st.Queue["conv1"])
