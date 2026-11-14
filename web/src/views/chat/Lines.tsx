@@ -32,7 +32,7 @@ export interface LineProps {
   assistant?: boolean;
   /** The hub's word on what to fix for the turn's model error (the session's turn_error_code): the chat's last line only,
    *  so its record reads as its banner did. */
-  fix?: { title: string; detail: string; action: string } | null;
+  fix?: { title: string; detail: string; action: string; launcher?: string } | null;
   /** The session is waiting out a subscription usage limit: the last error card says that, not that the turn was interrupted. */
   limit?: string;
   /** Inside an opened supervision trace, show complete injected inputs. */
@@ -325,7 +325,7 @@ export function ErrorBanner({ line, assistant, limit, fix, onRetry, onEditLastMe
   /** Waiting out a subscription usage limit: the banner says when it resets, as the line would. */
   limit?: string;
   /** The hub's word on what to fix for the turn's model error (the session's turn_error_code). */
-  fix?: { title: string; detail: string; action: string } | null;
+  fix?: { title: string; detail: string; action: string; launcher?: string } | null;
   /** Sends "continue"; offered only for an error that may pass by itself and needs no fix. */
   onRetry?: () => void;
   onEditLastMessage?: () => void;
@@ -356,7 +356,7 @@ function UsageLimitLine({ text, onDismiss }: { text: string; onDismiss?: () => v
 /** A model API error (cindy's error notice): why, in words, whether it passes by itself under it, then its actions; the
  *  ids, the status code, how many times in a row and the original are under "Error details". One the user must fix (not
  *  signed in, a wrong key, a model that is not there) says so instead, with "Fix it" (docs/assistant/onboarding.md 4.4). */
-function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix, onDismiss }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; onEditLastMessage?: () => void; fix?: { title: string; detail: string; action: string } | null; onDismiss?: () => void }) {
+function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix, onDismiss }: { info: APIErrorInfo; count: number; at?: string; onRetry?: () => void; onEditLastMessage?: () => void; fix?: { title: string; detail: string; action: string; launcher?: string } | null; onDismiss?: () => void }) {
   const sub = fix ? fix.detail : info.transient === true ? t("chat-lines.api_transient") : info.transient === false ? t("chat-lines.api_permanent") : "";
   const reason = (fix ? fix.title : info.reason) || t("chat-lines.reply_failed");
   return (
@@ -371,7 +371,7 @@ function APIErrorCard({ info, count, at, onRetry, onEditLastMessage, fix, onDism
       actions={
         <>
           {fix && (
-            <Button tone="primary" size="sm" className="touch-hit" onClick={() => runAction(fix.action, { onHelp: () => {} })}>
+            <Button tone="primary" size="sm" className="touch-hit" onClick={() => runAction(fix.action, { launcher: fix.launcher, onHelp: () => {} })}>
               {t("chat-lines.fix_it")}
             </Button>
           )}

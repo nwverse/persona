@@ -130,6 +130,20 @@ describe("turn errors", () => {
     expect(turnErrorFix(undefined)).toBeNull();
   });
 
+  it("names the affected launcher and keeps it with the repair action", async () => {
+    await initI18n("en");
+    try {
+      expect(turnErrorFix("not_logged_in", "team-relay")?.title).toBe("team-relay · Model not connected: Claude Code isn't signed in");
+      expect(turnErrorFix("auth_failed", "team-relay")?.title).toBe("team-relay · Model not connected: the key is wrong");
+      expect(turnErrorFix("model_route", "team-relay")?.title).toBe("team-relay · Model not connected: this model isn't available");
+      expect(turnErrorFix("auth_failed", "team-relay")?.launcher).toBe("team-relay");
+      // An older caller with no launcher keeps the generic words rather than showing a blank name.
+      expect(turnErrorFix("auth_failed")?.title).toBe("Model not connected: the key is wrong");
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+
   it("reads Claude Code's own refusals as model errors (the hub's markers)", () => {
     // i18n-ignore: Claude Code's words
     expect(parseAPIError("Not logged in · Please run /login")).toMatchObject({ code: "not_logged_in", transient: false });

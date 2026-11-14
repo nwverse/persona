@@ -56,6 +56,7 @@ internal fun NewAgentModelSheet(
     }
     JModelSheet(
         note = stringResource(R.string.agents_model_sheet_note, state.modelLauncher, list.agent.ifBlank { state.agentType }.agentLabel()),
+        owner = state.launchers.firstOrNull { it.name == state.modelLauncher }?.title ?: state.modelLauncher,
         models = list.models, selected = state.model, defaultDetail = defaultModelDetail(agentResources(), state),
         loading = state.models.loading, error = state.models.error?.text(),
         onPick = onPick, onRefresh = onRefresh, onDismiss = onDismiss, initialQuery = initialQuery,
