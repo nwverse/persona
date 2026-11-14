@@ -113,7 +113,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
     <Button tone="quiet" size="sm" className="-my-1 shrink-0" testId="inbox-original-toggle" expanded={embed ? originalOpen : undefined}
       icon={embed ? (originalOpen ? "list" : item.mail ? "mail" : "chat") : showEvent ? (item.mail ? "mail" : "chat") : "list"}
       onClick={embed ? toggleOriginal : () => setSource(showEvent ? {} : null)}>
-      {embed ? t(originalOpen ? "inbox-inboxdetail.view_event" : "inbox-inboxdetail.view_source") : t(showEvent ? "inbox-inboxdetail.view_source" : "inbox-inboxdetail.view_event")}
+      {embed ? t(originalOpen ? "inbox-inboxdetail.hide_source" : "inbox-inboxdetail.view_source") : t(showEvent ? "inbox-inboxdetail.view_source" : "inbox-inboxdetail.view_event")}
     </Button>
   ) : null;
   const muteRows: MenuItem[] = [
@@ -221,13 +221,15 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
         {embed ? (
           <>
             <EventBody item={item} onSource={openSource} embedded={originalOpen} />
-            <div className="shrink-0 border-b border-line px-4 py-1 sm:px-6">
-              <div className="mx-auto max-w-[760px]">
-                <Button tone="quiet" size="sm" testId="inbox-original-row-toggle" expanded={originalOpen} icon={originalOpen ? "list" : item.mail ? "mail" : "chat"} onClick={toggleOriginal}>
-                  {t(originalOpen ? "inbox-inboxdetail.view_event" : "inbox-inboxdetail.view_source")}
-                </Button>
+            {!originalOpen && (
+              <div className="shrink-0 border-b border-line px-4 py-1 sm:px-6">
+                <div className="mx-auto max-w-[760px]">
+                  <Button tone="quiet" size="sm" testId="inbox-original-row-toggle" expanded={false} icon={item.mail ? "mail" : "chat"} onClick={toggleOriginal}>
+                    {t("inbox-inboxdetail.view_source")}
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
             {originalOpen && own()}
           </>
         ) : showEvent ? <EventBody item={item} onSource={setSource} /> : !event && place ? <InboxExtensionBody key={`${itemKey(item)}/${place.extension}/${place.id}`} item={item} place={place} own={own} onOwn={setOwnShown} /> : own()}

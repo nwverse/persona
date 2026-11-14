@@ -92,11 +92,16 @@ const pressOriginal = async (testId: string) => {
   await flush();
 };
 const expectToggles = (open: boolean) => {
-  for (const testId of ["inbox-original-toggle", "inbox-original-row-toggle"]) {
-    const button = originalToggle(testId);
-    expect(button.textContent).toBe(t(open ? "inbox-inboxdetail.view_event" : "inbox-inboxdetail.view_source"));
-    expect(button.getAttribute("aria-expanded")).toBe(String(open));
+  const header = originalToggle("inbox-original-toggle");
+  expect(header.textContent).toBe(t(open ? "inbox-inboxdetail.hide_source" : "inbox-inboxdetail.view_source"));
+  expect(header.getAttribute("aria-expanded")).toBe(String(open));
+  const row = host.querySelector<HTMLButtonElement>('[data-testid="inbox-original-row-toggle"]');
+  if (open) {
+    expect(row).toBeNull();
+    return;
   }
+  expect(row?.textContent).toBe(t("inbox-inboxdetail.view_source"));
+  expect(row?.getAttribute("aria-expanded")).toBe("false");
 };
 const embedded = () => host.querySelector('[data-event-body="embedded"]');
 const pin = () => host.querySelector(`button[aria-label="${t("inbox-inboxdetail.pin_messages")}"]`);
@@ -131,7 +136,7 @@ afterEach(async () => {
 });
 
 describe("an embedded original starts collapsed", () => {
-  it("does not read or report a chat until expanded, and either Original control toggles the same body", async () => {
+  it("does not read or report a chat until expanded; the row expands it and the header hides it again", async () => {
     await draw(chatItem());
     expect(embedded()).toBeNull();
     expect(host.querySelector("[data-mid]")).toBeNull();
