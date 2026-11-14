@@ -5,7 +5,7 @@ import SwiftUI
 /// This Device › Live Screen. Its route part shows only while direct routes are offered (`ScreenRoutes.offered`);
 /// the quality tiers add their own section here.
 struct LiveScreenSettingsView: View {
-    @AppStorage(ScreenRoutePrefs.automaticKey) private var automatic = true
+    @StoredValue(ScreenRoutePrefs.automaticKey) private var automatic = true
 
     /// Whether Settings lists the page: while any of its sections has something to set.
     static var isShown: Bool { ScreenRoutes.offered }
@@ -23,6 +23,7 @@ struct LiveScreenSettingsView: View {
         }
         .themedPage()
         .detailTitle(String(localized: "Live Screen"))
+        .navigationBarTitleDisplayMode(.inline) // the centered title of Settings' pages (as Knowledge Selection)
         .onChange(of: automatic) { _, on in
             if !on { ScreenRoutes.turnedOff() }
         }

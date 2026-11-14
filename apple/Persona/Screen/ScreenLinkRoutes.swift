@@ -41,6 +41,8 @@ enum ScreenRoutes {
     @MainActor static var listeners: [String: @MainActor (PathChange) -> Void] = [:]
     /// And of the route in use as measured each second, with why the node has no direct routes when it says.
     @MainActor static var meters: [String: @MainActor (LinkStats?, String?) -> Void] = [:]
+    /// Each live screen's routes as last measured and the one in use, by pair (the DEBUG command channel reads them).
+    @MainActor static var latest: [String: (routes: [String: LinkStats], current: String, change: PathChange?)] = [:]
 
     /// A session opened for pair: register it for the video stream and start probing its direct routes.
     nonisolated static func opened(_ s: ScreenLinkSession, pair: String, group: String, machine: String) {
@@ -52,6 +54,7 @@ enum ScreenRoutes {
             probers[pair] = nil
             listeners[pair] = nil
             meters[pair] = nil
+            latest[pair] = nil
             ScreenLinkRegistry.shared.remove(pair)
         }
     }
@@ -270,7 +273,10 @@ actor ScreenLinkProber {
                 probe()
             case let .routes(routes, current, decision):
                 let stats = routes[current], why = paths?.unavailable, pair = pair
-                await MainActor.run { ScreenRoutes.meters[pair]?(stats, why) }
+                await MainActor.run {
+                    ScreenRoutes.meters[pair]?(stats, why)
+                    ScreenRoutes.latest[pair] = (routes, current, ScreenRoutes.latest[pair]?.change)
+                }
                 if case let .move(to, reason) = decision {
                     let kind = routes[to]?.kind.rawValue ?? "?"
                     ScreenRoutes.log.info("route: \(kind, privacy: .public) (\(reason.rawValue, privacy: .public)); \(routes.count) measured; in use \(current == to ? "yes" : "no", privacy: .public)")
@@ -280,7 +286,10 @@ actor ScreenLinkProber {
             case let .moved(change):
                 let kind = change.to.kind.rawValue, why = change.reason.rawValue, pair = pair
                 ScreenRoutes.log.info("moved to \(kind, privacy: .public) (\(why, privacy: .public))")
-                await MainActor.run { ScreenRoutes.listeners[pair]?(change) }
+                await MainActor.run {
+                    ScreenRoutes.listeners[pair]?(change)
+                    if let l = ScreenRoutes.latest[pair] { ScreenRoutes.latest[pair] = (l.routes, l.current, change) }
+                }
             case let .reopen(video):
                 let group = group, machine = machine, pair = pair
                 if let relay = await MainActor.run(body: { ScreenRoutes.reopenRelay(group: group, machine: machine, pair: pair, video: video) }) {
