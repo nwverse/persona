@@ -1476,6 +1476,22 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// A text key a newer hub added to a card: another type, or an empty string, reads as none and never drops the card.
+nonisolated struct LenientText: Codable, Hashable, Sendable {
+    var value: String?
+
+    init(_ value: String?) { self.value = value }
+
+    init(from decoder: Decoder) throws {
+        value = (try? decoder.singleValueContainer().decode(String.self)).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        if let value { try c.encode(value) } else { try c.encodeNil() }
+    }
+}
+
 /// A session's work state (docs/assistant/agent-work.md): the hub triages each stopped turn into done or blocked on something
 /// named, with one line for the lists. Only `phase` is always there.
 nonisolated struct WorkState: Codable, Hashable, Sendable {
@@ -2515,11 +2531,24 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var agentType: String?
     /// The asking session's `folded_under` (`Interaction.folded_under`). The card is shown on that parent. Absent from
     /// a hub without `sessions_hierarchy`, and on a card whose session is not folded.
-    var foldedUnder: String? = nil
-    /// How the asking session folds (`folded_as`).
-    var foldedAs: String? = nil
+    var foldedUnder: String? {
+        get { foldedUnderText?.value }
+        set { foldedUnderText = newValue.map(LenientText.init) }
+    }
+    /// How the asking session folds (`folded_as`): "worker", "side" (#7944).
+    var foldedAs: String? {
+        get { foldedAsText?.value }
+        set { foldedAsText = newValue.map(LenientText.init) }
+    }
     /// The side session whose chat shows the card when its session folds through one (`folded_side`, #7944, `SideFold`).
-    var foldedSide: String? = nil
+    var foldedSide: String? {
+        get { foldedSideText?.value }
+        set { foldedSideText = newValue.map(LenientText.init) }
+    }
+    /// What the three are stored as: a value of another type, or an empty one, reads as none and never drops the card.
+    var foldedUnderText: LenientText? = nil
+    var foldedAsText: LenientText? = nil
+    var foldedSideText: LenientText? = nil
 
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     /// The session the card is shown on. Answering still uses `id` and `sessionID`.
@@ -2547,8 +2576,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",
              toolTitle = "tool_title", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted", elicitation, mcpServerName = "mcp_server_name", mcpConfigSource = "mcp_config_source",
-             agentID = "agent_id", agentType = "agent_type", foldedUnder = "folded_under", foldedAs = "folded_as",
-             foldedSide = "folded_side"
+             agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under", foldedAsText = "folded_as",
+             foldedSideText = "folded_side"
     }
 }
 
