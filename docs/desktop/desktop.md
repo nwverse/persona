@@ -232,9 +232,10 @@ green.
 
 ## Small CI selection follow-up
 
-`scripts/ci/paths.py` selects the desktop lane for `desktop/**`, `web/**`, the synthetic hub and its desktop test,
-`spec/desktop-bridge.d.ts`, the desktop CI scripts and its workflow. These are the inputs the lane builds, loads or
-compiles. A regression in `scripts/ci/test_ci.py` checks each one. This does not change the default full-CI run or
+`scripts/ci/paths.py` selects the desktop lane for `desktop/**`, `web/**`, the synthetic hub and its stream helper
+and desktop test, `spec/desktop-bridge.d.ts`, the desktop CI scripts and its workflow. The web build also compiles the
+sign-in WebAssembly, so `server/cmd/password-wasm/**`, `server/internal/passwordpake/**` and `server/go.mod`/`go.sum`
+are inputs too. These are the inputs the lane builds, loads or compiles. A regression in `scripts/ci/test_ci.py` checks each one. This does not change the default full-CI run or
 explicit `desktop-test.yml` dispatch.
 
 ## Independent-review provenance
