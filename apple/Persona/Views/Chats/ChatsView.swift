@@ -326,159 +326,7 @@ struct ChatsView: View {
         let _ = searching
         SplitNavigation(path: pushing, listKey: unified == nil ? "agents.list" : "sidebar.list",
                         destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
-            agentsColumn
-                #if os(iOS) || os(visionOS)
-                .environment(header)
-                #endif
-                // The shell's top bar floats over the navigation bar: beside the split this page's own bar makes room
-                // for it (not the navigation container: a chat pushed on it must not move, nor the list on the way
-                // back, #340). On a phone the room is the list's first row's (`AgentsHeader`).
-                .background { ShellNavigationClearance(active: shell != nil && !ownsTop && !searching) }
-                .background { StackStillProbe(watcher: stackStill) }
-                #if os(macOS)
-                .onAppear { MacShellState.shared.agentsList = menuActions } // the shell's toolbar menu, Display › Collapse All / Expand All
-                #endif
-                .onChange(of: path.isEmpty) { _, atList in
-                    // Back at the list: the field shows what the results are for again (set it anew, the field is empty).
-                    guard atList, let q = searchedBeforePush else { return }
-                    searchedBeforePush = nil
-                    query = ""
-                    DispatchQueue.main.async { query = q }
-                }
-                // The Mac's buttons are in the list column's own title row (below); the shell is the phone's.
-                #if os(iOS) || os(visionOS)
-                .pageToolbar {
-                    if shell != nil || (ownsTop && header.up) {
-                        // The shell's own bar floats over this one (AgentsTopBar). Searching on a phone the field takes
-                        // the bar's row: no title under it either.
-                        ToolbarItem(placement: .principal) { Color.clear.frame(width: Theme.Size.hairline) }
-                            .sharedBackgroundVisibility(.hidden)
-                    } else {
-                        // Not on the Mac (#907): the connection state is at the foot of the window's sections column (and
-                        // the page's while that is hidden), and holding the bar's middle this empty item pushed New Session
-                        // out of the list column, an empty stretch to its left over the conversation. Without it the
-                        // button sits at the list column's trailing edge, by the conversation, as Mail's compose does.
-                        ToolbarItem(placement: .principal) { ConnectionTitle() }
-                        // On the Mac the shell shows it, next to its sidebar button (MacShell).
-                        ToolbarItem(placement: .topBarLeading) { AgentsListMenu(actions: menuActions) }
-                        if showsPersonalEntry {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button { openFromList(PersonalAgentsRoute()) } label: { Label("Personal Agents", systemImage: Theme.Icon.personalAgents) }
-                                    .accessibilityIdentifier("agents.personal")
-                            }
-                        }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button { newSession.wrappedValue = true } label: { Label("New Session [Chats View 58e21b]", systemImage: Theme.Icon.compose) }
-                        }
-                    }
-                }
-                #else
-                // In the list column's own title row, at its trailing edge (#1223): as window toolbar items they followed
-                // the window's middle, not the column (in the middle of the list at 920 wide, over the chat at 1800).
-                .overlay(alignment: .topTrailing) {
-                    if shell == nil { // always on the Mac: its window is not the phone's shell
-                        HStack(spacing: Theme.Space.s) {
-                            MacTitleRowButton(String(localized: "Personal Agents"), symbol: Theme.Icon.personalAgents) { openFromList(PersonalAgentsRoute()) }
-                            MacTitleRowButton(String(localized: "New Session [Chats View 58e21b]"), symbol: Theme.Icon.compose) { newSession.wrappedValue = true }
-                        }
-                        .padding(.trailing, Theme.Space.l)
-                        .frame(height: Theme.Size.macToolbarHeight)
-                        .ignoresSafeArea(.container, edges: .top)
-                    }
-                }
-                #endif
-                .sheet(isPresented: $showNew) {
-                    NewChatView { session in
-                        showNew = false
-                        openFromList(session.key)
-                    }
-                }
-                // Searching is not the root either: the drawer would slide the page with the keyboard up and the field open.
-                .onChange(of: path.isEmpty && !searching, initial: true) { _, root in shell?.workAtRoot = root }
-                .onChange(of: path) { _, p in
-                    #if os(iOS)
-                    // The Sidebar layout on a phone: what the drawer's list opened is in front, the drawer goes (#6332).
-                    if let unified, widthClass != .regular, !p.isEmpty { unified.drawer.close() }
-                    #endif
-                    spaceAt = spaceAt.filter { $0.key < p.count }
-                    if p.isEmpty, !leaving { AppModel.rememberChat(nil); model.chatSwitched = [:] } // back at the list: next launch starts here
-                }
-                .onChange(of: model.agentsListReveal) { _, request in
-                    // The Sidebar layout: Agents is a part of the sidebar, not a page: choosing it shows that part, and
-                    // the page beside it stays (#6332).
-                    if let unified {
-                        #if os(iOS)
-                        if widthClass != .regular { unified.drawer.open() } // on a phone the sidebar is the drawer
-                        #endif
-                        unified.scrollToAgents?()
-                        return
-                    }
-                    let previousPath = path
-                    stackStill.whenStill {
-                        // A newer targeted open wins, even if the stable-stack opener already consumed it.
-                        guard !leaving, model.agentsNavigationRevision == request, path == previousPath,
-                              model.openChat == nil, model.openPersonalAgent == nil else { return }
-                        spaceAt = [:]
-                        if !path.isEmpty { path = NavigationPath() }
-                    }
-                }
-                .onChange(of: model.openChat, initial: true) { _, key in
-                    // Not before the list is on screen: a push into a stack whose root has not appeared yet built the
-                    // chat three times (a TabView launch onto a chat, `-openSession` / a notification: items
-                    // read three times, `-openUploadDemo` uploading twice, #2061). The list's appearing opens it.
-                    if rootShown { takeOpenChat() }
-                }
-                .onChange(of: model.openPersonalAgent) { _, _ in
-                    if rootShown { takeOpenPersonalAgent() } // held back as `openChat` is (above)
-                }
-                .onAppear {
-                    if !rootShown {
-                        rootShown = true
-                        // Asked for before the list was there (above): a turn later, as the remembered chat below.
-                        if model.openChat != nil { DispatchQueue.main.async { takeOpenChat() } }
-                        if model.openPersonalAgent != nil { DispatchQueue.main.async { takeOpenPersonalAgent() } }
-                    }
-                    // A new tree (RootView swaps the shell and the tabs when the width class changes while the app is
-                    // active: iPhone Duo folded or opened; iOS's snapshots on the way to the background did it too
-                    // until #2836, 2026-11-04) starts at the list: open the chat that was open, as a launch does
-                    // (AppModel.init). Back at the list it is forgotten (rememberChat(nil) above). A turn later: the
-                    // split of the tree going away empties the paths as it goes, and a push made in the same update
-                    // did not show. The old tree's page, living on a moment, leaves it to this one (`leaving`).
-                    // Still the same chat a turn later: going back runs onAppear before onChange(path) forgets it (#1868).
-                    // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
-                    if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
-                       let v = AppModel.rememberedChat {
-                        let request = model.agentsNavigationRevision
-                        DispatchQueue.main.async {
-                            if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil,
-                               model.selectedTab == .chats, model.agentsNavigationRevision == request,
-                               AppModel.rememberedChat == v, !leaving {
-                                model.openChat = SessionKey(path: v)
-                            }
-                        }
-                    }
-                    if model.debugShowNewChat { model.debugShowNewChat = false; newSession.wrappedValue = true }
-                    #if DEBUG
-                    // `-openMachinePage <machine id>` (with `-tab dev`): that machine's projects.
-                    if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openMachinePage") { openFromList(MachineRoute(id: m)) }
-                    // `-openTerminalsPage all|<machine path>` (with `-tab dev`): Terminals (#4754), every computer's or one's.
-                    if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openTerminalsPage") {
-                        openFromList(TerminalsRoute(machine: m == "all" ? nil : m))
-                    }
-                    // `-openMonitor all|<machine id>` (with `-tab dev`): Machines, or one machine's page.
-                    if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openMonitor") {
-                        if m == "all" { openFromList(MachineListRoute()) } else { openFromList(MachineDetailRoute(id: m)) }
-                    }
-                    #endif
-                    if !machineFilter.isEmpty, !model.machines.isEmpty, model.machine(MachineRef(path: machineFilter)) == nil { machineFilter = "" }
-                }
-                // Another assistant is current, and the list is its agents now: a computer picked in the menu that is
-                // not one of its own would leave the list empty, and what was pushed from the list (a chat, a space, a
-                // computer) is the assistant before's.
-                .onChange(of: model.assistantSwitches) {
-                    if !machineFilter.isEmpty, !model.scopedMachines(inFront: false).contains(where: { $0.ref.path == machineFilter }) { machineFilter = "" }
-                    if !path.isEmpty { path = NavigationPath() }
-                }
+            listColumn
         } empty: {
             if unified != nil {
                 // The Sidebar layout (#6332): the page beside the sidebar starts at the Persona conversation, the root
@@ -541,6 +389,165 @@ struct ChatsView: View {
         .environment(\.openSpace) { space in
             if spaceAt[path.count - 2] == space { path.removeLast() } else { pushSpace(space) }
         }
+    }
+
+    /// The list column: its own property, so Xcode 26.0 type-checks it apart from the split around it (#5333, #7173).
+    /// Erased at its base (#6735): unoptimized, this getter reserves a stack slot for every modifier below, each holding
+    /// the whole column (`AgentsListStackTests`).
+    private var listColumn: some View {
+        AnyView(agentsColumn)
+            #if os(iOS) || os(visionOS)
+            .environment(header)
+            #endif
+            // The shell's top bar floats over the navigation bar: beside the split this page's own bar makes room
+            // for it (not the navigation container: a chat pushed on it must not move, nor the list on the way
+            // back, #340). On a phone the room is the list's first row's (`AgentsHeader`).
+            .background { ShellNavigationClearance(active: shell != nil && !ownsTop && !searching) }
+            .background { StackStillProbe(watcher: stackStill) }
+            #if os(macOS)
+            .onAppear { MacShellState.shared.agentsList = menuActions } // the shell's toolbar menu, Display › Collapse All / Expand All
+            #endif
+            .onChange(of: path.isEmpty) { _, atList in
+                // Back at the list: the field shows what the results are for again (set it anew, the field is empty).
+                guard atList, let q = searchedBeforePush else { return }
+                searchedBeforePush = nil
+                query = ""
+                DispatchQueue.main.async { query = q }
+            }
+            // The Mac's buttons are in the list column's own title row (below); the shell is the phone's.
+            #if os(iOS) || os(visionOS)
+            .pageToolbar {
+                if shell != nil || (ownsTop && header.up) {
+                    // The shell's own bar floats over this one (AgentsTopBar). Searching on a phone the field takes
+                    // the bar's row: no title under it either.
+                    ToolbarItem(placement: .principal) { Color.clear.frame(width: Theme.Size.hairline) }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    // Not on the Mac (#907): the connection state is at the foot of the window's sections column (and
+                    // the page's while that is hidden), and holding the bar's middle this empty item pushed New Session
+                    // out of the list column, an empty stretch to its left over the conversation. Without it the
+                    // button sits at the list column's trailing edge, by the conversation, as Mail's compose does.
+                    ToolbarItem(placement: .principal) { ConnectionTitle() }
+                    // On the Mac the shell shows it, next to its sidebar button (MacShell).
+                    ToolbarItem(placement: .topBarLeading) { AgentsListMenu(actions: menuActions) }
+                    if showsPersonalEntry {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button { openFromList(PersonalAgentsRoute()) } label: { Label("Personal Agents", systemImage: Theme.Icon.personalAgents) }
+                                .accessibilityIdentifier("agents.personal")
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { newSession.wrappedValue = true } label: { Label("New Session [Chats View 58e21b]", systemImage: Theme.Icon.compose) }
+                    }
+                }
+            }
+            #else
+            // In the list column's own title row, at its trailing edge (#1223): as window toolbar items they followed
+            // the window's middle, not the column (in the middle of the list at 920 wide, over the chat at 1800).
+            .overlay(alignment: .topTrailing) {
+                if shell == nil { // always on the Mac: its window is not the phone's shell
+                    HStack(spacing: Theme.Space.s) {
+                        MacTitleRowButton(String(localized: "Personal Agents"), symbol: Theme.Icon.personalAgents) { openFromList(PersonalAgentsRoute()) }
+                        MacTitleRowButton(String(localized: "New Session [Chats View 58e21b]"), symbol: Theme.Icon.compose) { newSession.wrappedValue = true }
+                    }
+                    .padding(.trailing, Theme.Space.l)
+                    .frame(height: Theme.Size.macToolbarHeight)
+                    .ignoresSafeArea(.container, edges: .top)
+                }
+            }
+            #endif
+            .sheet(isPresented: $showNew) {
+                NewChatView { session in
+                    showNew = false
+                    openFromList(session.key)
+                }
+            }
+            // Searching is not the root either: the drawer would slide the page with the keyboard up and the field open.
+            .onChange(of: path.isEmpty && !searching, initial: true) { _, root in shell?.workAtRoot = root }
+            .onChange(of: path) { _, p in
+                #if os(iOS)
+                // The Sidebar layout on a phone: what the drawer's list opened is in front, the drawer goes (#6332).
+                if let unified, widthClass != .regular, !p.isEmpty { unified.drawer.close() }
+                #endif
+                spaceAt = spaceAt.filter { $0.key < p.count }
+                if p.isEmpty, !leaving { AppModel.rememberChat(nil); model.chatSwitched = [:] } // back at the list: next launch starts here
+            }
+            .onChange(of: model.agentsListReveal) { _, request in
+                // The Sidebar layout: Agents is a part of the sidebar, not a page: choosing it shows that part, and
+                // the page beside it stays (#6332).
+                if let unified {
+                    #if os(iOS)
+                    if widthClass != .regular { unified.drawer.open() } // on a phone the sidebar is the drawer
+                    #endif
+                    unified.scrollToAgents?()
+                    return
+                }
+                let previousPath = path
+                stackStill.whenStill {
+                    // A newer targeted open wins, even if the stable-stack opener already consumed it.
+                    guard !leaving, model.agentsNavigationRevision == request, path == previousPath,
+                          model.openChat == nil, model.openPersonalAgent == nil else { return }
+                    spaceAt = [:]
+                    if !path.isEmpty { path = NavigationPath() }
+                }
+            }
+            .onChange(of: model.openChat, initial: true) { _, key in
+                // Not before the list is on screen: a push into a stack whose root has not appeared yet built the
+                // chat three times (a TabView launch onto a chat, `-openSession` / a notification: items
+                // read three times, `-openUploadDemo` uploading twice, #2061). The list's appearing opens it.
+                if rootShown { takeOpenChat() }
+            }
+            .onChange(of: model.openPersonalAgent) { _, _ in
+                if rootShown { takeOpenPersonalAgent() } // held back as `openChat` is (above)
+            }
+            .onAppear {
+                if !rootShown {
+                    rootShown = true
+                    // Asked for before the list was there (above): a turn later, as the remembered chat below.
+                    if model.openChat != nil { DispatchQueue.main.async { takeOpenChat() } }
+                    if model.openPersonalAgent != nil { DispatchQueue.main.async { takeOpenPersonalAgent() } }
+                }
+                // A new tree (RootView swaps the shell and the tabs when the width class changes while the app is
+                // active: iPhone Duo folded or opened; iOS's snapshots on the way to the background did it too
+                // until #2836, 2026-11-04) starts at the list: open the chat that was open, as a launch does
+                // (AppModel.init). Back at the list it is forgotten (rememberChat(nil) above). A turn later: the
+                // split of the tree going away empties the paths as it goes, and a push made in the same update
+                // did not show. The old tree's page, living on a moment, leaves it to this one (`leaving`).
+                // Still the same chat a turn later: going back runs onAppear before onChange(path) forgets it (#1868).
+                // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
+                if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
+                   let v = AppModel.rememberedChat {
+                    let request = model.agentsNavigationRevision
+                    DispatchQueue.main.async {
+                        if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil,
+                           model.selectedTab == .chats, model.agentsNavigationRevision == request,
+                           AppModel.rememberedChat == v, !leaving {
+                            model.openChat = SessionKey(path: v)
+                        }
+                    }
+                }
+                if model.debugShowNewChat { model.debugShowNewChat = false; newSession.wrappedValue = true }
+                #if DEBUG
+                // `-openMachinePage <machine id>` (with `-tab dev`): that machine's projects.
+                if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openMachinePage") { openFromList(MachineRoute(id: m)) }
+                // `-openTerminalsPage all|<machine path>` (with `-tab dev`): Terminals (#4754), every computer's or one's.
+                if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openTerminalsPage") {
+                    openFromList(TerminalsRoute(machine: m == "all" ? nil : m))
+                }
+                // `-openMonitor all|<machine id>` (with `-tab dev`): Machines, or one machine's page.
+                if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openMonitor") {
+                    if m == "all" { openFromList(MachineListRoute()) } else { openFromList(MachineDetailRoute(id: m)) }
+                }
+                #endif
+                if !machineFilter.isEmpty, !model.machines.isEmpty, model.machine(MachineRef(path: machineFilter)) == nil { machineFilter = "" }
+            }
+            // Another assistant is current, and the list is its agents now: a computer picked in the menu that is
+            // not one of its own would leave the list empty, and what was pushed from the list (a chat, a space, a
+            // computer) is the assistant before's.
+            .onChange(of: model.assistantSwitches) {
+                if !machineFilter.isEmpty, !model.scopedMachines(inFront: false).contains(where: { $0.ref.path == machineFilter }) { machineFilter = "" }
+                if !path.isEmpty { path = NavigationPath() }
+            }
     }
 
     /// The list column: the Agents list, or in the Sidebar layout the whole sidebar around it (#6332).
