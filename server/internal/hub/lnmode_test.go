@@ -63,12 +63,26 @@ func lnHub(t *testing.T) (*Hub, *fakeAPNs) {
 	if err := p.setPrefs("phone", NotifyPrefs{Input: true, Done: DoneAlways}); err != nil {
 		t.Fatal(err)
 	}
-	base := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
-	now := base
-	p.now = func() time.Time { return now }
-	t.Cleanup(func() { now = base })
 	h := &Hub{push: p}
+	lnSetClock(h, time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC))
 	return h, f
+}
+
+// lnSetClock points the pusher's clock at a fixed time behind an atomic: the background refresh reads it while the
+// test moves it.
+func lnSetClock(h *Hub, at time.Time) {
+	var clock atomic.Int64
+	clock.Store(at.UnixNano())
+	h.push.now = func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+	lnClocks.Store(h.push, &clock)
+}
+
+var lnClocks sync.Map // *Pusher → *atomic.Int64
+
+// lnMoveClock sets the clock lnSetClock made.
+func lnMoveClock(h *Hub, at time.Time) {
+	c, _ := lnClocks.Load(h.push)
+	c.(*atomic.Int64).Store(at.UnixNano())
 }
 
 // lnAttempts counts APNs alert attempts (Live Activity pushes use a different type).
@@ -152,7 +166,7 @@ func TestLnModeDedupWindowExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := h.push.now()
-	h.push.now = func() time.Time { return base.Add(12*time.Hour + time.Minute) }
+	lnMoveClock(h, base.Add(12*time.Hour+time.Minute))
 	if err := h.deliverPush(lnNotification(assistantwire.LevelP0, key, "second")); err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +381,7 @@ func TestLnSamePRP1IsOneEntry(t *testing.T) {
 	const pr = "https://example.test/pulls/12"
 	base := h.push.now()
 	for i := range 3 {
-		h.push.now = func() time.Time { return base.Add(time.Duration(i) * 10 * time.Minute) }
+		lnMoveClock(h, base.Add(time.Duration(i)*10*time.Minute))
 		if err := h.deliverPush(lnNotification(assistantwire.LevelP1, pr, "accepted "+string(rune('1'+i)))); err != nil {
 			t.Fatal(err)
 		}
@@ -415,5 +429,26 @@ func TestLnDedupIsAtomic(t *testing.T) {
 	wg.Wait()
 	if allowed.Load() != 1 {
 		t.Fatalf("%d concurrent pushes passed, want 1", allowed.Load())
+	}
+}
+
+// Review fix: a background refresh that read the old value before a PUT does not undo the PUT.
+func TestLnStaleRefreshDoesNotUndoSet(t *testing.T) {
+	h, _ := lnHub(t)
+	p := h.push
+	p.lnMu.Lock()
+	started := p.lnVersion // a refresh starts and reads "off"
+	p.lnRefreshing = true
+	p.lnMu.Unlock()
+	if err := p.setLnMode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	st := p.store.(*lnStore)
+	st.mu.Lock()
+	st.vals[lnModeSettingKey] = []byte("false") // what the slow read saw
+	st.mu.Unlock()
+	p.refreshLnMode(started)
+	if !p.lnModeOn() {
+		t.Fatal("a stale refresh turned the switch back off")
 	}
 }

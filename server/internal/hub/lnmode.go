@@ -99,17 +99,21 @@ func (p *Pusher) lnModeOn() bool {
 	defer p.lnMu.Unlock()
 	if p.store != nil && !p.lnRefreshing && (p.lnCached == nil || p.now().Sub(p.lnCachedAt) >= lnConfigTTL) {
 		p.lnRefreshing = true
-		go p.refreshLnMode()
+		go p.refreshLnMode(p.lnVersion)
 	}
 	return p.lnCached != nil && *p.lnCached
 }
 
-// refreshLnMode reads the switch from hub_settings into the cache (lnModeOn starts it, one at a time).
-func (p *Pusher) refreshLnMode() {
+// refreshLnMode reads the switch from hub_settings into the cache (lnModeOn starts it, one at a time). version is
+// lnVersion when it started: a setLnMode meanwhile wins over what this read saw.
+func (p *Pusher) refreshLnMode(version uint64) {
 	enabled, ok := p.readLnMode()
 	p.lnMu.Lock()
 	defer p.lnMu.Unlock()
 	p.lnRefreshing = false
+	if version != p.lnVersion {
+		return
+	}
 	if ok {
 		p.lnCached, p.lnCachedAt = &enabled, p.now()
 	} else if p.lnCached != nil {
@@ -143,6 +147,7 @@ func (p *Pusher) setLnMode(ctx context.Context, enabled bool) error {
 	}
 	p.lnMu.Lock()
 	p.lnCached, p.lnCachedAt = &enabled, p.now()
+	p.lnVersion++
 	p.lnMu.Unlock()
 	return nil
 }

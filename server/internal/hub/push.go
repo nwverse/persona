@@ -87,6 +87,7 @@ type Pusher struct {
 	lnCached     *bool
 	lnCachedAt   time.Time
 	lnRefreshing bool
+	lnVersion    uint64 // bumped by setLnMode, so a refresh that read before it does not undo it
 	lnLastPush   map[string]time.Time
 	intercepts   []pushIntercept
 	lnDirty      bool // the held-push list changed since the last save
