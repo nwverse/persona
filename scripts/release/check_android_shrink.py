@@ -73,8 +73,10 @@ NEAR_LIMIT = 9000
 # `Class.method(descriptor) size` per line, `#` starts a comment.
 KNOWN_OVERSIZED = Path(__file__).with_name("known_oversized_methods.txt")
 # One `Class.method(descriptor) size` per line, the descriptor carrying its return type (`()V`); a name without a
-# descriptor, or a bare class name, would never match a method in the dex.
-KNOWN_LINE = re.compile(r"^(\S+\.\S+)\.([^\s.()]+)\(([^\s()]*)\)(\[*L[^\s;]+;|\[*[VZBSCIJFD])\s+(\d+)$")
+# descriptor, a bare class name or a descriptor no dex method can have would never match and is rejected.
+FIELD_DESCRIPTOR = r"(?:\[*[ZBSCIJFD]|\[*L[^\s;]+;)"  # a parameter: never void, never a lone array bracket
+RETURN_DESCRIPTOR = r"(?:\[*[VZBSCIJFD]|\[*L[^\s;]+;)"
+KNOWN_LINE = re.compile(r"^(\S+\.\S+)\.([^\s.()]+)\((\S*)\)(\S+)\s+(\d+)$")
 
 
 class DexClass:
@@ -276,10 +278,19 @@ def read_known(path):
         if not line:
             continue
         match = KNOWN_LINE.match(line)
-        # Nothing but the whole signature can match a method in the dex; anything else would silently never apply.
+        # Nothing but a complete dex signature can match a method, and a size at or under the limit records a method that
+        # was never oversized: such a line would sit there forever and swallow the near-limit warning for its method.
         if not match:
             raise ValueError(f"{Path(path).name}:{number}: expected `Class.method(descriptor) size`, got {line!r}")
-        known[f"{match[1]}.{match[2]}({match[3]}){match[4]}"] = int(match[5])
+        parameters, returns = match[3], match[4]
+        if not re.fullmatch(FIELD_DESCRIPTOR + "*", parameters) or not re.fullmatch(RETURN_DESCRIPTOR, returns):
+            raise ValueError(f"{Path(path).name}:{number}: {parameters!r} -> {returns!r} is not a dex descriptor "
+                             f"(`Class.method(descriptor) return size`), got {line!r}")
+        if int(match[5]) <= COMPILED_LIMIT:
+            raise ValueError(f"{Path(path).name}:{number}: {match[5]} is not over the {COMPILED_LIMIT} ART compiles, "
+                             f"so the method was never oversized and the line only hides its near-limit warning: "
+                             f"remove it")
+        known[f"{match[1]}.{match[2]}({parameters}){returns}"] = int(match[5])
     return known, ""
 
 

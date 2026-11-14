@@ -332,6 +332,52 @@ class MethodSizeTests(unittest.TestCase):
         self.assertIn("list.txt:2: expected `Class.method(descriptor) size`, got 'persona.A.c 10001'",
                       str(raised.exception))
 
+    def test_a_list_line_that_is_not_a_dex_descriptor_is_rejected(self):
+        # `([^\s()]*)` used to take any text between the brackets, so a signature no dex holds sat in the list and
+        # never matched. Each part is now a run of complete field descriptors and the return is exactly one.
+        directory = tempfile.mkdtemp()
+        for line, expected in (("persona.A.c(not-a-descriptor)V 10001", "not a dex descriptor"),
+                               ("persona.A.c(Lfoo)V 10001", "not a dex descriptor"),
+                               ("persona.A.c(X)V 10001", "not a dex descriptor"),
+                               ("persona.A.c(V)V 10001", "not a dex descriptor"),
+                               ("persona.A.c([)V 10001", "not a dex descriptor"),
+                               ("persona.A.c()Lfoo 10001", "not a dex descriptor"),
+                               ("persona.A.c(I)Void 10001", "not a dex descriptor")):
+            with self.subTest(line):
+                path = Path(directory) / "list.txt"
+                path.write_text("persona.A.b()V 10001\n" + line + "\n")
+                with self.assertRaises(ValueError) as raised:
+                    shrink.read_known(path)
+                message = str(raised.exception)
+                self.assertIn("list.txt:2:", message)
+                self.assertIn(expected, message)
+        # Every real shape still parses: primitives, objects, both kinds of array and an object return.
+        path = Path(directory) / "list.txt"
+        path.write_text("persona.A.a()V 10001\npersona.A.b(Lfoo;[I[[Ljava/lang/String;)J 10001\n"
+                        "persona.A.c()Ljava/lang/String; 10001\n")
+        self.assertEqual(shrink.read_known(path)[0], {
+            "persona.A.a()V": 10001,
+            "persona.A.b(Lfoo;[I[[Ljava/lang/String;)J": 10001,
+            "persona.A.c()Ljava/lang/String;": 10001,
+        })
+
+    def test_a_list_line_at_or_under_the_limit_is_rejected(self):
+        # Such a line records a method that was never oversized, and being "known" hides its near-limit warning, so it
+        # would stay forever; the list may only shrink.
+        directory = tempfile.mkdtemp()
+        for size in (9000, 10000):
+            with self.subTest(size):
+                path = Path(directory) / "list.txt"
+                path.write_text("persona.A.b()V 10001\npersona.A.c()V " + str(size) + "\n")
+                with self.assertRaises(ValueError) as raised:
+                    shrink.read_known(path)
+                message = str(raised.exception)
+                self.assertIn(f"list.txt:2: {size} is not over the 10000 ART compiles", message)
+                self.assertIn("remove it", message)
+        path = Path(directory) / "list.txt"
+        path.write_text("persona.A.c()V 10001\n")
+        self.assertEqual(shrink.read_known(path)[0], {"persona.A.c()V": 10001})
+
 
 if __name__ == "__main__":
     unittest.main()
