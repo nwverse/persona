@@ -41,6 +41,16 @@ jobs:
           retention-days: 1
       - name: Linux Electron acceptance smoke (headless)
         run: scripts/ci/desktop-smoke.sh
+      - name: Linux packaged first-run acceptance (headless)
+        if: ${{ !cancelled() }}
+        run: xvfb-run -a node desktop/scripts/first-run-test.mjs desktop/release/first-run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-linux-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -79,6 +89,18 @@ jobs:
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
         run: scripts/ci/desktop-package.sh mac
+      - name: Unsigned macOS packaged setup; hub acceptance requires a valid signature
+        if: ${{ !cancelled() }}
+        env:
+          PERSONA_DESKTOP_TEST_PACKAGE: desktop/release/Persona-${{ env.PERSONA_DESKTOP_VERSION || '0.1.0' }}-mac-universal.zip
+        run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-macos-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -128,6 +150,19 @@ jobs:
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
         run: scripts/ci/desktop-package.sh win
+      - name: Packaged Windows app first-run acceptance
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PERSONA_DESKTOP_TEST_PACKAGE: desktop/release/win-unpacked/Persona.exe
+        run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-windows-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -137,7 +137,7 @@ async function scenario(name, { prefix, token, starting }) {
     if (exit.code !== 0) result = { ...result, ok: false, error: result.error ?? `Electron exited with ${JSON.stringify(exit)}` };
     const outside = gateway.outside();
     if (prefix && outside.length) result = { ...result, ok: false, error: result.error ?? `Requests left the prefix: ${outside.slice(0, 5).join(", ")}` };
-    result = { ...result, outsidePrefix: outside, otherLocalRequests: gateway.strangers(), headless, hubStartMs: hub.startMs, hubStartAttempts: hub.attempts };
+    result = { ...result, outsidePrefix: outside, headless, hubStartMs: hub.startMs, hubStartAttempts: hub.attempts };
     if (!result.ok) console.error(`${name}: ${result.error}\n${log.slice(-3000)}\n${hub.log().slice(-1500)}`);
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error), steps: [] };

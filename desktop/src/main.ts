@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { BrowserWindow, app, dialog, screen, shell, powerMonitor, Notification } from "electron";
+import { BrowserWindow, app, dialog, screen, shell, powerMonitor, Notification, protocol } from "electron";
 import { parseDeepLink, parseHubAddress, externalBrowserURL, inHub } from "./urls.js";
 import type { HubAddress } from "./urls.js";
 import { appPairingURL } from "./pairing.js";
@@ -16,8 +16,12 @@ import { hubPartition } from "./sessions.js";
 import { installSmokeCapture } from "./smoke.js";
 import { installAutoUpdate } from "./updater.js";
 import { desktopPresence } from "./presence.js";
+import { installSetupProtocol, SETUP_SCHEME } from "./setup-protocol.js";
+import { SETUP_URL } from "./setup-resources.js";
 
 installSmokeCapture();
+// Register the scheme before any ready callback. Its file handler is installed with the app's other ready-time setup.
+protocol.registerSchemesAsPrivileged([{ scheme: SETUP_SCHEME, privileges: { standard: true, secure: true } }]);
 
 let mainWindow: BrowserWindow | undefined;
 let hub: HubAddress | undefined;
@@ -89,7 +93,11 @@ async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow
 }
 
 async function showMain(): Promise<void> {
-  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return; }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    if (hub) await mainWindow.loadURL(hub.url.href);
+    return;
+  }
   const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
   const current = new BrowserWindow({
     ...DEFAULT_WINDOW,
@@ -179,7 +187,10 @@ async function showSetup(): Promise<void> {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      allowRunningInsecureContent: false,
       devTools: !app.isPackaged,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
       webviewTag: false,
     },
   });
@@ -202,7 +213,7 @@ async function showSetup(): Promise<void> {
       } catch { return { ok: false, error: "Enter a valid HTTP or HTTPS hub address." }; }
     },
   });
-  await setup.loadFile(join(import.meta.dirname, "setup.html"));
+  await setup.loadURL(SETUP_URL);
 }
 
 const locked = app.requestSingleInstanceLock();
@@ -220,6 +231,7 @@ else {
     else pendingDeepLink = raw;
   });
   app.whenReady().then(async () => {
+    installSetupProtocol();
     const publishPresence = () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       const presence = desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported());
@@ -241,8 +253,10 @@ else {
     });
     const saved = await store().read<{ hub?: string }>();
     try { hub = parseHubAddress(process.env.PERSONA_HUB_URL ?? saved?.hub ?? ""); } catch { hub = undefined; }
-    for (const scheme of ["persona", "jarvis"]) {
-      if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
+    if (process.env.PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION !== "1") {
+      for (const scheme of ["persona", "jarvis"]) {
+        if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
+      }
     }
     if (hub) await showMain();
     else await showSetup();

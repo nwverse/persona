@@ -19,6 +19,11 @@ import { app, BrowserWindow, ipcMain, nativeTheme, Notification, powerMonitor, s
  *   no notification service and nobody at the keyboard. Lock and unlock are the power monitor's own events, emitted.
  * - `shell.openExternal` records the address instead of starting a browser.
  */
+// Load the production entry before the app can become ready: its setup-scheme registration is synchronous at module
+// evaluation. The same module creates the windows observed below.
+await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
+const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
+
 const output = process.env.PERSONA_DESKTOP_E2E ? resolve(process.env.PERSONA_DESKTOP_E2E) : "";
 const scenario = process.env.PERSONA_DESKTOP_E2E_SCENARIO ?? "";
 const hubURL = process.env.PERSONA_HUB_URL ?? "";
@@ -46,18 +51,31 @@ const external = []; // addresses handed to the system browser
 const notifyRequests = []; // what the renderer asked for over the production IPC
 const badges = []; // every count the renderer sent
 const localSettings = []; // the shell-owned options window, observed without exposing it to the hub page
+const isLocalSettingsURL = url => url === "persona-setup://app/setup.html";
+const consoleErrors = [];
+const recordConsole = event => {
+  if (event.level === "error") consoleErrors.push(`${String(event.message).slice(0, 300)} (${event.sourceId}:${event.lineNumber})`);
+};
 app.on("browser-window-created", (_event, window) => {
   const record = url => {
-    if (url.endsWith("/setup.html") && !localSettings.includes(window)) {
-      localSettings.push(window);
-      // Chromium's headless platform gives new native windows a 1x1 off-screen frame. Exercise the same request the
-      // person made by making that test window visible; on native runners production show()/focus() already did this.
-      if (headless) {
-        window.setBounds({ x: 0, y: 0, width: 720, height: 640 });
-        window.show();
+    if (isLocalSettingsURL(url)) {
+      window.webContents.removeListener("console-message", recordConsole);
+      if (!localSettings.includes(window)) {
+        localSettings.push(window);
+        // Chromium's headless platform gives new native windows a 1x1 off-screen frame. Exercise the same request the
+        // person made by making that test window visible; on native runners production show()/focus() already did this.
+        if (headless) {
+          window.setBounds({ x: 0, y: 0, width: 720, height: 640 });
+          window.show();
+        }
       }
+    } else if (!window.webContents.isDestroyed()) {
+      // Attach to every replacement hub window, including a new origin after Continue. The exact local setup URL owns
+      // no hub renderer-error collector; it has a separate packaged-CDP boundary.
+      window.webContents.removeListener("console-message", recordConsole);
+      window.webContents.on("console-message", recordConsole);
     }
-    if (headless && !url.endsWith("/setup.html") && !url.startsWith("devtools:") && window.getBounds().width < 600) {
+    if (headless && !isLocalSettingsURL(url) && !url.startsWith("devtools:") && window.getBounds().width < 600) {
       // A replacement hub window has the same headless sizing issue as the first one.
       window.setBounds({ x: 0, y: 0, width: 1280, height: 840 });
       window.show();
@@ -66,6 +84,10 @@ app.on("browser-window-created", (_event, window) => {
   };
   window.webContents.on("did-start-navigation", (_event, url) => record(url));
   record(window.webContents.getURL());
+  // The initial hub window may already have loaded before this observer is installed; its ownership is the saved hub.
+  if (window.webContents.getURL().startsWith(hub.href)) {
+    window.webContents.on("console-message", recordConsole);
+  }
 });
 Notification.isSupported = () => true;
 Notification.prototype.show = function show() { shown.push({ title: this.title, body: this.body, notification: this }); };
@@ -388,9 +410,7 @@ async function subpathScenario() {
 async function main() {
   await mkdir(output, { recursive: true });
   const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
-  await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
   win = await created;
-  win.webContents.on("console-message", event => { if (event.level === "error") consoleErrors.push(String(event.message).slice(0, 300)); });
   await until("first load", () => !win.webContents.isLoading() && win.webContents.getURL().startsWith(hub.href), 45_000);
   // installDesktopIPC clears its channels when it installs; these observers are added after it, beside the real handlers.
   ipcMain.on("desktop:notify", (_event, value) => { if (value && typeof value === "object") notifyRequests.push({ title: value.title, body: value.body, tag: value.tag, route: value.route }); });
@@ -402,17 +422,16 @@ async function main() {
   else await hubChangeScenario();
 }
 
-const consoleErrors = [];
 const deadline = setTimeout(() => { void finish(new Error("the scenario did not finish in 150 s")); }, 150_000);
 let finished = false;
 async function finish(error) {
   if (finished) return;
   finished = true;
   clearTimeout(deadline);
-  const ok = !error && steps.length > 0 && steps.every(s => s.ok);
+  const ok = !error && steps.length > 0 && steps.every(s => s.ok) && consoleErrors.length === 0;
   const result = {
     ok, scenario, platform: process.platform, electron: process.versions.electron, hub: prefix ? `prefix ${prefix}` : "root",
-    ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+    ...(error ? { error: error instanceof Error ? error.message : String(error) } : consoleErrors.length ? { error: `Renderer errors: ${consoleErrors[0]}` } : {}),
     steps, screenshots: shots,
     boundary: { notifyRequests, shown: shown.map(n => ({ title: n.title, body: n.body })), closed: closed.length, badges, external },
     window: win && !win.isDestroyed() ? win.getBounds() : undefined,
