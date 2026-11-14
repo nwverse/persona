@@ -256,12 +256,45 @@ Only through the hub tunnel, no new externally exposed port:
   - View Only (`viewOnly`) by default. Switching View Only / Take Over in the top bar hands keyboard and mouse (touch) input to that Mac.
   - Scale to the window (`scaleViewport`), without changing the Mac's resolution.
   - On a Mac with several displays, the top bar's Displays menu shows one of them ("Displays" below).
+  - The top bar's Connection stats shows this connection's numbers ("Connection stats on the web" below).
   - On disconnection, offer Reconnect.
 - **Without `crypto.subtle`**: ARD login AES-encrypts the account and password; noVNC's AES uses browser `crypto.subtle`. Pages opened over HTTP (hub LAN address, App WebView) aren't secure contexts and lack `crypto.subtle`.
   - `aes.ts` supplies an AES-CBC-encryption-only substitute when missing.
   - Tests: three FIPS-197 standard vectors and byte-for-byte comparison with WebCrypto.
   - HTTPS or localhost uses the browser's implementation, without the substitute.
 - **View**: Cua Driver operates in the background without taking focus, so the view is the real desktop. Its agent cursor is a topmost window and visible.
+
+#### Connection stats on the web (#6558)
+
+- **Toggle**: the top bar's **Connection stats**, on any live Mac as the App's ⋯ › Connection Stats, off by default and
+  kept per Mac in this browser (`video.ts` `statsShown`). It shows a small panel at the top right of the picture, which
+  drags anywhere inside it and has a close button. A page an app embeds has no bar and no panel. The toggle and the panel
+  are a chunk of their own (`StatsOverlay.tsx`, words in `screen-video`), loaded once the screen is live.
+- **What it shows**, once a second (`meter.ts`): `VNC · Via hub`, then bitrate and frame rate, then on a line of its own
+  **Round trip to the hub N ms**. Only what was measured: a number with nothing behind it is left out, never guessed. A
+  still screen sends nothing, so it says 0 fps.
+- **How**, only while the panel is shown (`probes.ts`):
+  - Bitrate: the page opens the RFB WebSocket itself and hands it to noVNC (its constructor takes a channel: the same URL,
+    no subprotocols, and noVNC closes it). A listener beside noVNC's counts each message's bytes, RFB's own without the
+    WebSocket and TLS framing.
+  - Frame rate: noVNC has no frame event. The hook wraps its display's `flip()`, which puts each finished update on the
+    screen, at once or from its render queue, and counts the flips that draw. A noVNC whose display has no `flip()` and
+    `_renderQ` is not hooked, and the frame rate is left out. `probes.test.ts` runs the hook on the real noVNC 1.7, so an
+    upgrade that changes it fails there.
+  - Round trip to the hub: the screen page holds no hub connection (`main.tsx` loads only `ScreenView` here), and another
+    `/api/v1/ws` would count as one more connection of the device (a `device_sessions` row, every broadcast, the snapshots
+    sent on connect). So every 2 s while the page is visible it fetches `GET /api/v1/health?probe=N` (no sign-in, the
+    hub's memory only; `cache: "no-store"`, `redirect: "manual"`) and takes `responseStart − requestStart` from that
+    request's own Resource Timing entry, through a `PerformanceObserver` (the global buffer is never cleared). A probe
+    counts only when the hub answered `{"ok":true}` and both times are there; the panel shows the median of the last 5
+    from the last 20 s, and a background tab probes nothing. That is the browser's HTTP round trip to the hub, a little
+    of it the hub answering, and not the hub's way on to the Mac, so it never sits on the first line, where the App puts
+    the video's end-to-end total.
+- **Not yet**: the video channel's segments (capture · encode · network · decode), `path` (#6398) and `tier` (#6396)
+  come with the web video path.
+- **Tests**: `meter.test.ts`, `probes.test.ts`, `ScreenView.stats.test.tsx`, and in a real browser against the mock's
+  moving box (`MOCK_COMPUTER=ready MOCK_SCREEN=fake MOCK_SCREEN_ANIMATE=1`) `node web/e2e/screen-stats.mjs <web URL>`:
+  off by default, measured numbers in light and dark, kept per Mac, no round-trip line while the hub's health is refused.
 
 ### Native client in the App (#1343, `apple/Persona/Screen/`)
 
@@ -415,11 +448,13 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
   - One connection per Mac (`VNC.hold` / `release`), shared by full page and PiP. Disconnects 2 seconds after the last release, so switching doesn't reconnect.
   - Frames: between updates, `RFBFrameSink` copies the framebuffer (locked) into `CVPixelBufferPool` (32BGRA, IOSurface), up to 30 fps, with increasing host-clock timestamps. The full-page layer sets DisplayImmediately; PiP's source layer has its own `controlTimebase` (host clock, rate 1) and receives samples without DisplayImmediately (AVFoundation advises against mixing them).
   - **PiP source** (#1839): a 192pt-wide display layer matching the Mac screen ratio (`Theme.Size.pictureInPictureSource`), in the App's main window behind content: in the window, not hidden, but not visible. Previously 2×2pt, and attached to the full-page window when opened from there; closing the full page removed it and PiP couldn't start on real devices (TestFlight 161).
-  - **When it opens**: once the full page connects, prepare PiP (source, controller, audio session). The Picture in Picture button calls `startPictureInPicture` directly from the tap; once started, close the full page as if × were tapped. Going home with the full page open starts PiP automatically (`canStartPictureInPictureAutomaticallyFromInline`). Tapping VNC from a machine page or chat (with login remembered) also starts from the tap: first put a card in the source (next item), don't wait for connection. If `isPictureInPicturePossible` is false or the system doesn't respond, try again when it becomes true, after 0.4 seconds, then every second, at most 6 times, only in the foreground (background relies on automatic start). If it can't start within 8 seconds, or the system refuses (`failedToStart`), show "Picture in Picture couldn't open: reason; switched to full page" and open the full page.
+  - **Where the source lies** (#6333): the system's zoom into the small window starts at the source layer's frame, and Restore's ends there. It used to sit in the main window's bottom-left corner, so a small copy of the picture popped up there before it jumped into the small window. Now, while the full page is up, the source lies exactly over the page's whole picture (`VNCScreenUIView` reports it in screen points through `onPicture`; zoomed in it runs off the screen as the picture does), so the picture itself shrinks into the small window; with no page, it is in the top trailing corner, where the small window comes up (`VNCPiPPlacement`).
+  - **Handing the picture over** (#6333): at `willStart` the page closes with the transition (`AppModel.vncPiP` set then, not at `didStart`) and its picture turns transparent, so the picture never shows twice and no blank frame shows between them; the source stays where it was while the page goes. On Restore the full page opens first, and the system is told to animate (`restoreUserInterfaceForPictureInPictureStopWithCompletionHandler`'s completion) once the page has drawn its picture and the source lies over it, or after 0.6 seconds at the latest (`VNCPiPRestore`, answered once; the wait runs on a timer of its own, so a page slow to open on a busy main thread never holds the system's restore), so the small window grows back into the page's picture. The page's picture fades as the small window starts (`Theme.Motion.conceal`), since the system's copy comes over it a few frames later, and is back at once on Restore. Left: on the iPad simulator the system sometimes draws the small window's first frames (about 0.1 s) at the size it last had, in the top-left of a window that starts at the source's frame, before the picture fills it. The old corner source, about that size, hid it; a new content source, or a new controller and source for each start, did not change it, so it stays the system's.
+  - **When it opens**: once the full page connects, prepare PiP (source, controller, audio session). The Picture in Picture button calls `startPictureInPicture` directly from the tap; as it starts (`willStart`), the full page closes as if × were tapped. Going home with the full page open starts PiP automatically (`canStartPictureInPictureAutomaticallyFromInline`). Tapping VNC from a machine page or chat (with login remembered) also starts from the tap: first put a card in the source (next item), don't wait for connection. If `isPictureInPicturePossible` is false or the system doesn't respond, try again when it becomes true, after 0.4 seconds, then every second, at most 6 times, only in the foreground (background relies on automatic start). If it can't start within 8 seconds, or the system refuses (`failedToStart`), show "Picture in Picture couldn't open: reason; switched to full page" and open the full page.
   - **Card** (`VNCPiPCard`, #1839 follow-up: user found "PiP only after connecting" sluggish): before a Mac frame arrives, the source shows an `ImageRenderer` frame (black background, machine name, spinning Connecting…, every 0.1 seconds), converted to a sample with the host clock and fed to the source layer. The first frame of this connection (`RFBSession.pictured`, reset each connection) replaces it with the Mac view. Failure or disconnection shows the reason and "Tap ▶ to reconnect, or Restore to return to the App"; mark playback paused, and PiP's ▶ (`setPlaying(true)`) reconnects. Saved password wrong: in the foreground, open the full page to sign in again (PiP hands over); in the background, the card asks you to return to the App to sign in.
   - Why a card (TestFlight 161 PiP diagnostics): `startPictureInPicture` with an empty source (still connecting), even with `isPictureInPicturePossible` true, made the system do nothing—neither opening nor reporting failure. Picture in Picture on the full page (already displaying frames) opened immediately. #1928 waited for the first frame, making it work, but requiring connection first.
   - **PiP diagnostics** (full-page "…" menu): device PiP support, audio session, background audio, and each recent step (`VNCPiPLog`: tapped VNC, prepared, possible, started during tap or after waiting for a frame, opened, closed, why fallback). Copy All sends it to us. DEBUG runtime CLI `state` includes `vncPiP`; system logs use subsystem persona, category vnc.
-  - **No PiP in the simulator** (`isPictureInPictureSupported()` is false in iOS 27.0 and 27.1 simulators); tapping VNC opens the full page. PiP itself needs a real device; DEBUG `-showPiPSource YES` places the source at the App's top right (without opening the full page), so card → frame → disconnection can be checked in the simulator (`VNCTests.testTheSmallWindowConnectsInIt`). Starting system PiP, ▶ and Restore still require a real device.
+  - **No PiP in iPhone simulators** (`isPictureInPictureSupported()` is false in iOS 27.0 and 27.1 iPhone simulators, slim or stock); tapping VNC opens the full page. DEBUG `-showPiPSource YES` shows the source over the app (without system PiP), so card → frame → disconnection (`VNCTests.testTheSmallWindowConnectsInIt`) and where the source lies, over the page's picture upright and turned, else the top trailing corner (`VNCTests.testTheSourceLiesOverThePicture`), can be checked there. A stock iPad simulator (`scripts/app/sim-boot.sh --profile stock`) has system PiP: `VNCTests.testPictureInPictureRoundTrips` (`TEST_RUNNER_PERSONA_PIP_ROUNDS=1`) goes into the small window and back twice, for recordings. How it feels on a phone still needs a real device.
 - **Where VNC opens**: with that Mac's login saved, no full page open and PiP supported, go straight to PiP (`AppModel.openVNC`); otherwise full page (always full page when login is needed).
 - **Remember login** (#1322):
   - Login form adds Remember on This iPhone (Remember on This Mac on Mac), checked by default. Browser pages lack this; the form uses `username` / `current-password`, leaving it to browser password management.
@@ -443,7 +478,7 @@ input, the clipboard and as the fallback; only the picture moves to video. The p
 Mac whose node advertises `screen_video`, which a node does once it has the helper (the picture switcher in ⋯ stays
 hidden otherwise); until then every client shows RFB. The web, the Mac app and Android don't decode video yet.
 
-- **Persona Screen** (`apple/PersonaLink/Sources/PersonaScreen`, `PersonaScreenKit`): a Swift helper app inside
+- **Persona Screen** (`apple/PersonaLink/Sources/PersonaScreen`, `apple/Packages/PersonaScreenKit`): a Swift helper app inside
   Persona Link.app (`Contents/Helpers/Persona Screen.app`, bundle id `<link id>.screen`) that captures one display
   with ScreenCaptureKit and encodes it with VideoToolbox (HEVC Main, else H.264 High). It is an app bundle so its
   Screen Recording grant is its own, not the node's: the node starts it through LaunchServices
@@ -457,7 +492,10 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
     ≈10 ms p95 from a screen change to an encoded frame at 1080p60). The picture's long edge is at most `start.max_size`
     (never upscaled, even sides), the frame rate 1–60, and a keyframe comes at least every 10 s and whenever asked.
   - **Messages**: `start` gets `hello` (codec, display, size), then `format` and a keyframe; `format` again whenever the
-    parameter sets change. A still screen gives no frames, so a `heartbeat` goes out each second nothing did.
+    parameter sets change. A still screen gives no frames, so a `heartbeat` goes out each second nothing did. Each
+    second frames did, `timing` carries the helper's medians for the phone's Connection Stats (`TimingWindow`):
+    capture (display time to ScreenCaptureKit's callback, about 0), encode (VideoToolbox in to out) and network (half
+    the round trip from a frame going out to the phone's report on it, so no clocks need to agree), and what went out.
     `update` changes the bitrate cap and frame rate in place; a new display, size or codec restarts capture with a
     fresh `hello`, `format` and keyframe. `paused` says why capture stopped (`permission`, `locked`, `login_window`,
     `display_gone`, `busy`); when the Mac unlocks it sends `resumed` and starts again. The stream closing ends the
@@ -483,10 +521,17 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
     before it would show a picture switcher they can't use. `screen.dial` works either way.
 - **Hub** (`GET …/screen/video/connect?pair=…`): a binary WebSocket with the same checks as `…/ports/5900/connect`
   (full device, `cua` or `ego` on), counted against the same 64 streams per machine. It calls `screen.dial` and relays
-  the bytes without parsing them.
+  the bytes without parsing them. The iOS app's screen-sharing stream carries the pair it will bind to
+  (`…/ports/5900/connect?pair=…`, `RFBWebSocket`): 16 random bytes in hex, a new one each connection, so no other
+  stream can bind video to it by guessing. Hubs and nodes from before the video channel ignore the parameter.
 - **Wire** (length-prefixed messages: u32 big-endian length, u8 type, body). Helper → phone: `hello`, `format`,
-  `frame`, `heartbeat`, `paused`, `resumed`. Phone → helper: `start`, `report`, `keyframe`, `update`. Unknown types
-  are skipped by length, so either side may add more. `PersonaScreenKit` is the codec, shared with the app's client.
+  `frame`, `heartbeat`, `paused`, `resumed`, `timing`. Phone → helper: `start`, `report`, `keyframe`, `update`. Unknown types
+  are skipped by length, so either side may add more. `PersonaScreenKit` (`apple/Packages/PersonaScreenKit`, its own
+  package for macOS and iOS) is the codec, shared by the helper and the app's client. `update.path`
+  `{kind, via, min_rtt_ms}` (#6398) says the stream moved to another network route, so the helper can start its delay
+  baseline again (#6396); helpers that don't know the field skip it. `kind` (`lan`, `tailscale`, `ipv6`, `relay`) and
+  `via` (the phone's `wifi`, `cellular`, `wired` or `other` interface) name the cases of `LinkStats`, the route
+  measurement the route choice and the quality tiers share (`LinkStats.swift`, with `PathChange`).
 - **Adaptation** (`RateController`): the phone reports when each frame arrived; the helper turns that into a queueing
   delay and cuts the bitrate 30% over 150 ms, skips frames over 500 ms, and raises it 10% under 50 ms for 2 s. The
   delay is measured above the lowest one-way delay of the last 10 s, so the phone's and the Mac's clocks needn't agree.
@@ -497,12 +542,67 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
 - **Switching**: RFB signs in first and shows until the first video frame decodes; the phone then stops asking RFB for
   updates (Screen Sharing encodes nothing meanwhile). It returns to RFB within about a second on any of: the stream
   closes, no frame or heartbeat for 3 s, a decoding error, or the Mac locks (`paused`), then retries video after 30 s
-  doubling to 5 min, and at once when the helper reports the Mac unlocked (`resumed`).
+  doubling to 5 min, and at once when the helper reports the Mac unlocked (`resumed`). While capture is paused the
+  helper sends no heartbeat, so the 3 s rule waits for `resumed`.
+- **iPhone** (`apple/Persona/Screen/ScreenVideoStream.swift`, `ScreenVideoLink.swift`): the iOS app links
+  `PersonaScreenKit` (Mac and Vision compile the same sources and leave video out). `ScreenVideoStream` sends `start`,
+  decodes each frame with VideoToolbox as it comes (the helper never reorders), sends a `report` for every frame, and
+  shows only the newest picture of a burst. `ScreenVideoLink`, one per RFB session, opens the stream once RFB is
+  signed in, shows its pictures in a layer over RFB's on the same display (`hello.rect`, else the display shown; RFB's layer is
+  hidden meanwhile, so a picture of another shape leaves black, not a stale frame), and holds RFB's update requests while
+  they show; the request held goes out when video stops, so RFB's picture catches up.
+  Video is chosen by default on a Mac that offers it (⋯ › Picture, kept per Mac) and runs only while one display is
+  shown: the Mac's only one, or one picked from several the node numbered; all of several displays at once stay RFB.
+  It pauses while Picture in Picture shows the screen or the app is in the background (RFB carries the picture then).
+  When VNC shows instead, a line under the bars says why in plain words: the video stopped, the Mac is locked, or the
+  Mac hasn't allowed video yet (`permission` missing, so no stream is opened).
+  Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
+  helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
+  and decode are all known (a helper before `timing` gives the phone's numbers only).
 - **Permission and login**: only input on that Mac answers macOS's Screen Recording question — someone at the Mac, or
   the user's own taps through Screen Sharing. Nothing in Persona answers it, and Agents' computer-use calls can't target
   System Settings' Privacy & Security or the system alert. Video needs the same login as Screen Sharing (the `pair`
   binding); no password travels anywhere new. `computer.status` / `browser.status` gain `screen_video {version, codecs,
   permission}` (absent from an old node or one without the helper, so an old app keeps RFB).
+
+### Live screen routes (#6398)
+
+The live screen, picture and input together, takes the fastest route the phone can reach: the same local network,
+Tailscale, or the hub relay ([#6398](https://github.com/nwverse/persona/issues/6398) has the design). The node's end is
+`internal/screenlink`. What is in place: the screen session over the hub's relays; the direct routes come next.
+
+- **Screen session**: a phone that asks for one gets its RFB stream and its video stream as channels of one session at
+  the node, keyed by `pair`: channel 1 is the connection to Screen Sharing (still followed for the login, so video binds
+  to the pair as before), and each video stream is a channel of its own from 2 up (Persona Screen's socket). Each channel
+  is a resumable byte stream: bytes carry their offset, the receiver acknowledges them, and the sender keeps what isn't
+  acknowledged yet, so any of the session's transports can carry a channel on from where the other side is.
+  **A transport only carries a session the hub opened**: Screen Sharing is dialed and Persona Screen started through
+  `port.dial` / `screen.dial` exactly as before; a transport joining later sends the session's token first.
+- **Asking for it**: the phone offers the WebSocket subprotocol `persona-screen-link.1` (beside `binary`) on
+  `…/ports/5900/connect?pair=…` and `…/screen/video/connect?pair=…`. The hub then passes `link: true` in `port.dial` /
+  `screen.dial`, and selects the subprotocol only when the node answers `{link: 1}`. The web's noVNC (`binary`), apps
+  before it (no subprotocol), a hub before it (never passes `link`) and a node before it (answers `{}`) all keep the raw
+  stream, byte for byte.
+- **Wire**: the video wire's framing (u32 length, u8 type, body) with its own types: `data` (channel, offset, bytes),
+  `ack` (channel, received through), `paths` (the token; candidates and the certificate with the direct routes), `attach`
+  / `attached` (a transport joining with the token), `ping` / `pong` (the pong adds the node's TCP retransmitted and sent
+  packets on a direct route; 0 on a relay), `use` / `resumed` (carry these channels on this transport from these
+  offsets), `close` (a channel's end) and `reset` (the video channel goes on at a message boundary). A new video
+  channel's relay starts with `resumed` naming it.
+- **Limits** (`screenlink.Limits`): the node keeps at most 4 MB of RFB and 512 KB of video unacknowledged, and reads
+  Screen Sharing or Persona Screen only with room (Screen Sharing waits; the helper drops frames as it already does when
+  the stream is full), so memory never grows with how long a route is down. Bytes left unacknowledged for 10 s mean the
+  transport carrying them is stuck: it is closed and the channel goes on elsewhere. A channel with no transport for 10 s
+  closes (RFB's ends the session), and so does a session with no hub relay for 10 s, so revoking the device or turning
+  the screen off on the hub also ends it.
+- **Moving a channel**: RFB is always sent on exactly from the phone's offset; its protocol state can't lose a byte.
+  Video with a backlog older than 200 ms is not replayed: the node drops it, sends `reset` with where the stream goes
+  on, asks Persona Screen for a keyframe (between two of the phone's messages, never inside one) and drops frames until
+  it comes, so a late picture replaces a burst of old ones and the rate control isn't misled by their delay. When the
+  transport carrying a channel fails, the node moves it to the channel's own relay (or another transport) by itself.
+- **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
+  again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
+  or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
 
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 
@@ -686,6 +786,12 @@ Follow the order above, one PR per area. Item 6 can go with b, or a separate sma
   - `ComputerSectionTests.testTheLiveScreenAsksForTheMacsSignIn` taps VNC through to login required (ARD).
   - `ScreenDrawerTests` (mock with `MOCK_COMPUTER_OPERATING=1 MOCK_SCREEN=fake`; without `MOCK_SCREEN=fake`, it uses this Mac's real Screen Sharing, showing "hub doesn't allow this machine's screen" and failing if off; assistant and Agent chats each have a running operation): open the full page from the operating bar and ··· menu in assistant and Agent chats, close with ×.
   - `ScreenPasswordTests`: remember, automatic login next time (PiP on real device, full page in simulator), reenter changed password, forget; one-tap unlock.
+  - `VNCTests.testVideoTakesThePictureAndFallsBack` (#3954, mock `MOCK_SCREEN_VIDEO=1`, runner
+    `TEST_RUNNER_PERSONA_SCREEN_VIDEO=1`): video takes the picture after the sign-in, with Wi-Fi's cap in `start` and
+    reports coming back; the Mac locking and the stream dropping each put VNC back with their line, unlocking brings
+    video back. `testTheOverlayBreaksTheLatencyDown`: Connection Stats over the video shows every segment.
+    `ScreenVideoTests` (unit) decode the mock's fixture and drive the stream, the link and the overlay's reading from
+    a script; `TimingWindowTests` (`swift test`) the helper's medians.
   - `VNCTests`: PiP (real device: menu → PiP → remains on home screen → restore full page → PiP again; simulator has no PiP, verifies full-page fallback only). PiP source (`-showPiPSource`, also runs in simulator): appears within 1.5 seconds of tapping, shows Connecting (mock delays 3 seconds), then live view, and Failed to Connect after mock disconnects. On full page, tap/drag in both modes, Center Pointer (mock records clicks and pointer positions), clipboard both ways, typing and Mac shortcut row, Help. `TEST_RUNNER_PERSONA_VNC_PAUSE=2` slows it for recording; `testMeasure` (`MOCK_SCREEN_ANIMATE=1`, `TEST_RUNNER_PERSONA_VNC_MEASURE=1`) prints frame rate and latency.
   - Logging into a real Mac needs that Mac's password, so tests don't do it.
 - **Screenshots**: mock `MOCK_COMPUTER=ready|permissions|locked|missing|off` ([testing.md](../operations/testing.md)), with `-tab settings -openMachines YES -openMachineDetail macbook`.
