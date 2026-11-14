@@ -160,7 +160,7 @@ hello; the hub lists the feature only while every manager that carries Agents na
 | Old manager, new hub | No fold and no feature: clients keep today's behaviour. |
 | New hub and managers, an older web bundle | Until it reloads it folds by `folded_under` alone: a side is drawn as a child card in its parent's chat and left out of the rows; its parent shows the side's working or needs-you state, not its unseen result (`sides_unread`). |
 | New hub and managers, an older Android app | The same: it folds rows by `folded_under`, so a side is one of its parent's child sessions until the app is updated. |
-| New hub and managers, an older iOS app | It folds by its own child fields, which a side lacks (no `parent_session_id`): the side stays a plain row of its own. |
+| New hub and managers, an older iOS app | From #8010 on it folds rows by `folded_under` too, so a side is one of its parent's child sessions until the app is updated; an app from before #8010 folds by its own child fields, which a side lacks (no `parent_session_id`), and the side stays a plain row of its own. |
 
 ## Apple 端交接
 
