@@ -856,7 +856,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // since the page opened, the complete list's read failed (why, and Retry), or By to-do waiting for its to-dos; before,
   // the first two left "Loading…" or nothing at all under the controls for good. An older hub's rows come with the
   // socket's pushes, before GET /sessions answers, so they are drawn without waiting for it (#2812)
-  const listNote = hubUnreachable ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.agents_offline")}</p>
+  const listNote = hubUnreachable ? <p className="px-2 py-1 text-xs leading-normal text-ink-3">{t("sidebar.agents_offline")}</p>
     : !loaded && listError ? <ListError text={agentsReadFailed(listError)} onRetry={retryFullAgentSessions} />
     : todosPending ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
     : null;
