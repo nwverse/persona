@@ -25,7 +25,7 @@ const ICON: Record<ReturnType<typeof askTone>, IconName> = { attention: "hand", 
 function takeLabel(what: AskTake, short: boolean): string {
   switch (what) {
     case "take":
-      return short ? t("todo-status.ask_ok") : t("assistant-brief.take");
+      return short ? t("todos.ask_ok") : t("assistant-brief.take");
     case "ack":
       return t("assistant-brief.got_it");
     case "accept":
@@ -65,7 +65,7 @@ export function useTakeAsk(todo: Pick<Todo, "id">, ask: TodoAsk): { taking: AskT
       },
       (e) => {
         setState({ round, taking: "idle" });
-        toast(t("todo-status.ask_failed", { error: errorText(e) }), "error");
+        toast(t("todos.ask_failed", { error: errorText(e) }), "error");
       },
     );
   };
@@ -99,9 +99,9 @@ function AskLine({ todo, ask, className }: { todo: Todo; ask: TodoAsk; className
         )}
         {/* held for the briefing (#5803): why it did not ring; what that means on hover, written out on the to-do's page */}
         {ask.for_briefing === true && (
-          <span data-for-briefing="mark" title={t("todo-status.ask_held_hint")} className="flex min-w-0 items-center gap-1 text-ink-2">
+          <span data-for-briefing="mark" title={t("todos.ask_held_hint")} className="flex min-w-0 items-center gap-1 text-ink-2">
             <Icon name="clock" size={11} className="shrink-0" />
-            <span className="truncate">{t("todo-status.ask_held")}</span>
+            <span className="truncate">{t("todos.ask_held")}</span>
           </span>
         )}
       </span>
@@ -156,7 +156,7 @@ function AskPanel({ todo, ask }: { todo: Todo; ask: TodoAsk }) {
       </div>
       <p className={cx("mt-2 text-[13.5px] font-medium leading-[1.55] select-text [overflow-wrap:anywhere]", TONE[tone])}>{ask.verdict}</p>
       {ask.recommend && <p className="mt-1 text-[13px] leading-[1.55] text-ink select-text [overflow-wrap:anywhere]">{t("assistant-brief.recommend", { option: ask.recommend })}</p>}
-      {!what && <p className="mt-1 text-[12.5px] leading-[1.6] text-ink-3">{t("todo-status.ask_answer_hint")}</p>}
+      {!what && <p className="mt-1 text-[12.5px] leading-[1.6] text-ink-3">{t("todos.ask_answer_hint")}</p>}
       {(what || (decide && todo.origin)) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {what &&
@@ -175,7 +175,7 @@ function AskPanel({ todo, ask }: { todo: Todo; ask: TodoAsk }) {
               setRoute(todo.origin!, todo.id, ask.asked_at);
               navigate(conversationPage(todo.origin!, undefined, todo.manager));
             }}>
-              {t("todo-status.ask_answer")}
+              {t("todos.ask_answer")}
             </Button>
           )}
         </div>

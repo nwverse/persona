@@ -353,6 +353,6 @@ describe("task detail completion check with the real REST client", () => {
     await click(); await answer({ verdict: "needs_user", reason: "Synthetic explanation." });
     expect(result()?.textContent).toContain(t("todos.check_needs_user"));
     await click(); await answer({ error: "Synthetic service unavailable" }, 503);
-    expect(section().textContent).toContain(t("todo-status.check_unavailable"));
+    expect(section().textContent).toContain(t("todos.check_unavailable"));
   });
 });

@@ -18,7 +18,7 @@ const OLD = ["等你", "在做", "待查看", "做完", "做完了", "做完了�
 
 /** The same word meaning something else: an inbox item's tier, or a task waiting for its owner (#5732).
  *  (A file marked viewed in a code review says 已查看, #6072.) */
-const OTHER_MEANING = new Set(["lib-inbox.tier_action", "todo-status.section_waiting"]);
+const OTHER_MEANING = new Set(["lib-inbox.tier_action", "todos.section_waiting"]);
 
 function others(): [string, string][] {
   const out: [string, string][] = [];

@@ -286,7 +286,7 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
   const to: Route = { name: "todos", id: todo.id };
   const held = heldDelivery(todo);
   const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
-  const line = [held && t(`todo-status.delivery_${held.state}`), agents > 0 && t("todo-status.agent_count", { count: agents })].filter(Boolean).join(" · ");
+  const line = [held && t(`todos.delivery_${held.state}`), agents > 0 && t("todos.agent_count", { count: agents })].filter(Boolean).join(" · ");
   return (
     <div className="flex flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card" data-task={todo.id}>
       <div className="flex min-w-0 items-center gap-2">

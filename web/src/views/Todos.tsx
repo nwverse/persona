@@ -1170,7 +1170,7 @@ const SECTION_TONE: Record<TriageSection, string> = {
 
 /** A section's title: the two that are agent states take the state names (lib/state-labels.ts). */
 function sectionTitle(section: TriageSection): string {
-  if (section === "waiting") return t("todo-status.section_waiting");
+  if (section === "waiting") return t("todos.section_waiting");
   if (section === "working") return stateName("working");
   return t(`todos.section_${section}`);
 }
@@ -1367,7 +1367,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   // what it waits on, from its card (#4111): the question, the command; not its last words
   const urgentAsk = urgent.status === "needs_you" ? askText(urgentIx) : "";
   if (!urgentAsk && !urgentNow) return view;
-  const kicker = urgentIx?.kind === "plan" ? t("todo-status.kicker_plan") : urgentIx?.kind === "permission" ? t("todo-status.kicker_permission") : urgentIx?.kind === "screen" ? t("todo-status.kicker_screen") : urgentIx?.kind === "elicitation" ? t("todo-status.kicker_elicitation") : t("todo-status.kicker_question");
+  const kicker = urgentIx?.kind === "plan" ? t("todos.kicker_plan") : urgentIx?.kind === "permission" ? t("todos.kicker_permission") : urgentIx?.kind === "screen" ? t("todos.kicker_screen") : urgentIx?.kind === "elicitation" ? t("todos.kicker_elicitation") : t("todos.kicker_question");
   view.urgentLine = true;
   if (urgent.status === "needs_you") view.urgentLead = t("todos.urgent_line", { name: urgent.agent.title || urgent.session.title || "Agent", kicker });
   view.urgentText = urgentAsk || (urgentNow ? (urgentNow.kind === "words" ? plainMarkdown(urgentNow.text) : urgentNow.text) : "");
@@ -1489,7 +1489,7 @@ const TodoListItem = memo(function TodoListItem({
           {!todo.done_at && activeCount > 0 && (
             <>
               <span className="text-ink-3">·</span>
-              <span className="text-ink-3">{t("todo-status.agent_count", { count: activeCount })}</span>
+              <span className="text-ink-3">{t("todos.agent_count", { count: activeCount })}</span>
             </>
           )}
           {!todo.done_at && activeCount === 0 && (
@@ -1525,8 +1525,8 @@ const TodoListItem = memo(function TodoListItem({
         {/* Where its finished work is held short of live */}
         {held && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3">
-            <span className="font-medium text-orange">{t(`todo-status.delivery_${held.state}`)}</span>
-            {held.gate && <> · {t("todo-status.delivery_gate", { gate: held.gate })}</>}
+            <span className="font-medium text-orange">{t(`todos.delivery_${held.state}`)}</span>
+            {held.gate && <> · {t("todos.delivery_gate", { gate: held.gate })}</>}
             {held.unblock && ["user", "agent", "other"].includes(held.unblock) && <> · {t(`todos.unblock_${held.unblock}`)}</>}
           </div>
         )}
@@ -1712,9 +1712,9 @@ export function HeldForBriefing({ todo }: { todo: Pick<Todo, "ask"> }) {
     <p data-for-briefing="caption" className="mt-2 flex min-w-0 items-start gap-1.5 px-1 text-xs text-ink-2 [overflow-wrap:anywhere]">
       <Icon name="clock" size={13} className="mt-0.5 shrink-0" />
       <span>
-        <span className="font-medium">{t("todo-status.ask_held")}</span>
+        <span className="font-medium">{t("todos.ask_held")}</span>
         {t("assistant-decisionrow.separator")}
-        {t("todo-status.ask_held_hint")}
+        {t("todos.ask_held_hint")}
       </span>
     </p>
   );
@@ -2000,7 +2000,7 @@ function TodoDetail({
           {todoStatusLabel(todo, status)}
         </span>
         <span className="text-ink-3">·</span>
-        <span>{t("todo-status.agent_count", { count: activeAgents.length })}</span>
+        <span>{t("todos.agent_count", { count: activeAgents.length })}</span>
         <span className="text-ink-3">·</span>
         <span>{t("todos.created_at", { time: clock(todo.created_at) })}</span>
       </div>
@@ -2126,7 +2126,7 @@ function TodoDetail({
                 : `${mName} · ${shortPath(session?.cwd || agent.cwd)}`;
 
               const ix = sessionCard(interactions, agent.machine_id, agent.session_id);
-              const kicker = ix?.kind === "plan" ? t("todo-status.kicker_plan") : ix?.kind === "permission" ? t("todo-status.kicker_permission") : ix?.kind === "screen" ? t("todo-status.kicker_screen") : ix?.kind === "elicitation" ? t("todo-status.kicker_elicitation") : t("todo-status.kicker_question");
+              const kicker = ix?.kind === "plan" ? t("todos.kicker_plan") : ix?.kind === "permission" ? t("todos.kicker_permission") : ix?.kind === "screen" ? t("todos.kicker_screen") : ix?.kind === "elicitation" ? t("todos.kicker_elicitation") : t("todos.kicker_question");
               const sourceLabel = formatAgentSource(agent, todo.spaces, lookup);
 
               return (
@@ -2185,7 +2185,7 @@ function TodoDetail({
                     ) : now || (st === "needs_you" && askText(ix)) ? (
                       <div className="mt-1 line-clamp-2 text-[12.5px] text-ink-2">
                         {st === "needs_you" && (
-                          <span className="font-medium text-attention">{t("todo-status.kicker_line", { kicker })}</span>
+                          <span className="font-medium text-attention">{t("todos.kicker_line", { kicker })}</span>
                         )}
                         {(st === "needs_you" && askText(ix)) || (now && (now.kind === "words" ? plainMarkdown(now.text) : now.text))}
                       </div>

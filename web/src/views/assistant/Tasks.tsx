@@ -229,9 +229,9 @@ export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: 
 export function taskAsk(ix: Interaction | undefined): string | undefined {
   if (!ix) return undefined;
   const kicker =
-    ix.kind === "plan" ? t("todo-status.kicker_plan") : ix.kind === "permission" ? t("todo-status.kicker_permission") : ix.kind === "screen" ? t("todo-status.kicker_screen") : ix.kind === "elicitation" ? t("todo-status.kicker_elicitation") : t("todo-status.kicker_question");
+    ix.kind === "plan" ? t("todos.kicker_plan") : ix.kind === "permission" ? t("todos.kicker_permission") : ix.kind === "screen" ? t("todos.kicker_screen") : ix.kind === "elicitation" ? t("todos.kicker_elicitation") : t("todos.kicker_question");
   const ask = plainMarkdown(interactionAsk(ix).trim()).replace(/\s+/g, " ").trim();
-  return ask ? `${t("todo-status.kicker_line", { kicker })}${ask}` : kicker;
+  return ask ? `${t("todos.kicker_line", { kicker })}${ask}` : kicker;
 }
 
 
@@ -1142,7 +1142,7 @@ function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: 
   if (item.asks.length) return { title: item.todo.title, line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) };
   const ask = openAsk(item.todo);
   // a decision held for the briefing says so folded too (#5803): why it did not ring
-  if (isDecision(item.todo) || ask) return { title: item.todo.title, line: ask?.verdict, kicker: ask?.for_briefing === true ? t("todo-status.ask_held") : stateName("needs_you") };
+  if (isDecision(item.todo) || ask) return { title: item.todo.title, line: ask?.verdict, kicker: ask?.for_briefing === true ? t("todos.ask_held") : stateName("needs_you") };
   return undefined;
 }
 
@@ -1543,14 +1543,14 @@ export const RouteChip = memo(function RouteChip({ conversation }: { conversatio
   if (!todo) return null;
   return (
     <div className="flex flex-col items-start gap-1">
-      <span title={typeof route === "object" ? t("todo-status.ask_chat_hint") : undefined} className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full bg-accent-tint pl-3 pr-1 text-[12.5px] font-semibold text-accent">
+      <span title={typeof route === "object" ? t("todos.ask_chat_hint") : undefined} className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full bg-accent-tint pl-3 pr-1 text-[12.5px] font-semibold text-accent">
         <Icon name="send" size={12} />
-        <span className="min-w-0 truncate">{t(typeof route === "object" ? "todo-status.ask_chat_route" : "assistant-tasks.say_to", { title: todo.title })}</span>
+        <span className="min-w-0 truncate">{t(typeof route === "object" ? "todos.ask_chat_route" : "assistant-tasks.say_to", { title: todo.title })}</span>
         <button type="button" aria-label={t("assistant-tasks.give_back")} onClick={() => setRoute(conversation, null)} className="flex size-5 items-center justify-center rounded-full hover:bg-hover">
           <Icon name="x" size={11} />
         </button>
       </span>
-      {typeof route === "object" && <span className="text-xs text-ink-2">{t("todo-status.ask_chat_hint")}</span>}
+      {typeof route === "object" && <span className="text-xs text-ink-2">{t("todos.ask_chat_hint")}</span>}
     </div>
   );
 });
