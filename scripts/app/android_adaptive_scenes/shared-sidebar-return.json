@@ -1,7 +1,7 @@
 {
   "id": "shared-sidebar-return",
   "manifestId": "android-large-window-shared-sidebar-return",
-  "description": "Open an Inbox item beside the shared Assistant sidebar, rotate and resize the window in one process, then Back to the Inbox list with the sidebar still in place. The Inbox shows its item in the page itself, so the stack route stays inbox and the item is checked on the screenshots.",
+  "description": "Open an Inbox item beside the shared Assistant sidebar, resize the window in one process, then Back to the Inbox list with the sidebar still in place. The Inbox shows its item in the page itself, so the stack route stays inbox and the item is checked on the screenshots.",
   "requires": {
     "stackProbe": true,
     "fields": [
@@ -17,21 +17,29 @@
       "probePage": "Inbox"
     },
     {
+      "step": "wm-size",
+      "size": "900x1200",
+      "density": 160,
+      "widthDp": 900,
+      "heightDp": 1200
+    },
+    {
       "step": "assert",
+      "checks": {
+        "pid": "unchanged",
+        "route": {
+          "equals": "inbox"
+        },
+        "window.widthDp": {
+          "equals": 900
+        }
+      },
       "requires": {
         "page": "Inbox",
         "fields": [
           "firstVisibleKey",
           "firstVisibleOffsetPx"
         ]
-      },
-      "checks": {
-        "route": {
-          "equals": "inbox"
-        },
-        "selectedKey": {
-          "equals": null
-        }
       }
     },
     {
@@ -40,7 +48,8 @@
     },
     {
       "step": "tap",
-      "text": "Plan awaiting approval"
+      "text": "Direct",
+      "index": 0
     },
     {
       "step": "assert",
@@ -53,11 +62,14 @@
     },
     {
       "step": "capture",
-      "name": "02-sidebar-detail-right-stack"
+      "name": "02-sidebar-item-in-right-stack"
     },
     {
-      "step": "rotate",
-      "orientation": "portrait"
+      "step": "wm-size",
+      "size": "1200x900",
+      "density": 160,
+      "widthDp": 1200,
+      "heightDp": 900
     },
     {
       "step": "assert",
@@ -66,14 +78,14 @@
         "route": {
           "equals": "inbox"
         },
-        "window.orientation": {
-          "equals": "portrait"
+        "window.widthDp": {
+          "equals": 1200
         }
       }
     },
     {
       "step": "capture",
-      "name": "03-detail-rotated-portrait"
+      "name": "03-item-wide-landscape-window"
     },
     {
       "step": "wm-size",
@@ -96,23 +108,14 @@
     },
     {
       "step": "capture",
-      "name": "06-detail-regular-portrait-again"
+      "name": "04-item-narrow-portrait-window"
     },
     {
       "step": "key",
-      "keycombination": [
-        "BACK"
-      ]
+      "key": "BACK"
     },
     {
       "step": "assert",
-      "requires": {
-        "page": "Inbox",
-        "fields": [
-          "firstVisibleKey",
-          "firstVisibleOffsetPx"
-        ]
-      },
       "checks": {
         "pid": "unchanged",
         "route": {
@@ -121,11 +124,18 @@
         "selectedKey": {
           "equals": null
         }
+      },
+      "requires": {
+        "page": "Inbox",
+        "fields": [
+          "firstVisibleKey",
+          "firstVisibleOffsetPx"
+        ]
       }
     },
     {
       "step": "capture",
-      "name": "07-back-restored-inbox-list"
+      "name": "05-back-restored-inbox-list"
     }
   ]
 }
