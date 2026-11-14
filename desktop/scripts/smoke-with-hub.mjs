@@ -44,24 +44,35 @@ async function freePort() {
   return port;
 }
 
-/** The synthetic hub on its own port, taking only this run's device token. */
-async function startHub(env) {
+/** The synthetic hub on its own port. A start that hangs is reported with where Python stood, then tried once more. */
+async function startHub(env, attempt = 1) {
   const port = await freePort();
   let log = "";
-  const child = spawn(python, ["-I", join("scripts", "mock", "mock_hub.py")], {
+  const child = spawn(python, ["-I", "-X", "faulthandler", join("scripts", "mock", "mock_hub.py")], {
     cwd: root, env: { ...process.env, PORT: String(port), PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1", ...env }, stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", data => { log = (log + data).slice(-8000); });
   child.stderr.on("data", data => { log = (log + data).slice(-8000); });
-  const deadline = Date.now() + 30_000;
+  const started = Date.now(), deadline = started + 45_000;
   for (;;) {
     if (child.exitCode !== null) throw new Error(`The synthetic hub exited before it was ready:\n${log}`);
     try { if ((await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(800) })).ok) break; } catch { /* still starting */ }
-    if (Date.now() > deadline) { child.kill(); throw new Error(`The synthetic hub was not ready in 30 s:\n${log}`); }
+    if (Date.now() > deadline) {
+      // SIGABRT makes Python's fault handler write every thread's stack before it dies (elsewhere it only ends it).
+      const gone = new Promise(done => child.once("close", done));
+      child.kill("SIGABRT");
+      await Promise.race([gone, new Promise(done => setTimeout(done, 3000))]);
+      child.kill("SIGKILL");
+      console.error(`The synthetic hub was not ready in 45 s (attempt ${attempt}); where it stood:\n${log.slice(-4000)}`);
+      if (attempt >= 2) throw new Error(`The synthetic hub was not ready in 45 s, twice:\n${log.slice(-1500)}`);
+      return startHub(env, attempt + 1);
+    }
     await new Promise(done => setTimeout(done, 150));
   }
   return {
     port,
+    startMs: Date.now() - started,
+    attempts: attempt,
     log: () => log,
     async stop() {
       if (child.exitCode !== null) return;
@@ -113,7 +124,7 @@ async function scenario(name, { prefix, hubEnv }) {
     if (exit.code !== 0) result = { ...result, ok: false, error: result.error ?? `Electron exited with ${JSON.stringify(exit)}` };
     const outside = gateway.outside();
     if (prefix && outside.length) result = { ...result, ok: false, error: result.error ?? `Requests left the prefix: ${outside.slice(0, 5).join(", ")}` };
-    result = { ...result, outsidePrefix: outside, otherLocalRequests: gateway.strangers(), headless };
+    result = { ...result, outsidePrefix: outside, otherLocalRequests: gateway.strangers(), headless, hubStartMs: hub.startMs, hubStartAttempts: hub.attempts };
     if (!result.ok) console.error(`${name}: ${result.error}\n${log.slice(-3000)}\n${hub.log().slice(-1500)}`);
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error), steps: [] };
