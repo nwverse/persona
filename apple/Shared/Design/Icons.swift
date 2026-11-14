@@ -738,6 +738,24 @@ extension Theme {
         static let openQuestion = "questionmark.circle.dashed"
         /// A meeting's minutes as a whole (the watch's Meeting Minutes).
         static let minutes = "note.text"
+        /// The minutes' summary card (#6563): the Core Conclusions box's lightbulb, and a decision's mark in a topic card,
+        /// where a point has a dot.
+        static let conclusions = "lightbulb.max"
+        static let decided = "checkmark.seal.fill"
+        /// A topic card's icon by the hub's `icon` (`RecordingMinutesCards.symbol`); `general` for any other value.
+        static let topicProgress = "chart.bar.xaxis.ascending"
+        static let topicSchedule = "calendar.badge.checkmark"
+        static let topicRelease = "shippingbox"
+        static let topicPerformance = "speedometer"
+        static let topicMetrics = "chart.dots.scatter"
+        static let topicTooling = "screwdriver"
+        static let topicQuality = "ladybug"
+        static let topicDesign = "paintbrush.pointed"
+        static let topicPeople = people
+        static let topicCustomer = "person.bubble"
+        static let topicBudget = "banknote"
+        static let topicRisk = "flame"
+        static let topicGeneral = "circle.grid.2x2"
         /// A meeting's private mark (#3862, Private Meeting): its minutes are never used when Persona answers in later
         /// meetings. What stays private, as Health's note says it.
         static let privateMeeting = privacy
