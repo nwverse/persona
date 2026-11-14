@@ -41,14 +41,23 @@ describe("menu placement", () => {
     expect(placeMenu({ left: 100, right: 130, top: 700, bottom: 730 }, 200, wide).top).toBe(494);
     expect(placeMenu({ left: 100, right: 130, top: 140, bottom: 160 }, 290, { ...wide, screenH: 300 }).top).toBe(8);
   });
-  it("opens a menu too tall for either side on the roomier one, as tall as that room, not over its button", () => {
+  it("shows a menu the window can hold whole, over its button when neither side has room for it", () => {
+    const beside = { ...wide, beside: true };
+    // a 700px menu from a button low in an 800px window (784px to use): moved up to fit, every row shows
+    expect(placeMenu({ left: 100, right: 130, top: 600, bottom: 630 }, 700, beside)).toEqual({ left: 100, top: 8, width: 208 });
+    // a right-click menu of 500px at y = 450 in a 1280 × 820 window: whole from the top margin, not cut to the 442px above
+    expect(placeMenu({ left: 300, right: 300, top: 450, bottom: 450 }, 500, { ...beside, screenH: 820, gap: 0 })).toEqual({ left: 300, top: 8, width: 208 });
+    // the session's ⋯ (about 610px) from the middle of a 1440 × 900 window: whole
+    expect(placeMenu({ left: 700, right: 726, top: 430, bottom: 456 }, 610, { ...beside, screenW: 1440, screenH: 900 })).toEqual({ left: 700, top: 8, width: 208 });
+  });
+  it("opens a menu taller than the window on the roomier side of its button, as tall as that room, not over it", () => {
     const beside = { ...wide, beside: true };
     // the session header's ⋯ in a short window: under it, scrolling inside
     expect(placeMenu({ left: 470, right: 496, top: 14, bottom: 40 }, 610, { ...beside, screenH: 560 })).toEqual({ left: 470, top: 46, width: 208, maxHeight: 506 });
     // a button low on the page: above it, from the window's top margin
-    expect(placeMenu({ left: 100, right: 130, top: 600, bottom: 630 }, 700, beside)).toEqual({ left: 100, top: 8, width: 208, maxHeight: 586 });
+    expect(placeMenu({ left: 100, right: 130, top: 400, bottom: 430 }, 700, { ...beside, screenH: 600 })).toEqual({ left: 100, top: 8, width: 208, maxHeight: 386 });
     // with little room on both sides it opens over the button, as tall as the window allows
-    expect(placeMenu({ left: 100, right: 130, top: 150, bottom: 170 }, 300, { ...beside, screenH: 320 })).toEqual({ left: 100, top: 8, width: 208 });
+    expect(placeMenu({ left: 100, right: 130, top: 150, bottom: 170 }, 330, { ...beside, screenH: 320 })).toEqual({ left: 100, top: 8, width: 208 });
     // a card that does not scroll (the turn's cost, an info tip), or a menu on a phone, is placed as before: over the button
     expect(placeMenu({ left: 470, right: 496, top: 14, bottom: 40 }, 610, { ...wide, screenH: 560 })).toEqual({ left: 470, top: 8, width: 208 });
   });

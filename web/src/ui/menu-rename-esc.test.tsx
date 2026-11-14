@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-// Esc out of a menu row's rename: the input goes, the menu stays open on its Rename row, and the focus goes back to what
-// opened the menu (its button, a sidebar row), as a rename that commits gives it back. It was left on body, so the next
-// key reached nothing and a screen reader lost its place.
+// Esc out of a menu row's rename: the input goes, the menu stays open with its Rename row highlighted, and the focus goes
+// back to what opened the menu (its button, a sidebar row), as a rename that commits gives it back. It was left on body,
+// so the next key reached nothing and a screen reader lost its place; and with no row highlighted, Enter went to the
+// sidebar row under the open menu and opened its conversation.
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,14 +33,14 @@ afterEach(() => {
   row.remove();
 });
 
-function Open({ commit = async () => {} }: { commit?: (name: string) => Promise<void> }) {
+function Open({ commit = async () => {}, pin = () => {} }: { commit?: (name: string) => Promise<void>; pin?: () => void }) {
   const [open, setOpen] = useState(true);
   return open ? (
     <Menu
       anchor={row}
       onClose={() => setOpen(false)}
       items={[
-        { key: "pin", label: "设为常驻", accel: "P", onSelect: () => {} },
+        { key: "pin", label: "设为常驻", accel: "P", onSelect: pin },
         { key: "rename", label: "重命名…", accel: "R", onSelect: () => {}, rename: { value: "周末去杭州的行程", commit } },
       ]}
     />
@@ -51,6 +52,9 @@ const key = (k: string) => {
   act(() => void (document.activeElement ?? document.body).dispatchEvent(e));
 };
 const menu = () => document.querySelector("[role=menu]");
+/** The row the highlight sits under: jsdom lays nothing out, so it is told by the highlight showing at all and by the
+ *  keys that act on it. */
+const highlighted = () => (menu()?.querySelector<HTMLElement>("span[aria-hidden]")?.style.opacity ?? "0") === "1";
 
 describe("Esc out of a menu's rename", () => {
   it("keeps the menu open and gives the focus back to what opened it, not body", () => {
@@ -66,6 +70,25 @@ describe("Esc out of a menu's rename", () => {
     key("Escape");
     expect(menu()).toBeNull();
     expect(document.activeElement).toBe(row);
+  });
+
+  it("highlights the Rename row, so Enter renames again and the arrows go on from it, not the row underneath", () => {
+    const pin = vi.fn();
+    act(() => root.render(<Open pin={pin} />));
+    expect(highlighted()).toBe(false);
+    key("r");
+    key("Escape");
+    expect(highlighted()).toBe(true);
+    // Enter is the menu's: the Rename row's field again, not the sidebar row the focus is on
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    act(() => void row.dispatchEvent(enter));
+    expect(enter.defaultPrevented).toBe(true);
+    expect(document.activeElement?.tagName).toBe("INPUT");
+    key("Escape");
+    // ↑ from the Rename row is the row above it
+    key("ArrowUp");
+    key("Enter");
+    expect(pin).toHaveBeenCalledTimes(1);
   });
 
   it("does the same for Enter on the unchanged name, which renames nothing", () => {

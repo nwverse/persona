@@ -389,6 +389,8 @@ export function Menu({
   const asking = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loads = useRef(0);
   const rows = useRef<(HTMLElement | null)[][]>([]);
+  // The highlight last moved by a key, not the pointer: a row it lands on past a cut edge is scrolled into view
+  const keyed = useRef(false);
   // What had the focus as the menu opened (its button, a row's ⋯), read on the first render, before a row can take it.
   const [opener] = useState(() => {
     const el = document.activeElement as HTMLElement | null;
@@ -515,6 +517,7 @@ export function Menu({
     const { levels: ls, subs: open } = live.current;
     const it = ls[depth]?.[index];
     if (!enabled(it)) return;
+    keyed.current = false;
     setActive(depth, index);
     // a submenu opens (and the one beside it closes) a moment after the pointer settles on a row, so a pointer
     // crossing rows on its way to the submenu does not swap it
@@ -553,6 +556,7 @@ export function Menu({
       }
       e.preventDefault();
       e.stopPropagation();
+      keyed.current = true;
       if (intent.type === "close") {
         handBack(); // a row the pointer chose to confirm may have it
         onClose();
@@ -581,15 +585,21 @@ export function Menu({
     rows: (list: (HTMLElement | null)[]) => {
       rows.current[depth] = list;
     },
+    keyed,
     onHover: (i: number) => hover(depth, i),
     onEnter: () => clearTimeout(timer.current),
     onLeave: () => live.current.subs.length <= depth && setActive(depth, -1),
     onChoose: (i: number) => choose(depth, i, false),
     onRename: (it: MenuItem, name: string) => void commitRename(depth, it, name),
     onCancelRename: () => {
-      handBack(); // the input had it: the menu stays open, its Rename row highlighted, and the next key is the menu's
+      // The input had the focus: it goes back to what opened the menu, the menu stays open with its Rename row
+      // highlighted, and the next key is the menu's (Enter renames again, the arrows go on from it, Esc closes)
+      const index = live.current.levels[depth]?.findIndex((it) => it.key === live.current.renaming) ?? -1;
+      handBack();
       setRenaming(null);
       setFailure(null);
+      keyed.current = true;
+      if (index >= 0) setActive(depth, index);
     },
   });
 
@@ -604,13 +614,25 @@ export function Menu({
   );
 }
 
+/** The height of the fade a cut menu draws at an edge with more rows beyond it (`data-menu-more`, h-6). */
+const MENU_FADE = 24;
+
+/** Scrolls `box` (a menu) the least that shows `row` whole, clear of the fade at the edge it was past. */
+function reveal(box: HTMLElement, row: HTMLElement) {
+  if (box.scrollHeight <= box.clientHeight) return;
+  const b = box.getBoundingClientRect();
+  const r = row.getBoundingClientRect();
+  if (r.top < b.top + MENU_FADE) box.scrollTop = Math.max(0, box.scrollTop - (b.top + MENU_FADE - r.top));
+  else if (r.bottom > b.bottom - MENU_FADE) box.scrollTop = Math.min(box.scrollHeight - box.clientHeight, box.scrollTop + r.bottom - (b.bottom - MENU_FADE));
+}
+
 type Place =
   | { anchor: HTMLElement | null; point?: { x: number; y: number }; align: "left" | "right"; side: "top" | "bottom"; width: number; rect?: undefined }
   | { rect: { left: number; right: number; top: number; bottom: number }; width: number };
 
 /** One level of a menu: the rows, the highlight gliding under them, a rename input or a failure where they call for it. */
 function MenuPanel({
-  id, depth, items, active, confirming, renaming, busy, failure, rows: report, place, header, headerAsWritten, loading, loadError,
+  id, depth, items, active, confirming, renaming, busy, failure, rows: report, keyed, place, header, headerAsWritten, loading, loadError,
   onHover, onEnter, onLeave, onChoose, onRename, onCancelRename,
 }: {
   id: string;
@@ -622,6 +644,8 @@ function MenuPanel({
   busy: string | null;
   failure?: string;
   rows: (list: (HTMLElement | null)[]) => void;
+  /** The highlight last moved by a key (Menu's): then a row past a cut edge scrolls into view. */
+  keyed: { readonly current: boolean };
   place: Place;
   header?: string;
   headerAsWritten?: boolean;
@@ -654,12 +678,13 @@ function MenuPanel({
       // On a phone it keeps to what the keyboard leaves visible (the frame --kb-top / --kb-h follow).
       const view = narrow ? keyboardFrame(innerHeight, window.visualViewport) : undefined;
       // Measure the natural height: the inline maxHeight left by the previous placement (a keyboard that has since
-      // closed) would otherwise be read back as the menu's height, and the menu placed for a height it no longer has.
+      // closed) would otherwise be read back as the menu's height, and the menu placed for a height it no longer has;
+      // the class's cap (the window's height) too, or a menu taller than the window would seem to fit in it.
       // The scroll offset is put back too: the uncapped layout may clamp it.
       const el = ref.current;
       const { scrollTop } = el;
       const capped = el.style.maxHeight;
-      el.style.maxHeight = "";
+      el.style.maxHeight = "none";
       // ...at the width it will have: rows whose text wraps (`detail`, `wrap`) are taller in a narrower panel, and the
       // first placement has no width yet, so a menu above its anchor came out too short and covered it (#5584)
       el.style.width = `${Math.min(place.width, innerWidth - 16)}px`;
@@ -694,6 +719,10 @@ function MenuPanel({
   useLayoutEffect(() => {
     const el = els.current[active];
     setBox(el ? { top: el.offsetTop, height: el.offsetHeight } : null);
+    // the keys moved the highlight to a row the cut hides (or the fade covers): the menu scrolls it into view. Not
+    // for the pointer, whose row is in view already, so the menu never scrolls under it
+    if (el && ref.current && keyed.current) reveal(ref.current, el);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `keyed` is a ref
   }, [active]);
 
   const measureMore = () => {

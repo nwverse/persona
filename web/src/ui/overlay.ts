@@ -110,18 +110,19 @@ export interface MenuPlace {
   top: number;
   width: number;
   /** Set when the menu has less room than its own cap (the window, 8px inside): on a phone the visible viewport (the
-   *  keyboard up); on a wide screen the room on one side of its anchor, for a menu too tall for either side. */
+   *  keyboard up); on a wide screen the room on one side of its anchor, for a menu taller than the window. */
   maxHeight?: number;
 }
 
-/** The least room beside its anchor a menu too tall for either side is held to on a wide screen (five rows); with less on
+/** The least room beside its anchor a menu taller than the window is held to on a wide screen (five rows); with less on
  *  both sides it opens over the anchor, as tall as the window. */
 const MENU_MIN_ROOM = 160;
 
 /** Where a menu of height `h` opens next to `anchor`, kept 8px inside the area it may use: the window, or on a phone
- *  the visible viewport (`view`: its top and height, from --kb-top / --kb-h) the soft keyboard leaves. `beside`: never
- *  over its anchor (Menu on a wide screen, which holds itself to `maxHeight` and scrolls): one taller than the room on
- *  either side opens on the roomier side, as tall as that room, where over the anchor it hid the button that opened it. */
+ *  the visible viewport (`view`: its top and height, from --kb-top / --kb-h) the soft keyboard leaves. A menu that fits
+ *  in the window shows whole, moved over its anchor when neither side has room for it. `beside` (Menu on a wide screen,
+ *  which holds itself to `maxHeight` and scrolls): one taller than the window, which has to scroll anyway, opens on the
+ *  roomier side of its anchor, as tall as that room, where over the anchor it hid the button that opened it. */
 export function placeMenu(
   anchor: { left: number; right: number; top: number; bottom: number },
   h: number,
@@ -137,7 +138,7 @@ export function placeMenu(
   if (o.beside && !o.view) {
     const below = hi - anchor.bottom - gap;
     const above = anchor.top - gap - lo;
-    if (h > below && h > above && Math.max(below, above) >= MENU_MIN_ROOM)
+    if (h > hi - lo && Math.max(below, above) >= MENU_MIN_ROOM)
       return below >= above ? { left, top: anchor.bottom + gap, width, maxHeight: below } : { left, top: lo, width, maxHeight: above };
   }
   let top = o.side === "bottom" ? anchor.bottom + gap : anchor.top - fit - gap;
