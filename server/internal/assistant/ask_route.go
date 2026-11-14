@@ -59,7 +59,9 @@ type askRoute struct {
 	// With push tiering on (push_quiet.go) a card that runs past its last rung does not reach the user: it goes back to
 	// its task's supervisor once more (reminded), and when that hold runs out too it stays there (parked) until someone
 	// answers or escalates it, or the switch goes off, when it climbs on as before. Neither is kept over a restart: a
-	// restored route starts again from the supervisor, which is then reminded once more.
+	// restored route starts again from the supervisor, which is then reminded once more. reminded is sticky while the
+	// card lives: turning the switch off and on again before its hold runs out does not buy a second reminder for the
+	// same supervisor — only the switch being off when the hold runs out hands the card to the user.
 	reminded, parked bool
 }
 

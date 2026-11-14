@@ -315,6 +315,33 @@ func TestQuietPleaseVerifyPostsNoCard(t *testing.T) {
 	}
 }
 
+// A held escalation puts the card on the owner's Needs you list: the supervisor cannot escalate the same card again
+// (it is the user's already), and the tool reply tells them the escape hatches — escalate with p0 or the right
+// why_owner from the start, or notify_user with push_level P0 when waiting now would do real harm.
+func TestHeldEscalationIsNotReEscalatable(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	pushQuietFor(t, e.s, true)
+	e.raise(askPermission("ix1", "worker-1"))
+	e.noticeWith("lead1", "interaction_id=ix1")
+	res, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "x",
+		"why_owner": "priority"})
+	if err != nil || !strings.Contains(res, "without a push") {
+		t.Fatalf("first escalation: %s %v", res, err)
+	}
+	for _, args := range []map[string]any{
+		{"todo_id": e.todo.ID, "reason": "now urgent", "p0": true},
+		{"todo_id": e.todo.ID, "reason": "now urgent", "why_owner": "irreversible"},
+	} {
+		if _, err := runJSON(t, e.s, "lead1", "ask_escalate", args); err == nil ||
+			!strings.Contains(err.Error(), "no card waiting that the user has not been told of") {
+			t.Fatalf("re-escalation %v: %v", args, err)
+		}
+	}
+	if got := e.cardPushes("ix1"); len(got) != 1 || got[0] != assistantwire.LevelP1 {
+		t.Fatalf("the rejected re-escalation pushed: %v", got)
+	}
+}
+
 // With the switch off the same turn still posts its progress card (as before).
 func TestQuietOffTaskReportStillPosts(t *testing.T) {
 	s, f, posts := reportService(t, true)
