@@ -120,7 +120,7 @@ PERF_SIGNPOST. It was not silently fixed here; origin/main later fixed it in `74
 
 ```sh
 python3 -I scripts/app/test_perf_report.py
-python3 -I scripts/app/test_reference_evidence.py  # 6 checks: original hashes and all reported raw statistics
+python3 -I scripts/app/test_reference_evidence.py  # 8 checks: hashes, launch/package provenance and raw statistics
 python3 -I native/app-core/scripts/test_apple_measurements.py
 python3 -I scripts/test/test_doc_paths.py
 python3 -I scripts/test/test_doc_go_paths.py
@@ -153,6 +153,14 @@ It passed one warmup + three measured launches. `/tmp/persona-6871-final-launch-
 metric, device and attachment provenance. The first attempt failed at the old `beginRun` nil application reference;
 its crash evidence was retained rather than counted as a sample. The optimized UI build ended in
 `** TEST BUILD SUCCEEDED **` in `/tmp/persona-6871-launch-ui-build.log`.
+
+A later tagged memory/stream verification was not completed on the newest merged app. Its optimized rebuild queued
+through `xcode-slot` for more than an hour while other tasks held both slots, and all three simulator slots were
+occupied by other agents' devices. Those devices were not closed or preempted. Therefore the historical launch,
+stream and native-memory observations above remain explicitly historical, and this PR does not claim final tagged-UI
+acceptance on the newest merged build. The earlier optimized reference harness did build successfully with
+`** TEST BUILD SUCCEEDED **` in `/tmp/persona-6871-final-harness-build-fixed.log`; that is compilation evidence, not
+a completed new UI measurement.
 
 Hosted CI was not dispatched: this repository requires manual CI dispatch. The 38-case/94-step accepted continuity
 matrix was not rerun as a substitute for measurement evidence. No TestFlight, App Store, distribution signing or online
