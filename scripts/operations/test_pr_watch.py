@@ -361,11 +361,11 @@ class WatcherTests(unittest.TestCase):
                 if argv[:2] == ["git", "rev-parse"]:
                     return (SHA_BASE if "FETCH_HEAD" in argv else SHA_B) + "\n"
                 return ""
-            with patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
+            with patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: pr(head=SHA_B if number == 9 else SHA_A)), \
                     patch.object(pr_watch_repair, "verify", return_value=[]), \
                     patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
                     patch.object(pr_watch_repair, "gh_json", side_effect=[[], {"number": 9}]) as created:
-                pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]})
+                pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]}, allow_merge_only=True)
         self.assertIn("Refs #6", created.call_args.args[0][-1])
 
     def test_every_failed_lane_must_reproduce_on_main(self):

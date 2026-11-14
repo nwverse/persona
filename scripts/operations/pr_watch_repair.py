@@ -255,7 +255,7 @@ def repair_with_model(repo, pr, worktree, failure, config):
         return diff
 
 
-def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None):
+def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False):
     """Run relevant checks and privacy before pushing an ordinary repair commit."""
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
@@ -265,7 +265,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     checked(["git", "diff", "--check"], cwd=worktree)
     paths = checked(["git", "diff", "--cached", "--name-only", "--no-renames", "-z"], cwd=worktree)
     changed = [path for path in paths.split("\0") if path]
-    if not changed and pr.get("isCrossRepository"):
+    if not changed and pr.get("isCrossRepository") and allow_merge_only:
         changed = []
     elif not changed:
         raise WatchError("automatic repair produced no tracked file change")
@@ -328,7 +328,11 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             raise WatchError("cannot open a continuation PR without an issue link")
         body = "Refs #%d\n\nContinuation of #%s with an automated verification repair.\n\nOriginal failure:\n```text\n%s\n```" % (
             issues[0], pr["number"], bounded(failure, 4000))
-        created = gh_json(["pr", "create", "--repo", repo, "--base", pr["baseRefName"], "--head", branch,
+        owner = repo.split("/", 1)[0]
+        created = gh_json(["pr", "create", "--repo", repo, "--base", pr["baseRefName"], "--head", owner + ":" + branch,
                            "--title", "fix: continue #%s verification repair" % pr["number"], "--body", body])
+        actual = pr_snapshot(repo, created["number"])
+        if actual["headRefOid"] != head:
+            raise WatchError("continuation PR head does not match the verified repair")
         return created["number"]
     return pr["number"]
