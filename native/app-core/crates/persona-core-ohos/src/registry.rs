@@ -46,8 +46,9 @@ pub fn create(config: &[u8], host: Arc<dyn Host>) -> Result<i64> {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     let handle = i64::try_from(handle).map_err(|_| error("core handle space exhausted"))?;
     let mut map = lock();
-    map.get_or_insert_with(HashMap::new)
-        .insert(handle, Arc::new(Runtime::new(host)));
+    let mut runtime = Runtime::new(host);
+    runtime.set_explicit_shutdown();
+    map.get_or_insert_with(HashMap::new).insert(handle, Arc::new(runtime));
     Ok(handle)
 }
 
@@ -80,8 +81,10 @@ pub fn close(handle: i64) -> Result<()> {
         let mut map = lock();
         map.as_mut().and_then(|map| map.remove(&handle))
     };
-    // A final lease may join the worker and release the host; do not hold the registry lock across either callback.
-    drop(removed);
+    // Explicit close owns worker termination; a normal lease drop never joins the worker.
+    if let Some(runtime) = removed {
+        runtime.shutdown();
+    }
     Ok(())
 }
 
