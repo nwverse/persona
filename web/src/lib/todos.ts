@@ -277,12 +277,12 @@ export const TODO_TONE_CLASS: Record<(typeof TODO_STATUS_INFO)[TodoStatus]["tone
  *  or finished-unseen (#4896): a supervised one whose work was judged finished (#3124), or an open one whose result
  *  waits on them — to verify, to acknowledge, or to decide (its `ask`, #2056). */
 export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
-  return !todo.done_at && (reviewState(todo) === "pending_review" || !!openAsk(todo) || todo.delivery?.state === "live") && (status === "follow_up" || status === "unread" || status === "not_started");
+  return !todo.done_at && !acceptanceStands(todo) && !waitsForOwner(todo) && (reviewState(todo) === "pending_review" || !!openAsk(todo) || todo.delivery?.state === "live") && (status === "follow_up" || status === "unread" || status === "not_started");
 }
 
 /** A task's place in the order: its status's rank, Awaiting review right after Needs you. */
 export function todoRank(todo: Todo, status: TodoStatus): number {
-  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[status];
+  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[shownStatus(todo, status)];
 }
 
 export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" | "green" | "amber" | "idle" | "off" }> = {

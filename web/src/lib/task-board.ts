@@ -1,7 +1,7 @@
 // The task board (iOS TaskBoardSheet): one conversation's tasks and the agents its dock shows, by where they are —
 // Needs you / Awaiting review / Failed to start / Working / Finished / Stopped / Done, what the user must act on first (#4896). Pure, so the dock's
 // All N and the board count the same things.
-import { awaitsReview, type DockAgent, type Todo, type TodoStatus } from "./todos";
+import { awaitsReview, shownStatus, type DockAgent, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 
 export type BoardSectionKey = "waiting" | "review" | "failed" | "working" | "unread" | "stopped" | "done";
@@ -21,7 +21,7 @@ export interface BoardSection {
  *  stopped or finished-unseen ones (#4896). The web keeps Interrupted (interrupted) apart; it waits for the user like Needs you. */
 export function boardSectionOf({ todo, status }: BoardRow): BoardSectionKey {
   if (awaitsReview(todo, status)) return "review";
-  switch (status) {
+  switch (shownStatus(todo, status)) {
     case "needs_you":
     case "interrupted":
     case "usage_limit":
