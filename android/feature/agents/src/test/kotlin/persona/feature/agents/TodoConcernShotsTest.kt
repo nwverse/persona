@@ -16,6 +16,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -115,8 +116,10 @@ class TodoConcernShotsTest {
         assertTrue("Working", has(if (chinese) "工作中" else "Working"))
         assertTrue("Other open", has(if (chinese) "其他未完成" else "Other open"))
         assertTrue("Just finished", has(if (chinese) "刚做完" else "Just finished"))
-        assertFalse("a concern uses the existing single tag slot", has(if (chinese) "进行中" else "In progress"))
-        assertTrue("the ordinary row keeps its state tag", has(if (chinese) "未开始" else "Not started"))
+        assertTrue("the working concern keeps its state tag", has(if (chinese) "进行中" else "In progress"))
+        val notStarted = if (chinese) "未开始" else "Not started"
+        assertEquals("the open concern and ordinary row both keep their state tags", 2,
+            rule.onAllNodesWithText(notStarted, useUnmergedTree = true).fetchSemanticsNodes().size)
         titles.forEach { title -> assertTrue("missing title $title", has(title)) }
         val shotBounds = rule.onNodeWithTag("shot").fetchSemanticsNode().boundsInRoot
         assertTrue(tags.all { it.boundsInRoot.left >= shotBounds.left && it.boundsInRoot.right <= shotBounds.right })
@@ -149,6 +152,21 @@ class TodoConcernShotsTest {
     @Config(qualifiers = "zh-w400dp-h1400dp-xhdpi")
     @Test fun boardDarkChinese() = shot(AppStyle.Board, true, chinese = true)
 
+    @Test fun workingConcernShowsBothStateAndConcernTags() {
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                    TodosScreen(todos(false).take(1), sessions, null, onBack = {}, onOpenTodo = {}, now = now)
+                }
+            }
+        }
+        rule.onNodeWithText("Morning summary", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("In progress", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Concern", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals("Concern is spoken once", 1,
+            rule.onAllNodesWithContentDescription("Concern", useUnmergedTree = true).fetchSemanticsNodes().size)
+    }
+
     @Test fun closedConcernInExpandedRelatedRowIsLabelled() {
         val list = listOf(
             Todo("ordinary", title = "Morning work", createdAt = ago(500), updatedAt = ago(30), doneAt = ago(30), planId = "p1"),
@@ -167,6 +185,8 @@ class TodoConcernShotsTest {
         rule.waitForIdle()
         assertTrue(has("Morning answer"))
         assertEquals(1, rule.onAllNodesWithContentDescription("Concern", useUnmergedTree = true).fetchSemanticsNodes().size)
+        assertEquals("the section heading and the related line's section tag", 2,
+            rule.onAllNodesWithText("Just finished", useUnmergedTree = true).fetchSemanticsNodes().size)
         val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
         File(out(), "todos-concerns-related-glass-light-en.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }

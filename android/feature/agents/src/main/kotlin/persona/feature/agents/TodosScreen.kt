@@ -577,8 +577,14 @@ private fun TodoRelatedLine(todo: Todo, section: TriageSection, modifier: Modifi
             modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).clickable(onClick = onOpen).padding(vertical = Tokens.Space.xs),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
         ) {
-            Text(todo.title, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            ) {
+                Text(todo.title, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                JTag(section.label)
+            }
             val label = stringResource(R.string.agents_todo_concern)
             JTag(label, Modifier.clearAndSetSemantics { contentDescription = label })
         }
@@ -653,11 +659,12 @@ private fun TodoTriageRow(
                         todo.title,
                         style = if (finished) PersonaTheme.type.body.copy(textDecoration = TextDecoration.LineThrough) else PersonaTheme.type.headline,
                         color = if (finished) PersonaTheme.palette.ink3 else PersonaTheme.palette.ink,
-                        maxLines = 1,
+                        // A concern keeps its trailing state tag; one title wrap keeps both readable at large text sizes.
+                        maxLines = if (todo.kind == "concern") 2 else 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    if (todo.kind != "concern") when {
+                    when {
                         // an accepted task the hub reopened with more work reads Accepted, not Follow up (#3156)
                         accepted && state != TodoState.Working && state != TodoState.NeedsYou ->
                             JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
