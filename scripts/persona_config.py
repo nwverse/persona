@@ -143,23 +143,37 @@ def provisioning_profiles(cfg: dict) -> dict[str, str]:
     return profiles
 
 
-# The app's entitlements. The CarPlay voice entitlement needs Apple's approval first (docs/apple/carplay.md); the generated copy
-# sits in apple/, outside the Persona/ source folder, so XcodeGen does not pick it up as a resource.
+# The app's entitlements. Some need the capability on the App ID first (an App ID without it cannot sign them), so they
+# are opt-in in config.json: the CarPlay voice one needs Apple's approval (docs/apple/carplay.md), HomeKit the capability
+# turned on by the developer account's owner (docs/apple/phone-tools.md "Home"). With any of them on, a generated copy of
+# the app's file with them added sits in apple/, outside the Persona/ source folder, so XcodeGen does not pick it up as a
+# resource.
 APP_ENTITLEMENTS = os.path.join("Persona", "Resources", "Persona.entitlements")
-CARPLAY_ENTITLEMENTS = "PersonaCarPlay.entitlements"
+OPTIONAL_ENTITLEMENTS = "PersonaOptional.entitlements"
+# config.json app.<key> → the entitlement it adds.
+OPTIONAL = (
+    ("carplay_voice", "com.apple.developer.carplay-voice-based-conversation"),
+    ("homekit", "com.apple.developer.homekit"),
+)
+
+
+def opted_in(cfg: dict, key: str) -> bool:
+    # Only JSON true turns one on: a string like "false" is truthy in Python.
+    return get(cfg, "app." + key, False) is True
 
 
 def app_entitlements(cfg: dict) -> str:
-    # Opt-in: an App ID without the approved entitlement cannot sign it, so signing without it must keep working.
-    # Returns the path relative to apple/. Only JSON true turns it on: a string like "false" is truthy in Python.
-    if get(cfg, "app.carplay_voice", False) is not True:
+    # Returns the path relative to apple/: the app's own file when nothing optional is on, so signing keeps working.
+    extra = [entitlement for key, entitlement in OPTIONAL if opted_in(cfg, key)]
+    if not extra:
         return APP_ENTITLEMENTS
     with open(os.path.join(ROOT, "apple", APP_ENTITLEMENTS), "rb") as f:
         entitlements = plistlib.load(f)
-    entitlements["com.apple.developer.carplay-voice-based-conversation"] = True
-    with open(os.path.join(ROOT, "apple", CARPLAY_ENTITLEMENTS), "wb") as f:
+    for entitlement in extra:
+        entitlements[entitlement] = True
+    with open(os.path.join(ROOT, "apple", OPTIONAL_ENTITLEMENTS), "wb") as f:
         plistlib.dump(entitlements, f)
-    return CARPLAY_ENTITLEMENTS
+    return OPTIONAL_ENTITLEMENTS
 
 
 def xcconfig(cfg: dict):
@@ -177,6 +191,8 @@ def xcconfig(cfg: dict):
         f.write("PERSONA_PUSH_RELAY = %s\n" % get(cfg, "app.push_relay", "").rstrip("/").replace("//", "/$()/"))
         # Which entitlements the app signs with (app_entitlements; docs/apple/carplay.md).
         f.write("PERSONA_APP_ENTITLEMENTS = %s\n" % app_entitlements(cfg))
+        # Home's tools are offered only when the app signs with HomeKit (Info.plist PersonaHomeKit; docs/apple/phone-tools.md "Home").
+        f.write("PERSONA_HOMEKIT = %s\n" % ("YES" if opted_in(cfg, "homekit") else ""))
         # "No hub yet?" on the first screen opens this page (docs/operations/getting-started.md published; empty: the row is hidden).
         f.write("PERSONA_GETTING_STARTED_URL = %s\n" % get(cfg, "publish.getting_started_url", "").replace("//", "/$()/"))
         # Meta Wearables (docs/apple/meta-glasses.md): 0 means Developer Mode (no attestation), as Meta's docs say.
