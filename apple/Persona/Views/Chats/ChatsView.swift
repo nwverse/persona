@@ -1445,7 +1445,7 @@ private struct AgentsList: View {
         let live = unpinned.filter { $0.state.isLive }
         let shown: [Session]
         switch grouping {
-        case .recent: shown = AgentListOrder.recent(unpinned)
+        case .recent: shown = SideSessions.arrange(AgentListOrder.recent(unpinned)).rows
         case .todo:
             let groups = TodosLogic.buildTodoAgentGroups(sessions: live, todos: TodoStore.shared.todos, isMuted: model.isMuted)
             shown = rows.todos(groups) { g in g.todoID == nil ? isFolded(g.key, otherwise: g.folded) : isFolded(g.key) }
@@ -1791,14 +1791,17 @@ private struct AgentsList: View {
 
     /// The agents of a space or a working tree: busy (and pinned / looping) ones first, idle ones behind one "N more idle"
     /// row (`key` remembers it open). `depth`: levels in, under a working tree's row (2 under a nested one's).
-    /// The agents of a tab with several together, under the tab's row (`tabRows`, #2320).
+    /// The agents of a tab with several together, under the tab's row (`tabRows`, #2320); a side session a level in
+    /// under the session that started it, its group kept together (`AgentListOrder.rows`, #5935).
     @ViewBuilder private func agentRows(_ list: [Session], key: String, depth: Int = 0) -> some View {
-        let rows = lookup.projection?.rows[key].map { (busy: $0.busy, idle: $0.idle) } ?? order.tabEntries(list, all: quick == .all)
-        cappedRows(rows.busy, key: key, depth: depth) { e in entryRows(e, depth: depth) }
+        let rows = lookup.projection?.rows[key] ?? order.rows(list, all: quick == .all)
+        cappedRows(rows.busy, key: key, depth: depth, cap: rows.unsplit(AgentRowCap.rows)) { e in
+            entryRows(e, depth: depth, nested: rows.nested)
+        }
         if !rows.idle.isEmpty {
             let idle = rows.idle.flatMap(\.sessions)
             if expandedIdle.contains(key) || !query.isEmpty {
-                ForEach(rows.idle) { e in entryRows(e, depth: depth) }
+                ForEach(rows.idle) { e in entryRows(e, depth: depth, nested: rows.nested) }
                 if query.isEmpty { collapseRow(String(localized: "Hide \(idle.count) Idle"), key: key, depth: depth) }
             } else {
                 expandRow(idle, key: key, depth: depth)
@@ -1807,11 +1810,11 @@ private struct AgentsList: View {
     }
 
     /// One agent's row, or a tab's: its row, then (unless folded) its agents, the starter on top marked, the others a
-    /// level in under it.
-    @ViewBuilder private func entryRows(_ e: TabPanes.Entry, depth: Int = 0) -> some View {
+    /// level in under it. `nested`: the side sessions drawn a level in, under the session that started them (#5935).
+    @ViewBuilder private func entryRows(_ e: TabPanes.Entry, depth: Int = 0, nested: Set<SessionKey> = []) -> some View {
         switch e {
         case .agent(let s):
-            slotRow(s, depth: depth)
+            slotRow(s, depth: depth + (nested.contains(s.key) ? 1 : 0))
         case .tab(let g):
             tabRow(g, depth: depth)
             if !isFolded(g.foldID) {
@@ -1907,8 +1910,8 @@ private struct AgentsList: View {
                             get: { expandedQuiet.contains(g.id) || !query.isEmpty },
                             set: { if $0 { expandedQuiet.insert(g.id) } else { expandedQuiet.remove(g.id) } }
                         )) {
-                            let roles = TabPanes.roles(g.sessions)
-                            ForEach(TabPanes.grouped(ordered(g.sessions))) { s in slotRow(s, pane: roles[s.key]) }
+                            let roles = TabPanes.roles(g.sessions), quiet = order.rows(g.sessions, all: false)
+                            ForEach(quiet.sessions) { s in slotRow(s, depth: quiet.level(s), pane: roles[s.key]) }
                         } label: {
                             QuietSpaceRow(group: g, machine: machine(g.machineRef), showMachine: namesMachine, repo: repos)
                         }
@@ -2121,7 +2124,8 @@ private struct AgentsList: View {
         // room they have in the other groupings.
         if open {
             if quiet {
-                ForEach(lookup.projection?.rows[w.id]?.all ?? TabPanes.entries(ordered(w.sessions))) { e in entryRows(e, depth: level) }
+                let rows = lookup.projection?.rows[w.id] ?? order.rows(w.sessions, all: false)
+                ForEach(rows.all) { e in entryRows(e, depth: level, nested: rows.nested) }
             } else {
                 agentRows(w.sessions, key: w.id, depth: level)
             }
@@ -2302,8 +2306,9 @@ private struct AgentsList: View {
         .listRowSeparator(.hidden)
         if open {
             if quiet {
-                ForEach(lookup.projection?.rows[w.id]?.all ?? TabPanes.entries(ordered(w.sessions))) { e in
-                    entryRows(e, depth: depth + 1)
+                let rows = lookup.projection?.rows[w.id] ?? order.rows(w.sessions, all: false)
+                ForEach(rows.all) { e in
+                    entryRows(e, depth: depth + 1, nested: rows.nested)
                 }
             } else {
                 agentRows(w.sessions, key: w.id, depth: depth + 1)
@@ -2346,7 +2351,9 @@ private struct AgentsList: View {
     @ViewBuilder private func recentSection(_ sessions: [Session]) -> some View {
         if !sessions.isEmpty {
             listSection {
-                cappedRows(AgentListOrder.recent(sessions), key: "recent") { s in slotRow(s, context: true) }
+                // A side session under the session that started it, the group where its latest member is (#5935).
+                let rows = SideSessions.arrange(AgentListOrder.recent(sessions))
+                cappedRows(rows.rows, key: "recent", cap: rows.unsplit(AgentRowCap.rows)) { s in slotRow(s, context: true, depth: rows.level(s)) }
             } header: {
                 SectionHeader(title: String(localized: "Recently Used"), count: model.sessionLists.paged ? nil : sessions.count, tone: StatusPalette.idle)
             }
@@ -2421,7 +2428,8 @@ private struct AgentsList: View {
         let byRank = Dictionary(grouping: live, by: rank)
         let buckets = Self.stateTitles.enumerated().map { i, t in (key: t.key, title: t.title, rows: byRank[i] ?? [], tint: t.tint) }
         ForEach(buckets, id: \.key) { b in
-            let rows = ordered(b.rows)
+            // A side session under the session that started it while both are in this state (#5935).
+            let arranged = order.arranged(b.rows), rows = arranged.rows
             let id = "state/" + b.key
             // As the quick filters count: not a subtask that is a row only because its parent is not drawn.
             let counted = rows.filter { !$0.isNestedSubtask }.count
@@ -2429,10 +2437,14 @@ private struct AgentsList: View {
                 listSection {
                     if isFolded(id) {
                     } else if b.key == "idle" {
-                        cappedRows(rows, key: id) { s in slotRow(s, context: true, inStateSection: true) }
+                        cappedRows(rows, key: id, cap: arranged.unsplit(AgentRowCap.rows)) { s in
+                            slotRow(s, context: true, inStateSection: true, depth: arranged.level(s))
+                        }
                     } else {
                         // Muted mixes states: each row says its own. Loops and background work stay off the rows (the chat shows them).
-                        cappedRows(rows, key: id) { s in slotRow(s, context: true, inStateSection: b.key != "muted") }
+                        cappedRows(rows, key: id, cap: arranged.unsplit(AgentRowCap.rows)) { s in
+                            slotRow(s, context: true, inStateSection: b.key != "muted", depth: arranged.level(s))
+                        }
                     }
                 } header: {
                     FoldButton(title: b.title, folded: isFolded(id), detail: String(localized: "\(stateSectionCount(b.key, loaded: counted)) [Chats View cb60bd]")) { toggleFold(id) } label: {
@@ -2467,7 +2479,10 @@ private struct AgentsList: View {
                         if g.sessions.isEmpty, let hint = g.hint {
                             groupEmptyRow(hint)
                         } else {
-                            cappedRows(g.sessions, key: id) { s in slotRow(s, context: true, showHost: mixedHosts) }
+                            let rows = SideSessions.arrange(g.sessions) // a side session under its parent (#5935)
+                            cappedRows(rows.rows, key: id, cap: rows.unsplit(AgentRowCap.rows)) { s in
+                                slotRow(s, context: true, showHost: mixedHosts, depth: rows.level(s))
+                            }
                         }
                     }
                 } header: {
@@ -2650,13 +2665,13 @@ private struct AgentsList: View {
                             appProjectRow(project, machine: machines.count > 1 ? project.machine.flatMap { machine($0)?.title ?? $0.id } : nil)
                             if !isFolded(project.id) {
                                 // Other's agents keep where they run on their rows: they share no folder.
-                                cappedRows(project.sessions, key: project.id, depth: 1, cap: AgentRowCap.projectRows) { s in
-                                    slotRow(s, context: project.isOther, depth: 1)
+                                cappedRows(project.sessions, key: project.id, depth: 1, cap: project.unsplit(AgentRowCap.projectRows)) { s in
+                                    slotRow(s, context: project.isOther, depth: 1 + project.level(s))
                                 }
                             }
                         }
                     } else {
-                        cappedRows(app.sessions, key: app.id) { s in slotRow(s, context: true) }
+                        cappedRows(app.sessions, key: app.id, cap: app.unsplit(AgentRowCap.rows)) { s in slotRow(s, context: true, depth: app.level(s)) }
                     }
                 }
             } header: {
@@ -2685,17 +2700,21 @@ private struct AgentsList: View {
     /// One section per machine, its agents by state; idle ones fold like in a space.
     @ViewBuilder private func machineSections(_ live: [Session]) -> some View {
         ForEach(machineOrder(live), id: \.ref) { m in
-            let rows = ordered(live.filter { $0.machineRef == m.ref })
+            // A side session under the session that started it, its group kept together in or out of Idle (#5935).
+            let arranged = order.arranged(live.filter { $0.machineRef == m.ref }), rows = arranged.rows
             let id = "machine/" + m.ref.path
             let group = SpaceGroup(id: "m-" + m.ref.path, machineID: m.id, spaceID: "-", group: m.group, name: m.title, index: 0, sessions: rows,
                                    aggregate: model.sessionLists.aggregate(machineScope(m)), bounded: model.sessionLists.isPaged(m.group))
             listSection {
                 if !isFolded(id) {
                     if quick == .all {
-                        cappedRows(rows.filter(stays), key: id) { s in slotRow(s, context: true) }
-                        foldedRows(rows.filter { !stays($0) }, key: "machine-" + m.ref.path, label: String(localized: "Idle"))
+                        let parts = arranged.split(stays)
+                        cappedRows(parts.stay, key: id, cap: arranged.unsplit(AgentRowCap.rows, parts.stay)) { s in
+                            slotRow(s, context: true, depth: arranged.level(s))
+                        }
+                        foldedRows(parts.fold, key: "machine-" + m.ref.path, label: String(localized: "Idle"), nested: arranged.nested)
                     } else {
-                        cappedRows(rows, key: id) { s in slotRow(s, context: true) }
+                        cappedRows(rows, key: id, cap: arranged.unsplit(AgentRowCap.rows)) { s in slotRow(s, context: true, depth: arranged.level(s)) }
                     }
                 }
             } header: {
@@ -2752,11 +2771,12 @@ private struct AgentsList: View {
         .accessibilityIdentifier("agents.showAll")
     }
 
-    /// Quiet rows behind one "N more…" row (always open while searching).
-    @ViewBuilder private func foldedRows(_ rows: [Session], key: String, label: String, inStateSection: Bool = false) -> some View {
+    /// Quiet rows behind one "N more…" row (always open while searching); `nested`, side sessions a level in (#5935).
+    @ViewBuilder private func foldedRows(_ rows: [Session], key: String, label: String, inStateSection: Bool = false,
+                                         nested: Set<SessionKey> = []) -> some View {
         if !rows.isEmpty {
             if expandedIdle.contains(key) || !query.isEmpty {
-                ForEach(rows) { s in slotRow(s, context: true, inStateSection: inStateSection) }
+                ForEach(rows) { s in slotRow(s, context: true, inStateSection: inStateSection, depth: nested.contains(s.key) ? 1 : 0) }
                 if query.isEmpty { collapseRow(String(localized: "Hide \(rows.count) \(label)"), key: key) }
             } else {
                 expandRow(rows, key: key)
@@ -2845,8 +2865,8 @@ private struct AgentsList: View {
         .modifier(ButtonRowInsets(edges: CompactList.rowInsets))
         .accessibilityIdentifier("agents.quietSpace")
         if open {
-            let roles = TabPanes.roles(g.sessions)
-            ForEach(TabPanes.grouped(ordered(g.sessions))) { s in slotRow(s, pane: roles[s.key]) }
+            let roles = TabPanes.roles(g.sessions), quiet = order.rows(g.sessions, all: false)
+            ForEach(quiet.sessions) { s in slotRow(s, depth: quiet.level(s), pane: roles[s.key]) }
         }
     }
 
@@ -2945,8 +2965,8 @@ private struct AgentsList: View {
         .accessibilityIdentifier("agents.quietSpace")
         if open {
             // A card is one surface: a tab's agents sit together in it, named and marked, without a row of the tab's own.
-            let rows = TabPanes.grouped(ordered(g.sessions)), roles = TabPanes.roles(g.sessions)
-            ForEach(rows) { s in slotRow(s, cardLast: s.id == rows.last?.id, pane: roles[s.key]) }
+            let quiet = order.rows(g.sessions, all: false), rows = quiet.sessions, roles = TabPanes.roles(g.sessions)
+            ForEach(rows) { s in slotRow(s, cardLast: s.id == rows.last?.id, depth: quiet.level(s), pane: roles[s.key]) }
         }
     }
 
@@ -2973,8 +2993,8 @@ private struct AgentsList: View {
         .accessibilityValue(open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]"))
         .accessibilityIdentifier("agents.quietSpace")
         if open {
-            let roles = TabPanes.roles(g.sessions)
-            ForEach(TabPanes.grouped(ordered(g.sessions))) { s in slotRow(s, depth: 1, pane: roles[s.key]) }
+            let roles = TabPanes.roles(g.sessions), quiet = order.rows(g.sessions, all: false)
+            ForEach(quiet.sessions) { s in slotRow(s, depth: 1 + quiet.level(s), pane: roles[s.key]) }
         }
     }
 
