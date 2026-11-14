@@ -182,16 +182,16 @@ def repair_worker_argv(argv, worktree, home=None):
            if key in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
                       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                       "http_proxy", "https_proxy", "all_proxy", "no_proxy") or key.startswith("ANTHROPIC_")}
-    env.update({"HOME": str(home), "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "CI": "1"})
-    tool_roots = []
+    env.update({"HOME": str(home), "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "CI": "1",
+                "PATH": "/tools"})
     executable = shutil.which(argv[0])
     result = [sandbox, "--unshare-all", "--share-net", "--die-with-parent", "--new-session",
               "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib",
               "--ro-bind-try", "/lib64", "/lib64", "--ro-bind-try", "/opt", "/opt", "--tmpfs", "/tools"]
     if executable:
-        result.extend(["--ro-bind", str(Path(executable).resolve()), "/tools/" + Path(executable).name])
-        argv = ["/tools/" + Path(executable).name] + list(argv[1:])
-    result.extend(["--bind", str(worktree), str(worktree), "--chdir", str(worktree)])
+        result.extend(["--ro-bind", str(Path(executable).resolve()), "/tools/repair-" + Path(executable).name])
+        argv = ["/tools/repair-" + Path(executable).name] + list(argv[1:])
+    result.extend(["--bind", str(worktree), str(worktree), "--bind", str(home), str(home), "--chdir", str(worktree)])
     for key, value in env.items():
         result.extend(["--setenv", key, value])
     return result + ["--"] + argv
@@ -257,15 +257,17 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if checked(["git", "diff", "--cached", "--name-only"], cwd=worktree).strip():
         raise WatchError("repair worker left pre-staged changes outside its explicit repair diff")
     checked(["git", "add", "--"] + changed, cwd=worktree)
-    checked(["python3", "-I", str(scanner), "--staged"], cwd=worktree, timeout=180)
+    message = "fix: repair automated verification failure\n\n"
+    issues = linked_issue(pr.get("body", ""), repo)
+    if issues:
+        message += "Refs #%d\n\n" % issues[0]
+    message += "Co-Authored-By: Kimi Code <noreply@anthropic.com>"
+    message_path = Path(worktree).parent / "pr-watch-repair-message.txt"
+    message_path.write_text(message, encoding="utf-8")
+    checked(["python3", "-I", str(scanner), "--staged", "--commit-msg", str(message_path)], cwd=worktree, timeout=180)
     identity = ["-c", "user.name=chyroc", "-c", "user.email=chyroc@users.noreply.github.com"]
     if checked(["git", "diff", "--cached", "--stat"], cwd=worktree).strip():
-        message = "fix: repair automated verification failure\n\n"
-        issues = linked_issue(pr.get("body", ""), repo)
-        if issues:
-            message += "Refs #%d\n\n" % issues[0]
-        message += "Co-Authored-By: Kimi Code <noreply@anthropic.com>"
-        checked(["git"] + identity + ["commit", "-m", message], cwd=worktree)
+        checked(["git"] + identity + ["commit", "-F", str(message_path)], cwd=worktree)
     repaired_pr = dict(pr, headRefOid=checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip())
     results = verify(repo, repaired_pr, worktree, verify_config, verification_env())
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():

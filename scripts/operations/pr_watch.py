@@ -337,7 +337,7 @@ class Watcher:
         updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
         if updated_head:
             updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
-            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+            self.state.put(repo, number, updated_head, evidence_key=updated_key,
                            repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
             if pr.get("isCrossRepository"):
                 new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
@@ -430,6 +430,15 @@ class Watcher:
                                        repair_rounds=rounds + 1, outcome="base_updated")
                         self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
                 except WatchError as error:
+                    attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + 1
+                    if attempts >= 3:
+                        self.comment(repo, number, "Automatic base update failed after three attempts. No merge was attempted.\n\n```text\n%s\n```" % bounded(str(error), 6000))
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       outcome="failed", review_attempts=attempts, failure=str(error))
+                    else:
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       outcome="retry", review_attempts=attempts,
+                                       retry_after=time.time() + 60 * attempts, failure=str(error))
                     self.log("%s#%s automatic base update failed: %s" % (repo, number, bounded(error, 500)))
                 finally:
                     self.remove_worktree(repo, worktree)
@@ -518,8 +527,11 @@ class Watcher:
                 if not self.dry_run:
                     self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
                                  bounded(str(error), 12000))
+                attempts = int(old.get("review_attempts", 0)) + 1
                 self.state.put(repo, number, head, evidence_key=evidence_key,
-                               outcome="retry", retry_after=time.time() + 300, failure=str(error))
+                               outcome="retry" if attempts < 3 else "failed",
+                               review_attempts=attempts,
+                               retry_after=time.time() + 300, failure=str(error))
                 return
             # A missing semantic answer never becomes approval. Verification
             # Infrastructure failures remain retryable with capped backoff;
