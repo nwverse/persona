@@ -2368,7 +2368,7 @@ def save_place(body, pid):
 
 
 # Saved prompts (Settings › Saved Prompts, #7329): the user's own "/" prompts, as the manager keeps them
-# (assistant/saved_prompts.go). None by default, so the "/" list of every other screenshot stays as it was;
+# (assistant/saved/prompts.go). None by default, so the "/" list of every other screenshot stays as it was;
 # MOCK_SAVED_PROMPTS=1 has three; MOCK_SAVED_PROMPTS=old is an assistant from before them (its routes answer 404).
 SAVED_PROMPTS = [
     {"id": "sp1", "name": "review", "text": "Review this diff for security issues. List each finding with its file and line, and say how bad it is.",
