@@ -2135,6 +2135,15 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   minute is then the same machine for all of them, and the head's CPU time over the base's in the same minute came
   out at 0.943 with every one of the 20 minutes below 1, the unchanged hub's at 0.983 (`pairedCPU`). Measure a noisy
   quantity against a reference that sees the same noise at the same moment.
+- The largest share was not in the event path at all: `liveLoop` builds the fleet again up to ten times a second
+  while it changes, and each round took a new copy of every machine's list to decorate, 54% of what the manager
+  allocated. A loop that reads the same lists again and again keeps its arrays: `Devices.AppendSessions` copies a
+  machine's rows over the list the last round kept (`fleetInputsInto`), 78 KB a round where new copies were 886 KB.
+  What makes that safe is stated in the code and pinned by tests: every row is overwritten whole before it is
+  decorated, so no decoration carries over; rows a shorter list leaves behind are cleared; one goroutine owns the
+  arrays; and nothing built from a round keeps a row (`TestLiveRoundsOverKeptListsAreFreshRounds` runs every round
+  both ways and marshals each round's results again after the arrays were rewritten). Give the arrays back on the
+  slow tick, or a fleet gone quiet holds a second copy of its lists for good.
 
 ## The manager read its own session lists through their JSON (2026-11-13, #3197)
 
