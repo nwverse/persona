@@ -31,9 +31,9 @@ private final class CallbackBox: @unchecked Sendable {
     init(_ callbacks: PersonaCoreCallbacks) { self.callbacks = callbacks }
 }
 
-/// An owned C core handle. Value codecs are Sendable. The native lease registry accepts calls racing close and drops
-/// the last lease outside its lock; this adapter clears its ID before native destruction. `flush` remains test-only
-/// and must not run synchronously in a host callback. Call `close` outside the callback for an orderly stop.
+/// An owned C core handle. Value codecs are Sendable. The native lease registry accepts calls racing close and never
+/// joins the worker on an ordinary call's last lease. Close clears the ID and owns worker shutdown outside the lock.
+/// `flush` remains test-only and must not run synchronously in a host callback; `close` also belongs outside it.
 private struct NativeHandle: @unchecked Sendable {
     let raw: OpaquePointer
 }
