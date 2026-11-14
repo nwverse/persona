@@ -193,10 +193,10 @@ func TestNodePackageLookupOrder(t *testing.T) {
 	t.Run("misnamed own build", func(t *testing.T) {
 		mac := updatetest.Program(t, "personad", "darwin", "arm64")
 		site := newFakeRelease(t)
-		site.publish(t, "v2", overlapping("v2", 2), false, map[string]string{"personad-darwin-arm64": mac})
+		site.publish(t, "v2", overlapping("v2", 2), false, map[string]string{"personad-" + plat: full})
 		d, dir, _ := packageDevices(t, "v2", site.srv.URL)
-		copyTo(t, full, filepath.Join(dir, "personad-darwin-arm64")) // actually linux/riscv64, not the name's platform
-		pkg, err := d.nodePackageFor(ctx, "darwin", "arm64", nodeproto.ProgramPersonad)
+		copyTo(t, mac, filepath.Join(dir, "personad-"+plat)) // actually darwin/arm64, not the name's platform
+		pkg, err := d.nodePackageFor(ctx, otherOS, otherArch, nodeproto.ProgramPersonad)
 		if err != nil {
 			t.Fatal(err)
 		}
