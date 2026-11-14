@@ -110,7 +110,7 @@ export function BulkControls({ board, selection, busy, archived, onApply }: {
   </div>;
   return <div role="group" aria-label={t("workspaceboard.selection_actions")} className="shrink-0 space-y-2 border-b border-line bg-surface px-4 py-3">
     <div className="flex flex-wrap items-center gap-2">
-      <p role="status" aria-live="polite" className="min-w-0 flex-1 text-sm font-medium text-ink">{busy ? t("workspaceboard.bulk_saving") : t("workspaceboard.selected_count", { count })}</p>
+      <p role="status" aria-live="polite" className="min-w-max flex-1 whitespace-nowrap text-sm font-medium text-ink">{busy ? t("workspaceboard.bulk_saving") : t("workspaceboard.selected_count", { count })}</p>
       <Button tone="quiet" disabled={busy || !selection.visibleIDs.size || count === selection.visibleIDs.size} onClick={selection.selectAll}>{t("workspaceboard.select_all_visible")}</Button>
       <Button tone="quiet" disabled={busy || !count} onClick={selection.clear}>{t("workspaceboard.clear_selection")}</Button>
       <Button disabled={busy} onClick={selection.finish}>{t("workspaceboard.selection_done")}</Button>

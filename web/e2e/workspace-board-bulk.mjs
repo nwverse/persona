@@ -289,7 +289,10 @@ async function presentation(browser, language, textSize) {
     const alpha = page.getByRole("checkbox", { name: s.select_card.replace("{card}", "Alpha workspace"), exact: true });
     assert.equal(await alpha.evaluate((el) => el === document.activeElement), true, "Entering selection focuses the first visible checkbox");
     await x.select("Alpha", "Beta");
-    await page.getByText(s.selected_count.replace("{count}", "2"), { exact: true }).waitFor();
+    const count = page.getByText(s.selected_count.replace("{count}", "2"), { exact: true });
+    await count.waitFor();
+    const countGeometry = await count.evaluate((el) => ({ height: el.getBoundingClientRect().height, line: parseFloat(getComputedStyle(el).lineHeight) }));
+    assert(countGeometry.height <= countGeometry.line + 1, "The selected count stays on one readable line in every language");
     const actions = page.getByRole("group", { name: s.selection_actions, exact: true });
     const bounds = await actions.getByRole("button").evaluateAll((els) => els.map((el) => {
       const rect = el.getBoundingClientRect();
