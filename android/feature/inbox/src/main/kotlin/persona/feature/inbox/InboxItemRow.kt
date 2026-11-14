@@ -69,8 +69,8 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
             // An extension may draw the page of its connector's items (inbox_item); the rest open their own page.
             // An event (inbox phase 1) opens its own page; an item from an older hub its source, as always.
             checked = selection?.checked?.takeIf { selection.selectable }, dimmed = selecting && selection?.selectable == false,
-            onClick = { selection?.click { navigator.navigate(inboxRowPage(record, pages)) } ?: navigator.navigate(inboxRowPage(record, pages)) },
-            onLongClick = { selection?.longClick { menu = true } ?: run { menu = true } }, extra = {
+            onClick = { if (!busy) { selection?.click { navigator.navigate(inboxRowPage(record, pages)) } ?: navigator.navigate(inboxRowPage(record, pages)) } },
+            onLongClick = { if (!busy) { selection?.longClick { menu = true } ?: run { menu = true } } }, extra = {
                 record.localDelivery?.pendingStatus()?.let { PendingBadge(it) }
                     ?: record.localStatus?.let { InboxLocalStatus(it) }
                 // Meta carries a recognized shared state; without one, the old mark still has its own place below it.
