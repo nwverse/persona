@@ -129,6 +129,9 @@ func TestStartupOwnershipReadsRetryAndReconcile(t *testing.T) {
 		if !ok || kept.Manager != "m-0b0b0b" || kept.Name != "Kept computer" {
 			t.Fatalf("the recovered kept machine = %+v, present %v", kept, ok)
 		}
+		// Finish the coalesced config and manager updates before leaving the fake-time bubble.
+		synctest.Sleep(200 * time.Millisecond)
+		synctest.Wait()
 	})
 }
 
