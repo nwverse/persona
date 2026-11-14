@@ -454,8 +454,7 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "comment") as comment:
             self.watcher.process("example/one", 7)
         comment.assert_not_called()
-
-
+    def test_verification_does_not_import_pr_selector_or_receive_gh_credentials(self):
         with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \
                 patch.object(pr_watch_verify, "load_paths") as selector, \
                 patch.dict(os.environ, {"GH_TOKEN": "not-for-builds", "HOME": "/maintainer-home",

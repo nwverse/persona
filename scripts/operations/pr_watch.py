@@ -335,11 +335,16 @@ class Watcher:
                                                              failures=getattr(error, "failures", None), environ=verification_env())
         if comparison.get("reproduced"):
             self.log("%s#%s failure also reproduces on clean main; continue the remaining gates" % (repo, number))
-            self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
-                         bounded(str(error), 6000))
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            base_failures=comparison, verification="base_failure", checks=getattr(error, "checks", []),
                            outcome="passed_with_base_failures", failure=str(error))
+            try:
+                self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
+                             bounded(str(error), 6000))
+            except WatchError as comment_error:
+                self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                               outcome="base_comment_pending", failure=str(comment_error))
+                return False
             return "base_failure"
         updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
         if updated_head:
@@ -415,6 +420,11 @@ class Watcher:
             return
         if old.get("outcome") == "continuation":
             return
+        if old.get("outcome") == "base_comment_pending":
+            if not self.dry_run:
+                self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
+                             bounded(old.get("failure", ""), 6000))
+            old = dict(old, outcome="passed_with_base_failures", review_posted=True)
         if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
@@ -432,7 +442,7 @@ class Watcher:
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
                 return
         if not self.mergeable(pr):
-            if pr["mergeable"] == "CONFLICTING" and not pr.get("isCrossRepository") and not self.dry_run:
+            if pr["mergeable"] == "CONFLICTING" and not self.dry_run:
                 worktree = None
                 try:
                     rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
@@ -443,18 +453,24 @@ class Watcher:
                             self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
                         return
                     worktree = self.worktree(repo, number, pr)
-                    if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
-                        updated_head = checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+                    updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
+                    if updated_head:
                         merged_pr = dict(pr, headRefOid=updated_head)
                         results = verify(repo, merged_pr, str(worktree), config["verify"], environ=verification_env())
                         scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
                         checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
                                 cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
-                        pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
-                        updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
-                        self.state.put(repo, number, updated_head, evidence_key=updated_key,
-                                       repair_rounds=rounds + 1, outcome="base_updated")
-                        self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
+                        if pr.get("isCrossRepository"):
+                            new_number = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], "conflicting base", config["verify"])
+                            self.state.put(repo, number, head, evidence_key=evidence_key,
+                                           outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
+                            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+                        else:
+                            pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
+                            updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
+                            self.state.put(repo, number, updated_head, evidence_key=updated_key,
+                                           repair_rounds=rounds + 1, outcome="base_updated")
+                            self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
                 except WatchError as error:
                     attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + 1
                     if attempts >= 3:

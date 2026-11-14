@@ -314,7 +314,11 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             if latest["headRefOid"] != head:
                 raise WatchError("continuation PR has an older or different head; repair it in a fresh branch")
             return existing[0]["number"]
-        if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode != 0:
+        if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode == 0:
+            remote = checked(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).split()[0]
+            if remote != head:
+                raise WatchError("continuation branch exists at a different head; choose a fresh repair branch")
+        else:
             checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
     else:
         checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
