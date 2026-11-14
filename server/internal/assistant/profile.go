@@ -81,6 +81,9 @@ type Settings struct {
 	// MainBackgroundFolded: the apps fold the main conversation's background rounds (another conversation's message,
 	// a scheduled task or follow-up) into one line that opens on request (#4314). nil is on (the default).
 	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
+	// MainCompactWindow: the compaction window, in tokens, the main conversation is held to when its launcher declares a
+	// larger one (#7314, main_compact_window.go); nil is 400000, 0 follows the launcher.
+	MainCompactWindow *int `json:"main_compact_window,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`

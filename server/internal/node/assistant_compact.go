@@ -61,7 +61,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string) error {
 		}
 		n.stopAssistant(id)
 		var err error
-		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, IsMain: st.IsMain}
+		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow}
 		if p, err = n.spawnAssistant(id, cwd, launcher, true, false, execution); err != nil {
 			return err
 		}

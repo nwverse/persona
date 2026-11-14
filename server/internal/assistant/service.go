@@ -399,6 +399,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			cfg := s.settings(ctx)
 			p["is_main"] = id != "" && cfg.Main == id && cfg.mainRouteMachine() == device
 		}
+		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
+			putMainCompactWindow(s.settings(ctx), p) // the window it is held to (main_compact_window.go), as sendModel puts it
+		}
 		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
