@@ -490,7 +490,9 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
   tables, code and very tall cards, at most 520 pt (`ShareCardWidth`). Android has no Forward: on Glass the message
   menu's Share opens the page (`MessageSharePage`, Light / Dark in the top bar, the picture drawn from the card's
-  `GraphicsLayer`); Brief and Board share the words.
+  `GraphicsLayer`); Brief and Board share the words. What you see is what you share: a reply's cards are drawn as the
+  chat draws them, with nothing to use, and a card that only draws live is its fallback, never its JSON (#7261,
+  `docs/assistant/assistant-views.md` "Sharing a reply as a picture").
 - A message sent from here and not in the transcript yet (iOS `PendingBubble`): drawn as a sent bubble at once, with a
   mark before it, level with its last line: a quiet clock while it sends; a clock while it waits for the network, whose
   small menu is Retry Now and Don't Send, with "Sends when connected" under the bubble; a red mark once it failed, with
@@ -2541,6 +2543,19 @@ as finished without verifying a star, and opens GitHub outside the app.
   and waits three days. It stays away while requests or sessions need the user, or a search is active.
 - **Onboarding toast**: once per device on Android's setup **Done** (proposed iOS **Get started**), unless Star was
   already tapped. It uses the platform's timed toast and action.
+
+## Knowledge map outline (#7251)
+
+The web's knowledge map is a two-sided mind map; on the iPhone it is turned upright into an outline (`KnowledgeMapView`,
+logic in `KBMap`), which the owner chose over a pinch-to-zoom map that, fitted to a phone, drew its words at 5–8 pt. Rows
+are list rows: a topic (a dot in its branch's tone: accent, green, orange in turn), its subtopics and its points (the kind
+as a `KBPill`, Pitfall and Open question in `Theme.caution`), each level indented by `Theme.Space.l` with a rail in the tone.
+Folding uses the app's fold chevron (`Theme.Icon.disclosure`, turned when open, a 44 pt target) rather than the web's
+round +/−, as every other fold on iOS. What starts open is the web's: the six biggest topics onto their subtopics, every
+subtopic closed, more than three loose points beside subtopics under one closed Other. Tapping a point opens its sheet,
+a topic or a project its page. From `Theme.Size.knowledgeMapTwoColumns` of width (any iPad in landscape, a 13-inch one upright beside its
+sidebar) the outline sits beside a detail column for the selected node, the web map's side panel.
+Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
 
 ## Repository link preview
 
