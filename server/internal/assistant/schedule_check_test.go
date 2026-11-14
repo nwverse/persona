@@ -66,6 +66,12 @@ func TestRoutineCheckRun(t *testing.T) {
 			if tc.skipped && (len(f.sends) != 0 || len(f.pushed()) != 0 || counted(r)) {
 				t.Fatalf("skip started work or counted as failure: %+v", r)
 			}
+			if tc.skipped {
+				failures, total := s.todayFailures(t.Context(), "*", now, time.UTC)
+				if len(failures) != 0 || total != 0 {
+					t.Fatalf("condition skip counted in failure summary: total=%d, failures=%+v", total, failures)
+				}
+			}
 			if tc.name == "skip" && r.Error != "holiday" {
 				t.Fatalf("lost skip reason: %+v", r)
 			}

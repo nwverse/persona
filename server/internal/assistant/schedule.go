@@ -369,7 +369,7 @@ type schedule struct {
 func (sc *schedule) missedRuns(since time.Time) []ScheduleRun {
 	var missed []ScheduleRun
 	for i, r := range sc.runs {
-		if r.At.Before(since) || (r.Status != runFailed && r.Status != runSkipped) || r.Manual {
+		if r.At.Before(since) || (r.Status != runFailed && r.Status != runSkipped) || r.Manual || r.ConditionSkipped {
 			continue
 		}
 		recovered := false
