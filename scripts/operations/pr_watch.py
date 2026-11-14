@@ -271,11 +271,18 @@ class Watcher:
         if result.returncode:
             raise WatchError("could not post PR comment: " + bounded(result.stderr, 1000))
 
-    def success_review(self, repo, number, pr, results):
-        body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
-                "Local checks completed successfully:\n%s\n\n"
-                "This records only the checks listed above; it does not claim unrun device or visual acceptance.") % (
-            pr["headRefOid"][:9], "\n".join("- `%s`" % r["name"] for r in results))
+    def success_review(self, repo, number, pr, results, base_failures=None):
+        if base_failures:
+            body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
+                    "Some failed checks were independently reproduced on clean main and are not attributed to this PR. They are not claimed as passing tests:\n\n```text\n%s\n```\n\n"
+                    "Checks that actually passed:\n%s") % (
+                pr["headRefOid"][:9], bounded(base_failures.get("reason", "Base-owned failures") if isinstance(base_failures, dict) else base_failures, 4000),
+                "\n".join("- `%s`" % r["name"] for r in results if r.get("ok")) or "- No additional successful lanes")
+        else:
+            body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
+                    "Local checks completed successfully:\n%s\n\n"
+                    "This records only the checks listed above; it does not claim unrun device or visual acceptance.") % (
+                pr["headRefOid"][:9], "\n".join("- `%s`" % r["name"] for r in results))
         result = run(["gh", "pr", "review", str(number), "--repo", repo, "--comment", "--body", body], timeout=90)
         if result.returncode:
             raise WatchError("could not post successful review: " + bounded(result.stderr, 1000))
@@ -358,6 +365,8 @@ class Watcher:
                        repair_rounds=rounds + 1, outcome="repair_published", failure=str(error))
         self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="continuation", continuation=new_number)
             self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
         return False
 
@@ -394,6 +403,8 @@ class Watcher:
             previous = old
             old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
+            return
+        if old.get("outcome") == "continuation":
             return
         if old.get("head") == head and old.get("repair_exhausted"):
             return
@@ -507,6 +518,7 @@ class Watcher:
             if current.get("verification") == "base_failure":
                 self.phase(key, "continuing after a clean-main failure")
             with self.merging(repo):
+                phase = "merge"
                 self.phase(key, "rechecking exact head")
                 current_pr = pr_snapshot(repo, number)
                 if (current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"]
@@ -518,7 +530,8 @@ class Watcher:
                 if not current.get("review_posted"):
                     self.phase(key, "posting successful review")
                     if not self.dry_run:
-                        self.success_review(repo, number, current_pr, current.get("checks", []))
+                        self.success_review(repo, number, current_pr, current.get("checks", []),
+                                            current.get("base_failures"))
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                              review_posted=not self.dry_run)
                 self.finish_merge(config, current_pr, current)

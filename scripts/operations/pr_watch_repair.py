@@ -237,6 +237,7 @@ def repair_with_model(repo, pr, worktree, failure, config):
         patch = checked(["git", "diff", "--cached", "--binary"], cwd=isolated)
         checked(["git", "apply", "--check", "-"], cwd=worktree, input_text=patch)
         checked(["git", "apply", "-"], cwd=worktree, input_text=patch)
+        checked(["git", "add", "-A"], cwd=worktree)
         return diff
 
 
@@ -248,13 +249,13 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         raise WatchError("PR head moved during automatic repair; nothing was pushed")
     scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
     checked(["git", "diff", "--check"], cwd=worktree)
-    paths = checked(["git", "diff", "--name-only", "--no-renames", "-z"], cwd=worktree)
+    paths = checked(["git", "diff", "--cached", "--name-only", "--no-renames", "-z"], cwd=worktree)
     changed = [path for path in paths.split("\0") if path]
     if not changed and pr.get("isCrossRepository"):
         changed = []
     elif not changed:
         raise WatchError("automatic repair produced no tracked file change")
-    if checked(["git", "diff", "--cached", "--name-only"], cwd=worktree).strip():
+    if checked(["git", "diff", "--name-only"], cwd=worktree).strip():
         raise WatchError("repair worker left pre-staged changes outside its explicit repair diff")
     checked(["git", "add", "--"] + changed, cwd=worktree)
     message = "fix: repair automated verification failure\n\n"
@@ -262,12 +263,17 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if issues:
         message += "Refs #%d\n\n" % issues[0]
     message += "Co-Authored-By: Kimi Code <noreply@anthropic.com>"
-    message_path = Path(worktree).parent / "pr-watch-repair-message.txt"
-    message_path.write_text(message, encoding="utf-8")
-    checked(["python3", "-I", str(scanner), "--staged", "--commit-msg", str(message_path)], cwd=worktree, timeout=180)
-    identity = ["-c", "user.name=chyroc", "-c", "user.email=chyroc@users.noreply.github.com"]
-    if checked(["git", "diff", "--cached", "--stat"], cwd=worktree).strip():
-        checked(["git"] + identity + ["commit", "-F", str(message_path)], cwd=worktree)
+    with tempfile.NamedTemporaryFile(prefix="pr-watch-repair-message-", mode="w", encoding="utf-8", delete=False) as message_file:
+        message_file.write(message)
+        message_path = Path(message_file.name)
+    try:
+        checked(["python3", "-I", str(scanner), "--staged", "--commit-msg", str(message_path)], cwd=worktree, timeout=180,
+                environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
+        identity = ["-c", "user.name=chyroc", "-c", "user.email=chyroc@users.noreply.github.com"]
+        if checked(["git", "diff", "--cached", "--stat"], cwd=worktree).strip():
+            checked(["git"] + identity + ["commit", "-F", str(message_path)], cwd=worktree)
+    finally:
+        message_path.unlink(missing_ok=True)
     repaired_pr = dict(pr, headRefOid=checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip())
     results = verify(repo, repaired_pr, worktree, verify_config, verification_env())
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():

@@ -321,8 +321,14 @@ class WatcherTests(unittest.TestCase):
                 if argv[:2] == ["git", "rev-parse"]:
                     return (SHA_BASE if "FETCH_HEAD" in argv else SHA_B) + "\n"
                 if argv[:3] == ["git", "diff", "--name-only"]:
-                    return "repair.py\0"
+                    return ""
                 if argv[:4] == ["git", "diff", "--cached", "--name-only"]:
+                    return "repair.py\0"
+                if argv[:4] == ["git", "diff", "--cached", "--stat"]:
+                    return "repair.py | 1 +\n"
+                if argv[:4] == ["git", "diff", "--name-only", "--no-renames"]:
+                    return "repair.py\0"
+                if argv[:3] == ["git", "diff", "--name-only"]:
                     return ""
                 if argv[:3] == ["git", "diff", "--cached"]:
                     return "repair.py | 1 +\n"
@@ -418,7 +424,7 @@ class WatcherTests(unittest.TestCase):
                 patch.object(pr_watch_repair.shutil, "which", return_value="/usr/bin/bwrap"), \
                 patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as worker_run, \
                 patch.object(pr_watch_repair, "repair_repository_copy", return_value=nullcontext(self.root)), \
-                patch.object(pr_watch_repair, "checked", side_effect=["", "", "status", "stat", "patch", "", "", ""]):
+                patch.object(pr_watch_repair, "checked", side_effect=["", "", "status", "stat", "patch", "", "", "", ""]):
             pr_watch_repair.repair_with_model("example/one", pr(), self.root, "failure", {})
         env = worker_run.call_args.kwargs["environ"]
         self.assertNotIn("GH_TOKEN", env)
