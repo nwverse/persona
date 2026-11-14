@@ -129,18 +129,18 @@ class WatcherTests(unittest.TestCase):
         merge.assert_called_once()
         self.assertEqual(self.comments, ["passed"])
 
-    def test_prepare_failures_exhaust_bounded_retries(self):
+    def test_prepare_failures_retry_with_bounded_backoff(self):
         for attempt in range(3):
             with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                     patch.object(self.watcher, "worktree", side_effect=pr_watch_common.WatchError("fetch failed")):
                 self.watcher.process("example/one", 7)
             state = self.watcher.state.get("example/one", 7)
             self.assertEqual(state["review_attempts"], attempt + 1)
+            self.assertEqual(state["outcome"], "retry")
             state["retry_after"] = 0
             state.pop("head", None)
             self.watcher.state.put("example/one", 7, SHA_A, **state)
-        self.assertEqual(state["outcome"], "failed")
-        self.assertEqual(len(self.comments), 1)
+        self.assertEqual(self.comments, [])
 
     def test_review_prompt_is_delivered_and_large_diffs_use_complete_chunks(self):
         prompts = []
@@ -262,16 +262,16 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(len(self.comments), 1)
         self.assertIn("real test failed", self.comments[0])
 
-    def test_semantic_failure_retries_then_posts_once(self):
+    def test_semantic_failure_retries_with_backoff_without_comment_spam(self):
         for attempt in range(3):
             with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                     patch.object(pr_watch, "semantic_review", side_effect=pr_watch_common.WatchError("invalid output")), \
                     patch.object(self.watcher, "merge") as merge:
                 self.watcher.process("example/one", 7)
             merge.assert_not_called()
+            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
             self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
-        self.assertEqual(len(self.comments), 1)
-        self.assertIn("invalid output", self.comments[0])
+        self.assertEqual(self.comments, [])
 
     def test_conflicting_pr_waits_without_worker_or_requeue(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \

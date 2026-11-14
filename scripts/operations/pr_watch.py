@@ -426,14 +426,14 @@ class Watcher:
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
             # A missing semantic answer never becomes approval. Verification
-            # failures are durable for this head; infrastructure errors get a
-            # bounded retry before one concise public failure comment.
+            # Infrastructure failures remain retryable with capped backoff;
+            # verification failures and semantic findings stay terminal for
+            # this exact base/head until the PR changes.
             attempts = int(old.get("review_attempts", 0)) + 1
-            retry = (phase in ("preparing", "semantic", "merge") and attempts < 3
-                     and old.get("verification") != "passed" and phase != "merge")
+            retry = phase in ("preparing", "semantic") and old.get("verification") != "passed"
             outcome = "retry" if retry else ("merge_failed" if phase == "merge" else "failed")
             self.state.put(repo, number, head, evidence_key=evidence_key, outcome=outcome,
-                           review_attempts=attempts, retry_after=time.time() + min(300, 30 * (2 ** (attempts - 1))),
+                           review_attempts=attempts, retry_after=time.time() + min(1800, 30 * (2 ** min(attempts - 1, 6))),
                            failure=str(error))
             if not retry and not old.get("failure_posted"):
                 if not self.dry_run:
