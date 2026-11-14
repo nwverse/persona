@@ -177,40 +177,46 @@ struct SideSessionPage: View {
 struct SideSessionsPresentation: ViewModifier {
     let parent: SessionKey
     var on: Bool
-    @Binding var showList: Bool
-    @Binding var shown: SessionKey?
+    let ui: SideSessionsUI
     @State private var picked: SessionKey?
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: Binding(get: { on && showList }, set: { showList = $0 }), onDismiss: {
+            .sheet(isPresented: Binding(get: { on && ui.showList }, set: { ui.showList = $0 }), onDismiss: {
                 // A tap closes the sheet first; the side's page comes once it has gone.
                 if let p = picked {
                     picked = nil
-                    shown = p
+                    ui.shown = p
                 }
             }) {
                 SideSessionsSheet(parent: parent) { key in
                     picked = key
-                    showList = false
+                    ui.showList = false
                 }
             }
-            .detailPresentation(item: Binding(get: { on ? shown : nil }, set: { shown = $0 })) { side in
+            .detailPresentation(item: Binding(get: { on ? ui.shown : nil }, set: { ui.shown = $0 })) { side in
                 SideSessionPage(parent: parent, side: side)
             }
             .onChange(of: model.sideLanding, initial: true) { _, landing in
                 guard on, let landing, landing.parent == parent else { return }
                 model.sideLanding = nil
-                shown = landing.side
+                ui.shown = landing.side
             }
             #if DEBUG
             // `-showSideSessions sheet|side`: the sheet open, or the first side's page, once the samples are in.
             .task(id: parent) {
                 guard on, let mode = SideSessionSamples.mode, mode == "sheet" || mode == "side" else { return }
                 try? await Task.sleep(for: .seconds(2))
-                if mode == "sheet" { showList = true } else { shown = model.sides(of: parent).rows.first?.key }
+                if mode == "sheet" { ui.showList = true } else { ui.shown = model.sides(of: parent).rows.first?.key }
             }
             #endif
     }
+}
+
+/// What a parent's chat shows of its side sessions (#7944): the sheet open, and the side shown over the chat.
+@Observable final class SideSessionsUI {
+    var showList = false
+    var shown: SessionKey?
+    init(shown: SessionKey? = nil) { self.shown = shown }
 }

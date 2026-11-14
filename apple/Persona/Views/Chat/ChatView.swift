@@ -59,10 +59,9 @@ struct ChatView: View {
     @State private var showActivity = false
     /// "All subagents" opened, from the header's status line or ⋯ (`SubagentTreeSheet`).
     @State private var showSubagents = false
-    /// The Side Sessions sheet opened, from the header's chip or ⋯ (#7944, `SideSessionsPresentation`).
-    @State private var showSides = false
-    /// The side session shown over this chat (`SideSessionPage`): its cards are its own chat's then, not this one's.
-    @State private var shownSide: SessionKey?
+    /// Its side sessions' sheet and the side shown over it (#7944, `SideSessionsPresentation`): one reference, so the
+    /// page's value stays as small as it was (`MainPagesStackTests`).
+    @State private var sideUI: SideSessionsUI
     #if os(iOS)
     /// The review page of this session's changes (#151).
     @State private var reviewRequest: ReviewRequest?
@@ -238,10 +237,12 @@ struct ChatView: View {
         #else
         var start = key
         #endif
+        var landing: SessionKey?
         if style == .dev, !sidePage, let parent = AppModel.shared.sideParent(of: start) {
-            _shownSide = State(initialValue: start)
+            landing = start
             start = parent
         }
+        _sideUI = State(initialValue: SideSessionsUI(shown: landing))
         _key = State(initialValue: start)
         opened = key
         self.style = style
@@ -742,8 +743,6 @@ struct ChatView: View {
             .macSheet()
             #endif
         }
-        // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944).
-        .modifier(SideSessionsPresentation(parent: key, on: style == .dev && host == nil, showList: $showSides, shown: $shownSide))
     }
 
     private var chatActivity: some View {
@@ -2638,7 +2637,7 @@ struct ChatView: View {
         if style == .dev, host == nil {
             for ix in model.sideCards(for: key) {
                 let side = model.sideChat(of: ix) ?? ix.sessionKey
-                guard side != shownSide else { continue }
+                guard side != sideUI.shown else { continue }
                 cards.append(PendingCards.Card(interaction: ix, enabled: model.canAnswer(ix), from: Self.sideCardSource(side, ix, model)))
             }
         }
@@ -2661,7 +2660,7 @@ struct ChatView: View {
         if let parent = model.sideParent(of: key), let ix = SideSessionSamples.card(for: key, parent: parent) {
             cards.append(PendingCards.Card(interaction: ix, enabled: true))
         }
-        for row in sides.rows where row.key != shownSide {
+        for row in sides.rows where row.key != sideUI.shown {
             if let ix = SideSessionSamples.card(for: row.key, parent: key) {
                 cards.append(PendingCards.Card(interaction: ix, enabled: true, from: Self.sideCardSource(row.key, ix, model)))
             }
@@ -3513,7 +3512,7 @@ struct ChatView: View {
                 // Its side sessions (#7944), as the header's chip opens them.
                 let sides = self.sides
                 if !sides.isEmpty {
-                    Button { showSides = true } label: {
+                    Button { sideUI.showList = true } label: {
                         Label(SideSessionsSheet.menuTitle(sides.count), systemImage: Theme.Icon.sideSessions).lineLimit(1)
                     }
                     .accessibilityIdentifier("side-sessions-menu")
@@ -3818,6 +3817,8 @@ struct ChatView: View {
                 if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
             }
         }
+        // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944).
+        .modifier(SideSessionsPresentation(parent: key, on: host == nil, ui: sideUI))
     }
 
     /// Back: out of files / Git to the chat first, then off the page.
@@ -3923,6 +3924,8 @@ struct ChatView: View {
                 if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
             }
         }
+        // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944).
+        .modifier(SideSessionsPresentation(parent: key, on: host == nil, ui: sideUI))
     }
 
     @ViewBuilder private var sideHeaderRows: some View {
@@ -3959,7 +3962,7 @@ struct ChatView: View {
             // which stays put as the work comes and goes.
             if activity || mode != nil || !sides.isEmpty {
                 HStack(spacing: Theme.Space.s) {
-                    if !sides.isEmpty { SideSessionsChip(sides: sides) { showSides = true } }
+                    if !sides.isEmpty { SideSessionsChip(sides: sides) { sideUI.showList = true } }
                     if activity {
                         ActivityChips(loop: session?.loop, background: session?.background ?? []) { showActivity = true }
                     }
