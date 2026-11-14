@@ -373,7 +373,8 @@ internal class CapsuleSessions(
         if (current.agentState != AgentState.Unread || wiring.bindingsFor(key).value?.connection?.state?.value != ConnectionState.Online ||
             "${capsuleId(key)}|${current.updatedAt.orEmpty()}|${current.rev ?: ""}" != version) return false
         return try {
-            session.preferences.markSeen(listOf(current))
+            // the reply was on screen, not a Mark as read: with Manual mark as read on it stays Unread (#7356)
+            if (!session.preferences.markLooked(current)) return false
             acknowledged.value += version
             if (noticeMemory.pending?.targetId == capsuleId(key)) { noticeMemory.clearPending(); pendingNotice.value = null }
             true

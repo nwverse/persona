@@ -945,7 +945,7 @@ struct ChatView: View {
             model.subscribe(key, by: owner)
             if viewing != nil { model.subscribe(shownKey, by: owner) }
             model.show(key, by: owner)
-            model.markSeen(key)
+            model.sawChat(key)
             #if os(iOS)
             fullPage.document = { fullPageDocument() }
             fullPage.setShown(true)
@@ -979,7 +979,7 @@ struct ChatView: View {
         }
         #endif
         .onChange(of: session?.state) { _, st in
-            if st == .unread && model.visibleSession == key { model.markSeen(key) }
+            if st == .unread && model.visibleSession == key { model.sawChat(key) }
         }
     }
 
@@ -3391,6 +3391,11 @@ struct ChatView: View {
     #endif
 
     @ViewBuilder private var moreMenuItems: some View {
+            // Manual mark as read (#7356): opening the chat left it Unread; this is how it stops being
+            if model.manualRead, session?.state == .unread {
+                Button { model.markSeen(key) } label: { Label("Mark as Read", systemImage: Theme.Icon.success).lineLimit(1) }
+                    .accessibilityIdentifier("chat-mark-read")
+            }
             if style == .dev, let host { hostedMenuItems(host) }
             if let s = session, let todo = s.todo,
                 TodosLogic.isOnTodosHub(sessionGroup: s.key.group, hubGroup: model.hub?.group) {
@@ -4708,7 +4713,7 @@ struct ChatView: View {
         position = ScrollPosition(edge: .top)
         model.subscribe(next, by: owner)
         model.show(next, by: owner)
-        model.markSeen(next)
+        model.sawChat(next)
         if style == .dev {
             AppModel.rememberChat(next)
             #if os(iOS)

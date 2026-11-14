@@ -86,6 +86,8 @@ data class SettingsServices(
     val clearCacheFiles: ((List<java.io.File>) -> Unit)? = null,
     /** How the Agents list draws its agents (Settings › Interface style, Glass), kept with the list's other settings; null without a list. */
     val agentsDisplay: persona.core.domain.sort.AgentListDisplaySettings? = null,
+    /** Settings › Agents › Manual mark as read (#7356): the selected hub's switch, with the pins and mutes; null in demo mode. */
+    val readSettings: persona.core.contracts.api.HubPreferences? = null,
 )
 
 fun EntryProviderScope<NavKey>.settingsEntries(navigator: Navigator, services: SettingsServices? = null) {

@@ -13,6 +13,7 @@ import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
+import { manualRead, onManualReadChange } from "./manual-read";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
@@ -768,6 +769,8 @@ function onMessage(msg: Record<string, unknown>) {
     case "hello": {
       receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
       helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
+      // Manual mark as read (#7356): read the hub's switch again (another hub, or one that came back, may say otherwise)
+      void import("./read-setting").then((m) => m.refreshReadSetting(), () => {});
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
       set({
@@ -969,7 +972,7 @@ export function markSeen(list: Session[]) {
     const s = current && changedAt(current) >= changedAt(given) ? current : given;
     const mark = newMark(s, Date.now(), now);
     if (!mark) continue;
-    marks[id] = deliverSeen(s.machine_id, s.session_id, mark);
+    marks[id] = deliverSeen(s.machine_id, s.session_id, { ...mark, manual: true }); // the user's own: counts in manual mode
     changed.push({ ...s, state: "idle", seen_at: now });
   }
   if (!changed.length) return;
@@ -1415,16 +1418,52 @@ onDefaultManager((was) => {
  *  being Unread here at once, and on the hub so every client agrees (docs/protocol/agent-states.md "Seen"). An agent
  *  already seen is told again anyway (cheap, and the hub may not have the page's last mark): only an unread one waits
  *  in the outbox. */
-export function markSeenLocally(mid: string, sid: string) {
+export function markSeenLocally(mid: string, sid: string, manual = false) {
+  // Manual mark as read (#7356): looking is not reading, only markRead is
+  if (!manual && manualRead()) return;
   const s = getSession(mid, sid);
   const mark = s ? newMark(s, Date.now()) : undefined;
   if (!mark) {
-    send({ type: "seen", machine_id: mid, session_id: sid });
+    send({ type: "seen", machine_id: mid, session_id: sid, ...(manual ? { manual: true } : {}) });
     return;
   }
-  set({ seen: { ...state.seen, [runtimeIdentity(s!)]: deliverSeen(mid, sid, mark) } });
+  set({ seen: { ...state.seen, [runtimeIdentity(s!)]: deliverSeen(mid, sid, { ...mark, manual }) } });
   scheduleSeenCheck();
 }
+
+/** The user's Mark as read on one conversation or Agent: what opening it does with the switch off, and the only way
+ *  to clear Unread with it on. Pressing it again is harmless. */
+export function markRead(mid: string, sid: string) {
+  markSeenLocally(mid, sid, true);
+}
+
+// The switch turned on: what this page marked by looking, and the hub may not have recorded yet, no longer holds its
+// rows seen (the hub ignores such a mark now). Turned off: the chats on screen are seen, as opening them would.
+onManualReadChange((on) => {
+  if (!on) {
+    seeViewed(true);
+    return;
+  }
+  const looked = new Set(Object.keys(state.seen).filter((id) => !state.seen[id].manual));
+  if (!looked.size) return;
+  const now = Date.now();
+  const seen = { ...state.seen };
+  for (const id of looked) delete seen[id];
+  // the rows those marks held seen were unread when marked (newMark): unread again, unless the hub moved them on since
+  const unhold = (rows: Session[]) => {
+    let out = rows;
+    rows.forEach((s, i) => {
+      const m = state.seen[runtimeIdentity(s)];
+      if (!m || !looked.has(runtimeIdentity(s)) || stateOf(s) !== "idle" || markOver(s, m, now)) return;
+      if (out === rows) out = [...rows];
+      out[i] = { ...s, state: "unread" };
+    });
+    return out;
+  };
+  const sessions = Object.fromEntries(Object.entries(state.sessions).map(([mid, rows]) => [mid, unhold(rows)]));
+  const assistant = state.assistant && { ...state.assistant, conversations: unhold(state.assistant.conversations) };
+  set({ seen, sessions, sessionSummaries: unhold(state.sessionSummaries), ...(assistant ? { assistant } : {}) });
+});
 
 // ── chats on screen ─────────────────────────────────────
 // The agent conversations shown on this page, by runtimeIdentity, with how many views show each (the page and a side
@@ -1470,11 +1509,11 @@ if (typeof document !== "undefined") {
 function deliverSeen(mid: string, sid: string, mark: SeenMark, overHTTP = false): SeenMark {
   const at = Date.now();
   if (!overHTTP && isOpen()) {
-    send({ type: "seen", machine_id: mid, session_id: sid });
+    send({ type: "seen", machine_id: mid, session_id: sid, ...(mark.manual ? { manual: true } : {}) });
     return { ...mark, sentAt: at, route: "socket", answered: false };
   }
   const id = runtimeIdentity({ machine_id: mid, session_id: sid } as Session);
-  void api(`${sessionPath(mid, sid)}/seen`, { method: "POST" }).then(
+  void api(`${sessionPath(mid, sid)}/seen`, { method: "POST", ...(mark.manual ? { json: { manual: true } } : {}) }).then(
     () => {
       const m = state.seen[id];
       if (m && m.sentAt === at) set({ seen: { ...state.seen, [id]: { ...m, answered: true } } });

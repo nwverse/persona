@@ -654,6 +654,32 @@ class CapsuleSessionsTest {
         assertEquals(1, fixture.read.size)
     }
 
+    @Test fun withManualMarkAsReadTheShownReplyLeavesItUnreadUntilTheUserMarksIt() = runTest {
+        val task = agent("home", "task", "unread").copy(rev = 2)
+        val fixture = Fixture(backgroundScope, listOf(task))
+        fixture.manualRead = true
+        fixture.bindings.value = fixture.binding()
+        runCurrent()
+        fixture.source.shown(true)
+        runCurrent()
+        fixture.source.select(capsuleId(task.key))
+        runCurrent()
+        fixture.messages.getValue(task.key).value = ChatSnapshot(loading = false, verified = true,
+            items = listOf(Item("reply", role = "assistant", kind = "text", text = "Verified answer")))
+        runCurrent()
+        val version = requireNotNull(fixture.source.content.value.readVersion)
+        val badge = fixture.source.content.value.badgeCount
+        // the verified reply on screen is a look, not a Mark as read: nothing sent, still Unread, still counted
+        assertFalse(fixture.source.viewed(capsuleId(task.key), "reply", version))
+        runCurrent()
+        assertTrue(fixture.read.isEmpty())
+        assertEquals(badge, fixture.source.content.value.badgeCount)
+        // the user's own "seen" (next past a reply that cannot be matched) still marks it
+        fixture.source.perform(capsuleId(task.key), "seen")
+        runCurrent()
+        assertEquals(listOf(task.key to "|2"), fixture.read)
+    }
+
     @Test fun aNewerRevisionCannotBeAcknowledgedByAnOlderDisplayedReply() = runTest {
         val task = agent("home", "task", "unread").copy(rev = 1)
         val fixture = Fixture(backgroundScope, listOf(task))
@@ -783,6 +809,8 @@ class CapsuleSessionsTest {
         val opened = mutableListOf<Pair<SessionKey?, Boolean>>()
         val openedInbox = mutableListOf<String?>()
         val read = mutableListOf<Pair<SessionKey, String>>()
+        /** Manual mark as read on the hub (#7356): a look is dropped, only the user's Mark as read counts. */
+        var manualRead = false
         val openedCards = mutableListOf<persona.core.navigation.RequestRef>()
         val inbox = MutableStateFlow(persona.feature.inbox.InboxSnapshot())
         val hubPreferences = MutableStateFlow(HubPreferencesSnapshot())
@@ -853,6 +881,11 @@ class CapsuleSessionsTest {
                 override suspend fun markSeen(session: SessionKey, version: String) {
                     read += session to version
                     hubPreferences.value = hubPreferences.value.copy(seen = hubPreferences.value.seen + (session.path to version))
+                }
+                override suspend fun markLooked(session: SessionKey, version: String): Boolean {
+                    if (manualRead) return false
+                    markSeen(session, version)
+                    return true
                 }
             }),
         )

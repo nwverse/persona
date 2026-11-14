@@ -2,13 +2,14 @@
 // and the confirmation of "Mark all as seen". What they do is in lib/agent-actions.ts.
 import { attachLive, flipMute, flipPin, handToPersona } from "../lib/agent-actions";
 import { errorText } from "../lib/api";
-import { resumeCommand, sessionCanRename, sessionDeletable, sessionMenuActions } from "../lib/format";
+import { resumeCommand, sessionCanRename, sessionDeletable, sessionMenuActions, stateOf } from "../lib/format";
 import { appArchiveDeps, archiveAgent, archiveOffers, deleteInsteadOfArchive } from "../lib/agent-archives";
 import { closeAgentAction } from "../lib/close-agent";
 import { machineWithHub } from "../lib/mesh";
 import { isPinned } from "../lib/pins";
 import { isMuted } from "../lib/session-actions";
-import { getState, markSeen, refresh, refreshTodos, useStore } from "../lib/store";
+import { getState, markRead, markSeen, refresh, refreshTodos, useStore } from "../lib/store";
+import { manualRead } from "../lib/manual-read";
 import { unlinkAgentFromTodo } from "../lib/todos";
 import type { Session } from "../lib/types";
 import { sessionNode } from "../lib/node-actions";
@@ -28,6 +29,8 @@ export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boole
   // "Live link" shows when the chat's ⋯ shows it (sessionMenuActions), and does the same (#3405); so do Archive and Close…
   const allowed = sessionMenuActions(s);
   return [
+    // Manual mark as read (#7356): an Unread row is read from here without opening it, or after opening left it Unread
+    ...(manualRead() && stateOf(s) === "unread" ? [{ key: "mark-read", label: t("mark-read.action"), icon: "check" as const, onSelect: () => markRead(s.machine_id, s.session_id) }] : []),
     ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attachLive(s) }] : []),
     { key: "pin", label: o.pinned ? t("agentmenus.unpin") : t("agentmenus.pin"), icon: "pin", accel: "p", onSelect: () => void flipPin(s) },
     // as the chat's ⋯: by capabilities.rename where the node says so (a runtime's session, #6294)

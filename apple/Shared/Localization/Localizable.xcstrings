@@ -13654,6 +13654,28 @@
       },
       "extractionState" : "manual"
     },
+    "A read-only device can't change this." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A read-only device can't change this."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み取り専用のデバイスでは変更できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读设备不能修改这个设置。"
+          }
+        }
+      }
+    },
     "A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub, this device's credential included, goes through it unencrypted, even for an https hub: you're trusting whatever app holds that port." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -83034,6 +83056,50 @@
       },
       "extractionState" : "manual"
     },
+    "Manual Mark as Read" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manual Mark as Read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手動で既読にする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手动标记已读"
+          }
+        }
+      }
+    },
+    "Mark as Read" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark as Read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既読にする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标记已读"
+          }
+        }
+      }
+    },
     "MCP Form Needs You" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -107747,6 +107813,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Opening a conversation or an Agent no longer clears Unread; use Mark as Read in the chat's More menu or the row's menu. Off by default. Saved on the hub, so every device matches." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opening a conversation or an Agent no longer clears Unread; use Mark as Read in the chat's More menu or the row's menu. Off by default. Saved on the hub, so every device matches."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会話や Agent を開いても未読は消えません。チャットの「その他」メニューまたは行のメニューの「既読にする」を使います。既定はオフ。hub に保存され、すべてのデバイスで共通です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开会话或 Agent 时不再自动清除未读，需在聊天的“更多”菜单或行菜单里点“标记已读”。默认关闭。保存在 hub 上，所有设备保持一致。"
+          }
+        }
+      }
     },
     "Opening the link doesn't finish it. Complete the page, then come back and tap Continue." : {
       "extractionState" : "manual",
@@ -158970,6 +159058,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这个文件是空的"
+          }
+        }
+      }
+    },
+    "This hub doesn't support it yet. Update the hub to use it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub doesn't support it yet. Update the hub to use it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この hub はまだ対応していません。hub を更新すると使えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 hub 还不支持此设置，更新 hub 后可用。"
           }
         }
       }

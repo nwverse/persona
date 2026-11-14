@@ -28,14 +28,27 @@ nonisolated struct SeenOutbox {
         var route: Route = .socket
         /// The hub answered the HTTP request: nothing more to send, only the list to wait for.
         var answered = false
+        /// The user's Mark as read, not a chat being looked at: only these count while Manual mark as read is on (#7356).
+        var manual = false
     }
 
     private(set) var marks: [SessionKey: Mark] = [:]
 
     /// `session` as the app had it when the user looked at it. Only an unread one waits for the hub.
-    mutating func mark(_ key: SessionKey, _ session: Session, at now: Date) {
+    mutating func mark(_ key: SessionKey, _ session: Session, at now: Date, manual: Bool = false) {
         guard session.state == .unread else { return }
-        marks[key] = Mark(seenBefore: session.seenAt, updatedBefore: session.updatedAt, markedAt: now, sentAt: now)
+        marks[key] = Mark(seenBefore: session.seenAt, updatedBefore: session.updatedAt, markedAt: now, sentAt: now, manual: manual)
+    }
+
+    /// Whether the waiting mark for `key` is the user's Mark as read.
+    func isManual(_ key: SessionKey) -> Bool { marks[key]?.manual ?? false }
+
+    /// Manual mark as read turned on (#7356): the marks made by looking go (the hub ignores them now); the sessions they
+    /// held seen, still unread on the hub, are returned to be shown Unread again.
+    mutating func dropLooks() -> [SessionKey] {
+        let looked = marks.filter { !$0.value.manual }.map(\.key)
+        for key in looked { marks[key] = nil }
+        return looked
     }
 
     mutating func sent(_ key: SessionKey, _ route: Route, at now: Date) {

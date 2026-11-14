@@ -1,0 +1,7 @@
+{
+  "group": "Unread",
+  "label": "Manual mark as read",
+  "hint": "Opening a conversation or an Agent no longer clears Unread; use Mark as read in the chat or the row's menu. Off by default. Saved on the hub, so your phone and every browser match.",
+  "readonly": "A read-only device can't change this.",
+  "old_hub": "This hub doesn't support it yet. Update the hub to use it."
+}

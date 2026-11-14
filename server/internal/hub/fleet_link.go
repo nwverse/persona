@@ -461,9 +461,10 @@ func (h *Hub) fleetConnected() {
 	h.fleetClientsChanged()
 }
 
-// markSeen tells the manager the user looked at a session (an app's WebSocket seen).
-func (h *Hub) markSeen(machine, session string) {
-	_ = h.notifyBus(h.sessionOwner(machine, session), assistantwire.EventSeen, assistantwire.FleetSeen{MachineID: machine, SessionID: session})
+// markSeen tells the manager the user looked at a session (an app's WebSocket seen); manual when they pressed Mark as
+// read (#7356).
+func (h *Hub) markSeen(machine, session string, manual bool) {
+	_ = h.notifyBus(h.sessionOwner(machine, session), assistantwire.EventSeen, assistantwire.FleetSeen{MachineID: machine, SessionID: session, Manual: manual})
 }
 
 // mutesChanged tells every manager the muted spaces / agents (the hub's settings mutes) after a change and after a

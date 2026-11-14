@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -68,8 +69,16 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 			apierr.Write(w, http.StatusNotFound, errors.New("unknown machine"))
 			return
 		}
-		s.markSeen(r.Context(), m.ID, r.PathValue("sid"))
-		apierr.WriteJSON(w, map[string]any{"ok": true})
+		// {"manual":true}: the user pressed Mark as read (#7356); no body is an app marking what it opened
+		var body struct {
+			Manual bool `json:"manual"`
+		}
+		if err := decodeBody(w, r, &body, 4<<10); err != nil && !errors.Is(err, io.EOF) {
+			writeBodyErr(w, err, err)
+			return
+		}
+		recorded := s.userSeen(r.Context(), m.ID, r.PathValue("sid"), body.Manual)
+		apierr.WriteJSON(w, map[string]any{"ok": true, "recorded": recorded})
 	})
 	mux.Handle("/", next)
 	return mux

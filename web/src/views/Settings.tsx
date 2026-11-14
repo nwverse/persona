@@ -32,6 +32,7 @@ import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
 import { AgentGroup } from "./settings/AgentGroup";
+import { ReadGroup } from "./settings/ReadGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
 import { PersonaPicker } from "./assistant/Persona";
 import { Connectors } from "./settings/Connectors";
@@ -383,6 +384,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "hub" && <>
                 <HubSettings />
                 <AgentGroup />
+                <ReadGroup />
               </>}
               {tab === "managers" && <ManagersSettings />}
             </div>

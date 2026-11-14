@@ -1454,6 +1454,10 @@ extension AssistantSidebar {
         .disabled(key == nil && model.assistantConfig == nil)
         .contextMenu {
             if let key {
+                // Manual mark as read (#7356): an Unread conversation is read from its row, as from its chat's More menu
+                if model.manualRead, main?.state == .unread {
+                    Button { model.markSeen(key) } label: { Label("Mark as Read", systemImage: Theme.Icon.success) }
+                }
                 if collapse != nil { MainChatPlaceItems(key: key, openKnowledge: openKnowledge, openProfile: openProfile) }
                 MainConversationMenu(key: key) // Compact context, New Main Chat… (#1762)
                 Button {
@@ -1797,6 +1801,9 @@ extension AssistantSidebar {
         .background { if !kept { SwipeRowMark() } } // the drawer leaves a drag to the left on it to the row
         #endif
         .contextMenu {
+            if model.manualRead, s.state == .unread {
+                Button { model.markSeen(s.key) } label: { Label("Mark as Read", systemImage: Theme.Icon.success) }
+            }
             if isMain { MainConversationMenu(key: s.key) } // Compact context, New Main Chat… (#1762)
             if !kept {
                 // A direction is the hub's, for every device (#4331): the long press makes a conversation one, or ends

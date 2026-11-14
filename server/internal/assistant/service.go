@@ -297,6 +297,7 @@ func New(o Options) *Service {
 	s.todoRoutes()
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
+	s.readSettingsRoutes()
 	s.channelRoutes()
 	s.companionRoutes()
 	s.kbInit(o.KB)

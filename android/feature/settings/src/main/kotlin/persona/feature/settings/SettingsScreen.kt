@@ -356,6 +356,7 @@ private fun SettingsContent(
             itemsIndexed(entries) { index, (destination, title) -> JGroupItem(GroupPosition.of(index, entries.size)) {
                 JRow(stringResource(title), onClick = { open(destination) })
             } }
+            services.readSettings?.takeUnless { services.demo }?.let { preferences -> item("manual-read") { ManualReadSection(preferences) } }
         }
         "desktops" -> DesktopsPage(deviceController, services.desktops.takeUnless { services.demo }, paired && services.deviceSettings != null, back)
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)

@@ -40,8 +40,8 @@ describe("marking fallback-only sessions seen", () => {
     off();
 
     expect(vi.mocked(api).mock.calls).toEqual([
-      ["/sessions/demo/agent-64/seen", { method: "POST" }],
-      ["/sessions/demo/agent-70/seen", { method: "POST" }],
+      ["/sessions/demo/agent-64/seen", { method: "POST", json: { manual: true } }],
+      ["/sessions/demo/agent-70/seen", { method: "POST", json: { manual: true } }],
     ]);
     expect(getState().sessions.demo).toEqual([
       untouched,
@@ -59,7 +59,7 @@ describe("marking fallback-only sessions seen", () => {
     upsertSession(current);
     markSeen([row("working"), row("changed"), row("already-seen", { state: "idle" })]);
 
-    expect(vi.mocked(api).mock.calls).toEqual([["/sessions/demo/changed/seen", { method: "POST" }]]);
+    expect(vi.mocked(api).mock.calls).toEqual([["/sessions/demo/changed/seen", { method: "POST", json: { manual: true } }]]);
     expect(getState().sessions.demo).toEqual([
       working,
       { ...current, state: "idle", seen_at: "2026-01-01T00:00:00.000Z" },
@@ -75,8 +75,8 @@ describe("marking fallback-only sessions seen", () => {
     markSeen([left, right, left]);
 
     expect(Socket.last.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
-      { type: "seen", machine_id: left.machine_id, session_id: left.session_id },
-      { type: "seen", machine_id: right.machine_id, session_id: right.session_id },
+      { type: "seen", machine_id: left.machine_id, session_id: left.session_id, manual: true },
+      { type: "seen", machine_id: right.machine_id, session_id: right.session_id, manual: true },
     ]);
     expect(api).not.toHaveBeenCalled();
     expect(getState().sessions.demo[0].state).toBe("idle");
@@ -87,7 +87,7 @@ describe("marking fallback-only sessions seen", () => {
     upsertSession(row("updated", { state: "idle", updated_at: "2025-12-30T00:00:00Z", seen_at: "2025-12-30T01:00:00Z" }));
     const latest = row("updated", { title: "Latest result", updated_at: "2025-12-31T00:00:00Z", state_since: "2025-12-31T00:00:01Z" });
     markSeen([latest]);
-    expect(vi.mocked(api).mock.calls).toEqual([["/sessions/demo/updated/seen", { method: "POST" }]]);
+    expect(vi.mocked(api).mock.calls).toEqual([["/sessions/demo/updated/seen", { method: "POST", json: { manual: true } }]]);
     expect(getState().sessions.demo[0]).toEqual({ ...latest, state: "idle", seen_at: "2026-01-01T00:00:00.000Z" });
   });
 });

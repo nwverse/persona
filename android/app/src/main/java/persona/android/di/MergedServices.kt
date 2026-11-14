@@ -178,6 +178,16 @@ internal fun mergedPreferences(stacks: GroupStacks): HubPreferences = object : H
         withPreferences(GroupKeys.pathNamespace(path)) { it.toggleMute(GroupKeys.rawPath(path), space) }
     override suspend fun markSeen(session: SessionKey, version: String) =
         withPreferences(GroupKeys.namespaceOf(session.machineId)) { it.markSeen(GroupKeys.rawKey(session), version) }
+    // each hub keeps its own Manual mark as read: its own repository drops a look while that hub's switch is on
+    override suspend fun markLooked(session: SessionKey, version: String) =
+        withPreferences(GroupKeys.namespaceOf(session.machineId)) { it.markLooked(GroupKeys.rawKey(session), version) }
+    // Settings shows and changes the selected hub's switch, as its other hub-level pages
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override val readSettings: Flow<ReadSettingsState> = stacks.selected.flatMapLatest { stack ->
+        stack?.repositories?.preferences?.preferences?.map { it.read } ?: flowOf(ReadSettingsState())
+    }
+    override suspend fun setManualRead(on: Boolean) =
+        withPreferences(stacks.selected.value?.namespace) { it.setManualRead(on) }
 }
 
 /**

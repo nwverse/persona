@@ -22,7 +22,8 @@ import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
-import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
+import { getSession, getState, hubHas, listenSession, markRead, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
+import { useManualRead } from "../../lib/manual-read";
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview";
@@ -2352,6 +2353,9 @@ export const Header = memo(function Header({
   const [sharingOpen, setSharingOpen] = useState(false);
   const allowed = session ? sessionMenuActions(session) : [];
   const attach = () => session && attachLive(session);
+  const manualRead = useManualRead();
+  const unread = Boolean(session && manualRead && stateOf(session) === "unread");
+  const readNow = () => session && markRead(session.machine_id, session.session_id);
   // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer. The same action as its stopped
   // line's Resume: the terminal shown as that line's Terminal shows it, then the Resume both share.
   const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));
@@ -2402,6 +2406,7 @@ export const Header = memo(function Header({
     ? [
         // the space's other agents (#5421: in ⋯ at every width, as cindy's header has no such button)
         ...(others.length > 0 ? [spaceAgentsItem(others, () => tabs.openAt(menu.anchor))] : []),
+        ...(unread ? [{ key: "mark-read", label: t("mark-read.action"), icon: "check" as const, onSelect: readNow }] : []),
         ...assistantItems,
         ...(!assistant && !main ? [{ key: "share", label: t("chat-chatview.share"), icon: "link" as const, onSelect: () => setSharingOpen(true) }] : []),
         ...(linkedTodo
@@ -2520,6 +2525,12 @@ export const Header = memo(function Header({
       </div>
       {topCenter && <div className="flex min-w-0 flex-1 justify-center lg:hidden">{topCenter}</div>}
       <div className={headerSlot(Boolean(topCenter), "end")}>
+      {/* Manual mark as read (#7356): opening it left it Unread; this is how it stops being */}
+      {unread && (
+        <Button tone="quiet" size="sm" icon="check" onClick={readNow} aria-label={t("mark-read.action")} testId="chat-mark-read">
+          <span className="max-sm:sr-only">{t("mark-read.action")}</span>
+        </Button>
+      )}
       {background && (
         <span className="relative flex shrink-0">
           <IconButton

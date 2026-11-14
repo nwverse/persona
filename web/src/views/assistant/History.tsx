@@ -11,7 +11,8 @@ import { ago, stateOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
-import { onHubEvent, refreshAssistant, useStore } from "../../lib/store";
+import { markRead, onHubEvent, refreshAssistant, useStore } from "../../lib/store";
+import { manualRead } from "../../lib/manual-read";
 import { isResumed } from "../../lib/reconnect";
 import type { AssistantInfo, Session } from "../../lib/types";
 import { leaderItem } from "../ConversationMenu";
@@ -315,6 +316,8 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
   const leader = useStore((x) => !!x.assistant?.leaders?.includes(s.session_id));
   const own = !main && !builtIn;
   const items: MenuItem[] = [
+    // Manual mark as read (#7356): an Unread conversation is read from its row, as from its chat's header
+    ...(manualRead() && st === "unread" ? [{ key: "mark-read", label: t("mark-read.action"), icon: "check" as const, onSelect: () => markRead(s.machine_id, s.session_id) }] : []),
     ...(own && !s.archived ? [leaderItem(s, leader)] : []),
     ...(own ? [{ key: "rename", label: t("assistant-history.rename_ellipsis"), icon: "pencil" as const, onSelect: () => onRename(s) }] : []),
     { key: "copy", label: t("assistant-history.copy_session_id"), icon: "copy", onSelect: () => void copyText(s.session_id) },

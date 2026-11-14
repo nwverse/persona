@@ -1858,9 +1858,14 @@ SEND_FAIL = {"on": False}
 # Delete conversation (DELETE /api/v1/sessions/{mid}/{sid}): what was taken out, so /mock/reset puts it back.
 SESSION_DELETED = []
 PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins: what the Agents list keeps on top
+# GET / PUT /api/v1/read-settings (#7356, assistant/read_settings.go): Manual mark as read; MOCK_MANUAL_READ=1 starts it on.
+READ_SETTINGS = {"manual": os.environ.get("MOCK_MANUAL_READ") == "1"}
 
 
-def mark_seen(sid):
+def mark_seen(sid, manual=False):
+    # Manual mark as read: only the user's Mark as read counts, as the manager records it
+    if READ_SETTINGS["manual"] and not manual:
+        return False
     SEEN.append(sid)
     changed = None
     for s in SESSIONS + ASSISTANT:
@@ -1871,6 +1876,7 @@ def mark_seen(sid):
     # socket landed (SeenOutbox, #1588). Without it the app sends every one again over HTTP 5 s later (#2061).
     if changed:
         push_machine(changed)
+    return True
 
 
 HITS = {}  # "GET /api/v1/machines" -> how many (GET /mock/hits): pull to refresh and reloads
@@ -23763,6 +23769,7 @@ MOCK_HELP = [
     "MOCK_SIDE_SESSIONS=1  Two Claude desktop side sessions under the PR review (parent_agent_id, #5935), one waiting for you",
     "MOCK_SESSIONS_CATALOG=1  With MOCK_SESSIONS_LIST=1: catalog=1, place= and space= on the paged list, a Windows PC, one repository on two computers and a plain notes folder on two",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
+    "MOCK_MANUAL_READ=1  Manual mark as read starts on (#7356): opening a chat leaves it Unread; only its Mark as read clears it",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_CHILD_SESSIONS=1  The Paseo computer (MOCK_PASEO) with its agent's four created agents (one waiting for you, one working with a Codex subagent of its own, one done, one failed) and an agent whose creator is not listed: the hub folds them (folded_under / children) and the lead's chat draws a card for each (#5120)",
     "MOCK_PASEO=1  A computer that enables Paseo beside herdr: a project with its main checkout, two titled worktree workspaces and one with no agent, all in the workspace catalog (New worktree… makes one in Paseo's folder, #6295; Rename, Delete worktree and Rename space as the node answers them, the login flow's worktree with two uncommitted changes, #6297), an agent with the two agents it created (one waiting for you), and a Codex agent whose thread has a subagent",
@@ -24621,6 +24628,7 @@ class H(BaseHTTPRequestHandler):
             if PREFS_FAIL[0]: return self.send_json({"error": "mock: prefs unavailable"}, 503)  # #1860
             return self.send_json(PREFS)
         if p == "/api/v1/pins": return self.send_json(PINS)
+        if p == "/api/v1/read-settings": return self.send_json({**READ_SETTINGS, "can_write": True})
         if p == "/api/v1/mutes": return self.send_json({"spaces": [], "sessions": TREE_MUTED, "allowed": []})
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
@@ -26492,8 +26500,16 @@ class H(BaseHTTPRequestHandler):
                 if s["session_id"] == sid and body.get("title"): s["title"] = body["title"]
             return self.send_json({"ok": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/seen"):
-            mark_seen(p.split("/")[5])
-            return self.send_json({"ok": True})
+            body = json.loads(self.last_body or b"{}")
+            return self.send_json({"ok": True, "recorded": mark_seen(p.split("/")[5], bool(body.get("manual")))})
+        if p == "/api/v1/read-settings" and self.command == "PUT":
+            body = json.loads(self.last_body or b"{}")
+            if not isinstance(body.get("manual"), bool): return self.send_json({"error": "manual is required"}, 400)
+            READ_SETTINGS["manual"] = body["manual"]
+            for send, _ in list(LIVE):
+                try: send({"type": "read_settings", "manual": body["manual"]})
+                except Exception: pass
+            return self.send_json({**READ_SETTINGS, "can_write": True})
         # 设为常驻 / 取消常驻 (#4331, assistant/route.go makeDirection / endDirection): the leaders list changes
         if p.startswith("/api/v1/assistant/directions/") and p.split("/")[-1] in ("make", "end") and self.command == "POST":
             lead, op = p.split("/")[5], p.split("/")[6]
@@ -27197,7 +27213,7 @@ class H(BaseHTTPRequestHandler):
                         TOOL_RESULTS.append(msg)
                     continue
                 if msg.get("type") == "seen":
-                    mark_seen(msg.get("session_id"))
+                    mark_seen(msg.get("session_id"), bool(msg.get("manual")))
                     continue
                 if TERMINAL_FULL and herdr_message(msg, send, full_views):
                     continue

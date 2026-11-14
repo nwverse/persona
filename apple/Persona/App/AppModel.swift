@@ -1547,6 +1547,71 @@ final class AppModel {
         }
     }
     @ObservationIgnored private var hubRestartTimeout: Task<Void, Never>?
+
+    /// Manual mark as read (#7356, `ReadSettings`): the hub's switch as last known, kept for the next launch so a chat
+    /// reopened before the hub answers is not marked seen. Fetched on connect, then the `read_settings` events.
+    private(set) var manualRead = UserDefaults.standard.bool(forKey: AppModel.manualReadKey) {
+        didSet {
+            guard manualRead != oldValue else { return }
+            UserDefaults.standard.set(manualRead, forKey: Self.manualReadKey)
+            manualReadChanged()
+        }
+    }
+    static let manualReadKey = "persona.manualRead"
+    /// The hub's answer about the switch: nil until it answered.
+    private(set) var readSettingsState: ReadSettingsState?
+    @ObservationIgnored private var readSettingsWrites = 0
+
+    func refreshReadSettings() async {
+        // the default manager's switch, as the web reads it (no assistant pick)
+        guard let api = hub?.api else { return }
+        let writes = readSettingsWrites
+        let answer: ReadSettings?
+        do { answer = try await api.readSettings() } catch { return } // the next connect asks again
+        guard writes == readSettingsWrites else { return }
+        if let answer {
+            readSettingsState = ReadSettingsState(supported: true, canWrite: answer.canWrite)
+            manualRead = answer.manual
+        } else {
+            readSettingsState = ReadSettingsState(supported: false, canWrite: false)
+            manualRead = false
+        }
+    }
+
+    /// Settings' switch: shown at once, put back (and the error shown) when the hub refuses.
+    func setManualRead(_ on: Bool) async {
+        guard let api = hub?.api else { return }
+        let before = manualRead
+        readSettingsWrites += 1
+        let writes = readSettingsWrites
+        manualRead = on
+        do {
+            let answer = try await api.setManualRead(on)
+            if writes == readSettingsWrites { manualRead = answer.manual }
+        } catch {
+            if writes == readSettingsWrites { manualRead = before }
+            show(error)
+        }
+    }
+
+    /// On: what this app marked by looking, and the hub has not recorded yet, no longer holds its rows seen (the hub
+    /// ignores such a mark now). Off: the chat on screen is seen, as opening it would.
+    private func manualReadChanged() {
+        guard manualRead else {
+            if let key = visibleSession { sawChat(key) }
+            return
+        }
+        let looked = seenOutbox.dropLooks()
+        guard !looked.isEmpty else { return }
+        var lists = sessionsByMachine
+        for key in looked {
+            if let i = lists[key.machineRef]?.firstIndex(where: { $0.sessionID == key.sessionID }), lists[key.machineRef]![i].state == .idle {
+                lists[key.machineRef]![i].state = .unread
+            }
+        }
+        sessionsByMachine = lists
+    }
+
     /// This app's build (CFBundleVersion).
     static let appBuild = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0
     var hubCompat: HubCompat { HubCompat.of(hubHello, appBuild: Self.appBuild) }
@@ -1783,6 +1848,7 @@ final class AppModel {
         if group == hub?.group {
             // The hub's version and whether an update is out or under way (an older hub has no such page: nil).
             Task { hubUpdate = try? await api?.hubUpdate() }
+            Task { await refreshReadSettings() }
             if plan.refetch {
                 Task { await personas.refresh(api) }
                 LarkSync.shared.reconnected()
@@ -2199,6 +2265,8 @@ final class AppModel {
             LiveActivityController.shared.apply(mergedFleet())
         case .hubUpdate(let status):
             if isHub, hubUpdate != status { hubUpdate = status }
+        case .readSettings(let manual):
+            if isHub { manualRead = manual }
         case .desktops(let list):
             link(group)?.desktops = DesktopDevice.shown(list)
         case .extensionOperation(var op, let manager):
@@ -2331,6 +2399,7 @@ final class AppModel {
         case .taskPlan: "task_plan"
         case .fleet: "fleet"
         case .hubUpdate: "hub_update"
+        case .readSettings: "read_settings"
         case .extensionOperation: "extension_operation"
         case .extensionAuth: "extension_auth"
         case .desktops: "desktops"
@@ -2348,7 +2417,7 @@ final class AppModel {
     private func notifyTransitions(old: [Session], new: [Session]) {
         let before = Dictionary(old.map { ($0.sessionID, $0.status) }, uniquingKeysWith: { a, _ in a })
         for s in new where before[s.sessionID] == .working && (s.status == .idle || s.status == .done) {
-            if visibleSession == s.key { markSeen(s.key) }
+            if visibleSession == s.key { sawChat(s.key) }
             if visibleSession == s.key { Haptics.success() }
         }
     }
@@ -2834,9 +2903,19 @@ final class AppModel {
         }
     }
 
-    /// The user looked at this session: finished work stops being "unread" (docs/protocol/agent-states.md).
-    func markSeen(_ key: SessionKey) {
-        sendSeen(key)
+    /// The user's Mark as read (swipe, menus, the chat's button): finished work stops being "unread"
+    /// (docs/protocol/agent-states.md), whether Manual mark as read is on or not, and the hub hears it was the user's.
+    func markSeen(_ key: SessionKey) { seen(key, manual: true) }
+
+    /// The user looked at this session (its chat appeared, or a turn ended while it was shown): seen, unless Manual mark
+    /// as read is on (#7356), when only `markSeen` clears Unread.
+    func sawChat(_ key: SessionKey) {
+        guard !manualRead else { return }
+        seen(key, manual: false)
+    }
+
+    private func seen(_ key: SessionKey, manual: Bool) {
+        sendSeen(key, manual: manual)
         // Optimistic: flip the local copy right away.
         if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }),
            list[i].state == .unread {
@@ -2846,23 +2925,28 @@ final class AppModel {
         }
     }
 
-    private func sendSeen(_ key: SessionKey) {
-        if let s = sessionIndex[key] { seenOutbox.mark(key, s, at: Date()) }
-        deliverSeen(key)
+    private func sendSeen(_ key: SessionKey, manual: Bool) {
+        if let s = sessionIndex[key] { seenOutbox.mark(key, s, at: Date(), manual: manual) }
+        deliverSeen(key, manual: manual)
     }
 
     /// Over the socket while it answers its pings, else over HTTP. Nothing says whether the socket's went through: an
     /// unread one not taken within `SeenOutbox.confirmWithin` goes again over HTTP (#1588).
-    private func deliverSeen(_ key: SessionKey, overHTTP: Bool = false) {
+    /// `manual`: the user's Mark as read; a resend reads it from the outbox's mark.
+    private func deliverSeen(_ key: SessionKey, overHTTP: Bool = false, manual: Bool? = nil) {
+        let manual = manual ?? seenOutbox.isManual(key)
         if !overHTTP, let socket = socket(key.group), socket.state == .connected, !socket.stalled {
             seenOutbox.sent(key, .socket, at: Date())
-            socket.send(["type": "seen", "machine_id": key.machineID, "session_id": key.sessionID])
+            var msg: [String: Any] = ["type": "seen", "machine_id": key.machineID, "session_id": key.sessionID]
+            if manual { msg["manual"] = true }
+            socket.send(msg)
             scheduleSeenCheck()
         } else if let api = api(key.group) {
             seenOutbox.sent(key, .http, at: Date())
             Task {
                 // A failed one waits for the socket to come back (`hello`).
-                if (try? await api.post("/api/v1/sessions/\(key.machineID)/\(key.sessionID)/seen")) != nil { seenOutbox.answered(key) }
+                let body: [String: Bool] = manual ? ["manual": true] : [:]
+                if (try? await api.post("/api/v1/sessions/\(key.machineID)/\(key.sessionID)/seen", body: body)) != nil { seenOutbox.answered(key) }
             }
         }
     }
@@ -2882,7 +2966,7 @@ final class AppModel {
     func markSeen(_ keys: [SessionKey]) {
         let unread = keys.filter { session($0)?.state == .unread }
         guard !unread.isEmpty else { return }
-        for key in unread { sendSeen(key) }
+        for key in unread { sendSeen(key, manual: true) }
         var lists = sessionsByMachine
         for key in unread {
             if let i = lists[key.machineRef]?.firstIndex(where: { $0.sessionID == key.sessionID }) { lists[key.machineRef]![i].state = .idle }
