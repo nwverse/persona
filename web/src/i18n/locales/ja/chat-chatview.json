@@ -55,7 +55,7 @@
   "unpin": "ピン留めを外す",
   "pin": "ピン留め",
   "copy_session_id": "セッションIDをコピー",
-  "copy_folder": "フォルダのパスをコピー",
+  "copy_folder": "フォルダーのパスをコピー",
   "copy_resume_command": "再開コマンドをコピー",
   "delete_chat": "チャットを削除…",
   "sidebar": "サイドバー",
@@ -135,5 +135,6 @@
   "search_origin_changed": "元の記録が変わりました。現在の記録をご覧ください",
   "search_return": "検索前の位置に戻る",
   "search_menu": "会話内を検索",
-  "todo_completed_label": "To-do（完了）：{title}"
+  "todo_completed_label": "To-do（完了）：{title}",
+  "export": "会話を書き出す…"
 }

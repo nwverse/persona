@@ -297,6 +297,12 @@ objects, bounds and references; malformed layouts keep raw scanning. Keep config
 original bytes, decode unreachable string objects too, and still scan data, padding and trailing bytes. Do not fix
 this by changing a locale, allowing an address or rearranging the generated plist.
 
+## Rust dependency panic paths in a Release archive (#7394)
+
+- Rust dependencies carry their source paths in panic metadata, so an Apple XCFramework can include the build Mac's home and Cargo registry address even when the app has no such string in its source. `check_bundle_privacy.py` correctly rejects that main executable.
+- Set `--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona` in `native/app-core/scripts/build-apple.sh` for every Apple target. This changes only debug/panic paths, not the runtime code or the privacy scanner's exemptions; verify the actual exported archive with `check_bundle_privacy.py`.
+- A successful archive does not prove the package can ship: the bundle privacy scan runs after it, before export and upload. Keep that gate.
+
 ## Device names in Siri intent descriptions (#3113)
 
 App Store Connect can commit an upload but reject it before the build appears in TestFlight. Validation code 90626 rejected a meeting-recording App Intent description containing `iPhone`, even though archive, export, purpose strings and entitlements passed. Keep the intent description device-neutral in Swift and in every catalog translation; changing a permission purpose string does not fix Siri metadata. If a committed upload never appears, inspect the upload's state and errors instead of re-uploading the same package or treating the wait timeout as success.
@@ -616,6 +622,29 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Appearance changes rebuild views through `RootView.id(look)`; keeping settings navigation in `AppModel` preserves the page, not its `@State` form. Store unsaved drafts in memory scoped by hub / extension, retain them when rereading, clear after successful save. Unparsed numeric input is also a draft; comparing configuration JSON alone is insufficient.
 - UIKit providers for dynamic `Color(light:dark:)` have different identities each time; equal numeric colors do not imply SwiftUI `Color ==`. When changing static role colors into computed properties, keep default colors statically cached and create extension role colors only once per `StyleSpec` composition. Do not hide repeated color-object creation by changing existing tests to RGB comparisons.
 - A collection's main preview being unexpired does not guarantee valid members: check every member's expiry, unresolved dependencies and permission digest. When uninstall returns `removed_members`, report only members actually removed successfully, not all members inferred from main-package success.
+
+## The dictation bar's wave and measuring it (#5843)
+
+- **A frame-by-frame `Canvas` costs app CPU off the main thread**: `Canvas(rendersAsynchronously: true)` in `TimelineView(.animation)` kept the main thread
+  below the composer it replaced, but RenderBox drew a new texture every frame on its own threads (through the simulator's
+  emulated Metal) and the app's total CPU went up. Redrawing only per sample and sliding with a SwiftUI `.offset` animation
+  was worse still: SwiftUI steps that animation on the main thread every frame. What fit: the canvas drawn once per sample
+  (`TimelineView(.periodic)`), in a view whose layer Core Animation slides (`WaveStripView`), each tick restarting the slide
+  from the layer's presentation value. Listening: app CPU 8.3 % against 11.0 % before (iPhone 17 Pro simulator).
+- **Switching a view between `if timeline { … } else { … }` builds it again**: the strip's hosting controller was rebuilt on
+  every open and close, a long frame each time. Keep one `TimelineView` and slow its schedule while idle.
+- **Measure a container the content cannot size**: a strip one pitch wider than the wave, measured through
+  `onGeometryChange` on a container that fit it, widened on every pass, a layout loop that left the window blank.
+- **Two blocking calls hide in "simple" taps**: `AVAudioSession.setActive(false)` blocks the main thread for about 50 ms
+  (`Dictation.stop(settling:)` lets it go later, off the main thread); a cold `UIImpactFeedbackGenerator`'s first impact
+  blocked 100–600 ms on a simulator (keep one generator and `prepare()` it ahead).
+- **Measuring taps with XCUITest measures XCUITest**: every `tap()`, coordinate taps too, takes an accessibility
+  snapshot of the app on its main thread (about 80 ms over a long conversation), inside the measured window. Drive the
+  touches from the host with `idb ui tap`, start and stop `FrameStats` with `simctl spawn … notifyutil -p
+  com.persona.perf.frames.start|stop`, and wait for the app's report to reach the mock before switching its label.
+- **Simulator CPU numbers have modes**: for several minutes after installing a freshly built binary, the app's listening
+  CPU sat near 18 % instead of 8–11 %, with no view bodies or pushes, then dropped. Alternate old and new builds, let the
+  machine settle after a build, count the first round after an install as warm-up, and compare like runs.
 
 ## Video export
 
@@ -2538,3 +2567,15 @@ that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder 
   simulator (iOS 27) and on some on an iPad one; a second tap a few seconds later always went through. Turning
   autocorrection off did not change it. `FilesActionsTests`, which takes a screenshot between typing and tapping, saw it
   once. Tap again while the alert stays up, then check what reached the mock; a single tap reads as an app bug.
+
+## A row opened at the oldest end jumped 100 pt: the pin let go too early (2026-11-14, #7237)
+
+- At the oldest end of the chat the list rests about 100 pt past the end its own arithmetic gives (`within`), and UIKit sets
+  it back to that end once the content size follows a pass after the row grew. A held row was clamped to `within`, so it went
+  up by the difference, and the hold ended on SwiftUI's first report of the row, which still said it had not moved (SwiftUI
+  reports the position its own layout gives, ahead of the scroll view). Your own long message and a work line both did it.
+- `ChatPin` now remembers how far past the end the list was when the hold began (`Held.slack`) and allows it, and a hold
+  does not end until the row has said its content grew and the list is where the hold wants it. Evidence: per-frame row top
+  (`UnfoldTrace`) constant on opening and folding at the oldest end; `UnfoldTests.testWorkLineAtTheOldestEnd` with
+  `MOCK_LONG_HISTORY=oldest` and `-showOldest`. A stale report is not proof the list is there: also read the offset
+  (`-scrollTrace`, the `why` column of the pin says how the last hold ended).
