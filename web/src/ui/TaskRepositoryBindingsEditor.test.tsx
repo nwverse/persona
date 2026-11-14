@@ -16,6 +16,7 @@ const identity = { provider: "github" as const, instance_url: "https://github.co
 const other = { provider: "github" as const, instance_url: "https://github.com", path: "example/docs", canonical_url: "https://github.com/example/docs" };
 const catalog: RepositoryCatalog = { manager: "assistant", catalog_revision: 4, repositories: [{ ...identity, id: "web", verified_at: "2026-01-01T00:00:00Z" }] };
 const set: TaskRepositorySet = { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 1, repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, source_snapshot: { identity, clone_url: identity.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" }, links: [{ kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" }], catalog_state: "current" }] };
+const emptySet: TaskRepositorySet = { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 1, repositories: [] };
 const twoLinks: TaskRepositorySet = { ...set, revision: 2, repositories: [{ ...set.repositories[0], links: [
   { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
   { kind: "pull_request", number: "8", canonical_url: identity.canonical_url + "/pull/8" },
@@ -129,12 +130,50 @@ it("falls back to the legacy PR link on a hub without the association route", as
   expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("Linked before repositories were stored here.");
 });
 
-it("shows the legacy link only until the store has links, never both", async () => {
+it("never draws the legacy link beside the store's links", async () => {
   await render("assistant", "todo_example", "https://example.com/pull/3211");
   await answer(calls[0], twoLinks);
   const section = document.querySelector("[data-todo-repositories]")!;
   expect(section.querySelector('a[href="https://example.com/pull/3211"]')).toBeNull();
   expect(section.textContent).toContain("#7");
+});
+
+// Backend 2fb96c7b1 imports the legacy PR history into the canonical store once, and an explicit removal sticks. A
+// successful empty answer is therefore the whole truth: the old pr_url must not come back as a fallback (#review).
+it("trusts a successful empty store over an existing legacy PR", async () => {
+  await render("assistant", "todo_example", "https://example.com/pull/3211");
+  await answer(calls[0], emptySet);
+  const section = document.querySelector("[data-todo-repositories]")!;
+  expect(section.querySelector('a[href="https://example.com/pull/3211"]')).toBeNull();
+  expect(section.textContent).toContain("No repositories linked");
+});
+
+it("keeps the last repository removed after an empty save and a reload, with no legacy PR back", async () => {
+  await render("assistant", "todo_example", "https://example.com/pull/3211");
+  await answer(calls[0], set);
+  await click("Manage links");
+  await answerEditor(catalog, set);
+  await settle();
+  // Remove the only repository in the dialog, then save the empty set.
+  await act(async () => { [...document.querySelectorAll('[role="dialog"] [aria-label]')].find((b) => b.getAttribute("aria-label") === "Options for example/web")!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+  const remove = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes("Remove repository"))!;
+  expect(remove).toBeTruthy();
+  await act(async () => { remove.click(); });
+  await click("Save");
+  const save = calls.at(-1)!;
+  expect(save.init.method).toBe("PUT");
+  expect(JSON.parse(save.init.body as string).repositories).toEqual([]);
+  await answer(save, { ...emptySet, revision: 2 });
+  // Saved empty: the page's own view is empty too, and the removed PR stays gone.
+  const section = document.querySelector("[data-todo-repositories]")!;
+  expect(section.querySelector('a[href="https://example.com/pull/3211"]')).toBeNull();
+  expect(section.textContent).toContain("No repositories linked");
+  // A reload (the version changes) reads the same empty store and still shows no legacy fallback.
+  await render("assistant", "todo_example", "https://example.com/pull/3211");
+  await answer(calls.at(-1)!, { ...emptySet, revision: 2 });
+  const reloaded = document.querySelector("[data-todo-repositories]")!;
+  expect(reloaded.querySelector('a[href="https://example.com/pull/3211"]')).toBeNull();
+  expect(reloaded.textContent).toContain("No repositories linked");
 });
 
 it("ignores late results after manager, todo or credential changes", async () => {

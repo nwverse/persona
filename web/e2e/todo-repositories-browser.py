@@ -50,12 +50,13 @@ assert TODO, "the mock hub lists no to-do (start it with MOCK_TODO_LIST=1)"
 TODO_ID, LEGACY_PR = TODO["id"], TODO.get("pr_url", "")
 
 
-def fixture_source(legacy=False):
+def fixture_source(legacy=False, empty=False):
     """The whole page's fetch shim, installed before any page script so the section's first read finds it."""
     return """(() => {
-  const state = window.repoFixture = {calls: [], revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s};
+  const state = window.repoFixture = {calls: [], revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s, empty: %(empty)s};
   const identity = %(identity)s, catalog = %(catalog)s, todoId = %(todo)s;
-  const set = () => ({schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: [{
+  const set = () => state.empty ? {schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: []}
+    : ({schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: [{
     repo_id: 'web', requested_ref: {kind: 'default'},
     source_snapshot: {identity, clone_url: identity.canonical_url, catalog_revision: 4, transport_origin: 'canonical_default'},
     links: state.numbers.map((n) => ({kind: 'pull_request', number: String(n), canonical_url: identity.canonical_url + '/pull/' + n})),
@@ -79,7 +80,7 @@ def fixture_source(legacy=False):
     return reply(set());
   };
   return true;
-})()""" % {"legacy": "true" if legacy else "false", "identity": json.dumps(IDENTITY), "catalog": json.dumps(CATALOG), "todo": json.dumps(TODO_ID)}
+})()""" % {"legacy": "true" if legacy else "false", "empty": "true" if empty else "false", "identity": json.dumps(IDENTITY), "catalog": json.dumps(CATALOG), "todo": json.dumps(TODO_ID)}
 
 
 def js(expression):
@@ -141,7 +142,7 @@ def type_url(value):
       el.dispatchEvent(new Event('input', {bubbles: true})); })()""" % json.dumps(value))
 
 
-def open_todo(theme, width, legacy=False, large=False):
+def open_todo(theme, width, legacy=False, large=False, empty=False):
     # The page is opened first and reloaded: Page.addScriptToEvaluateOnNewDocument only reaches documents created after
     # it, not the tab's first one.
     new_tab(f"{WEB}/?token=mock")
@@ -156,7 +157,7 @@ def open_todo(theme, width, legacy=False, large=False):
     # reloaded page would run old code. Unregister and clear its caches (a dev server has none).
     js("navigator.serviceWorker?.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister())))")
     js("caches?.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k))))")
-    cdp("Page.addScriptToEvaluateOnNewDocument", source=fixture_source(legacy=legacy))
+    cdp("Page.addScriptToEvaluateOnNewDocument", source=fixture_source(legacy=legacy, empty=empty))
     cdp("Page.reload")
     wait_for_load()
     eventually("!!window.repoFixture")
@@ -231,6 +232,17 @@ def run(theme, width, suffix=""):
     check(js("document.activeElement && document.activeElement.innerText.trim() === 'Manage links'"), f"{where}: Escape closes the dialog and hands the focus back")
 
 
+def run_empty(theme="light", width=1280):
+    """The canonical store's own empty answer (the last repository removed) is authoritative: no legacy PR comes back."""
+    open_todo(theme, width, empty=True)
+    section = "document.querySelector('[data-todo-repositories]').innerText"
+    eventually("document.querySelector('[data-todo-repositories]').innerText.includes('No repositories linked')")
+    check(js("document.querySelector('[data-todo-repositories] a[href=%s]') === null" % json.dumps(LEGACY_PR)),
+          "a successful empty store shows no legacy PR")
+    check("Add repository" in js(section), "and still offers the editor")
+    shot(f"section-empty-{width}-{theme}")
+
+
 def run_legacy(theme="light", width=1280):
     open_todo(theme, width, legacy=True)
     eventually("document.querySelector('[data-todo-repositories]').innerText.includes('Linked before repositories were stored here.')")
@@ -245,6 +257,7 @@ try:
         for width in (1280, 390):
             run(theme, width)
     run("light", 390, "-large")
+    run_empty()
     run_legacy()
     print("VERDICT: pass")
 except AssertionError as failure:

@@ -2358,9 +2358,12 @@ per-repository **Source options** disclosure; empty aliases and default branches
 need no setup. Saved-source changes (`removed`, `identity_changed`) and
 `unlisted` rows inferred from agent-added links are explained beneath their
 repository while the saved source stays. A to-do's `pr_url` is drawn inside
-this group (as a link row, with one line saying it predates the store) and never
-beside it, so one place holds a task's issues and PRs; a hub without the route
-shows only that legacy link.
+this group as a link row with one line saying it predates the store, and never
+beside it, so one place holds a task's issues and PRs. That row is a fallback
+for a hub whose route is missing only: a successful store answer is
+authoritative even when it is empty, because the manager imports the legacy
+history once and honours an explicit removal, so an empty answer after the last
+repository was removed must not resurrect the old PR.
 
 Controls have labels, action groups wrap at narrow widths, and saving disables
 edits. Failed saves keep input; conflicts offer explicit **Discard edits and

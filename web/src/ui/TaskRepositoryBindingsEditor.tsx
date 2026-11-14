@@ -39,7 +39,7 @@ function LinkRow({ identity, view, onRemove, disabled }: { identity: RepositoryI
       <span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span>
       <Icon name="external" size={11} className="ml-auto shrink-0 text-ink-3" />
     </a>
-    {onRemove && <IconButton icon="x" size={24} iconSize={12} label={t("task-repositories.remove_link", { link: tag })} onClick={onRemove} disabled={disabled} className="min-h-11" />}
+    {onRemove && <IconButton icon="x" size={24} iconSize={12} label={t("task-repositories.remove_link", { link: tag })} onClick={onRemove} disabled={disabled} />}
   </div>;
 }
 
@@ -89,7 +89,7 @@ function RepositoryDraftRow({ row, entry, saved, pending, onChange, onRemove }: 
   return <Group>
     <Row icon="folder" label={name} hint={`${providerName(identity)} · ${hostOf(identity)}`}>
       {!!links.length && <Pill>{links.length}</Pill>}
-      <IconButton icon="more" label={t("task-repositories.options", { name })} onClick={menu.open} disabled={pending} className="min-h-11" />
+      <IconButton icon="more" label={t("task-repositories.options", { name })} onClick={menu.open} disabled={pending} />
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right"
         items={[{ key: "remove", label: t("task-repositories.remove"), icon: "x", danger: true, onSelect: onRemove }]} />}
     </Row>
@@ -316,8 +316,8 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
             </p>}
           </Fragment>)}
           {!saved && !error && <div className="px-4 py-3"><Loading /></div>}
-          {saved && !repositories.length && legacyPRs.map((p) => <Row key={p.url} icon="pullRequest" hint={t("task-repositories.legacy_note")}
-            label={<a href={p.url} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">{p.text}</a>} />)}
+          {/* A successful answer is the store's whole word, even empty: the manager imports the legacy history once and
+              honours an explicit removal, so `pr_url` is a fallback for a missing route (above) and nowhere else. */}
           {saved && !repositories.length && <Row label={t("task-repositories.no_links")} hint={t("task-repositories.agent_hint")} wrapHint />}
           {error && <RowFailed text={error} retry={t("task-repositories.retry")} onRetry={() => { setError(""); setAttempt((n) => n + 1); }} />}
         </>}
