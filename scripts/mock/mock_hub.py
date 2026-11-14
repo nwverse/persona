@@ -45,7 +45,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
-            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes", "pane_new_space"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -3044,7 +3044,28 @@ RULE_SUGGESTIONS = {
         "scope": {}, "creates": "", "setting": "agents.delegate", "count": 3},
 } if os.environ.get("MOCK_RULE_SUGGESTIONS") == "1" else {}
 RULE_SUGGESTIONS_ANSWERED = set()  # answered with Always or Not now
-RULE_GRANTS = []  # the standing authorizations Always granted, as GET /api/v1/assistant/standing-authorizations lists them
+# MOCK_STANDING_AUTHORIZATIONS=1: two synthetic standing authorizations to list and revoke (#7002); =forbidden: this
+# device has no full access (403); =fail: every revoke fails (503), so the apps put the row back.
+STANDING_MODE = os.environ.get("MOCK_STANDING_AUTHORIZATIONS", "")
+
+
+def standing_seed():
+    """The standing authorizations a fresh mock hub has: none, or MOCK_STANDING_AUTHORIZATIONS' two."""
+    if STANDING_MODE not in ("1", "fail"):
+        return []
+    return [
+        {"id": "sa_mock_weather", "machine_id": "macbook", "directory": "/Users/me/code/weather",
+         "actions": ["merge", "deploy-test"], "conditions": ["ci_green", "no_conflicts"],
+         "quote": "Merge the weather app and put it on the test site when the checks pass. No need to ask me.",
+         "source": "Main conversation", "granted_at": ago(days=3), "reversible": True},
+        {"id": "sa_mock_blog", "machine_id": "server", "directory": "/home/me/projects/blog",
+         "actions": ["push"], "conditions": ["Only the branch I reviewed"],
+         "quote": "Push the blog changes yourself once I've looked at them.",
+         "source": "Main conversation", "granted_at": ago(days=12), "reversible": False},
+    ]
+
+
+RULE_GRANTS = standing_seed()  # the standing authorizations, as GET /api/v1/assistant/standing-authorizations lists them; Always adds one
 RULE_GRANTS_REVISION = [1]
 RULE_TRUST_ADDED = set()  # the tasks.trust keys Always added, which /mock/reset takes away again
 RULE_SUGGESTION_ON = {"todo_review": "rs_mock_merge", "ix_tests": "rs_mock_delegate", "plan_mock_3": "rs_mock_start"}
@@ -3065,17 +3086,23 @@ def suggested_plan(plan):
 def rule_suggestions_area(h, method, p):
     """POST /api/v1/assistant/rule-suggestions/{id}/always | not-now (MOCK_RULE_SUGGESTIONS=1), and the standing
     authorizations Always granted: GET /api/v1/assistant/standing-authorizations lists them, DELETE …/{id} revokes one."""
-    if RULE_SUGGESTIONS and p == "/api/v1/assistant/standing-authorizations" and method == "GET":
+    standing = RULE_SUGGESTIONS or STANDING_MODE
+    if standing and p.startswith("/api/v1/assistant/standing-authorizations") and STANDING_MODE == "forbidden":
+        h.send_json({"error": "Full access is required.", "code": "forbidden"}, 403)  # as the hub, for a device without the full role
+        return True
+    if standing and p == "/api/v1/assistant/standing-authorizations" and method == "GET":
         h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
         return True
-    if RULE_SUGGESTIONS and p.startswith("/api/v1/assistant/standing-authorizations/") and method == "DELETE":
-        kept = [g for g in RULE_GRANTS if g["id"] != unquote(p.rsplit("/", 1)[1])]
-        if len(kept) == len(RULE_GRANTS):
-            h.send_json({"error": "not found", "code": "not_found"}, 404)
+    if standing and p.startswith("/api/v1/assistant/standing-authorizations/") and method == "DELETE":
+        if STANDING_MODE == "fail":
+            h.send_json({"error": "Synthetic storage failure"}, 503)
             return True
-        RULE_GRANTS[:] = kept
-        RULE_GRANTS_REVISION[0] += 1
-        h.send_json({"revision": RULE_GRANTS_REVISION[0], "authorizations": RULE_GRANTS})
+        # As the hub: ok with the revision, also for one that is gone already (the revision moves only on a removal).
+        kept = [g for g in RULE_GRANTS if g["id"] != unquote(p.rsplit("/", 1)[1])]
+        if len(kept) != len(RULE_GRANTS):
+            RULE_GRANTS[:] = kept
+            RULE_GRANTS_REVISION[0] += 1
+        h.send_json({"ok": True, "revision": RULE_GRANTS_REVISION[0]})
         return True
     m = re.fullmatch(r"/api/v1/assistant/rule-suggestions/([^/]+)/(always|not-now)", p)
     if not m or method != "POST":
@@ -10214,7 +10241,15 @@ def node_action(h, p, body):
     elif area == "tabs" and verb == "close":
         CLOSED_TABS.add(body.get("tab_id"))
     elif area == "tabs" and verb == "rename":
-        TAB_NAMES[body.get("tab_id")] = body.get("label")
+        # A name that is a refusal's word is refused as the hub relays it (#6996; as "taken" refuses a worktree): "offline"
+        # (503 node_unreachable), "unsupported" (an engine without rename) and "closed" (the tab gone), the node's words as 502
+        label = str(body.get("label", ""))
+        if label == "offline":
+            return h.send_json({"error": "machine %s is offline" % mid, "code": "node_unreachable", "retryable": True, "delivered": "none"}, 503)
+        if label in ("unsupported", "closed"):
+            words = "unsupported: orca cannot do this" if label == "unsupported" else "tab %s is not running" % body.get("tab_id")
+            return h.send_json({"error": words, "code": "internal"}, 502)
+        TAB_NAMES[body.get("tab_id")] = label
     elif area == "panes" and verb == "split":
         n = len(SPLIT_PANES.setdefault(mid, [])) + 20
         src = body.get("pane", "w1:p2")
@@ -12254,6 +12289,17 @@ if MOCK_INBOX_EVENTS:
 # side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
 # fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
 # now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+# MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
+# (MOCK_INBOX_TODO=time: with a time, so All Day is off).
+if os.environ.get("MOCK_INBOX_TODO"):
+    _td = next((x for x in INBOX if x["id"] == "mail:acc1:t4:504"), None)
+    if _td is not None:
+        _due = (NOW + timedelta(days=2)).astimezone()
+        _td["suggestion"] = {"version": 1, "kind": "todo", "text": "确认设计评审改到周二下午", "at": ago(minutes=2),
+                             "due": _due.replace(hour=15, minute=0, second=0, microsecond=0).isoformat() if os.environ["MOCK_INBOX_TODO"] == "time" else _due.strftime("%Y-%m-%d")}
+        _td["status"] = "action"
+
+
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
@@ -12294,6 +12340,68 @@ if MOCK_HANDOFF_CARD:
     if MOCK_TASKS:
         TASK_FEED.setdefault(ASK1, []).append({"id": "feed_handoff", "conversation": ASK1, "at": ago(minutes=0.4), "kind": "inbox_suggestion",
                                                "ref": _hid, "body": _hcard})
+
+
+# Merge and Add to to-dos (#6480): POST /api/v1/inbox/merge, /merge/undo, /todo, /todo/undo as the hub answers them. A merge takes the
+# newest row as the survivor and hides the others (kept in MERGED for Undo); a to-do files its row as done_by=todo with a todo link.
+# What each asked for is kept at /mock/inbox_actions.
+INBOX_ACTIONS = []
+MERGED = {}
+
+
+def inbox_merge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge"))
+    ids = [t.get("id") for t in body.get("items") or []]
+    rows = [x for x in INBOX if x["id"] in ids and not x.get("done_at")]
+    if len(ids) < 2: return {"error": "请至少选两行再合并", "code": "bad_request"}, 400
+    if len(rows) < 2: return {"error": "没有可合并的内容", "code": "merge_none"}, 409
+    rows.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    top, rest = rows[0], rows[1:]
+    top["merged_from"] = [{"id": x["id"], "source": x["source"], "account_name": x.get("account_name"), "title": x.get("title")} for x in rest]
+    top["count"] = sum(x.get("count", 1) for x in rows)
+    MERGED[top["id"]] = rest
+    for x in rest: INBOX.remove(x)
+    _chain_add(top, "merged", "由 %d 行合并" % len(rows))
+    return {"item": dict({k: v for k, v in top.items() if k != "context"}, version=inbox_version(top)), "members": [x["id"] for x in rest], "undo": {"id": top["id"]}}, 200
+
+
+def inbox_unmerge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge/undo"))
+    top = next((x for x in INBOX if x["id"] == body.get("id")), None)
+    if top is None or top["id"] not in MERGED: return {"error": "没有可拆开的合并", "code": "bad_request"}, 400
+    rest = MERGED.pop(top["id"])
+    INBOX.extend(rest)
+    top.pop("merged_from", None)
+    top["count"] = max(1, top.get("count", 1) - sum(x.get("count", 1) for x in rest))
+    return {"changed": [top] + rest}, 200
+
+
+def inbox_todo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo"))
+    out = {"changed": [], "unchanged": [], "skipped": [], "failed": [], "todos": [], "undo": {"items": []}}
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is None: out["skipped"].append({"id": t.get("id"), "reason": "missing"}); continue
+        if x.get("done_at"): out["unchanged"].append(x["id"]); continue
+        if t.get("version") and t["version"] != inbox_version(x): out["skipped"].append({"id": x["id"], "reason": "changed"}); continue
+        todo_id = "todo-%s-%d" % (x["id"], len(INBOX_ACTIONS))
+        x["done_at"], x["done_by"] = ago(minutes=0), "todo"
+        _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": todo_id})
+        out["changed"].append(dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)))
+        out["todos"].append({"item": {"id": x["id"]}, "todo": {"id": todo_id, "title": t.get("title") or x.get("title")}})
+        out["undo"]["items"].append({"id": x["id"], "todo_id": todo_id})
+    return out, 200
+
+
+def inbox_todo_undo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo/undo"))
+    changed = []
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is not None and x.get("done_by") == "todo":
+            x.pop("done_at", None), x.pop("done_by", None)
+            changed.append(x)
+    return {"changed": changed}, 200
 
 
 def _chain_add(x, kind, text, **more):
@@ -12339,6 +12447,10 @@ def inbox_suggestion(iid, body):
         elif s["kind"] == "agent":
             _chain_add(x, "agent", "开了子会话：" + text[:40], link={"type": "session", "machine_id": "m1", "session_id": "s-mock-agent"})
             h.update(state="agent", since=ago()); x["status"] = "working"
+        elif s["kind"] == "todo":  # Add to to-dos (#6480): the row is filed with a link to the to-do
+            INBOX_ACTIONS.append({"route": "suggestion", "text": body.get("text"), "due": body.get("due")})
+            _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": "todo-" + x["id"]})
+            x["done_at"], x["done_by"] = ago(), "todo"
         else:  # a conclusion: Got it files it (the chain says so)
             _chain_add(x, "done", "你标了已处理")
             x["done_at"], x["done_by"] = ago(), "user"
@@ -15413,8 +15525,8 @@ def mock_peer_fold():
 # Also with MOCK_PEER_FOLD=1 (or =live: its session pushed again every 1.5 s): work lines right under a long message from
 # another session, folded to a few lines with Expand (#6645: the folded words still took the long presses below the
 # card, so a long press on the answer under it lifted the card). A working Agent chat: the exchange reported (a tool
-# and a reply in its work line, 37 minutes long, a 2 KB answer); one with tools only; one with a reply only; then the
-# running one, its last tool still going. Synthetic text.
+# and a reply in its work line, then a long answer); one with tools only; one with a reply only; then the running one,
+# its last tool still going. Synthetic text.
 PEER_FOLD = "a1f3c2d4-0000-4000-8000-000000006645"
 PEER_REPORT = ("合并队列的进展：\n"
                "- 发布分支已经合上最新的主干，只有一个说明文件冲突，已经解决，不用变基。\n"
@@ -15424,19 +15536,19 @@ PEER_REPORT = ("合并队列的进展：\n"
                "- 截图在 PR 里，深浅色各一套。\n"
                "- 下一步：等界面测试跑完再报一次。\n"
                "最后一行在这里。")
-# The reported exchange as the real one was shaped: a message from another session in English, folded to three lines;
-# a reply and the turn's end; 37 minutes later a background agent's result woke the agent (a wake tool_result, its call
-# on an earlier page), it sent a message, and a long answer came (about 2 KB, drawn in several rows).
-PEER_EN_REPORT = ("Got feature-split 1a2b3c4d. It merges onto the new main with only a .lane/REPORT.md conflict, so no "
-                  "rebase is needed. Whether it ships in the next patch release is up to you and the lead; I queued it "
-                  "behind the two open fixes. The popup count in PopupTests is now 62, all passing; two UI tests are "
-                  "still running and I will report again when they finish. Screenshots for light and dark are in the PR.")
+# The reported exchange, built to the shape of a real one: a message from another session in English, folded to three
+# lines; a reply and the turn's end; later a background agent's result woke the agent (a wake tool_result, its call on
+# an earlier page), it sent a message, and a long answer came, drawn in several rows.
+PEER_EN_REPORT = ("Got feature-split 1a2b3c4d. The branch applies cleanly on top of today's main; the only clash was one "
+                  "line in the changelog, fixed by hand. Whether it goes into the next patch release is for you and the "
+                  "lead to decide; it waits behind the two open fixes. All 62 popup unit tests pass; two UI tests are "
+                  "still running and I will report again when they finish. Light and dark screenshots are in the PR.")
 PEER_LONG_ANSWER = ("已经回复 release-worker，等它的界面测试结果。构建脚本的新版本也做完了，在 `core` 的 `build-split` 分支上，"
-                    "提交 `5e6f7a8b`，没有推送或合并；分支已经交给 release-worker 排进合并队列。\n\n"
+                    "提交 `5e6f7a8b`，还只在本机；分支已经交给 release-worker，由它安排什么时候合。\n\n"
                     "**做了什么**\n"
                     "- **拆分**：`release.sh` 现在分成构建和上传两步，上传失败只重试上传，不再从头构建；两步之间的产物放在 `dist/`，带校验和。\n"
                     "- **结果**：原来一次失败要重跑 12 分钟，现在重试上传只要 40 秒；三次模拟的上传失败都在第二次重试时成功。\n"
-                    "- **没改 core 以外的文件**：守护进程和配置都不用改，旧的一步式命令还能用，会打印一行提示换成新命令。\n\n"
+                    "- **只动了构建脚本**：守护进程和配置都不用改，旧的一步式命令还能用，会打印一行提示换成新命令。\n\n"
                     "**验证**\n"
                     "- 离线：`go build` 和 `go vet` 干净，`go test ./...` 全过（含新加的 9 个用例）。\n"
                     "- 本机：完整走了一遍构建、上传、校验，产物和旧脚本逐字节一致。\n"
@@ -15458,7 +15570,7 @@ def mock_peer_fold_work():
              *tool("Edit", {"file_path": "/Users/me/code/shop-app/scripts/release.sh", "old_string": "build && upload",
                             "new_string": "build\nupload"}, "ok", 69),
              it("assistant", "text", 68, text="拆好了：构建和上传现在是两步，上传失败只重试上传。")]
-    # The case reported, shaped as it was (see PEER_EN_REPORT): its work line reads "Tools 1 · Replies 1 · 37 min".
+    # The case reported (see PEER_EN_REPORT): its work line reads "Tools 1 · Replies 1 · …".
     items += [it("user", "text", 62, text=PEER_EN_REPORT, **{"from": "release-worker"}),
               it("assistant", "text", 61.9, text="先回它一句，说收到了；构建脚本那边还在后台跑，跑完再一起报。"),
               it("system", "turn_duration", 61.9, turn_duration={"duration_ms": 7000}),
@@ -15487,7 +15599,7 @@ def mock_peer_fold_work():
     ITEMS[PEER_FOLD] = items
     SESSIONS.append(sess("macbook", PEER_FOLD, "发布脚本拆分", "/Users/me/code/shop-app", "working", "working", "shop-app", 22,
                          "peers", 1, 0, "还差两条，接着跑。",
-                         background=[{"id": "bkload", "kind": "shell", "description": "压测第 1 轮", "command": "npm run load -- round1",
+                         background=[{"id": "bkload", "kind": "shell", "description": "跑一轮负载测试", "command": "npm run load -- round1",
                                       "output_file": "/tmp/claude/bkload.output", "started_at": ago(minutes=40)}]))
 
 
@@ -18633,18 +18745,20 @@ _PLAIN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
 _PLAIN_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?")
 _PLAIN_LIST = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?")
 _PLAIN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<])")
-_PLAIN_INLINE = [
+_PLAIN_LINKS = [
     (re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\[[^\]\n]*\]"), r"\1"),
     (re.compile(r"<((?:https?|mailto):[^> \t\n]+)>"), r"\1"),
-    (re.compile(r"\*\*([^ \t\n*]|[^ \t\n*][^\n]*?[^ \t\n*])\*\*"), r"\1"),
+]
+_PLAIN_EMPHASIS = [
     (re.compile(r"(^|[^0-9A-Za-z_])__([^ \t\n_]|[^ \t\n_][^\n]*?[^ \t\n_])__($|[^0-9A-Za-z_])"), r"\1\2\3"),
     (re.compile(r"~~([^~\n]+?)~~"), r"\1"),
     (re.compile(r"\*([^ \t\n*]|[^ \t\n*][^*\n]*?[^ \t\n*])\*"), r"\1"),
     (re.compile(r"(^|[^0-9A-Za-z_])_([^ \t\n_]|[^ \t\n_][^_\n]*?[^ \t\n_])_($|[^0-9A-Za-z_])"), r"\1\2\3"),
 ]
 _PLAIN_ESCAPED = 0xE000
+_PLAIN_CODE = 0xF0000  # a line's i-th code span while the markup around it goes (searchCode, #7195)
 
 
 def search_plain(md):
@@ -18702,29 +18816,85 @@ def search_code_span(s):
 
 
 def search_marks(s):
-    for r, w in _PLAIN_INLINE:
+    for r, w in _PLAIN_LINKS:
+        s = r.sub(w, s)
+    s = search_strong(s)
+    for r, w in _PLAIN_EMPHASIS:
         s = r.sub(w, s)
         if w.endswith("\\3"):
             s = r.sub(w, s)
     return s
 
 
+def _plain_space(c):
+    return c in " \t"
+
+
+def _plain_operand(c):
+    return c.isascii() and c.isalnum()
+
+
+def search_strong(s):
+    """A line without `**` (searchStrong, #7195): a run not after a space closes the nearest open one, one not before a
+    space opens; a pair loses two stars on its inner side each; a run left alone goes, unless it reads as `2 ** 3` or
+    `a**b`."""
+    if "**" not in s:
+        return s
+    runs, i = [], 0  # [at, end, cut_from, cut_to, paired]
+    while i < len(s):
+        if s[i] != "*":
+            i += 1
+            continue
+        j = i
+        while j < len(s) and s[j] == "*":
+            j += 1
+        if j - i >= 2:
+            runs.append([i, j, i, j, False])
+        i = j
+    opened = []
+    for k, r in enumerate(runs):
+        before = r[0] > 0 and not _plain_space(s[r[0] - 1])
+        after = r[1] < len(s) and not _plain_space(s[r[1]])
+        if before and opened:
+            o = runs[opened.pop()]
+            o[2], o[3], o[4] = o[1] - 2, o[1], True
+            r[2], r[3], r[4] = r[0], r[0] + 2, True
+            continue
+        if after:
+            opened.append(k)
+    out, frm = [], 0
+    for at, end, cut_from, cut_to, paired in runs:
+        if not paired and at > 0 and end < len(s) and (
+                _plain_space(s[at - 1]) and _plain_space(s[end]) or _plain_operand(s[at - 1]) and _plain_operand(s[end])):
+            continue  # an expression: it stays
+        out.append(s[frm:cut_from])
+        frm = cut_to
+    out.append(s[frm:])
+    return "".join(out)
+
+
 def search_inline(line):
     line = _PLAIN_ESCAPE.sub(lambda m: chr(_PLAIN_ESCAPED + ord(m.group(1))), line)
-    out = []
+    code, out = [], []
     while line:
         span = search_code_span(line)
         if not span:
-            out.append(search_marks(line))
+            out.append(line)
             break
         at, n, end = span
-        out.append(search_marks(line[:at]))
-        code = line[at + n:end]
-        if len(code) >= 2 and code[0] == " " and code[-1] == " " and code.strip(" "):
-            code = code[1:-1]
-        out.append(code)
+        out.append(line[:at])
+        c = line[at + n:end]
+        if len(c) >= 2 and c[0] == " " and c[-1] == " " and c.strip(" "):
+            c = c[1:-1]
+        out.append(chr(_PLAIN_CODE + len(code)))
+        code.append(c)
         line = line[end + n:]
-    return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in "".join(out))
+
+    def unescape(s):
+        return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in s)
+
+    return "".join(unescape(code[ord(c) - _PLAIN_CODE]) if 0 <= ord(c) - _PLAIN_CODE < len(code) else unescape(c)
+                   for c in search_marks("".join(out)))
 
 
 def search_fold(s):
@@ -19104,7 +19274,8 @@ def personal_rows():
             for i, (prov, title, hours, unread) in enumerate(rows)]
 def personal_listed(hidden):
     return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] in ("configured", "partial", "partial_setup") else []
-# MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
+# MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made
+# (MOCK_GIT_WRITE_FEATURE=0 keeps the repository but leaves `git_write` out of the hello: a client's Git tab as before, #7013). GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files;
 # git_stash_conflicted also leaves them unmerged in the status, as a stash apply that stopped on conflicts does);
 # ?reset=1 starts over; ?gone=1 puts the branch on an upstream deleted on the remote (#1884). The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
@@ -19174,7 +19345,8 @@ def git_pr(h, op, body):
 def git_write_status(root):
     w = GIT_W
     head = MOCK_COMMITS[0] if w["ahead"] <= 2 else dict(MOCK_COMMITS[0], hash="e" * 40, short="eeeeeee", subject=w.get("last", MOCK_COMMITS[0]["subject"]))
-    return {"is_repo": True, "root": root, "branch": w["branch"], "head": head, "upstream": w["upstream"], "ahead": w["ahead"],
+    # as the node: no "upstream" for a branch without one
+    return {"is_repo": True, "root": root, "branch": w["branch"], "head": head, **({"upstream": w["upstream"]} if w["upstream"] else {}), "ahead": w["ahead"],
             "behind": 0, "stashes": len(w["stashes"]), "commits": ([head] if head is not MOCK_COMMITS[0] else []) + MOCK_COMMITS[:29],
             "files": [dict(f) for f in w["files"]], **({"gone": True} if w["gone"] else {})}
 
@@ -20134,7 +20306,9 @@ def zrle_rect(px, W, x, y, w, h, z):
 # (else 403, as the node's not_signed_in). GET /mock/screen-video says what the phone sent (`start`s, report count) and
 # how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?pause=locked
 # sends `paused` with that reason (no frames and no heartbeats, as the helper), ?resume=1 sends `resumed` and starts over
-# with `hello`, `format` and the keyframe.
+# with `hello`, `format` and the keyframe. Once a second while frames go out it sends `timing` as the helper does: capture
+# 0 and encode 4.8 ms (made up: nothing is encoded here), the network as half the real round trip from a frame going out
+# to the phone's report on it.
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
                 "refuse": False}
 _SCREEN_VIDEO_FIXTURE = []
@@ -20177,7 +20351,7 @@ def screen_video_connect(h, mid):
     h.send_response(101, "Switching Protocols")
     h.send_header("Upgrade", "websocket"); h.send_header("Connection", "Upgrade")
     h.send_header("Sec-WebSocket-Accept", accept); h.end_headers(); h.wfile.flush()
-    st = {"open": True, "pause": None, "resume": False, "started": threading.Event()}
+    st = {"open": True, "pause": None, "resume": False, "started": threading.Event(), "sent": {}, "rtts": []}
     SCREEN_VIDEO["streams"].append(st)
     lock = threading.Lock()
 
@@ -20195,6 +20369,7 @@ def screen_video_connect(h, mid):
         hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
         if not st["started"].wait(10): st["open"] = False; return
         number, i, restart = 0, 0, True
+        second, count, size = time.monotonic(), 0, 0
         try:
             while st["open"]:
                 if st["pause"]:
@@ -20208,8 +20383,18 @@ def screen_video_connect(h, mid):
                 if restart: msg(*hello); msg(*fmt); i, restart = 0, False
                 body = frames[i][1]
                 number += 1
+                st["sent"][number] = time.monotonic()
+                st["sent"].pop(number - 256, None)
                 msg(3, struct.pack(">IQ", number, int(time.monotonic() * 1e6)) + body[12:])
+                count, size = count + 1, size + len(body)
                 i = (i + 1) % len(frames)
+                if time.monotonic() - second >= 1:
+                    took, rtts = time.monotonic() - second, sorted(st["rtts"])
+                    st["rtts"] = []
+                    network = round(rtts[len(rtts) // 2] / 2 * 1000, 1) if rtts else None
+                    msg(7, json.dumps({"capture_ms": 0.0, "encode_ms": 4.8, "network_ms": network,
+                                       "kbps": round(size * 8 / 1000 / took), "fps": round(count / took)}).encode())
+                    second, count, size = time.monotonic(), 0, 0
                 time.sleep(1 / 30)
         except OSError:
             pass
@@ -20239,6 +20424,8 @@ def screen_video_connect(h, mid):
                     st["started"].set()
                 elif t == 17:
                     SCREEN_VIDEO["reports"] += 1
+                    sent = st["sent"].pop(struct.unpack(">I", body[:4])[0], None) if len(body) >= 4 else None
+                    if sent is not None: st["rtts"].append(time.monotonic() - sent)
     except OSError:
         pass
     st["open"] = False
@@ -24009,11 +24196,12 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
+            TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
             # MOCK_RULE_SUGGESTIONS: every suggestion is offered again, and what Always made is gone (web/e2e/rule-suggestions.mjs)
-            RULE_SUGGESTIONS_ANSWERED.clear(); del RULE_GRANTS[:]; RULE_GRANTS_REVISION[0] = 1
+            RULE_SUGGESTIONS_ANSWERED.clear(); RULE_GRANTS[:] = standing_seed(); RULE_GRANTS_REVISION[0] = 1
             if MOCK_TASKS and RULE_TRUST_ADDED:
                 TASK_TRUST[:] = [k for k in TASK_TRUST if k["key"] not in RULE_TRUST_ADDED]
                 RULE_TRUST_ADDED.clear()
@@ -24134,6 +24322,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/kb_updates": return self.send_json({"updates": KB_UPDATES})
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
+        if p == "/mock/inbox_actions": return self.send_json({"requests": INBOX_ACTIONS})
         if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
             PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"fail": PREFS_FAIL[0]})
@@ -25708,6 +25897,14 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "inbox"})
                 except Exception: pass
             return self.send_json(res)
+        if p in ("/api/v1/inbox/merge", "/api/v1/inbox/merge/undo", "/api/v1/inbox/todo", "/api/v1/inbox/todo/undo") and self.command == "POST":
+            body = json.loads(self.last_body or b"{}")
+            res, code = {"/api/v1/inbox/merge": inbox_merge, "/api/v1/inbox/merge/undo": inbox_unmerge, "/api/v1/inbox/todo": inbox_todo,
+                         "/api/v1/inbox/todo/undo": inbox_todo_undo}[p](body)
+            for send, _ in list(LIVE):
+                try: send({"type": "inbox"})
+                except Exception: pass
+            return self.send_json(res, code)
         if p == "/api/v1/inbox/mutes" and self.command == "POST":
             body = json.loads(self.last_body or b"{}")
             other = other_manager(self)
@@ -27042,6 +27239,8 @@ MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feat
 MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 MOCK_HELP.append("MOCK_RULE_SUGGESTIONS=1  A standing rule suggested after the same answer three times (#5802): on the PR check's decision "
                  "(with MOCK_TODO_ASKS=1), on the network tests' question card and, with MOCK_TASKS=1, on the open plan; Always and Not now answer it")
+MOCK_HELP.append("MOCK_STANDING_AUTHORIZATIONS=1  Two synthetic standing authorizations to list and revoke (#7002); "
+                 "=forbidden answers 403 (no full access), =fail makes every revoke fail (503)")
 MOCK_HELP.append("MOCK_ASK_HELD=1  With MOCK_TODO_ASKS=1: the PR check's decision is held for the next briefing (for_briefing, #5803)")
 MOCK_HELP.append("MOCK_BRIEF_SETUP=1  With MOCK_TASKS=1: the morning briefing carries the week's recommended setup lines (#5804)")
 MOCK_HELP.append("MOCK_SUPERVISE_LISTED=1  The model catalog lists assistant.supervise itself and every built-in purpose has a description (#5806)")
