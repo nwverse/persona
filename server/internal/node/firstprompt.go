@@ -140,6 +140,10 @@ func (n *Node) firstAfterDialog(pane, id, prompt string, since time.Time, wait, 
 			continue
 		}
 		why := n.typeFirstAfterDialog(pane, id, prompt)
+		if why == "" {
+			// Under the lock: a send waiting for it must not put the handoff in front again (engine_switch.go).
+			n.dropHandoffCarried(id, since)
+		}
 		unlock()
 		if why == errDialogBack {
 			continue // another dialog came up first: wait for it too
