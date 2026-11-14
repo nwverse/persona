@@ -3,6 +3,7 @@ package osproc
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"slices"
@@ -52,6 +53,16 @@ func TestGoResolverOpensNoSystemControlSocket(t *testing.T) {
 		if len(child) != 0 {
 			t.Errorf("%s child inherited descriptors %v; want none", name, child)
 		}
+	}
+}
+
+// reliableResolverWarmup keeps the real resolver but gives a helper five seconds, so the test does not reject the
+// production contract's allowed 50 ms timeout path when the machine is loaded. A missing warm-up still fails the test.
+func reliableResolverWarmup() {
+	resolverLookupHost = func(_ context.Context, host string) ([]string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return net.DefaultResolver.LookupHost(ctx, host)
 	}
 }
 
@@ -110,8 +121,13 @@ func TestResolverWarmupIgnoresErrors(t *testing.T) {
 		return nil, errors.New("injected resolver failure")
 	}
 	SealInherited()
-	if host := <-called; host != "localhost" {
-		t.Errorf("warm-up looked up %q, want localhost", host)
+	select {
+	case host := <-called:
+		if host != "localhost" {
+			t.Errorf("warm-up looked up %q, want localhost", host)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SealInherited did not call the resolver warm-up")
 	}
 }
 

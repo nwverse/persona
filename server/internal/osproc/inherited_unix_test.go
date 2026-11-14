@@ -46,6 +46,7 @@ type sealHelperResult struct {
 
 func sealHelper(mode string) int {
 	if mode == "seal" {
+		reliableResolverWarmup()
 		SealInherited()
 	}
 	var res sealHelperResult

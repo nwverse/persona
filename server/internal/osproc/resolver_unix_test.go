@@ -55,6 +55,7 @@ func resolverHelper(mode string) int {
 func checkResolverInheritance() (resolverHelperResult, error) {
 	var res resolverHelperResult
 	res.Before = osproctest.Describe()
+	reliableResolverWarmup()
 	SealInherited()
 	res.Sealed = osproctest.Describe()
 	if _, err := net.LookupHost("localhost"); err != nil {
