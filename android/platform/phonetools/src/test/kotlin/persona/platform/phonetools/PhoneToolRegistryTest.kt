@@ -33,7 +33,7 @@ class PhoneToolRegistryTest {
         var executions = 0
         val registry = PhoneToolRegistry({ sources }, { online }, { foreground }, { _, _ -> permission },
             { error("Reads must not ask for confirmation") }, { _, _ -> executions++; PhoneToolResult.text("ok") })
-        assertEquals(12, registry.enabledSpecs().size)
+        assertEquals(16, registry.enabledSpecs().size)
         assertFalse(registry.all.any { it.name.startsWith("phone_reminders_") || it.name == "phone_health_write_sample" })
         assertTrue(registry.all.any { it.name == "phone_health_summary" })
         assertTrue(registry.all.all { it.inputSchema["type"]?.jsonPrimitive?.content == "object" })
@@ -381,5 +381,120 @@ class PhoneToolRegistryTest {
         val replay = registry.call(call)
         assertTrue(replay.isError)
         assertEquals(text(leaderResult), text(replay))
+    }
+
+    // MARK: confirmation preparation (before → after cards read the target in the suspend path, before confirm)
+
+    private val updateArgs = buildJsonObject { put("id", "5"); put("company", "Beta") }
+
+    private fun preparedRegistry(
+        events: MutableList<String>,
+        permitted: () -> Boolean = { true },
+        decision: () -> PhoneConfirmation = { PhoneConfirmation.Allowed },
+        prepare: suspend (String, JsonObject) -> PhonePreparedConfirmation,
+    ) = PhoneToolRegistry({ PhoneSource.entries.toSet() }, { true }, { true }, { _, _ -> permitted() },
+        { events += "confirm"; decision() },
+        { name, _ -> events += "plain:$name"; PhoneToolResult.text("plain") }, prepare)
+
+    private fun prepared(events: MutableList<String>, result: suspend () -> PhoneToolResult = { PhoneToolResult.text("done") }) =
+        PhonePreparedConfirmation({ "card" }) { events += "execute"; result() }
+
+    @Test fun thePreparedCardIsReadBeforeConfirmAndTheWriteRunsFromThePreparedSnapshot() = runTest {
+        val events = mutableListOf<String>()
+        val registry = preparedRegistry(events) { _, _ -> events += "prepare"; prepared(events) }
+        val result = registry.call(PhoneToolCall("one", "phone_contacts_update", updateArgs))
+        assertFalse(result.isError)
+        // The ordinary execute is never used for a prepared write: the snapshot travels with the prepared value.
+        assertEquals(listOf("prepare", "confirm", "execute"), events)
+    }
+
+    @Test fun whilePreparationSuspendsReadsAndAnotherWriteStillComplete() = runTest {
+        val events = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        val registry = preparedRegistry(events) { _, _ -> release.await(); prepared(events) }
+        val update = async { registry.call(PhoneToolCall("slow", "phone_contacts_update", updateArgs)) }
+        runCurrent()
+        assertFalse(update.isCompleted)
+        assertFalse(registry.call(PhoneToolCall("read", "phone_device_info", buildJsonObject {})).isError)
+        val create = registry.call(PhoneToolCall("other", "phone_calendar_create_event", buildJsonObject {
+            put("title", "x"); put("start", "2026-11-01T10:00:00+08:00"); put("end", "2026-11-01T11:00:00+08:00")
+        }))
+        assertFalse(create.isError)
+        assertFalse(update.isCompleted)
+        release.complete(Unit)
+        assertFalse(update.await().isError)
+        assertEquals(listOf("plain:phone_device_info", "confirm", "plain:phone_calendar_create_event", "confirm", "execute"), events)
+    }
+
+    @Test fun aRepeatedCallIdPreparesAndExecutesOnce() = runTest {
+        val events = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        val registry = preparedRegistry(events) { _, _ -> events += "prepare"; release.await(); prepared(events) }
+        val call = PhoneToolCall("same", "phone_contacts_update", updateArgs)
+        val leader = async { registry.call(call) }
+        runCurrent()
+        val follower = async { registry.call(call) }
+        runCurrent()
+        release.complete(Unit)
+        assertFalse(leader.await().isError)
+        assertFalse(follower.await().isError)
+        assertFalse(registry.call(call).isError)
+        assertEquals(listOf("prepare", "confirm", "execute"), events)
+    }
+
+    @Test fun aFailedPreparationNeverShowsACardOrWrites() = runTest {
+        val events = mutableListOf<String>()
+        val registry = preparedRegistry(events) { _, _ ->
+            events += "prepare"
+            throw PhoneToolFailure(PhoneToolFailure.Kind.InvalidArgument, "no contact with id \"5\"")
+        }
+        val result = registry.call(PhoneToolCall("bad", "phone_contacts_update", updateArgs))
+        assertTrue(result.isError)
+        assertTrue(text(result), text(result).contains("no contact with id"))
+        assertEquals(listOf("prepare"), events)
+    }
+
+    @Test fun denyDismissAndARevokedPermissionNeverExecuteThePreparedWrite() = runTest {
+        for (decision in listOf(PhoneConfirmation.Denied, PhoneConfirmation.Dismissed, PhoneConfirmation.Withdrawn, PhoneConfirmation.NotShown)) {
+            val events = mutableListOf<String>()
+            val registry = preparedRegistry(events, decision = { decision }) { _, _ -> prepared(events) }
+            assertTrue(registry.call(PhoneToolCall("no-$decision", "phone_contacts_update", updateArgs)).isError)
+            assertFalse(events.toString(), "execute" in events)
+        }
+        // Allow, but the permission was taken back while the card was open.
+        val events = mutableListOf<String>()
+        var granted = true
+        val registry = preparedRegistry(events, permitted = { granted }, decision = { granted = false; PhoneConfirmation.Allowed }) { _, _ -> prepared(events) }
+        val result = registry.call(PhoneToolCall("revoked", "phone_contacts_update", updateArgs))
+        assertTrue(result.isError)
+        assertTrue(text(result).startsWith("没有权限"))
+        assertFalse("execute" in events)
+    }
+
+    @Test fun aStaleSnapshotIsARefusalButAnUnclearBatchIsUncertainAndNeverRetried() = runTest {
+        val stale = preparedRegistry(mutableListOf()) { _, _ ->
+            PhonePreparedConfirmation({ "card" }) { throw PhoneToolWriteRefusal("changed after the card; nothing was written") }
+        }
+        val refused = stale.call(PhoneToolCall("stale", "phone_contacts_update", updateArgs))
+        assertTrue(refused.isError)
+        assertEquals("changed after the card; nothing was written", text(refused))
+
+        var executions = 0
+        val unclear = preparedRegistry(mutableListOf()) { _, _ ->
+            PhonePreparedConfirmation({ "card" }) { executions++; throw IllegalStateException("provider died") }
+        }
+        val call = PhoneToolCall("unclear", "phone_contacts_update", updateArgs)
+        val first = unclear.call(call)
+        assertEquals(text(PhoneToolText.uncertain()), text(first))
+        assertEquals(text(first), text(unclear.call(call)))
+        assertEquals(1, executions)
+    }
+
+    @Test fun aPreparedWriteThatNeverAnswersIsUncertainAfterTheLocalTimeout() = runTest {
+        val registry = preparedRegistry(mutableListOf()) { _, _ ->
+            PhonePreparedConfirmation({ "card" }) { kotlinx.coroutines.delay(60_000); PhoneToolResult.text("late") }
+        }
+        val result = registry.call(PhoneToolCall("hang", "phone_calendar_delete_event", buildJsonObject { put("id", "1") }))
+        assertEquals(text(PhoneToolText.uncertain()), text(result))
     }
 }

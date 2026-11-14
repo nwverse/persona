@@ -51,7 +51,14 @@ class PhoneToolCatalogTest {
     }
 
     @Test fun onlyWritesAskFirstAndForegroundToolsAreTheOnesAndroidRestricts() {
-        assertEquals(listOf("phone_calendar_create_event"), PhoneToolCatalog.all.filter { it.confirmation != null }.map { it.spec.name })
+        assertEquals(PhoneToolCatalog.confirmedWriteNames, PhoneToolCatalog.all
+            .filter { it.confirmation != null || it.confirmationNeedsPreparation }.map { it.spec.name }.toSet())
+        assertEquals(setOf("phone_calendar_create_event", "phone_calendar_update_event", "phone_calendar_delete_event",
+            "phone_contacts_create", "phone_contacts_update"), PhoneToolCatalog.confirmedWriteNames)
+        // Updates and deletes show before → after, so their card is prepared in the suspend path; the others stay pure.
+        assertEquals(setOf("phone_calendar_update_event", "phone_calendar_delete_event", "phone_contacts_update"),
+            PhoneToolCatalog.all.filter { it.confirmationNeedsPreparation }.map { it.spec.name }.toSet())
+        assertTrue(PhoneToolCatalog.all.filter { it.confirmationNeedsPreparation }.all { it.confirmation == null })
         assertEquals(setOf("phone_location_current", "phone_clipboard_get", "phone_clipboard_set"),
             PhoneToolCatalog.all.filter { it.foregroundOnly }.map { it.spec.name }.toSet())
         assertEquals(listOf("phone_photos_recent", "phone_photo_get"),
