@@ -111,6 +111,9 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 	fail := func(err error) {
 		if !swapped {
 			update.ClearDevelopmentAdoption(u.dir, adoption)
+		}
+		recoveryRetained := swapped || u.adoptionUnresolved()
+		if !recoveryRetained {
 			u.removeDownloads(staged)
 		}
 		u.mu.Lock()
@@ -121,7 +124,7 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		}
 		u.mu.Unlock()
 		why := i18n.Localize(err, u.h.userLang())
-		if swapped {
+		if recoveryRetained {
 			why += "; " + su(u.h.userLang(), "err_development_recovery")
 		}
 		u.set("failed", "", why)
@@ -263,6 +266,16 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 			return
 		}
 		adoption = p
+		for _, name := range update.ProgramNames {
+			if _, ok := programs[name]; ok {
+				p.Programs = append(p.Programs, update.Swapped{Target: filepath.Join(filepath.Dir(target), name)})
+			}
+		}
+		p.Run = runAs(u.self, p.Programs)
+		if err := update.PrepareDevelopmentAdoption(u.dir, &p); err != nil {
+			fail(err) // no live program has been changed
+			return
+		}
 	}
 	restore := func() {
 		if err := update.RestoreAll(p); err == nil {
@@ -271,8 +284,19 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 			u.h.logf("update: restore failed, recovery retained: %v", err)
 		}
 	}
-	prev, err := update.Swap(target, bin)
+	var prev string
+	if r.Development != nil {
+		// From here on the durable journal owns all recovery material, even
+		// when a replacement fails partway through the transaction.
+		swapped = true
+		prev, err = p.Prev, update.InstallPrepared(target, bin)
+	} else {
+		prev, err = update.Swap(target, bin)
+	}
 	if err != nil {
+		if swapped {
+			restore()
+		}
 		fail(err)
 		return
 	}
@@ -280,8 +304,15 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 	p.Prev = prev
 	for _, name := range update.ProgramNames {
 		if pb, ok := programs[name]; ok {
-			sw, err := update.SwapProgram(filepath.Join(filepath.Dir(target), name), pb)
-			p.Programs = append(p.Programs, sw)
+			var err error
+			programTarget := filepath.Join(filepath.Dir(target), name)
+			if r.Development != nil {
+				err = update.InstallPrepared(programTarget, pb)
+			} else {
+				var sw update.Swapped
+				sw, err = update.SwapProgram(programTarget, pb)
+				p.Programs = append(p.Programs, sw)
+			}
 			if err != nil {
 				restore()
 				fail(fmt.Errorf("%s: %w", name, err))
@@ -310,7 +341,9 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		u.h.logf("update: handing over to %s", m.Version)
 		if err := u.handover(ctx, p.RunPath(), m.Build); err != nil {
 			restore()
-			_ = os.Remove(update.PendingPath(u.dir))
+			if !swapped {
+				_ = os.Remove(update.PendingPath(u.dir))
+			}
 			fail(i18n.Err("hub-selfupdate.err_no_start", i18n.Args{"error": err.Error()}))
 		}
 		return
@@ -323,7 +356,9 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 	time.Sleep(500 * time.Millisecond) // the apps get the restarting event before the socket goes
 	if err := u.exec(p.RunPath()); err != nil {
 		restore()
-		_ = os.Remove(update.PendingPath(u.dir))
+		if !swapped {
+			_ = os.Remove(update.PendingPath(u.dir))
+		}
 		fail(err)
 	}
 }
@@ -346,6 +381,13 @@ func (u *updater) removeDownloads(staged string) {
 // that went back through the watchdog or the edge (both start the old build, which never knew of it), one a stop
 // cut short, and those an older build left. Only <build>/ directories go; the markers and logs beside them stay.
 func (u *updater) pruneDownloads(keep int64) {
+	// A failed or interrupted adoption still owns its staged programs/Nodes.
+	// An unreadable journal has unknown effects, so leave all staging intact.
+	var adoption update.Pending
+	adopting, err := update.Load(update.DevelopmentAdoptionPath(u.dir), &adoption)
+	if err != nil || adopting && adoption.ToBuild <= 0 {
+		return
+	}
 	entries, err := os.ReadDir(u.dir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -355,7 +397,7 @@ func (u *updater) pruneDownloads(keep int64) {
 	}
 	for _, e := range entries {
 		build, err := strconv.ParseInt(e.Name(), 10, 64)
-		if !e.IsDir() || err != nil || build <= 0 || build == keep || strconv.FormatInt(build, 10) != e.Name() {
+		if !e.IsDir() || err != nil || build <= 0 || build == keep || adopting && build == adoption.ToBuild || strconv.FormatInt(build, 10) != e.Name() {
 			continue
 		}
 		u.removeDownloads(filepath.Join(u.dir, e.Name()))

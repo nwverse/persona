@@ -272,24 +272,7 @@ func pendingCommit(p update.Pending) string {
 // detachDevelopmentWeb makes the newly embedded Web authoritative. Keep a local
 // override with the same transaction so rollback restores the old UI too.
 func (u *updater) detachDevelopmentWeb(p *update.Pending) error {
-	web := filepath.Join(u.h.cfg.dir, "web")
-	if _, err := os.Lstat(web); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	previous := filepath.Join(u.dir, "development", fmt.Sprintf("web-previous-%d", p.ToBuild))
-	if err := os.MkdirAll(filepath.Dir(previous), 0700); err != nil {
-		return err
-	}
-	if _, err := os.Lstat(previous); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("previous Web recovery directory already exists")
-	}
-	if err := os.Rename(web, previous); err != nil {
-		return err
-	}
-	p.Web, p.WebPrev = web, previous
-	return nil
+	return update.DetachDevelopmentWeb(u.dir, filepath.Join(u.h.cfg.dir, "web"), p)
 }
 
 // Remove only the checkout built by this exact invocation, after the existing

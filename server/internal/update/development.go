@@ -51,8 +51,9 @@ type DevelopmentBackup struct {
 	Pruned   []string `json:"pruned"`
 }
 
-// An adoption fence survives an interruption between the first rename and the
-// complete pending journal. Unknown effects require inspection, never a replay.
+// The adoption fence reserves the attempt, then becomes a write-ahead recovery
+// journal before any live program is replaced. Incomplete older fences remain
+// fail-closed: their effects cannot be inferred safely.
 func DevelopmentAdoptionPath(dir string) string {
 	return filepath.Join(dir, "development", "adopting.json")
 }
@@ -74,6 +75,57 @@ func BeginDevelopmentAdoption(dir string, p Pending) error {
 		return err
 	}
 	syncDir(filepath.Dir(path))
+	return nil
+}
+
+// PrepareDevelopmentAdoption follows BeginDevelopmentAdoption and saves every
+// preimage before making the complete recovery record durable. Callers must use
+// InstallPrepared afterward: Swap would overwrite the saved preimages.
+func PrepareDevelopmentAdoption(dir string, p *Pending) error {
+	p.Prev = p.Target + ".prev"
+	if err := copyFile(p.Target, p.Prev); err != nil {
+		return err
+	}
+	for i := range p.Programs {
+		s := &p.Programs[i]
+		if _, err := os.Lstat(s.Target); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		s.Prev = s.Target + ".prev"
+		if err := copyFile(s.Target, s.Prev); err != nil {
+			return err
+		}
+	}
+	p.RecoveryReady = true
+	return Save(DevelopmentAdoptionPath(dir), p)
+}
+
+// InstallPrepared atomically replaces a program whose preimage is already in
+// the durable adoption journal. It never overwrites the saved preimage.
+func InstallPrepared(target, newBin string) error { return copyFile(newBin, target) }
+
+// DetachDevelopmentWeb journals the rename intent before moving the override.
+func DetachDevelopmentWeb(dir, web string, p *Pending) error {
+	if _, err := os.Lstat(web); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	previous := filepath.Join(dir, "development", fmt.Sprintf("web-previous-%d", p.ToBuild))
+	if _, err := os.Lstat(previous); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("previous Web recovery directory already exists")
+	}
+	p.Web, p.WebPrev = web, previous
+	if err := Save(DevelopmentAdoptionPath(dir), p); err != nil {
+		return err
+	}
+	if err := os.Rename(web, previous); err != nil {
+		return err
+	}
+	syncDir(filepath.Dir(web))
+	syncDir(filepath.Dir(previous))
 	return nil
 }
 
@@ -144,7 +196,9 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 	// Interrupt lets the helper resume writers on cancellation. A killed helper leaves
 	// its durable coordination marker; a later attempt fails closed.
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-	cmd.WaitDelay = 75 * time.Second
+	// Allow child-group escalation (6s) plus a fresh 60s resume deadline and
+	// its own escalation, with margin for journal syncing and process exit.
+	cmd.WaitDelay = 90 * time.Second
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("development %s failed; inspect update/development/%s.log on the Hub", operation, operation)
 	}

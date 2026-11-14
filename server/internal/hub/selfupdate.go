@@ -279,11 +279,40 @@ func (u *updater) boot() (pending bool) {
 	}
 	var p update.Pending
 	ok, err := update.Load(update.PendingPath(u.dir), &p)
-	if err != nil || !ok {
+	if err != nil {
+		return false
+	}
+	if !ok {
+		// The adoption journal is durable before the first replacement. A
+		// crash before pending.json must restore the whole transaction too.
+		ok, err = update.Load(update.DevelopmentAdoptionPath(u.dir), &p)
+		if err == nil && ok && p.RecoveryReady && p.Development != nil &&
+			(u.h.build.Number == p.FromBuild || u.h.build.Number == p.ToBuild) {
+			if u.h.build.Number == p.ToBuild {
+				u.rollback(p, su(u.h.userLang(), "reason_went_back"))
+				return true // exec normally does not return
+			}
+			if err := update.RestoreAll(p); err != nil {
+				u.h.logf("update: interrupted adoption recovery retained: %v", err)
+			} else {
+				u.markRolledBack(p, su(u.h.userLang(), "reason_went_back"))
+				update.ClearDevelopmentAdoption(u.dir, p)
+				if !u.adoptionUnresolved() {
+					u.removeDownloads(u.stagedDir(p.ToBuild))
+				}
+			}
+		}
 		return false
 	}
 	if p.ToBuild != u.h.build.Number {
 		if u.h.build.Number == p.FromBuild {
+			if p.Development != nil {
+				if err := update.RestoreAll(p); err != nil {
+					u.h.logf("update: restore failed, recovery retained: %v", err)
+					return false
+				}
+				update.ClearDevelopmentAdoption(u.dir, p)
+			}
 			u.markRolledBack(p, su(u.h.userLang(), "reason_went_back"))
 		} else {
 			_ = os.Remove(update.PendingPath(u.dir)) // replaced by a build deployed straight from master: not a failure
@@ -497,17 +526,19 @@ func (u *updater) offline(ids []string) []string {
 	return out
 }
 
-// rollback writes why, puts the old binary back and runs it. It returns only when that fails. The update's downloads
-// go first: the old binary comes from Prev, and nothing reads them after this.
+// rollback restores the complete transaction before recording success or
+// deleting recovery material. It returns only when restoring or exec fails.
 func (u *updater) rollback(p update.Pending, reason string) {
 	u.h.logf("update: going back to %s: %s", p.FromVersion, reason)
-	u.markRolledBack(p, reason)
-	u.removeDownloads(u.stagedDir(p.ToBuild))
 	if err := update.RestoreAll(p); err != nil {
 		u.h.logf("update: restore %s: %v", p.Prev, err)
 		return
 	}
+	u.markRolledBack(p, reason)
 	update.ClearDevelopmentAdoption(u.dir, p)
+	if !u.adoptionUnresolved() {
+		u.removeDownloads(u.stagedDir(p.ToBuild))
+	}
 	if err := u.exec(p.RunPath()); err != nil {
 		u.h.logf("update: run %s: %v", p.RunPath(), err)
 	}

@@ -102,6 +102,8 @@ type Pending struct {
 	Backup      *DevelopmentBackup    `json:"backup,omitempty"`
 	Web         string                `json:"web,omitempty"`
 	WebPrev     string                `json:"web_prev,omitempty"`
+	// RecoveryReady means every program preimage was saved before any live replacement.
+	RecoveryReady bool `json:"recovery_ready,omitempty"`
 	// Programs are the programs swapped with the hub (persona-hub and persona-manager): going back puts them back too.
 	Programs []Swapped `json:"programs,omitempty"`
 	// Run is the program the hub goes on as, when it is not Target: the persona-hub swapped with personad, for a hub
@@ -160,6 +162,9 @@ func RestoreAll(p Pending) error {
 		}
 		if s.Prev == "" {
 			err = os.Remove(s.Target)
+			if err == nil {
+				syncDir(filepath.Dir(s.Target))
+			}
 			if errors.Is(err, os.ErrNotExist) {
 				err = nil
 			}
@@ -171,8 +176,14 @@ func RestoreAll(p Pending) error {
 		}
 	}
 	if p.WebPrev != "" {
-		if _, err := os.Lstat(p.Web); errors.Is(err, os.ErrNotExist) {
+		_, prevErr := os.Lstat(p.WebPrev)
+		if _, err := os.Lstat(p.Web); err == nil && errors.Is(prevErr, os.ErrNotExist) && p.RecoveryReady {
+			// The intent was journaled but not renamed, or a previous recovery
+			// already restored it. Repeating recovery must preserve that Web.
+		} else if errors.Is(err, os.ErrNotExist) {
 			keep(os.Rename(p.WebPrev, p.Web))
+			syncDir(filepath.Dir(p.Web))
+			syncDir(filepath.Dir(p.WebPrev))
 		} else if err == nil {
 			keep(errors.New("web directory changed during update; previous Web retained"))
 		} else {

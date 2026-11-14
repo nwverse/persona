@@ -1,5 +1,20 @@
 # Lessons: hub / node and networking
 
+## Journal recovery before changing live update files (#6921)
+
+A fence saying an update started cannot restore a Web directory renamed before `pending.json`
+was saved. Save all program preimages first, then sync a complete recovery journal before
+replacing programs, and save the Web rename intent before moving it. Recovery must tolerate
+an intent whose rename never ran and a Web directory already restored by an earlier attempt.
+Restore first; only successful restoration permits deleting markers or staging. Startup pruning
+must honor retained recovery ownership too. Exercise abrupt process exits between the actual
+renames and pending publication, not only returned installation errors.
+
+Cancellation cleanup needs its own time budget: first signal the whole child group with SIGINT,
+escalate within bounded waits, and defer repeated cancellation while resuming paused writers.
+A failed resume keeps its coordination marker; successful resume does not make an interrupted
+snapshot publishable.
+
 ## An empty list sent as null means "no change" to an optional field (2026-11-14)
 
 The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.

@@ -6,11 +6,13 @@ import importlib.util
 import io
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -119,6 +121,96 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         hook = self.tool("writer-hook", "import pathlib,sys\np=pathlib.Path(sys.argv[1]);p.write_text((p.read_text() if p.exists() else '')+sys.argv[2]+'\\n')\n")
         return {"runtime": str(runtime), "hub_database":"effective-fixture-database", "executables":{"personad":str(binary)}, "candidate":{"commit":"a"*40}, "config":{"backup":{
             "quiesce":[hook,str(events),"pause"], "resume":[hook,str(events),"resume"]}}}
+
+    def wait_file(self, path, process):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if path.exists():
+                return
+            if process.poll() is not None:
+                self.fail("helper exited before " + path.name)
+            time.sleep(.01)
+        self.fail("timed out waiting for " + path.name)
+
+    def test_cancellation_resumes_writers_and_reaps_child_group(self):
+        for phase, cancel_signal in (("quiesce", signal.SIGINT), ("dump", signal.SIGTERM),
+                                     ("resume", signal.SIGINT), ("failed-resume", signal.SIGINT),
+                                     ("stubborn-dump", signal.SIGINT)):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                # Each cancellation gets an independent synthetic installation.
+                previous_root = self.root
+                self.root = Path(directory)
+                child_group = None
+                try:
+                    request = self.history_fixture()
+                    paused, entered, resumed, interrupted = [self.root / n for n in ("paused", "entered", "resumed", "interrupted")]
+                    blocker = self.tool("blocker", f'''import os, pathlib, signal, sys, time
+def interrupt(*_):
+    pathlib.Path({str(interrupted)!r}).write_text('SIGINT')
+    raise SystemExit(9)
+signal.signal(signal.SIGINT, interrupt)
+if {phase == 'stubborn-dump'!r}:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pathlib.Path({str(entered)!r}).write_text(str(os.getpid()))
+while True: time.sleep(.01)
+''')
+                    pause = self.tool("pause", f"import pathlib\npathlib.Path({str(paused)!r}).touch()\n")
+                    resume = self.tool("resume", f'''import pathlib, time
+if {phase == 'resume'!r}: pathlib.Path({str(entered)!r}).touch()
+time.sleep(.4)
+if {phase == 'failed-resume'!r}: raise SystemExit(7)
+pathlib.Path({str(paused)!r}).unlink(missing_ok=True)
+pathlib.Path({str(resumed)!r}).touch()
+''')
+                    request["config"]["backup"].update(quiesce=[pause], resume=[resume])
+                    if phase == "quiesce":
+                        request["config"]["backup"]["quiesce"] = [self.tool("pause-block", f"import pathlib,os\npathlib.Path({str(paused)!r}).touch()\nos.execv({blocker!r},[{blocker!r}])\n")]
+                    elif phase != "resume":
+                        self.tool("pg_dump", Path(blocker).read_text().split("\n", 1)[1])
+                    request.update(operation="backup", result=str(self.root/"result.json"))
+                    with subprocess.Popen([sys.executable, str(ROOT/"server/internal/update/webdev.py")],
+                                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                          text=True, start_new_session=True) as process:
+                        try:
+                            process.stdin.write(json.dumps(request))
+                            process.stdin.close()
+                            self.wait_file(entered, process)
+                            if phase != "resume":
+                                child_group = int(entered.read_text())
+                            process.send_signal(cancel_signal)
+                            if phase == "resume":
+                                time.sleep(.05)
+                                process.send_signal(signal.SIGTERM)
+                            self.assertNotEqual(process.wait(timeout=10), 0)
+                        finally:
+                            if process.poll() is None:
+                                process.kill()
+                            process.wait(timeout=3)
+                    store = Path(request["runtime"])/"update/development-backups"
+                    self.assertFalse((self.root/"result.json").exists())
+                    self.assertTrue(any(store.glob(".incomplete-*")))
+                    if phase == "failed-resume":
+                        self.assertTrue(paused.exists())
+                        self.assertTrue((store/"coordination-pending.json").exists())
+                    else:
+                        self.assertTrue(resumed.exists(), "cancellation interrupted resume")
+                        self.assertFalse(paused.exists())
+                        self.assertFalse((store/"coordination-pending.json").exists())
+                    if phase != "resume":
+                        if phase != "stubborn-dump":
+                            self.assertTrue(interrupted.exists(), "child did not get graceful SIGINT")
+                        with self.assertRaises(ProcessLookupError):
+                            os.killpg(int(entered.read_text()), 0)
+                    with self.assertRaisesRegex(ValueError, "coordination|incomplete"):
+                        webdev.snapshot(request)
+                finally:
+                    if child_group is not None:
+                        try:
+                            os.killpg(child_group, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    self.root = previous_root
 
     def test_three_verified_snapshots_and_failure_retention(self):
         request = self.history_fixture()

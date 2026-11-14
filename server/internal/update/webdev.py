@@ -4,6 +4,7 @@ Requests arrive on stdin; credentials and command output never go into the recei
 Run `python3 webdev.py verify BACKUP` to verify a retained recovery point offline.
 """
 import datetime
+import contextlib
 import fcntl
 import gzip
 import hashlib
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from urllib.parse import urlsplit, urlunsplit
 
 OWNER = "persona-web-development-backup-v1"
@@ -29,6 +31,28 @@ PLATFORMS = {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "wind
 HISTORY_LIMIT = 1024
 
 
+@contextlib.contextmanager
+def defer_cancellation():
+    # Cleanup and resume have their own bounded deadlines. A second cancellation
+    # must not interrupt them and leave a stopped writer or orphaned child.
+    pending = []
+    previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        for s in previous:
+            signal.signal(s, lambda *_: pending.append(True))
+        yield pending
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
+def interrupt(*_):
+    # The first signal unwinds into cleanup; later signals cannot abort it.
+    for s in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(s, signal.SIG_IGN)
+    raise InterruptedError()
+
+
 def run(argv, cwd=None, env=None, output=False, timeout=1800):
     # Do not echo argv: Git credentials, database URLs and hooks can be private.
     with subprocess.Popen(argv, cwd=cwd, env=env, start_new_session=True,
@@ -36,12 +60,28 @@ def run(argv, cwd=None, env=None, output=False, timeout=1800):
         try:
             stdout, _ = process.communicate(timeout=timeout)
         except BaseException:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.communicate()
+            with defer_cancellation():
+                # Signal the whole child group, first allowing hook cleanup.
+                # Timeout and cancellation share the same bounded escalation.
+                for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+                    deadline = time.monotonic() + 2
+                    try:
+                        os.killpg(process.pid, sig)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        if sig == signal.SIGKILL:
+                            raise
+                        continue
+                    # Reaping the leader does not mean its group is finished:
+                    # descendants may still be completing their signal hooks.
+                    try:
+                        os.killpg(process.pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(max(0, deadline - time.monotonic()))
             raise
         if process.returncode:
             raise subprocess.CalledProcessError(process.returncode, argv)
@@ -402,16 +442,19 @@ def snapshot(request):
             finally:
                 # Even partially failed quiesce hooks can have stopped a writer.
                 # A failed resume preserves its marker and blocks adoption/retry.
-                print("development backup: resuming writers", flush=True)
-                try:
-                    run(backup["resume"], timeout=60)
-                except BaseException as exc:
-                    print("development backup: resume failed: " + failure_detail(exc), file=sys.stderr, flush=True)
-                    if snapshot_error is not None:
-                        raise exc from snapshot_error
-                    raise
-                coordination.unlink()
-                sync_dir(store)
+                with defer_cancellation() as cancelled:
+                    print("development backup: resuming writers", flush=True)
+                    try:
+                        run(backup["resume"], timeout=60)
+                    except BaseException as exc:
+                        print("development backup: resume failed: " + failure_detail(exc), file=sys.stderr, flush=True)
+                        if snapshot_error is not None:
+                            raise exc from snapshot_error
+                        raise
+                    coordination.unlink()
+                    sync_dir(store)
+                if cancelled and snapshot_error is None:
+                    raise InterruptedError()
             for member in temporary.iterdir():
                 sync_dir(member)
             os.rename(temporary, published)
@@ -447,7 +490,8 @@ def main():
     request = json.load(sys.stdin)
     # No interactive credentials or indefinite network prompt in an updater.
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(InterruptedError()))
+    signal.signal(signal.SIGINT, interrupt)
+    signal.signal(signal.SIGTERM, interrupt)
     operation = request["operation"]
     result = {"resolve": resolve, "build": build, "backup": snapshot,
               "backups": backups, "prepare_backup": prepare_backup}[operation](request)

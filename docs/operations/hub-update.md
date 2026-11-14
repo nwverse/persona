@@ -183,9 +183,21 @@ recovery procedure; use the offline procedure only when data recovery is actuall
 
 `coordination-pending.json` means a pause/resume outcome needs inspection: run the original
 resume procedure and verify the writers before removing that exact marker. `.incomplete-*`
-directories remain for inspection. `update/development/adopting.json` fences an interrupted
-adoption, including the window before `pending.json` is complete; new attempts refuse to replay
-it. Inspect the installed binaries, `.prev`, Web recovery directory and backup, complete rollback
+directories remain for inspection. Normal cancellation signals the helper and its active child
+group with SIGINT, then escalates child termination within bounded waits. The resume hook gets
+its own 60-second deadline; additional SIGINT/SIGTERM signals are deferred until it finishes.
+A failed/timed-out resume or a force-killed helper retains its coordination evidence and blocks
+adoption. An interrupted snapshot is never published or rotated, even after successful resume.
+
+`update/development/adopting.json` reserves an attempt, then records every program preimage
+before replacement (`recovery_ready: true`). The Web rename intent is synced there before moving
+the override. Startup of the previous or attempted build restores this journal when `pending.json`
+is absent; recovery can repeat after a partial restore. Failed recovery retains the journal,
+pending marker when present, and independent staged programs/Node packages across startup cleanup.
+Only a complete restore permits cleanup. An incomplete reservation (including a crash while
+preparing preimages), unreadable journal or older fence remains blocked for manual inspection;
+no live replacement occurs before the new journal is ready. Inspect the installed binaries,
+`.prev`, Web recovery directory and backup, complete rollback
 or confirmation, and only then clear the matching fence. Regular confirmation/rollback clears
 its own matching fence. Never delete these records merely to make Retry available.
 

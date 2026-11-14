@@ -346,7 +346,7 @@ func TestDevelopmentHeldHistorySkipsUnbuiltBadAndUnresolvedCandidates(t *testing
 }
 
 func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
-	for _, failure := range []string{"", "automatic", "build", "backup", "adopt"} {
+	for _, failure := range []string{"", "automatic", "build", "backup", "adopt", "preimage", "partial", "restore"} {
 		t.Run(failure, func(t *testing.T) {
 			p := newPublisher(t, "unused", 202611021700)
 			h, _, target, execs := updatingHub(t, p, "release")
@@ -365,6 +365,16 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			web := filepath.Join(h.cfg.dir, "web")
 			os.MkdirAll(web, 0700)
 			os.WriteFile(filepath.Join(web, "index.html"), []byte("old web"), 0600)
+			program := filepath.Join(filepath.Dir(target), "persona-hub")
+			os.WriteFile(program, []byte("old companion"), 0700)
+			if failure == "preimage" {
+				os.Mkdir(program+".prev", 0700)
+			}
+			if failure == "partial" {
+				// A new program cannot be installed, after the hub and existing
+				// companion have already been replaced. Full restore must undo both.
+				os.Mkdir(filepath.Join(filepath.Dir(target), "persona-manager.new"), 0700)
+			}
 			var phases []string
 			u.devRun = func(ctx context.Context, c *update.DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
 				phases = append(phases, operation)
@@ -382,6 +392,9 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 					artifacts := t.TempDir()
 					script := []byte(fmt.Sprintf("#!/bin/sh\necho %s\necho 'channel release, build %d'\n", input["version"], input["build"]))
 					os.WriteFile(filepath.Join(artifacts, "personad-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
+					for _, name := range update.ProgramNames {
+						os.WriteFile(filepath.Join(artifacts, name+"-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
+					}
 					response = map[string]any{"artifacts": artifacts, "ancestors": []string{h.build.Commit, strings.Repeat("b", 40)}}
 				case "backup":
 					response = update.DevelopmentBackup{ID: "snapshot-fixture", Retained: 3, Pruned: []string{"snapshot-old-fixture"}}
@@ -391,6 +404,14 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			}
 			if failure == "adopt" {
 				u.handover = func(context.Context, string, int64) error { return errors.New("fixture standby failed") }
+			}
+			if failure == "restore" {
+				u.handover = func(context.Context, string, int64) error {
+					if err := os.Remove(target + ".prev"); err != nil {
+						return err
+					}
+					return errors.New("fixture preimage lost before standby failed")
+				}
 			}
 			if _, err := u.check(context.Background()); err != nil {
 				t.Fatal(err)
@@ -409,6 +430,33 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				}
 			}
 			u.install(context.Background(), automatic)
+			if failure == "restore" {
+				var pending update.Pending
+				if ok, err := update.Load(update.PendingPath(u.dir), &pending); !ok || err != nil {
+					t.Fatal("lost pending after failed restore", err)
+				}
+				if !u.adoptionUnresolved() || u.view().State != "failed" {
+					t.Fatal("lost recovery fence")
+				}
+				u.pruneDownloads(0)
+				if _, err := os.Stat(pending.Nodes); err != nil {
+					t.Fatal("lost staged Nodes", err)
+				}
+				if _, err := os.Stat(filepath.Join(u.stagedDir(pending.ToBuild), "programs")); err != nil {
+					t.Fatal("lost staged programs", err)
+				}
+				// Restore the unavailable preimage and simulate a fresh old-build
+				// startup. Web was already restored by the first attempt.
+				os.WriteFile(target+".prev", []byte("#!/bin/sh\necho old\n"), 0700)
+				if u.boot() || u.adoptionUnresolved() {
+					t.Fatal("recovery could not be retried")
+				}
+				data, _ := os.ReadFile(target)
+				if !strings.Contains(string(data), "echo old") {
+					t.Fatal("old hub not restored")
+				}
+				return
+			}
 			if failure != "" && !automatic {
 				if u.view().State != "failed" {
 					t.Fatalf("state %+v", u.view())
@@ -423,6 +471,12 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				}
 				if len(execs()) != 0 {
 					t.Fatal("restarted on failed preparation")
+				}
+				if data, _ := os.ReadFile(program); string(data) != "old companion" {
+					t.Fatal("old companion lost")
+				}
+				if u.adoptionUnresolved() {
+					t.Fatal("fully restored attempt kept an unresolved fence")
 				}
 				if failure == "build" && len(phases) != 2 {
 					t.Fatal("backup ran after failed build")

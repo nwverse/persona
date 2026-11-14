@@ -2,9 +2,31 @@ package update
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDevelopmentWebRecoveryPreservesConflictingOverride(t *testing.T) {
+	dir := t.TempDir()
+	p := Pending{RecoveryReady: true, Web: filepath.Join(dir, "web"), WebPrev: filepath.Join(dir, "previous")}
+	for _, path := range []string{p.Web, p.WebPrev} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "index.html"), []byte(path), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RestoreAll(p); err == nil {
+		t.Fatal("overwrote a changed override")
+	}
+	for _, path := range []string{p.Web, p.WebPrev} {
+		if got, err := os.ReadFile(filepath.Join(path, "index.html")); err != nil || string(got) != path {
+			t.Fatal("changed Web recovery contents", err)
+		}
+	}
+}
 
 func TestDevelopmentAdoptionFenceMatchesExactAttempt(t *testing.T) {
 	dir := t.TempDir()
