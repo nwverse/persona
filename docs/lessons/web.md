@@ -1,5 +1,20 @@
 # Lessons: web UI and interactions
 
+## A paging hub pushes no sessions: a computer's Agents are not in `sessions[mid]` (web audit items 3 and 30)
+
+A connection that asked for `sessions_list` gets no `sessions` / `sessions_delta` pushes (docs/protocol/protocol.md
+"Bounded Agents lists"), so the store's `sessions[mid]` stays empty and `sessionSummaries` holds only the list's first
+page. The Machines cards and a computer's page read `sessions[mid]` and said "No agents running" / "Agent 0" for every
+computer. Read a computer's Agents the way the Agents list does (`useFullAgentSessions`, folded, without the assistant's
+conversations), and keep the older hub's pushed path working (the same hook returns the store's rows there). A count
+whose source has not been read yet, or failed, is unknown, not zero: `useFullAgentSessions().loaded` / `error` and
+`useAgentListStatus()` tell the page to say "Loading…" or "Couldn't load …" instead. Take that status from the same
+source as the count: with several assistants Overview counts from the complete list, and a status read from the paged
+list said "loaded" while the complete list was still on its way or had failed (`useScopedAgentListStatus`). A count of
+the first pages (`sessionSummaries`) is not a computer's count either while the list has more pages. Check with
+`MOCK_SESSIONS_LIST=1` and without it, with the default roster (several assistants) and `MOCK_MANAGERS=1`, and with
+`GET /api/v1/sessions` answering 500 in the browser.
+
 ## A date field's change fires per typed segment; a list hidden under a narrow detail drops the focus (web audit, 2026-11-14)
 
 - `<input type="date">`, `time` and `datetime-local` fire `input` (React's `onChange`) whenever the typed segments make
@@ -398,7 +413,7 @@ A background wake can reopen an exchange before its recap. Find the live exchang
 
 ## Optional sidebar entries need both setup and list results (#2934)
 
-A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
+A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event that says the list changed (`session_ids: []`, which the hub sends when a source is added or removed, when its listing starts or stops failing, and for an extension's keyless `agentsrc.updated`) must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. An event naming sessions rereads only the sessions, and the status with them once it is a minute old (#7681): the status read asks every source's extension in turn, and a session's new message does not change it. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
 
 ## Report evidence is separate from report prose (#2554)
 
@@ -1300,3 +1315,12 @@ words come from the catalog's rest, which `main.tsx`'s own imports do not wait f
 - A push can be handed to the service worker without a push service: DevTools' `ServiceWorker.deliverPushMessage` with the registration id from `ServiceWorker.workerRegistrationUpdated` (`web/e2e/web-push.mjs`).
 - FCM now and then answers 410 for a subscription a fresh headless profile made moments before; subscribing again works. A live check retries once that way instead of failing.
 - Vite's dev server registers no service worker (`lib/pwa.ts`): anything that depends on it is checked against the built app under `vite preview`, which keeps the dev server's `/api` proxy.
+
+## An IntersectionObserver says nothing about a jump across its view (audit item 51)
+
+An observer reports a target only when it crosses a threshold. A mark that goes from below a scroller's view to above it
+in one frame (a long scroll, `scrollTop` set by script, a reveal) is "not intersecting" both times, so no entry comes and
+code that tells "above" from "below" by `boundingClientRect.top < rootBounds.top` keeps the old answer. When only "above
+the view" matters, open the view far below the scroller (`rootMargin: "0px 0px 1000000px 0px"`): a mark is then either
+in it or above it, and every change between the two is reported (`watchPin` in `web/src/views/SidebarSection.tsx`, the
+sidebar's pinned headings). Check such code with a jump, not only with a scroll a few pixels at a time.

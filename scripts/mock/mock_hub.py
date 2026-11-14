@@ -663,6 +663,7 @@ ASK1 = "b2e4d6f8-0000-4000-8000-000000000001"
 ASK2 = "b2e4d6f8-0000-4000-8000-000000000002"
 ASK3 = "b2e4d6f8-0000-4000-8000-000000000003"
 ASK4 = "b2e4d6f8-0000-4000-8000-000000000004"  # a long one (the top bar must not move as it scrolls)
+ASK5 = "b2e4d6f8-0000-4000-8000-000000000005"  # a completed turn with narration folded out of the newest page
 
 # MOCK_WORKFLOWS=1 (#2935, docs/protocol/protocol.md "workflows"): the widget agent's turn ended to wait for a workflow it runs in
 # the background (one earlier run was stopped). Each agent's transcript reads like a subagent's ("<session>@<agent>").
@@ -926,7 +927,7 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
                       workflows=_wf_runs)
 
 # MOCK_BG_WAITING=1 (#6045): two agents whose turns ended with background commands. One only waits (a loop on the PR's
-# checks): Waiting in the background, apart from Working. The other's background build works: Working, as before.
+# checks): Waiting in the background, apart from Working. The other's build gets the working background-task line (#7341).
 if os.environ.get("MOCK_BG_WAITING") == "1":
     for _s in SESSIONS:
         if _s["session_id"] == BLOG:
@@ -936,7 +937,7 @@ if os.environ.get("MOCK_BG_WAITING") == "1":
                                    "command": "until gh pr checks 7 --watch; do sleep 60; done", "started_at": ago(minutes=9)}])
         if _s["session_id"] == RELEASE:
             _s.update(status="done", state="working", state_since=ago(minutes=4), seen_at=None, background_working=True,
-                      last_text="在后台打包发布产物，完了我核对一下。",
+                      last_text="发布说明整理好了，后台打包结束后我再核对产物。",
                       background=[{"id": "bb1d5te2k", "kind": "shell", "description": "打包发布产物", "command": "make release",
                                    "started_at": ago(minutes=4)}])
 
@@ -2917,6 +2918,32 @@ _TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
 if _TODO_LIST:
     TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 
+# MOCK_TODO_CONCERNS=1 (#3582): one concern working, one waiting for its report in Other open, and one closed by its
+# report, for the To-dos list's light / dark captures. "only" keeps just these to-dos so the working one is within
+# Home's six cards, and links it to its Agent's space for the Space page capture. The dedicated agent keeps the rest of
+# the fixture unchanged.
+if os.environ.get("MOCK_TODO_CONCERNS") in ("1", "only"):
+    _concern_sid = "c3d5e7f9-0000-4000-8000-358200000001"
+    SESSIONS.append(sess("macbook", _concern_sid, "Compare backup schedules", "/Users/me/code/persona", "working",
+                         "working", "persona", 7, "1", 1, 4, "Comparing nightly and weekly backup schedules."))
+    _concern_todos = [
+        {"id": "todo_concern_working", "title": "Which backup schedule should we use?", "kind": "concern", "notes": "",
+         "done_at": None, "created_at": ago(hours=2), "updated_at": ago(minutes=4), "origin": "conv_demo", "spaces": [],
+         "agents": [{"machine_id": "macbook", "session_id": _concern_sid, "linked_at": ago(minutes=30), "released_at": None,
+                     "title": "Compare backup schedules", "cwd": "/Users/me/code/persona", "agent": "claude", "start_error": "",
+                     "source": "manual", "via": ""}]},
+        {"id": "todo_concern_open", "title": "When should the monthly report arrive?", "kind": "concern", "notes": "",
+         "done_at": None, "created_at": ago(hours=3), "updated_at": ago(minutes=20), "origin": "conv_demo", "spaces": [], "agents": []},
+        {"id": "todo_concern_closed", "title": "Is the nightly backup covered?", "kind": "concern", "notes": "",
+         "done_at": ago(minutes=15), "created_at": ago(hours=4), "updated_at": ago(minutes=15), "origin": "conv_demo",
+         "done_by": "reported", "done_reason": "The nightly backup is already covered.", "spaces": [], "agents": []},
+    ]
+    if os.environ["MOCK_TODO_CONCERNS"] == "only":
+        _concern_todos[0]["spaces"] = [{"machine_id": "macbook", "space": "persona", "linked_at": ago(minutes=30)}]
+        TODOS_INIT[:] = _concern_todos
+    else:
+        TODOS_INIT.extend(_concern_todos)
+
 
 def _lead_supervision(leader, state=""):
     return {"supervisor": leader, "done_when": [], "state": state, "round": 0, "reviews": [], "updated_at": ago(minutes=30)}
@@ -3398,6 +3425,10 @@ TODO_DECISIONS = [
     todo_decision("dec_size_medium", "todo_weather", "小组件先做哪种尺寸？", "中号，小号放到 1.4", "中号放得下三天预报",
                   supersedes="dec_size_small", at=ago(minutes=20)),
 ] if os.environ.get("MOCK_TODO_DECISIONS") else []
+if os.environ.get("MOCK_TODO_CONCERNS") in ("1", "only"):
+    TODO_DECISIONS.append(todo_decision(
+        "dec_concern_report", "todo_concern_closed", "Is the nightly backup covered?",
+        "The nightly backup is already covered.", source="reported", at=ago(minutes=15)))
 _mark_superseded("todo_weather")
 TODO_DECISIONS_INIT = copy.deepcopy(TODO_DECISIONS)
 
@@ -3421,6 +3452,20 @@ def todo_decisions_route(command, tid, did, query, body):
     earlier_only = {"error": "a decision can only supersede an earlier decision of the same todo", "code": "bad_request",
                     "retryable": False}
     if command == "POST" and did is None:
+        if (body.get("source") or "").strip() == "reported":
+            if t.get("kind") != "concern":
+                return {"error": "source reported is for a concern only", "code": "bad_request", "retryable": False}, 400
+            choice = (body.get("choice") or "").strip()
+            if not choice:
+                return {"error": "report cannot be empty", "code": "bad_request", "retryable": False}, 400
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            TODO_DECISIONS.append(todo_decision("dec_" + uuid.uuid4().hex[:8], tid, t["title"], choice,
+                                                source="reported", at=now))
+            closed = not t.get("done_at")
+            if closed:
+                t["done_at"], t["done_by"], t["done_reason"] = now, "reported", choice
+            _decision_written(t)
+            return {"todo": format_todo(t), "closed": closed}, 200
         question, choice = (body.get("question") or "").strip(), (body.get("choice") or "").strip()
         if not question or not choice:
             return {"error": "question and choice cannot be empty", "code": "bad_request", "retryable": False}, 400
@@ -7662,6 +7707,14 @@ ITEMS[BLOG] = (
     + tool("Bash", {"command": "npm run build", "description": "构建站点"}, "✓ 32 page(s) built in 4.81s", 15)
     + [it("assistant", "text", 12, text="迁移完成：\n\n- **32 篇文章**都能正常构建，代码高亮、脚注、图片说明都保留了\n- 旧的 `/2023/05/xxx.html` 链接全部加了 **301 跳转**\n- Lighthouse 性能分从 **71 提到 98**\n\n要我顺便把 RSS 也换成 Astro 的官方插件吗？")]
 )
+# A finished exchange proves that the working background command folds the old turn instead of removing it (#7341).
+if os.environ.get("MOCK_BG_WAITING") == "1":
+    ITEMS[RELEASE] = (
+        [it("user", "text", 8, text="整理发布说明，打包先在后台跑。")]
+        + tool("Bash", {"command": "make release", "description": "打包发布产物", "run_in_background": True},
+               "Command running in background with ID: bb1d5te2k.", 6)
+        + [it("assistant", "text", 4, text="发布说明整理好了，后台打包结束后我再核对产物。")]
+    )
 ITEMS[PHOTOS] = [it("user", "text", 10, text="照片同步脚本要支持 HEIC，导出的时候转成 JPEG")] + [it("assistant", "text", 6, text="计划写好了，等你批准后开始改。")]
 ITEMS[ORDERS] = (
     [it("user", "text", 20, text="/orders 接口最近 P95 到了 2 秒，查一下")]
@@ -17195,17 +17248,22 @@ def fold_work(items):
     # a subagent's call stays on the page: the chat draws it as a card that never folds (#5602)
     agents = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use" and x.get("tool_name") in ("Task", "Agent")}
 
-    def inside(x):
+    latest_narration = next((i for i in range(len(items) - 1, -1, -1) if items[i]["role"] == "assistant" and items[i]["kind"] == "text"), -1)
+
+    def inside(i):
+        x = items[i]
         if x["kind"] == "thinking":
             return True
+        if x["kind"] == "text":
+            return bool(x.get("narration")) and i != latest_narration
         t = x.get("tool_use_id")
         return x["kind"] in ("tool_use", "tool_result", "image") and t and t in uses and t in results and t not in agents
     out, i = [], 0
     while i < len(items):
-        if not inside(items[i]):
+        if not inside(i):
             out.append(items[i]); i += 1; continue
         j = i
-        while j < len(items) and inside(items[j]):
+        while j < len(items) and inside(j):
             j += 1
         run = items[i:j]
         if len(run) < 3 and sum(len(x.get("text") or "") + len(json.dumps(x.get("tool_input") or "")) for x in run) < 4096:
@@ -17539,10 +17597,16 @@ def paged_sessions(query):
         return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}, "todo": {}, "pane_source": {}}
+        if roots:
+            counts["active_agents_by_machine"] = {}
         waits = sum(1 for s in rows if s.get("background_waiting") and state_of(s) == "working")
         if waits:
             counts["background_waiting"] = waits
         for s in rows:
+            if roots and not s.get("assistant") and state_of(s) != "offline":
+                active = counts["active_agents_by_machine"]
+                mid = s["machine_id"]
+                active[mid] = active.get(mid, 0) + 1
             values = {"machine": s["machine_id"], "project": s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", ""),
                       "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s), "todo": (s.get("todo") or {}).get("id", ""),
                       "pane_source": pane_origin(s)}
@@ -17592,6 +17656,15 @@ def find_items(sid):
     items = ITEMS.get(sid, [])
     if GAP and sid == SESSIONS[0]["session_id"] and not GAP_STATE["grown"]:
         return items[:-6]  # what the transcript held before the lines whose push gets lost
+    # MOCK_REPLY_USAGE=1 (#5470): the blog agent and the main conversation's last reply carry token usage, so the
+    # footer under that reply can show a catalog price. A copy, so the fixture items stay as they are.
+    if os.environ.get("MOCK_REPLY_USAGE") == "1" and sid in (BLOG, ASK1):
+        items = [dict(x) for x in items]
+        for x in reversed(items):
+            if x.get("role") == "assistant" and x.get("kind") == "text":
+                x["usage"] = [{"model": "claude-opus-5-5", "in": 2, "out": 3400,
+                               "cache_read": 1200000, "cache_write": 9000}]
+                break
     return items
 
 
@@ -18862,6 +18935,16 @@ def mock_chat_search():
     ITEMS[ASK4] = rows
     session = next(s for s in ASSISTANT if s["session_id"] == ASK4)
     session.update(title="琥珀灯塔 AmberTitle 周末出行", last_text=last, updated_at=ago(minutes=1), seen_at=ago(minutes=0), rev=3000, total_items=len(rows))
+    narration = it("assistant", "text", 0.8, text="FoldedNeedle 这段说明必须展开后才能看到。", narration=True)
+    narration["id"] = "narration-target"
+    folded = [it("user", "text", 1, text="把这段过程整理成最终回复"), narration]
+    folded += tool("Read", {"file_path": "/home/me/notes/folded.md"}, "步骤已完成。", 0.7)
+    folded += [it("assistant", "text", 0.2, text="FinalAnswer 最终回答。")]
+    for seq, row in enumerate(folded, 1):
+        row["seq"] = seq
+    ITEMS[ASK5] = folded
+    FULL[narration["id"]] = narration
+    ASSISTANT.append(assistant_sess(ASK5, "折叠回复示例", 1, "FinalAnswer 最终回答。"))
     PAGING["on"] = True
 
 
@@ -18924,7 +19007,7 @@ def search_index_text(item):
     return text if text.strip() else None
 
 
-# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/search_text.go),
+# A reply's Markdown as the chat shows it (#7072): the manager's searchPlain (server/internal/assistant/chatsearch/text.go),
 # pattern for pattern; spec/fixtures/chat-search checks both.
 _PLAIN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 _PLAIN_RULE = re.compile(r"^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
@@ -20353,7 +20436,7 @@ def png(w, h, rgb):
 # …&slow=S: it answers S seconds late (the small window's "Connecting…"); …&down=1: it hangs up on everyone, now and on
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
-               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False,
+               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False, "wheel_in": [], "input": [],
                "events": []}  # clipboard writes (node / rfb) and keys, in the order they came (#3075: ⌘V after the write)
 # MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
 # numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
@@ -20507,9 +20590,17 @@ def zrle_rect(px, W, x, y, w, h, z):
 # sends `paused` with that reason (no frames and no heartbeats, as the helper), ?resume=1 sends `resumed` and starts over
 # with `hello`, `format` and the keyframe. Once a second while frames go out it sends `timing` as the helper does: capture
 # 0 and encode 4.8 ms (made up: nothing is encoded here), the network as half the real round trip from a frame going out
-# to the phone's report on it.
+# to the phone's report on it. MOCK_SCREEN_VIDEO_TIERS=1: the hello says the helper has quality tiers (`features`,
+# #6396) on a 14-inch MacBook Pro's display (`points`, `pixels`; the fixture plays at its own size whatever the tier);
+# GET /mock/screen-video also lists the `update`s the client sent (#6558: a new data budget, the tier it picked).
+# MOCK_SCREEN_INPUT=granted|missing|asked (#7775): MacBook's node reads the live screen's pixel scroll records
+# (`screen_input`; =missing: Persona Input may not post events and macOS hasn't asked; =asked: not allowed, asked once).
+# As the node does, the 5900 relay takes each record (RFB client message type 200, 16 bytes) out of the stream, so the
+# fake Screen Sharing never sees it, and keeps it: GET /mock/screen-password lists them as `input` (kind, phase,
+# momentum, dy, when it came); ?clear=1 empties it.
+SCREEN_INPUT = {"mode": os.environ.get("MOCK_SCREEN_INPUT", "")}
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
-                "refuse": False}
+                "updates": [], "refuse": False, "tiers": os.environ.get("MOCK_SCREEN_VIDEO_TIERS") == "1"}
 _SCREEN_VIDEO_FIXTURE = {}
 _SCREEN_VIDEO_FILES = {"hevc": "fixture.bin", "h264": "fixture-h264.bin"}
 
@@ -20542,7 +20633,7 @@ def screen_video_control(h, q):
     if q.get("resume", ["0"])[0] == "1":
         for st in SCREEN_VIDEO["streams"]: st["resume"] = True
     h.send_json({"open": sum(1 for st in SCREEN_VIDEO["streams"] if st["open"]), "starts": SCREEN_VIDEO["starts"],
-                 "reports": SCREEN_VIDEO["reports"], "refuse": SCREEN_VIDEO["refuse"]})
+                 "reports": SCREEN_VIDEO["reports"], "updates": SCREEN_VIDEO["updates"], "refuse": SCREEN_VIDEO["refuse"]})
 
 
 def screen_video_connect(h, mid):
@@ -20575,6 +20666,8 @@ def screen_video_connect(h, mid):
         if not st["started"].wait(10): st["open"] = False; return
         msgs = screen_video_fixture(screen_video_codec(st.get("codecs")))
         hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
+        if SCREEN_VIDEO["tiers"]:  # as the helper says it: the display's points and pixels (a 14-inch MacBook Pro's) for the tiers
+            hello = (hello[0], json.dumps({**json.loads(hello[1]), "features": ["tiers"], "points": [1512, 982], "pixels": [3024, 1964]}).encode())
         number, i, restart = 0, 0, True
         second, count, size = time.monotonic(), 0, 0
         try:
@@ -20631,6 +20724,8 @@ def screen_video_connect(h, mid):
                     SCREEN_VIDEO["starts"].append(start)
                     st["codecs"] = start.get("codecs")
                     st["started"].set()
+                elif t == 19:
+                    SCREEN_VIDEO["updates"].append(json.loads(body or b"{}"))
                 elif t == 17:
                     SCREEN_VIDEO["reports"] += 1
                     sent = st["sent"].pop(struct.unpack(">I", body[:4])[0], None) if len(body) >= 4 else None
@@ -21729,6 +21824,9 @@ def computer_of(machine_id, enabled):
         c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
                              "permission": "missing" if SCREEN_VIDEO["mode"] in ("missing", "denied") else "granted"}
         if SCREEN_VIDEO["mode"] == "denied": c["screen_video"]["asked"] = True
+    if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_INPUT["mode"]:  # MOCK_SCREEN_INPUT (#7775)
+        c["screen_input"] = {"version": 1, "permission": "granted" if SCREEN_INPUT["mode"] == "granted" else "missing"}
+        if SCREEN_INPUT["mode"] == "asked": c["screen_input"]["asked"] = True
     return c
 
 
@@ -24173,6 +24271,20 @@ class H(BaseHTTPRequestHandler):
         if self.token_refused(): return
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
+        if p == "/api/v1/push/ln-mode":
+            return self.send_json({"enabled": bool(os.environ.get("MOCK_LN"))})
+        if p == "/api/v1/push/intercepts":
+            if not os.environ.get("MOCK_LN"):
+                return self.send_json({"intercepts": []})
+            return self.send_json({"intercepts": [
+                {"at": ago(hours=3), "level": "P1", "reason": "ln_p1_held",
+                 "title": "发布结果等你核对", "body": "网页和手机的构建都完成了",
+                 "related_key": "demo-subject", "manager": "assistant", "also": ["请检查最后的发布说明"]},
+                {"at": ago(hours=4), "level": "P1", "reason": "ln_dedup_12h", "title": "同一任务还有一次补充汇报", "manager": "assistant"},
+                {"at": ago(hours=5), "level": "P2", "reason": "ln_p2_silent", "title": "后台检查已完成",
+                 "body": "没有需要你处理的事项", "manager": "assistant"},
+                {"at": ago(days=1), "level": "P1", "reason": "ln_p1_held", "title": "昨天的记录不应出现"},
+            ]})
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
         if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)
@@ -24220,7 +24332,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(GIT_PULL_STATE)
         if p == "/mock/screen-password":  # MOCK_SCREEN=fake: the Mac's password changed; who signed in how; what was typed
             if "p" in q: FAKE_SCREEN["password"] = q["p"][0]
-            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[])
+            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[], wheel_in=[], input=[])
             if "clip" in q: fake_screen_clip(q["clip"][0])  # the Mac copied this
             if "bg" in q and q["bg"][0] in FAKE_BG_COLORS and FAKE_BG["kind"]:  # another background (MOCK_SCREEN_BG)
                 FAKE_BG["kind"] = q["bg"][0]
@@ -24236,7 +24348,8 @@ class H(BaseHTTPRequestHandler):
                     except OSError: pass
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
                                    "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
-                                   "events": FAKE_SCREEN["events"][-200:]})
+                                   "events": FAKE_SCREEN["events"][-200:], "wheel_in": FAKE_SCREEN["wheel_in"],
+                                   "input": FAKE_SCREEN["input"]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -25639,6 +25752,8 @@ class H(BaseHTTPRequestHandler):
             if not t: return self.send_json({"error": "待办不存在"}, 404)
             if self.command == "PATCH":
                 body = json.loads(self.last_body or b"{}")
+                if body.get("done") is True and t.get("kind") == "concern" and not t.get("done_at"):
+                    return self.send_json({"error": "a concern closes only with its report", "code": "concern_report_required"}, 409)
                 now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 aff = set(a["machine_id"] for a in t.get("agents", []) if not a.get("released_at"))
                 if "title" in body:
@@ -26964,7 +27079,18 @@ class H(BaseHTTPRequestHandler):
                 if op == 8: break
                 if op == 9:
                     frame(0xA, payload); continue
-                if op in (0, 1, 2): tcp.sendall(payload)
+                if op in (0, 1, 2):
+                    # A wheel notch (a pointer event with button 4 or 5 down) as it reaches the relay, before the fake
+                    # Screen Sharing reads it between its frames: when the app sent it (#7775).
+                    if port == 5900 and len(payload) == 6 and payload[0] == 5 and payload[1] & 24:
+                        FAKE_SCREEN["wheel_in"].append(time.time())
+                    if port == 5900 and len(payload) == 16 and payload[0] == 200:  # a pixel scroll record (#7775)
+                        kind, phase, momentum = payload[2], payload[3], payload[4]
+                        dy, dx = struct.unpack(">ff", payload[8:16])
+                        FAKE_SCREEN["input"].append({"kind": kind, "phase": phase, "momentum": momentum, "dy": dy, "dx": dx,
+                                                     "t": time.time()})
+                        continue
+                    tcp.sendall(payload)
         except OSError:
             pass
         finally:
