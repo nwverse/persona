@@ -118,11 +118,29 @@ The assistant's two tools (descriptions in `server/internal/prompts/mcp/computer
   - With the **same** session name, tokens work across calls: read the Clear token once, click it in the next `call`, and Calculator resets.
   - Named sessions expire after 5 minutes idle.
   - So line numbers from `computer_state` can be used in later `computer_run` calls.
+- **A session that ended (#7590)**: once Cua Driver ends a session, it refuses every later call under that label
+  ("session has ended; … Call start_session …") until `start_session` starts it again. It ends one after 5 minutes idle,
+  and when the user presses Stop on the bar it shows on the Mac's screen ("You're in control / Return to agent / Stop").
+  The error is the same for both, `get_session` on it is refused too, and Cua Driver keeps no reason (0.38.0, measured).
+  The manager tells them apart by its own record of the label (`extmgr/computer_session.go`, in memory):
+  | Found ended | Taken for | What happens |
+  | --- | --- | --- |
+  | Used under 5 minutes ago | The user's Stop (it cannot have idled out) | Nothing runs. The model is told the user stopped it on that Mac, not to call again in this turn, and to ask the user with a sentence in their language (`hub-computer.session_stopped`). Retries keep getting that answer |
+  | After that, the owner spoke in the conversation (a message, or an answer to its question; the assistant's `ownerHeard`) | Their go-ahead | `start_session` under the same label, then the call once more |
+  | Used 5 minutes ago or more, or never used by a manager that has run that long | Idled out | `start_session`, then the call once more, silently |
+  | Never used, by a manager that started under 5 minutes ago and has not heard the owner since | Cannot tell | Treated as the user's Stop |
+  - The manager's own label (`persona-apps`, its look at the apps and windows for the protected-app checks) and the
+    node's (`persona-gate`, `cua_gate.go`) only read: no cursor, no bar, nothing for the user to stop. They always start
+    again (the node does its own), or every check would fail as unreadable and every run would be refused.
+  - What it can miss: a Stop after the label's last use, when the manager restarted in between and its next call
+    comes 5 minutes or more after that restart with no word from the owner since. That call is taken for an
+    idled-out session.
+  - The node takes `start_session` only for the call's own label and with no other arguments.
 - **Why not keep a `cua-driver mcp` child resident on the node**: a session name already preserves tokens. One `call` per invocation is stateless: node restarts, hub redeployments and two concurrent chats don't affect it. It costs one extra process per call (tens of milliseconds), negligible next to Cua Driver operations (about 0.3 seconds per click, 1.3 seconds to find a window).
 
 **Arguments and tools**:
 - Arguments go to `cua-driver call` through stdin: no length limit, and absent from process listings.
-- The node accepts only 7 tools: `get_desktop_state`, `get_accessibility_tree`, `get_window_state`, `list_apps`, `list_windows`, `run_script`, `run_steps`. Cua Driver settings, updates, extensions and clipboard don't go through this path.
+- The node accepts only 8 tools: `get_desktop_state`, `get_accessibility_tree`, `get_window_state`, `list_apps`, `list_windows`, `run_script`, `run_steps`, and `start_session` for the call's own label (a session that ended, above). Cua Driver settings, updates, extensions and clipboard don't go through this path.
 
 **If the daemon isn't running**: the node first runs `open -g -b com.trycua.driver`, opening CuaDriver.app in the background through LaunchServices with no window. Measured: starts within 1 second, retaining permissions, then the call proceeds.
 
