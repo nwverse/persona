@@ -3,7 +3,7 @@
 // prompt, permission mode, which conversation runs go into, "Run now", the last result and the task's own runs.
 // A new one has "Cancel" / "Add", so trying a template and backing out creates nothing; an existing one is saved with
 // "Save" and deleted after an inline confirmation.
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { conversationPage } from "../../lib/conversation-page";
 import { shownManager } from "../../lib/manager-choice";
@@ -18,7 +18,10 @@ import { Button, cx, Dialog, Spinner, toast, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Field, inputClass, Segmented, SectionTitle, Switch, textareaClass } from "./parts";
+import { lazyPage } from "../../lib/lazy-page";
 import { formatDate, t } from "../../i18n";
+
+const TaskExecutionFields = lazyPage(() => import("./TaskExecutionFields").then((m) => m.TaskExecutionFields));
 
 /** Brings an inline confirmation into view once, when it appears (stable, so not on every render). */
 const reveal = (el: HTMLElement | null) => el?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
@@ -46,7 +49,6 @@ export function TaskEditor({
   const [busy, setBusy] = useState<"" | "save" | "run" | "delete" | "fresh">("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [askBypass, setAskBypass] = useState(false);
-  const [central, setCentral] = useState(false);
   const [runs, setRuns] = useState<Run[]>([]);
   const nowMs = useNow(30_000);
   const now = useMemo(() => new Date(nowMs), [nowMs]);
@@ -56,16 +58,9 @@ export function TaskEditor({
   const hasPush = useStore((s) => hubHas(s.features, TASK_PUSH_FEATURE)) || task.push === "asked";
   /** "When done, put it in the Inbox" shows when the hub takes it (task_inbox), or the task already has it. */
   const hasInbox = useStore((s) => hubHas(s.features, TASK_INBOX_FEATURE)) || !!task.inbox;
+  const hasExecution = useStore((s) => hubHas(s.features, "task_execution")) || !!task.execution || !!task.cwd || !!task.launcher || !!task.model;
   /** "Cron" shows when the hub runs cron tasks (task_cron), or the task already is one. */
   const hasCron = useStore((s) => hubHas(s.features, TASK_CRON_FEATURE)) || task.repeat === "cron";
-
-  useEffect(() => {
-    let live = true;
-    api("/model-config").then(() => live && setCentral(true), () => {});
-    return () => {
-      live = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!saved?.id) return;
@@ -107,7 +102,7 @@ export function TaskEditor({
       ? await api<{ task: Task }>(`/assistant/tasks/${enc(saved.id)}`, { method: "PUT", json: body })
       : await api<{ task: Task }>("/assistant/tasks", { method: "POST", json: body });
     setSaved(r.task);
-    setDraft((d) => ({ ...d, id: r.task.id }));
+    setDraft(r.task);
     onSaved(r.task);
     return r.task;
   };
@@ -265,6 +260,8 @@ export function TaskEditor({
             )}
           </section>
 
+          {hasExecution && <Suspense fallback={<Spinner />}><TaskExecutionFields draft={draft} disabled={working} onChange={set} /></Suspense>}
+
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_prompt")}</SectionTitle>
             <textarea
@@ -333,19 +330,6 @@ export function TaskEditor({
                 {t("assistant-taskeditor.permission_hint", { mode: t("lib-session-actions.mode_auto") })}
                 {draft.session_id ? t("assistant-taskeditor.permission_hint_resume") : ""}
               </p>
-            )}
-            {central && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  navigate("/settings?tab=model-config&purpose=assistant");
-                }}
-                className="mt-1 inline-flex items-center gap-1 whitespace-nowrap px-1 text-[11.5px] text-accent-ink hover:underline"
-              >
-                {t("assistant-taskeditor.model_config_assistant")}
-                <Icon name="chevronRight" size={11} stroke={2.2} />
-              </button>
             )}
           </section>
 
@@ -479,13 +463,19 @@ export function RunLine({ run, now, onOpen, showTitle }: { run: Run; now: Date; 
       {onOpen && <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />}
     </>
   );
-  return onOpen ? (
+  return <div>{onOpen ? (
     <button type="button" onClick={onOpen} title={t("assistant-taskeditor.open_run")} className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left transition-colors hover:bg-hover">
       {body}
     </button>
   ) : (
     <div className="flex items-center gap-2.5 px-3.5 py-2">{body}</div>
-  );
+  )}
+    {run.execution && <details className="px-3.5 pb-2 text-[11.5px] text-ink-3">
+      <summary className="cursor-pointer">{t("assistant-taskeditor.execution_used")}</summary>
+      {run.conversation && <p>{t(`assistant-taskeditor.conversation_${run.conversation}`)}{run.conversation_reason ? ` · ${t("assistant-taskeditor.conversation_changed")}` : ""}</p>}
+      <p className="break-all">{[run.execution.agent, run.execution.launcher, run.execution.model || t("settings-modelconfiguration.provider_default"), run.execution.effort, run.execution.machine_id, run.execution.cwd, run.execution.permission_mode].filter(Boolean).join(" · ")}</p>
+    </details>}
+  </div>;
 }
 
 export function RunMark({ status }: { status: string }) {

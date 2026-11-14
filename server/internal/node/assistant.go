@@ -282,6 +282,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	restartForRecovery := recovery != nil && restart
 	resume := id != ""
 	st, _ := n.state.get(id)
+	if executionOption(options).Strict {
+		if err := n.checkTaskDirectory(id, cwd, launcher); err != nil {
+			return "", err
+		}
+	}
 	// Read and consume the one-shot choice before guest or launcher normalization can replace options. A resumed send
 	// must never lose an explicit tier and quietly continue on the thread's current speed.
 	startTier := executionOption(options).ServiceTier
@@ -340,6 +345,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	}
 	if own, switched := n.assistantResumeLauncher(ctx, id, launcher, st); switched {
+		if executionOption(options).Strict {
+			return "", errors.New("task execution context differs from this conversation; start a new conversation")
+		}
 		n.logger.Printf("assistant %s: resumes on %s, the kind of agent it was started on, not on %s", short(id), launcherOr(own, st.Launcher), launcher)
 		launcher, options = own, nil // the model picked for the other launcher is not this one's
 	}
@@ -370,7 +378,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
-			execution = modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime}
+			execution = modelExecution{Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime}
 		}
 	}
 	if launcher != "" && st.Launcher != "" && launcher != st.Launcher && execution.Fingerprint == "" {
@@ -392,7 +400,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
 		return "", err
 	}
-	if recovery == nil && id != "" {
+	if recovery == nil && id != "" && !execution.Strict {
 		execution = n.heldFallback(id, launcher, execution) // the fallback that answered, for a while (#3788)
 	}
 	if execution.Model != "" {

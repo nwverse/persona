@@ -351,3 +351,25 @@ func TestMachineCallGatesSessionSwitch(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineCallGatesTaskExecution(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	without := current("old")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.TaskExecution })
+	for _, info := range []proto.NodeInfo{current("new"), without, {Version: "pre-handshake"}} {
+		m.mu.Lock()
+		m.info, m.online = info, true
+		m.mu.Unlock()
+		for _, method := range []string{"assistant.directory", "assistant.send"} {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var re *rpc.Error
+			err := m.call(ctx, method, map[string]any{"task_execution": true}, nil)
+			refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated
+			if refused != !nodeHas(info, nodeproto.TaskExecution) {
+				t.Fatalf("%s %s: %v", info.Version, method, err)
+			}
+		}
+	}
+}

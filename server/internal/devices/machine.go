@@ -550,6 +550,16 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if !nodeHas(info, nodeproto.TaskExecution) {
+		raw, _ := json.Marshal(params)
+		var task struct {
+			TaskExecution bool `json:"task_execution"`
+		}
+		_ = json.Unmarshal(raw, &task)
+		if method == "assistant.directory" || method == "assistant.send" && task.TaskExecution {
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution")}
+		}
+	}
 	if !nodeHas(info, nodeproto.AssistantConfigDir) && (method == "assistant.send" || method == "assistant.warm" || method == "session.send") {
 		raw, _ := json.Marshal(params)
 		var fields struct {

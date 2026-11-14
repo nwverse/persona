@@ -450,6 +450,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			checks = append(checks, map[string]string{"name": "claude-version", "status": "ok", "state": f.doctorState[p.Device], "detail": detail})
 		}
 		return json.Marshal(map[string]any{"ok": true, "checks": checks})
+	case assistantwire.DeviceAssistantDirectory:
+		return json.Marshal(map[string]any{"cwd": a["path"]})
 	case DeviceAssistantPrepare:
 		f.prepared = append(f.prepared, a)
 		return json.Marshal(map[string]any{"cwd": "/home/me/.persona/assistant"})

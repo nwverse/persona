@@ -104,7 +104,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if h == nil {
 		return "", errRuntimeAway(launcher)
 	}
-	n.assistantRuntimeSkills(cwd)
+	if n.assistantDirectoryPrepared(cwd) {
+		n.assistantRuntimeSkills(cwd)
+	}
 	memDir := n.memoryDir(cwd)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	instructions := ""

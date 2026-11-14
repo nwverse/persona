@@ -2618,3 +2618,21 @@ visible. The preview explicitly says remote existence is unconfirmed. Check and 
 keeps the draft on failure, and a browser timeout asks the user to refresh because persistence is unconfirmed.
 This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
 options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
+
+## Scheduled task execution options
+
+The web task editor serves people scheduling specialist work as an optional **Execution options** group, closed by
+default and placed before the prompt. Its title and configuration share one compact line, with ellipsis and a full
+text tooltip when narrow. Its disclosure always shows the effective launcher name, agent backend,
+model and thinking effort; repeated launcher/backend names are shown once. It reuses `Field`, native selects,
+`ModelPicker`, semantic surface/text tokens and the existing dialog. Every untouched control explicitly follows
+Assistant, with known inherited values shown. Selecting another launcher uses that agent's defaults for model and
+effort. Empty choices retain dynamic inheritance rather than pinning a copied value. Task list rows use the same
+formatter and resolved `execution` context, including inherited model and effort; older responses without that
+context keep their legacy display and need no new fields. The selected computer is shown
+inside the group. Launcher and model discovery use that computer's chat-compatible capabilities; the model catalog
+is only requested when the group opens. A working directory
+is an existing path on that computer, explained under the field. Switching execution context may start a new chat;
+the hint says earlier chats are retained. Failed saves retain the draft, and saving/running disables the controls.
+Run history has a separate disclosure for its execution configuration, outside the button opening the conversation.
+This is a secondary form extension; primary screens, themes and chat input remain unchanged.

@@ -96,6 +96,7 @@ func TestATaskStartsANewConversationWhenItsOwnCannotGoOn(t *testing.T) {
 	}
 
 	// Model configuration › Main chat now runs on another launcher (a task's conversations follow it, #1570).
+	n.zshrc = map[string][]proto.Launcher{"server": {{Name: "codex", Agent: "codex"}}}
 	setModel(t, h, "assistant", ModelBinding{Provider: "launcher.codex"})
 	switched, _ := runNow(t, h, "p")
 	if switched.SessionID == gone.SessionID {

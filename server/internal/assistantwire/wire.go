@@ -305,15 +305,16 @@ type Snapshot struct {
 
 // TaskView is one scheduled task in the snapshot.
 type TaskView struct {
-	ID           string    `json:"id"`
-	Label        string    `json:"label"`  // its title, or what stands for one
-	Repeat       string    `json:"repeat"` // once / daily / interval / cron
-	Enabled      bool      `json:"enabled"`
-	At           time.Time `json:"at,omitempty"` // once: when; interval, cron: the next run
-	EveryMinutes int       `json:"every_minutes,omitempty"`
-	MachineID    string    `json:"machine_id,omitempty"` // of the conversation it came from
-	RunMachineID string    `json:"run_machine_id,omitempty"`
-	RunSessionID string    `json:"run_session_id,omitempty"` // its own conversation
+	ExecutionMachineID string    `json:"execution_machine_id,omitempty"`
+	ID                 string    `json:"id"`
+	Label              string    `json:"label"`  // its title, or what stands for one
+	Repeat             string    `json:"repeat"` // once / daily / interval / cron
+	Enabled            bool      `json:"enabled"`
+	At                 time.Time `json:"at,omitempty"` // once: when; interval, cron: the next run
+	EveryMinutes       int       `json:"every_minutes,omitempty"`
+	MachineID          string    `json:"machine_id,omitempty"` // of the conversation it came from
+	RunMachineID       string    `json:"run_machine_id,omitempty"`
+	RunSessionID       string    `json:"run_session_id,omitempty"` // its own conversation
 	// Push is what of a run reaches the phone: "" every run's answer, PushAsked only what the run sends with
 	// notify_user (#2396). Such a task always runs in its own conversation, whose finished turns are not pushed.
 	Push string `json:"push,omitempty"`

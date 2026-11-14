@@ -43,6 +43,8 @@ beforeEach(() => {
     if (path === "/api/v1/assistant/tasks") return Promise.resolve(tasksReply());
     if (path === "/api/v1/assistant/runs") return Promise.resolve(runsReply());
     if (path === "/api/v1/model-config") return Promise.resolve(json({ providers }));
+    if (path.startsWith("/api/v1/machines/box/launchers")) return Promise.resolve(json({ launchers: [{ name: "assistant", display_name: "Assistant", agent: "claude" }, { name: "shared", agent: "claude" }] }));
+    if (path.startsWith("/api/v1/machines/remote/launchers")) return Promise.resolve(json({ launchers: [{ name: "shared", agent: "codex" }] }));
     throw new Error(`Unexpected request: ${path}`);
   }));
   host = document.createElement("div");
@@ -204,6 +206,33 @@ describe("a change the hub refuses while the list cannot be read again", () => {
 });
 
 describe("what a task runs with (#5029)", () => {
+  it("resolves backend metadata on each execution computer rather than sharing the same alias across computers", async () => {
+    tasksReply = () => json({ tasks: [
+      { ...task, id: "local", title: "Local task", execution: { machine_id: "box", launcher: "shared", model: "local-model", effort: "high" } },
+      { ...task, id: "remote", title: "Remote task", execution: { machine_id: "remote", launcher: "shared", model: "remote-model", effort: "high" } },
+    ] });
+    runsReply = () => json({ runs: [] });
+    await render();
+    await flush();
+    expect(host.textContent).toContain("shared · claude · local-model · high");
+    expect(host.textContent).toContain("shared · codex · remote-model · high");
+    expect(calls.filter((path) => path.startsWith("/api/v1/machines/box/launchers"))).toHaveLength(1);
+    expect(calls.filter((path) => path.startsWith("/api/v1/machines/remote/launchers"))).toHaveLength(1);
+  });
+
+  it("shows the full effective configuration for inherited tasks and keeps older rows without it usable", async () => {
+    providers = [{ id: "launcher.assistant", name: "Assistant", agent: "claude" }];
+    tasksReply = () => json({ tasks: [{ ...task, execution: { machine_id: "box", launcher: "assistant", model: "opus", effort: "high" } }, { ...task, id: "legacy", title: "Legacy task" }] });
+    runsReply = () => json({ runs: [] });
+    await render();
+    await flush();
+    const row = [...host.querySelectorAll<HTMLElement>('[role="button"]')].find((el) => el.textContent?.includes(task.title))!;
+    expect(row.textContent).toContain("Assistant · claude · opus · high");
+    expect(row.querySelector<HTMLElement>('span[title*="opus"]')?.title).toContain("Assistant · claude · opus · high");
+    expect(host.textContent).toContain("Legacy task");
+    expect(host.textContent).not.toContain("undefined");
+  });
+
   it("names its launcher by the provider's display name with the ID in the tooltip; an rc alias by its ID", async () => {
     providers = [{ id: "launcher.relay-example-com", name: "我的中转 站", kind: "launcher" }];
     tasksReply = () => json({ tasks: [{ ...task, launcher: "relay-example-com" }, { ...task, id: "task-2", title: "Weekly review", launcher: "cc_glm" }] });

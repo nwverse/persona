@@ -911,3 +911,23 @@ func TestAssistantPendingFailureUsesTheReplacementProcess(t *testing.T) {
 		t.Fatalf("the replacement's pending failure was dropped: %d recovery send(s), want 2", got)
 	}
 }
+
+// A task's explicit execution choice keeps the same-model retry, then surfaces the error without a model switch.
+func TestTaskExecutionNeverFallsBackToAnotherModel(t *testing.T) {
+	f := sdkTest(t)
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "bin", "claude"), []byte("#!/bin/sh\n"+claudeLikeCLI), 0700); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "task request", nil, "", "", modelExecution{Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdkWait(t, "the same-model retry", func() bool { return strings.Count(f.file("user.jsonl"), `"type":"user"`) == 2 })
+	f.idle(t, id)
+	if strings.Contains(f.file("cli-argv"), "--model fallback-model") {
+		t.Fatal("task silently changed models")
+	}
+	if p := f.proc(id); p == nil || !p.model.Strict || p.model.Model == "fallback-model" {
+		t.Fatalf("task execution choice was lost: %+v", p)
+	}
+}

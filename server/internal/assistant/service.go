@@ -536,6 +536,10 @@ func (s *Service) device(ctx context.Context, id string) (Device, bool) {
 
 // startParams are what a new conversation starts with.
 type startParams struct {
+	TaskModel      *ModelBinding
+	MachineID      string
+	Cwd            string
+	TaskExecution  bool
 	Text           string               `json:"text"`
 	PermissionMode string               `json:"permission_mode,omitempty"`
 	Purpose        string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's

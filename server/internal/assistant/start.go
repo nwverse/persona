@@ -256,7 +256,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	var cwd string
 	var err error
-	if p.GuestTools != nil {
+	if p.Cwd != "" {
+		cwd = p.Cwd
+	} else if p.GuestTools != nil {
 		cwd, err = s.guestPrepare(ctx, machine) // its own directory: none of the assistant's instructions, memory or skills
 	} else {
 		cwd, err = s.prepareSpace(ctx, machine, p.Space)
@@ -266,6 +268,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	if p.TaskExecution {
+		params["task_execution"] = true
+	}
 	if p.Model != "" {
 		params["model"] = p.Model // picked with the first message, as with a message (sendModel): a typed id too
 	}
@@ -300,14 +305,21 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			delete(params, "model") // picked for the launcher that is gone, not for the one it falls back to
 		}
 	}
-	if err := s.applyModel(ctx, purpose, params); err != nil {
+	if p.TaskModel != nil && p.TaskExecution {
+		params["launch"] = "headless"
+		if err := s.finishModel(ctx, purpose, params, *p.TaskModel); err != nil {
+			return proto.Session{}, err
+		}
+	} else if err := s.applyModel(ctx, purpose, params); err != nil {
 		return proto.Session{}, err
 	}
 	if params["launch"] != "headless" {
 		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
 	}
-	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
-		return proto.Session{}, err
+	if !p.TaskExecution {
+		if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
+			return proto.Session{}, err
+		}
 	}
 	used, _ := params["launcher"].(string)
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
@@ -415,7 +427,7 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 // in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
-		Origin: p.Origin, OriginRef: p.OriginRef})
+		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution, TaskModel: p.TaskModel})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'

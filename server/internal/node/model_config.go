@@ -12,6 +12,7 @@ import (
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
 type modelExecution struct {
+	Strict bool `json:",omitempty"` // scheduled execution never substitutes another model or agent
 	Model  string
 	Effort string
 	// ServiceTier is a one-shot native speed request for a new Codex conversation. It is consumed before the first turn,
