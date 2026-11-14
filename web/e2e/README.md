@@ -237,3 +237,25 @@ node web/e2e/keyboard-overlays.mjs <loopback-web-origin> [--shots <dir>] [--exec
 ```
 
 Run against an exclusively owned mock-backed web server, in Chinese, light and dark, a fresh browser context each. It checks that the session ⋯ menu shows every row at 1280 × 820, and at 1280 × 560 (too short for it) opens beside its button (not over it) with a fade at the edge where rows are cut and End scrolling the last row into view; that Escape anywhere in the ⌘K palette closes it and gives the focus back to the composer it was opened from; that ⌘/ and ⌘K replace one another instead of stacking two dialogs; that Tab in the shortcut help reaches "Change in Settings" after the scrolling list and wraps to Close; that Escape out of a menu's Rename leaves the focus on the row with the Rename row highlighted, so Enter renames again; that Escape clears the To-dos search; and that a theme, theme color or language picked in one tab reaches the other, the language's reload waiting (with a toast) while that tab holds a draft. Every hub write except the sign-in is answered in the browser. It prints one line per check and a verdict, and exits nonzero on a failure or its three-minute timeout.
+
+## The Inbox by keyboard, its filtered empty state and long lists (web usability audit)
+
+```sh
+PORT=<port> MOCK_INBOX_EXTRA=300 MOCK_INBOX_HISTORY=busy python3 scripts/mock/mock_hub.py &
+(cd web && npx vite build --outDir <scratch>/dist && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite preview --outDir <scratch>/dist --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/inbox-keyboard-long-list.mjs http://127.0.0.1:<web port> <artifact-directory>
+```
+
+Run against an exclusively owned web server backed by the mock hub with the flags above (`npx vite` works too; a
+production build is what the timings mean). It uses only the mock's invented data and answers the read failure in the
+browser. In English, light and dark, at 1280 x 820 unless named: chips that leave nothing show the neutral filtered
+empty state with no green check and **Clean up all** without "Nothing to do", and **Clear filters** brings the rows
+back with the keyboard on the **All** chip; a failed read has its own **Retry** and a Clean up all with no scope; the detail's small line has the time right
+after its words, not at the line's end; **Edit** on a drafted reply puts the caret at the end of the text; Select and
+Done keep the keyboard on the one button, also after Esc on a row's tick; at 390 x 844 a row opened by keyboard moves
+the focus to the item's title, with its focus ring, and Esc or the browser's Back returns it to that row. With Done
+open, **Done** in an opened item's header leaves the list where it was (it used to jump to the row filed under Done), at
+1280 and at 390, and at 390 the focus lands on the row now in the item's place. Last, a 390 x 844 touch phone at CPU 4x
+opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
+end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
+four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.
