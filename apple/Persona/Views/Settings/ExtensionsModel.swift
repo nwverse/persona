@@ -457,21 +457,24 @@ enum ExtensionText {
 
     /// One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
     /// with the abnormal or offline count when there is one. Nil without a node summary, so the hub-process wording stands.
+    /// The hub ships nodeStatus only while the aggregate drives status, so each headline count is non-zero.
     static func nodeStatusNote(_ p: HubExtension) -> String? {
         guard let s = p.nodeStatus, s.total > 0 else { return nil }
+        let offline = s.offline > 0 ? " · " + String(localized: "\(s.offline) machines offline") : ""
         switch p.status {
         case "running":
-            let main = String(localized: "Running on \(s.running) machines", comment: "Node extension: machines running it")
-            return s.abnormal > 0 ? main + " · " + String(localized: "\(s.abnormal) machines have an issue") : main
+            var line = String(localized: "Running on \(s.running) machines", comment: "Node extension: machines running it")
+            if s.abnormal > 0 { line += " · " + String(localized: "\(s.abnormal) machines have an issue") }
+            return line + offline
         case "error":
             let main = String(localized: "\(s.abnormal) machines have an issue")
             return s.offline > 0 ? main + " · " + String(localized: "\(s.offline) machines offline") : main
         case "starting":
-            return String(localized: "Starting on \(s.starting) machines")
+            return String(localized: "Starting on \(s.starting) machines") + offline
         case "stopped":
-            return s.stopped == 0 && s.offline > 0
-                ? String(localized: "\(s.offline) machines offline")
-                : String(localized: "Stopped on \(s.stopped) machines")
+            // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+            if s.stopped == 0 && s.offline > 0 { return String(localized: "\(s.offline) machines offline") }
+            return String(localized: "Stopped on \(s.stopped) machines") + offline
         default:
             return nil
         }

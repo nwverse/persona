@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The top-level status of a plugin whose work happens on computers comes from its machines while the hub's own
@@ -182,5 +184,74 @@ func TestNodeOnlyExtensionStatusComesFromMachines(t *testing.T) {
 	view = h.extensions.view(ctx, p)
 	if view.Status != extensionDisabled {
 		t.Fatalf("disabled keeps the hub's say: %+v", view)
+	}
+	if view.NodeStatus != nil {
+		t.Fatalf("no aggregate while the hub's own status governs (disabled): %+v", view.NodeStatus)
+	}
+}
+
+// While the hub's own process lives, its status governs and no aggregate is shipped: clients must never pair a
+// hub-process status with machine counts (which would render "0 machines have an issue" while the hub process errors).
+func TestLiveHubProcessKeepsItsStatusWithoutNodeSummary(t *testing.T) {
+	ctx := context.Background()
+	h, _ := extensionTestHub(t)
+	box, _ := extensionNodeMachine(t, h, "box", "linux", "amd64", false)
+	reg := h.extensions.reg
+	pv, err := reg.Preview(ctx, "dir:"+helperPackageWithHubRuntime(t), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetConfig(ctx, "example-helper", json.RawMessage(`{"computers": ["box"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	h.syncExtensionNodes(ctx, box)
+
+	// A live, startup RPC process: the hub has a process of its own that reports running once initialized.
+	socket := filepath.Join(t.TempDir(), "live.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		peer := rpc.New("test", conn)
+		peer.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+			if method == extension.MInitialize {
+				return extension.InitializeResult{Protocol: extension.Protocol, ID: "example-helper", Version: "1.0.0"}, nil
+			}
+			return map[string]any{}, nil
+		}
+		_ = peer.Serve(context.Background(), conn)
+	}()
+	procCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	live := host.Start(procCtx, host.Spec{ID: "example-helper", Name: "Example Helper", RPC: true, RPCSocket: socket, Startup: true,
+		Init: func(context.Context) (extension.InitializeParams, error) {
+			return extension.InitializeParams{Protocol: extension.Protocol}, nil
+		}})
+	t.Cleanup(func() { live.Stop(); _ = listener.Close() })
+	waitLong(t, "the live hub process to run", func() bool {
+		st, _ := live.Status()
+		return st == host.StateRunning
+	})
+	h.extensions.byID["example-helper"] = &hubExtension{id: "example-helper", proc: live}
+
+	view := h.extensions.view(ctx, reg.Get("example-helper"))
+	if view.Status != host.StateRunning {
+		t.Fatalf("the live hub process governs: %+v", view)
+	}
+	if view.NodeStatus != nil {
+		t.Fatalf("no aggregate while the hub's own process governs: %+v", view.NodeStatus)
+	}
+	if len(view.Nodes) != 1 {
+		t.Fatalf("the per-machine rows still ship: %+v", view.Nodes)
 	}
 }

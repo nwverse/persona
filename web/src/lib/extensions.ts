@@ -131,21 +131,23 @@ export interface NodeStatusSummary {
 export function nodeStatusNote(p: Pick<HubExtension, "node_status" | "status">): string | null {
   const s = p.node_status;
   if (!s || s.total === 0) return null;
+  const offlinePart = () => (s.offline > 0 ? ` · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : "");
   switch (p.status) {
     case "running": {
       const main = t("lib-extensions.node_running", { count: s.running });
-      return s.abnormal > 0 ? `${main} · ${t("lib-extensions.node_abnormal_count", { count: s.abnormal })}` : main;
+      const abnormal = s.abnormal > 0 ? ` · ${t("lib-extensions.node_abnormal_count", { count: s.abnormal })}` : "";
+      return main + abnormal + offlinePart();
     }
     case "error": {
       const main = t("lib-extensions.node_abnormal_count", { count: s.abnormal });
       return s.offline > 0 ? `${main} · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : main;
     }
     case "starting":
-      return t("lib-extensions.node_starting", { count: s.starting });
+      return t("lib-extensions.node_starting", { count: s.starting }) + offlinePart();
     case "stopped":
-      return s.stopped === 0 && s.offline > 0
-        ? t("lib-extensions.node_offline_count", { count: s.offline })
-        : t("lib-extensions.node_stopped", { count: s.stopped });
+      // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+      if (s.stopped === 0 && s.offline > 0) return t("lib-extensions.node_offline_count", { count: s.offline });
+      return t("lib-extensions.node_stopped", { count: s.stopped }) + offlinePart();
     default:
       return null;
   }

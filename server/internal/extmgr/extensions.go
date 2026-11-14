@@ -408,13 +408,14 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		// A plugin whose work happens on computers: while the hub runs no process of its own for it (it has none, or
 		// its on-call process is idle), its top-level status says what the program does across the machines it is
 		// switched on for, not the hub process's idle "stopped" or the declaration-only "running". A live hub process,
-		// and the disabled / needs_setup / incompatible states, keep the hub's say.
+		// and the disabled / needs_setup / incompatible states, keep the hub's say; node_status is present only while
+		// the aggregate drives the status, so clients never pair a hub-process status with machine counts.
 		if aggregated, summary, hasNodes := nodeStatus(v.Nodes); hasNodes {
-			v.NodeStatus = &summary
 			hubProcessIdle := hp == nil || hp.proc == nil
 			if v.Status == host.StateStopped || (hubProcessIdle && v.Status == host.StateRunning) {
 				v.Status = aggregated
 				v.Error = ""
+				v.NodeStatus = &summary
 			}
 		}
 	}

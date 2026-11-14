@@ -81,6 +81,14 @@ struct ExtensionsModelTests {
         let allOffline = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"stopped","# +
             #""node_status":{"total":1,"running":0,"starting":0,"stopped":0,"offline":1,"abnormal":0}}"#)
         #expect(ExtensionText.state(allOffline) == "1 台机器离线")
+
+        let stoppedAndOffline = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"stopped","# +
+            #""node_status":{"total":2,"running":0,"starting":0,"stopped":1,"offline":1,"abnormal":0}}"#)
+        #expect(ExtensionText.state(stoppedAndOffline) == "1 台机器已停止 · 1 台机器离线")
+
+        let runningAndOffline = try plugin(#"{"id":"p","name":"P","kind":"connectors","status":"running","# +
+            #""node_status":{"total":3,"running":2,"starting":0,"stopped":0,"offline":1,"abnormal":0}}"#)
+        #expect(ExtensionText.state(runningAndOffline) == "在 2 台机器上运行 · 1 台机器离线")
     }
 
     @Test func detailDecodesTheForm() async throws {

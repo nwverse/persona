@@ -131,6 +131,10 @@ class ExtensionsStateTest {
             ExtensionText.state(res, p("stopped", NodeStatusSummary(total = 2, stopped = 2))))
         assertEquals("1 台机器离线",
             ExtensionText.state(res, p("stopped", NodeStatusSummary(total = 1, offline = 1))))
+        assertEquals("1 台机器已停止 · 1 台机器离线",
+            ExtensionText.state(res, p("stopped", NodeStatusSummary(total = 2, stopped = 1, offline = 1))))
+        assertEquals("在 2 台机器上运行 · 1 台机器离线",
+            ExtensionText.state(res, p("running", NodeStatusSummary(total = 3, running = 2, offline = 1))))
         // No summary: the hub process's own status wording stands.
         assertEquals("启动", ExtensionText.state(res, p("stopped", NodeStatusSummary())))
     }

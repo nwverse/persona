@@ -69,6 +69,14 @@ describe("扩展的文字", () => {
     const allOffline = extension("stopped", { node_status: { total: 1, running: 0, starting: 0, stopped: 0, offline: 1, abnormal: 0 } });
     expect(extensionState(allOffline)).toBe("1 台机器离线");
 
+    // A stopped machine and an offline one: the stopped headline plus the offline count, never "Stopped on 0".
+    const stoppedAndOffline = extension("stopped", { node_status: { total: 2, running: 0, starting: 0, stopped: 1, offline: 1, abnormal: 0 } });
+    expect(extensionState(stoppedAndOffline)).toBe("1 台机器已停止 · 1 台机器离线");
+
+    // Running machines and one away: the running headline plus the offline count.
+    const runningAndOffline = extension("running", { node_status: { total: 3, running: 2, starting: 0, stopped: 0, offline: 1, abnormal: 0 } });
+    expect(extensionState(runningAndOffline)).toBe("在 2 台机器上运行 · 1 台机器离线");
+
     // No node summary: the hub process's own status wording stands.
     expect(extensionState(extension("stopped"))).toBe("启动");
   });

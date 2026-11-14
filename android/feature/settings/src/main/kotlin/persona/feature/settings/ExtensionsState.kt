@@ -58,26 +58,31 @@ internal object ExtensionText {
     /**
      * One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
      * with the abnormal or offline count when there is one. Null without a node summary, so the hub-process wording stands.
+     * The hub ships node_status only while the aggregate drives status, so each headline count is non-zero.
      */
     fun nodeStatusNote(res: Resources, p: HubExtension): String? {
         val s = p.nodeStatus ?: return null
         if (s.total == 0) return null
         fun q(plural: Int, count: Int) = res.getQuantityString(plural, count, count)
+        fun offline() = if (s.offline > 0) " · " + q(R.plurals.settings_ext_node_offline, s.offline) else ""
         return when (p.status) {
             "running" -> buildList {
                 add(q(R.plurals.settings_ext_node_running, s.running))
                 if (s.abnormal > 0) add(q(R.plurals.settings_ext_node_abnormal, s.abnormal))
+                if (s.offline > 0) add(q(R.plurals.settings_ext_node_offline, s.offline))
             }.joinToString(" · ")
             "error" -> buildList {
                 add(q(R.plurals.settings_ext_node_abnormal, s.abnormal))
                 if (s.offline > 0) add(q(R.plurals.settings_ext_node_offline, s.offline))
             }.joinToString(" · ")
-            "starting" -> q(R.plurals.settings_ext_node_starting, s.starting)
-            "stopped" -> if (s.stopped == 0 && s.offline > 0) {
-                q(R.plurals.settings_ext_node_offline, s.offline)
-            } else {
-                q(R.plurals.settings_ext_node_stopped, s.stopped)
-            }
+            "starting" -> q(R.plurals.settings_ext_node_starting, s.starting) + offline()
+            "stopped" ->
+                // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+                if (s.stopped == 0 && s.offline > 0) {
+                    q(R.plurals.settings_ext_node_offline, s.offline)
+                } else {
+                    q(R.plurals.settings_ext_node_stopped, s.stopped) + offline()
+                }
             else -> null
         }
     }
