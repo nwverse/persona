@@ -25,6 +25,8 @@ import { tmpdir } from "node:os";
 import { basename, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, shipItJobLabel, testAppId, updaterCacheName, windowsRegistryKeys } from "./update-test-cache.mjs";
+import { packagedUpdateConfigPath, readPackagedUpdateConfig, readUpdateTestEvents, watchForNsisInstall, watchUpdateTestEvents as watch } from "./update-test-receipts.mjs";
+import { inspectWindowsRegistryKeys, readWindowsInstallLocations, removeOwnedWindowsRegistryKeys as removeWindowsKeys, removeOwnedShipItJob as removeShipItJob } from "./update-test-native.mjs";
 
 const OLD = "0.9.0";
 const NEW = "0.9.1";
@@ -145,7 +147,9 @@ async function build(version, port) {
   ], { seconds: 1500, quiet: true, env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.update-test", CSC_IDENTITY_AUTO_DISCOVERY: "false" } });
   if (code !== 0) console.log(text);
   need(`build ${version}`, code === 0, `exit ${code}`);
-  const updateConfig = await readFile(join(directory, platform === "win32" ? "win-unpacked" : platform === "darwin" ? `mac-${process.arch}/${PRODUCT}.app/Contents/Resources` : "linux-unpacked", "resources", "app-update.yml"), "utf8");
+  const updateConfigPath = packagedUpdateConfigPath(directory, platform);
+  const updateConfig = await readPackagedUpdateConfig(directory, platform);
+  need(`${version} app-update.yml is in the packaged resources directory`, /^url: http:\/\/127\.0\.0\.1:/m.test(updateConfig), updateConfigPath);
   need(`${version} uses this run's updater cache identity`, new RegExp(`^updaterCacheDirName: ${cacheIdentity}$`, "m").test(updateConfig), cacheIdentity);
   return directory;
 }
@@ -159,24 +163,12 @@ async function metadata(directory) {
 }
 
 function events(profile) {
-  return readFile(join(profile, "update-test.jsonl"), "utf8").then(text => text.split("\n").filter(Boolean).map(line => JSON.parse(line)), () => []);
-}
-
-/** Polls the app's own record of updater events until `done` returns something, the app is gone, or time is up. */
-async function watch(profile, seconds, done) {
-  const deadline = Date.now() + seconds * 1000;
-  for (;;) {
-    const seen = await events(profile);
-    const found = done(seen);
-    if (found) return found;
-    if (Date.now() > deadline) return undefined;
-    await sleep(500);
-  }
+  return readUpdateTestEvents(profile);
 }
 
 function launch(executable, profile) {
   // An AppImage unpacks itself where FUSE is missing; keep that inside this test's own directory.
-  const env = { ...process.env, ...runPaths.environment, ...(platform === "linux" ? { APPIMAGE_EXTRACT_AND_RUN: "1", TMPDIR: join(work, "tmp") } : {}) };
+  const env = { ...process.env, ...runPaths.environment, PERSONA_UPDATE_TEST_EXECUTABLE_DIR: installed, ...(platform === "linux" ? { APPIMAGE_EXTRACT_AND_RUN: "1", TMPDIR: join(work, "tmp") } : {}) };
   for (const name of ["PERSONA_HUB_URL", "PERSONA_DESKTOP_DISABLE_UPDATE", "PERSONA_DESKTOP_SMOKE", "ELECTRON_RUN_AS_NODE"]) delete env[name];
   const args = [`--user-data-dir=${profile}`];
   if (platform === "linux") args.push("--no-sandbox", "--disable-gpu");
@@ -215,52 +207,21 @@ async function windowsRunning(image) {
 
 /** Query, then remove only this run's exact random keys; never enumerate or reset the account's registry. */
 async function removeOwnedWindowsRegistryKeys() {
-  const keys = windowsRegistryKeys(runPaths.identity);
-  const failures = [];
-  for (const key of keys) {
-    const query = await run("reg", ["query", key], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
-    if (query.code !== 0) {
-      if (query.code !== 1) failures.push(`NSIS registry query failed for ${key}: ${query.error?.message ?? `exit ${query.code}`}`);
-      continue;
-    }
-    const result = await run("reg", ["delete", key, "/f"], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
-    if (result.code !== 0) failures.push(`NSIS registry cleanup failed for ${key}: ${result.error?.message ?? `exit ${result.code}`}`);
-  }
-  for (const key of keys) {
-    const after = await run("reg", ["query", key], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
-    if (after.code === 0) failures.push(`NSIS registry key remains after cleanup: ${key}`);
-    else if (after.code !== 1) failures.push(`NSIS registry verification failed for ${key}: ${after.error?.message ?? `exit ${after.code}`}`);
-  }
-  return failures;
+  return removeWindowsKeys({ keys: windowsRegistryKeys(runPaths.identity), run });
 }
 async function windowsRegistryState() {
-  const keys = windowsRegistryKeys(runPaths.identity);
-  const script = `$ErrorActionPreference='Stop'; ${JSON.stringify(keys)} | ForEach-Object { $key = $_ -replace '^HKCU\\\\', 'HKCU:\\'; [PSCustomObject]@{ Name = $_; Exists = Test-Path -LiteralPath $key } } | ConvertTo-Json -Compress`;
-  const { code, text } = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { seconds: 60, quiet: true });
-  if (code !== 0) throw new Error(`could not inspect this run's NSIS registry keys (exit ${code})`);
-  const parsed = JSON.parse(text);
-  return Object.fromEntries((Array.isArray(parsed) ? parsed : [parsed]).map(entry => [entry.Name, entry.Exists === true]));
+  return inspectWindowsRegistryKeys({ keys: windowsRegistryKeys(runPaths.identity), run });
 }
 
 /** ShipIt's launchd registration is separate from its owned files. Query and remove only this run's random label. */
 async function removeOwnedShipItJob() {
-  const label = shipItJobLabel(runPaths.identity);
-  const domain = `gui/${process.getuid()}`;
-  const inspect = await run("launchctl", ["print", `${domain}/${label}`], { seconds: 30, quiet: true }).catch(error => ({ code: -1, error }));
-  if (inspect.code !== 0) {
-    if (inspect.code === 113) return [];
-    return [`could not inspect this run's ShipIt job: ${inspect.error?.message ?? `exit ${inspect.code}`}`];
-  }
-  const removed = await run("launchctl", ["bootout", `${domain}/${label}`], { seconds: 30, quiet: true }).catch(error => ({ code: -1, error }));
-  if (removed.code !== 0) return [`ShipIt job removal failed: ${removed.error?.message ?? `exit ${removed.code}`}`];
-  const after = await run("launchctl", ["print", `${domain}/${label}`], { seconds: 30, quiet: true }).catch(error => ({ code: -1, error }));
-  return after.code === 113 ? [] : [`ShipIt job remains registered after removal (query exit ${after.code})`];
+  return removeShipItJob({ label: shipItJobLabel(runPaths.identity), uid: process.getuid(), run });
 }
 
 async function assertNativeStateAbsent() {
   if (platform === "win32") {
     const state = await windowsRegistryState();
-    need("this run's NSIS registry keys do not already belong to another run", Object.values(state).every(exists => !exists), state);
+    need("this run's NSIS registry keys do not already belong to another run", Object.values(state).every(entry => !entry.exists), state);
   } else if (platform === "darwin") {
     const label = shipItJobLabel(runPaths.identity);
     const result = await run("launchctl", ["print", `gui/${process.getuid()}/${label}`], { seconds: 30, quiet: true });
@@ -348,7 +309,13 @@ async function main() {
     const downloaded = await sha512(settled.file).catch(() => undefined);
     need("the downloaded package's sha512 matches the feed", downloaded === next.sha512, basename(settled.file));
     if (platform === "win32") {
-      need("the real NSIS updater installs only inside this run's temporary directory", await watch(profile, 180, all => all.find(entry => entry.event === "nsis-install"))?.installDirectory === installed, installed);
+      const receipt = await watchForNsisInstall(profile, 180, installed);
+      need("the real NSIS updater runs inside this run's temporary directory", receipt.matchesExpectedDirectory && receipt.event.executableInRunDirectory === true, receipt.event ?? { expectedExecutableDirectory: installed });
+      const registry = await readWindowsInstallLocations({ keys: windowsRegistryKeys(runPaths.identity), run });
+      const installKey = windowsRegistryKeys(runPaths.identity)[0];
+      // Diagnostic only: the running executable and the post-install version are the pass/fail evidence. NSIS may
+      // write or replace this value later during installation; an unavailable intermediate read is not fabricated.
+      step("read NSIS's own GUID InstallLocation (diagnostic; not a pass/fail verdict)", true, registry[installKey]);
     }
   }
 
