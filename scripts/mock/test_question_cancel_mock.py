@@ -104,6 +104,7 @@ class QuestionCancelMockTests(unittest.TestCase):
             self.assert_pending(hub, ("ix_ask_long",), False)
             self.assert_resolved(hub, ("ix_tests",))
             self.assert_ids(self.history(hub), ("ix_tests",))
+
     def test_startup_failure_stops_the_process(self):
         created = []
         original_init = CleaningMockHub.__init__
