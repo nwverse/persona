@@ -238,8 +238,8 @@ func TestQuickMetaSuccessfulTurnKeepsOrdinaryReply(t *testing.T) {
 	}
 	assertReply := func(t *testing.T, m quickMeta) {
 		t.Helper()
-		if m.lastText != "Recovered normally" || m.answer != "Recovered normally" {
-			t.Fatalf("the ordinary reply was not kept: last %q, answer %q", m.lastText, m.answer)
+		if m.lastText != "Recovered normally" || assistantAnswer(m) != "Recovered normally" {
+			t.Fatalf("the ordinary reply was not kept: last %q, answer %q", m.lastText, assistantAnswer(m))
 		}
 	}
 	m := readQuickMeta(path, writeLines(t, path, lines))
