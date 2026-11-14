@@ -10,6 +10,7 @@ import XCTest
 /// stays empty however often the app writes).
 final class InboxCollapsedSourceTests: XCTestCase {
     private static let chatItem = "lark:f1:100"
+    private static let chatTitle = "韩梅梅"
     private static let chatFeed = "f1"
     private static let otherTitle = "周末徒步群"
     private static let otherPreview = "周六早上 8 点"
@@ -89,6 +90,16 @@ final class InboxCollapsedSourceTests: XCTestCase {
 
         toggle.tap()
         XCTAssertTrue(mailBodyElement().waitForNonExistence(timeout: 5), "Collapse left the mail reader on the page")
+    }
+
+    /// Collapsed, the page is still the chat's page: it names the chat in its bar, as the chat itself did before it was
+    /// behind View original.
+    @MainActor func testCollapsedChatDetailStillNamesTheChat() throws {
+        try resetFixture(Self.chatItem)
+        openDetail(Self.chatItem)
+        XCTAssertTrue(app.navigationBars[Self.chatTitle].firstMatch.waitForExistence(timeout: 10),
+                      "the collapsed chat detail does not name the chat:\n\(app.debugDescription)")
+        XCTAssertFalse(app.textFields["lark.box"].exists, "the chat was built for its title")
     }
 
     /// Regular width keeps one detail column for every item: an expanded source must not stay open for the next item.
