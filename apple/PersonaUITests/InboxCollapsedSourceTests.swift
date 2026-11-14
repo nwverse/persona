@@ -6,6 +6,11 @@ import XCTest
 /// default shape: without MOCK_INBOX_EVENTS (those items are events) and without MOCK_MAIL (which gives UID 501 a
 /// different body); the mail case checks its fixture and skips rather than waiting for text that cannot come.
 ///
+/// The reused-column case needs its own hub with one assistant (`MOCK_MANAGERS=0`, a hub from before the roster):
+///   PORT=<port> MOCK_MANAGERS=0 python3 scripts/mock/mock_hub.py
+///   TEST_RUNNER_PERSONA_INBOX_HUB=http://127.0.0.1:<port>
+/// and skips without it: on the default mock the second item belongs to another assistant, which the Inbox does not list.
+///
 /// The chat's read reports are read from `/mock/lark_reads`; the mail's seen writes from `GET /mock/mail`'s flags, where
 /// the mock keeps them (`/mock/mail_flags` is filled by a handler the mail area's own answer always pre-empts, so it
 /// stays empty however often the app writes).
@@ -13,6 +18,7 @@ final class InboxCollapsedSourceTests: XCTestCase {
     private static let chatItem = "lark:f1:100"
     private static let chatTitle = "韩梅梅"
     private static let chatFeed = "f1"
+    private static let otherItem = "lark:f3:300"
     private static let otherTitle = "周末徒步群"
     private static let mailItem = "mail:acc1:t1:501"
     private static let mailAccount = "acc1"
@@ -104,30 +110,88 @@ final class InboxCollapsedSourceTests: XCTestCase {
     }
 
     /// Regular width keeps one detail column for every item: an expanded source must not stay open for the next item.
+    /// It goes the way a person does: the Inbox opened from the Assistant sidebar, an item picked from its list, View
+    /// original, Back to that same list, then the next item. Needs its own hub, `MOCK_MANAGERS=0` (see the class): the
+    /// default mock puts the second item under another assistant, which the Inbox does not list.
     @MainActor func testAnotherItemOpensCollapsed() throws {
-        try resetFixture(Self.chatItem)
-        openDetail(Self.chatItem)
+        let inboxHub = try singleAssistantHub()
+        try resetFixture(Self.chatItem, on: inboxHub)
+        launchInbox(inboxHub)
         try requireWide()
+        guard let first = listRow(Self.chatTitle) else {
+            return XCTFail("no \(Self.chatTitle) row in the Inbox:\n\(app.debugDescription)")
+        }
+        first.tapCenter()
         let toggle = element("inbox.detail.source")
         requireHittable(toggle, "View original on the collapsed chat")
         toggle.tap()
         XCTAssertTrue(app.textFields["lark.box"].waitForExistence(timeout: 15), "View original did not build the chat")
 
-        guard let row = listRow(Self.otherTitle) else {
-            return XCTFail("no \(Self.otherTitle) row in the list column:\n\(app.debugDescription)")
+        backToInbox()
+        guard let nextRow = listRow(Self.otherTitle) else {
+            return XCTFail("no \(Self.otherTitle) row in the Inbox after Back:\n\(app.debugDescription)")
         }
-        row.tapCenter()
+        nextRow.tapCenter()
         let next = element("inbox.detail.source")
         requireHittable(next, "\(Self.otherTitle)'s source toggle")
         assertLabel("看原文", on: next, "the next item's source toggle")
         XCTAssertFalse(app.textFields["lark.box"].exists, "the previous chat stayed open on the next item")
-        // The detail's own bar names the item open, so the page really is the other item's (its title is in the list
-        // column too, which `listRow` reads; a navigation bar is not).
+        // The detail's own bar names the item open: the list it came from is behind the page, not beside it.
         XCTAssertTrue(app.navigationBars[Self.otherTitle].firstMatch.waitForExistence(timeout: 10),
                       "the detail did not change to \(Self.otherTitle):\n\(app.debugDescription)")
+
+        // And the new item collapses again like any other.
+        next.tap()
+        XCTAssertTrue(app.textFields["lark.box"].waitForExistence(timeout: 15), "View original did not build the next chat")
+        next.tap()
+        XCTAssertTrue(app.textFields["lark.box"].waitForNonExistence(timeout: 5), "Collapse left the next chat on the page")
+        assertLabel("看原文", on: next, "the next item's source toggle after Collapse")
     }
 
     // MARK: - Driving the app
+
+    /// The Inbox as the Assistant sidebar opens it (the placeholder beside the list), from a paired launch.
+    @MainActor private func launchInbox(_ inboxHub: String) {
+        app = XCUIApplication()
+        let pair = "persona://pair?url=" + inboxHub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-app.tab", "assistant", "-dev.openChat", "",
+                               "-openSplitFresh", "YES", "-inbox.kind", "", "-inbox.source", ""]
+        app.launchPinned()
+        acceptIconAlert()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "no app window")
+        regularWidth = app.windows.firstMatch.frame.width > 600
+        requireHittable(element("sidebar-inbox"), "Inbox in the Assistant sidebar")
+        element("sidebar-inbox").tap()
+        requireHittable(element("inbox.more"), "the Inbox's own toolbar")
+    }
+
+    /// Back as a finger does it, from the leading edge of the window (a regular-width navigation bar spans it).
+    @MainActor private func backToInbox() {
+        sleep(1) // once the push has settled
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.0, dy: 0.5))
+            .press(forDuration: 0.1,
+                   thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        requireHittable(element("inbox.more"), "the Inbox list after Back")
+    }
+
+    /// The dedicated hub: `PERSONA_INBOX_HUB` must name a mock started with `MOCK_MANAGERS=0` (no roster), whose Inbox
+    /// lists both items — the default mock files the second one under another assistant the Inbox leaves out.
+    private func singleAssistantHub() throws -> String {
+        guard let inboxHub = ProcessInfo.processInfo.environment["PERSONA_INBOX_HUB"] else {
+            throw XCTSkip("needs a second scripts/mock/mock_hub.py with MOCK_MANAGERS=0 (TEST_RUNNER_PERSONA_INBOX_HUB): "
+                          + "the default mock's second item is another assistant's")
+        }
+        let data = try Data(contentsOf: try XCTUnwrap(URL(string: inboxHub + "/api/v1/inbox")))
+        let items = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["items"] as? [[String: Any]] ?? []
+        guard let other = items.first(where: { $0["id"] as? String == Self.otherItem }),
+              ["assistant", ""].contains(other["manager"] as? String ?? "") else {
+            throw XCTSkip("the hub at TEST_RUNNER_PERSONA_INBOX_HUB files \(Self.otherItem) under another assistant: "
+                          + "start it with MOCK_MANAGERS=0")
+        }
+        return inboxHub
+    }
 
     @MainActor private func openDetail(_ item: String) {
         app = XCUIApplication()
@@ -155,19 +219,14 @@ final class InboxCollapsedSourceTests: XCTestCase {
         }
     }
 
-    /// A row of the list column at regular width (the open page's title is the same text, in the detail column).
+    /// An item's row in the Inbox list, scrolled to: the Inbox is the page the sidebar opened, and its items push over
+    /// it, so on that page a row's title is the only one (the open page's own title is in its bar, not here).
     @MainActor private func listRow(_ title: String) -> XCUIElement? {
-        let half = app.windows.firstMatch.frame.midX
         let deadline = Date.now.addingTimeInterval(20)
         repeat {
             let rows = app.staticTexts.matching(identifier: title).allElementsBoundByIndex
-            if let row = rows.first(where: { $0.isHittable && $0.frame.maxX < half }) { return row }
-            // Down the list column only: the detail column beside it scrolls the open page.
-            let window = app.windows.firstMatch
-            window.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.8))
-                .press(forDuration: 0.05,
-                       thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.3)),
-                       withVelocity: .slow, thenHoldForDuration: 0.05)
+            if let row = rows.first(where: { $0.isHittable }) { return row }
+            app.swipeUp(velocity: .slow) // a section below the first screen
             usleep(250_000)
         } while Date.now < deadline
         return nil
@@ -208,15 +267,15 @@ final class InboxCollapsedSourceTests: XCTestCase {
 
     /// The item open again as unhandled, and the mail unseen: Done or a reader in the shared mock by an earlier run
     /// must not keep this one from reporting what is on screen (a done item's toolbar has no Done either).
-    private func resetFixture(_ item: String) throws {
-        try post("/api/v1/inbox/done", body: ["ids": [item], "done": false])
+    private func resetFixture(_ item: String, on hub: String? = nil) throws {
+        try post("/api/v1/inbox/done", body: ["ids": [item], "done": false], to: hub ?? self.hub)
         if item == Self.mailItem {
             try post("/api/v1/mail/messages/\(Self.mailAccount)/\(Self.mailUID)/flags",
-                     body: ["mailbox": "INBOX", "seen": false])
+                     body: ["mailbox": "INBOX", "seen": false], to: hub ?? self.hub)
         }
     }
 
-    private func post(_ path: String, body: [String: Any]) throws {
+    private func post(_ path: String, body: [String: Any], to hub: String) throws {
         let url = try XCTUnwrap(URL(string: hub + path))
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
