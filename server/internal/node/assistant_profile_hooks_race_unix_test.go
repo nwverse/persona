@@ -54,16 +54,10 @@ func TestAssistantProfileSeedSerializesConcurrentStarts(t *testing.T) {
 	profile := filepath.Join(n.dir, "profiles", "claude")
 	first := make(chan answer, 1)
 	go start("a5500000-0000-4000-8000-000000000561", first)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, err := os.Stat(profile); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("first start did not create the profile")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitFor(t, "first start to create the profile", func() bool {
+		_, err := os.Stat(profile)
+		return err == nil
+	})
 	second := make(chan answer, 1)
 	go start("a5500000-0000-4000-8000-000000000562", second)
 	returnedEarly := false
