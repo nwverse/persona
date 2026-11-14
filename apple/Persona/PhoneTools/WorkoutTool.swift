@@ -17,7 +17,7 @@ nonisolated struct WorkoutHeartRate: Codable, Equatable, Sendable {
 /// Per-kilometre splits from a workout's distance samples (#2526). Each sample's distance is spread evenly over its own
 /// interval, and the time a pause covers is left out, as the Workout app counts it.
 nonisolated enum WorkoutSplits {
-    struct Sample {
+    nonisolated struct Sample {
         let start: Date
         let end: Date
         let meters: Double
