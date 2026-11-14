@@ -13,6 +13,8 @@ struct BesideOrUnder: Layout {
     /// Between the lines when the aside goes under.
     var lineGap: CGFloat = Theme.Space.xs
     var alignment: VerticalAlignment = .center
+    /// The share of the width the main view must get, or all it needs if that is less, for the aside to stay beside it.
+    var minShare: CGFloat = 0.5
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard subviews.count >= 2 else { return subviews.first?.sizeThatFits(proposal) ?? .zero }
@@ -43,7 +45,7 @@ struct BesideOrUnder: Layout {
         let mainIdeal = subviews[0].sizeThatFits(.unspecified).width
         let aside = subviews[1].sizeThatFits(.unspecified)
         let tail = tailWidth(subviews)
-        let beside = width - aside.width - gap - tail >= min(mainIdeal, width / 2)
+        let beside = width - aside.width - gap - tail >= min(mainIdeal, width * minShare)
         let mainWidth = max(0, beside ? width - aside.width - gap - tail : width - tail)
         let main = subviews[0].sizeThatFits(ProposedViewSize(width: mainWidth, height: nil))
         var items: [(index: Int, size: CGSize, x: CGFloat)] = [(0, CGSize(width: mainWidth, height: main.height), 0)]

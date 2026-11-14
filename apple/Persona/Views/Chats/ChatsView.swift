@@ -4018,14 +4018,14 @@ extension CountsHeading where Trailing == EmptyView {
 }
 
 /// An agent row's words and its time (with the source under it): the time at the row's end; under the words when
-/// beside them it would leave the title under half the width (`BesideOrUnder`, #1658). Outside `SlotRow`, whose
+/// beside them it would leave the title under 70% of the width (its words stay on one line, so they get the whole row when stacked) (`BesideOrUnder`, #1658). Outside `SlotRow`, whose
 /// equality is its stored values.
 struct TimeBesideOrUnder<Words: View, Time: View>: View {
     @ViewBuilder var words: Words
     @ViewBuilder var time: Time
 
     var body: some View {
-        BesideOrUnder(alignment: .firstTextBaseline) {
+        BesideOrUnder(alignment: .firstTextBaseline, minShare: 0.7) {
             words
             time
         }
