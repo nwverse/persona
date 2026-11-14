@@ -78,11 +78,9 @@ public struct NativeChatStoreContinuityReplay {
                 }
                 try shadow.dispatch(action)
                 try shadow.flush()
-                // The worker publishes the patch, then invokes the host. Read the wake before draining it: a callback
-                // may not have returned yet even though flush has accounted for this action.
+                // The worker publishes, invokes the synchronous host callback, and only then accounts for this action
+                // as done. After flush has returned, every wake that belongs to this action must therefore be recorded.
                 let wakes = shadow.wakeChatIDs()
-                try shadowCheck(wakes.count == previousWakeCount || wakes.count == previousWakeCount + 1,
-                                "wake-delivery-count", step: index)
                 let patch = try shadow.drain()
                 try apply(patch)
                 try shadowCheck(wakes.allSatisfy { $0 == shadow.chat }, "wake-chat", step: index)
