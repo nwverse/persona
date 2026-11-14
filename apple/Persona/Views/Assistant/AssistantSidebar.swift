@@ -928,10 +928,12 @@ struct AssistantSidebar: View {
     #if os(iOS)
     // MARK: The Sidebar layout's parts (#6332)
 
-    /// The head: the assistant (its switcher). Search is the foot's, over the whole window (#4206, the owner).
+    /// The head: the assistant (its switcher). Search is the foot's, over the whole window (#4206, the owner). Its mark
+    /// on the places' symbol line (`rowsLeading`).
     private var unifiedHeader: some View {
         topBar
-            .padding(.horizontal, Theme.Space.xl)
+            .padding(.leading, ui.rowsLeading.map { $0 + Self.headShift } ?? Theme.Space.xl)
+            .padding(.trailing, Theme.Space.xl)
             .padding(.top, besideBar ? AssistantTopBar.topInset : Theme.Space.s)
             .padding(.bottom, Theme.Space.s)
     }
@@ -944,7 +946,8 @@ struct AssistantSidebar: View {
             mainItem(all)
             Divider().padding(.horizontal, Theme.Space.m).padding(.top, Theme.Space.s)
         }
-        .padding(.horizontal, Theme.Space.s)
+        // Where the list's rows start (`rowsLeading`): its mark on the places' symbol line, its shade as wide as theirs.
+        .padding(.horizontal, ui.rowsLeading ?? Theme.Space.s)
         // Which conversations the tasks started, as the whole sidebar reads them (the rows' source marks).
         .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
     }
@@ -958,6 +961,9 @@ struct AssistantSidebar: View {
             foldHeading(String(localized: "Pages [Sidebar Layout]"), folded: $placesFolded, id: "sidebar-fold-places") {
                 EmptyView()
             } tally: { placesTally }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(UnifiedSidebar.columnSpace)).minX } action: { x in
+                if ui.rowsLeading != x { ui.rowsLeading = x }
+            }
             if !placesFolded { actions(all) }
             // No New Chat on the heading: the column has one, its foot's (#4206, the owner).
             foldHeading(String(localized: "Persona Chats [Sidebar Layout]"), folded: $chatsFolded, id: "sidebar-fold-chats") {
@@ -1039,6 +1045,10 @@ enum AssistantSidebarPart {
     var searchScope = AssistantFullSearch.Scope.chats
     /// The Agent picked in it: its chat opens once the search has gone.
     var pickedAgent: SessionKey?
+    /// Where the Sidebar layout's list rows start in its column (the list's own margin and the rows' inset), measured on
+    /// the Pages heading: its head and the main conversation start there too, so the marks of the head, the main row and
+    /// the places stand on one line (#4206). nil until the list is laid out.
+    var rowsLeading: CGFloat?
     #endif
     var ending: Session?
     var renaming: Session?
@@ -1174,7 +1184,8 @@ extension AssistantSidebar {
             HStack {
                 if model.showsAssistantSwitcher, let current = model.currentAssistant {
                     // One installed assistant uses the switcher too; only a missing roster or current assistant keeps the persona title.
-                    AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow, openSettings: showSettings)
+                    AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow,
+                                            faceGap: part == .header ? Self.headFaceGap : Theme.Space.m, openSettings: showSettings)
                 } else {
                     #if os(macOS)
                     Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
@@ -1224,6 +1235,14 @@ extension AssistantSidebar {
     private func openSearch() {
         withAnimation(Theme.Motion.state) { ui.searchOpen = true }
         searching = true
+    }
+
+    /// How far the head's face starts past the rows' start: its centre on the places' symbols, which are centred in their
+    /// column after the row's padding (#4206).
+    private static var headShift: CGFloat { Theme.Space.m + Theme.Sidebar.glyphColumn / 2 - Theme.Size.avatar / 2 }
+    /// Between the head's face and its name: the name starts where the places' titles do.
+    private static var headFaceGap: CGFloat {
+        Theme.Space.m + Theme.Sidebar.glyphColumn + Theme.Sidebar.gap - headShift - Theme.Size.avatar
     }
 
     /// The header sits in the Mac's title bar row: one line.

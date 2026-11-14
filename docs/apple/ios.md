@@ -850,7 +850,11 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   the page's top bar keeps its place empty, so the face stays in the middle (`AssistantTopBar.newChatInSidebar`; the
   iPad's Persona column in the Separate layout too), and the Persona Chats heading has none. A phone keeps the top bar's.
   The parts share their dialogs through `AssistantSidebarUI`, presented around the column (`AssistantSidebarPresenters`):
-  a sheet on a list row went with the row as it scrolled away.
+  a sheet on a list row went with the row as it scrolled away. The head's face, the main conversation's mark and the places' symbols stand on
+  one vertical line, their names on another (#4206): the head and the main conversation (held over the list) start where
+  the list's rows do, measured on the Pages heading (`AssistantSidebarUI.rowsLeading`; the list's own margin differs by
+  device), the head's face moved by what centres it on the symbols' column and its name brought to the titles' line
+  (`AssistantSwitcherHeader.faceGap`).
 - **Search** (#4206, the owner; it replaced #6332's field in the head, which filtered the column in place): the foot's
   Search opens the whole-window search (`AssistantFullSearch`, the open Duo's from #3705) at every width, with two
   scopes over the results: **Chats**, Persona's, as #3705's and #7123's (titles, last messages, and what was said, from

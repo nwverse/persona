@@ -28,6 +28,8 @@ import SwiftUI
     @ObservationIgnored var scrollToNeeds: (() -> Void)?
     @ObservationIgnored var scrollToAgents: (() -> Void)?
 
+    /// The column's coordinate space, where its parts measure where the list's rows start (`AssistantSidebarUI.rowsLeading`).
+    nonisolated static let columnSpace = "unified.column"
     /// The list's anchors (`ScrollViewReader` ids).
     nonisolated static let agentsAnchor = "unified.agents"
     nonisolated static let needsAnchor = "unified.needs"
@@ -119,6 +121,7 @@ struct UnifiedSidebarColumn<Agents: View>: View {
             SidebarUsageStrip { show(.machines) }
             persona(.footer)
         }
+        .coordinateSpace(.named(UnifiedSidebar.columnSpace))
         .modifier(AssistantSidebarPresenters(ui: state.ui, open: open))
         .background { UnifiedSidebar.columnColor.ignoresSafeArea() }
         // A container: on its own the identifier went onto every element in it, the rows' own lost.
