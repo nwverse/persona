@@ -194,10 +194,14 @@ class Watcher:
             self.wake.set()
             raise
 
-    def queue_priority(self, repo, number):
-        """Reprocess superseded verification before starting fresh reviews."""
+    def queue_priority(self, repo, number, sha):
+        """Prioritize only a migration that process() will actually attempt."""
         old = self.state.get(repo, number)
-        if (old.get("format") == FORMAT_VERSION
+        evidence_key = repo + "#" + str(number) + "@" + str(old.get("base", "")) + ".." + sha
+        if (old.get("head") == sha and old.get("evidence_key") == evidence_key
+                and old.get("retry_after", 0) <= time.time()
+                and old.get("outcome") != "merge_failed"
+                and old.get("format") == FORMAT_VERSION
                 and old.get("verification_policy") != VERIFICATION_POLICY_VERSION
                 and old.get("verification") not in ("passed", "base_failure")
                 and not old.get("repair_exhausted")
@@ -217,11 +221,10 @@ class Watcher:
                     self.log("%s#%s: newer head noticed while busy" % (repo, number))
                 return
             self.active[key] = {"started": time.monotonic(), "phase": "queued", "source": source}
-        with self.queue_lock:
-            priority = self.queue_priority(repo, number)
+            priority = self.queue_priority(repo, number, sha)
             sequence = self.queue_sequence
             self.queue_sequence += 1
-        self.tasks.put((priority, sequence, key))
+            self.tasks.put((priority, sequence, key))
         self.log("%s#%s queued (%s)" % (repo, number, source))
 
     def phase(self, key, phase):
