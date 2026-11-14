@@ -85,6 +85,8 @@ struct ChatView: View {
     @State private var pane: SessionPane = .chat
     /// A file the Files pane shows in its folder (the preview's Show in Files Page, #5827).
     @State private var filesReveal: String?
+    /// Kept when the Files pane swaps back to Chat, so an unfinished remote operation can be seen again.
+    @State private var folderTransfers = FolderTransfers()
     @State private var git: GitStatus?
     @State private var menu = MessageMenu()
     /// What Forward To picked (#3807): done once its sheet has gone, as a navigation made while it goes is dropped.
@@ -2037,7 +2039,7 @@ struct ChatView: View {
                 GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             } else if pane == .files {
-                FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key, reveal: $filesReveal).padding(.top, headerRoom)
+                FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key, reveal: $filesReveal, transfers: folderTransfers).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             }
         }
@@ -2054,7 +2056,7 @@ struct ChatView: View {
         case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         case .files: FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key,
-                                     reloadGit: { await loadGit() }, reveal: $filesReveal).padding(.top, headerRoom)
+                                     reloadGit: { await loadGit() }, reveal: $filesReveal, transfers: folderTransfers).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         }
         #endif
@@ -6096,13 +6098,25 @@ extension UIImage {
 /// of the screen goes to it — no title, no tabs — under a slim bar that drags it back down (a tap on its handle or its
 /// Close too), there in every state, a session that isn't running included (#4328).
 /// Its size does not change with anything around it but the keyboard (a new size is a resize of the pane it drives).
+/// A plain terminal opened from Terminals renames its tab from the bar's ⋯ (#6996), the same prompt as its row's.
 struct TerminalCover: View {
     @Environment(\.dismiss) private var dismiss
     let key: SessionKey
     var switchTo: ((SessionKey) -> Void)?
     /// Resume in Terminal (#5521): resume the stopped Agent as the terminal comes up.
     var resumeOnOpen = false
+    /// Rename… in the bar's ⋯: the tab, and what saves a new name (true once the computer took it). Nil: the bar keeps
+    /// its settings button (an Agent's terminal: its chat's ⋯ renames it).
+    var rename: Rename? = nil
     @State private var offset: CGFloat = 0
+    @State private var renaming: TabRename.Target?
+    /// The name saved here, which the next Rename… starts from.
+    @State private var renamed: String?
+
+    struct Rename {
+        var target: TabRename.Target
+        var save: (TabRename.Target, String) async -> Bool
+    }
 
     var body: some View {
         TerminalPanel(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen, grab: TerminalGrab(
@@ -6110,7 +6124,8 @@ struct TerminalCover: View {
             released: { distance, predicted in
                 if distance > 140 || predicted > 420 { close() } else { withAnimation(.spring(duration: 0.3)) { offset = 0 } }
             },
-            close: close))
+            close: close,
+            rename: rename.map { r in { renaming = current(r) } }))
             .padding(.horizontal, Theme.Space.xs)
             .padding(.bottom, Theme.Space.xxs)
             .offset(y: offset)
@@ -6119,6 +6134,18 @@ struct TerminalCover: View {
                 Color.black.opacity(Double(0.4 * (1 - min(offset / 500, 1)))).ignoresSafeArea()
             }
             .accessibilityAction(.escape) { close() } // VoiceOver's scrub, as on any sheet (#4328)
+            .renameTerminalAlert($renaming) { t, name in
+                guard let rename else { return }
+                let before = renamed
+                renamed = TabRename.cleaned(name)
+                Task { if !(await rename.save(t, name)) { renamed = before } }
+            }
+    }
+
+    private func current(_ r: Rename) -> TabRename.Target {
+        var t = r.target
+        if let renamed { t.name = renamed }
+        return t
     }
 
     private func close() { dismiss() }
