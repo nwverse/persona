@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,28 +26,60 @@ func envEntries(env []string, k string) []string {
 	return out
 }
 
-// Claude Code's automatic switch after a refusal goes to a model ID of its own, which a gateway may not serve: every
-// gateway-shaped provider that is not Anthropic's own API turns it off, whatever its model list says, and its own
-// environment, applied last, can set it empty to restore Claude Code's default (#7319).
-func TestProviderEnvTurnsRefusalFallbackOffBehindGateways(t *testing.T) {
+// lackingList is a model list without Claude Code's fallback models, servingList one with all of them (the gateway's
+// own model besides).
+var (
+	lackingList = []proto.ProviderModel{{ID: "m1"}}
+	servingList = []proto.ProviderModel{{ID: "m1"}, {ID: "claude-opus-4-8"}, {ID: "claude-opus-5"}, {ID: "claude-sonnet-5"}}
+)
+
+// The models Claude Code 2.1.322 was seen falling back to: a version that moves elsewhere changes refusalFallbackModels
+// and this list together.
+func TestRefusalFallbackModelsAsObserved(t *testing.T) {
+	want := []string{"claude-opus-4-8", "claude-opus-5", "claude-sonnet-5"}
+	if got := strings.Fields(refusalFallbackModels); !slices.Equal(got, want) {
+		t.Fatalf("refusalFallbackModels = %q, want %q", got, want)
+	}
+}
+
+// Claude Code's automatic switch after a refusal goes to a model ID of its own, which a gateway may not serve: a
+// gateway-shaped provider that is not Anthropic's own API turns it off when its model list lacks one of those models.
+// No list, or one with all of them (compared trimmed, in any case, without "[1m]"), keeps Claude Code's default, and
+// the launcher's own environment, applied last, wins either way (#7319).
+func TestProviderEnvTurnsRefusalFallbackOffForAnUnservedFallback(t *testing.T) {
 	const gw = "https://gw.example.com"
-	gateway := proto.ManagedLauncher{Name: "gw", Kind: "api", BaseURL: gw, APIKey: "sk-test-1", Model: "m1"}
+	gateway := proto.ManagedLauncher{Name: "gw", Kind: "api", BaseURL: gw, APIKey: "sk-test-1", Model: "m1", Models: lackingList}
 	with := func(f func(*proto.ManagedLauncher)) proto.ManagedLauncher {
 		l := gateway
 		f(&l)
 		return l
+	}
+	listing := func(ids ...string) func(*proto.ManagedLauncher) {
+		return func(l *proto.ManagedLauncher) {
+			l.Models = nil
+			for _, id := range ids {
+				l.Models = append(l.Models, proto.ProviderModel{ID: id})
+			}
+		}
 	}
 	for _, tc := range []struct {
 		name  string
 		l     proto.ManagedLauncher
 		value string // "-" for unset
 	}{
-		{"gateway", gateway, "1"},
-		{"gateway with a path and /v1", with(func(l *proto.ManagedLauncher) { l.BaseURL = gw + "/prefix/v1/" }), "1"},
-		{"gateway shaped by a field, not the kind", proto.ManagedLauncher{Name: "gw", BaseURL: gw, Model: "m1", TimeoutMS: 60000}, "1"},
-		{"gateway whose model list names other models", with(func(l *proto.ManagedLauncher) {
-			l.Models = []proto.ProviderModel{{ID: "m1"}, {ID: "fallback-model"}}
-		}), "1"},
+		{"a list lacking all three", gateway, "1"},
+		{"a list lacking claude-opus-4-8", with(listing("m1", "claude-opus-5", "claude-sonnet-5")), "1"},
+		{"a list lacking claude-opus-5", with(listing("m1", "claude-opus-4-8", "claude-sonnet-5")), "1"},
+		{"a list lacking claude-sonnet-5", with(listing("m1", "claude-opus-4-8", "claude-opus-5")), "1"},
+		{"a list naming them only with a vendor prefix or a date", with(listing("anthropic/claude-opus-4-8", "claude-opus-5-20260101", "claude-sonnet-5")), "1"},
+		{"a list with all three", with(func(l *proto.ManagedLauncher) { l.Models = servingList }), "-"},
+		{"a list of only the three", with(listing("claude-sonnet-5", "claude-opus-5", "claude-opus-4-8")), "-"},
+		{"a list with all three marked [1m] and in other cases", with(listing("m1", "Claude-Opus-4-8[1m]", " claude-opus-5 ", "CLAUDE-SONNET-5[1M]")), "-"},
+		{"no list", with(func(l *proto.ManagedLauncher) { l.Models = nil }), "-"},
+		{"an empty list", with(func(l *proto.ManagedLauncher) { l.Models = []proto.ProviderModel{} }), "-"},
+		{"a list of blank IDs", with(listing(" ", "")), "-"},
+		{"a gateway with a path and /v1", with(func(l *proto.ManagedLauncher) { l.BaseURL = gw + "/prefix/v1/" }), "1"},
+		{"a gateway shaped by its list, not the kind", proto.ManagedLauncher{Name: "gw", BaseURL: gw, Model: "m1", Models: lackingList}, "1"},
 		{"a host that only starts like the official one", with(func(l *proto.ManagedLauncher) { l.BaseURL = "https://api.anthropic.com.gw.example.com" }), "1"},
 		{"the official API", with(func(l *proto.ManagedLauncher) { l.BaseURL = "https://api.anthropic.com" }), "-"},
 		{"the official API in capitals with /v1", with(func(l *proto.ManagedLauncher) { l.BaseURL = " https://API.Anthropic.com/v1/ " }), "-"},
@@ -54,6 +87,10 @@ func TestProviderEnvTurnsRefusalFallbackOffBehindGateways(t *testing.T) {
 		{"a launcher from before #2455", proto.ManagedLauncher{Name: "gw", BaseURL: gw, APIKey: "sk-test-1", Model: "m1"}, "-"},
 		{"its own environment empties it", with(func(l *proto.ManagedLauncher) { l.Env = refusalFallbackOff + "=" }), ""},
 		{"its own environment empties it in quotes", with(func(l *proto.ManagedLauncher) { l.Env = "export " + refusalFallbackOff + `=""` }), ""},
+		{"its own environment sets it with all three listed", with(func(l *proto.ManagedLauncher) {
+			l.Models, l.Env = servingList, refusalFallbackOff+"=1"
+		}), "1"},
+		{"its own environment sets it with no list", with(func(l *proto.ManagedLauncher) { l.Models, l.Env = nil, refusalFallbackOff+"=1" }), "1"},
 		{"its own environment sets it on the official API", with(func(l *proto.ManagedLauncher) {
 			l.BaseURL, l.Env = "https://api.anthropic.com", refusalFallbackOff+"=1"
 		}), "1"},
@@ -73,24 +110,33 @@ func TestProviderEnvTurnsRefusalFallbackOffBehindGateways(t *testing.T) {
 	}
 }
 
-// What `personad launch` gets for a provider (launcher.env) and does with it: the variable reaches the claude it execs,
-// a Persona conversation's too (PERSONA_ASSISTANT=1), after the shell's, and its settings env, which Claude Code applies
-// over the process environment. An empty value from the launcher's own environment replaces the shell's, so claude sees
-// it empty, once. A provider that sets none leaves the shell's alone.
+// refusalLaunchers are the providers the start-path tests below run: "gw" lacks the fallback models, "emptied" lacks
+// them too but empties the variable in its own environment, "listed" serves them all and "official" is Anthropic's API.
+func refusalLaunchers() []proto.ManagedLauncher {
+	return []proto.ManagedLauncher{
+		{Name: "gw", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1", Models: lackingList},
+		{Name: "emptied", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1", Models: lackingList, Env: refusalFallbackOff + "="},
+		{Name: "listed", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1", Models: servingList},
+		{Name: "official", Kind: "api", BaseURL: "https://api.anthropic.com", APIKey: "sk-test-1", Model: "m1", Models: lackingList},
+	}
+}
+
+// What `personad launch` gets for a provider (launcher.env) and does with it: for one whose list lacks a fallback model
+// the variable reaches the claude it execs, a Persona conversation's too (PERSONA_ASSISTANT=1), after the shell's, and
+// its settings env, which Claude Code applies over the process environment. An empty value from the launcher's own
+// environment replaces the shell's, so claude sees it empty, once. A provider that sets none (one that lists every
+// fallback model, Anthropic's API) leaves the shell's alone.
 func TestRefusalFallbackReachesPersonadLaunch(t *testing.T) {
 	n := agentNode(t, false)
-	n.setManaged([]proto.ManagedLauncher{
-		{Name: "gw", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1"},
-		{Name: "served", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1", Env: refusalFallbackOff + "="},
-		{Name: "official", Kind: "api", BaseURL: "https://api.anthropic.com", APIKey: "sk-test-1", Model: "m1"},
-	})
+	n.setManaged(refusalLaunchers())
 	shell := []string{"PATH=/usr/bin", refusalFallbackOff + "=0"}
 	for _, tc := range []struct {
 		launcher, want string // want "-": what the shell gave stays
 		replaced       bool   // the shell's value is dropped, not only followed
 	}{
 		{"gw", "1", false},
-		{"served", "", true},
+		{"emptied", "", true},
+		{"listed", "-", false},
 		{"official", "-", false},
 	} {
 		resp := n.launcherEnv(tc.launcher)
@@ -141,11 +187,7 @@ func mustManaged(t *testing.T, n *Node, name string) proto.ManagedLauncher {
 // the user's settings.json.
 func TestRefusalFallbackInGeneratedSettings(t *testing.T) {
 	n := agentNode(t, false)
-	n.setManaged([]proto.ManagedLauncher{
-		{Name: "gw", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1"},
-		{Name: "served", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1", Env: refusalFallbackOff + "="},
-		{Name: "official", Kind: "api", BaseURL: "https://api.anthropic.com", APIKey: "sk-test-1", Model: "m1"},
-	})
+	n.setManaged(refusalLaunchers())
 	writeFile(t, filepath.Join(n.dir, "claude-settings.json"), `{"hooks":{"Stop":[]}}`)
 	profile := filepath.Join(n.home, "profile")
 	writeFile(t, filepath.Join(profile, "settings.json"), `{"env":{"`+refusalFallbackOff+`":"1"}}`)
@@ -162,7 +204,8 @@ func TestRefusalFallbackInGeneratedSettings(t *testing.T) {
 		launcher, want string // "-" for unset
 	}{
 		{"gw", "1"},
-		{"served", ""},
+		{"emptied", ""},
+		{"listed", "-"},
 		{"official", "-"},
 	} {
 		check := func(what string, s map[string]any) {
@@ -217,16 +260,13 @@ func TestRefusalFallbackReachesTheSDKStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("CLAUDE_CONFIG_DIR", profile)
-	n.setManaged([]proto.ManagedLauncher{
-		{Name: "gw", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1"},
-		{Name: "served", Kind: "api", BaseURL: "https://gw.example.com", APIKey: "sk-test-1", Model: "m1", Env: refusalFallbackOff + "="},
-		{Name: "official", Kind: "api", BaseURL: "https://api.anthropic.com", APIKey: "sk-test-1", Model: "m1"},
-	})
+	n.setManaged(refusalLaunchers())
 	for _, tc := range []struct {
 		launcher, want string // "-": not set by Persona, the node's stays
 	}{
 		{"gw", "1"},
-		{"served", ""},
+		{"emptied", ""},
+		{"listed", "-"},
 		{"official", "-"},
 	} {
 		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), configDir: profile, mcp: map[string]any{}}

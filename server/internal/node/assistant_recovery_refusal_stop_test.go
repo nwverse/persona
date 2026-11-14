@@ -12,10 +12,11 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// With Claude Code's automatic refusal fallback off (CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK, every gateway-shaped
-// provider, #7319) a refused turn ends on its refusal: a model_refusal_no_fallback row and Claude Code's synthetic reply
-// with stop_reason "refusal", not a 404 from a fallback model the gateway does not serve. The assistant's recovery
-// still takes that ending as a safeguards refusal, whichever way the record gives the failure.
+// With Claude Code's automatic refusal fallback off (CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK, a gateway-shaped provider
+// whose model list lacks a fallback model, #7319) a refused turn ends on its refusal: a model_refusal_no_fallback row
+// and Claude Code's synthetic reply with stop_reason "refusal", not a 404 from a fallback model the gateway does not
+// serve. The assistant's recovery still takes that ending as a safeguards refusal, whichever way the record gives the
+// failure.
 const (
 	refusalStopPrompt = `{"type":"user","uuid":"u1","timestamp":"2026-01-01T12:00:00Z","isSidechain":false,"message":{"role":"user","content":"Sample request"}}`
 	refusalStopRow    = `{"type":"system","subtype":"model_refusal_no_fallback","uuid":"r1","parentUuid":"u1","timestamp":"2026-01-01T12:00:01Z","isSidechain":false,"trigger":"refusal","originalModel":"primary-model","apiRefusalCategory":"synthetic-policy","apiRefusalExplanation":"Upstream refused the request","refusedUserMessageUuid":"u1"}`

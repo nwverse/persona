@@ -302,8 +302,9 @@ in a private config directory (`<PERSONA_HOME>/profiles/<launcher>`, #4310), and
 the config directory it runs in, never `~/.claude`'s. Something that must hold wherever Persona runs claude goes into the
 managed launcher's environment (`providerEnv`, `node/launcherenv.go`): that reaches `personad launch`, the generated
 `--settings` env and the Agent SDK bridge, whatever profile the process uses. A rule Persona applies to every provider
-of a kind is code there (as #7319 is for gateways); a user's own choice is the provider's `env` field, where an empty
-value overrides a Persona default. Check such a setting in the profile the process really uses, not in `~/.claude`.
+of a kind is code there (as #7319 is for gateways whose model list lacks a fallback model); a user's own choice is the
+provider's `env` field, where a value, an empty one too, overrides a Persona default. Check such a setting in the
+profile the process really uses, not in `~/.claude`.
 
 ## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
 
