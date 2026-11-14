@@ -196,8 +196,8 @@ internal class ContactsTool(
 
     private companion object {
         const val MAX_CANDIDATES = 500
-        const val staleContactMessage = "联系人在确认后已变化，未写入 / The contact changed after it was shown for confirmation. " +
-            "Nothing was written. Call phone_contacts_search and prepare a fresh confirmation instead of retrying this call."  // i18n-ignore: tool result for the model
+        const val staleContactMessage = "联系人在确认后已变化，未写入 / The contact changed after it was shown for confirmation. " + // i18n-ignore: tool result for the model
+            "Nothing was written. Call phone_contacts_search and prepare a fresh confirmation instead of retrying this call."
     }
 }
 

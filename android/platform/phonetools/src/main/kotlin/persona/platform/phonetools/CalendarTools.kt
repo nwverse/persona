@@ -332,8 +332,8 @@ internal class CalendarTools(
         const val OCCURRENCE_TOLERANCE_MILLIS = 60_000L
         /** Search window around an occurrence's start; wide enough for the UTC midnights of all-day instances. */
         const val WINDOW_MILLIS = 2 * 86_400_000L
-        const val staleEventMessage = "日程在确认后已变化，未写入 / The event changed after it was shown for confirmation. " +
-            "Nothing was written. Call phone_calendar_events and prepare a fresh confirmation instead of retrying this call."  // i18n-ignore: tool result for the model
+        const val staleEventMessage = "日程在确认后已变化，未写入 / The event changed after it was shown for confirmation. " + // i18n-ignore: tool result for the model
+            "Nothing was written. Call phone_calendar_events and prepare a fresh confirmation instead of retrying this call."
         /** The local calendar's colour in the system calendar app (data, not app UI). */
         const val LOCAL_CALENDAR_COLOR = 0xff3f51b5.toInt()
     }
