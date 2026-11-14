@@ -12,9 +12,10 @@ const hub = vi.hoisted(() => ({
   missing: false,
   failNext: null as Error | null,
   /** What the composers get: the module hands them their rows. */
+  published: [] as string[][],
   rows: [] as readonly { word: string; text: string; source?: string; key?: string }[],
 }));
-vi.mock("./saved-prompt-rows", () => ({ setSavedPromptRows: (next: typeof hub.rows) => void (hub.rows = next) }));
+vi.mock("./saved-prompt-rows", () => ({ setSavedPromptRows: (next: typeof hub.rows) => { hub.rows = next; hub.published.push(next.map((row) => row.word)); } }));
 vi.mock("./api", async (original) => {
   const real = await original<typeof import("./api")>();
   const { managerHeaderFor } = await import("./manager-choice");
@@ -94,6 +95,7 @@ beforeEach(() => {
   hub.missing = false;
   hub.failNext = null;
   hub.rows = [];
+  hub.published = [];
   resetManagerChoice();
 });
 
@@ -294,6 +296,7 @@ describe("pending requests belong to their original assistant and sign-in", () =
   });
 
   it("retires a mutation when the roster replaces the default assistant", async () => {
+    settleRosterDefault(); // this is a known original default, not its initial discovery
     startSavedPrompts(); await settle();
     let finish!: (value: unknown) => void;
     vi.mocked(api).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
@@ -374,4 +377,66 @@ it.each(["cold", "known", "old hub"])("preserves omitted-header default negotiat
     expect(rows().map((r) => r.word)).toEqual([`/${defaultManager}`]);
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).has("X-Persona-Manager")).toBe(false);
   } finally { vi.unstubAllGlobals(); }
+});
+
+
+it.each([
+  { method: "create", defaultManager: "m-real-default" },
+  { method: "edit", defaultManager: "m-real-default" },
+  { method: "delete", defaultManager: "m-real-default" },
+  { method: "order", defaultManager: "m-real-default" },
+  { method: "create", defaultManager: "assistant" },
+])("canonically refreshes a pending cold $method after discovering default $defaultManager", async ({ method, defaultManager }) => {
+  const real = await vi.importActual<typeof import("./api")>("./api");
+  const mock = vi.mocked(api), original = mock.getMockImplementation()!;
+  let serverRows = [prompt("sp1", "before"), prompt("sp2", "second")];
+  let finish!: (response: Response) => void;
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).has("X-Persona-Manager")).toBe(false);
+    return (init?.method ?? "GET") === "GET" ? Promise.resolve(json({ prompts: serverRows }))
+      : new Promise<Response>((resolve) => { finish = resolve; });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  mock.mockImplementation(real.api);
+  try {
+    startSavedPrompts(); await settle();
+    const pending = method === "create" ? saveSavedPrompt(null, { name: "after", text: "Saved" })
+      : method === "edit" ? saveSavedPrompt("sp1", { name: "after", text: "Edited" })
+      : method === "delete" ? deleteSavedPrompt("sp1") : moveSavedPrompt("sp2", -1);
+    setRosterDefault(defaultManager);
+    await settle(); // discovery read completes before the write; it cannot include that write yet
+    expect(rows().map((row) => row.word)).toEqual(["/before", "/second"]);
+    const reads = fetcher.mock.calls.filter(([, init]) => (init?.method ?? "GET") === "GET").length;
+    serverRows = method === "create" ? [...serverRows, prompt("sp3", "after")]
+      : method === "edit" ? [prompt("sp1", "after"), serverRows[1]]
+      : method === "delete" ? [serverRows[1]] : [...serverRows].reverse();
+    // The original default was not identified at admission: only a new canonical GET may publish its result.
+    finish(json(method === "order" ? { prompts: [prompt("sp9", "unproven")] }
+      : { prompt: prompt(method === "create" ? "sp3" : "sp1", "unproven") }));
+    await pending; await settle();
+    expect(rows().map((row) => row.word)).toEqual(serverRows.map((row) => `/${row.name}`));
+    expect(hub.published.some((list) => list.includes("/unproven"))).toBe(false);
+    expect(fetcher.mock.calls.filter(([, init]) => (init?.method ?? "GET") === "GET")).toHaveLength(reads + 1);
+    expect(fetcher.mock.calls.filter(([, init]) => (init?.method ?? "GET") !== "GET")).toHaveLength(1);
+  } finally {
+    mock.mockImplementation(original);
+    vi.unstubAllGlobals();
+  }
+});
+
+
+it("retires cold recovery after a discovered default switches away and back", async () => {
+  startSavedPrompts(); await settle();
+  let finish!: (value: unknown) => void;
+  vi.mocked(api).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = saveSavedPrompt(null, { name: "old", text: "Old admission" });
+  setRosterDefault("m-discovered"); await settle();
+  hub.prompts.set("assistant", [prompt("sp1", "newer")]);
+  setRosterDefault("m-other-default");
+  setRosterDefault("m-discovered"); await settle();
+  const calls = hub.calls.length;
+  finish({ prompt: prompt("sp2", "unproven") }); await pending; await settle();
+  expect(rows().map((row) => row.word)).toEqual(["/newer"]);
+  expect(hub.calls).toHaveLength(calls);
 });
