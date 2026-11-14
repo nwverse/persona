@@ -557,8 +557,9 @@ func (h *Manager) computerState(ctx context.Context, m *Machine, session, conver
 	if windowID == 0 {
 		pick, err := h.chooseWindow(ctx, m, session, conversation, app, pid)
 		switch {
-		case err != nil:
+		case err != nil && pid != 0:
 			return proto.TextResult(err.Error(), true)
+		case err != nil: // the windows not read (an LCU machine on auto, say): Cua Driver's own lookup, as before
 		case len(pick.Candidates) > 0:
 			return ambiguousWindows(app, "computer_state", pick, false)
 		case pick.Processes > 1 || pid != 0 && pick.WindowID != 0:

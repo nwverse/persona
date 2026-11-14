@@ -292,8 +292,8 @@ func (h *Manager) pinSteps(ctx context.Context, m *Machine, session, conversatio
 	case app != "":
 		pick, err := pickOf(app)
 		switch {
-		case err != nil:
-			return refuse(proto.TextResult(err.Error(), true))
+		case err != nil: // the windows not read: the app as given, as before
+			in["app"] = app
 		case len(pick.Candidates) > 0:
 			return refuse(ambiguousWindows(app, "computer_run", pick, false))
 		case pick.Processes > 1:
@@ -303,11 +303,7 @@ func (h *Manager) pinSteps(ctx context.Context, m *Machine, session, conversatio
 		}
 	}
 	for _, named := range stepTargets(steps) {
-		pick, err := pickOf(named)
-		if err != nil {
-			return refuse(proto.TextResult(err.Error(), true))
-		}
-		if pick.Processes > 1 {
+		if pick, err := pickOf(named); err == nil && pick.Processes > 1 { // not read: the step's own run says what is wrong
 			if len(pick.Candidates) == 0 { // chosen, but a step naming it would have Cua Driver choose again
 				pick, _ = h.everyProcess(ctx, m, session, conversation, named)
 			}

@@ -195,3 +195,31 @@ func TestComputerToolsWithSeveralProcesses(t *testing.T) {
 		t.Fatalf("its active process, by pid (its frontmost window, a dialog over it included): %s %+v", text, run)
 	}
 }
+
+// Windows that cannot be read (an LCU machine while the backend is still auto, say) leave the tools as they were:
+// Cua Driver's own lookup, the app as given.
+func TestComputerToolsWhenWindowsCannotBeRead(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	ctx := context.Background()
+	_, seen := computerMac(t, h, "mac")
+	if err := h.extensions.reg.SetEnabled(ctx, cuaExtensionID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.extensions.reg.SetConfig(ctx, cuaExtensionID, json.RawMessage(`{"machines": ["mac"], "app_approval": false}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	fakeNoLockMu.Lock()
+	fakeWindows["mac"] = func(int) string { return `{"error": "not a list"}` }
+	fakeNoLockMu.Unlock()
+	t.Cleanup(func() { fakeNoLockMu.Lock(); delete(fakeWindows, "mac"); fakeNoLockMu.Unlock() })
+	if res := h.callComputerTool(ctx, "conv1234-5678", "computer_state", json.RawMessage(`{"machine": "mac", "app": "Calculator"}`)); res.IsError {
+		t.Fatalf("computer_state: %+v", res)
+	}
+	_, calls := seen()
+	if c := calls[len(calls)-2]; c.Tool != "run_script" || !strings.Contains(c.Args["script"].(string), `cua.getApp("Calculator")`) {
+		t.Fatalf("Cua Driver's own lookup: %+v", calls)
+	}
+	if res := h.callComputerTool(ctx, "conv1234-5678", "computer_state", json.RawMessage(`{"machine": "mac", "pid": 63}`)); !res.IsError {
+		t.Fatalf("a pid that cannot be checked is not taken on trust: %+v", res)
+	}
+}
