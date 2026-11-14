@@ -21,10 +21,13 @@ function harnessOf(report: MainExecution): string | undefined {
   }
 }
 
+/** The main chat's line in its header, or "" when nothing about where it runs is known (an older hub, a failed read, a
+ *  report for another conversation): the line is left out then, rather than telling an everyday user what was not
+ *  reported. A missing location is left out the same way; a proxy is named as the way in, never as the location. */
 export function mainRuntimeSummary(main: string | undefined, report?: MainExecution, starting = false): string {
   const label = t("main-runtime.main");
   if (!main) return t(starting ? "main-runtime.starting" : "main-runtime.not_started");
-  if (report?.session_id !== main) return t("main-runtime.unknown");
+  if (report?.session_id !== main) return "";
   const harness = harnessOf(report);
   const location = report.source && (report.location?.container
     ? t("main-runtime.container", { name: report.location.container })
@@ -40,8 +43,7 @@ export function mainRuntimeSummary(main: string | undefined, report?: MainExecut
   }
   if (report.state === "running" || report.source || harness) {
     return parts(label, report.state === "running" ? t("main-runtime.running") : undefined,
-      location || (report.source === "runtime" && report.proxy
-        ? t("main-runtime.proxy", { name: report.proxy }) : t("main-runtime.location_unknown")), harness);
+      location || (report.source === "runtime" && report.proxy ? t("main-runtime.proxy", { name: report.proxy }) : undefined), harness);
   }
-  return t("main-runtime.unknown");
+  return "";
 }

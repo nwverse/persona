@@ -1571,3 +1571,11 @@ the presence of a container. An external runtime can opt in with `caps.execution
 `session.execution {session_id}` with `{state, location?: {host?, container?}}` for that exact session. The connecting
 node is never substituted for the runtime's execution location. Older nodes and runtimes can leave the location
 unknown. A stopped or offline main can show its last observed location; a missing observation remains unknown.
+
+The header line uses the product's name for the conversation, **Main chat** (`主对话`, `メインチャット`), as the sidebar
+and Settings do, for example "Main chat · Running · <location> · Claude Code". What is not known is left out rather
+than reported as missing: no location, no part for it; a proxy without a location is named as the way in ("Via
+<proxy>"), never as the location. When nothing about the main chat's execution is known (an older hub without the view,
+a failed read, a report for another conversation, the `unknown` state) the line is not drawn at all; it used to read
+"Main conversation · Runtime not reported" to everyday users (web usability audit 2026-11-14, item 80;
+`web/src/lib/main-runtime.ts`, `web/src/views/assistant/MainRuntimeBadge.tsx`).
