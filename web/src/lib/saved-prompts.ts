@@ -7,7 +7,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError, credentialOwner, errorText, getToken, subscribeCredentialOwner } from "./api";
 import type { ComposerCommand } from "./extension-prompts";
-import { MANAGER_HEADER, onManagerChoice, shownManager } from "./manager-choice";
+import { currentHeaders, onManagerChoice, shownManager } from "./manager-choice";
 import { setSavedPromptRows } from "./saved-prompt-rows";
 import { onHubEvent } from "./store";
 
@@ -40,9 +40,16 @@ const listeners = new Set<() => void>();
 let stop: (() => void)[] | null = null;
 let reads = 0;
 let managerGeneration = 0;
+let lastManager = shownManager();
 let viewOwner = "";
 // Switching away and back still retires the earlier assistant's work.
-onManagerChoice(() => { managerGeneration++; });
+onManagerChoice(() => {
+  const manager = shownManager();
+  if (manager !== lastManager) {
+    lastManager = manager;
+    managerGeneration++;
+  }
+});
 
 function requestOwner() {
   const credential = credentialOwner();
@@ -52,7 +59,7 @@ function requestOwner() {
   const current = () => credential === credentialOwner() && manager === shownManager() && generation === managerGeneration;
   return {
     manager, key, current,
-    options: { token: getToken(), tokenOwner: credential, headers: { [MANAGER_HEADER]: manager }, isAuthContextCurrent: current },
+    options: { token: getToken(), tokenOwner: credential, headers: currentHeaders(), isAuthContextCurrent: current },
   };
 }
 

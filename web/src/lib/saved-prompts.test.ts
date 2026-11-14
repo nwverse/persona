@@ -66,7 +66,7 @@ vi.mock("./store", async (original) => ({
   },
 }));
 import { api, handleUnauthorized, setPairedToken, setToken } from "./api";
-import { chooseManager, resetManagerChoice, setRosterDefault } from "./manager-choice";
+import { chooseManager, resetManagerChoice, setRosterDefault, settleRosterDefault } from "./manager-choice";
 import {
   deleteSavedPrompt,
   moveSavedPrompt,
@@ -309,6 +309,7 @@ describe("pending requests belong to their original assistant and sign-in", () =
 
 it("does not let a retired assistant's real 401 sign out the current assistant", async () => {
   setToken("synthetic-current-token");
+  chooseManager("m-origin");
   hub.prompts.set("m-other", [prompt("sp9", "current")]);
   startSavedPrompts(); await settle();
   const real = await vi.importActual<typeof import("./api")>("./api");
@@ -330,9 +331,47 @@ it("does not let a retired assistant's real 401 sign out the current assistant",
     expect(hub.calls).toHaveLength(calls);
     const headers = new Headers(fetcher.mock.calls[0][1]?.headers);
     expect(headers.get("Authorization")).toBe("Bearer synthetic-current-token");
-    expect(headers.get("X-Persona-Manager")).toBe("assistant");
+    expect(headers.get("X-Persona-Manager")).toBe("m-origin");
   } finally {
     handleUnauthorized(() => {});
     vi.unstubAllGlobals();
   }
+});
+
+
+it("keeps a chosen assistant's pending save when only the roster default changes", async () => {
+  chooseManager("m-chosen");
+  hub.prompts.set("m-chosen", [prompt("sp1", "before")]);
+  startSavedPrompts(); await settle();
+  let finish!: (value: unknown) => void;
+  vi.mocked(api).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = saveSavedPrompt(null, { name: "after", text: "Chosen assistant" });
+  setRosterDefault("m-new-default");
+  await settle(); // the roster-triggered GET finishes before the save
+  expect(rows().map((r) => r.word)).toEqual(["/before"]);
+  hub.prompts.set("m-chosen", [prompt("sp1", "before"), prompt("sp2", "after")]);
+  finish({ prompt: prompt("sp2", "after") });
+  await pending; await settle();
+  expect(rows().map((r) => r.word)).toEqual(["/before", "/after"]);
+});
+
+it.each(["cold", "known", "old hub"])("preserves omitted-header default negotiation on a %s roster", async (roster) => {
+  const defaultManager = roster === "old hub" ? "assistant" : "m-real-default";
+  if (roster === "known") setRosterDefault(defaultManager);
+  if (roster === "old hub") settleRosterDefault();
+  const real = await vi.importActual<typeof import("./api")>("./api");
+  const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+    // The hub uses its actual default only when the request does not name a manager.
+    const manager = new Headers(init?.headers).get("X-Persona-Manager") || defaultManager;
+    return Promise.resolve(new Response(JSON.stringify({ prompts: [prompt("sp1", manager)] }),
+      { status: 200, headers: { "Content-Type": "application/json" } }));
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    vi.mocked(api).mockImplementationOnce(real.api);
+    startSavedPrompts(); await settle();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(rows().map((r) => r.word)).toEqual([`/${defaultManager}`]);
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).has("X-Persona-Manager")).toBe(false);
+  } finally { vi.unstubAllGlobals(); }
 });
