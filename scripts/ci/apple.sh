@@ -1,14 +1,14 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires macOS 26, Xcode 26.0.x,
 # XcodeGen, Python 3 and rsync. No developer account, hub or personal config.
-# Usage: scripts/ci/apple.sh [all|ios|macos|packages]
+# Usage: scripts/ci/apple.sh [all|ios|packages]
 # CI: macos-26, DEVELOPER_DIR=/Applications/Xcode_26.0.1.app/Contents/Developer.
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|macos|packages) ;; *) printf 'Usage: %s [all|ios|macos|packages]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|packages) ;; *) printf 'Usage: %s [all|ios|packages]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS 26 and Xcode 26.0.x\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -228,27 +228,4 @@ PY
     -resultBundlePath "$OUTPUT/ios-html-security.xcresult" test
   result ios-html-security AssistantHTMLSecurityTests
   ci_run 'Verify token baseline was not rewritten' 60 cmp "$CI_ROOT/apple/PersonaTests/TokenBaseline.json" "$SOURCE/apple/PersonaTests/TokenBaseline.json"
-fi
-if [ "$LANE" = all ] || [ "$LANE" = macos ]; then
-  ci_run 'Require macOS SDK' 60 xcrun --sdk macosx --show-sdk-version
-  resolve PersonaMac
-  ci_run 'Unsigned macOS app and notification extension build' 1800 "${XCODE[@]}" -scheme PersonaMac \
-    -destination 'generic/platform=macOS' -derivedDataPath "$OUTPUT/macos-build" \
-    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
-  # The real unsigned build above keeps all shipping entitlements. A Mac ad-hoc
-  # test host cannot claim profile-authorized push or shared Keychain groups:
-  # AMFI rejects it before main, even when codesign --verify succeeds. Prepare
-  # only the disposable snapshot for offline execution; retain its sandbox,
-  # other permissions, hardened-runtime settings and ad-hoc signatures.
-  ci_run 'Prepare profile-free Mac offline test entitlements' 60 python3 "$CI_ROOT/scripts/ci/apple_entitlements.py" \
-    "$SOURCE/apple/Mac/Resources/PersonaMac.entitlements" \
-    "$SOURCE/apple/PersonaNotify/PersonaMacNotify.entitlements"
-  printf '%s\n' 'apple-ci: excluded Mac integration suites: ExtensionStreamSnapshotTests (5 live extension/hub cases requiring PERSONA_STREAM_TEST_PAIR); OldHubCompatibilityIntegrationTests (old-hub lab requiring PERSONA_COMPAT_TEST_URL, excluded on iOS too). Mac UI/screenshot tests are a separate lane.'
-  ci_run 'macOS offline unit tests' 1800 "${XCODE[@]}" -scheme PersonaMac \
-    -destination 'platform=macOS' -derivedDataPath "$OUTPUT/macos-tests" -parallel-testing-enabled NO \
-    -disableAutomaticPackageResolution "${TEST_SIGNING[@]}" \
-    -only-testing:PersonaMacTests -skip-testing:PersonaMacTests/ExtensionStreamSnapshotTests \
-    -skip-testing:PersonaMacTests/OldHubCompatibilityIntegrationTests \
-    -resultBundlePath "$OUTPUT/macos-unit.xcresult" test
-  result macos-unit
 fi

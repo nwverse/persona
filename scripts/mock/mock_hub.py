@@ -2854,6 +2854,13 @@ if MOCK_LEADERS:
          "origin": MOCK_LEADERS[0], "created_at": ago(hours=3), "updated_at": ago(hours=3), "spaces": [], "agents": [],
          "supervision": _lead_supervision(MOCK_LEADERS[0])},
     ])
+# MOCK_TODO_PROJECTS=1: to-dos filed under the example knowledge-base projects (#2581, #7077): two under 天气 App, two
+# under 照片同步脚本, one under the blog; the rest in none.
+if os.environ.get("MOCK_TODO_PROJECTS") == "1":
+    for _t in TODOS_INIT:
+        _p = {"todo_weather": "weather-app", "todo_review": "weather-app", "todo_photos": "photo-sync", "todo_nas": "photo-sync",
+              "todo_blog": "blog"}.get(_t["id"])
+        if _p: _t["project"] = _p
 TODOS = copy.deepcopy(TODOS_INIT)
 
 _DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}
@@ -3391,6 +3398,7 @@ KB = {
 }
 KB_TAGS = {"projects": ["iOS", "前端", "个人"]}
 KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
+KB_TRASH = {}  # deleted projects by trash id (DELETE /api/v1/kb/projects/{id}, POST /api/v1/kb-trash/{id}/restore)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
 # tombstones (a later PUT gets 410). GET /mock/recordings reads both back. MOCK_RECORDINGS_DOWN=1: 503 (the hub away).
 RECORDINGS = {}
@@ -12277,10 +12285,6 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
-# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
-# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
-# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
-# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 # MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
 # (MOCK_INBOX_TODO=time: with a time, so All Day is off).
 if os.environ.get("MOCK_INBOX_TODO"):
@@ -12292,12 +12296,29 @@ if os.environ.get("MOCK_INBOX_TODO"):
         _td["status"] = "action"
 
 
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. Its sessions and their example computer join the ordinary session and machine lists with the
+# same row fields as the mock's other rows, so the timeline and Agents list can show the Agent's live state. This takes
+# precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                   "spec", "fixtures", "inbox", "showcase.json")
     with open(_showcase_path, encoding="utf-8") as _f:
-        INBOX[:] = json.load(_f)["items"]
+        _showcase = json.load(_f)
+    INBOX[:] = _showcase["items"]
+    MACHINES.append({"id": "m1", "name": "示例电脑", "kind": "ssh", "icon": "desktop", "ssh_host": "example-computer", "online": True,
+                     "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user",
+                     "herdr_version": "0.9.5", "claude_version": "2.1.320", "last_seen": ago()})
+    for _i, _row in enumerate(_showcase.get("sessions", [])):
+        _state = _row["state"]
+        _status = {"working": "working", "needs_you": "blocked", "unread": "done", "offline": "offline"}.get(_state, "idle")
+        _session = sess(_row["machine_id"], _row["session_id"], _row["title"], _row.get("cwd", ""),
+                        _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
+        _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
+        SESSIONS.append(_session)
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -23528,6 +23549,7 @@ VOICE_VOICES = {
 MOCK_HELP = [
     "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_TODO_PROJECTS=1  To-dos filed under the example knowledge-base projects (#7077: the detail's Project, Group By › Project)",
     "MOCK_KB_CORRECTIONS=1  Knowledge base: the lists links are held in, so links can be removed, and confirmed facts on one person (#6997)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
@@ -25639,6 +25661,26 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
             return self.send_json(out_machine(machine))
+        if self.command == "DELETE" and re.fullmatch(r"/api/v1/kb/projects/[^/]+", p):  # soft delete (#4412, kb/project_trash.go)
+            if MEETING_MODE["kb_read_only"]: return self.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
+            slug = unquote(p.rsplit("/", 1)[1])
+            e = next((e for e in KB["projects"] if e["id"] == slug), None)
+            if e is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            KB["projects"].remove(e)
+            tid = time.strftime("%Y%m%d%H%M%S") + "-%d" % (len(KB_TRASH) + 1)
+            KB_TRASH[tid] = {"entry": e, "detail": KB_DETAIL.pop(("projects", slug), None)}
+            return self.send_json({"id": tid, "kind": "projects", "slug": slug, "name": e["name"],
+                                   "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        if self.command == "POST" and re.fullmatch(r"/api/v1/kb-trash/[^/]+/restore", p):  # the project back, unless taken (409)
+            tid = unquote(p.split("/")[4])
+            t = KB_TRASH.get(tid)
+            if t is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            if any(e["id"] == t["entry"]["id"] for e in KB["projects"]):
+                return self.send_json({"error": "a project with this slug exists", "code": "conflict"}, 409)
+            KB_TRASH.pop(tid)
+            KB["projects"].append(t["entry"])
+            if t["detail"] is not None: KB_DETAIL[("projects", t["entry"]["id"])] = t["detail"]
+            return self.send_json({"id": tid, "kind": "projects", "slug": t["entry"]["id"], "name": t["entry"]["name"]})
         if self.command == "PUT" and p.startswith("/api/v1/kb/"):  # "Tagging": kept over the automatic tagging
             if os.environ.get("MOCK_KB_SAVE_FAIL") == "1": return self.send_json({"error": "知识库暂时写不进去"}, 502)
             kind, eid = p.split("/")[4:6]

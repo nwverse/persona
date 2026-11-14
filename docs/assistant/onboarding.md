@@ -670,7 +670,7 @@ Separate P1 issues: "Chat only" mode (after decision 9), node `claude.install`, 
 ### 7.3 iOS / macOS work assigned to a Mac
 
 Each issue references the protocol in section 5 and states "The Linux development machine cannot compile Swift; note in the PR if Xcode 26.0 was not verified." UI uses only the design system (`.surface`, `EmptyStateView(action:)`, `Theme.*`); do not raise the `TokenRatchetTests` baseline. Single-line buttons; light and dark screenshots.
-The native Mac app is frozen ([mac.md](../apple/mac.md)): in M1–M4 and M6, the Mac gets only what the shared iOS code brings, with no Mac-only work and no Mac screenshots or acceptance beyond keeping an existing Mac flow working (M2's paste-link pairing). M5 is Persona Link, which is not frozen.
+The retired native Mac app was frozen ([mac.md](../archive/apple/mac.md)): in M1–M4 and M6, it received only what the shared iOS code brought. M5 is Persona Link, which remains independently installable and is not frozen ([desktop.md](../desktop/desktop.md)).
 
 | # | Title | Changes | Acceptance |
 | --- | --- | --- | --- |
