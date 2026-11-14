@@ -165,6 +165,11 @@ import UIKit
     static let start = "com.persona.perf.frames.start"
     static let stop = "com.persona.perf.frames.stop"
     static let glideNotice = "com.persona.perf.frames.glide"
+    /// The other shell page comes to the front, as the switch's tap does it (`AppModel.selectedTab`, the strip slides).
+    /// A UI test's own tap costs main-thread time in the app: XCTest resolves the button from an accessibility snapshot
+    /// before it taps and again for every wait, 55–70 ms each on the `assistant` suite's data, some of them while the
+    /// strip moves (#5438). With this cue the measured frames are the app's.
+    static let switchPages = "com.persona.perf.shell.switch"
 
     private static var activeRun: [String: Any]?
 
@@ -182,7 +187,7 @@ import UIKit
                        "expected_iterations": d.integer(forKey: "perfRunIterations")] as [String: Any]
             DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.handle(n, run: run) } }
         }
-        for name in [start, stop, glideNotice, "com.persona.perf.frames.context"] {
+        for name in [start, stop, glideNotice, switchPages, "com.persona.perf.frames.context"] {
             CFNotificationCenterAddObserver(center, nil, callback, name as CFString, nil, .deliverImmediately)
         }
     }
@@ -193,6 +198,9 @@ import UIKit
             activeRun = run
         } else if name == glideNotice {
             Task { await runGlide() }
+        } else if name == switchPages {
+            let model = AppModel.shared
+            model.selectedTab = model.selectedTab == .chats ? .assistant : .chats
         } else if name == start {
             activeRun = run
             if stats.running { stats.stop(label: "probe") }

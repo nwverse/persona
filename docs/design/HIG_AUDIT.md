@@ -713,7 +713,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-078 Retired PersonaLink menu mixed hard-coded Chinese with localized strings
 - **Severity**: P2 (historical). **Platform**: retired macOS menu bar UI, removed in #6770.
-- **Location**: former `apple/PersonaLink/Sources/PersonaLink/` (retained in git history).
+- **Location**: the retired Mac menu bar UI, retained in git history rather than as a current repository path.
 - **Violates**: [Layout](https://developer.apple.com/design/human-interface-guidelines/layout): test localizations; [Writing][writing]: one consistent voice.
 - **Problem**: row titles used plain strings, bypassing the retired package's catalog. The desktop setup now uses its three-language resources, and the connector uses terminal localization.
 - **Evidence**: `MenuRow(title: <hard-coded Chinese>, ...)` versus `MenuRow(title: linkText("Set Web Address…"), ...)`.
@@ -729,7 +729,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-080 Retired PersonaLink menu rows highlighted only on hover
 - **Severity**: P2 (historical). **Platform**: retired macOS menu bar UI, removed in #6770.
-- **Location**: former `apple/PersonaLink/Sources/PersonaLink/` (retained in git history).
+- **Location**: the retired Mac menu bar UI, retained in git history rather than as a current repository path.
 - **Violates**: [Buttons][btn]: always include a press state for a custom button; [Accessibility][a11y]: support Full Keyboard Access.
 - **Problem**: rows were plain buttons whose accent fill came only from hover; keyboard focus had no highlight.
 - **Evidence**: `Button(action: action) { content(hover && !disabled) }.buttonStyle(.plain).onHover { hover = $0 }`.
