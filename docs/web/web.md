@@ -659,7 +659,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     `node web/e2e/composer-growth-scroll.mjs <origin> <artifacts> after` runs the real app against a fully intercepted
     synthetic mock hub in light/dark, at 390 × 844 and 1280 × 900, checking growth, idle/manual scrolling and the editor.
   - Input (Prompt Bar): Enter sends, Shift+Enter adds a line, Enter does not send during IME composition; `/` commands (the app's quick messages; `/clear` confirms first; since #2978 filtered by session capabilities, as on iOS: `/model` only for Claude in herdr panes that can switch models, `/clear` only for Claude in a pane that is not working and does not need you; none for Codex / compatible Codex forks / read-only sources, `lib/composer-commands.ts`);
-    the `/` palette (#5325, `views/chat/SlashPalette.tsx`, a chunk of its own; cindy's slash command palette, at the owner's request, 2026-11-12): a lone `/word` in the box opens a 320 px panel at the composer's left edge, one 36 px row per command (44 px on a touch screen), the command without its slash on the left and, in 12 px muted text on the right, where it comes from: nothing for Persona's own commands (Continue, Commit, Report, the main conversation's `/clear`), the agent's name for its own slash commands (`/compact`, `/context`, `/model`, `/loop`, an Agent's `/clear`: Claude Code, Codex in a Codex session; `agentCommands`), the extension's name for a quick prompt.
+    the `/` palette (#5325, `views/chat/SlashPalette.tsx`, a chunk of its own; cindy's slash command palette, at the owner's request, 2026-11-12): a lone `/word` in the box opens a 320 px panel at the composer's left edge, one 36 px row per command (44 px on a touch screen), the command without its slash on the left and, in 12 px muted text on the right, where it comes from: nothing for Persona's own commands (Continue, Commit, Report, the main conversation's `/clear`), the agent's name for its own slash commands (`/compact`, `/context`, `/model`, `/loop`, an Agent's `/clear`: Claude Code, Codex in a Codex session; `agentCommands`), **Saved** for one of your saved prompts (after the chat's own commands; "Saved prompts" below), the extension's name for a quick prompt.
     The focused row's description is in a 280 px card 8 px to the panel's right, level with the row and never lower than the panel's bottom, to its left when the window has no room on the right, and a line inside the panel under the rows when it has room on neither side, as on a phone (there the keyboard leaves little height, and a card above the panel would push the rows off the top); a command that types words (Persona's text commands, quick prompts) adds **Types: “…”** there.
     Ranked as cindy ranks (`rankCommands`): the name equal to what follows the slash, then starting with it, then containing it, each in the list's order; commands whose description contains it come after every name hit, so a word in the user's language still finds an English command. At most 25 rows; **No matching commands** when nothing matches, and Enter then sends the words as they are, since the list holds only a few of the agent's commands. ↑ ↓ (wrapping), Enter / Tab pick; Esc or a press outside the composer closes it; hovering a row focuses it, a click picks it and the box keeps the focus; no key hint line. Each row carries its description for screen readers (`aria-describedby`); the card is drawn only.
     Deviations from cindy: a click picks rather than a mousedown (a tap's click would land on whatever lay under the closed palette), rows grow to 44 px on touch screens, and the panel enters with Persona's `pop-in`;
@@ -1199,6 +1199,37 @@ It forwards a reply to another computer's Agent (searching "Astro") and to Perso
 note the hub got (`GET /mock/sent_to`), the card in the sent bubble and that it opens the original, and New agent's card;
 then several at once: Select messages…, Cancel, none picked, your message and the reply forwarded together to the blog's
 Agent, the two blocks in the chat's order before the note, and the one card in the sent bubble.
+
+### Saved prompts (#7329)
+
+The user's own `/` prompts: the instructions they send again and again ("review this diff for security issues…", a team's
+PR checklist), kept on the hub as the current assistant's settings (`assistant.saved_prompts`, the routes in
+`docs/protocol/protocol.md` ("REST (App → hub)")), so every device and browser has the same list. No assistant tool reads
+or writes them: the main chat's fixed payload stays as it was.
+
+- **In every chat's `/` list** (Agent chats, Persona chats, the new-conversation and health boxes): after the chat's own
+  commands and before extensions' quick prompts, in the list's order, with **Saved** where a row says where it comes from,
+  ranked and filtered with the rest (`rankCommands`). Picking one puts its text in the box and never sends it, as a quick
+  prompt does; the card beside the list shows what it types. A box with no commands of its own still opens the list for
+  them. The rows come from `lib/saved-prompt-rows.ts`, a few lines on the first screen; the list, its reads and words are
+  `lib/saved-prompts.ts`, a chunk loaded the first time a box has the focus or a `/`. One list per page, read again on
+  `hello`, on `assistant_saved_prompts` (another device changed it; only the shown assistant's, `PAGE_EVENTS`) and when
+  another assistant becomes the current one; until it is in, a box shows none.
+- **Settings › Saved Prompts** (`views/settings/SavedPrompts.tsx`, in the current assistant's group): each prompt's
+  `/name` and the first two lines of its text, **New Prompt**, and per row Move Up / Move Down (the `/` list's order,
+  `PUT …/order`), **Edit** and **Delete** (confirmed in the row). An empty page says what they are for. An assistant from
+  before them (404) says it does not keep them yet; a failed read offers Try Again, and a list read before stays.
+- **The editor** (`views/settings/SavedPromptDialog.tsx`): Name (one word, shown after a fixed `/`) and Text (several
+  lines; ⌘/Ctrl-Return saves). It says a rule before asking the hub: a name another prompt has at once, the name and text
+  rules once there is something to check or Save was pressed; the hub's own refusal shows in the dialog and keeps what
+  was typed. A count appears past 80% of the 8,000 characters.
+- **Save as Prompt…** on your own message's menu (right click, a long press, the ⋯ beside the bubble) where the chat
+  can send: the editor over the page, filled with the message's words and a name from its first ones (lower case, joined
+  by `-`, moved past a name taken). Not on replies, and not in a read-only chat.
+- iOS and Android follow in their own issues; until then they ignore `assistant_saved_prompts`.
+- Checks: `lib/saved-prompts.test.ts`, `views/settings/SavedPrompts.test.tsx`, `views/chat/Composer.saved-prompts.test.tsx`,
+  `views/chat/MessageActions.save-prompt.test.tsx`; end to end against the mock hub (`MOCK_SAVED_PROMPTS=1`), wide and phone,
+  light and dark: `node web/e2e/saved-prompts.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`.
 
 ### Unified main-chat entry (#930)
 
