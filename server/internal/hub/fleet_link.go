@@ -611,9 +611,7 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 		}
 		h.forwardOwned(w, r, h.byRequest)
 	})
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/seen", h.withMachine(func(w http.ResponseWriter, r *http.Request, _ *Machine) {
-		h.forwardOwned(w, r, h.bySession)
-	}))
+	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/seen", h.withMachine(h.postSeen))
 }
 
 // ---- what the manager asks of the hub for the nodes ----
