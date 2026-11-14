@@ -3,7 +3,7 @@
 // is a separate chip. Before, one column mixed both, so a parked to-do whose Agent had stopped read "Parked" and an
 // Agent's own state and a to-do's state were drawn with different icon sets.
 import { t } from "../i18n";
-import { stateOf } from "./format";
+import { foldedState } from "./child-sessions";
 import { stateName } from "./state-labels";
 import { reviewState, type Supervision } from "./supervision";
 import type { AgentState, Session } from "./types";
@@ -31,7 +31,7 @@ export function agentRowKey(o: { live: boolean; status: string; lead?: Session; 
   }
   if (!o.todo) return "not_started";
   if (!o.lead) return "stopped";
-  const own = stateOf(o.lead);
+  const own = foldedState(o.lead); // a working or waiting child session counts, as in todoStatus and mostUrgentAgent
   if (own === "offline") return "stopped";
   if (own === "working" || own === "needs_you" || own === "unread") return own;
   return "idle";
@@ -75,8 +75,11 @@ export function todoChipState(o: { toStart: boolean; status: string; done: boole
   if (o.done || o.status === "done") return stateName("done");
   if (review === "parked") return t("assistant-tasks.review_parked");
   if (review === "needs_user") return t("assistant-tasks.review_needs_user");
-  if (review === "pending_review") return t("assistant-tasks.review_pending");
-  if (review === "rework") return t("assistant-tasks.review_rework", { round: o.todo?.supervision?.round ?? 1 });
+  // Awaiting review and rework are the to-do's state only while its Agent is not at work or asking: otherwise the row is
+  // that Agent's (its status column says so) and a review chip beside it would contradict it.
+  const agentBusy = o.status === "working" || o.status === "waiting" || o.status === "needs_you" || o.status === "unread";
+  if (review === "pending_review" && !agentBusy) return t("assistant-tasks.review_pending");
+  if (review === "rework" && !agentBusy) return t("assistant-tasks.review_rework", { round: o.todo?.supervision?.round ?? 1 });
   if (o.stage === "merge" && o.pr) return t("assistant-tasks.todo_waiting_merge");
   return undefined;
 }

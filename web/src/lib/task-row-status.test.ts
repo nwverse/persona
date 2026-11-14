@@ -14,6 +14,9 @@ describe("a task row's status column says only what its Agent is doing (#6492)",
     expect(agentRowKey({ live: false, status: "follow_up", lead: session("idle"), todo: true, agents: 1 })).toBe("idle");
     expect(agentRowKey({ live: false, status: "done", lead: undefined, todo: true, agents: 1 })).toBe("stopped");
     expect(agentRowKey({ live: false, status: "follow_up", lead: session("unread"), todo: true, agents: 1 })).toBe("unread");
+    // an idle lead whose child sessions work or ask folds them in, as todoStatus and mostUrgentAgent do
+    expect(agentRowKey({ live: false, status: "follow_up", lead: { ...session("idle"), children: { total: 1, working: 1 } }, todo: true, agents: 1 })).toBe("working");
+    expect(agentRowKey({ live: false, status: "parked", lead: { ...session("idle"), children: { total: 1, needs_you: 1 } }, todo: true, agents: 1 })).toBe("needs_you");
     // the states that are the Agent's own stay as they are
     expect(agentRowKey({ live: false, status: "needs_you", lead: session("needs_you"), todo: true, agents: 1 })).toBe("needs_you");
     expect(agentRowKey({ live: false, status: "usage_limit", todo: true, agents: 1 })).toBe("usage_limit");
@@ -41,5 +44,15 @@ describe("the to-do's own state is a chip of its own (#6492)", () => {
     expect(todoChipState({ toStart: true, status: "not_started", done: false })).toBe(t("assistant-tasks.plan_waiting"));
     expect(todoChipState({ toStart: false, status: "accepted", done: true })).toBe(t("assistant-tasks.review_accepted"));
     expect(todoChipState({ toStart: false, status: "working", done: false, todo: { done_at: null } })).toBeUndefined();
+  });
+
+  it("says awaiting review and rework only while the Agent is not working or asking", () => {
+    const review = (state: Supervision["state"]): Supervision => ({ state, supervisor: "c", reviews: [], round: 2 });
+    for (const status of ["working", "waiting", "needs_you", "unread"]) {
+      expect(todoChipState({ toStart: false, status, done: false, todo: { done_at: null, supervision: review("pending_review") } })).toBeUndefined();
+      expect(todoChipState({ toStart: false, status, done: false, todo: { done_at: null, supervision: review("rework") } })).toBeUndefined();
+    }
+    expect(todoChipState({ toStart: false, status: "follow_up", done: false, todo: { done_at: null, supervision: review("pending_review") } })).toBe(t("assistant-tasks.review_pending"));
+    expect(todoChipState({ toStart: false, status: "follow_up", done: false, todo: { done_at: null, supervision: review("rework") } })).toBe(t("assistant-tasks.review_rework", { round: 2 }));
   });
 });
