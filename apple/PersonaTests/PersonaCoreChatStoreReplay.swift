@@ -87,8 +87,8 @@ public struct NativeChatStoreContinuityReplay {
                             throw CoreContinuityShadow.Mismatch(rule: "effect-chat", inputShape: "another-chat")
                         }
                         return try effect.requestJSON ?? .null
-                    case let .rejected(reason: reason):
-                        throw CoreContinuityShadow.Mismatch(rule: "rejected", inputShape: reason)
+                    case .rejected:
+                        throw CoreContinuityShadow.Mismatch(rule: "rejected", inputShape: "effect-rejected")
                     }
                 }
                 let expected = `case`.expected[index]
