@@ -460,7 +460,6 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 	if wait {
 		it.Suggestion = nil // the user's own reply supersedes a suggestion still waiting for confirmation
 		it.Agent.SentOf = c.Last
-		b.flushInboxWakes(it)
 		b.waitForOtherSide(it, defaultInboxFollow(now), ViaUser, now, loc, true)
 		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text}, false, now)
 		tell = true

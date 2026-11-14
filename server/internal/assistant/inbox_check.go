@@ -123,6 +123,7 @@ func (s *Service) checkInboxFollowUps(ctx context.Context, cfg InboxAgentConfig,
 	running := b.inboxRunning()
 	var changed []*inboxWrite
 	checked := map[*InboxItem]bool{}
+	sourceAdmitted := map[*InboxItem]bool{}
 	for _, c := range b.inboxWakeCandidates(cfg, due) {
 		if running >= agentConcurrency(cfg) {
 			break
@@ -130,6 +131,7 @@ func (s *Service) checkInboxFollowUps(ctx context.Context, cfg InboxAgentConfig,
 		w := beginWrite(c.it)
 		if c.source {
 			b.admitInboxSourceWake(c.it, now)
+			sourceAdmitted[c.it] = true
 		}
 		if c.check {
 			f := c.it.Follow
@@ -147,8 +149,8 @@ func (s *Service) checkInboxFollowUps(ctx context.Context, cfg InboxAgentConfig,
 		}
 	}
 	for _, it := range due {
-		if checked[it] {
-			continue
+		if checked[it] || sourceAdmitted[it] {
+			continue // an admitted source wake owns this pass's slot, including after the third empty check
 		}
 		f := it.Follow
 		hasConversation := it.Agent != nil && it.Agent.SessionID != ""
