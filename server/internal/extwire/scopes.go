@@ -93,6 +93,20 @@ var RouteScopes = map[string]string{
 	// The todos (the assistant's, relayed): reading them, adding, editing and attaching agents and spaces, and writing
 	// outcome decisions (an extension writes no other source). Deleting a todo, superseding decisions, the done check and
 	// a retry stay with full credentials.
+	"GET /api/v1/todos/{id}/backend-workspace":                           ScopeTodosRead,
+	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}": ScopeTodosRead,
+	"POST /api/v1/todos/{id}/backend-workspace/prepare":                  ScopeTodosWrite,
+	"POST /api/v1/todos/{id}/backend-workspace/cancel":                   ScopeTodosWrite,
+	"POST /api/v1/todos/{id}/backend-workspace/cleanup":                  ScopeTodosWrite,
+	"GET /api/v1/todos/{id}/workspace-rules":                             ScopeTodosRead,
+	"PUT /api/v1/todos/{id}/workspace-rules":                             ScopeTodosWrite,
+	"POST /api/v1/todos/{id}/workspace-naming/preview":                   ScopeTodosWrite,
+	"POST /api/v1/todos/{id}/workspace-naming/plans":                     ScopeTodosWrite,
+	"GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}":       ScopeTodosRead,
+	"POST /api/v1/assistant/workspace-naming/preview":                    ScopeTodosWrite,
+	"GET /api/v1/todos/{id}/repositories":                                ScopeTodosRead,
+	"PUT /api/v1/todos/{id}/repositories":                                ScopeTodosWrite,
+	"PUT /api/v1/todos/{id}/repositories/{repo_id}/links":                ScopeTodosWrite,
 	"GET /api/v1/todos":                                 ScopeTodosRead,
 	"GET /api/v1/todos/{id}/decisions":                  ScopeTodosRead,
 	"POST /api/v1/todos":                                ScopeTodosWrite,

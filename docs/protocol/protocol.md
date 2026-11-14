@@ -2903,7 +2903,7 @@ The web's file panel and Git panel refresh automatically while open (`web/src/li
 
 The manager ↔ node protocol (the `node.*`, `sessions.*`, `session.*`… RPC over ssh, Persona Link, tailcat or a member hub) carries a version and capabilities, so a device and a manager built from different commits work together. The constants live in `server/internal/nodeproto` (a pure contract package that imports nothing).
 
-- After `engine.use` (when there is a stored engine), the manager's first call is `node.info`. Besides what the node is, it answers `protocol` (the node protocol it speaks, an integer), `protocol_min` (the oldest manager protocol it still answers), `program` and `executable` (`personad` or `persona-node`, and the file it runs from: an update brings the same kind of program to that file; older nodes leave both out and run personad, [link.md](../operations/link.md) "The device's program") and `capabilities` (stable names: `sessions`, `model_configuration`, `assistant_service_tier`, `node_update`, `engines`, `machine_uid`, `herdr_server`, `plugin_node_call`, `ultracode`, `health_spaces`, `preview`, `secret_run`, `clipboard`, `secret_env`, `launcher_switch`, `model_http`, `engine_switch`, `model_run`, `launcher_switch_now`, `launcher_switch_idle`, `pane_cwd`, `node_update_idle`, `pane_new_space`, `session_skills_v1`; `secret_env` only from a resident node, attached or Persona Link). A name is never renamed or reused; a node drops one only together with a protocol bump.
+- After `engine.use` (when there is a stored engine), the manager's first call is `node.info`. Besides what the node is, it answers `protocol` (the node protocol it speaks, an integer), `protocol_min` (the oldest manager protocol it still answers), `program` and `executable` (`personad` or `persona-node`, and the file it runs from: an update brings the same kind of program to that file; older nodes leave both out and run personad, [link.md](../operations/link.md) "The device's program") and `capabilities` (stable names: `sessions`, `model_configuration`, `assistant_service_tier`, `node_update`, `engines`, `machine_uid`, `herdr_server`, `plugin_node_call`, `ultracode`, `health_spaces`, `preview`, `secret_run`, `clipboard`, `secret_env`, `launcher_switch`, `model_http`, `engine_switch`, `model_run`, `launcher_switch_now`, `launcher_switch_idle`, `pane_cwd`, `node_update_idle`, `pane_new_space`, `session_skills_v1`, `task_workspace_v1`; `secret_env` only from a resident node, attached or Persona Link). A name is never renamed or reused; a node drops one only together with a protocol bump.
 - The protocol version rises only for a change an older peer cannot follow (a method whose params or results change meaning). Additions are new capabilities, and the manager checks the capability before using them.
 - The manager drives a node when `protocol >= MinVersion`, `protocol_min <= Version` (both the manager's) and the node has every required capability (today `sessions`). Otherwise the node is **incompatible**: it stays connected and shows in the machine list, but is not configured, listed or watched, and every call except `ping`, `sessions.list`, `node.info` and `node.update.*` is refused with `node_outdated` (so it can still be updated). The machine list says why in `node_incompatible`: `node_protocol_old` (update the node) or `node_protocol_new` (the node needs a newer manager).
 - Optional features check capabilities, not builds: a nonempty `service_tier` on a new conversation's `assistant.send` needs `assistant_service_tier` (the manager answers `node_outdated` before any thread or turn starts; an omitted tier keeps the old behavior); a model on `assistant.send` / `assistant.warm` / `session.start` / `session.send` needs `model_configuration`; `"ultracode":true` on `session.start` needs `ultracode` (a node from before the handshake has none; `false` asks for nothing and is never refused); another manager's health space (`health_dir` on `file.upload.begin` and `health.reports.*`) needs `health_spaces`; `clipboard.get` / `clipboard.set` need `clipboard` (`node.info`'s `clipboard: {supported, reason?}` says whether a clipboard is reachable there); an update over the node RPC needs `node_update` (and `node_update` in `node.info` saying it can run now), and with `node_update_idle` the manager waits until `sessions.list` answers `update_busy: false` ([node-update.md](../operations/node-update.md) "Usage"), for every Agent to be idle without it or when the field is missing; `secret.run` needs `secret_run` (without it the manager answers `node_outdated` before the card is shown); `secret.stage` and a `session.start` with `secret_ticket` need `secret_env` (the same `node_outdated`: an older node would start the Agent without the values); `launcher` on `session.modes` needs `launcher_switch` (the hub answers `node_outdated`: an older node would drop it and switch only the model); `switch_now` on `session.send` needs `launcher_switch_now` (the same `node_outdated`: an older node would type the message on the old launcher and leave the switch waiting); `session.switch` needs `launcher_switch_idle` (the same `node_outdated`); a launcher of the other engine there is taken as a switch to that engine by a node with `engine_switch` only (one without refuses it with a `switch_*` code); `model.http` needs `model_http` and `model.run` needs `model_run` (the same `node_outdated`).
@@ -4547,3 +4547,53 @@ gets 501 `assistant_service_tier_manager_outdated` before relaying an explicit o
 Resumed sends and non-Codex starts return coded 409 refusals; a native refusal returns
 `assistant_service_tier_refused`, stops the unused new process and persists no conversation before the first turn.
 New Agent starts do not take a speed setting.
+
+### Optional Todo repository metadata
+
+The manager relays `GET /api/v1/todos/{id}/repositories` with `todos.read`, and
+`PUT /api/v1/todos/{id}/repositories` plus
+`PUT /api/v1/todos/{id}/repositories/{repo_id}/links` with `todos.write`.
+Routing uses the Todo owner, including explicit-manager conflicts, just like
+existing Todo detail routes. `POST /api/v1/todos` accepts optional atomic
+`repository_bindings`; omitted fields preserve all legacy creation behavior.
+The full request, revision and source-snapshot contract is in
+`docs/assistant/todos.md` ("Repository associations").
+
+
+### Backend workspace naming metadata
+
+Manager routes and the operation snapshot contract are documented in
+`docs/assistant/todos.md` ("Backend workspace naming").
+
+| Node method | Input and result |
+| --- | --- |
+| `workspace.naming.resolve` | `workspacenaming.Source` → `Preview {status, sample, plan?, diagnostics[]}`. The target supplies `NodeContext`; paths may be absent on disk. Version `workspace-naming/v1`. Local format validation only, with no resource creation, Git network access or Engine call. |
+
+Legacy workspace resolution and `new/existing/none` do not call this method.
+The new Assistant view field `workspace_naming_version` advertises manager
+support; an unavailable computer or unsupported method never falls back to an
+Engine naming path.
+
+## Backend task workspace RPC
+
+The optional Node capability `task_workspace_v1` supports engine-independent preparation. Manager
+business operations and HTTP routes are documented in [todos.md](../assistant/todos.md) under
+"Backend workspace preparation". Hub `device.call` retains machine ownership checks and additionally
+binds the preparation plan's manager and machine to the authenticated route. It owns no preparation
+state. Requests use `taskworkspace.Request`; results use `taskworkspace.Record`. All operation IDs
+are stable and independent of transport IDs and engine workspace IDs.
+
+| Node method | Contract |
+| --- | --- |
+| `task.workspace.capabilities` | Read-only probe → `{capability: "task_workspace_v1"}`. |
+| `task.workspace.prepare` | Adopt or resume the exact saved naming plan and operation. Returns actual repository paths, private Git locations, frozen source commits, phases and structured errors. Every selected repository must be verified before ready. |
+| `task.workspace.inspect` | Read-only physical observation. It does not fetch, reset, repair or adopt an unrelated directory. |
+| `task.workspace.cancel` | Prevent the operation from preparing again; retain physical resources. |
+| `task.workspace.cleanup` | Explicit worktree cleanup using `force?` and `delete_branch?`, both false by default. Returns removed flags and retained Git paths. |
+| `task.workspace.acquire` | Register `use_id` against ready resources after physical inspection; prevent cleanup. |
+| `task.workspace.release` | Release the exact `use_id` after use stops. |
+
+The Manager checks the capability before adopting a preparation operation. Older Nodes return an
+explicit unsupported result; legacy workspace creation remains available through its original paths.
+On Unix inherited subprocess locks allow reconciliation after Node death. On Windows an interrupted
+in-flight command remains unknown until its execution can be established; it is never blindly replayed.

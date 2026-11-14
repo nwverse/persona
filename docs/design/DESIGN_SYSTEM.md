@@ -1523,6 +1523,18 @@ The workspace catalog, selection and management actions follow the current assis
 
 Removal uses the confirmation sheet pattern in section 4.4 because it needs branch and uncommitted-file choices. The dialog identifies the workspace and explains which files and running sessions will be lost. Keep the branch by default; require an explicit discard choice for uncommitted files. Confirmation stays unavailable until the computer supplies a valid preview. A changed target requires another preview, and an uncertain dispatched removal offers status reconciliation rather than another destructive submission. Renaming uses the existing text-entry dialog pattern and preserves workspace, branch and Agent identities.
 
+Backend naming (#7100) is a collapsed advanced panel in Assistant settings and
+Todo details, reusing `Group`, `Button` and the standard settings input. It
+serves people configuring coding tasks; ordinary tasks need no new fields.
+Three labeled template fields show inherited values, with explicit **Use
+inherited**, **Save** and **Restore inheritance** controls. Preview uses the
+selected computer and layout, labels examples, wraps full paths and explains
+that availability and source commits are checked later. A failed save retains
+its draft; reloading updates the saved baseline without replacing local edits.
+Changing a field, computer or assistant retires earlier previews. The panel
+changes no creation mode and starts nothing. This is a secondary settings
+surface, not another workspace management destination.
+
 ### 4.11 Questions of several
 
 A card that asks several questions at once shows where it is and lets the answers be checked before they go (a pending
@@ -2558,3 +2570,21 @@ visible. The preview explicitly says remote existence is unconfirmed. Check and 
 keeps the draft on failure, and a browser timeout asks the user to refresh because persistence is unconfirmed.
 This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
 options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
+
+## Optional repository associations
+
+Coding-work metadata belongs in the existing Web to-do editor's collapsed
+**Repositories and links (optional)** group. Ordinary to-dos still require only a
+title. `TaskRepositoryBindingsEditor` is the controlled metadata editor;
+`TodoRepositoryBindings` owns existing-Todo requests and `NewTodoRepositoryBindings`
+contributes a draft to the parent's single creation request. These reuse `Button`,
+`Loading`, shared settings inputs, semantic tokens and toast Undo for draft
+removal. There is no new page or workspace control.
+
+Repository links are one URL per line. Directory aliases and source refs are in
+per-repository **Source options** disclosure. Empty aliases and default branches
+need no setup. Saved-source changes are explained beside that repository, while
+legacy PR display remains separate. Controls have labels, action groups wrap at
+narrow widths, and saving disables edits. Failed saves keep input; conflicts offer
+explicit **Discard edits and reload**. Manager/Todo/credential changes retire old
+results. New copy ships in English, Simplified Chinese and Japanese.

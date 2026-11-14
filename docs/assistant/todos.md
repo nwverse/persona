@@ -870,3 +870,199 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 3. **Empty-workspace rename does not migrate**: when renaming through hub with no active sessions, hub cannot resolve old workspace name; `todo_spaces` does not automatically migrate, like pin/mute.
 4. **`/clear` recreates session**: Agent `/clear` creates a new session uuid underneath; new session does not auto-link to old to-do, and original session row stays listed.
 5. **Assistant disconnected**: to-do APIs and create/send with `todo_id` return 503; workspace renames through hub do not migrate and answered cards are not recorded as decisions ("Who owns what").
+
+## Repository associations
+
+Repository associations are optional metadata for ordinary to-dos and existing
+single-repository tasks. They do not create or remove directories, change the
+workspace mode, or advance task progress. Legacy `new` / `existing` / `none`,
+Engine-created workspaces, reused directories and cleanup retain their existing
+behavior. The existing `pr_url` and delivery judgment stay independent: multiple
+linked PRs never imply that a task is complete.
+
+The Web to-do creation dialog and detail use the optional **Repositories and
+links** group. Source options are disclosed per repository. No alias or base
+branch is required: an empty alias means no directory override and a missing ref
+means the remote default branch. This feature does no Git or remote issue lookup.
+An issue/PR URL must belong to the saved provider, instance and target repository;
+links retain numeric string IDs, including IDs beyond JavaScript's integer range.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/todos/{id}/repositories` | Returns `schema_version`, `manager`, `todo_id`, `revision` and `repositories` |
+| PUT | `/api/v1/todos/{id}/repositories` | `{expected_revision, expected_catalog_revision, repositories}` replaces business associations atomically; `[]` clears them |
+| PUT | `/api/v1/todos/{id}/repositories/{repo_id}/links` | `{expected_revision, links}` replaces one repository's links; `[]` clears them |
+
+`POST /api/v1/todos` also accepts optional `repository_bindings` containing
+`catalog_revision` and `repositories`. The Todo and associations commit in one
+transaction. Older requests omitting it retain existing behavior; ordinary PATCH
+operations never touch association storage. The catalog response and
+`repositories_list` include `catalog_revision`. Writes require exact revisions;
+conflicts preserve the client draft and require reconciliation. Read failures
+never masquerade as an empty set.
+
+`todo_repositories_get`, `todo_repositories_set` and `todo_repository_links_set`
+expose the same manager-owned store. `todo_get` points to the dedicated association read without adding a catalog
+read dependency to the old tool. `todo_create` accepts the optional creation object; a matching
+existing Todo with supplied bindings is explicitly refused so callers can read
+and edit that Todo without silently discarding associations. Writes retain the
+existing outbound confirmation rule for health conversations.
+
+Shared Go types and validators: `server/internal/assistant/repository/task.go`.
+Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
+`spec/fixtures/task-repositories/contract.json`. Directory aliases use one ASCII
+rule, case-insensitive uniqueness, reserved-device-name rejection and an optional
+empty override. Explicit `root` layout maps one selected repository to `.`;
+`container` layout uses a validated nonempty effective directory name. This
+opt-in mapping never changes legacy cwd inference.
+
+Each association saves identity and credential-free transport by value. Catalog
+names are independent. A removed or identity-changed catalog entry is reported
+without replacing the saved source. Catalog clients omitting `clone_url` preserve
+its previous value when identity is unchanged; a changed identity gets its own
+canonical fallback. Adopting a new source requires removing and reselecting the
+association in separate saves.
+
+Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
+select repository IDs through `repository.Snapshot`, and persist that value with
+their operation in the same transaction. The reader locks the Todo, including an
+empty set. Digests exclude links and association revision. Consumers retain the
+operation's snapshot for retries; no permanent business-association seal or
+legacy-start hook exists. Physical records, paths, resolved commits and cleanup
+belong to the workspace preparation service.
+
+
+## Backend workspace naming
+
+People configuring coding tasks can open **Workspace naming** in advanced
+Assistant settings or a to-do's details. It applies only to explicitly selected
+backend preparation. It does not change Engine creation, legacy `new`, `existing`
+or `none`, existing preferences, task progress or cleanup.
+
+The fields are `base_directory` (default `{home}/workspace`),
+`task_directory_template` (`task-{task-id}`), and `branch_template`
+(`persona/{task-id}`). Each field inherits task override → Assistant → product
+default. Omitted patch fields preserve saved values; `null` removes an override;
+empty strings are invalid. Assistant writes still require the explicit manager.
+Task overrides have their own CAS revision, independent of legacy Todo edits.
+
+Folder templates support `{task-id}`, `{task-slug}`, `{yyyy}` and `{mmdd}`.
+Branches also support `{repo}`, `{branch}` and `{base-branch}`. The last two
+require an explicit branch; default, tag, commit and arbitrary typed refs are
+preserved without guessing a branch. Only a template using an unavailable field
+fails. A root repository maps to `.`, while containers use each repository's
+explicit alias or the shared repository-name default. Duplicate names fail.
+
+| Route | Contract |
+| --- | --- |
+| `GET/PUT /api/v1/assistant` | `workspace_rules`, `effective_workspace_rules`, `workspace_naming_version` (`workspace-naming/v1`); PUT patches rules with explicit manager ownership. |
+| `GET/PUT /api/v1/todos/{id}/workspace-rules` | `{todo_id, revision, workspace_rules}`; PUT requires `expected_revision` and a rule patch. |
+| `POST /api/v1/assistant/workspace-naming/preview` | Clearly labeled sample, using selected computer and layout; optional draft rules. |
+| `POST /api/v1/todos/{id}/workspace-naming/preview` | Trusted saved Todo/repositories, explicit `machine_id`, `layout` (`root` or `container`) and `selected_repo_ids`, optional draft rules. |
+| `POST /api/v1/todos/{id}/workspace-naming/plans` | Same selection plus required stable `operation_id`, without draft rules; saves one immutable snapshot for this operation. |
+| `GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}` | Reads a saved snapshot, including after a lost save response. |
+
+Preview calls the selected computer's read-only `workspace.naming.resolve` RPC.
+It supplies its own home and native path semantics; no browser-provided home or
+resolved path is trusted. It checks lexical paths, existing credential-folder
+restrictions and local branch format. No directory is created, no repository is
+queried or fetched, and no Engine is opened. `.persona` and `.git` task path
+segments and private state directories are unavailable; `{persona-home}` has no
+registered public workspace subtree in this version and is unsupported.
+
+The sole resolver and wire contract are in
+`server/internal/workspacenaming/naming.go`, with an exact shared vector in
+`spec/fixtures/workspace-naming/contract.json`. It freezes the instant, assistant
+timezone (explicit UTC fallback), title slug, effective rules, T1 selected source
+snapshot, paths and task branches. `digest` is SHA-256 of the Go JSON encoding
+with its own digest cleared; repositories are ordered by repository ID.
+
+The manager persists `todo_workspace_rules` and `workspace_naming_plans` in
+PostgreSQL. Snapshot saves check the current override revision and selected source
+digest in the same Todo transaction. Link-only edits do not alter that source
+digest. Retrying an existing operation returns its original snapshot without
+rereading settings, title, clock or computer context. Changing input requires a
+new operation; associations and overrides remain editable, including after a
+snapshot. Preparation can call `db.ReadWorkspaceNamingPlanTx` in its own
+transaction. This read does not permanently bind the Todo or attest readiness;
+preparation owns cancellation, intent checks, physical ownership, Git source
+resolution, recovery and existing cleanup semantics.
+
+Web reuses `WorkspaceRulesEditor`, `WorkspaceNamingPreview`, settings inputs,
+Group and Button. Saves confirm returned values; failures keep drafts and can
+reload the saved baseline without discarding local edits. Edits and computer or
+assistant changes invalidate pending preview responses. These controls never
+select a creation mode or start an Agent.
+
+## Backend workspace preparation
+
+Backend creation is an explicit additional path for people preparing repository work on a computer.
+It does not change legacy `new` / `existing` / `none`, engine-created workspaces, existing checkout
+reuse, ordinary to-dos or their defaults. Associating repositories never creates a directory. A saved
+naming plan selects the repositories to prepare, independently of later association edits. Root layout
+uses one linked worktree at relative path `.`; container layout uses the selected subdirectories.
+
+The Manager adopts the T1 repository snapshot and saved T2 naming plan in one transaction before
+calling the Node. The shared repository contract lives in `server/internal/repositorywire`; the original
+`server/internal/assistant/repository` import path retains aliases and forwarding helpers. This keeps
+the Hub independent of Manager code while preserving the T1/T2 API. New records are in manager migration `0520_task_workspaces.sql`, separate from
+legacy engine workspace IDs. Repository migration `0516_todo_repositories.sql` replaces its earlier
+0513/0514 names through the existing renumbering mechanism; 0514 on main belongs to search. A Node
+stores physical receipts and private bare repositories under its protected `task-workspaces` directory.
+The bare repositories are private to the workspace, have no shared object dependencies, and survive
+default cleanup so local branches and commits really remain available. `common_dir` reports their
+actual locations. This separate Git storage also permits a root worktree to be removed while retaining
+its branches. File APIs cannot edit the ownership receipts; shell access under the same OS account
+is not a separate security boundary.
+
+The HTTP operations are:
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /api/v1/todos/{id}/backend-workspace` | Current persisted workspace or null; never prepares resources. |
+| `GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}` | Persisted workspace plus a separate live Node observation or an unavailable error. |
+| `POST /api/v1/todos/{id}/backend-workspace/prepare` | `operation_id`; first call also supplies `machine_id`, `layout` and `selected_repo_ids`. Saves or adopts a naming plan, then prepares. |
+| `POST /api/v1/todos/{id}/backend-workspace/cancel` | `operation_id`; persists cancellation before contacting the Node. |
+| `POST /api/v1/todos/{id}/backend-workspace/cleanup` | `operation_id`, optional `force` and `delete_branch` (both false by default). Returns per-repository removal and branch results plus retained Git paths. |
+
+The assistant's `todo_workspace` tool exposes inspect, prepare, cancel and cleanup with the same
+contract. Preparation and cleanup never start an Agent or change task stage. Missing support returns
+`unsupported`; it never falls back to engine creation. Errors carry code, stage, operation, repository,
+path and available actions; partial results remain in the operation record. Raw Git stderr and embedded
+credentials are not returned. Default refs are discovered from remote HEAD and fetched on the Node;
+typed branch/tag/commit/ref input is preserved. A resolved base commit is checkpointed before the
+worktree is added. Current HEAD and dirty state never replace that source fact.
+
+Use the same operation for transient retry. After an unknown transport outcome, inspect it first.
+A canceled operation remains canceled. To correct inputs, cancel, edit associations/rules and use a
+new operation on the same to-do. Unchanged successful instances at the same root are reused; changes
+that would replace successful work return `resource_conflict` and require explicit cleanup. Cleanup
+keeps tombstones; preparing after removal uses a new operation/workspace identity. `node_operation_id` records the operation actually admitted by the Node, which may still be the
+previous one after rejected corrections. Further corrections and cleanup target that physical owner,
+including when cancellation happened before any Node effects. Business metadata stays editable and
+does not invalidate a ready workspace.
+
+Node locks cover each workspace and its root, including Git subprocesses. On Unix the subprocess
+inherits both lock descriptors: a killed Node cannot make an ongoing command look stopped. A new
+Node reconciles the Git registration after the command exits, preserving commits and dirty files. On
+Windows an interrupted in-flight command remains `operation_unknown` because the current lock
+implementation cannot prove its child stopped; normal completed-command restart recovery is supported.
+No native Windows execution is claimed by a cross-build.
+
+Cleanup uses the existing worktree rules: running Agents/use claims prevent removal, uncommitted
+changes require force, and deleting an unmerged task branch requires force. New commits alone do
+not prevent default cleanup because the task branch and its bare object store remain. The ancestry
+check for non-force branch deletion uses the frozen source, the equivalent of the source checkout's
+branch. Unknown container files and additional Git registrations are preserved, including with force.
+Cleanup results distinguish removed checkouts from retained branch storage; no retained branch is
+claimed after its object store has been deleted.
+
+The T4 consumption boundary is `PrepareBackendWorkspace`, `InspectBackendWorkspace`,
+`AcquireBackendWorkspace`, `CheckBackendWorkspaceUse`, and `ReleaseBackendWorkspace` in
+`server/internal/assistant/task_workspaces.go`. Acquire before Engine start, check the current task
+intent immediately before starting, and keep the stable use ID until the session stops. An ambiguous
+acquire/release retains the use claim for inspection. Cleanup and use admission share the Todo lock;
+Node verifies Git again on acquire. Sandboxed Engine consumers must allow the returned `common_dir`
+paths for Git writes as well as the root and repository paths. Cancel/completion racing preparation prevents a late Ready result
+from authorizing a start. Engine opening, session recovery and user interface assembly are separate
+consumers of these primitives.
