@@ -206,15 +206,26 @@ Relations chain (A shares a PR with B, B an issue with C: one row). A closed to-
 
 When `task_review` (or the judge's spot check) accepts a task, the hub closes it. If its conversation, its supervisor
 or the background supervisor that follows it up for the main chat then sends its agent more work (`agent_send`,
-`agent_interrupt` with `then`, or the owner's message on its card), the hub reopens it while the supervision still
-says `accepted` (`docs/assistant/todos.md`). It does so once the agent's computer takes the send (`agentSendNote.sent`
-→ `reopenTodo`): the reopen is stored, so it holds when the agent only queued the text and the manager restarted
-before its turn began. A turn that starts before the send returns reopens it at its start (`taskWorking` →
-`closedTurnReopens`). A send that definitely failed reopens nothing. That agent's other turns leave it closed, whether
-or not its plan started the agent: a wakeup it set itself, other conversations' work, the owner typing in its session
-(#6726, #7539). Their ends raise no review signal either. Earlier the page treated every reopened task as not reviewed: it showed "Follow up", its badge
-"Supervising", and criteria added with the extra work (`agent_supervise` / `agent_send` replace `done_when`, so the
-list grew from 5 to 8) as open with a clock and counted them ("5/8").
+`agent_interrupt` with `then`, or the owner's message on that task's card), the hub reopens it while the supervision
+still says `accepted` (`docs/assistant/todos.md`). It does so once the agent's computer takes the send, or when the
+send's answer is unknown (`agentSendNote.sent` → `reopenTodo`): the reopen is stored, so it holds when the agent only
+queued the text and the manager restarted before its turn began. A turn of the agent that starts while the send is
+still out waits for that answer (`closedTurnReopens`): if the send definitely failed, the turn was other work and the
+task stays closed through it; if not, the turn is the task's, its end included. A bare `/exit` or `/quit` asks for no
+work (the agent's computer closes the agent) and reopens nothing, and a card message reopens only the task whose card
+it was sent from. That agent's other turns leave the task closed, whether or not its plan started the agent: a wakeup
+it set itself, other conversations' work, the owner typing in its session (#6726, #7539). Their ends raise no review
+signal either.
+
+Two gaps remain. A manager restart while the send is still out (up to 90 seconds for a card message, up to 5 minutes
+when the agent is resumed first or for `agent_interrupt`'s `then`) loses the reopen: the task stays closed until more
+is sent or someone reopens it. And after a restart, a turn of other work that was already running when the send was
+taken ends as the reopened task's: the conversation gets one extra receipt for it, with no judgment and no review
+signal.
+
+Earlier the page treated every reopened task as not reviewed: it showed "Follow up", its badge "Supervising", and
+criteria added with the extra work (`agent_supervise` / `agent_send` replace `done_when`, so the list grew from 5 to
+8) as open with a clock and counted them ("5/8").
 
 The acceptance now stands until a newer review replaces it (`acceptanceStands` in `web/src/lib/supervision.ts`):
 
