@@ -567,7 +567,8 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   hidden meanwhile, so a picture of another shape leaves black, not a stale frame), and holds RFB's update requests while
   they show; the request held goes out when video stops, so RFB's picture catches up.
   Video is chosen by default on a Mac that offers it (⋯ › Picture, kept per Mac; ⋯ › Quality appears only once the
-  helper's `hello.features` has `tiers`, since before #6396 it would change nothing) and runs only while one display is
+  helper's `hello.features` has `tiers` and the app has its side of them too, `ScreenTiers.appSupported`, since one
+  release carries both and before #6396's iPhone policy the choice would change nothing) and runs only while one display is
   shown: the Mac's only one, or one picked from several the node numbered; all of several displays at once stay RFB.
   It pauses while Picture in Picture shows the screen or the app is in the background (RFB carries the picture then).
   When VNC shows instead, a line under the bars says why in plain words: the video stopped, the Mac is locked, or the
