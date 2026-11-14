@@ -85,6 +85,22 @@ func TestMachineCallLogsFailures(t *testing.T) {
 		t.Fatalf("log: %q", log.lines)
 	}
 
+	// Offline calls: the first in a minute is logged, the rest not (a start always is); the next line after the minute
+	// counts them.
+	m.logCall("node.configure", errOffline, time.Millisecond, 1)
+	m.logCall("usage.read", errOffline, time.Millisecond, 1)
+	m.logCall("session.start", errOffline, time.Millisecond, 1)
+	if len(log.with("result=offline")) != 3 || len(log.with("method=session.start result=offline")) != 2 {
+		t.Fatalf("offline calls within the minute: %q", log.lines)
+	}
+	m.callLogMu.Lock()
+	m.offlineLogged = time.Now().Add(-callOfflineEvery)
+	m.callLogMu.Unlock()
+	m.logCall("node.configure", errOffline, time.Millisecond, 1)
+	if len(log.with("method=node.configure result=offline", "offline_not_logged=1")) != 1 {
+		t.Fatalf("the offline line after the minute: %q", log.lines)
+	}
+
 	m.logCall("ping", nil, time.Millisecond, 1)
 	if got := log.with("method=ping"); len(got) != 0 {
 		t.Fatalf("a quick ping that worked was logged: %q", got)

@@ -56,15 +56,34 @@ func callResult(err error) string {
 	return callError
 }
 
-// shouldLogCall: failures always (a quick cancel excepted); successes when slow, for a session start, or sampled.
-func (m *Machine) shouldLogCall(method, result string, took time.Duration) bool {
+// callOfflineEvery: calls to a machine with no connection fail at once, and the hub's own rounds (keep sessions, usage,
+// watches) make them all the time while it is away: one line per machine this often, saying how many were not logged.
+// A session start is always logged.
+const callOfflineEvery = time.Minute
+
+// shouldLogCall: failures always (a quick cancel excepted, offline ones rate-limited); successes when slow, for a
+// session start, or sampled. suppressed is how many offline lines were not logged before this one.
+func (m *Machine) shouldLogCall(method, result string, took time.Duration) (ok bool, suppressed int) {
 	switch result {
 	case callOK:
-		return took >= callSlow || devicewire.IsSessionStart(method) || m.callCount.Add(1)%callLogSample == 0
+		return took >= callSlow || devicewire.IsSessionStart(method) || m.callCount.Add(1)%callLogSample == 0, 0
 	case callCanceled:
-		return took >= callSlow
+		return took >= callSlow, 0
+	case callOffline:
+		if devicewire.IsSessionStart(method) {
+			return true, 0
+		}
+		m.callLogMu.Lock()
+		defer m.callLogMu.Unlock()
+		if now := time.Now(); now.Sub(m.offlineLogged) >= callOfflineEvery {
+			n := m.offlineSkipped
+			m.offlineLogged, m.offlineSkipped = now, 0
+			return true, n
+		}
+		m.offlineSkipped++
+		return false, 0
 	}
-	return true
+	return true, 0
 }
 
 // logCall writes one line for a finished call: key=value fields, the error last and quoted.
@@ -72,19 +91,23 @@ func (m *Machine) shouldLogCall(method, result string, took time.Duration) bool 
 //	[m1] rpc call method=session.start result=closed took=1m2.3s via=ssh sent=true tries=1 err="rpc: connection closed"
 func (m *Machine) logCall(method string, err error, took time.Duration, tries int) {
 	result := callResult(err)
-	if !m.shouldLogCall(method, result, took) {
+	ok, suppressed := m.shouldLogCall(method, result, took)
+	if !ok {
 		return
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%s] rpc call method=%s result=%s took=%s", m.cfg.ID, method, result, took.Round(time.Millisecond))
 	if via := m.transportNow(); via != "" {
-		fmt.Fprintf(&b, " via=%s", via)
+		fmt.Fprintf(&b, " via=%s", via) // the connection now: a call cut off by a reconnect shows the new one's
 	}
 	switch {
 	case errors.Is(err, rpc.ErrDropped): // out on the connection when it closed: the node may have done it
 		b.WriteString(" sent=true")
 	case errors.Is(err, rpc.ErrClosed), errors.Is(err, rpc.ErrSuspended): // never written
 		b.WriteString(" sent=false")
+	}
+	if suppressed > 0 {
+		fmt.Fprintf(&b, " offline_not_logged=%d", suppressed) // since the last offline line of this machine
 	}
 	if tries > 1 {
 		fmt.Fprintf(&b, " tries=%d", tries)
