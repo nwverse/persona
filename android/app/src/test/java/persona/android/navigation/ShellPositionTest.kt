@@ -32,6 +32,16 @@ class ShellPositionTest {
         }
     }
 
+    @Test fun explicitEmptyInboxReturnsRoundTrip() {
+        file.parentFile!!.mkdirs()
+        val store = ShellPositionStore(context, scope)
+        val position = ShellPosition(inboxReturns = emptyList())
+        store.save(position)
+        val restored = store.load()
+        assertEquals(emptyList<ChatRoute>(), restored.inboxReturns)
+        assertEquals(position, restored)
+    }
+
     @Test fun currentTwoTabPositionsRoundTrip() {
         file.parentFile!!.mkdirs()
         val store = ShellPositionStore(context, scope)

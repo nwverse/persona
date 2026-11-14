@@ -19,7 +19,7 @@ internal data class ShellPosition(
     val machine: String = "",
     val chats: Map<AppTab, ChatRoute> = emptyMap(),
     /** Inbox provenance for conversations whose visible NavKey stays unchanged to retain their UI state. */
-    val inboxReturns: List<ChatRoute> = emptyList(),
+    val inboxReturns: List<ChatRoute>? = null,
 )
 
 /** Navigation is discarded with the pairing; retired writers cannot recreate it after cleanup. */

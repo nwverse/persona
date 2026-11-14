@@ -97,8 +97,15 @@ internal class AppNavigator(
             chat == null || fromInbox -> null
             chat.kind != null -> Router().parse(RouteInput.Internal(route))
             // Keep the kindless key itself: normalizing it would replace the existing page and lose its saved UI state.
-            chatTab(chat) == AppTab.Agents -> ResolvedRoute(AppTab.Agents, route)
-            else -> null
+            else -> {
+                val target = chatTab(chat)
+                    ?: stacks.entries.firstOrNull { (_, stack) ->
+                        stack.any { page -> page.chat()?.let { sameConversation(it, chat) } == true }
+                    }?.key
+                    ?: selectedTab().takeIf { it == AppTab.Persona }
+                    ?: AppTab.Agents
+                ResolvedRoute(target, route).takeIf { chat.source !is RouteSource.InboxItem || target == AppTab.Agents }
+            }
         }
         if (resolved != null) {
             val tab = resolved.restore(stacks)
