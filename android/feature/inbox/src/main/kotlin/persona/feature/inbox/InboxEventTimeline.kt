@@ -159,7 +159,12 @@ private fun ChainRow(
     val reported = entry.kind == "reported"
     val words = chainEntryText(entry).ifBlank { entry.kind }
     val baseTarget = chainRowTarget(entry, record)
-    var open by rememberSaveable(record.item.id, entry.id) { mutableStateOf(false) }
+    var open by rememberSaveable(
+        record.item.id,
+        entry.id,
+        if (reported) words else null,
+        if (reported) entry.messages else null,
+    ) { mutableStateOf(false) }
     var clipped by remember(record.item.id, entry.id, words) { mutableStateOf(false) }
     val target = when {
         reported && baseTarget == ChainTarget.None ->
@@ -185,7 +190,7 @@ private fun ChainRow(
                 onTextLayout = { layout ->
                     if (reported && !open) {
                         val nowClipped = layout.lineCount > 0 &&
-                            layout.getLineEnd(layout.lineCount - 1, visibleEnd = true) < layout.layoutInput.text.length
+                            layout.getLineEnd(layout.lineCount - 1, visibleEnd = true) < words.trimEnd().length
                         if (clipped != nowClipped) clipped = nowClipped
                     }
                 })
