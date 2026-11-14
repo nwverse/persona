@@ -377,18 +377,22 @@ func relayText(msg relayMsg) string {
 }
 
 // queueRelay keeps a message for a conversation until it may go in: its turn ended and the owner is not talking in it
-// (relay_presence.go). The queue is kept in the order the messages came; drainRelays picks by rank.
+// (relay_presence.go). The queue is kept in the order the messages came; drainRelays picks by rank. A turn held by an
+// ask_user waiting for the owner lets go of it after a while (ask_release.go).
 func (s *Service) queueRelay(to string, msg relayMsg) int {
 	b := &s.relays
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !s.relayLocked(context.Background()) {
+		b.mu.Unlock()
 		return 0
 	}
 	msg.QueuedAt, msg.Depth = time.Now().UTC(), len(b.st.Queue[to])+1
 	b.st.Queue[to] = append(b.st.Queue[to], msg)
 	s.saveRelayLocked()
-	return len(b.st.Queue[to])
+	n := len(b.st.Queue[to])
+	b.mu.Unlock()
+	go s.releaseHeldAsks(to)
+	return n
 }
 
 // queuedRelays are the texts waiting for a conversation (shown above its composer, like typed-ahead input); false

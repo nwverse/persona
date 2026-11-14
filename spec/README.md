@@ -44,7 +44,7 @@ spec/
 | sort | 见各自 [README](fixtures/sort/README.md) |
 | answer | 见各自 [README](fixtures/answer/README.md) |
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
-| wire | 见各自 [README](fixtures/wire/README.md) |
+| wire | 见各自 [README](fixtures/wire/README.md). The `items`, `items_after`, `items_range` cases and the `items` events are also replayed by the shared Rust core's `transport` decoders (`native/app-core`, `cargo test`), #7385 |
 | injected | 见各自 [README](fixtures/injected/README.md)：hub 注入给模型的消息（任务通知、定时任务……）怎么认 |
 | comments | [README](fixtures/comments/README.md): the `> Comment N` / `Code comment N` / `Element comment N` blocks a message leads with, written and read back by the web app and the iOS app (#151) |
 | attention | [README](fixtures/attention/README.md): Persona Link's "Needs you" summary counts what the web app's badge counts, checked by Go and the web app |
