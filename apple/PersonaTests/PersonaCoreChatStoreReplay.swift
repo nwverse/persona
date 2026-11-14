@@ -3,7 +3,7 @@ import PersonaCore
 import PersonaCoreTestSupport
 @testable import Persona
 
-typealias ContinuityCase = PersonaCoreTestSupport.ContinuityCase
+public typealias ContinuityCase = PersonaCoreTestSupport.ContinuityCase
 private typealias ContinuityJSON = PersonaCoreTestSupport.ContinuityJSON
 private typealias ContinuityFixtureError = PersonaCoreTestSupport.ContinuityFixtureError
 
