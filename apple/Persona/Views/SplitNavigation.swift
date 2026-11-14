@@ -130,7 +130,11 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 withAnimation(Theme.Motion.layout) { columns.wrappedValue = SplitColumns.shown }
             }, hide: { [columns = $columns] in
                 withAnimation(Theme.Motion.layout) { columns.wrappedValue = .detailOnly }
-            }))
+            }, hideOverlay: hideOverlay))
+            #if os(iOS)
+            // A pick that changes the page (an Agent, a place): a list laid over the page goes (#4852).
+            .onChange(of: path) { hideOverlay() }
+            #endif
             #endif
         } else {
             #if os(iOS)
@@ -147,6 +151,16 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             }
             #endif
         }
+    }
+
+    /// A pick in a list laid over the page (the open Duo upright, an iPad mini upright) changed what the page shows: the list
+    /// slides away, as the system's sidebar does on an iPad in portrait (#4852). Beside the page it stays; a filter or a
+    /// grouping, which changes no page, leaves it too.
+    private func hideOverlay() {
+        #if os(iOS)
+        guard overlays == true, columns != .detailOnly else { return }
+        withAnimation(Theme.Motion.layout) { columns = .detailOnly }
+        #endif
     }
 
     #if os(iOS)
@@ -294,6 +308,9 @@ extension EnvironmentValues {
 struct SplitShowList {
     var show: () -> Void
     var hide: (() -> Void)? = nil
+    /// Slides the list away if it lies over the page (#4852), for a pick that leaves the page as it was (the conversation
+    /// picked while it is already there); beside the page it stays.
+    var hideOverlay: (() -> Void)? = nil
 }
 
 /// Appends a value to a `SplitNavigation`'s path.

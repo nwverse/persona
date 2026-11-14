@@ -101,6 +101,7 @@ struct UnifiedSidebarColumn<Agents: View>: View {
     /// A phone's width: the column is the drawer's (`UnifiedSidebar.drawer`), which a pick closes. The split says so
     /// (`SplitDetail.drawer`): an iPad's sidebar column can read compact by its own width.
     @Environment(\.splitDetail) private var split
+    @Environment(\.splitShowList) private var showList
     private var inDrawer: Bool { split?.drawer == true }
     let state: UnifiedSidebar
     /// The Agents list, given the Persona rows to hold above its own.
@@ -154,6 +155,9 @@ struct UnifiedSidebarColumn<Agents: View>: View {
         state.shownPlace = page.isSidebarPlace ? page : nil
         router?.show(page)
         if inDrawer { state.drawer.close() }
+        // Laid over the page (the open Duo upright): a pick slides the column away, even one that leaves the page as it
+        // was (#4852); a pick that changes the page does it through the split's path too.
+        showList?.hideOverlay?()
     }
 }
 
