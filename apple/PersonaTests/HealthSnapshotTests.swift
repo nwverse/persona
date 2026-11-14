@@ -63,12 +63,12 @@ struct HealthSnapshotTests {
     @Test func responseKeepsTheSameFieldsAndAddsSourceAndAsOf() throws {
         let now = Date(timeIntervalSince1970: 1_760_000_000)
         let answer = try #require(makeSnapshot(asOf: now).response(metrics: ["steps"], days: 7, now: now))
-        guard case .object(let object) = answer else { return Issue.record("answer is not an object") }
+        guard case .object(let object) = answer else { Issue.record("answer is not an object"); return }
         #expect(object["source"] == .string("snapshot"))
         #expect(object["as_of"] == .string(ToolDate.string(now)))
         #expect(object["days"] == .number(7))
         #expect(object["metrics"] == .array([.string("steps")]))
-        guard case .array(let data) = object["data"] else { return Issue.record("no data rows") }
+        guard case .array(let data) = object["data"] else { Issue.record("no data rows"); return }
         #expect(data.count == 2) // today and yesterday are inside the 7-day window; the 30-day-old row is not
         for case .object(let row) in data {
             #expect(row["steps"] != nil, "only the requested metric is carried into a row")
@@ -81,7 +81,8 @@ struct HealthSnapshotTests {
         let answer = try #require(makeSnapshot(asOf: now).response(metrics: ["heart_rate"], days: 7, now: now))
         guard case .object(let object) = answer, case .array(let data) = object["data"],
               case .object(let row)? = data.first, case .object(let heartRate)? = row["heart_rate"] else {
-            return Issue.record("heart_rate row missing")
+            Issue.record("heart_rate row missing")
+            return
         }
         #expect(heartRate["average"] == .number(72))
         #expect(heartRate["min"] == .number(58))
@@ -113,7 +114,7 @@ struct HealthSnapshotTests {
             isDataAvailable: { false }
         )
         let answer = try #require(decode(content))
-        guard case .object(let object) = answer else { return Issue.record("answer is not an object") }
+        guard case .object(let object) = answer else { Issue.record("answer is not an object"); return }
         #expect(object["source"] == .string("snapshot"))
         #expect(object["as_of"] == .string(ToolDate.string(now)))
     }
