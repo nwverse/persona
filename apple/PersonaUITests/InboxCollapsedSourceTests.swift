@@ -2,8 +2,9 @@ import XCTest
 
 /// A non-event inbox item's source (decisions line 13a): opening the detail builds neither `LarkChatView` nor the mail
 /// reader, so nothing is reported read; View original builds it and reports what is on screen, and Collapse takes it
-/// away again. A reused detail column starts collapsed for the next item. Run against scripts/mock/mock_hub.py without
-/// MOCK_INBOX_EVENTS (PERSONA_MOCK_HUB).
+/// away again. A reused detail column starts collapsed for the next item. Run against scripts/mock/mock_hub.py in its
+/// default shape: without MOCK_INBOX_EVENTS (those items are events) and without MOCK_MAIL (which gives UID 501 a
+/// different body); the mail case checks its fixture and skips rather than waiting for text that cannot come.
 ///
 /// The chat's read reports are read from `/mock/lark_reads`; the mail's seen writes from `GET /mock/mail`'s flags, where
 /// the mock keeps them (`/mock/mail_flags` is filled by a handler the mail area's own answer always pre-empts, so it
@@ -13,7 +14,6 @@ final class InboxCollapsedSourceTests: XCTestCase {
     private static let chatTitle = "韩梅梅"
     private static let chatFeed = "f1"
     private static let otherTitle = "周末徒步群"
-    private static let otherPreview = "周六早上 8 点"
     private static let mailItem = "mail:acc1:t1:501"
     private static let mailAccount = "acc1"
     private static let mailUID = 501
@@ -70,6 +70,7 @@ final class InboxCollapsedSourceTests: XCTestCase {
     }
 
     @MainActor func testMailIsBuiltOnlyAfterViewOriginal() throws {
+        try requireDefaultMailFixture()
         try resetFixture(Self.mailItem)
         let baseline = try mailSeenReports().count
         openDetail(Self.mailItem)
@@ -120,9 +121,10 @@ final class InboxCollapsedSourceTests: XCTestCase {
         requireHittable(next, "\(Self.otherTitle)'s source toggle")
         assertLabel("看原文", on: next, "the next item's source toggle")
         XCTAssertFalse(app.textFields["lark.box"].exists, "the previous chat stayed open on the next item")
-        // The collapsed line previews that item's newest line, so the page really is the other item's.
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.otherPreview)).firstMatch
-            .waitForExistence(timeout: 5), "\(Self.otherTitle)'s own row is not the one open:\n\(app.debugDescription)")
+        // The detail's own bar names the item open, so the page really is the other item's (its title is in the list
+        // column too, which `listRow` reads; a navigation bar is not).
+        XCTAssertTrue(app.navigationBars[Self.otherTitle].firstMatch.waitForExistence(timeout: 10),
+                      "the detail did not change to \(Self.otherTitle):\n\(app.debugDescription)")
     }
 
     // MARK: - Driving the app
@@ -137,6 +139,20 @@ final class InboxCollapsedSourceTests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "no app window")
         regularWidth = app.windows.firstMatch.frame.width > 600
         requireHittable(element("inbox.detail.done"), "the \(item) detail")
+    }
+
+    /// The default mock's mail 501 carries the body this case looks for; MOCK_MAIL gives it another. Said plainly
+    /// rather than waited on as a timeout.
+    private func requireDefaultMailFixture() throws {
+        let data = try Data(contentsOf: try XCTUnwrap(
+            URL(string: hub + "/api/v1/mail/messages/\(Self.mailAccount)/\(Self.mailUID)?mailbox=INBOX")))
+        let message = try XCTUnwrap(
+            (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? [String: Any],
+            "no mail \(Self.mailUID) in this mock")
+        let text = message["text"] as? String ?? ""
+        guard text.contains(Self.mailBody) else {
+            throw XCTSkip("needs the default scripts/mock/mock_hub.py: mail \(Self.mailUID) has no 「\(Self.mailBody)」 (MOCK_MAIL on?)")
+        }
     }
 
     /// A row of the list column at regular width (the open page's title is the same text, in the detail column).
