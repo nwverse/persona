@@ -68,7 +68,7 @@ python3 -I scripts/operations/pr_watch.py --config <private config>
 
 `--dry-run` still runs the model and repository checks but never comments, sends notifications or merges. It shares the persistent state, so a later live run can use its completed evidence only for the exact same head. Use a separate state file for an isolated experiment. A second process cannot acquire the state lock while the service is running.
 
-The service polls every 60 seconds, uses bounded worker concurrency, and finishes GitHub comments/merges serially. A nonblocking instance lock prevents accidental duplicate services. State, including which gates actually completed, is stored atomically with mode `0600`; temporary worktrees live below that state directory. Inspect logs with `journalctl --user-unit persona-pr-watch.service`.
+The service polls every 60 seconds, uses bounded worker concurrency, and finishes GitHub comments/merges serially. Superseded incomplete/failed verification is dequeued before fresh reviews so a large discovery backlog cannot indefinitely delay the policy migration; all other work retains discovery order. A nonblocking instance lock prevents accidental duplicate services. State, including which gates actually completed, is stored atomically with mode `0600`; temporary worktrees live below that state directory. Inspect logs with `journalctl --user-unit persona-pr-watch.service`. Repository/PR selection is part of the configuration fingerprint; a focused run needs an isolated state file, or an explicit state migration when reusing the live evidence is intended.
 
 An optional loopback webhook can supplement polling. Set `PR_WATCH_WEBHOOK_SECRET` in the service's private environment; it must contain at least 32 characters. The receiver verifies HMAC SHA-256, size, event type, repository, PR number and full head SHA. It listens on `127.0.0.1:18777` by default and needs an authenticated HTTPS reverse proxy if used remotely. Polling remains sufficient without it.
 
@@ -80,7 +80,7 @@ systemctl --user enable --now persona-pr-watch.service
 systemctl --user status persona-pr-watch.service
 ```
 
-Stop or restart only this unit when changing its implementation. Preserve its private state across upgrades. An older state file without version `1` semantic evidence is not treated as approval; affected PRs are reviewed again.
+Stop or restart only this unit when changing its implementation. Preserve its private state across upgrades. An older state file without version `1` semantic evidence is not treated as approval; affected PRs are reviewed again. Verification-policy version `2` retries an incomplete or failed verification recorded by an older policy on the same base/head, while retaining its valid semantic review and repair budget. Completed checks, base-owned failure evidence, published findings, merged results, continuations and exhausted repairs are not reset by this migration.
 
 ## Verification and limitations
 
