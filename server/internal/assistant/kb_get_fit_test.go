@@ -238,6 +238,21 @@ func TestFitKBGetAtTheCeiling(t *testing.T) {
 	if got := fitKBGet(long, "/data/x"); !utf8.ValidString(got) || estTokens(got) > kbGetMaxTokens {
 		t.Errorf("one long line: %d tokens", estTokens(got))
 	}
+	// A long line early (a one-paragraph summary.md) is cut inside, not dropped whole for the line before it: the result
+	// keeps nearly the whole budget, and the cut line starts a line of its own.
+	early := "Path: /data/x\n\nmeta.json:\n{}\n\nsummary.md:\n" + strings.Repeat("中文字", 10000) + "\n" + strings.Repeat(line, 50)
+	got = fitKBGet(early, "/data/x")
+	kept, _, ok = strings.Cut(got, "[kb_get cut here")
+	if !ok || !utf8.ValidString(got) || !strings.HasSuffix(kept, "\n") || !strings.HasPrefix(early, strings.TrimSuffix(kept, "\n")) {
+		t.Fatalf("a long line early:\n%.300s", got)
+	}
+	rest = early[len(kept)-1:]
+	if !strings.HasSuffix(got, prompts.RenderKBGetCut(prompts.KBGetCut{Chars: utf8.RuneCountInString(rest), Tokens: estTokens(rest), Path: "/data/x"})+"\n") {
+		t.Errorf("cut line:\n%s", got[len(kept):])
+	}
+	if n := estTokens(got); n > kbGetMaxTokens || n < kbGetMaxTokens-kbGetCutReserve-10 {
+		t.Errorf("a long line early: %d tokens after the cut", n)
+	}
 }
 
 // The estimate counts a CJK character as 1.25 tokens and two ASCII bytes as one, rounding up, so a CJK result is not

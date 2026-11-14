@@ -768,8 +768,9 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
   and since 2026-11-04 so does the knowledge base, so they call the engine directly (formerly bus calls to hub `kb.search` / `kb.list` / `kb.get` / `kb.update`).
 - **What `kb_get` hands the model** (#7316, `assistant/kb_get_fit.go`): a project's people (every member of each group chat linked to it, thousands for a large one)
   are folded to 20, ranked as the detail's links are (importance, relevance, last seen), with a line giving the total and the meta.json that has them all. Any result
-  past 20,000 estimated tokens (a CJK character as 1.25, an ASCII one as half) is cut at a line's end, with a line saying how much was left out and where the
-  files are: Claude Code refuses an MCP tool's output past 25,000 tokens. Only the tool's text changes; the files, `kb.get` and the apps' detail pages are as before.
+  past 20,000 estimated tokens (a CJK character as 1.25, an ASCII one as half) is cut at a line's end (inside the line when it began over 2,000 bytes back), with a
+  line saying how much was left out and where the files are: Claude Code refuses an MCP tool's output past 25,000 tokens. Only the tool's text changes; the
+  files, `kb.get` and the apps' detail pages are as before.
 - **Main chat**: hub settings `assistant.main` stores its session id (set by `POST /api/v1/assistant/conversations` with `main: true`,
   cleared by `PUT /api/v1/assistant {"main":"-"}`). When requesting a snapshot per message, node passes the session id to `assistant.context`; main-chat snapshots start with "This is the main chat".
 - **AI twin**: Agent prompts end with this chat's profile and its first 3 projects (`<persona-context>`), requiring new conclusions to be written back to the project timeline through `kb_update`.

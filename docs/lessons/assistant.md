@@ -419,6 +419,17 @@ request lists the deferred tools by name but nothing can load them (the transcri
 Measured on Claude Code 2.1.321 with a 256-tool connector: with `--tools Bash,Read` the connector's tools were
 unreachable; with `ToolSearch` added the model loaded one on request, and the first request stayed ~15K tokens.
 
+## A leader's split must be somewhere the owner can see (#5846)
+
+Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
+only listed tasks with an Agent, so the pieces nobody had started yet were invisible, and the owner could only ask the
+leader and read an answer full of its own labels. A leader's `todo_create` now opens a to-do under its direction, and the
+tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
+To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
+and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
+
+- Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
+
 ## Size a tool's text in tokens, not characters (#7316)
 
 Claude Code refuses an MCP tool's output past 25,000 tokens (`MAX_MCP_OUTPUT_TOKENS`, which Persona does not set) and
@@ -434,16 +445,6 @@ not the model: linking a group chat to a project adds all its members to the pro
 meta.json held 3,708 ids, 92% of a 129,000-character result. Fold such lists in the tool's text rather than count on
 the store staying small.
 
-## A leader's split must be somewhere the owner can see (#5846)
-
-Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
-only listed tasks with an Agent, so the pieces nobody had started yet were invisible, and the owner could only ask the
-leader and read an answer full of its own labels. A leader's `todo_create` now opens a to-do under its direction, and the
-tree shows pieces no Agent has worked on as `planned`. Two traps found on the way: such a piece has an `origin`, so the
-To-dos SOP shelves it after 48 h untouched like any agent-made to-do (it leaves the tree; the leader touching it keeps it),
-and the stuck rule must not count a piece that never started, or every planned piece older than a day reported stuck.
-
-- Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions.
 ## A source read by pages must settle what left the page (#5993)
 
 The Inbox's mail rounds read each account's newest 40 INBOX messages, and every rule that files a mail item (read

@@ -24,6 +24,8 @@ const (
 	kbGetMaxTokens = 20000
 	// kbGetCutReserve is what the cut line takes of the ceiling, its path aside.
 	kbGetCutReserve = 100
+	// kbGetCutSlack is how far back, in bytes, a cut moves to end on a whole line: about 1,000 tokens at most.
+	kbGetCutSlack = 2000
 )
 
 // estTokens is a conservative token count for text a tool returns: a rune past ASCII (CJK text, full-width
@@ -125,7 +127,9 @@ func replaceTopKey(obj []byte, key string, value []byte) ([]byte, bool) {
 }
 
 // fitKBGet is out, a kb_get result, as it is when it is within kbGetMaxTokens; else cut at the end of the last line
-// that fits, with the line saying how much was left out and that the rest is in the files at path.
+// that fits, or inside that line at a character when it began more than kbGetCutSlack back (one long line, a paragraph
+// or a meta.json edited into one line, must not take the budget with it), with the line saying how much was left out
+// and that the rest is in the files at path.
 func fitKBGet(out, path string) string {
 	if estTokens(out) <= kbGetMaxTokens {
 		return out
@@ -138,9 +142,12 @@ func fitKBGet(out, path string) string {
 			break
 		}
 	}
-	if nl := strings.LastIndexByte(out[:end], '\n'); nl >= 0 {
+	if nl := strings.LastIndexByte(out[:end], '\n'); nl >= 0 && end-(nl+1) <= kbGetCutSlack {
 		end = nl + 1
 	}
-	rest := out[end:]
-	return out[:end] + prompts.RenderKBGetCut(prompts.KBGetCut{Chars: utf8.RuneCountInString(rest), Tokens: estTokens(rest), Path: path}) + "\n"
+	kept, rest := out[:end], out[end:]
+	if kept != "" && !strings.HasSuffix(kept, "\n") {
+		kept += "\n"
+	}
+	return kept + prompts.RenderKBGetCut(prompts.KBGetCut{Chars: utf8.RuneCountInString(rest), Tokens: estTokens(rest), Path: path}) + "\n"
 }
