@@ -44,6 +44,9 @@ import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
 import persona.core.domain.sort.canInterrupt
 import persona.core.domain.sort.canSend
+import persona.core.domain.sort.isStoppedAgent
+import persona.core.domain.sort.TerminalResume
+import persona.core.domain.sort.terminalResume
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.canTypeClaudeCommands
 import persona.core.domain.sort.shownCloseout
@@ -242,6 +245,7 @@ private fun ChatPage(
     }
     fun deliveryAction(message: OutboxMessage, action: DeliveryAction) {
         if (readOnly) return
+        if (!canSend && action in setOf(DeliveryAction.Retry, DeliveryAction.RetryNow)) return
         scope.launch {
             try {
                 if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage, ::removed))
@@ -1003,6 +1007,8 @@ private fun ChatPage(
                             if (!historyOnly && !readOnly && session != null) ModelFallbackCard(session, chrome.actions)
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                            else if (session?.isStoppedAgent == true) ChatStoppedNote(agentTerminal,
+                                resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
                             else {
                                 // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
