@@ -235,7 +235,10 @@ def repair_with_model(repo, pr, worktree, failure, config):
         if not diff.strip():
             raise WatchError("automatic repair worker made no code change: " + bounded(result.stdout, 1000))
         patch = checked(["git", "diff", "--cached", "--binary"], cwd=isolated)
-        checked(["git", "apply", "--check", "-"], cwd=worktree, input_text=patch)
+        if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:
+            raise WatchError("PR head moved before applying the repair patch")
+        if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
+            raise WatchError("repair worktree moved before applying the patch")
         checked(["git", "apply", "-"], cwd=worktree, input_text=patch)
         checked(["git", "add", "-A"], cwd=worktree)
         return diff
@@ -275,7 +278,11 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     finally:
         message_path.unlink(missing_ok=True)
     repaired_pr = dict(pr, headRefOid=checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip())
-    results = verify(repo, repaired_pr, worktree, verify_config, verification_env())
+    verified_tree = checked(["git", "rev-parse", "HEAD^{tree}"], cwd=worktree).strip()
+    with repair_repository_copy(worktree) as verification_copy:
+        results = verify(repo, repaired_pr, str(verification_copy), verify_config, verification_env())
+    if checked(["git", "rev-parse", "HEAD^{tree}"], cwd=worktree).strip() != verified_tree:
+        raise WatchError("the verified tree differs from the tree being published")
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
         raise WatchError("repair verification changed the checkout after its local commit")
     if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:

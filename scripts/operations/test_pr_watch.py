@@ -419,12 +419,21 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(check.call_count, 2)
 
     def test_repair_worker_has_no_github_credentials(self):
+        calls = []
+        def repair_checked(argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ["git", "rev-parse", "HEAD"]:
+                return SHA_A + "\n"
+            if argv[:4] == ["git", "diff", "--cached", "--stat"]:
+                return "" if len(calls) <= 2 else "repair.py | 1 +\n"
+            return ""
         with patch.dict(os.environ, {"GH_TOKEN": "not-for-worker", "PR_WATCH_WEBHOOK_SECRET": "not-for-worker",
                                      "ANTHROPIC_API_KEY": "model-only"}), \
                 patch.object(pr_watch_repair.shutil, "which", return_value="/usr/bin/bwrap"), \
                 patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as worker_run, \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch_repair, "repair_repository_copy", return_value=nullcontext(self.root)), \
-                patch.object(pr_watch_repair, "checked", side_effect=["", "", "status", "stat", "patch", "", "", "", ""]):
+                patch.object(pr_watch_repair, "checked", side_effect=repair_checked):
             pr_watch_repair.repair_with_model("example/one", pr(), self.root, "failure", {})
         env = worker_run.call_args.kwargs["environ"]
         self.assertNotIn("GH_TOKEN", env)

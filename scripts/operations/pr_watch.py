@@ -401,7 +401,8 @@ class Watcher:
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
             previous = old
-            old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
+            old = {"repair_rounds": int(previous.get("repair_rounds", 0)),
+                   "repair_exhausted": bool(previous.get("repair_exhausted"))}
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
         if old.get("outcome") == "continuation":
@@ -476,9 +477,10 @@ class Watcher:
             phase = "semantic"
             current = self.state.get(repo, number)
             if current.get("evidence_key") != evidence_key or current.get("format") != FORMAT_VERSION:
+                rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          base=pr["baseRefOid"], format=FORMAT_VERSION, outcome="reviewing",
-                                         repair_rounds=int(old.get("repair_rounds", 0)))
+                                         repair_rounds=rounds)
             if current.get("semantic") != "passed" and current.get("semantic") != "findings":
                 self.phase(key, "independent semantic review")
                 findings = semantic_review(repo, pr, str(worktree), self.config["reviewer"])
