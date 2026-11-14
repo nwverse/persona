@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -123,6 +124,41 @@ func (b *inboxBook) merge(items []*InboxItem, now time.Time) (*InboxItem, []*Inb
 	sv.Read = false
 	sv.TriagedAt = "" // the merged row is judged again, with the members' text
 	return sv, took
+}
+
+// liftMerged keeps a survivor's tier at the highest of the rows it stands for: its own before the merge and its members'
+// now. A model's verdict on the merged row (triage) or a member's tier that moved since the merge never lowers it; the
+// verdict still supplies the summary. The reason of the row the tier came from goes with it, and urgency with an action
+// tier. Under b.mu; it reports whether it changed anything.
+func (b *inboxBook) liftMerged(sv *InboxItem) bool {
+	if len(sv.MergedFrom) == 0 {
+		return false
+	}
+	tier, reason, urgent := "", "", false
+	if t := strings.TrimSuffix(sv.PreMergeTier, "|"); t != "" {
+		tier = t
+	}
+	for _, ref := range sv.MergedFrom {
+		m := b.items[ref.ID]
+		if m == nil || m.MergedInto != sv.ID {
+			continue
+		}
+		if tierRank(m.Tier) > tierRank(tier) {
+			tier, reason = m.Tier, m.Reason
+		}
+		urgent = urgent || m.Urgent
+	}
+	changed := false
+	if tierRank(tier) > tierRank(sv.Tier) {
+		sv.Tier, changed = tier, true
+		if reason != "" {
+			sv.Reason = reason
+		}
+	}
+	if urgent && sv.Tier == TierAction && !sv.Urgent {
+		sv.Urgent, changed = true, true
+	}
+	return changed
 }
 
 // unmerge gives the members of survivor sv their rows back. Under b.mu. It returns the rows that changed.

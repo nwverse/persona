@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -188,4 +189,59 @@ func TestConfirmTodoSuggestion(t *testing.T) {
 	if _, err := h.actOnSuggestion(t.Context(), "a", suggestionReq{Version: 0, Action: suggestConfirm}, false); err == nil {
 		t.Fatal("answer-only device confirmed")
 	}
+}
+
+// A model's verdict on a merged row never lowers it below the rows it stands for: its own tier before the merge, and its
+// members' now (#7230).
+func TestMergedTierSurvivesTriage(t *testing.T) {
+	ctx := context.Background()
+	merge := func(h *inboxHub, ids string) {
+		t.Helper()
+		if code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/merge", `{"items":[`+ids+`]}`); code != 200 {
+			t.Fatalf("merge: %d %v", code, out)
+		}
+	}
+	t.Run("the survivor's own tier", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"tier":"noise","summary":"all of it","reason":"nothing to do"}`))
+		mergeItems(h)
+		merge(h, `{"id":"a"},{"id":"b"},{"id":"c"}`) // b is the newest and Needs you
+		sv := h.inbox.items["b"]
+		if sv.TriagedAt != "" {
+			t.Fatalf("a merged row is judged again: %q", sv.TriagedAt)
+		}
+		h.saveWrites(ctx, []*inboxWrite{h.triage(ctx, sv)}, "its triage")
+		if sv.Tier != TierAction || sv.Summary != "all of it" || sv.TriagedAt != sv.Last {
+			t.Fatalf("after triage: tier %q summary %q triaged %q", sv.Tier, sv.Summary, sv.TriagedAt)
+		}
+	})
+	t.Run("a member's tier that moved", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"tier":"noise","summary":"s","reason":"r"}`))
+		mergeItems(h)
+		merge(h, `{"id":"a"},{"id":"c"}`) // a (FYI) survives c (collapsed)
+		sv := h.inbox.items["a"]
+		if sv.Tier != TierFYI {
+			t.Fatalf("merged tier %q", sv.Tier)
+		}
+		h.inbox.mu.Lock()
+		c := h.inbox.items["c"]
+		c.Tier, c.Reason, c.Urgent = TierAction, "asked for a time", true // its later verdict
+		h.inbox.mu.Unlock()
+		h.saveWrites(ctx, []*inboxWrite{h.triage(ctx, sv)}, "its triage")
+		if sv.Tier != TierAction || sv.Reason != "asked for a time" || !sv.Urgent {
+			t.Fatalf("after triage: %q %q urgent=%v", sv.Tier, sv.Reason, sv.Urgent)
+		}
+	})
+	t.Run("a verdict above them stands", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"tier":"action","summary":"s","reason":"r"}`))
+		mergeItems(h)
+		merge(h, `{"id":"a"},{"id":"c"}`)
+		sv := h.inbox.items["a"]
+		h.saveWrites(ctx, []*inboxWrite{h.triage(ctx, sv)}, "its triage")
+		if sv.Tier != TierAction || sv.Reason != "r" {
+			t.Fatalf("after triage: %q %q", sv.Tier, sv.Reason)
+		}
+	})
 }
