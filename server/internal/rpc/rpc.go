@@ -61,6 +61,17 @@ type droppedError struct{}
 func (droppedError) Error() string        { return ErrClosed.Error() }
 func (droppedError) Is(target error) bool { return target == ErrClosed }
 
+// ErrNotWritten is matched (errors.Is) by what Call answers when the caller's ctx ended before the request could be
+// written (the writer busy with a long write ahead): the other side never saw it. The error is still the ctx's
+// (errors.Is DeadlineExceeded / Canceled), with its words.
+var ErrNotWritten = errors.New("rpc: request not written")
+
+type notWrittenError struct{ err error }
+
+func (e notWrittenError) Error() string        { return e.err.Error() }
+func (e notWrittenError) Unwrap() error        { return e.err }
+func (e notWrittenError) Is(target error) bool { return target == ErrNotWritten }
+
 // Limits are optional transport budgets for untrusted runtime peers. Zero preserves
 // existing process/node behavior; configure them before Serve or any concurrent call.
 type Limits struct{ FrameBytes, ConcurrentRequests, PendingCalls int }
@@ -356,6 +367,9 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 		req = message{ID: id, Method: method, Params: raw}
 	}
 	if err := p.writeContext(ctx, req); err != nil {
+		if cerr := ctx.Err(); cerr != nil && errors.Is(err, cerr) {
+			return notWrittenError{err} // waited for the writer (a long write ahead) and gave up: never on the wire
+		}
 		return err
 	}
 	var m message
