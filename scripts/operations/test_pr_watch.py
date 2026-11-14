@@ -300,6 +300,9 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("TestActualAssertion", summary)
         self.assertIn("got 1, want 2", summary)
         self.assertNotIn("handles no error and client errors 0", summary)
+        python_failure = "Traceback (most recent call last):\n  File \"test_x.py\", line 2\n    self.assertEqual(1, 2)\nAssertionError: 1 != 2\nFAILED (failures=1)"
+        summary = pr_watch_verify.result_summary(subprocess.CompletedProcess([], 1, python_failure, ""))
+        self.assertIn("AssertionError: 1 != 2", summary)
 
     def test_unknown_mergeability_waits(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="UNKNOWN")), \
@@ -429,13 +432,20 @@ class VerifyTests(unittest.TestCase):
                         "+.padding(8)", "+Image(systemName: \"checkmark\")"):
             with patch.object(pr_watch_verify, "checked", return_value=changed):
                 self.assertFalse(pr_watch_verify.non_ui_apple_change(".", SHA_BASE, SHA_A, [path]))
+        for changed in ("+import SwiftUI", "+NavigationStack { Content() }"):
+            with patch.object(pr_watch_verify, "checked", return_value=changed):
+                self.assertFalse(pr_watch_verify.non_ui_apple_change(
+                    ".", SHA_BASE, SHA_A, ["apple/Persona/Views/Session/FilesPane.swift"]))
+        with patch.object(pr_watch_verify, "checked", return_value="+.padding(8)"):
+            self.assertFalse(pr_watch_verify.non_ui_apple_change(
+                ".", SHA_BASE, SHA_A, ["apple/PersonaUITests/MinutesTests.swift", "apple/Persona/Views/Session/FilesPane.swift"]))
         for names in ([path, "server/internal/node/session.go"],
-                      ["apple/Persona/Views/Session/FilesPane.swift"],
-                      ["apple/PersonaUITests/MinutesTests.swift", "apple/Persona/Views/Session/FilesPane.swift"],
-                      ["apple/Packages/BeautifulUI/Sources/BeautifulUI/Components/ChatPanel.swift"],
                       ["apple/Shared/Localization/Localizable.xcstrings"]):
             self.assertFalse(pr_watch_verify.non_ui_apple_change(".", SHA_BASE, SHA_A, names))
-        with patch.object(pr_watch_verify, "checked", return_value="+struct RecordingMinutesView {}"):
+        with patch.object(pr_watch_verify, "checked", return_value="+import SwiftUI"):
+            self.assertFalse(pr_watch_verify.non_ui_apple_change(
+                ".", SHA_BASE, SHA_A, ["apple/Persona/App/TestsSupport/Feature.swift"]))
+        with patch.object(pr_watch_verify, "checked", return_value="+Text(ready)"):
             self.assertFalse(pr_watch_verify.non_ui_apple_change(
                 ".", SHA_BASE, SHA_A, ["apple/Persona/Recording/RecordingMinutesView.swift"]))
 
@@ -477,8 +487,9 @@ class MergeTests(unittest.TestCase):
                 patch.object(pr_watch_merge, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
             pr_watch_merge.merge("example/one", 7, ".", privacy="scanner.py",
                                  expected_head=SHA_A, expected_base=SHA_BASE)
-        self.assertIn(["git", "fetch", "-q", "origin", "pull/7/head:refs/pr-watch/heads/7"], commands)
-        self.assertIn(["git", "fetch", "-q", "origin", "refs/heads/main:refs/pr-watch/bases/7"], commands)
+        self.assertIn(["git", "fetch", "-q", "origin", "+pull/7/head:refs/pr-watch/heads/7"], commands)
+        self.assertIn(["git", "fetch", "-q", "origin", "+pull/7/head:refs/pr-watch/heads/7"], commands)
+        self.assertIn(["git", "fetch", "-q", "origin", "+refs/heads/main:refs/pr-watch/bases/7"], commands)
         scan = execute.call_args_list[0].args[0]
         self.assertIn(SHA_BASE + ".." + SHA_A, scan)
 

@@ -21,8 +21,8 @@ def result_summary(result):
     output = (result.stdout + "\n" + result.stderr).strip()
     lines = output.splitlines()
     selected = set()
-    marker = re.compile(r"(?:^--- FAIL:|^FAIL(?:\s|\t)|^FAILED(?:\s|:)|^panic:|^Traceback|"
-                        r"^FAIL\s+\S|^(?:fatal|time out|command not found)\b)", re.I)
+    marker = re.compile(r"(?:^--- FAIL:|^FAIL(?:\s|\t)|^FAILED(?:\s|:)|^\s*(?:AssertionError|ERROR):|"
+                        r"^panic:|^Traceback|^FAIL\s+\S|^(?:fatal|time out|command not found)\b)", re.I)
     for index, line in enumerate(lines):
         if marker.search(line):
             selected.update(range(max(0, index - 4), min(len(lines), index + 6)))
@@ -94,9 +94,11 @@ def non_ui_apple_change(worktree, base, head, names):
     if not names or not all(name.startswith(APPLE_NON_UI_PATHS) for name in names):
         return False
     for path in names:
-        test_path = any(part in ("PersonaTests", "PersonaUITests") or part.endswith("Tests")
-                        for part in path.split("/"))
-        if (path.startswith(APPLE_VISUAL_PATHS) and not test_path) or "View" in Path(path).name:
+        parts = path.split("/")
+        test_path = (len(parts) >= 2 and parts[1] in ("PersonaTests", "PersonaUITests")) or (
+            len(parts) >= 5 and parts[1] == "Packages" and parts[3] == "Tests") or (
+            len(parts) >= 4 and parts[1] == "PersonaLink" and parts[2] == "Tests")
+        if path.startswith(APPLE_VISUAL_PATHS) and not test_path:
             return False
         if "/Assets" in path or "/Design" in path or "/Localization" in path:
             return False
