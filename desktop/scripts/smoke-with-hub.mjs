@@ -53,7 +53,7 @@ async function startHub(env, attempt = 1) {
   });
   child.stdout.on("data", data => { log = (log + data).slice(-8000); });
   child.stderr.on("data", data => { log = (log + data).slice(-8000); });
-  const started = Date.now(), deadline = started + 45_000;
+  const started = Date.now(), deadline = started + 90_000;
   for (;;) {
     if (child.exitCode !== null) throw new Error(`The synthetic hub exited before it was ready:\n${log}`);
     try { if ((await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(800) })).ok) break; } catch { /* still starting */ }
@@ -63,8 +63,8 @@ async function startHub(env, attempt = 1) {
       child.kill("SIGABRT");
       await Promise.race([gone, new Promise(done => setTimeout(done, 3000))]);
       child.kill("SIGKILL");
-      console.error(`The synthetic hub was not ready in 45 s (attempt ${attempt}); where it stood:\n${log.slice(-4000)}`);
-      if (attempt >= 2) throw new Error(`The synthetic hub was not ready in 45 s, twice:\n${log.slice(-1500)}`);
+      console.error(`The synthetic hub was not ready in 90 s (attempt ${attempt}); where it stood:\n${log.slice(-4000)}`);
+      if (attempt >= 2) throw new Error(`The synthetic hub was not ready in 90 s, twice:\n${log.slice(-1500)}`);
       return startHub(env, attempt + 1);
     }
     await new Promise(done => setTimeout(done, 150));
@@ -85,16 +85,16 @@ async function startHub(env, attempt = 1) {
   };
 }
 
-async function scenario(name, { prefix, hubEnv }) {
+async function scenario(name, { prefix, token, starting }) {
   const directory = join(output, name);
-  await rm(directory, { recursive: true, force: true }); // a previous run's verdict must not stand in for this one
-  await mkdir(directory, { recursive: true });
-  // A temporary pairing code as `personad hub pair` makes: the page trades it for its own device credential.
-  const token = `jp_${randomBytes(18).toString("hex")}`;
-  const profile = await mkdtemp(join(tmpdir(), "persona-desktop-e2e-"));
-  let hub, gateway, result;
+  let hub, gateway, result, profile;
   try {
-    hub = await startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "2", ...hubEnv });
+    await rm(directory, { recursive: true, force: true }); // a previous run's verdict must not stand in for this one
+    await mkdir(directory, { recursive: true });
+    profile = await mkdtemp(join(tmpdir(), "persona-desktop-e2e-"));
+    const started = await starting;
+    if (started.error) throw started.error;
+    hub = started.hub;
     gateway = await startGateway({ dist, mockPort: hub.port, prefix });
     const direct = `http://127.0.0.1:${hub.port}/api/v1`;
     if ((await fetch(`${direct}/sessions`, { signal: AbortSignal.timeout(3000) })).status !== 401) throw new Error("The synthetic hub answers without a credential");
@@ -131,9 +131,10 @@ async function scenario(name, { prefix, hubEnv }) {
     console.error(`${name}: ${result.error}`);
   } finally {
     await gateway?.close().catch(() => {});
-    await hub?.stop().catch(() => {});
-    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
+    await (await starting).hub?.stop().catch(() => {});
+    if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
   }
+  await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   return result;
 }
@@ -148,8 +149,14 @@ try {
   }
   await mkdir(output, { recursive: true });
   // The root hub lists desktop_unregister; the prefixed one is an older hub, where only closing the socket withdraws.
-  scenarios.root = await scenario("root", { prefix: "", hubEnv: { MOCK_DESKTOPS: "1" } });
-  scenarios.subpath = await scenario("subpath", { prefix: PREFIX, hubEnv: {} });
+  // Both hubs start now, each with a temporary pairing code as `personad hub pair` makes (the page trades it for its
+  // own device credential): on a hosted macOS runner a hub started after the first Electron run took over 30 s.
+  const plans = [["root", "", { MOCK_DESKTOPS: "1" }], ["subpath", PREFIX, {}]].map(([name, prefix, hubEnv]) => {
+    const token = `jp_${randomBytes(18).toString("hex")}`;
+    const starting = startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "2", ...hubEnv }).then(hub => ({ hub }), error => ({ error }));
+    return { name, prefix, token, starting };
+  });
+  for (const plan of plans) scenarios[plan.name] = await scenario(plan.name, plan);
 } catch (error) {
   failure = error instanceof Error ? error.message : String(error);
   console.error(failure);
