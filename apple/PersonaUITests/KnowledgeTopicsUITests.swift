@@ -50,7 +50,7 @@ final class KnowledgeTopicsUITests: XCTestCase {
         while rows() >= before, Date.now < deadline { Thread.sleep(forTimeInterval: 0.2) }
         XCTAssertLessThan(rows(), before, "the fold did not close the topic")
 
-        app.buttons["项目"].firstMatch.tap() // i18n-ignore
+        app.buttons["kb.map.view.projects"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "kb.map.node").firstMatch.waitForExistence(timeout: 30))
         shot(app, "map-projects")
     }

@@ -59,11 +59,18 @@ struct KnowledgeMapView: View {
 
     private func outline(wide: Bool) -> some View {
         List {
+            // The Knowledge page's own choice of kind (`KBKindBar`) and the Inbox's filters are chips that grow with the
+            // text size; the system's segmented control kept its small fixed size here (#7251 review).
             Section {
-                SegmentedChoice(String(localized: "Map"), [(value: Shown.topics, label: String(localized: "Topics [Knowledge Map]")),
-                                                          (value: .projects, label: String(localized: "Projects [Knowledge Map]"))], selection: $shown)
-                    .labelsHidden()
-                    .accessibilityIdentifier("kb.map.view")
+                HStack(spacing: Theme.Space.s) {
+                    FilterChip(title: String(localized: "Topics [Knowledge Map]"), symbol: Theme.Icon.topic, on: shown == .topics) { shown = .topics }
+                        .accessibilityIdentifier("kb.map.view.topics")
+                    FilterChip(title: String(localized: "Projects [Knowledge Map]"), symbol: Theme.Icon.space, on: shown == .projects) { shown = .projects }
+                        .accessibilityIdentifier("kb.map.view.projects")
+                    Spacer(minLength: Theme.Space.flush)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(Text("Map"))
             }
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
