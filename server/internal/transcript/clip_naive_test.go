@@ -108,7 +108,7 @@ func naiveBoundInputJSON(candidate []byte, originalSize, budget int) []byte {
 		}
 		markerKey = fmt.Sprintf("%s_%d", inputClipMarker, suffix)
 	}
-	marker := &naiveInputClipNode{value: inputClipNote(originalSize, 0, 0), key: markerKey}
+	marker := &naiveInputClipNode{value: inputClipMarkerValue(originalSize, 0, 0), key: markerKey}
 	root.kids = append(root.kids, marker)
 	root.fixed = 1
 	arrayItems, objectFields := 0, 0
@@ -132,7 +132,7 @@ func naiveBoundInputJSON(candidate []byte, originalSize, budget int) []byte {
 		} else {
 			objectFields++
 		}
-		marker.value = inputClipNote(originalSize, arrayItems, objectFields)
+		marker.value = inputClipMarkerValue(originalSize, arrayItems, objectFields)
 	}
 	return marshalPlain(root.out())
 }
@@ -203,7 +203,7 @@ func TestClipInputNaiveReferencePinsNestedOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		arrayItems, _ := inputClipMarkerCounts(t, decoded[inputClipMarker].(string))
+		arrayItems, _ := inputClipMarkerCounts(t, inputClipMarkerNote(t, decoded[inputClipMarker]))
 		if arrayItems != 3 {
 			continue
 		}

@@ -112,7 +112,7 @@ test('clipInput keeps short inputs and top-level non-objects unchanged, and boun
   assert.ok(jsonBytes(out) <= MAX_INPUT)
   assert.ok(out.values.length > 0 && out.values.length < input.values.length)
   assert.deepEqual(out.values, input.values.slice(0, out.values.length))
-  assert.match(out.zz_persona_clipped, /^Omitted \d+ array items and 0 object fields\./)
+  assert.match(out.zz_persona_clipped.note, /^Omitted \d+ array items and 0 object fields\./)
   assert.deepEqual(input, original)
 })
 
@@ -127,7 +127,7 @@ test('clipInput only replaces a near-share string when its JSON is strictly shor
     assert.ok(jsonBytes(out) <= jsonBytes(input))
     assert.ok(jsonBytes(out) <= MAX_INPUT)
     assert.ok(out.items.length > 0 && out.items.length < 200)
-    assert.equal(typeof out.zz_persona_clipped, 'string')
+    assert.equal(typeof out.zz_persona_clipped.note, 'string')
     for (const item of out.items) assert.equal(item.text, cut ? candidate : text)
   }
   for (const tail of ['\\'.repeat(30), '"'.repeat(30), '\u0000'.repeat(30), '<>&'.repeat(10), '\u2028\u2029'.repeat(5)]) {
@@ -139,7 +139,7 @@ test('clipInput only replaces a near-share string when its JSON is strictly shor
     assert.equal(shouldCut, ['\\', '"', '\u0000'].includes(tail[0]), 'use JSON.stringify escaping, not Go HTML escaping')
     assert.ok(jsonBytes(out) <= MAX_INPUT)
     assert.ok(out.items.length > 0 && out.items.length < 200)
-    assert.equal(typeof out.zz_persona_clipped, 'string')
+    assert.equal(typeof out.zz_persona_clipped.note, 'string')
     for (const item of out.items) assert.equal(item.text, shouldCut ? candidate : text)
   }
 })
@@ -176,6 +176,10 @@ test('summaryOf says what a call does, not just which tool', () => {
   assert.equal(summaryOf('mcp__x__create', { repo: 'a/b', count: 3 }), 'repo: a/b', 'any other text, with its name')
   assert.equal(summaryOf('mcp__x__create', clipInput({ repo: 'a/b', values: Array.from({ length: 4000 }, () => ['short', 42, true, null]) })), 'repo: a/b',
     'a real fallback argument stays ahead of the appended structural clip marker')
+  const clippedWithoutText = clipInput({ values: Array.from({ length: 4000 }, () => ['short', 42, true, null]) })
+  assert.equal(summaryOf('mcp__x__create', clippedWithoutText), 'mcp__x__create',
+    'an object marker cannot become the call summary when the input has no other top-level string')
+  assert.deepEqual(Object.keys(clippedWithoutText.zz_persona_clipped), ['note'])
   assert.equal(summaryOf('mcp__x__ping', { count: 3 }), 'mcp__x__ping', 'no text at all: the tool name')
   assert.equal(summaryOf('mcp__x__ping', { path: '  ', count: 3 }), 'mcp__x__ping', 'blank strings say nothing')
   assert.equal(summaryOf('t', null), 't')

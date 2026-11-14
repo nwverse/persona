@@ -130,8 +130,45 @@ func TestClipJSONBoundsLargeJSONNumbers(t *testing.T) {
 	if !ok || number.String() != "1e1000" {
 		t.Fatalf("large number changed: %#v", decoded["n"])
 	}
-	if _, ok := decoded[inputClipMarker].(string); !ok {
-		t.Fatal("large-number object has no structural clip marker")
+	if note := inputClipMarkerNote(t, decoded[inputClipMarker]); !strings.HasSuffix(note, fmt.Sprintf(clipNoteFormat, len(raw))) {
+		t.Fatalf("large-number object has the wrong structural clip marker: %q", note)
+	}
+}
+
+func TestClipJSONTrailingJSONAfterLargeNumberPassesThrough(t *testing.T) {
+	raw := []byte(`{"n":1e1000,` + strings.TrimPrefix(string(shortValueInput()), "{") + ` x`)
+	if out := clipJSON(raw); !bytes.Equal(out, raw) {
+		t.Fatalf("trailing JSON after a large number changed: %d bytes from %d", len(out), len(raw))
+	}
+}
+
+func TestClipJSONReportsOriginalSizeWithWhitespace(t *testing.T) {
+	raw := append([]byte(" \n\t"), shortValueInput()...)
+	raw = append(raw, ' ', '\n')
+	out := clipJSON(raw)
+	decoded, err := decodeInputObject(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := inputClipMarkerNote(t, decoded[inputClipMarker])
+	if !strings.HasSuffix(note, fmt.Sprintf(clipNoteFormat, len(raw))) {
+		t.Fatalf("marker %q does not report the original %d bytes", note, len(raw))
+	}
+}
+
+func TestClipInputWorkLinearInDeepNesting(t *testing.T) {
+	const depth, items = 2000, 12_000
+	candidate := []byte(`{"a":` + strings.Repeat("[", depth) + strings.TrimSuffix(strings.Repeat("1,", items), ",") + strings.Repeat("]", depth) + `}`)
+	if len(candidate) <= maxInputLen {
+		t.Fatalf("deep fixture is only %d bytes", len(candidate))
+	}
+	out, work := boundInputJSONBudgetWork(candidate, len(candidate), maxInputLen)
+	if len(out) > maxInputLen || !json.Valid(out) {
+		t.Fatalf("deep input returned %d valid-%v bytes", len(out), json.Valid(out))
+	}
+	nodes := depth + items + 2 // root, every array, and every scalar
+	if work > 6*nodes {
+		t.Fatalf("deep clipping visited %d nodes for %d indexed values, want linear work at most %d", work, nodes, 6*nodes)
 	}
 }
 

@@ -149,10 +149,13 @@ func TestStringsJustOverTheShareStayWhole(t *testing.T) {
 	}
 	var got struct {
 		Items  []map[string]string `json:"items"`
-		Marker string              `json:"zz_persona_clipped"`
+		Marker struct {
+			Note string `json:"note"`
+		} `json:"zz_persona_clipped"`
 	}
-	if err := json.Unmarshal(out, &got); err != nil || len(got.Items) == 0 || len(got.Items) == len(items) || got.Marker == "" {
-		t.Fatalf("did not keep a marked, nonempty prefix: %v, %d items", err, len(got.Items))
+	if err := json.Unmarshal(out, &got); err != nil || len(in) != 59_611 || len(out) != 24_563 || len(got.Items) != 82 ||
+		got.Marker.Note != "Omitted 118 array items and 0 object fields.\n…（已截断，共 59611 字节）" {
+		t.Fatalf("unexpected exact clip: %v, input %d, output %d, %d items, marker %q", err, len(in), len(out), len(got.Items), got.Marker.Note)
 	}
 	for i, it := range got.Items {
 		if it["text"] != items[i]["text"] {
@@ -173,10 +176,13 @@ func TestEscapedStringsJustOverTheShareAreCut(t *testing.T) {
 	out := clipJSON(in)
 	var got struct {
 		Items  []map[string]string `json:"items"`
-		Marker string              `json:"zz_persona_clipped"`
+		Marker struct {
+			Note string `json:"note"`
+		} `json:"zz_persona_clipped"`
 	}
-	if err := json.Unmarshal(out, &got); err != nil || len(got.Items) == 0 || len(got.Items) == len(items) || got.Marker == "" {
-		t.Fatalf("did not keep a marked, nonempty prefix: %v, %d items", err, len(got.Items))
+	if err := json.Unmarshal(out, &got); err != nil || len(in) != 76_811 || len(out) != 24_575 || len(got.Items) != 64 ||
+		got.Marker.Note != "Omitted 136 array items and 0 object fields.\n…（已截断，共 76811 字节）" {
+		t.Fatalf("unexpected exact clip: %v, input %d, output %d, %d items, marker %q", err, len(in), len(out), len(got.Items), got.Marker.Note)
 	}
 	for i, it := range got.Items {
 		if !strings.HasPrefix(it["text"], quoted[:minInputShare]) || !strings.Contains(it["text"], "已截断") {
@@ -212,10 +218,13 @@ func TestClippedHTMLIsNotEscaped(t *testing.T) {
 	}
 	var got struct {
 		Items  []map[string]string `json:"items"`
-		Marker string              `json:"zz_persona_clipped"`
+		Marker struct {
+			Note string `json:"note"`
+		} `json:"zz_persona_clipped"`
 	}
-	if err := json.Unmarshal(out, &got); err != nil || len(got.Items) == 0 || len(got.Items) == len(rows) || got.Marker == "" {
-		t.Fatalf("did not keep a marked, nonempty prefix: %v, %d items", err, len(got.Items))
+	if err := json.Unmarshal(out, &got); err != nil || len(snippets) != 61_011 || len(out) != 24_527 || len(got.Items) != 80 ||
+		got.Marker.Note != "Omitted 120 array items and 0 object fields.\n…（已截断，共 61011 字节）" {
+		t.Fatalf("unexpected exact HTML clip: %v, input %d, output %d, %d items, marker %q", err, len(snippets), len(out), len(got.Items), got.Marker.Note)
 	}
 	for i, item := range got.Items {
 		if item["text"] != text {

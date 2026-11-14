@@ -13,16 +13,24 @@
         "values": {
           "$repeat": 4000,
           "value": [
-            { "$index": 0 },
-            { "$string": "a", "count": 17 },
-            { "$string": "b", "count": 18 }
+            {
+              "$index": 0
+            },
+            {
+              "$string": "a",
+              "count": 17
+            },
+            {
+              "$string": "b",
+              "count": 18
+            }
           ]
         }
       },
       "expected": {
         "check": "short_values",
         "input_bytes": 198902,
-        "output_bytes": 24560,
+        "output_bytes": 24569,
         "remaining": 501,
         "array_items": 3499,
         "object_fields": 0,
@@ -39,12 +47,21 @@
       "input": {
         "outer": {
           "$repeat": 200,
-          "value": { "$repeat": 100, "value": "x" }
+          "value": {
+            "$repeat": 100,
+            "value": "x"
+          }
         }
       },
       "expected": {
         "check": "nested_arrays",
-        "marker": true
+        "marker": true,
+        "input_bytes": 80411,
+        "output_bytes": 24306,
+        "array_items": 2070,
+        "object_fields": 0,
+        "remaining": 77,
+        "inner": [78]
       }
     },
     {
@@ -53,18 +70,26 @@
       "source": [
         "web/src/views/chat/ActionRow.tsx: editDiffs",
         "apple/Persona/Views/Chat/ToolViews.swift: ToolDetail",
-        "android/feature/chat/src/main/kotlin/persona/feature/chat/ContentPresentation.kt: editInput"
+        "android/feature/chat/src/main/kotlin/persona/feature/chat/ContentPresentation.kt: toolDiff"
       ],
       "input": {
         "file_path": "/home/user/project/a.go",
         "edits": {
           "$repeat": 2000,
-          "value": { "old_string": "a", "new_string": "b" }
+          "value": {
+            "old_string": "a",
+            "new_string": "b"
+          }
         }
       },
       "expected": {
         "check": "object_array",
-        "marker": true
+        "marker": true,
+        "input_bytes": 72049,
+        "output_bytes": 24574,
+        "array_items": 1322,
+        "object_fields": 0,
+        "remaining": 678
       }
     },
     {
@@ -79,12 +104,21 @@
       "input": {
         "todos": {
           "$repeat": 2000,
-          "value": { "content": "Do the work", "activeForm": "Doing the work", "status": "pending" }
+          "value": {
+            "content": "Do the work",
+            "activeForm": "Doing the work",
+            "status": "pending"
+          }
         }
       },
       "expected": {
         "check": "todo_array",
-        "marker": true
+        "marker": true,
+        "input_bytes": 150011,
+        "output_bytes": 24504,
+        "array_items": 1675,
+        "object_fields": 0,
+        "remaining": 325
       }
     },
     {
@@ -101,14 +135,24 @@
           "value": {
             "question": "Choose one?",
             "header": "Choice",
-            "options": [{ "label": "A", "description": "First" }],
+            "options": [
+              {
+                "label": "A",
+                "description": "First"
+              }
+            ],
             "multi_select": false
           }
         }
       },
       "expected": {
         "check": "question_array",
-        "marker": true
+        "marker": true,
+        "input_bytes": 114015,
+        "output_bytes": 24528,
+        "array_items": 786,
+        "object_fields": 0,
+        "remaining": 214
       }
     },
     {
@@ -119,17 +163,27 @@
         "integrations/runtime-sdk/lib/input-clip.js: boundInput"
       ],
       "input": {
-        "values": { "$repeat": 100, "value": "short" },
+        "values": {
+          "$repeat": 100,
+          "value": "short"
+        },
         "wide": {
           "$fields": 2000,
           "key": "a_long_field_name_with_many_bytes_",
           "pad": 4,
-          "value": { "$index": 0 }
+          "value": {
+            "$index": 0
+          }
         }
       },
       "expected": {
         "check": "wide_object",
-        "marker": true
+        "marker": true,
+        "input_bytes": 95711,
+        "output_bytes": 24565,
+        "array_items": 100,
+        "object_fields": 1478,
+        "remaining": 522
       }
     },
     {
@@ -143,12 +197,19 @@
         "$fields": 2000,
         "key": "root_field_",
         "pad": 4,
-        "value": { "$index": 0 }
+        "value": {
+          "$index": 0
+        }
       },
       "expected": {
         "check": "root_wide",
         "key_prefix": "root_field_",
-        "marker": true
+        "marker": true,
+        "input_bytes": 48891,
+        "output_bytes": 24557,
+        "array_items": 0,
+        "object_fields": 978,
+        "remaining": 1022
       }
     },
     {
@@ -168,7 +229,18 @@
         "check": "root_wide",
         "key_prefix": "quote_\"_slash_\\_control_\u0001_<>&_",
         "value": "quote_\"_slash_\\_control_\u0001_<>&_  ",
-        "marker": true
+        "marker": true,
+        "input_bytes": 180001,
+        "go_input_bytes": 192001,
+        "sdk_input_bytes": 180001,
+        "go_output_bytes": 24503,
+        "sdk_output_bytes": 24509,
+        "go_remaining": 254,
+        "sdk_remaining": 271,
+        "go_object_fields": 1746,
+        "sdk_object_fields": 1729,
+        "array_items": 0,
+        "object_fields": 1746
       }
     },
     {
@@ -179,14 +251,19 @@
         "integrations/runtime-sdk/lib/input-clip.js: dropInputClipTail"
       ],
       "input": {
-        "$single_field": { "$string": "k", "count": 25000 },
+        "$single_field": {
+          "$string": "k",
+          "count": 25000
+        },
         "value": "short"
       },
       "expected": {
         "check": "single_long_key",
         "array_items": 0,
         "object_fields": 1,
-        "marker": true
+        "marker": true,
+        "input_bytes": 25012,
+        "output_bytes": 115
       }
     },
     {
@@ -197,15 +274,30 @@
         "integrations/runtime-sdk/lib/items.js: clipInput"
       ],
       "input": {
-        "long": { "$string": "abcdef", "count": 1000 },
+        "long": {
+          "$string": "abcdef",
+          "count": 1000
+        },
         "values": {
           "$repeat": 3000,
-          "value": ["short", { "$index": 0 }, true, null]
+          "value": [
+            "short",
+            {
+              "$index": 0
+            },
+            true,
+            null
+          ]
         }
       },
       "expected": {
         "check": "mixed_strings",
-        "marker": true
+        "marker": true,
+        "input_bytes": 85912,
+        "output_bytes": 24555,
+        "array_items": 2068,
+        "object_fields": 0,
+        "remaining": 932
       }
     },
     {
@@ -218,15 +310,18 @@
       "input": {
         "$pad_object_to": 24577,
         "value": {
-          "values": { "$repeat": 2430, "value": "1234567" }
+          "values": {
+            "$repeat": 2430,
+            "value": "1234567"
+          }
         }
       },
       "expected": {
         "check": "one_byte_over",
         "input_bytes": 24577,
-        "output_bytes": 24573,
-        "remaining": 2419,
-        "array_items": 11,
+        "output_bytes": 24572,
+        "remaining": 2418,
+        "array_items": 12,
         "object_fields": 0,
         "marker": true
       }
@@ -239,19 +334,265 @@
         "integrations/runtime-sdk/lib/input-clip.js: boundInput"
       ],
       "input": {
-        "$pad_object_to": 24580,
+        "$pad_object_to": 24581,
         "value": {
-          "values": { "$repeat": 2430, "value": "1234567" }
+          "values": {
+            "$repeat": 2430,
+            "value": "1234567"
+          }
         }
       },
       "expected": {
         "check": "one_byte_over",
-        "input_bytes": 24580,
+        "input_bytes": 24581,
         "output_bytes": 24576,
-        "remaining": 2419,
-        "array_items": 11,
+        "remaining": 2418,
+        "array_items": 12,
         "object_fields": 0,
         "marker": true
+      }
+    },
+    {
+      "name": "marker_growth_boundary",
+      "description": "Changing omission-count digits is part of the marker's encoded size at the stopping boundary.",
+      "source": [
+        "server/internal/transcript/clip_bound.go: boundInputJSONBudgetWork",
+        "integrations/runtime-sdk/lib/input-clip.js: boundInput"
+      ],
+      "input": {
+        "$pad_object_to": 24582,
+        "value": {
+          "values": {
+            "$repeat": 2430,
+            "value": "1234567"
+          }
+        }
+      },
+      "expected": {
+        "check": "one_byte_over",
+        "input_bytes": 24582,
+        "marker": true,
+        "output_bytes": 24567,
+        "array_items": 13,
+        "object_fields": 0,
+        "remaining": 2417
+      }
+    },
+    {
+      "name": "empty_nested_boundary",
+      "description": "A nested container can become empty at the boundary without charging a comma that does not exist.",
+      "source": [
+        "server/internal/transcript/clip_bound.go: dropTail",
+        "integrations/runtime-sdk/lib/input-clip.js: dropInputClipTail"
+      ],
+      "input": {
+        "$pad_object_to": 26046,
+        "value": {
+          "a": {
+            "small": [
+              1,
+              2,
+              3
+            ],
+            "wide": {
+              "$fields": 2600,
+              "key": "k",
+              "pad": 4,
+              "value": 1
+            }
+          }
+        }
+      },
+      "expected": {
+        "check": "nested_empty",
+        "input_bytes": 26046,
+        "marker": true,
+        "output_bytes": 24567,
+        "array_items": 3,
+        "object_fields": 159,
+        "remaining": 2441
+      }
+    },
+    {
+      "name": "unsorted_root",
+      "description": "Removal follows sorted keys even when the SDK input document puts telling fields first.",
+      "source": [
+        "server/internal/transcript/clip_bound.go: build",
+        "integrations/runtime-sdk/lib/input-clip.js: InputClipTree.build"
+      ],
+      "input": {
+        "$fields": 3000,
+        "base": {
+          "title": "Quarterly numbers",
+          "url": "https://example.com/sheet"
+        },
+        "key": "c",
+        "pad": 4,
+        "value": {
+          "$index": 0
+        }
+      },
+      "expected": {
+        "check": "unsorted_root",
+        "key_prefix": "c",
+        "total": 3000,
+        "absent": [
+          "title",
+          "url"
+        ],
+        "marker": true,
+        "input_bytes": 43953,
+        "output_bytes": 24568,
+        "array_items": 0,
+        "object_fields": 1298,
+        "remaining": 1704
+      }
+    },
+    {
+      "name": "unsorted_two_arrays",
+      "description": "Equal-length arrays under unsorted keys break the tie in sorted-key preorder in both implementations.",
+      "source": [
+        "server/internal/transcript/clip_bound.go: inputClipHeap.Less",
+        "integrations/runtime-sdk/lib/input-clip.js: heapLess"
+      ],
+      "input": {
+        "b": {
+          "$repeat": 2001,
+          "value": [
+            {
+              "$index": 0
+            },
+            {
+              "$string": "a",
+              "count": 17
+            },
+            {
+              "$string": "b",
+              "count": 18
+            }
+          ]
+        },
+        "a": {
+          "$repeat": 2001,
+          "value": [
+            {
+              "$index": 0
+            },
+            {
+              "$string": "a",
+              "count": 17
+            },
+            {
+              "$string": "b",
+              "count": 18
+            }
+          ]
+        }
+      },
+      "expected": {
+        "check": "two_arrays",
+        "marker": true,
+        "input_bytes": 197893,
+        "output_bytes": 24558,
+        "array_items": 3499,
+        "object_fields": 0,
+        "a_remaining": 251,
+        "b_remaining": 252
+      }
+    },
+    {
+      "name": "integer_keys",
+      "description": "Integer-like keys are removed in UTF-8 lexicographic order, not JavaScript's integer-first key order.",
+      "source": [
+        "server/internal/transcript/clip_bound.go: build",
+        "integrations/runtime-sdk/lib/input-clip.js: InputClipTree.build"
+      ],
+      "input": {
+        "rows": {
+          "$fields": 4000,
+          "key": "",
+          "pad": 0,
+          "value": {
+            "$index": 0
+          }
+        }
+      },
+      "expected": {
+        "check": "integer_keys",
+        "marker": true,
+        "input_bytes": 53790,
+        "output_bytes": 24575,
+        "array_items": 0,
+        "object_fields": 2225,
+        "remaining": 1775,
+        "last_key": "2595"
+      }
+    },
+    {
+      "name": "unicode_keys",
+      "description": "A key above U+FFFF sorts after a U+E000 key by code point, unlike JavaScript's default UTF-16 sort.",
+      "source": [
+        "server/internal/transcript/clip_bound.go: build",
+        "integrations/runtime-sdk/lib/input-clip.js: InputClipTree.build"
+      ],
+      "input": {
+        "rows": {
+          "$keyed_fields": ["c", "\ud800\udc00", "\ue000"],
+          "suffix": "k",
+          "count": 8000,
+          "value": {
+            "$string": "x",
+            "count": 200
+          }
+        }
+      },
+      "expected": {
+        "check": "unicode_keys",
+        "remaining": 2,
+        "array_items": 0,
+        "object_fields": 1,
+        "present": ["c", "\ue000"],
+        "absent": ["\ud800\udc00"],
+        "marker": true,
+        "input_bytes": 24636,
+        "output_bytes": 16540
+      }
+    },
+    {
+      "name": "marker_collision_base",
+      "description": "With only the base user key present, the first synthetic collision suffix is exactly _2.",
+      "source": [
+        "server/internal/transcript/clip_bound.go: boundInputJSONBudgetWork",
+        "integrations/runtime-sdk/lib/input-clip.js: boundInput"
+      ],
+      "input": {
+        "zz_persona_clipped": "keep this user value",
+        "values": {
+          "$repeat": 4000,
+          "value": [
+            {
+              "$index": 0
+            },
+            {
+              "$string": "a",
+              "count": 17
+            },
+            {
+              "$string": "b",
+              "count": 18
+            }
+          ]
+        }
+      },
+      "expected": {
+        "check": "marker_collision_base",
+        "marker": true,
+        "marker_key": "zz_persona_clipped_2",
+        "input_bytes": 198946,
+        "output_bytes": 24566,
+        "array_items": 3500,
+        "object_fields": 0,
+        "remaining": 500
       }
     },
     {
@@ -264,7 +605,10 @@
       "input": {
         "$pad_object_to": 24576,
         "value": {
-          "values": { "$repeat": 2430, "value": "1234567" }
+          "values": {
+            "$repeat": 2430,
+            "value": "1234567"
+          }
         }
       },
       "expected": {
@@ -287,16 +631,29 @@
         "values": {
           "$repeat": 4000,
           "value": [
-            { "$index": 0 },
-            { "$string": "a", "count": 17 },
-            { "$string": "b", "count": 18 }
+            {
+              "$index": 0
+            },
+            {
+              "$string": "a",
+              "count": 17
+            },
+            {
+              "$string": "b",
+              "count": 18
+            }
           ]
         }
       },
       "expected": {
         "check": "marker_collision",
         "marker": true,
-        "marker_key": "zz_persona_clipped_3"
+        "marker_key": "zz_persona_clipped_3",
+        "input_bytes": 198999,
+        "output_bytes": 24570,
+        "array_items": 3501,
+        "object_fields": 0,
+        "remaining": 499
       }
     }
   ]

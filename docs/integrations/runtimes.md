@@ -119,16 +119,20 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   cuts when the string becomes strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes
   for a three-digit original length); a longer or more heavily escaped tail may be cut.
   If the result is still over budget, a third pass drops tail items from the currently longest arrays (the most retained items,
-  document order breaking ties). Once no attached array can be shortened, it drops trailing fields from the currently widest objects
-  the same way. Surviving keys, item order and value types stay unchanged. For every top-level object accepted by the JSON decoder,
-  the final encoded input is at most **24,576 bytes**, including the marker: one collision-safe top-level string field named
-  `zz_persona_clipped` (suffixed `_2`, `_3`, … if needed). Its value counts the direct array-item and object-field omissions and ends
-  with the usual cut note and the original whole-input byte size. Typed tool projections ignore the unknown root field; generic argument
-  and Raw Input views show it. The `zz_` prefix puts the marker after ordinary argument names in sorted-key subject fallbacks; if no
-  earlier string argument exists, the omission note can become the subject.
+  preorder breaking ties), then trailing fields from the currently widest objects the same way. Object children use Unicode
+  code-point order for removal and preorder ties, matching the hub's UTF-8 byte-wise sort rather than JavaScript's UTF-16 or
+  integer-first enumeration order. Surviving array items keep their order; surviving object fields keep each implementation's
+  own output order and value types. For every top-level object accepted by the JSON decoder, the final encoded input is at
+  most **24,576 bytes**, including the marker: one collision-safe top-level field named `zz_persona_clipped` (suffixed `_2`,
+  `_3`, … if needed), whose value is an object of the form `{"note":"Omitted X array items and Y object fields.\n…（已截断，共 N 字节）"}`.
+  The note counts direct removals and ends with the usual cut note and the original whole-input byte size. The object wrapper
+  is deliberate: old and new clients' "first string argument" subject and summary fallbacks cannot mistake the marker for the
+  call's subject. Typed tool projections ignore the unknown root field; generic argument and Raw Input views show it.
   Inputs at or under budget are untouched. Each implementation measures its own wire encoding: both leave `<>&` raw, but
   `JSON.stringify` also leaves U+2028/U+2029 raw while the hub's Go encoder escapes them, so their shares and output bytes can differ.
-  Top-level arrays and other non-object inputs stay unchanged, as before.
+  Malformed input, trailing JSON and nesting the decoder rejects (deeper than 10,000 levels) pass through unchanged as before.
+  A valid number outside float64 range, such as `1e1000`, is retried with `UseNumber` so its object is still clipped. Top-level
+  arrays and other non-object inputs stay unchanged.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
 
 ## Interactions

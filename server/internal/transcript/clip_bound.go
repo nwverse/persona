@@ -6,19 +6,18 @@ import (
 	"sort"
 )
 
-// inputClipMarker is deliberately after ordinary argument names in sorted-key subject fallbacks. Existing arguments stay
-// ahead of it in the usual case; an input with no earlier string can use the omission note instead of a bare tool name.
+// inputClipMarker is an object, not a string, so no client's "first string argument" subject fallback can turn the
+// structural clipping note into the call's title. Generic JSON views still show it, and recursive cut detectors find note.
 const inputClipMarker = "zz_persona_clipped"
 
-// inputClipNode indexes one value in the JSON produced by the string passes. size is its current encoded size, including
-// brackets or braces for containers. Object children retain the candidate's key order; the root marker is appended last
-// and is the one fixed child. parent lets a removal update every ancestor's size without encoding any subtree again.
+// inputClipNode indexes one value in the JSON produced by the string passes. size is the encoded size of a scalar (or of
+// the fixed marker object). Object children retain the candidate's sorted-key order; the root marker is appended last and
+// is the one fixed child. Container sizes are summed only when their subtree is detached, never along every ancestor.
 type inputClipNode struct {
-	kind    byte // '[', '{', or 0 for a scalar
+	kind    byte // '[', '{', or 0 for a scalar (the marker object is scalar to the index)
 	value   any  // scalar value; containers rebuild their value from children
 	key     string
 	keySize int // encoded key size when the parent is an object
-	parent  *inputClipNode
 	kids    []*inputClipNode
 	fixed   int
 	size    int
@@ -31,30 +30,26 @@ type inputClipTree struct {
 	arrays  []*inputClipNode
 	objects []*inputClipNode
 	order   int
+	work    int // node visits, used by the deep-nesting test rather than a wall-clock assertion
 }
 
 func newInputClipTree(v any) *inputClipTree {
 	t := &inputClipTree{}
-	t.build(v, nil)
+	t.build(v)
 	return t
 }
 
-func (t *inputClipTree) build(v any, parent *inputClipNode) *inputClipNode {
-	n := &inputClipNode{value: v, parent: parent, active: true, index: -1}
+func (t *inputClipTree) build(v any) *inputClipNode {
+	t.work++
+	n := &inputClipNode{value: v, active: true, index: -1}
 	switch v := v.(type) {
 	case []any:
 		n.kind = '['
 		n.order = t.order
 		t.order++
 		t.arrays = append(t.arrays, n)
-		n.size = 2
-		for i, e := range v {
-			child := t.build(e, n)
-			if i > 0 {
-				n.size++
-			}
-			n.size += child.size
-			n.kids = append(n.kids, child)
+		for _, e := range v {
+			n.kids = append(n.kids, t.build(e))
 		}
 	case map[string]any:
 		n.kind = '{'
@@ -66,20 +61,35 @@ func (t *inputClipTree) build(v any, parent *inputClipNode) *inputClipNode {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys) // the same order as encoding/json, which produced the candidate
-		n.size = 2
-		for i, k := range keys {
-			child := t.build(v[k], n)
+		for _, k := range keys {
+			child := t.build(v[k])
 			child.key, child.keySize = k, jsonLen(k)
-			if i > 0 {
-				n.size++
-			}
-			n.size += child.keySize + 1 + child.size
 			n.kids = append(n.kids, child)
 		}
 	default:
 		n.size = len(marshalPlain(v))
 	}
 	return n
+}
+
+// size sums the current encoded size of a subtree. It is called only for the initial root and for a child being
+// detached, so after the initial walk each indexed node is visited here at most once.
+func (t *inputClipTree) size(n *inputClipNode) int {
+	t.work++
+	if n.kind == 0 {
+		return n.size
+	}
+	size := 2
+	for i, child := range n.kids {
+		if i > 0 {
+			size++
+		}
+		if n.kind == '{' {
+			size += child.keySize + 1
+		}
+		size += t.size(child)
+	}
+	return size
 }
 
 // inputClipHeap chooses the longest array or widest object, with the first container in document order breaking ties.
@@ -130,33 +140,28 @@ func nextInputClipNode(h *inputClipHeap) *inputClipNode {
 	return nil
 }
 
-func deactivateInputClipNode(n *inputClipNode) {
+func (t *inputClipTree) deactivate(n *inputClipNode) {
+	t.work++
 	n.active = false
 	for _, child := range n.kids {
-		deactivateInputClipNode(child)
+		t.deactivate(child)
 	}
 }
 
-func (n *inputClipNode) resize(delta int) {
-	for p := n; p != nil; p = p.parent {
-		p.size += delta
-	}
-}
-
-func dropInputClipTail(h *inputClipHeap, n *inputClipNode) {
+func (t *inputClipTree) dropTail(h *inputClipHeap, n *inputClipNode) int {
 	last := len(n.kids) - 1 - n.fixed // fixed suffix children (the root marker) are never removed
 	child := n.kids[last]
-	saved := child.size
+	saved := t.size(child)
 	if n.kind == '{' {
 		saved += child.keySize + 1
 	}
 	if len(n.kids) > 1 {
-		saved++ // the comma before the removed member
+		saved++ // the comma before the removed member, including the root marker's comma
 	}
 	n.kids = append(n.kids[:last], n.kids[last+1:]...)
-	n.resize(-saved)
-	deactivateInputClipNode(child)
+	t.deactivate(child)
 	containerheap.Fix(h, n.index)
+	return saved
 }
 
 func (n *inputClipNode) decodedValue() any {
@@ -182,18 +187,27 @@ func inputClipNote(originalSize, arrayItems, objectFields int) string {
 	return fmt.Sprintf("Omitted %d array items and %d object fields."+clipNoteFormat, arrayItems, objectFields, originalSize)
 }
 
+func inputClipMarkerValue(originalSize, arrayItems, objectFields int) map[string]any {
+	return map[string]any{"note": inputClipNote(originalSize, arrayItems, objectFields)}
+}
+
 // boundInputJSON applies the third and final clip pass to an over-budget candidate from the string passes. It removes
 // array tails, longest by current item count first, then object trailing fields, widest by current field count first.
-// Every surviving value keeps its type and place. The root marker names the direct removals and ends with the existing
-// cut note; its encoded bytes are included throughout, so the returned compact JSON is at most maxInputLen bytes.
+// Every surviving value keeps its type and place. The root marker object names the direct removals and ends with the
+// existing cut note; its encoded bytes are included throughout, so the compact JSON is at most maxInputLen bytes.
 func boundInputJSON(candidate []byte, originalSize int) []byte {
 	return boundInputJSONBudget(candidate, originalSize, maxInputLen)
 }
 
 func boundInputJSONBudget(candidate []byte, originalSize, budget int) []byte {
+	out, _ := boundInputJSONBudgetWork(candidate, originalSize, budget)
+	return out
+}
+
+func boundInputJSONBudgetWork(candidate []byte, originalSize, budget int) ([]byte, int) {
 	value, err := decodeInputObject(candidate)
 	if err != nil {
-		return candidate // candidate came from marshalPlain; keep the old behavior if that ever changes
+		return candidate, 0 // candidate came from marshalPlain; keep the old behavior if that ever changes
 	}
 	tree := newInputClipTree(value)
 	rootNode := tree.objects[0] // the document root is the first object in preorder
@@ -215,33 +229,31 @@ func boundInputJSONBudget(candidate []byte, originalSize, budget int) []byte {
 		}
 		markerKey = fmt.Sprintf("%s_%d", inputClipMarker, suffix)
 	}
-	marker := &inputClipNode{value: inputClipNote(originalSize, 0, 0), key: markerKey, keySize: jsonLen(markerKey), parent: rootNode, active: true, index: -1}
-	marker.size = jsonLen(marker.value.(string))
-	added := marker.keySize + 1 + marker.size
+	marker := &inputClipNode{value: inputClipMarkerValue(originalSize, 0, 0), key: markerKey, keySize: jsonLen(markerKey), active: true, index: -1}
+	marker.size = len(marshalPlain(marker.value))
+	size := tree.size(rootNode) + marker.keySize + 1 + marker.size
 	if len(rootNode.kids) > 0 {
-		added++
+		size++
 	}
 	rootNode.kids = append(rootNode.kids, marker)
 	rootNode.fixed = 1
-	rootNode.resize(added)
 	containerheap.Fix(&objects, rootNode.index)
 
 	arrayItems, objectFields := 0, 0
-	for rootNode.size > budget {
+	for size > budget {
 		if n := nextInputClipNode(&arrays); n != nil {
-			dropInputClipTail(&arrays, n)
+			size -= tree.dropTail(&arrays, n)
 			arrayItems++
 		} else if n := nextInputClipNode(&objects); n != nil {
-			dropInputClipTail(&objects, n)
+			size -= tree.dropTail(&objects, n)
 			objectFields++
 		} else {
 			break // only the small root marker remains, which always fits
 		}
-		note := inputClipNote(originalSize, arrayItems, objectFields)
-		delta := jsonLen(note) - marker.size
-		marker.value = note
-		marker.size += delta
-		marker.parent.resize(delta)
+		marker.value = inputClipMarkerValue(originalSize, arrayItems, objectFields)
+		nextSize := len(marshalPlain(marker.value))
+		size += nextSize - marker.size
+		marker.size = nextSize
 	}
-	return marshalPlain(rootNode.decodedValue())
+	return marshalPlain(rootNode.decodedValue()), tree.work
 }

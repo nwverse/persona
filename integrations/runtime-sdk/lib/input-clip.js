@@ -39,7 +39,10 @@ class InputClipTree {
       node.kind = '{'
       node.order = this.order++
       this.objects.push(node)
-      for (const key of Object.keys(value)) { // JSON.parse preserves the candidate's encoded key order
+      // Go sorts decoded object keys by their UTF-8 bytes. Use that order for removal and preorder ties, but delete from
+      // value itself below so surviving fields keep the SDK's own key order in the emitted object.
+      const keys = Object.keys(value).sort((a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')))
+      for (const key of keys) {
         const child = this.build(value[key])
         child.key = key
         child.keySize = jsonLen(key)
@@ -138,6 +141,10 @@ function inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat) {
   return `Omitted ${arrayItems} array items and ${objectFields} object fields.${clipNoteFormat.replace('%d', String(originalSize))}`
 }
 
+function inputClipMarkerValue(originalSize, arrayItems, objectFields, clipNoteFormat) {
+  // An object cannot become a call's subject through a client's "first string argument" fallback.
+  return { note: inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat) }
+}
 /** Bound an over-budget object from the string passes, returning a new object whose JSON is at most maxInput bytes. */
 export function boundInput(candidate, originalSize, maxInput, clipNoteFormat) {
   // Normalize once so sizes and surviving values have exactly the shapes JSON.stringify emits. Only this private copy
@@ -152,8 +159,8 @@ export function boundInput(candidate, originalSize, maxInput, clipNoteFormat) {
   for (let suffix = 2; Object.hasOwn(value, markerKey); suffix++) markerKey = `${inputClipMarker}_${suffix}`
   let arrayItems = 0
   let objectFields = 0
-  let note = inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat)
-  let noteSize = jsonLen(note)
+  let markerValue = inputClipMarkerValue(originalSize, arrayItems, objectFields, clipNoteFormat)
+  let noteSize = jsonLen(markerValue)
   let size = inputClipSize(root) + jsonLen(markerKey) + 1 + noteSize
   if (root.kids.length > 0) size++
 
@@ -168,11 +175,11 @@ export function boundInput(candidate, originalSize, maxInput, clipNoteFormat) {
       size -= dropInputClipTail(tree.objects, object, root)
       objectFields++
     }
-    note = inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat)
-    const nextSize = jsonLen(note)
+    markerValue = inputClipMarkerValue(originalSize, arrayItems, objectFields, clipNoteFormat)
+    const nextSize = jsonLen(markerValue)
     size += nextSize - noteSize
     noteSize = nextSize
   }
-  value[markerKey] = note
+  value[markerKey] = markerValue
   return value
 }
