@@ -34,7 +34,7 @@ def load_tests(loader, tests, pattern):
 
 class AppleRenameTests(unittest.TestCase):
     def test_sources_use_only_canonical_directories_and_project(self):
-        for suffix in ('', 'Watch', 'Widgets', 'Notify', 'Tests', 'MacTests', 'UITests'):
+        for suffix in ('', 'Watch', 'Widgets', 'Notify', 'Tests', 'UITests'):
             with self.subTest(directory=suffix):
                 self.assertFalse((APPLE / (FORMER_NAME + suffix)).exists())
                 self.assertTrue((APPLE / ('Persona' + suffix)).is_dir())
@@ -52,20 +52,18 @@ class AppleRenameTests(unittest.TestCase):
     def test_targets_use_canonical_product_modules(self):
         targets = blocks(TARGETS)
         expected = {
-            'Persona': 'Persona', 'PersonaMac': 'Persona', 'PersonaWatch': 'Persona', 'PersonaVision': 'Persona',
-            'PersonaWidgets': 'PersonaWidgets', 'PersonaNotify': 'PersonaNotify', 'PersonaMacNotify': 'PersonaNotify', 'PersonaVisionNotify': 'PersonaNotify',
+            'Persona': 'Persona', 'PersonaWatch': 'Persona', 'PersonaVision': 'Persona',
+            'PersonaWidgets': 'PersonaWidgets', 'PersonaNotify': 'PersonaNotify', 'PersonaVisionNotify': 'PersonaNotify',
             'PersonaShare': 'PersonaShare', 'PersonaVisionShare': 'PersonaShare',
             'PersonaWatchWidgets': 'PersonaWatchWidgets', 'PersonaVisionWidgets': 'PersonaWidgets',
         }
-        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaMacTests', 'PersonaUITests', 'PersonaMacUITests'})
+        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaUITests'})
         for target, module in expected.items():
             with self.subTest(target=target):
                 self.assertIn('PRODUCT_MODULE_NAME: ' + module + '\n', targets[target])
                 self.assertIn('PRODUCT_NAME: Persona', targets[target])
         self.assertIn('TEST_TARGET_NAME: Persona\n', targets['PersonaUITests'])
-        self.assertIn('TEST_TARGET_NAME: PersonaMac\n', targets['PersonaMacUITests'])
         self.assertIn('Persona.app/Persona"', targets['PersonaTests'])
-        self.assertIn('Persona.app/Contents/MacOS/Persona"', targets['PersonaMacTests'])
 
     def test_vision_target_uses_canonical_source_and_scheme(self):
         target = blocks(TARGETS)['PersonaVision']
@@ -77,11 +75,10 @@ class AppleRenameTests(unittest.TestCase):
 
     def test_only_canonical_schemes_build_existing_targets(self):
         schemes = blocks(SCHEMES)
-        self.assertEqual(set(schemes), {'Persona', 'PersonaMac', 'PersonaWatch', 'PersonaVision', 'PersonaMacExtensionUI'})
+        self.assertEqual(set(schemes), {'Persona', 'PersonaWatch', 'PersonaVision'})
         for name, scheme in schemes.items():
-            target = 'PersonaMac' if name == 'PersonaMacExtensionUI' else name
-            self.assertIn(target + ': all\n', scheme)
-        self.assertIn('PersonaMacUITests: [test]', schemes['PersonaMacExtensionUI'])
+            self.assertIn(name + ': all\n', scheme)
+        self.assertNotIn('PersonaMac', schemes)
         self.assertFalse((APPLE / (FORMER_NAME + '.xcodeproj')).is_symlink())
 
     def test_intent_control_activity_and_info_keys_use_canonical_identity(self):
@@ -107,7 +104,7 @@ class AppleRenameTests(unittest.TestCase):
         for key in ('PushKeychainGroup', 'PushRelay', 'AppGroup'):
             self.assertIn('Persona' + key + ':', PROJECT)
             self.assertNotIn(FORMER_NAME + key + ':', PROJECT)
-        for relative in ('Persona/Resources/Info.plist', 'Mac/Resources/Info.plist'):
+        for relative in ('Persona/Resources/Info.plist', 'Vision/Resources/Info.plist'):
             info = plistlib.loads((APPLE / relative).read_bytes())
             self.assertEqual(info['CFBundleURLTypes'][0]['CFBundleURLSchemes'], ['persona', FORMER_NAME.lower()])
 
@@ -148,8 +145,11 @@ class AppleRenameTests(unittest.TestCase):
         self.assertRegex(selection, r'#if os\(visionOS\)[\s\S]*?return false')
         # Active compact width still selects the shell; #2836 holds that width while iOS snapshots the app away.
         self.assertRegex(selection, r'#elseif os\(iOS\)\s+return \(heldWidthClass \?\? widthClass\) == \.compact \|\| flipped\s+#else\s+return false')
-        self.assertIn('if usesShell { ShellView()', root)
-        self.assertIn('} else { RootTabs()', root)
+        # The Sidebar layout when it is chosen, at every width (#6332: the drawer on a phone, the column at regular width);
+        # otherwise the shell at compact width, else the tabs. Separate stays the default.
+        self.assertIn('@StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate', root)
+        self.assertRegex(root, r'if usesSidebar \{ SidebarRoot\(\)[^\n]*\n\s+else if usesShell \{ ShellView\(\)[^\n]*\n'
+                               r'\s+else \{ RootTabs\(\)')
         self.assertIn('RootTabs().visionShell()', root)
         tabs = root.split('private struct RootTabs: View {', 1)[1].split('\n#if os(iOS)', 1)[0]
         self.assertIn('TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) }))', tabs)
@@ -160,7 +160,9 @@ class AppleRenameTests(unittest.TestCase):
         for name in ('Assistant', 'Agents', 'Inbox', 'Settings'):
             self.assertRegex(root, r'private struct ' + name + r'RootTab: TabContent')
         routes = root.split('final class PadRouter: TabRouter {', 1)[1].split('private struct PadRoutes:', 1)[0]
-        self.assertRegex(routes, r'func route\(_ t: AppTab, in model: AppModel\)\s*\{\s*switch t')
+        # While the router sets the tab itself it only notes which is in front (#6939).
+        self.assertRegex(routes, r'func route\(_ t: AppTab, in model: AppModel\)\s*\{\s*'
+                                 r'if settingTab \{ front = t; return \}\s*switch t')
         self.assertIn('show(.inbox)', routes)
         self.assertIn('model.shellSettings = true', routes)
 

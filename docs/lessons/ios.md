@@ -24,6 +24,29 @@ before the fix and 448 KB after.
 - `StackPeak.measure` (in `AgentsListStackTests`) paints the unused stack, runs the render, and finds the lowest word
   overwritten. Keep a page under half the device's stack (512 KB).
 
+## Keep a control's accessibility identifier off its surrounding container (#7033)
+
+A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
+
+## Words cut off by a clip still take touches, over the rows below them (2026-11-13, #6645)
+
+- `.clipped()`, `.clipShape` and `.mask` hide what is drawn, not what takes touches. A long message folded with
+  `.frame(height:)` + `.clipped()` still lays all of its words out, and the ones past the fold kept taking touches.
+  The chat's list is drawn upside down (newest first, flipped back), so an older row is drawn over the newer rows under
+  it: the message from another session folded to three lines (`LineFold`) took the taps meant for the work line right
+  under it, which never opened, and its long-press recognizer took the long presses on the answer under that, so the
+  card lifted instead. A message of about 2 KB can hide a screen of words.
+- Anything that cuts its content off by a clip takes `.contentShape(.rect)` right after the clip (`BubbleFold`,
+  `CardFold`, `LineFold`, `ReplyQuote`). Leave the words' accessibility alone while doing it: wrapping them in
+  `.accessibilityElement(children: .contain)` made the lifted copy of an open card (`MessageLift` combines a short
+  message's elements) read only its sender and Collapse, without its words.
+- Prove it with a touch at the row's own spot, not by its element: `WorkLineUnderFoldUITests` taps and long-presses
+  each row under a folded message (mock `MOCK_PEER_FOLD=1`). An element-based tap can't tell what lies on top.
+- Reproduce with the reported shape. Hidden words take touches only where their text lies: a fixture whose folded
+  message hid a bulleted list let the taps through between its items, and the work line opened on the unfixed build;
+  one English paragraph, as reported, took every tap. Get the shape from the real session (kinds, order, sizes; never
+  its words) before deciding a report does not reproduce.
+
 ## An edit menu needs the selection's rect, not just a point (#6005)
 
 - If `UIEditMenuInteraction.presentEditMenu(with:)` gets only a `sourcePoint` and its delegate has no
@@ -66,6 +89,15 @@ before the fix and 448 KB after.
   exactly as large as its words inside a SwiftUI view, a touch on the knob lands outside it and the handle can't be
   dragged. Make the text view reach past the words (`Theme.Lift.handleReach`), with a matching
   `textContainerInset` that keeps the words where they are.
+- A UIKit copy of MarkdownUI's text must use MarkdownUI's sizes, not the text style's. MarkdownUI scales its size like
+  `@ScaledMetric` relative to body and rounds it to a whole point: 22 pt at xxxLarge, where
+  `UIFont.preferredFont(forTextStyle: .body)` is 23, and 48 at AX5, where body is 53. Its list markers take at least
+  1.5 em, plus the `Label`'s 8 pt gap. At the default size both match, so only a large text size shows the copy
+  wrapping onto more lines than the chat (#6552, `ReplyText.Look.replySize`, `ReplyMetrics.markerRoom`). Compare the
+  line counts in `-showLiftLines` at xxxLarge and AX5.
+- The place between characters nearest a press can be after the pressed character. Looking the word up forward from
+  there takes the next word, and Chinese has no space to stop it. Look it up on the side the press is on
+  (`LiftUITextView.place(nearest:)`, #6552).
 
 ## A lazy grid never makes what it does not show (#4073)
 
@@ -1772,6 +1804,24 @@ no initial Working row so the message shifted by one row, and pending local remo
 - `-ui.scheme light|dark` makes the app icon follow the appearance, and SpringBoard's "You have changed the icon"
   alert covers the screenshot and takes taps: dismiss it through `com.apple.springboard` after launch.
 
+## One scroll in a pending card, its answers outside it (2026-11-13, #6605)
+
+- A permission, plan or terminal-dialog card put its whole form in a `ScrollView` capped at 55% of the container, under
+  the cards' area capped at half the page: a long command made the card taller than the area, so the command scrolled in
+  the card and the card in the area, with the answers last. #4839 had fixed the same for question cards only. Every form
+  now takes the area's cap (`formCap` includes `areaCap`), and the ones with answers keep them under their one scroll area
+  (`CardForm`). Check a new card kind against both caps, not only the page's 55%.
+- Fit a card by giving up lines of its long part, not by scrolling: `CardBodyStack` is a `Layout` (not a VStack, which a
+  scroll view offers no height to share) that offers the part marked `givesCardRoom()` what the others leave of the cap,
+  and `CardFold` shows the whole lines of that (never under two). The cut comes from layout, not from measured state, so
+  nothing goes back and forth; the fold only measures whether it cut anything, to show Show All.
+- In the app target (default MainActor isolation) a `LayoutValueKey` must be `nonisolated`: a `Layout` reads it off its
+  subviews in a nonisolated context, and the main-actor conformance fails to compile ("main actor-isolated conformance
+  … cannot be used in nonisolated context"). Plain `Layout` structs compile as they are.
+- Screenshots straight from `simctl` (no UI test): a relaunch of a fresh install brings back the notification question,
+  and `simctl openurl persona://open?…` first asks "Open in Persona?". Take each shot from the first launch on a freshly
+  erased simulator, or from a UI test that dismisses SpringBoard's alert (never by the label 允许 alone: the cards have one).
+
 ## A view that places itself over the whole screen gets no keyboard avoidance (2026-11-10, #3004)
 
 Superseded for the + panel by #4312: it is a system sheet now, its bar a `safeAreaInset` that the system's keyboard
@@ -2039,7 +2089,7 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **`WorkStepView` compares only its item and `first`**: a value handed down from the chat (a workflow run's progress) never reaches a step that is already drawn, because the hub's pushes do not change the item. A card that changes on its own reads its data itself, by a key in the item: `WorkflowCallCard` reads `AppModel.workflow(_:call:)`, one observable cell per (session, Workflow call) set only when that run changes, so a push about another run or the rest of the session draws nothing.
 - **A decision `ChatLines` makes from outside the items belongs in `LinesKey`**: `foldsIntoRun` / `showsFolded` now depend on which runs the hub lists; the lines are memoized by the store's version, so without `workflowCalls` in the key a run that appeared (or went) left the call folded into the chips (or out of the fold) until something else changed.
 - **`fold_work` hides the step a card hangs on** (as on the web, `docs/lessons/web.md`): a chat opened while a run goes on has the launching turn as one fold item. Fetch the fold whose `[ts, until]` holds the run's `started_at` (`WorkflowRun.foldsHoldingCalls`). A fetch can fail (the hub redeployed, the phone offline, not connected yet: `AppModel.unfold` then returns without throwing), so judge by whether the fold left the items, and ask again after a wait that doubles from 5 s to a minute (`WorkflowCallCard.fetchFolds`). Marking it "asked" before the fetch and swallowing the error left the card buried for the whole visit.
-- **A second-by-second clock per row is not free on the Mac**: `Text(timerInterval:)` needs no body, but 60 of them (a run's listed agents, all running) kept the idle Mac chat at 7.8% CPU (Debug build, `ps` over 20 s) against 0.5% without. One clock for the run, the rows to the minute (`TimelineView(.periodic(by: 60))`, all rows on one shared anchor so they turn in one update, not 60 wake-ups a minute). Measured again over 90 s (30–120 s after launch, so at least one minute tick; process CPU time from `ps -o cputime`; Debug, Mac locked): a plain chat 0.25–0.30%, the run's card with 16 running rows 0.84%, with 61 running rows 0.82%. So many agents add nothing; what remains over a plain chat (about 6 ms a second, `sample`: SwiftUI layout in `NSHostingView.layout`) is the run's one second clock. FrameStats could not run: display links do not fire while the Mac is locked (`docs/apple/mac.md`). Measure an idle card with many live rows, against the same card with few, before giving each row its own clock.
+- **A second-by-second clock per row is not free on the Mac**: `Text(timerInterval:)` needs no body, but 60 of them (a run's listed agents, all running) kept the idle Mac chat at 7.8% CPU (Debug build, `ps` over 20 s) against 0.5% without. One clock for the run, the rows to the minute (`TimelineView(.periodic(by: 60))`, all rows on one shared anchor so they turn in one update, not 60 wake-ups a minute). Measured again over 90 s (30–120 s after launch, so at least one minute tick; process CPU time from `ps -o cputime`; Debug, Mac locked): a plain chat 0.25–0.30%, the run's card with 16 running rows 0.84%, with 61 running rows 0.82%. So many agents add nothing; what remains over a plain chat (about 6 ms a second, `sample`: SwiftUI layout in `NSHostingView.layout`) is the run's one second clock. FrameStats could not run: display links do not fire while the Mac is locked (`docs/archive/apple/mac.md`). Measure an idle card with many live rows, against the same card with few, before giving each row its own clock.
 - **A UI test that drags the chat to bring a card into view**: a plain `press(forDuration:thenDragTo:)` flings the flipped list well past it. Drag slowly and hold at the end (`withVelocity: .slow, thenHoldForDuration:`), check the target's frame between drags, and assert it is hittable before tapping it; "a row is gone" alone is no proof that a block folded (the lazy list may simply have dropped the line).
 - **Every expander inside a chat row needs the pin, nested ones too**: the phase blocks inside the run's card first toggled with a plain `withAnimation`; in the upside-down list a phase opening 12 rows (or 「n more」 opening 43) pushed its head and everything above it up, under the top bar. Route each one through `toggleInPlace(pin, key, …)` with `.chatPinned(key)` on what was tapped (or the head above it, for 「n more」 / Show Fewer), as the card's own head does; outside the list (`chatPin` nil: the chat's header) it animates as before, so check Reduce Motion there yourself (`toggleInPlace` falls back to `withAnimation` unconditionally).
 - **Don't middle-truncate a line that ends in numbers**: the Agents row's 「后台 workflow「parity-audit」 · Verify 2/2 · 169/185+」 cut in the middle read 「…9/185+」, a wrong count. Cut only the name (`WorkflowLine`: name and details as two texts, the details laid out first).
@@ -2336,6 +2386,20 @@ a Mac (macOS 14, region China): Tiananmen Gate searched by name came back at (39
 a snapshot, the same point shifted to GCJ-02 (39.91059, 116.40371) landed in an alley 550 m east, and a walking route
 drawn from MapKit's own points followed the streets. Check on a phone in the mainland before adding any conversion.
 
+## MapKit walking steps describe the maneuver at the end of each step's line (2026-11-14, #6936)
+
+`MKRoute.Step.instructions` is what to do where that step's `polyline` ends, not where it starts. A walking route Apple
+Maps gave for two points in central Shanghai (979 m, 12 steps, asked from a Mac with the language set to Chinese) read:
+a first step "路线导航开始" ("start the route") with no length and a one-point line, then "右转" over 24 m whose line, at its
+end, turns right into the next step's line, "左转" over 268 m that turns left at its end, and so on, to a last step
+"到达目的地" ("arrive at the destination") whose line ends at the destination. All five turns agreed with the angle
+between one step's last segment and the next step's first. Taking the instruction for the step's start shows every
+arrow and says every "in 40 m, turn left" one step early, the arrow pointing the opposite way of the words at the
+corners. So: the next maneuver is the instruction of the step being walked, its distance is to that step's end, its
+arrow is the turn from that step's last segment into the next step's first, and the last step is arriving. Steps carry
+no maneuver type; read the turn off the lines. The instructions are terse in the mainland ("右转" without a street name
+is common). Check a route from another region before relying on the same reading there (#6672 has the code that used it).
+
 ## A sidebar place has more than one way in (2026-11-13, #6599)
 
 The drawer's places (Inbox, Machines, Knowledge…) keep their stacks through `AssistantView.show` (`ShellPlaces`,
@@ -2369,3 +2433,58 @@ synchronously flushes `RootView`'s dirtied SwiftUI graph (`ChatView`, `ChatTrans
   Reading and mutating the same `@Observable` property there (such as `&+= 1` via `_modify`) subscribes the representable to
   its own write and causes an endless `updateUIView` loop; compare against `@ObservationIgnored` shadow fields and write via
   pure setter assignment.
+
+## What `nonisolated` covers where MainActor is the default, and what it does not (2026-11-13, #4262)
+
+Twenty blocking calls carried `// perf-ok:` because their author believed they ran off the main thread. The isolation
+lint (`docs/apple/performance.md`, "Isolation lint") confirmed ten. The rest rested on one of these, each checked against
+the compiler by running the shape and reading `Thread.isMainThread`:
+
+- `nonisolated` on a type covers its members and nested types, not a plain `extension` of it: in an app target that
+  extension's members are MainActor again. Write `nonisolated extension`.
+- A `nonisolated async` function awaited from the main actor runs on the main actor (`NonisolatedNonsendingByDefault`,
+  on in the app targets). `@concurrent` is what leaves it.
+- A member that meets a requirement of a protocol declared in an app target is on the main actor even inside a
+  `nonisolated` struct, because the protocol is MainActor by default. Mark the member `nonisolated`.
+- `queue.sync { … }` runs the block on a background queue while the caller waits: from the main actor it blocks the
+  main thread for the whole read. "It runs on the store's queue" was true and beside the point.
+- `Task { }` in code that is not isolated starts on the global executor; `Task { @Sendable in }` in main-actor code still
+  starts on the main actor. Only an explicit `@Sendable` on a closure that is kept and called elsewhere moves it.
+
+Building the lint taught two things about SwiftPM. `swift build -c release` and `swift test -c release` compile with
+different flags (testable imports), so each rebuilds swift-syntax from scratch after the other, two minutes a time;
+`--disable-testable-imports` lets them share one build. And a package whose folder moved is rebuilt from scratch
+(Xcode 27.2), which is why `scripts/ci/apple.sh` builds the lint from a fixed copy beside its build output. An editor
+that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder inside it; git ignores that folder, but
+`scripts/test/test_script_layout.py` walks ignored files too and fails on the git hook samples in it, so delete it.
+
+## Picture in Picture zooms from its source's frame; iPad simulators have it (2026-11-13, #6333)
+
+- The system's transition into the small window starts at the content source layer's frame, wherever that is, and
+  Restore's ends there. A source parked out of sight (VNC's sat behind the content in the bottom-left corner) shows as a
+  small copy of the picture popping up there first. Keep the source exactly over the picture people are looking at
+  while it is up (`VNCPiPPlacement`), close the page at `willStart` (not `didStart`) so the picture never shows twice,
+  and call Restore's completion only once the page has drawn its picture again (`VNCPiPRestore`, with a time limit
+  on a timer off the main thread: a page opening under load held the main thread 10 s, so the system waited 10 s,
+  and in that run the next start never reached `didStart`). Hide the page's picture with a short fade, not at once: the system's copy appears a few
+  frames after `willStart`. With the source that large, the system sometimes draws the small window's first frames
+  (about 0.1 s) at the size the window last had, in the top-left of the transition, before the picture fills it: a
+  fresh `contentSource`, or a new controller and layer for each start, did not change it (iPad simulator; the old
+  small source hid it). Look at a couple of round trips frame by frame before blaming the source.
+- `isPictureInPictureSupported()` is false on iPhone simulators, slim or stock, but true on a stock iPad simulator
+  (`sim-boot.sh --profile stock`): record the system's transition there; how it feels on a phone still needs a device.
+- On an iPad simulator the hardware keyboard takes over once XCUITest types, hiding the on-screen keyboard: a form
+  that rose above it slides down, and a tap aimed at its button lands on whatever moved there. Submit with `"\n"` (the
+  field's `onSubmit`), or wait for the layout to settle before tapping.
+
+## A disabled alert button is not drawn disabled (2026-11-14, #6996)
+
+- Rename Terminal (`RenameTerminalAlert` in `apple/Persona/Views/Chats/TerminalsView.swift`) first had
+  `Button("Save") { … }.disabled(!TabRename.canSave(name, …))`. On the iOS 27 simulator the accessibility tree called
+  Save disabled for the starting name, but the alert drew it in the same blue as Cancel: a button that looks ready and
+  does nothing. Check in the action instead (an empty or unchanged name saves nothing, as Rename Space and Rename Agent
+  do), and limit the length with `.onChange` on the field's text.
+- UI tests: a tap on an alert's button 0.75 s after `typeText` into its field was lost on every save on an iPhone
+  simulator (iOS 27) and on some on an iPad one; a second tap a few seconds later always went through. Turning
+  autocorrection off did not change it. `FilesActionsTests`, which takes a screenshot between typing and tapping, saw it
+  once. Tap again while the alert stays up, then check what reached the mock; a single tap reads as an app bug.

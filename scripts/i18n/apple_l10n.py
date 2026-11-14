@@ -41,13 +41,12 @@ LANGS = ["en", "zh-Hans", "ja"]
 SOURCE = "en"
 # The app targets' sources and PersonaKit's, whose text is looked up in the app's main bundle (#5575, #5758); not the
 # tests, the test apps or the other SwiftPM packages (BeautifulUI's keys: `beautifului_problems`).
-SOURCE_DIRS = ["Persona", "Shared", "Mac", "Vision", "PersonaWatch", "PersonaWidgets", "LiveActivity", "PersonaNotify", "PersonaShare",
+SOURCE_DIRS = ["Persona", "Shared", "Vision", "PersonaWatch", "PersonaWidgets", "LiveActivity", "PersonaNotify", "PersonaShare",
                "Packages/PersonaKit/Sources"]
 CATALOGS = [
     "Shared/Localization/Localizable.xcstrings",
     "Persona/Intents/AppShortcuts.xcstrings",
     "Persona/Resources/InfoPlist.xcstrings",
-    "Mac/Resources/InfoPlist.xcstrings",
     "Vision/Resources/InfoPlist.xcstrings",
     "PersonaWatch/InfoPlist.xcstrings",
 ]
@@ -60,10 +59,12 @@ LINK_SOURCES = "PersonaLink/Sources/PersonaLink"
 LINK_CATALOG = LINK_SOURCES + "/Resources/Localizable.xcstrings"
 LINK_CJK = {}
 # The targets whose extracted strings go into the catalogs (sync / strict).
-TARGETS = ["Persona", "PersonaMac", "PersonaVision", "PersonaWatch", "PersonaWidgets", "PersonaNotify", "PersonaShare"]
+TARGETS = ["Persona", "PersonaVision", "PersonaWatch", "PersonaWidgets", "PersonaNotify", "PersonaShare"]
 
 SPEC = re.compile(r"%(?:(\d+)\$)?(#@\w+@|[-+ 0#]*\d*(?:\.\d+)?(?:ll|hh|l|h|z|t|j|q|L)?[@dDiuUxXoOfeEgGcCsSpaA])")
 CJK = swift_literals.CJK
+# A key's trailing context, ` [Queue Strip]`: a word in brackets, not a format argument (`In [%@]`) or punctuation.
+CONTEXT = re.compile(r" (\[[^\[\]%]*[^\W\d_][^\[\]%]*\])$")
 
 
 def _specifier_type(spec):
@@ -231,6 +232,15 @@ def catalog_problems(data, rel="catalog", infoplist=False):
                 # The catalog's empty key is intentional; it still needs an explicit translated unit.
                 if not isinstance(text, str) or (not text and key != ""):
                     report(f"{path or 'stringUnit'} has no value")
+        # A key's context (`Open [file]`) tells keys with the same English apart and is never shown: a value that
+        # keeps it puts "[Queue Strip]" on screen in that language (#6703).
+        context = CONTEXT.search(key)
+        for lang, units in by_lang.items() if context else ():
+            for unit, path, *_ in units:
+                text = unit.get("value")
+                if isinstance(text, str) and context.group(1) in text:
+                    problems.append(f"{rel}: {key!r}: {lang} {path or 'stringUnit'} shows the key's context "
+                                    f"{context.group(1)}: drop it from the value")
         en = by_lang.get(SOURCE, [])
         root_units = [u for u in en if u[3] is None and not u[4] and isinstance(u[0].get("value"), str)]
         if not root_units:
