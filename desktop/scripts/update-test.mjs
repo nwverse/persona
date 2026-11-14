@@ -354,6 +354,8 @@ async function cleanup() {
     if (await stat(uninstaller).then(() => true, () => false)) await run(uninstaller, ["/S", `_?=${join(work, "app")}`], { seconds: 300, verbatim: true, quiet: true }).catch(() => undefined);
   }
   await rm(cacheDirectory(), { recursive: true, force: true }).catch(() => undefined);
+  // Squirrel.Mac keeps the update it unpacked, accepted or not, under the test build's placeholder app ID.
+  if (platform === "darwin") await rm(join(homedir(), "Library", "Caches", "com.example.persona.desktop.ShipIt"), { recursive: true, force: true }).catch(() => undefined);
   // The AppImage started by the updater itself (see above) runs with the test build's default profile.
   if (platform === "linux") await rm(join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "persona-desktop-update-test"), { recursive: true, force: true }).catch(() => undefined);
   for (let attempt = 0; attempt < 5; attempt++) {

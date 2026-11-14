@@ -94,7 +94,7 @@ No certificate exists yet, so no release has published desktop packages. These a
 
 Two things to know before buying anything:
 
-- **macOS updates need the Developer ID signature, not just the download.** The macOS updater (Squirrel.Mac) installs a new version only into a Developer ID signed app, and only when the new version is signed by the same team. An unsigned or ad-hoc build finds and downloads the update and then cannot install it; the update test below records exactly that.
+- **macOS updates need the Developer ID signature, not just the download.** The macOS updater (Squirrel.Mac) installs a new version only into a Developer ID signed app, and only when the new version is signed by the same team. An unsigned or ad-hoc build finds and downloads the update and then cannot install it; the update test below records exactly that. electron-updater's own "downloaded" event fires before Squirrel.Mac has judged the file, so it is not evidence of an installable update on macOS.
 - **Windows certificates issued since mid-2023 usually cannot be exported.** Certificate authorities now keep the private key on a hardware token or in a cloud HSM, so there may be no `.pfx` to put in `WIN_CSC_LINK`. Signing with such a certificate needs a cloud-signing step in place of the `.pfx` (for example the authority's signing service). Which service to use is the owner's decision and is not implemented. An unsigned Windows package does update (the updater checks the download's SHA-512 against the metadata), but Windows SmartScreen warns on install and the updater cannot check the publisher.
 
 ### The update test
@@ -104,7 +104,7 @@ Two things to know before buying anything:
 | System | What is checked |
 | --- | --- |
 | Windows (hosted runner) | Silent per-user NSIS install of the old version into a temporary directory; the app finds the new version, downloads it, and the file's SHA-512 equals the metadata's; quitting installs it; the reopened app reports the new version and finds nothing newer; then uninstall. |
-| macOS (hosted runner) | The app finds the new version and downloads the ZIP, whose SHA-512 equals the metadata's; Squirrel.Mac then refuses to install into a build without a Developer ID signature, and the test reports that refusal instead of an install. |
+| macOS (hosted runner) | The old version runs from its ZIP with an ad-hoc signature (no certificate). It finds the new version and downloads the ZIP, whose SHA-512 equals the metadata's. The test then follows Squirrel.Mac's own verdict rather than the download event: on the hosted runner Squirrel.Mac refuses the file ("did not pass validation: code failed to satisfy specified code requirement(s)"), and the test reports that refusal instead of an install. Had it accepted, the test would require the install and the reopened version as on Windows. |
 | Linux (AppImage) | The same as Windows through an AppImage, under Xvfb. The product ships no Linux package; this exercises the shared feed, differential download and checksum code where no macOS or Windows computer is available. |
 
 The Desktop workflow runs it on all three systems (`update` job in `.github/workflows/desktop-test.yml`) and uploads `result.json` and the app's log.
