@@ -80,9 +80,12 @@ export function ModelPill({
   // what the next message runs on, before its model: the engine when it changes (Cindy's case), else the launcher
   // (Persona's in-session switch, #5035)
   const target = pending ? (pending.engine !== current.engine ? agentName(pending.engine) : pending.provider) : "";
-  const label = pending
-    ? t(effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending", { agent: target, model: name, effort })
-    : t(effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria", { model: name, effort });
+  const label = t(
+    pending
+      ? (effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending")
+      : (effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria"),
+    { agent: target, model: name, effort },
+  );
 
   const body: ReactNode = (
     <>
