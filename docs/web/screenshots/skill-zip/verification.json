@@ -1,0 +1,513 @@
+{
+  "source_commit": "04c9cfa473986dd36745295a087765240d7e407c",
+  "captured_at": "2026-11-14T22:43:26.976836+00:00",
+  "browser": "Chrome/149.0.7827.55",
+  "sources": {
+    "web/src/views/settings/Skills.tsx": "ac19d5384bb7da87f34745df13d8e6eaa85655a4f360be44ab6876a47f7803e3",
+    "server/internal/assistant/skills_import_browser_test.go": "7870bb5988071c023849ec2d99d0408496111878d48f0f7456a7171fc0dbf869",
+    "web/src/i18n/locales/en/settings-skills.json": "1066b7fb83118e5cb9f29815a6eb8aff9897eb2b048f9da9749d4f6035611b8b",
+    "web/src/i18n/locales/zh-Hans/settings-skills.json": "e23f6372bf653e3e0b979822cbf069f2319227505f0da47d72b4ccc450adff97",
+    "web/src/i18n/locales/ja/settings-skills.json": "365a20b9b613ef57d3b59584536712c6c857b83891cb94a555bab38ec521716c"
+  },
+  "checks": [
+    "Cancel initially focused; Tab reaches Install; Escape restores Upload ZIP focus",
+    "Native dragover/drop cancelled during a held real preview; no navigation, second request or changed filename",
+    "Explicit Install creates SKILL.md; Undo retains it in recovery and refreshes the list",
+    "The real importer rejects an empty description with the localized actionable error"
+  ],
+  "captures": [
+    {
+      "file": "preview-light.png",
+      "state": "preview; Cancel initially focused",
+      "locale": "en",
+      "theme": "light",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "Cancel",
+          "visible": true
+        },
+        {
+          "label": "Install skill",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "preview-dark.png",
+      "state": "preview; Install focused by Tab",
+      "locale": "en",
+      "theme": "dark",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "Cancel",
+          "visible": true
+        },
+        {
+          "label": "Install skill",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "narrow-dark-large.png",
+      "state": "preview; Large text",
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "text_size": "large",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "Cancel",
+          "visible": true
+        },
+        {
+          "label": "Install skill",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "narrow-light-large.png",
+      "state": "preview; Large text",
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "text_size": "large",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "Cancel",
+          "visible": true
+        },
+        {
+          "label": "Install skill",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "ja-preview.png",
+      "state": "localized preview",
+      "locale": "ja",
+      "theme": "light",
+      "width": 390,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "キャンセル",
+          "visible": true
+        },
+        {
+          "label": "スキルをインストール",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "ja-preview-dark.png",
+      "state": "localized preview",
+      "locale": "ja",
+      "theme": "dark",
+      "width": 390,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "キャンセル",
+          "visible": true
+        },
+        {
+          "label": "スキルをインストール",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-preview.png",
+      "state": "localized preview",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 390,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        },
+        {
+          "label": "安装 skill",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-preview-dark.png",
+      "state": "localized preview",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 390,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        },
+        {
+          "label": "安装 skill",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-group-light.png",
+      "state": "Skills group",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [],
+      "errors": []
+    },
+    {
+      "file": "zh-group-dark.png",
+      "state": "Skills group",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [],
+      "errors": []
+    },
+    {
+      "file": "zh-choose-light.png",
+      "state": "choose ZIP",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "选择 ZIP 文件",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-drop-dark.png",
+      "state": "native file drag over the zone",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "选择 ZIP 文件",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-checking-dark.png",
+      "state": "pending real preview response",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-checking-light.png",
+      "state": "pending real preview response",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-refused-light.png",
+      "state": "real importer refuses an empty description",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "选择 ZIP 文件",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-refused-dark.png",
+      "state": "real importer refuses an empty description",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "选择 ZIP 文件",
+          "visible": true
+        },
+        {
+          "label": "取消",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-installed-light.png",
+      "state": "installed in the real temporary store",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "撤回安装",
+          "visible": true
+        },
+        {
+          "label": "关闭",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-installed-dark.png",
+      "state": "installed in the real temporary store",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "撤回安装",
+          "visible": true
+        },
+        {
+          "label": "关闭",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-undone-dark.png",
+      "state": "real Undo; recovery path retained",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "关闭",
+          "visible": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-undone-light.png",
+      "state": "real Undo; recovery path retained",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 1280,
+      "text_size": "standard",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "buttons": [
+        {
+          "label": "",
+          "visible": true
+        },
+        {
+          "label": "关闭",
+          "visible": true
+        }
+      ],
+      "errors": []
+    }
+  ],
+  "screenshots": {
+    "preview-light.png": "c5471e70ccb17f9df078152be55cffc97333e7af92e65f877b52bd97ab7cd47a",
+    "preview-dark.png": "238dd20c1609ca3f44d287cda02aaaeb6fee2014195aa7eee61c9b95f978358b",
+    "narrow-dark-large.png": "4b413d3f5655448908cac48b6e5e84449920640953d70f838cec13b843122d57",
+    "narrow-light-large.png": "ea40c6c9582232d58dd89f4a98633c786e97da01cff99034648537ef67a59a97",
+    "ja-preview.png": "7e699e421f41e124c2d8e6b2fd93e2f5425208f05d5b36e53d721b69a6b62b47",
+    "ja-preview-dark.png": "be965fc14f263dbdf463b5c676432f7a2758fef184c804ee09592fd091c47145",
+    "zh-preview.png": "11dfc51c65080fcbee6df4f96c96dec6c8a00e3df79717ecc71f3b8919bda7ac",
+    "zh-preview-dark.png": "a4a3aec2164cf0461e5db023c8fa5119e092b71036ffe6917566c48323d692e3",
+    "zh-group-light.png": "87b9f3e4d7dbfd1c506026eb1fe6bfa77bb77daf69b07a7a6390d008ee3c666c",
+    "zh-group-dark.png": "c4466810946a4a6a8ffc93604064cdb5a54b857ec3f9820752dcb31db6818baf",
+    "zh-choose-light.png": "1f6f460ae2914ba81288642f6267ac3f1263c70fe38c42109ab96086ff234a07",
+    "zh-drop-dark.png": "8dc8cda36a0b5560c89d01a0b815dddc38e423a90fb53b1c3725a30c673638a4",
+    "zh-checking-dark.png": "f0679b46c8318882de245bd722d2849a1511804fc3e4042abb4219289528f18b",
+    "zh-checking-light.png": "4b38e1e210e5d1544f5ef780d58571073f938ff5db70f39dc0be319a9082e952",
+    "zh-refused-light.png": "67b54dccd1196f11498e55ff74efdf0dd1aa9ad85cef54df6ef3e278cdf466b6",
+    "zh-refused-dark.png": "b8b45d1cf3a3118fbbebf2f170c274b4473a8a15feee4e4bf364d3303f1853b4",
+    "zh-installed-light.png": "1bf71a36765527605acb9b692a8d881332144e726f63ad71031b4182fe873ff4",
+    "zh-installed-dark.png": "d84ade77e5c075e312e3f2388f43c1cfbc875e58f937b54fbea1ace5c43029a5",
+    "zh-undone-dark.png": "16fc733d5569e91770892f6805228ea5fdcb50cc9bdab4fa462999b3bc558756",
+    "zh-undone-light.png": "c010a239f1e4c3d21977c361190df8a8901676fbb13fb2999cbac089da2eb118"
+  },
+  "manual_inspection": {
+    "reviewer": "Codex",
+    "result": "pass",
+    "captures_reviewed": 20,
+    "observations": [
+      "Light and dark surfaces, status marks and text remain readable.",
+      "The desktop preview and 390 px Large preview keep content and footer actions visible; long install paths wrap.",
+      "Chinese and Japanese previews keep their localized primary buttons on one line.",
+      "The keyboard focus ring is visible on Install in dark mode.",
+      "Choose, drag-over, checking, refused, installed and undone states match their state and recovery copy."
+    ]
+  },
+  "watcher_integration": "Pending maintainer configuration of ui_evidence_command; this report is not a watcher gate credential."
+}
