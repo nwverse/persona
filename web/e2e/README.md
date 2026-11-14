@@ -216,6 +216,46 @@ asks first. It then checks that the session waits (`bypass_pending`, the chip st
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
 
+## Settings: hints, search, provider errors, disconnect, hubs and lists (web audit)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_CHANNELS=1 MOCK_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/settings-audit.mjs <loopback-web-origin> <artifact-directory>
+```
+
+Run against an exclusively owned mock-backed web server; a server proxying a real hub is refused (the runner checks the
+mock's health reply). Each check opens a fresh headless Chrome context signed in to the mock; requests to other origins
+are blocked, and a write that revokes a token or saves a provider is answered in the browser with an error and never
+reaches the mock. It checks, in light and dark:
+
+- General's setting sentences wrap instead of being cut at one line (1280 and a 390 phone), Translation's note keeps
+  its spacing above Agent preferences, and on a phone the language menu sits under its sentence; in English, Chinese
+  and Japanese nothing in General is cut off with an ellipsis on a 390 phone (audit item 17).
+- In English, Chinese and Japanese, typing a setting's name ("Language") in the settings search lists that setting
+  first, Enter scrolls to its row and lights it, and Esc clears the box; the settings of the other pages are found by
+  their labels (thinking effort, time zone, default permissions, quiet hours, continue after errors, secrets, device
+  tokens, revoke; in Chinese also the audit's own words, in English "timezone" and "effort"), Revoke is listed as
+  Revoke, and an agent's setting opens that agent's section (audit item 18); the hub's category reads "This hub" and
+  Models and Knowledge selection have different icons (audit item 66).
+- Next on an empty custom gateway focuses the first field with a problem, marks it invalid, and its note is inside
+  the dialog's visible area at 1280 x 600; every field that needs something says so, the others with a red edge;
+  nothing is saved (audit item 19).
+- Disconnect this browser asks first, saying pairing is needed again; Cancel revokes nothing and keeps the sign-in.
+  With the question's chunk refused (a redeploy), Disconnect from the account menu leaves the app drawn, says
+  reloading should fix it and revokes nothing (audit item 20).
+- Add hub refuses "not a url" and an escaped host under the field and keeps the list as it was, and still adds a real
+  address (audit item 67).
+- On a 390 phone a connector's page, Sent and an extension's page each draw one Back, the top bar's, which goes to the
+  category; so do the market's catalog, one of its extensions and the list of markets, whose Back goes to the catalog;
+  under the Lark bot's address the top bar's Back goes to Settings; a wide screen keeps the page's own Back (audit
+  item 64).
+- With the list beside an open extension or connector, the open row is the only one marked `aria-current`, its name is
+  whole and its state sits under it; a list on its own marks nothing (audit item 68).
+
+It prints one line per check and a final verdict, writes `results.json` and screenshots to the artifact directory, and
+exits nonzero on a failure or its five-minute timeout. Against a build from before these fixes nearly every check fails.
+
 ## The app shell's connection states, dead links and keyboard focus (web usability audit)
 
 ```sh
