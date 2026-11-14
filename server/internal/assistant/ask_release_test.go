@@ -262,7 +262,8 @@ func TestALetGoQuestionsCardOutlivesItsTurnOnTheQueue(t *testing.T) {
 		t.Fatal("the node's connection ending took the card down")
 	}
 	// NodeDetached returns once its own work is done, but a push it decided on goes out on a goroutine (deliver): every
-	// push still on its way has to land before the count says anything.
+	// push still on its way has to land before the count says anything. This relies on NodeDetached deciding its pushes
+	// before it returns; a push handed to another long-lived goroutine (over a channel, say) would not be counted here.
 	waitFor(t, "the pushes under way to land", func() bool { return underWay() == 0 })
 	if n := len(a.f.pushed()); n != 1 {
 		t.Fatalf("%d pushes, want the card's one", n)
