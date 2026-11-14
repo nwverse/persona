@@ -1,10 +1,12 @@
-# Mac design language
+# Mac design language (retired)
 
-The Mac app (`PersonaMac`) adds a layer of conventions on top of the iOS design system (`docs/apple/ios.md`, "Design language"): the same tokens, styles, and theme colors,
-with rules only for **layout**, **density**, and **what to leave out** on Mac. The goal is the quiet, compact, keyboard-and-mouse-first feel of Mail, Notes, Things, and the Codex desktop app,
+**Historical record, not a maintained design guide.** #6770 removes the native Mac target. The Electron desktop app reuses the existing web UI rather than these native-Mac layouts ([desktop.md](../../desktop/desktop.md)). The text below records the former client's conventions.
+
+The former Mac app (`PersonaMac`) added a layer of conventions on top of the iOS design system (`docs/apple/ios.md`, "Design language"): the same tokens, styles, and theme colors,
+with rules only for **layout**, **density**, and **what to leave out** on Mac. The goal was the quiet, compact, keyboard-and-mouse-first feel of Mail, Notes, Things, and the Codex desktop app,
 not an enlarged iPhone screen. The default style (Liquid Glass) and all other styles follow these layouts; each style's surfaces and colors still come from its `ComponentSpec`.
 
-The native Mac app is frozen ([mac.md](mac.md)): these rules apply to bug fixes in its existing screens, and no new Mac design work is planned (#2214). Development mockups are not stored in the repository.
+The former native Mac app was frozen ([mac.md](mac.md)): these rules applied to bug fixes in its existing screens. Development mockups are not stored in the repository.
 
 ## Four principles
 
@@ -35,7 +37,7 @@ The native Mac app is frozen ([mac.md](mac.md)): these rules apply to bug fixes 
 
 - These rules apply only on Mac: in views under `apple/Mac/`, or in `#if os(macOS)` branches of shared views. The iOS appearance must not change by a single pixel.
 - Add missing values as tokens first (Mac-only tokens go in `apple/Mac/Design/MacTokens.swift`); no literals in pages (`TokenRatchetTests` allows only reductions).
-- Do not change structures whose performance has already been measured: section pages stay mounted (`MacPageStack`, #390), and the toolbar changes one frame later. Compare changes with `-showPerfRun sections` (`docs/apple/mac.md`, "Section switching: persistent pages").
+- Do not change structures whose performance has already been measured: section pages stay mounted (`MacPageStack`, #390), and the toolbar changes one frame later. Compare changes with `-showPerfRun sections` (`docs/archive/apple/mac.md`, "Section switching: persistent pages").
 
 ## Reference layouts
 
