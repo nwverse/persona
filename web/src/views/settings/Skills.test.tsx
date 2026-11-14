@@ -94,6 +94,33 @@ it("previews untrusted text, confirms explicitly, refreshes the old list and off
   expect(installed).toBe(false);
 });
 
+it("says where the skills live in one footer line, not as rows of the list", async () => {
+  expect(host.textContent).toContain(t("settings-skills.footer_where", { machine: "Example computer" }));
+  expect(host.querySelectorAll(".divide-y > *")).toHaveLength(1);
+});
+
+it("checks a ZIP dropped on the drop zone like a chosen one", async () => {
+  await click("settings-skills.upload");
+  const zone = document.querySelector<HTMLElement>('[data-testid="skill-zip-drop"]');
+  expect(zone).toBeTruthy();
+  const file = new File(["x".repeat(5)], "synthetic.zip", { type: "application/zip" });
+  const drag = (type: string) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "dataTransfer", { value: { files: [file], types: ["Files"] } });
+    zone!.dispatchEvent(e);
+    return e;
+  };
+  await act(async () => { expect(drag("dragover").defaultPrevented).toBe(true); });
+  expect(zone!.className).toContain("border-accent");
+  await act(async () => {
+    expect(drag("drop").defaultPrevented).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  await flush();
+  expect(writes.map((w) => w.op)).toEqual(["preview"]);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(preview.destination);
+});
+
 it("cancels a preview without installing and returns keyboard focus to Upload ZIP", async () => {
   await click("settings-skills.upload");
   await upload();

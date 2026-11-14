@@ -344,13 +344,21 @@ environment/credential changes, strict server-derived targeting and the confirma
 and a temporary directory; unrelated routes use `scripts/mock/mock_hub.py`. It is UI integration evidence, not a
 production or live-model test. Its header documents loopback ports and shutdown; run with `SKILL_IMPORT_QA=1`.
 
+The Skills group keeps only the list in its card; where the skills live, who shares them and when changes apply are
+its one footer line. The upload dialog reuses existing web patterns: LookUpload's drop zone (choose or drop a ZIP, the
+check's progress in its place), ProviderImport's preview card and Cancel/primary footer, and `ErrorNotice` for a refused
+package.
+
 Curated synthetic captures, actually inspected in a browser (not production assets):
 
-| Preview | Light | Dark |
+| Capture | Light | Dark |
 | --- | --- | --- |
 | Desktop, standard text | [Light](../web/screenshots/skill-zip/preview-light.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/preview-dark.png) |
 | 390 px, largest supported text setting | [Light](../web/screenshots/skill-zip/narrow-light-large.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/narrow-dark-large.png) |
 | Localized narrow layout | [Simplified Chinese](../web/screenshots/skill-zip/zh-preview.png) | [Japanese](../web/screenshots/skill-zip/ja-preview.png) |
+| Skills group, Simplified Chinese | [Light](../web/screenshots/skill-zip/zh-group-light.png) | [Dark](../web/screenshots/skill-zip/zh-group-dark.png) |
+| Choosing a ZIP | [Light](../web/screenshots/skill-zip/zh-choose-light.png) | [Dark, a file dragged over](../web/screenshots/skill-zip/zh-drop-dark.png) |
+| Refused package, installed | [Refused (light)](../web/screenshots/skill-zip/zh-refused-light.png) | [Installed (light)](../web/screenshots/skill-zip/zh-installed-light.png) |
 
 Browser observations: Cancel initially owns preview focus; Tab reaches Install with a visible ring; Escape closes
 and restores Upload ZIP focus. No horizontal overflow at 390 px, including Large. A missing-string description
