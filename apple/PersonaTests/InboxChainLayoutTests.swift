@@ -14,27 +14,43 @@ struct InboxChainLayoutTests {
     @Test(arguments: [320.0, 744.0] as [CGFloat])
     func plainReportedDetailGrowsBeyondTwoLines(width: CGFloat) throws {
         let one = try height(entry(lines: 1, detail: Self.lines(1)), width: width)
-        let two = try height(entry(lines: 2, detail: Self.lines(2)), width: width)
-        let four = try height(entry(lines: 4, detail: Self.lines(4)), width: width)
+        let referenceTwo = try uncappedTextHeight(lines: 2)
+        let referenceFour = try uncappedTextHeight(lines: 4)
+        #expect(referenceFour > referenceTwo, "the uncapped Text reference did not grow")
 
-        // Sensitivity: this same measurement must distinguish even the two heights allowed by the old cap.
-        #expect(two > one, "two lines did not grow beyond one at width \(width)")
-        #expect(four > two, "plain reported detail stayed capped at width \(width)")
+        let messageBatches: [(name: String, messages: [InboxItem.ChainEntry.Message]?)] = [
+            ("nil", nil),
+            ("empty", []),
+        ]
+        for batch in messageBatches {
+            let two = try height(entry(lines: 2, detail: Self.lines(2), messages: batch.messages), width: width)
+            let four = try height(entry(lines: 4, detail: Self.lines(4), messages: batch.messages), width: width)
 
-        let emptyMessagesTwo = try height(entry(lines: 2, detail: Self.lines(2), messages: []), width: width)
-        let emptyMessagesFour = try height(entry(lines: 4, detail: Self.lines(4), messages: []), width: width)
-        #expect(emptyMessagesFour > emptyMessagesTwo, "an empty message array recapped the row at width \(width)")
+            // Sensitivity: this same measurement must distinguish even the two heights allowed by the old cap.
+            #expect(two > one, "two lines did not grow beyond one with \(batch.name) messages at width \(width)")
+            #expect(four > two, "plain reported detail stayed capped with \(batch.name) messages at width \(width)")
+
+            // The rest of the row is unchanged, so its growth is exactly the uncapped Text's four-minus-two-line growth.
+            // Integral CGImage heights can round the row and reference by one pixel differently, not by a whole line.
+            let expectedFour = two + referenceFour - referenceTwo
+            #expect(abs(four - expectedFour) <= 1,
+                    "\(batch.name) messages: four-line height \(four), expected \(expectedFour) +/- 1 px at width \(width)")
+        }
     }
 
     @Test(arguments: [320.0, 744.0] as [CGFloat])
     func everyOtherClosedRowKeepsTheTwoLineCap(width: CGFloat) throws {
         let link = InboxItem.Link(type: "source", url: "https://example.com/report")
+        let malformedSessionLink = InboxItem.Link(type: "session")
         let messages = [InboxItem.ChainEntry.Message(sender: "Agent", text: "Context", at: nil)]
         let cases: [(name: String, two: InboxItem.ChainEntry, four: InboxItem.ChainEntry)] = [
             ("non-reported", entry(kind: "sent", lines: 2, detail: Self.lines(2)),
              entry(kind: "sent", lines: 4, detail: Self.lines(4))),
             ("reported with a link", entry(lines: 2, detail: Self.lines(2), link: link),
              entry(lines: 4, detail: Self.lines(4), link: link)),
+            ("reported with a malformed session link",
+             entry(lines: 2, detail: Self.lines(2), link: malformedSessionLink),
+             entry(lines: 4, detail: Self.lines(4), link: malformedSessionLink)),
             ("reported with messages", entry(lines: 2, detail: Self.lines(2), messages: messages),
              entry(lines: 4, detail: Self.lines(4), messages: messages)),
             ("reported with nil detail", entry(lines: 2), entry(lines: 4)),
@@ -62,6 +78,18 @@ struct InboxChainLayoutTests {
         let renderer = ImageRenderer(content: InboxChainSection(item: item)
             .frame(width: width, alignment: .leading)
             .environment(model)
+            .environment(\.colorScheme, .light)
+            .environment(\.dynamicTypeSize, .large))
+        renderer.scale = 1
+        return try #require(renderer.cgImage).height
+    }
+
+    private func uncappedTextHeight(lines: Int) throws -> Int {
+        let renderer = ImageRenderer(content: Text(Self.lines(lines))
+            .font(Theme.Font.secondary)
+            .foregroundStyle(.secondary)
+            .lineLimit(nil)
+            .fixedSize(horizontal: true, vertical: true)
             .environment(\.colorScheme, .light)
             .environment(\.dynamicTypeSize, .large))
         renderer.scale = 1

@@ -4,7 +4,8 @@ import XCTest
 /// Run against Fixtures/reported_detail_hub.py (PERSONA_MOCK_HUB). On baseline production,
 /// reported-long is capped at the same two-line height as reported-short and fails the
 /// four-line assertion. TEST_RUNNER_PERSONA_SHOTS=<dir> keeps the closed and open screens;
-/// TEST_RUNNER_PERSONA_UI_SCHEME=dark captures the dark rendering.
+/// TEST_RUNNER_PERSONA_UI_SCHEME=dark captures the dark rendering;
+/// TEST_RUNNER_PERSONA_TEXT_SIZE=<UIContentSizeCategory name> runs at that text size.
 final class InboxReportedDetailUITests: XCTestCase {
     private static let short = "reported-short"
     private static let long = "reported-long"
@@ -26,6 +27,7 @@ final class InboxReportedDetailUITests: XCTestCase {
         sleep(1) // Let the existing Show all animation finish before reading rendered frames.
 
         var heights: [String: CGFloat] = [:]
+        var longTextHeight: CGFloat?
         for id in [Self.short, Self.long] + Self.controls {
             let row = entry(app, id)
             reveal(row, in: app)
@@ -33,7 +35,13 @@ final class InboxReportedDetailUITests: XCTestCase {
             XCTAssertGreaterThan(height, 0, "\(id) has no rendered row")
             heights[id] = height
             print("REPORTED-DETAIL \(layout) \(id) closed height=\(height)")
-            if id == Self.long { shot(app, "plain-detail") }
+            if id == Self.long {
+                let text = detailText(app, containing: "Long detail A.", "Long detail B.", "Long detail C.", "Long detail D.")
+                reveal(text, in: app)
+                longTextHeight = text.frame.height
+                print("REPORTED-DETAIL \(layout) \(id) closed Text height=\(text.frame.height)")
+                shot(app, "plain-detail")
+            }
         }
         shot(app, "controls-closed")
 
@@ -64,6 +72,15 @@ final class InboxReportedDetailUITests: XCTestCase {
         let openMessages = entry(app, "reported-messages").frame.height
         XCTAssertGreaterThan(openMessages, try XCTUnwrap(heights["reported-messages"]) + 8,
                              "opening messages must add their expansion below the still-capped row")
+
+        // Opening this reported row uncaps its main Text. It has the same font and four explicit lines as reported-long,
+        // so it is an uncapped same-font reference; its expansion is below that Text and must not enter this measurement.
+        let uncapped = detailText(app, containing: "Chat control A.", "Chat control B.", "Chat control C.", "Chat control D.")
+        reveal(uncapped, in: app)
+        let uncappedHeight = uncapped.frame.height
+        print("REPORTED-DETAIL \(layout) reported-messages open Text height=\(uncappedHeight)")
+        XCTAssertEqual(try XCTUnwrap(longTextHeight), uncappedHeight, accuracy: 1,
+                       "Long detail A.-D. must render at the full four-line height of the expanded same-font reference; a three-line cap is one line shorter")
         shot(app, "messages-open")
     }
 
@@ -77,6 +94,7 @@ final class InboxReportedDetailUITests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-ui.scheme", environment["PERSONA_UI_SCHEME"] ?? "light",
                                "-tab", "mail", "-inbox.kind", "", "-inbox.source", "", "-inbox.grouping", "",
                                "-openInboxItem", "reported-detail-fixture"]
+            + (environment["PERSONA_TEXT_SIZE"].map { ["-UIPreferredContentSizeCategoryName", $0] } ?? [])
         app.launchPinned()
         acceptIconAlert()
         regularWidth = app.windows.firstMatch.frame.width > 600
@@ -87,6 +105,14 @@ final class InboxReportedDetailUITests: XCTestCase {
 
     @MainActor private func entry(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", id)).firstMatch
+    }
+
+    @MainActor private func detailText(_ app: XCUIApplication, containing lines: String...) -> XCUIElement {
+        var query = app.staticTexts
+        for line in lines {
+            query = query.matching(NSPredicate(format: "label CONTAINS %@", line))
+        }
+        return query.firstMatch
     }
 
     /// Finds lazy rows above or below the viewport without relying on their accessibility text.
@@ -116,7 +142,8 @@ final class InboxReportedDetailUITests: XCTestCase {
         let environment = ProcessInfo.processInfo.environment
         if let directory = environment["PERSONA_SHOTS"] {
             let appearance = environment["PERSONA_SHOTS_APPEARANCE"] ?? environment["PERSONA_UI_SCHEME"] ?? "light"
-            let file = "reported-detail-\(name)-\(layout)-\(UITestStyle.name)-\(appearance).png"
+            let size = environment["PERSONA_TEXT_SIZE"] == nil ? "" : "-ax"
+            let file = "reported-detail-\(name)-\(layout)-\(UITestStyle.name)-\(appearance)\(size).png"
             try? png.write(to: URL(fileURLWithPath: directory).appending(path: file))
         }
     }
