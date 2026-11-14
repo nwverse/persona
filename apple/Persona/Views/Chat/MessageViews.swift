@@ -1102,7 +1102,7 @@ struct StreamingText: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("StreamingText")
         #endif
-        // Reads only what is laid out: it changes when text arrives or the reveal reaches the next block, not at every
+        // Reads only what is laid out: it changes when text arrives or the reveal reaches the next line, not at every
         // frame (the frames redraw `RevealedTail`, and only by drawing).
         let laidOut = done ? text : reveal.laidOut(of: text)
         StreamingMarkdown(text: laidOut, reveal: done ? nil : reveal).equatable()
@@ -1140,7 +1140,7 @@ private struct StreamingMarkdown: View, Equatable {
     }
 }
 
-/// The block being written, laid out whole (as received) and drawn as far as the reveal has come (`fraction`). The only
+/// The block being written, laid out to the end of the line the reveal is in and drawn as far as it has come (`fraction`). The only
 /// view that reads the frames: a frame changes its text renderer, which redraws the text without laying it out.
 private struct RevealedTail: View {
     var tail: String
@@ -1254,7 +1254,7 @@ private struct RevealRenderer: TextRenderer {
 
 /// Drives `StreamReveal` with the display's frames: a display link runs only while received text waits to be shown
 /// (P9), at most 30 times a second, and stops when the view goes. It publishes what to lay out (`layoutEnd`, which
-/// changes when text arrives or the reveal reaches the next block) apart from how much of the last block to draw
+/// changes when text arrives or the reveal reaches the next line) apart from how much of the last block to draw
 /// (`fraction`, which changes at every frame), so the frames redraw only the drawing (`RevealPlan`, #7287). On the Mac
 /// (frozen, docs/apple/mac.md) the text shows as it comes.
 @MainActor @Observable
@@ -1264,8 +1264,9 @@ final class StreamRevealClock {
     /// How much of the last laid-out block to draw, 0…1.
     private(set) var fraction = 1.0
     @ObservationIgnored private var reveal: StreamReveal?
-    /// `StreamChunks.blocks` of the received text.
+    /// `StreamChunks.blocks` and `lineEnds` of the received text.
     @ObservationIgnored private var blocks: [Range<Int>] = []
+    @ObservationIgnored private var lineEnds: [Int] = []
     #if os(iOS) || os(visionOS)
     @ObservationIgnored private var link: CADisplayLink?
     #endif
@@ -1285,7 +1286,10 @@ final class StreamRevealClock {
     }
 
     func receive(_ text: String) {
-        if reveal?.text != text { blocks = StreamChunks.blocks(text) }
+        if reveal?.text != text {
+            blocks = StreamChunks.blocks(text)
+            lineEnds = StreamChunks.lineEnds(text)
+        }
         #if os(iOS) || os(visionOS)
         let now = CACurrentMediaTime()
         if reveal == nil { reveal = StreamReveal(text) } else { reveal?.receive(text, at: now) }
@@ -1321,7 +1325,7 @@ final class StreamRevealClock {
     /// Sets what changed, each only when it did: `layoutEnd` is read by the whole reply, `fraction` by its last block.
     private func publish() {
         guard let reveal else { return }
-        let plan = RevealPlan.make(blocks: blocks, shown: reveal.shown.utf16.count)
+        let plan = RevealPlan.make(blocks: blocks, lineEnds: lineEnds, shown: reveal.shown.utf16.count)
         if plan.layoutEnd != layoutEnd { layoutEnd = plan.layoutEnd }
         if plan.fraction != fraction { fraction = plan.fraction }
     }

@@ -57,6 +57,13 @@ public nonisolated enum StreamChunks {
         return out
     }
 
+    /// Where the lines of `text` end: the UTF-16 offset of each line break.
+    public static func lineEnds(_ text: String) -> [Int] {
+        var out: [Int] = []
+        for (i, unit) in text.utf16.enumerated() where unit == 0x0A { out.append(i) }
+        return out
+    }
+
     /// The space MarkdownUI's theme puts between the last block of one piece and the first of the next (the larger
     /// of the two margins, `MarkdownUI.Theme.persona`).
     public static func gap(after prev: String, before next: String) -> CGFloat {
@@ -82,15 +89,16 @@ public nonisolated enum StreamChunks {
 
 /// What of a streaming reply to lay out and how much of it to draw, once `StreamReveal` has said how much is shown
 /// (#7287). Laying out what is shown changed the layout at every frame, and each change re-measured the whole chat
-/// (about 4 ms). Instead the received text is laid out up to the end of the block the shown part ends in (that changes
-/// only when text arrives or the reveal reaches the next block), and only that block's drawing follows the reveal:
-/// `fraction` of it, by its characters.
+/// (about 4 ms). Instead the received text is laid out up to the end of the line the shown part ends in (that changes
+/// only when text arrives or the reveal reaches the next line), and only the drawing of that line's block follows the
+/// reveal: `fraction` of what of it is laid out. Not the whole block: a list's next markers, a table's next row and a
+/// code block's next lines are drawn without text, and only text is what the renderer can hold back.
 public nonisolated struct RevealPlan: Equatable, Sendable {
     /// The UTF-16 length of the received text to lay out.
     public var layoutEnd: Int
     /// The UTF-16 start of the block the reveal is in (the last block of what is laid out).
     public var blockStart: Int
-    /// How much of that block to draw, 0…1.
+    /// How much of that block, as laid out, to draw: 0…1.
     public var fraction: Double
 
     public init(layoutEnd: Int, blockStart: Int, fraction: Double) {
@@ -99,16 +107,22 @@ public nonisolated struct RevealPlan: Equatable, Sendable {
         self.fraction = fraction
     }
 
-    /// `blocks`: `StreamChunks.blocks` of the received text; `shown`: the UTF-16 length of what is shown.
-    public static func make(blocks: [Range<Int>], shown: Int) -> RevealPlan {
+    /// The UTF-16 offset of what is drawn (where the reveal is).
+    public var drawnEnd: Double { Double(blockStart) + fraction * Double(layoutEnd - blockStart) }
+
+    /// `blocks`: `StreamChunks.blocks` of the received text; `lineEnds`: `StreamChunks.lineEnds` of it; `shown`: the
+    /// UTF-16 length of what is shown.
+    public static func make(blocks: [Range<Int>], lineEnds: [Int], shown: Int) -> RevealPlan {
         guard let last = blocks.last else { return RevealPlan(layoutEnd: 0, blockStart: 0, fraction: 1) }
+        if shown >= last.upperBound { return RevealPlan(layoutEnd: last.upperBound, blockStart: last.lowerBound, fraction: 1) }
         // The block the shown part ends in: the last one starting before it (a shown part ending in the blank line
         // after a block is that block, whole).
         let block = blocks.last { $0.lowerBound < shown } ?? blocks[0]
-        let isLast = block == last
-        let length = block.upperBound - block.lowerBound
+        // To the end of the line the shown part ends in, within the block.
+        let lineEnd = lineEnds.first { $0 >= shown } ?? Int.max
+        let end = min(block.upperBound, lineEnd)
+        let length = end - block.lowerBound
         let fraction = length > 0 ? min(1, max(0, Double(shown - block.lowerBound) / Double(length))) : 1
-        return RevealPlan(layoutEnd: isLast ? last.upperBound : block.upperBound, blockStart: block.lowerBound,
-                          fraction: shown >= last.upperBound ? 1 : fraction)
+        return RevealPlan(layoutEnd: end, blockStart: block.lowerBound, fraction: fraction)
     }
 }

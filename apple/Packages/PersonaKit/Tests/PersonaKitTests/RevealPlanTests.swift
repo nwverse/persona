@@ -49,37 +49,40 @@ struct RevealPlanTests {
         }
     }
 
-    @Test func plansTheBlockTheRevealIsIn() {
+    @Test func plansTheLineTheRevealIsIn() {
         let text = Self.reply
         let blocks = StreamChunks.blocks(text)
+        let lines = StreamChunks.lineEnds(text)
         #expect(blocks.count == 6)
-        // Inside the second block: laid out to its end, part of it drawn.
-        let mid = blocks[1].lowerBound + blocks[1].count / 2
-        let plan = RevealPlan.make(blocks: blocks, shown: mid)
-        #expect(plan.layoutEnd == blocks[1].upperBound)
-        #expect(plan.blockStart == blocks[1].lowerBound)
-        #expect(abs(plan.fraction - Double(mid - blocks[1].lowerBound) / Double(blocks[1].count)) < 1e-9)
+        // In the list's first item: laid out to the end of that item's line, not the items after it.
+        let list = blocks[2]
+        let firstItemEnd = lines.first { $0 > list.lowerBound }!
+        let plan = RevealPlan.make(blocks: blocks, lineEnds: lines, shown: list.lowerBound + 3)
+        #expect(plan.layoutEnd == firstItemEnd)
+        #expect(plan.blockStart == list.lowerBound)
+        #expect(abs(plan.drawnEnd - Double(list.lowerBound + 3)) < 1e-9)
         // In the blank line after a block: that block, whole; nothing of the next is laid out.
-        let gap = RevealPlan.make(blocks: blocks, shown: blocks[1].upperBound + 1)
+        let gap = RevealPlan.make(blocks: blocks, lineEnds: lines, shown: blocks[1].upperBound + 1)
         #expect(gap.layoutEnd == blocks[1].upperBound && gap.fraction == 1)
         // Everything shown: all of it, drawn whole.
-        let all = RevealPlan.make(blocks: blocks, shown: text.utf16.count)
+        let all = RevealPlan.make(blocks: blocks, lineEnds: lines, shown: text.utf16.count)
         #expect(all.layoutEnd == text.utf16.count && all.fraction == 1)
-        // The last block (still being written) is laid out to the end of what arrived.
-        let tail = RevealPlan.make(blocks: blocks, shown: blocks[5].lowerBound + 2)
-        #expect(tail.layoutEnd == text.utf16.count && tail.fraction < 1)
     }
 
-    /// As the reveal moves on, what is laid out and drawn only grows: never a block or a character taken back.
+    /// As the reveal moves on, what is laid out and what is drawn only grow, and nothing is drawn past what is shown
+    /// or past what is laid out.
     @Test func neverGoesBack() {
         let text = Self.reply
         let blocks = StreamChunks.blocks(text)
+        let lines = StreamChunks.lineEnds(text)
         var last = RevealPlan(layoutEnd: 0, blockStart: 0, fraction: 0)
         for shown in 0...text.utf16.count {
-            let plan = RevealPlan.make(blocks: blocks, shown: shown)
+            let plan = RevealPlan.make(blocks: blocks, lineEnds: lines, shown: shown)
             #expect(plan.layoutEnd >= last.layoutEnd)
-            #expect(plan.blockStart > last.blockStart || (plan.blockStart == last.blockStart && plan.fraction >= last.fraction))
-            #expect(plan.layoutEnd >= shown || plan.fraction == 1) // never draws past what is laid out
+            #expect(plan.blockStart >= last.blockStart)
+            #expect(plan.drawnEnd >= last.drawnEnd - 1e-9)
+            #expect(plan.drawnEnd <= Double(max(shown, plan.blockStart)) + 1e-9 || plan.fraction == 1)
+            #expect(plan.layoutEnd >= min(shown, text.utf16.count) || plan.fraction == 1)
             last = plan
         }
         #expect(last.fraction == 1 && last.layoutEnd == text.utf16.count)
