@@ -39,7 +39,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
   const card = useRef<HTMLDivElement>(null);
   const frame = useRef(0);
   const idleTimer = useRef(0);
-  const pendingTimer = useRef(0);
+  const jumpRun = useRef(0);
   const hovered = useRef(false);
   const focused = useRef(false);
   const drag = useRef<{ pointer: number; ids: string[]; pitch: number; top: number } | null>(null);
@@ -129,7 +129,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
     previewOrigin.current = null;
     suppressClick.current = false;
     clearTimeout(idleTimer.current);
-    clearTimeout(pendingTimer.current);
+    jumpRun.current++;
     setActive(null);
     setPending(null);
     setPreview(null);
@@ -143,21 +143,14 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
 
   useEffect(() => () => {
     clearTimeout(idleTimer.current);
-    clearTimeout(pendingTimer.current);
+    jumpRun.current++;
     if (frame.current) cancelAnimationFrame(frame.current);
     frame.current = 0;
   }, []);
 
-  useEffect(() => {
-    if (pending !== null && pending === active) {
-      clearTimeout(pendingTimer.current);
-      setPending(null);
-    }
-  }, [pending, active]);
-
   const indexOf = (id: string | null) => id === null ? -1 : ticks.findIndex((tick) => tick.id === id);
-  const current = pending ?? active;
-  const center = indexOf(windowCenter ?? current);
+  const current = active;
+  const center = indexOf(windowCenter ?? pending ?? current);
   const plan = planNavRailTicks(ticks.length, height, center < 0 ? ticks.length - 1 : center);
   const shown = ticks.slice(plan.start, plan.start + plan.count);
   const previewTick = ticks.find((tick) => tick.id === preview);
@@ -182,13 +175,21 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
     setPreview(id);
     wake();
   };
-  const jump = (id: string) => {
+  const jump = async (id: string) => {
     if (!list.current.some((tick) => tick.id === id)) return;
+    const run = ++jumpRun.current;
     setPending(id);
-    clearTimeout(pendingTimer.current);
-    pendingTimer.current = window.setTimeout(() => setPending(null), M.pendingMs);
-    void onJump(id);
     wake();
+    const result = onJump(id);
+    if (!result) {
+      setPending(null);
+      return;
+    }
+    try {
+      await result;
+    } finally {
+      if (run === jumpRun.current) setPending(null);
+    }
   };
   const pickY = (y: number) => {
     const bounds = drag.current;
@@ -211,7 +212,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
       data-nav-source={total === undefined ? "loaded" : "server"}
       data-visible={visible}
       tabIndex={0}
-      className={cx("absolute inset-y-0 z-10 flex flex-col justify-center py-6 transition-opacity duration-200 motion-reduce:transition-none", visible ? "opacity-100" : "opacity-0")}
+      className={cx("absolute inset-y-0 z-10 flex flex-col justify-center py-6 transition-opacity duration-200 motion-reduce:transition-none", visible || pending ? "opacity-100" : "opacity-0")}
       style={{ right, width: M.width }}
       onMouseEnter={() => {
         hovered.current = true;
@@ -299,6 +300,11 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
         }
       }}
     >
+      {pending && (
+        <span role="status" data-nav-loading className="pointer-events-none absolute right-full top-0 whitespace-nowrap rounded-nav-preview border border-line bg-surface px-2 py-1 text-sm text-ink shadow-nav-preview">
+          {t("chat-navrail.loading_target")}
+        </span>
+      )}
       <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
       {shown.map((tick, k) => {
         const i = plan.start + k;

@@ -95,7 +95,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   // Bumped whenever the shown conversation starts over (another session, or the file was rewritten): an older page or a
   // fold asked for before that is dropped when it lands, so it never merges into the conversation shown by then.
   const generation = useRef(0);
-  const earlierInFlight = useRef(false); // set at once, unlike loadingEarlier, so scroll events before a render do not ask twice
+  const earlierInFlight = useRef<Promise<void> | null>(null); // concurrent callers can wait for the same page
   // The back-off after a failed older page: when loadEarlier may ask again, and how long the last wait was.
   const earlierRetryAt = useRef(0);
   const earlierWait = useRef(0);
@@ -121,7 +121,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     // Older pages and folds still on their way were asked for from what is shown now: they must not land on what replaces it.
     const disownReads = () => {
       generation.current++;
-      earlierInFlight.current = false;
+      earlierInFlight.current = null;
       setLoadingEarlier(false);
     };
     disownReads();
@@ -378,38 +378,42 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     revWatch.current?.heard(opts.rev, Date.now());
   }, [opts.rev]);
 
-  const loadEarlier = useCallback(async () => {
+  const loadEarlier = useCallback(() => {
+    if (earlierInFlight.current) return earlierInFlight.current;
     const first = itemsRef.current[0];
-    if (!first || earlierInFlight.current || !hasMore || Date.now() < earlierRetryAt.current) return;
+    if (!first || !hasMore || Date.now() < earlierRetryAt.current) return Promise.resolve();
     const gen = generation.current;
-    earlierInFlight.current = true;
     setLoadingEarlier(true);
-    try {
-      const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}&before_seq=${first.seq}`);
-      if (gen !== generation.current) return;
-      if (p.history && history.current && p.history !== history.current) {
-        generation.current++;
-        setNonce((n) => n + 1);
-        return;
+    const read = (async () => {
+      try {
+        const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}&before_seq=${first.seq}`);
+        if (gen !== generation.current) return;
+        if (p.history && history.current && p.history !== history.current) {
+          generation.current++;
+          setNonce((n) => n + 1);
+          return;
+        }
+        apply(p.items ?? []);
+        setHasMore(Boolean(p.has_more));
+        setError("");
+        earlierRetryAt.current = 0;
+        earlierWait.current = 0;
+      } catch (e) {
+        if (gen !== generation.current) return;
+        // Kept in state for the caller to show; the next try waits instead of firing on every scroll tick.
+        earlierWait.current = Math.min(earlierWait.current ? earlierWait.current * 2 : EARLIER_RETRY_MS, EARLIER_RETRY_MAX_MS);
+        earlierRetryAt.current = Date.now() + earlierWait.current;
+        setError(sessionLoadError(errorText(e)));
+      } finally {
+        // a start-over already cleared both for the conversation shown now
+        if (gen === generation.current) {
+          earlierInFlight.current = null;
+          setLoadingEarlier(false);
+        }
       }
-      apply(p.items ?? []);
-      setHasMore(Boolean(p.has_more));
-      setError("");
-      earlierRetryAt.current = 0;
-      earlierWait.current = 0;
-    } catch (e) {
-      if (gen !== generation.current) return;
-      // Kept in state for the caller to show; the next try waits instead of firing on every scroll tick.
-      earlierWait.current = Math.min(earlierWait.current ? earlierWait.current * 2 : EARLIER_RETRY_MS, EARLIER_RETRY_MAX_MS);
-      earlierRetryAt.current = Date.now() + earlierWait.current;
-      setError(sessionLoadError(errorText(e)));
-    } finally {
-      // a start-over already cleared both for the conversation shown now
-      if (gen === generation.current) {
-        earlierInFlight.current = false;
-        setLoadingEarlier(false);
-      }
-    }
+    })();
+    earlierInFlight.current = read;
+    return read;
   }, [mid, sid, hasMore, apply]);
 
   const expandFold = useCallback(

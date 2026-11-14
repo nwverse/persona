@@ -1184,6 +1184,8 @@ conversation. Upward transcript loading extends that range when it reaches earli
 still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
 This requested pagination correction does not add a setting or change placement. Android has no corresponding
 navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
+When a web selection needs older messages, keep its loading status at the rail while the current transcript stays in
+place. Only the latest selection can move the transcript. If it fails, keep the marks available so it can be selected again.
 
 ### 4.3 Feedback and haptics
 
