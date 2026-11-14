@@ -5560,6 +5560,29 @@
       },
       "extractionState" : "manual"
     },
+    "%lld / %lld items · " : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld items · "
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld 項目 · "
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld 项 · "
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld / %lld viewed" : {
       "localizations" : {
         "en" : {
@@ -31824,6 +31847,50 @@
       },
       "extractionState" : "manual"
     },
+    "Cancel compression of %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel compression of %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ の圧縮をキャンセル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消压缩 %@"
+          }
+        }
+      }
+    },
+    "Cancel copy of %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel copy of %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のコピーをキャンセル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消复制 %@"
+          }
+        }
+      }
+    },
     "Cancel download of %@" : {
       "localizations" : {
         "en" : {
@@ -39649,6 +39716,29 @@
       },
       "extractionState" : "manual"
     },
+    "Compressing on the computer…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compressing on the computer…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータで圧縮中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在电脑上压缩…"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Computer" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -43927,6 +44017,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "复制到 iPhone"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Copying on the computer…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copying on the computer…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータでコピー中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在电脑上复制…"
           }
         }
       },
