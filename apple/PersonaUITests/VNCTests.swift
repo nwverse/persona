@@ -1020,10 +1020,11 @@ final class VNCTests: XCTestCase {
     }
 
     /// #6398: the stats overlay's Route row (the demo's numbers: a direct LAN route, its round trip and loss, and why the
-    /// live screen moved), for review in light and dark (PERSONA_LOOK names the run).
+    /// live screen moved, on its own line), for review in light and dark, at the default size and at xxxLarge.
     @MainActor func testTheOverlayShowsTheRoute() throws {
-        for scheme in ["light", "dark"] {
-            let (app, _) = try signedInMachinePage(["-showScreenStatsDemo", "YES", "-ui.scheme", scheme])
+        for (scheme, size) in [("light", "L"), ("dark", "L"), ("light", "XXXL"), ("dark", "XXXL")] {
+            let (app, _) = try signedInMachinePage(["-showScreenStatsDemo", "YES", "-ui.scheme", scheme,
+                                                    "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\(size)"])
             let overlay = app.descendants(matching: .any)["screen-stats"].firstMatch
             XCTAssertTrue(overlay.waitForExistence(timeout: 10), "the overlay:\n\(app.debugDescription)")
             XCTAssertTrue(overlay.label.contains("6 ms"), "the route's round trip: \(overlay.label)")
@@ -1031,7 +1032,7 @@ final class VNCTests: XCTestCase {
                 let alert = source.alerts.containing(NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")).firstMatch
                 if alert.exists, alert.buttons.firstMatch.exists { alert.buttons.firstMatch.tap() }
             }
-            shot(app, "vnc-overlay-route-\(scheme)")
+            shot(app, "vnc-overlay-route-\(scheme)-\(size == "L" ? "default" : "xxxl")")
             app.terminate()
         }
     }

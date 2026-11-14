@@ -182,7 +182,12 @@ struct ScreenStatsOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             header
-            if let route = routeText { kv(String(localized: "Route [Screen Stats]"), route, note: stats.routeReason) }
+            if let route = routeText {
+                kv(String(localized: "Route [Screen Stats]"), route)
+                // Why it last changed, on its own line as the tier's: the reasons are words and would widen the panel
+                // past the screen at the larger text sizes.
+                if let why = stats.routeReason { Text(why).foregroundStyle(.tertiary) }
+            }
             if let tier = stats.tier {
                 kv(String(localized: "Tier"), tier)
                 // Why it last changed, on its own line: the reasons are words and would widen the panel past the screen.

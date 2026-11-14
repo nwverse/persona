@@ -25,6 +25,9 @@ var (
 	// given how many run_steps calls that Mac has had, so a window can come up partway through a call.
 	fakeWindows = map[string]func(runs int) string{}
 	fakeApps    = map[string]string{}
+	// fakeEnded are the session labels Cua Driver ended on a fake Mac (#7590): every call under one is refused as Cua
+	// Driver refuses it, until start_session.
+	fakeEnded = map[string]map[string]bool{}
 )
 
 // computerCall is one computer.call a fake node got.
@@ -104,7 +107,18 @@ func computerMac(t *testing.T, h *Manager, id string) (*Machine, func() (statuse
 			calls = append(calls, c)
 			fakeNoLockMu.Lock()
 			windows, apps := fakeWindows[id], fakeApps[id]
+			ended := fakeEnded[id][c.Session]
+			if ended && c.Tool == "start_session" {
+				delete(fakeEnded[id], c.Session)
+			}
 			fakeNoLockMu.Unlock()
+			switch {
+			case ended && c.Tool == "start_session":
+				return proto.ComputerResult{Output: json.RawMessage(`{"active": true, "revived": true, "session": "` + c.Session + `"}`)}, nil
+			case ended:
+				return nil, &rpc.Error{Message: "cua-driver " + c.Tool + ": session has ended; tool call '" + c.Tool + "' was rejected. " +
+					"Call start_session with session '" + c.Session + "' to start it again, or use a new session label."}
+			}
 			switch c.Tool {
 			case "list_apps":
 				if apps != "" {
@@ -259,10 +273,12 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 		t.Fatalf("a window's tree and screenshot: %+v", res)
 	}
 	_, calls := seen()
-	if len(calls) != 2 || calls[0].Tool != "run_script" || !strings.Contains(calls[0].Args["script"].(string), `cua.getApp("Calculator")`) {
+	// One process of the app (none listed here): the window is Cua Driver's own lookup's (computer_window.go).
+	if len(calls) != 3 || calls[0].Tool != "list_windows" || calls[0].Args["app"] != "Calculator" || calls[1].Tool != "run_script" ||
+		!strings.Contains(calls[1].Args["script"].(string), `cua.getApp("Calculator")`) {
 		t.Fatalf("the window is found by Cua Driver's own lookup: %+v", calls)
 	}
-	if w := calls[1]; w.Tool != "get_window_state" || w.Args["window_id"] != float64(2318) || w.Args["query"] != "7" || w.Session != "persona-conv1234" {
+	if w := calls[2]; w.Tool != "get_window_state" || w.Args["window_id"] != float64(2318) || w.Args["query"] != "7" || w.Session != "persona-conv1234" {
 		t.Fatalf("then read under the conversation's session: %+v", w)
 	}
 
