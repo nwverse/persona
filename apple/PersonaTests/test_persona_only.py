@@ -208,7 +208,7 @@ class PersonaOnlyTests(unittest.TestCase):
     def test_project_uses_only_persona_targets_and_schemes(self):
         project = yaml.safe_load(source("project.yml"))
         self.assertEqual(project["name"], "Persona")
-        self.assertEqual(set(project["schemes"]), {"Persona", "PersonaMac", "PersonaWatch", "PersonaVision", "PersonaMacExtensionUI"})
+        self.assertEqual(set(project["schemes"]), {"Persona", "PersonaWatch", "PersonaVision"})
         targets = project["targets"]
         for name, target in targets.items():
             with self.subTest(target=name):
@@ -221,8 +221,8 @@ class PersonaOnlyTests(unittest.TestCase):
         for scheme in project["schemes"].values():
             self.assertTrue(set(scheme["build"]["targets"]).issubset(targets))
         modules = {
-            "Persona": "Persona", "PersonaMac": "Persona", "PersonaVision": "Persona", "PersonaWatch": "Persona",
-            "PersonaWidgets": "PersonaWidgets", "PersonaNotify": "PersonaNotify", "PersonaMacNotify": "PersonaNotify", "PersonaVisionNotify": "PersonaNotify",
+            "Persona": "Persona", "PersonaVision": "Persona", "PersonaWatch": "Persona",
+            "PersonaWidgets": "PersonaWidgets", "PersonaNotify": "PersonaNotify", "PersonaVisionNotify": "PersonaNotify",
             "PersonaShare": "PersonaShare", "PersonaVisionShare": "PersonaShare",
             "PersonaWatchWidgets": "PersonaWatchWidgets", "PersonaVisionWidgets": "PersonaWidgets",
         }
@@ -237,7 +237,7 @@ class PersonaOnlyTests(unittest.TestCase):
 
     def test_plists_have_unique_keys_and_exact_compatible_url_schemes(self):
         registered = set()
-        expected = {"Persona/Resources/Info.plist", "Mac/Resources/Info.plist",
+        expected = {"Persona/Resources/Info.plist",
                     "Vision/Resources/Info.plist", "PersonaLink/Info.plist", "PersonaWatch/Info.plist"}
         for path in apple_files():
             if path.suffix not in {".plist", ".entitlements"}:
@@ -257,7 +257,7 @@ class PersonaOnlyTests(unittest.TestCase):
                     registered.add(relative)
         self.assertEqual(registered, expected)
         project = yaml.safe_load(source("project.yml"))
-        for target in ["Persona", "PersonaMac", "PersonaVision"]:
+        for target in ["Persona", "PersonaVision"]:
             settings = project["targets"][target]
             properties = settings["info"]["properties"]
             self.assertEqual(len(properties["CFBundleURLTypes"]), 1)
@@ -407,7 +407,7 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertIn('LegacyNames.product.uppercased() + "_HOME"', helper)
         route = source("Shared/HubPageLink.swift")
         self.assertIn('case "persona", LegacyNames.conversationPath:', route)
-        for path in ["Shared/APIClient.swift", "Shared/ExtensionSystemLink.swift", "Mac/App/MacOpenURL.swift"]:
+        for path in ["Shared/APIClient.swift", "Shared/ExtensionSystemLink.swift"]:
             self.assertIn("HubNaming.accepts(scheme:", source(path))
         self.assertIn('["persona", LegacyNames.urlScheme].contains(url.scheme?.lowercased() ?? "")',
                       source("LiveActivity/PersonaActivityAttributes.swift"))
