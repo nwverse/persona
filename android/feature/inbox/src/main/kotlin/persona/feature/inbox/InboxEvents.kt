@@ -176,5 +176,5 @@ internal fun chainIcon(kind: String, record: InboxRecord): PhIcon = when (kind) 
 internal fun chainTime(value: String?, locale: Locale, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
     val at = value?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return ""
     val today = at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
-    return LocalizedFormats.format(at, if (today) LocalizedFormats.TIME_24 else LocalizedFormats.MONTH_DAY_TIME_24, locale, zone)
+    return LocalizedFormats.format24(at, if (today) LocalizedFormats.TIME_24 else LocalizedFormats.MONTH_DAY_TIME_24, locale, zone)
 }

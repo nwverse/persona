@@ -141,7 +141,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
         if (nowText != null) item("event-state") {
             EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
                 key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), stateActions)
-        } else if (oldMark != null) item("event-state") {
+        } else if (oldMark != null && oldMark !is EventMark.Suggests) item("event-state") {
             EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), stateActions)
         } else item("event-state") {
             EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), stateActions)
@@ -222,8 +222,7 @@ internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier, acti
         EventMark.Preparing -> JInlineStatus(stringResource(R.string.inbox_handling_preparing), modifier, tone = InlineTone.Busy, action = action)
         is EventMark.Failed -> JInlineStatus(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
             ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed, action = action)
-        // The suggestion card says the state; an older hub can still supply its processing conversation.
-        is EventMark.Suggests -> if (action != null) Row(modifier) { action() }
+        is EventMark.Suggests -> Unit
         is EventMark.Now -> {
             val icon = inboxNowIcon(mark.key)
             JInlineStatus(mark.text, modifier, tone = icon.tone, icon = icon.icon, action = action)

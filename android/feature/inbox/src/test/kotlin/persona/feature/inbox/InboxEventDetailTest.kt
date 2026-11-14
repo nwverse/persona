@@ -97,7 +97,8 @@ class InboxEventDetailTest {
         val suggested = record(now = null, where = null)
         show(suggested)
         rule.onNodeWithText("Alex: Can we?", useUnmergedTree = true).assertExists()
-        // The suggestion card itself carries the old hub's suggestion; the state row only keeps its conversation.
+        // An older hub still gets its tier state and conversation; the suggestion is not repeated in the state row.
+        rule.onNodeWithText("Needs you", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Friday works", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("Suggested reply: Friday works", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText("Conversation ›").assertExists()

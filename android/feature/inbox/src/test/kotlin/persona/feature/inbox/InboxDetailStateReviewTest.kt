@@ -28,7 +28,7 @@ import persona.core.navigation.Navigator
 
 /**
  * The detail page's state line: shared `now` words stay above a suggestion, whose card still says the suggestion once;
- * an older hub without `now` draws only the processing conversation for its suggestion mark. Every other state has
+ * an older hub without `now` uses its tier state beside the processing conversation. Every other state has
  * words — a hub without `now`, without a mark and without a suggestion still shows the page's own tier or done words.
  */
 @RunWith(AndroidJUnit4::class)
@@ -90,12 +90,13 @@ class InboxDetailStateReviewTest {
     }
 
     @Test fun everyStateHasWords() {
-        // An older hub's suggestion, without now: the card says it once and the processing conversation remains.
+        // An older hub's suggestion, without now: tier state and conversation remain; the card says the suggestion once.
         val reply = InboxSuggestion(version = 1, kind = "reply", text = "Friday works")
         val oldHub = record(suggestion = reply).let {
             it.copy(event = it.event.copy(handling = InboxHandling(state = "done", machineId = "m1", sessionId = "s1")))
         }
         show(oldHub)
+        rule.onNodeWithText("Needs you", useUnmergedTree = true).assertExists()
         assertTrue("suggestion card", rule.onAllNodesWithText("Friday works", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         rule.onNodeWithText("Suggested reply: Friday works", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithText("Conversation ›").assertExists()
