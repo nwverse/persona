@@ -105,12 +105,30 @@ In these cases tools still attempt the call, returning Cua Driver's original err
 
 The assistant's two tools (descriptions in `server/internal/prompts/mcp/computer/`):
 
-- **`computer_state {machine, app?, query?, screenshot?}`**
-  - With `app`: first use `cua.getApp(app)` in `run_script` to find its frontmost window (Cua Driver's own lookup), then `get_window_state`: accessibility tree (markdown) plus screenshot.
-  - Without: `get_accessibility_tree` (on-screen Apps and windows) plus `get_desktop_state` (full-screen screenshot).
-- **`computer_run {machine, steps | script, app?, observe?, timeout_ms?}`**
-  - `steps` → `run_steps`: a sequence of actions, finding targets by role and name or `element_token`; stops on the first failure.
-  - `script` → `run_script`: JS with loops and conditions, up to 120 seconds.
+- **`computer_state {machine, app?, pid?, window_id?, query?, screenshot?}`**
+  - With `app`: `list_windows` for the app's windows. With one process, `cua.getApp(app)` in `run_script` finds its frontmost window (Cua Driver's own lookup); with several, the manager chooses (below). Then `get_window_state`: accessibility tree (markdown) plus screenshot.
+  - With `pid` or `window_id`: that process's best window, or that window.
+  - Without any: `get_accessibility_tree` (on-screen Apps and windows) plus `get_desktop_state` (full-screen screenshot).
+- **`computer_run {machine, steps | script, app?, pid?, window_id?, observe?, timeout_ms?}`**
+  - `steps` → `run_steps`: a sequence of actions, finding targets by role and name or `element_token`; stops on the first failure. `pid` / `window_id` (or the process chosen of an app with several) go to `run_steps` as the default window of steps that name none.
+  - `script` → `run_script`: JS with loops and conditions, up to 120 seconds. Not with `pid` / `window_id`.
+- **An app with several processes (#7591)** (`extmgr/computer_window.go`): two processes can share an app's name and
+  bundle id (the user's browser and another copy of it with its own profile). Cua Driver's own lookup takes whichever it
+  finds first, so it once read another copy's small untitled window and the user's own could not be chosen.
+  - Each process's best window: a titled ordinary (layer 0) window, then on the current Space, on screen, in front of
+    the process's others.
+  - Between processes: the one with a titled window, then on the current Space, then the app active now (`list_apps`).
+    Window stacking does not decide between processes: the other copy's windows were stacked over the user's.
+  - Still more than one: nothing runs, and the result lists the candidates (pid, window_id, title, size, on the
+    current Space) for the model to call again with `pid` or `window_id`, asking the user by the titles when unsure.
+  - `computer_run`: the call's `app` with several processes is pinned to the chosen pid (not its window, so a dialog
+    over it in that process is still found). A step that names such an app itself, or a script that does
+    (`cua.getApp` takes no process), is refused with the candidates: a step's own app has Cua Driver choose again.
+  - `pid` / `window_id` are checked against the Mac (`list_windows`, `list_apps`) and stand for their app in per-app
+    approval and the protected-app checks. A pid of another app than the one named is an error, never a way around
+    them. LCU takes neither.
+  - The cost: one `list_windows` (about 75 ms on the Mac) per `computer_state` with an app, and per app a run's steps
+    or script name.
 
 **Session**: each chat's calls carry the same Cua Driver session name, `persona-<first 8 characters of chat id>`.
 - Tested locally (Cua Driver 0.38.0):
@@ -683,12 +701,27 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
   - **Connection stats**: video mode shows the iPhone's lines (Video · Via hub · total; bitrate · fps · codec · size;
     capture · encode · network · decode); over VNC, when the Mac offers video but this page can't play it, one line
     says why: not a secure address, a browser that can't play it, or a decoder that couldn't start.
+  - **Data use** (`data-use.ts`, the iPhone's `ScreenVideoBudget` and `ScreenMobileData`): the cap goes in
+    `start.max_kbps` and, when `navigator.connection` changes, in an `update`. Without tiers the caps are the iPhone's:
+    1.5 Mbit/s with the browser's Data Saver on (`saveData`, its Low Data Mode), 4 on mobile data, 12 otherwise. Chrome
+    and Edge say `type: "cellular"`; Safari and Firefox say nothing, so a phone's browser (a coarse pointer and a screen
+    no wider than 600 CSS pixels on its short side) gets 4 and nothing is asked, any other 12. With tiers on both sides
+    (`webTiers.supported`, PR 4) mobile data follows the user's choice as on the iPhone: Data Saver (1.5 Mbit/s and at
+    most one pixel per point, `maxScale` for the tier policy) until they choose, Clearer 4. The stream starts on the
+    cap without tiers, which aren't known before `hello`. The card (`MobileDataCard`: On mobile data, The screen is
+    saving data. Make it clearer?, Clearer about 0.6 GB an hour, Data Saver about 0.2–0.3 GB an hour) sits under the bar
+    while video shows, is asked at most twice while nothing is chosen (once a page), and the choice is kept in this
+    browser for every computer (`persona.screen.mobileData`). The web has no Settings row for it: it sits in ⋯ as
+    "Quality on mobile data" while it applies. The browser's Data Saver is always Data Saver and asks nothing. Until
+    the page drives tiers the card and the choice never show; a development server started with
+    `VITE_SCREEN_TIERS=1` shows them.
   - **Tests**: `video-wire.test.ts`, `video-bitstream.test.ts`, `video-probe.test.ts`, `video-stream.test.ts`,
-    `video-link.test.ts`, `rfb-hold.test.ts` (on the real noVNC), `VideoPicture.test.tsx`, `ScreenView.video.test.tsx`;
-    `node web/e2e/screen-video-decode.mjs <web URL>` decodes both fixtures in a real browser, and
-    `node web/e2e/screen-video.mjs <web URL> <mock hub URL>` runs the page against the mock's helper side
+    `video-link.test.ts`, `rfb-hold.test.ts` (on the real noVNC), `data-use.test.ts`, `VideoPicture.test.tsx`,
+    `ScreenView.video.test.tsx`; `node web/e2e/screen-video-decode.mjs <web URL>` decodes both fixtures in a real
+    browser, `node web/e2e/screen-video.mjs <web URL> <mock hub URL>` runs the page against the mock's helper side
     (`MOCK_SCREEN_VIDEO=1`, which plays `fixture.bin` (HEVC) or `fixture-h264.bin` as the helper picks from
-    `start.codecs`).
+    `start.codecs`), and `node web/e2e/screen-data-use.mjs <web URL> <mock hub URL>` the card and the choice with
+    tiers on both sides (`MOCK_SCREEN_VIDEO_TIERS=1`, `VITE_SCREEN_TIERS=1`).
 - **Permission and login**: only input on that Mac answers macOS's Screen Recording question — someone at the Mac, or
   the user's own taps through Screen Sharing. Nothing in Persona answers it, and Agents' computer-use calls can't target
   System Settings' Privacy & Security or the system alert. Video needs the same login as Screen Sharing (the `pair`
