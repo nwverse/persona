@@ -1,8 +1,8 @@
 import XCTest
 
-/// Settings › This Device › Live Screen (#6398) against scripts/mock/mock_hub.py (TEST_RUNNER_PERSONA_SCREEN_HUB): the row
-/// shows only while direct routes are offered (here a DEBUG launch with -showScreenRoutes), the route switch is on by
-/// default and stays as set, and the page reads in light and dark, at the default size and at xxxLarge (where interface
+/// Settings › This Device › Live Screen (#6398, #6396) against scripts/mock/mock_hub.py (TEST_RUNNER_PERSONA_SCREEN_HUB,
+/// MOCK_SCREEN_VIDEO=1): the route switch is there only while direct routes are offered (here a DEBUG launch with
+/// -showScreenRoutes), first, above the quality on mobile data; it is on by default and stays as set, and the page reads in light and dark, at the default size and at xxxLarge (where interface
 /// text stops growing), in English and Chinese. Screenshots are attachments (PERSONA_SHOTS also writes them out).
 final class LiveScreenSettingsTests: XCTestCase {
     private var hub: String? { ProcessInfo.processInfo.environment["PERSONA_SCREEN_HUB"] }
@@ -40,13 +40,13 @@ final class LiveScreenSettingsTests: XCTestCase {
         XCTAssertEqual(kept.value as? String, "1")
     }
 
-    /// Without direct routes offered (a release build until acceptance), Settings has no Live Screen row.
-    @MainActor func testNoRowWithoutDirectRoutes() throws {
-        let app = try launch([])
-        let about = app.buttons["settings-about"].firstMatch
-        for _ in 0..<8 where !about.isHittable { app.swipeUp() }
-        XCTAssertTrue(about.waitForExistence(timeout: 15))
-        XCTAssertFalse(app.buttons["settings-live-screen"].exists, "no row while nothing is offered")
+    /// Without direct routes offered (a release build until acceptance) the page has no route switch; the quality section
+    /// (#6396) is there for a computer with video, as the mock's MacBook is.
+    @MainActor func testNoRouteSwitchWithoutDirectRoutes() throws {
+        let app = try launch(["-openLiveScreenSettings", "YES"])
+        XCTAssertTrue(app.descendants(matching: .any)["settings-live-screen-mobile-data"].firstMatch.waitForExistence(timeout: 15),
+                      "the quality section:\n\(app.debugDescription)")
+        XCTAssertFalse(app.switches["settings-live-screen-routes"].exists, "no route switch while direct routes aren't offered")
     }
 
     /// The page and the row for review: light and dark, default size and xxxLarge, English and Chinese. The page is

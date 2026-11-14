@@ -44,9 +44,9 @@ enum ScreenQuality: String, CaseIterable {
 /// Whether ⋯ › Quality can do anything (#6396): both this app and the Mac's helper must have quality tiers. The helper
 /// says so in `hello.features`; this app says so here. One release carries the app and Persona Link together, so a
 /// helper with tiers can meet an app without its side of them, and a choice that changes nothing must not show.
-/// `appSupported` turns on with the iPhone's tier policy.
+/// `appSupported`: the iPhone's tier policy is in (#6396).
 nonisolated enum ScreenTiers {
-    static let appSupported = false
+    static let appSupported = true
 
     static func offered(helperHasTiers: Bool, appSupported: Bool = appSupported) -> Bool { appSupported && helperHasTiers }
 }
