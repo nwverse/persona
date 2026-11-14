@@ -86,12 +86,22 @@ try {
       if (name === "editor") {
         await page.waitForTimeout(300);
         await page.screenshot({ path: join(out, `${name}-${theme}.png`), animations: "disabled" });
+        await page.evaluate(() => { document.body.style.zoom = "200%"; });
+        await page.waitForTimeout(250);
+        await page.screenshot({ path: join(out, `${name}-large-${theme}.png`), animations: "disabled" });
+        await page.evaluate(() => { document.body.style.zoom = ""; });
+        await page.waitForTimeout(150);
         return;
       }
       const side = await page.locator("aside").first().boundingBox();
       await agents.evaluate((el) => el.scrollIntoView({ block: "start" }));
       await page.waitForTimeout(300);
       await page.screenshot({ path: join(out, `${name}-${theme}.png`), clip: { x: side.x, y: Math.max(0, side.y), width: side.width, height: Math.min(1200, 1500 - side.y) }, animations: "disabled" });
+      await page.evaluate(() => { document.body.style.zoom = "200%"; });
+      await page.waitForTimeout(250);
+      await agents.screenshot({ path: join(out, `${name}-large-${theme}.png`), animations: "disabled" });
+      await page.evaluate(() => { document.body.style.zoom = ""; });
+      await page.waitForTimeout(150);
     };
     await load();
     check(await agents.getByText(firstName, { exact: true }).count() === 1, `${theme}: custom name appears before filtering`);
