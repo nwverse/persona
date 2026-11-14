@@ -85,6 +85,8 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-skills.title"), anchor: "skills" },
   { tab: "persona", group: t("settings-assistantsettings.machine"), hint: t("settings-assistantsettings.runs_on_title"), anchor: "runs-on-machine" },
   { tab: "persona", group: t("settings-assistantsettings.cwd"), anchor: "runs-on-cwd" },
+  { tab: "persona", group: t("settings-assistantsettings.main_place"), anchor: "runs-on" },
+  { tab: "persona", group: t("settings-assistantsettings.main_runtime"), anchor: "runs-on" },
   { tab: "persona", group: t("settings-assistantsettings.timezone"), anchor: "runs-on" },
   // the assistant's profile › Session triage
   { tab: "persona", group: t("settings-triagesettings.title"), anchor: "triage" },
