@@ -31,7 +31,7 @@ import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/ro
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { refresh, useStore } from "../lib/store";
 import { conversationTitle } from "./assistant/conversations";
-import { agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
+import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, type MenuItem } from "../ui/atoms";
@@ -896,6 +896,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const groupsRef = useRef<HTMLDivElement>(null);
   const [showAllRecent, setShowAllRecent] = useState(false);
   const recentShown = showAllRecent ? recent : firstAndCurrent(recent, 8, (s) => rowKey(s) === activeKey);
+  const recentState = worstTreeState(recent.map(agentTreeState));
   const recentRows = (
     <>
       {recentShown.map((s) => (
@@ -1033,7 +1034,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         <TodoTreeView tree={todoTree} machines={machines} showHost={mixedHosts} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} onNavigate={onNavigate} after={recent.length > 0 && (
           // "By to-do" draws "Recent (not running)" as a row like its to-dos' and groups' (#6458); its name says what it
           // holds, so no ⓘ, and like under the other groupings it is listed only with something in it (#6447, the owner)
-          <GroupBranch branch="recent" name={t("sidebar.recent")} icon="history" n={recent.length} state={worstTreeState(recent.map(agentTreeState))} folded={recentFolded} onToggle={toggleRecent}>
+          <GroupBranch branch="recent" name={t("sidebar.recent")} icon="history" n={recent.length} state={recentState} label={agentGroupLabel(recent, recentState)} folded={recentFolded} onToggle={toggleRecent}>
             {recentRows}
           </GroupBranch>
         )} />
