@@ -100,22 +100,22 @@ func TestPushInterceptsManagerFilterBeforeLimit(t *testing.T) {
 func TestPushDailyStatsCounts(t *testing.T) {
 	h, f := lnHub(t)
 	// Switch off: two pushes go out and still count as delivered.
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "off-1", "one")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "off-1", "one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP2, "off-2", "two")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP2, "off-2", "two")); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP0, "p0-key", "rings")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP0, "p0-key", "rings")); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP2, "p2-key", "silent")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP2, "p2-key", "silent")); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "p1-key", "held")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "p1-key", "held")); err != nil {
 		t.Fatal(err)
 	}
 	// Wait for the three pushes that actually went out (two with the switch off, one P0): their APNs goroutines must
@@ -147,14 +147,14 @@ func TestPushDailyStatsHeldToManager(t *testing.T) {
 	h, f := lnHub(t)
 	base := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 	lnSetClock(h, base)
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "a-today", "a")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "a-today", "a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.deliverPushFrom("manager-b", lnNotification(assistantwire.LevelP1, "b-today", "b")); err != nil {
+	if _, err := h.deliverPushFrom("manager-b", lnNotification(assistantwire.LevelP1, "b-today", "b")); err != nil {
 		t.Fatal(err)
 	}
 	lnMoveClock(h, base.AddDate(0, 0, -1))
-	if err := h.deliverPushFrom("manager-b", lnNotification(assistantwire.LevelP1, "b-yesterday", "b old")); err != nil {
+	if _, err := h.deliverPushFrom("manager-b", lnNotification(assistantwire.LevelP1, "b-yesterday", "b old")); err != nil {
 		t.Fatal(err)
 	}
 	lnMoveClock(h, base)
@@ -222,7 +222,7 @@ func TestPushDailyStatsHeldToManager(t *testing.T) {
 // The delivered-push record lives in hub_settings, so a restart keeps the counts like the switch and the held list.
 func TestPushSentPersists(t *testing.T) {
 	h, f := lnHub(t)
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "persisted-sent", "x")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "persisted-sent", "x")); err != nil {
 		t.Fatal(err)
 	}
 	f.calls(t, 1) // let the APNs goroutine finish before the fake server closes
@@ -275,7 +275,7 @@ func TestPushWriterRetriesFailedSave(t *testing.T) {
 	h, f := lnHub(t)
 	store := &flakyPutStore{lnStore: h.push.store.(*lnStore), failsLeft: 2}
 	h.push.store = store
-	if err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "retry-me", "x")); err != nil {
+	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "retry-me", "x")); err != nil {
 		t.Fatal(err)
 	}
 	f.calls(t, 1) // wait for the push goroutine; the store retries are what this test measures
