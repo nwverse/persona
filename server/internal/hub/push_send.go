@@ -50,23 +50,25 @@ func (p *Pusher) sendFromPolicy(manager string, policy pushPolicy, build localiz
 	if p == nil {
 		return 0, 0
 	}
-	policy.manager = manager
-	if policy.title == "" || policy.body == "" {
-		if payload := build(i18n.Default); payload != nil {
-			if alert, ok := payload["aps"].(map[string]any)["alert"].(map[string]any); ok {
-				if policy.title == "" {
-					policy.title, _ = alert["title"].(string)
-				}
-				if policy.body == "" {
-					policy.body, _ = alert["body"].(string)
-				}
+	if p.lnModeOn() { // off: nothing below runs and the push goes exactly as before
+		policy.manager = manager
+		if policy.title == "" || policy.body == "" {
+			// The held-push record's text, from the alert when the caller gave none. A payload need not have one (an
+			// extension's push_localized may carry no aps at all).
+			aps, _ := build(i18n.Default)["aps"].(map[string]any)
+			alert, _ := aps["alert"].(map[string]any)
+			if t, _ := alert["title"].(string); policy.title == "" {
+				policy.title = t
+			}
+			if b, _ := alert["body"].(string); policy.body == "" {
+				policy.body = b
 			}
 		}
-	}
-	if allow, _ := p.applyLn(policy); !allow {
-		// ln mode held this push back for every device; selection counts as zero, the WebSocket still carries it
-		// (callers run notifyWSFrom themselves) so the app's lists and briefings keep updating.
-		return 0, 0
+		if allow, _ := p.applyLn(policy); !allow {
+			// Held back for every device; the selection counts as zero. The WebSocket still carries it (callers run
+			// notifyWSFrom themselves), so the app's lists and briefings keep updating.
+			return 0, 0
+		}
 	}
 	return p.sendFromTo(manager, build, collapseID, wants, rule, only, sent)
 }

@@ -178,7 +178,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolInboxPost(ctx, machine, self, args) // inbox_post.go
 	case "notify_user":
 		var a struct {
-			Title, Body, PushLevel string
+			Title      string `json:"title"`
+			Body       string `json:"body"`
+			PushLevel  string `json:"push_level"`
+			RelatedKey string `json:"related_key"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
 			return "", fmt.Errorf("title and body are required")
@@ -200,7 +203,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
-			Asked: true, Level: a.PushLevel, RelatedKey: "session:" + self})
+			Asked: true, Level: a.PushLevel, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200)})
 		// The Feishu bot and the channels with pushes on (channels_handler.go).
 		s.channelsPushed(machine, self, a.Title, a.Body)
 		s.recordNotify(ctx, machine, self) // an interruption (north_star.go)

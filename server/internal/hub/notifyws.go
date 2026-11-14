@@ -96,7 +96,9 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 	}
 	wants := pushWants{Kind: "input"}
 	sum := sha256.Sum256([]byte("todo_decide\x00" + todo.ID))
-	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "todo:" + todo.ID, title: title, body: text}
+	// One key a round: the same decision does not ring twice in 12 hours, but a new round of it (asked again) does.
+	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "todo:" + todo.ID + "@" + todo.AskedAt.UTC().Format(time.RFC3339Nano),
+		title: title, body: text}
 	h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil)
 	h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
 }

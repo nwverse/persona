@@ -9,12 +9,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apns"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // lnStore is the in-memory settings store plus the device-table methods newPusher and setPrefs touch.
@@ -234,6 +237,9 @@ func TestLnModeSwitchAndInterceptsPersist(t *testing.T) {
 	if err := h.deliverPush(lnNotification(assistantwire.LevelP2, "persisted", "held")); err != nil {
 		t.Fatal(err)
 	}
+	if !h.push.waitInterceptsSaved(2 * time.Second) {
+		t.Fatal("the held pushes were not saved")
+	}
 	restarted := newPusher(t.TempDir(), store, t.Logf)
 	if !restarted.lnModeOn() {
 		t.Fatal("the ln mode switch did not survive a restart")
@@ -313,5 +319,101 @@ func TestLnInterceptsHeldToManager(t *testing.T) {
 	mux.ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden || !h.push.lnModeOn() {
 		t.Fatalf("an extension token changed the switch: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Review fix: with the switch off a payload without aps (an extension's push_localized may send one) goes out as
+// before instead of panicking while the held-push text is read.
+func TestLnOffPayloadWithoutAPS(t *testing.T) {
+	h, _ := lnHub(t)
+	attempts := lnAttempts(h)
+	build := func(i18n.Lang) map[string]any { return map[string]any{"custom": "x"} }
+	h.push.sendFrom("manager-a", build, "", nil, quietNone, nil)
+	if *attempts != 1 {
+		t.Fatalf("got %d pushes, want 1", *attempts)
+	}
+	if err := h.push.setLnMode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	h.push.sendFrom("manager-a", build, "", nil, quietNone, nil) // P1: held, no panic
+	if *attempts != 1 || len(h.push.lnInterceptsView(0)) != 1 {
+		t.Fatalf("pushes %d, intercepts %d; want 1 and 1", *attempts, len(h.push.lnInterceptsView(0)))
+	}
+}
+
+// Review fix: same-minute P1 entries merge only within one manager, so one extension never reads another's titles.
+func TestLnMergeStaysWithinManager(t *testing.T) {
+	h, _ := lnHub(t)
+	if err := h.push.setLnMode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []string{"manager-a", "manager-b"} {
+		if err := h.deliverPushFrom(from, lnNotification(assistantwire.LevelP1, "", "from "+from)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view := h.push.lnInterceptsView(0)
+	if len(view) != 2 || len(view[0].Also) != 0 || len(view[1].Also) != 0 {
+		t.Fatalf("view = %+v, want two separate entries", view)
+	}
+}
+
+// Three P1 conclusion notices about one PR at different times are one held entry, not three.
+func TestLnSamePRP1IsOneEntry(t *testing.T) {
+	h, _ := lnHub(t)
+	if err := h.push.setLnMode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	const pr = "https://example.test/pulls/12"
+	base := h.push.now()
+	for i := range 3 {
+		h.push.now = func() time.Time { return base.Add(time.Duration(i) * 10 * time.Minute) }
+		if err := h.deliverPush(lnNotification(assistantwire.LevelP1, pr, "accepted "+string(rune('1'+i)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view := h.push.lnInterceptsView(0)
+	if len(view) != 1 || len(view[0].Also) != 2 || view[0].RelatedKey != pr {
+		t.Fatalf("view = %+v, want one entry for the PR with two merged titles", view)
+	}
+}
+
+// Review fix: a decision rings once per round. The same round again is held; a new round (asked again) rings.
+func TestLnDecisionRoundsRingAgain(t *testing.T) {
+	h, _ := lnHub(t)
+	if err := h.push.setLnMode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	attempts := lnAttempts(h)
+	todo := assistantwire.NotifyTodo{ID: "todo_1", AskedAt: time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC), Recommend: "ok"}
+	h.notifyDecide("", "", "", "", "decide", "body", todo)
+	h.notifyDecide("", "", "", "", "decide", "body", todo)
+	todo.AskedAt = todo.AskedAt.Add(time.Hour)
+	h.notifyDecide("", "", "", "", "decide again", "body", todo)
+	if *attempts != 2 {
+		t.Fatalf("got %d decision pushes, want 2 (one per round)", *attempts)
+	}
+}
+
+// Review fix: two P0 pushes with one key at the same moment never both pass.
+func TestLnDedupIsAtomic(t *testing.T) {
+	h, _ := lnHub(t)
+	if err := h.push.setLnMode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var allowed atomic.Int32
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if ok, _ := h.push.applyLn(pushPolicy{level: assistantwire.LevelP0, relatedKey: "same"}); ok {
+				allowed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if allowed.Load() != 1 {
+		t.Fatalf("%d concurrent pushes passed, want 1", allowed.Load())
 	}
 }

@@ -87,32 +87,48 @@ func levelFor(kind, given string) string {
 	}
 }
 
-// lnModeOn says whether the switch is on, reading hub.settings through a short cache. A database that does not
-// answer keeps the last known answer (off before the first successful read), so an outage never turns filtering on
-// by itself.
+// lnModeOn says whether the switch is on. It never waits on the database: the switch is read once at startup
+// (loadLnState), written through setLnMode, and refreshed in the background when the cached answer is older than
+// lnConfigTTL (another hub process may have changed it). A database that does not answer keeps the last known answer,
+// off before the first successful read, so an outage never turns filtering on by itself.
 func (p *Pusher) lnModeOn() bool {
 	if p == nil {
 		return false
 	}
 	p.lnMu.Lock()
-	got, at := p.lnCached, p.lnCachedAt
-	p.lnMu.Unlock()
-	if got != nil && p.now().Sub(at) < lnConfigTTL {
-		return *got
+	defer p.lnMu.Unlock()
+	if p.store != nil && !p.lnRefreshing && (p.lnCached == nil || p.now().Sub(p.lnCachedAt) >= lnConfigTTL) {
+		p.lnRefreshing = true
+		go p.refreshLnMode()
 	}
-	enabled := false
-	if p.store != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
-		var stored bool
-		if ok, err := p.store.Setting(ctx, lnModeSettingKey, &stored); err == nil && ok {
-			enabled = stored
-		}
-		cancel()
-	}
+	return p.lnCached != nil && *p.lnCached
+}
+
+// refreshLnMode reads the switch from hub_settings into the cache (lnModeOn starts it, one at a time).
+func (p *Pusher) refreshLnMode() {
+	enabled, ok := p.readLnMode()
 	p.lnMu.Lock()
-	p.lnCached, p.lnCachedAt = &enabled, p.now()
-	p.lnMu.Unlock()
-	return enabled
+	defer p.lnMu.Unlock()
+	p.lnRefreshing = false
+	if ok {
+		p.lnCached, p.lnCachedAt = &enabled, p.now()
+	} else if p.lnCached != nil {
+		p.lnCachedAt = p.now() // keep the last answer; try again after another TTL
+	}
+}
+
+// readLnMode reads the switch; ok false when the database did not answer. No row is off.
+func (p *Pusher) readLnMode() (enabled, ok bool) {
+	if p.store == nil {
+		return false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
+	defer cancel()
+	found, err := p.store.Setting(ctx, lnModeSettingKey, &enabled)
+	if err != nil {
+		return false, false
+	}
+	return found && enabled, true
 }
 
 // setLnMode writes the switch (hub_settings) and refreshes the cache immediately.
@@ -131,9 +147,10 @@ func (p *Pusher) setLnMode(ctx context.Context, enabled bool) error {
 	return nil
 }
 
-// applyLn decides whether one alert push may go out while ln mode is on. It runs once per push call, never per
-// device: a held push is one intercepted entry however many devices would have received it. The dedup bookkeeping of
-// a push it allows is updated here, before device selection.
+// applyLn decides whether one alert push may go out. With the switch off it allows everything and touches nothing.
+// It runs once per push call, never per device: a held push is one intercepted entry however many devices would have
+// received it. The 12-hour check and the note of a P0 that goes out happen under one hold of lnMu, so two pushes with
+// the same key at the same moment cannot both pass.
 func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 	if !p.lnModeOn() {
 		return true, ""
@@ -143,63 +160,75 @@ func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 		level = assistantwire.LevelP1
 	}
 	now := p.now()
-	if key := strings.TrimSpace(policy.relatedKey); key != "" {
-		p.lnMu.Lock()
-		last, seen := p.lnLastPush[key]
-		p.lnMu.Unlock()
-		if seen && now.Sub(last) < lnDedupWindow {
-			p.recordIntercept(pushIntercept{At: now.UTC(), Level: level, Reason: interceptReasonDedup,
-				Title: policy.title, Body: policy.body, RelatedKey: key, Manager: policy.manager})
+	key := strings.TrimSpace(policy.relatedKey)
+	in := pushIntercept{At: now.UTC(), Level: level, Title: policy.title, Body: policy.body, RelatedKey: key, Manager: policy.manager}
+	p.lnMu.Lock()
+	if key != "" {
+		if last, seen := p.lnLastPush[key]; seen && now.Sub(last) < lnDedupWindow {
+			in.Reason = interceptReasonDedup
+			p.addInterceptLocked(in, false)
+			p.lnMu.Unlock()
 			return false, interceptReasonDedup
 		}
 	}
 	switch level {
 	case assistantwire.LevelP0:
-		// P0 interrupts; remember the key so the same subject cannot interrupt again within the window.
-		if key := strings.TrimSpace(policy.relatedKey); key != "" {
-			p.lnMu.Lock()
-			if p.lnLastPush == nil {
-				p.lnLastPush = map[string]time.Time{}
-			}
-			p.lnLastPush[key] = now
-			p.lnMu.Unlock()
+		// P0 interrupts; its key then stays quiet for the window.
+		if key != "" {
+			p.noteKeyPushedLocked(key, now)
 		}
+		p.lnMu.Unlock()
 		return true, ""
 	case assistantwire.LevelP2:
-		p.recordIntercept(pushIntercept{At: now.UTC(), Level: level, Reason: interceptReasonP2,
-			Title: policy.title, Body: policy.body, RelatedKey: policy.relatedKey, Manager: policy.manager})
+		in.Reason = interceptReasonP2
+		p.addInterceptLocked(in, false)
+		p.lnMu.Unlock()
 		return false, interceptReasonP2
-	default: // P1 and anything unknown: held rather than alerted.
-		p.recordInterceptMerged(pushIntercept{At: now.UTC(), Level: assistantwire.LevelP1, Reason: interceptReasonP1,
-			Title: policy.title, Body: policy.body, RelatedKey: policy.relatedKey, Manager: policy.manager})
+	default: // P1 and anything unknown: held for the list and the briefing rather than alerted.
+		in.Level, in.Reason = assistantwire.LevelP1, interceptReasonP1
+		p.addInterceptLocked(in, true)
+		p.lnMu.Unlock()
 		return false, interceptReasonP1
 	}
 }
 
-// recordInterceptMerged folds a P1 conclusion push into the entry opened within the same minute when one exists, so
-// several cards arriving together become one entry; otherwise it opens one.
-func (p *Pusher) recordInterceptMerged(in pushIntercept) {
-	p.lnMu.Lock()
-	minute := in.At.Truncate(time.Minute)
-	for i := len(p.intercepts) - 1; i >= 0 && i >= len(p.intercepts)-16; i-- {
-		e := p.intercepts[i]
-		if e.Reason == interceptReasonP1 && e.At.Truncate(time.Minute).Equal(minute) {
-			if in.Title != "" {
-				p.intercepts[i].Also = append(p.intercepts[i].Also, in.Title)
-			}
-			persist := append([]pushIntercept(nil), p.intercepts...)
-			p.lnMu.Unlock()
-			p.persistIntercepts(persist)
-			return
+// noteKeyPushedLocked remembers that key alerted at now, and forgets keys whose window is over (card keys are unique,
+// so the map would otherwise only grow). lnMu is held.
+func (p *Pusher) noteKeyPushedLocked(key string, now time.Time) {
+	if p.lnLastPush == nil {
+		p.lnLastPush = map[string]time.Time{}
+	}
+	for k, at := range p.lnLastPush {
+		if now.Sub(at) >= lnDedupWindow {
+			delete(p.lnLastPush, k)
 		}
 	}
-	p.lnMu.Unlock()
-	p.recordIntercept(in)
+	p.lnLastPush[key] = now
 }
 
-// recordIntercept keeps one held push, drops entries past the age and count limits, and best-effort persists the list.
-func (p *Pusher) recordIntercept(in pushIntercept) {
-	p.lnMu.Lock()
+// addInterceptLocked keeps one held push and schedules its save. merge (P1): it folds into a recent P1 entry of the
+// same manager opened in the same minute, or about the same related key within the 12-hour window, so several
+// conclusion cards arriving together, or three cards about one PR, become one entry. Entries past the age and count
+// limits go. lnMu is held.
+func (p *Pusher) addInterceptLocked(in pushIntercept, merge bool) {
+	if merge {
+		minute := in.At.Truncate(time.Minute)
+		for i := len(p.intercepts) - 1; i >= 0 && i >= len(p.intercepts)-64; i-- {
+			e := &p.intercepts[i]
+			if e.Reason != interceptReasonP1 || e.Manager != in.Manager {
+				continue
+			}
+			sameMinute := e.At.Truncate(time.Minute).Equal(minute)
+			sameKey := in.RelatedKey != "" && e.RelatedKey == in.RelatedKey && in.At.Sub(e.At) < lnDedupWindow
+			if sameMinute || sameKey {
+				if in.Title != "" {
+					e.Also = append(slices.Clip(e.Also), in.Title)
+				}
+				p.scheduleSaveLocked()
+				return
+			}
+		}
+	}
 	cutoff := p.now().Add(-lnInterceptAge)
 	kept := p.intercepts[:0]
 	for _, e := range p.intercepts {
@@ -209,30 +238,86 @@ func (p *Pusher) recordIntercept(in pushIntercept) {
 	}
 	p.intercepts = append(kept, in)
 	if len(p.intercepts) > lnInterceptMax {
-		p.intercepts = p.intercepts[len(p.intercepts)-lnInterceptMax:]
+		p.intercepts = slices.Clone(p.intercepts[len(p.intercepts)-lnInterceptMax:])
 	}
-	persist := append([]pushIntercept(nil), p.intercepts...)
+	p.scheduleSaveLocked()
+}
+
+// recordIntercept keeps one held push (tests and callers outside applyLn).
+func (p *Pusher) recordIntercept(in pushIntercept) {
+	p.lnMu.Lock()
+	p.addInterceptLocked(in, false)
 	p.lnMu.Unlock()
-	p.persistIntercepts(persist)
 }
 
-// persistIntercepts writes the list to hub_settings; failures only log, the in-memory list stays authoritative until
-// the next write.
-func (p *Pusher) persistIntercepts(list []pushIntercept) {
+// scheduleSaveLocked marks the list changed and starts the one writer if it is not running. The writer saves the
+// latest list, then again while it changed meanwhile, so saves never land out of order and a burst of held pushes is
+// one or two writes, off the push path. lnMu is held.
+func (p *Pusher) scheduleSaveLocked() {
+	if p.store == nil {
+		return
+	}
+	p.lnDirty = true
+	if !p.lnWriting {
+		p.lnWriting = true
+		go p.saveIntercepts()
+	}
+}
+
+func (p *Pusher) saveIntercepts() {
+	for {
+		p.lnMu.Lock()
+		if !p.lnDirty {
+			p.lnWriting = false
+			p.lnMu.Unlock()
+			return
+		}
+		p.lnDirty = false
+		list := cloneIntercepts(p.intercepts)
+		p.lnMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
+		if err := p.store.PutSetting(ctx, lnInterceptsSettingKey, list); err != nil {
+			p.logf("ln mode: save held pushes: %v", err)
+		}
+		cancel()
+	}
+}
+
+// waitInterceptsSaved waits (up to d) for the writer to finish; true when nothing is left to save.
+func (p *Pusher) waitInterceptsSaved(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		p.lnMu.Lock()
+		idle := !p.lnWriting && !p.lnDirty
+		p.lnMu.Unlock()
+		if idle {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func cloneIntercepts(in []pushIntercept) []pushIntercept {
+	out := make([]pushIntercept, len(in))
+	for i, e := range in {
+		e.Also = slices.Clone(e.Also)
+		out[i] = e
+	}
+	return out
+}
+
+// loadLnState reads the switch and the held-push list once at startup; an absent or unreadable row is off / empty.
+func (p *Pusher) loadLnState() {
 	if p == nil || p.store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
-	defer cancel()
-	if err := p.store.PutSetting(ctx, lnInterceptsSettingKey, list); err != nil {
-		p.logf("ln mode: persist intercepts: %v", err)
-	}
-}
-
-// loadIntercepts reads the persisted list once at startup; an absent or unreadable row means an empty list.
-func (p *Pusher) loadIntercepts() {
-	if p == nil || p.store == nil {
-		return
+	if enabled, ok := p.readLnMode(); ok {
+		p.lnMu.Lock()
+		p.lnCached, p.lnCachedAt = &enabled, p.now()
+		p.lnMu.Unlock()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
 	defer cancel()
@@ -260,7 +345,9 @@ func (p *Pusher) lnInterceptsView(limit int) []pushIntercept {
 	defer p.lnMu.Unlock()
 	out := make([]pushIntercept, 0, min(limit, len(p.intercepts)))
 	for i := len(p.intercepts) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, p.intercepts[i])
+		e := p.intercepts[i]
+		e.Also = slices.Clone(e.Also)
+		out = append(out, e)
 	}
 	return out
 }
