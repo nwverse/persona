@@ -16,7 +16,7 @@ import (
 // send alerts every device whose settings take it (nil: all of them).
 // A device that chose "Phone Muted" gets none while a desktop app is connected (desktops.go), and a desktop app that is
 // connected gets none of these: it shows them itself. What was asked for explicitly (nil) goes to it all the same.
-// The hub's own alerts (pairing, a computer joining) always pass ln mode: they are P0.
+// The hub's own alerts (pairing, a computer joining) always pass the grading filter: they are P0.
 func (p *Pusher) send(payload map[string]any, collapseID string, wants func(NotifyPrefs) bool) {
 	p.sendLocalized(func(i18n.Lang) map[string]any { return payload }, collapseID, wants)
 }
@@ -40,12 +40,12 @@ func (p *Pusher) sendLocalizedQuietTo(build localized, collapseID string, wants 
 // personad notify): none to a device that turned that manager's pushes off (NotifyPrefs.MutedManagers), whatever else
 // it takes. "" is the hub's own push. wants keeps its meaning: nil (asked for explicitly) still goes past Phone Muted
 // and to an open desktop. Returns the selected count and the reachable count before preferences are applied. Such a
-// push defaults to P1 for ln mode; callers that know its urgency use sendFromPolicy.
+// push defaults to P1 for grading; callers that know its urgency use sendFromPolicy.
 func (p *Pusher) sendFrom(manager string, build localized, collapseID string, wants func(NotifyPrefs) bool, rule quietRule, sent func(Device)) (selected, reachable int) {
 	return p.sendFromPolicy(manager, pushPolicy{level: assistantwire.LevelP1, manager: manager}, build, collapseID, wants, rule, nil, sent)
 }
 
-// sendFromPolicy is sendFrom with the push's ln-mode policy (level, related key and the held-push record's text).
+// sendFromPolicy is sendFrom with the push's grading policy (level, related key and the held-push record's text).
 func (p *Pusher) sendFromPolicy(manager string, policy pushPolicy, build localized, collapseID string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool, sent func(Device)) (selected, reachable int) {
 	if p == nil {
 		return 0, 0
