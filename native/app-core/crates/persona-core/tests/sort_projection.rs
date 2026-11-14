@@ -273,8 +273,12 @@ fn since_query_filters_by_updated_at() {
     no_now["settings"]["query"] = serde_json::json!("since:24h");
     let input: Input = serde_json::from_value(no_now).expect("no now");
     let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
-    let total: usize = actual["groups"].as_array().expect("groups").iter()
-        .map(|g| g["rows"].as_array().map_or(0, |a| a.len())).sum();
+    let total: usize = actual["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|g| g["rows"].as_array().map_or(0, |a| a.len()))
+        .sum();
     assert_eq!(total, 0, "since: without now must match nothing");
 }
 
@@ -294,9 +298,17 @@ fn background_waiting_quick_filter_shows_only_rank_4() {
     }))
     .expect("bg input");
     let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
-    let group_ids: Vec<&str> = actual["groups"].as_array().expect("groups").iter()
-        .map(|g| g["id"].as_str().expect("id")).collect();
-    assert_eq!(group_ids, vec!["state/background"], "only the background-waiting section appears");
+    let group_ids: Vec<&str> = actual["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|g| g["id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(
+        group_ids,
+        vec!["state/background"],
+        "only the background-waiting section appears"
+    );
     assert_eq!(actual["groups"][0]["rows"], serde_json::json!(["m/bg"]));
 }
 
