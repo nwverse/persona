@@ -320,8 +320,12 @@ class WatcherTests(unittest.TestCase):
             calls = []
             def fake_checked(argv, **kwargs):
                 calls.append(argv)
+                if argv[:2] == ["git", "rev-parse"] and "FETCH_HEAD" in argv:
+                    return SHA_BASE + "\n"
                 if argv[:2] == ["git", "rev-parse"]:
-                    return (SHA_BASE if "FETCH_HEAD" in argv or "HEAD^{tree}" in argv else SHA_B) + "\n"
+                    return SHA_B + "\n"
+                if argv[:2] == ["git", "ls-remote"]:
+                    return SHA_A + "\trefs/heads/fix/example\n"
                 if argv[:3] == ["git", "diff", "--name-only"]:
                     return ""
                 if argv[:4] == ["git", "diff", "--cached", "--name-only"]:
@@ -362,7 +366,9 @@ class WatcherTests(unittest.TestCase):
             root = Path(directory)
             def fake_checked(argv, **kwargs):
                 if argv[:2] == ["git", "rev-parse"]:
-                    return (SHA_BASE if "FETCH_HEAD" in argv or "HEAD^{tree}" in argv else SHA_B) + "\n"
+                    if "FETCH_HEAD" in argv:
+                        return SHA_BASE + "\n"
+                    return SHA_B + "\n"
                 return ""
             with patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: pr(head=SHA_B if number == 9 else SHA_A)), \
                     patch.object(pr_watch_repair, "verify", return_value=[]), \

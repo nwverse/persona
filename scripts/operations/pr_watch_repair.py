@@ -77,6 +77,10 @@ def failed_go_tests(worktree, text):
 def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None, failures=None, environ=None):
     """Rerun every failed lane independently before calling anything base-owned."""
     if failures:
+        changed_tests = checked(["git", "diff", "--name-only", "--no-renames", pr["baseRefOid"] + "..." + pr["headRefOid"],
+                                 "--", "*_test.go", "*_test.py", "*.test.ts", "*.test.tsx"], cwd=worktree).splitlines()
+        if changed_tests:
+            return {"reproduced": False, "reason": "The PR changes test inputs, so a same-named main failure is not enough for base attribution."}
         evidence = []
         for item in failures:
             try:
@@ -226,7 +230,9 @@ def repair_repository_copy(worktree):
         copy = Path(temporary) / "checkout"
         checked(["git", "clone", "--quiet", "--no-hardlinks", str(source), str(copy)], cwd=source.parent, timeout=180)
         head = checked(["git", "rev-parse", "HEAD"], cwd=source).strip()
-        checked(["git", "checkout", "--quiet", "--detach", head], cwd=copy, timeout=90)
+        checked(["git", "switch", "--detach", head], cwd=copy, timeout=90)
+        if checked(["git", "rev-parse", "HEAD"], cwd=copy).strip() != head:
+            raise WatchError("repair clone did not preserve the exact PR head")
         checked(["git", "remote", "remove", "origin"], cwd=copy)
         yield copy
 
@@ -335,7 +341,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         if not issues:
             raise WatchError("cannot open a continuation PR without an issue link")
         result = run(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60)
-        if result.returncode == 2 and not result.stdout.strip():
+        if result.returncode == 0 and not result.stdout.strip():
             checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
         elif result.returncode:
             raise WatchError("cannot verify continuation branch before publishing: " + bounded(result.stderr, 800))
@@ -344,6 +350,11 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             if remote != head:
                 raise WatchError("continuation branch exists at a different head; choose a fresh repair branch")
     if not pr.get("isCrossRepository"):
+        checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
+        remote_output = checked(["git", "ls-remote", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180).strip()
+        if remote_output and remote_output.split()[0] != pr["headRefOid"]:
+            raise WatchError("PR head moved before the repair push; nothing was pushed")
+            raise WatchError("PR head moved before the repair push; nothing was pushed")
         checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
     if pr.get("isCrossRepository"):
         body = "Refs #%d\n\nContinuation of #%s with an automated verification repair.\n\nOriginal failure:\n```text\n%s\n```" % (
