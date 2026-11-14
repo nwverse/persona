@@ -51,9 +51,10 @@ const external = []; // addresses handed to the system browser
 const notifyRequests = []; // what the renderer asked for over the production IPC
 const badges = []; // every count the renderer sent
 const localSettings = []; // the shell-owned options window, observed without exposing it to the hub page
+const isLocalSettingsURL = url => url === "persona-setup://app/setup.html";
 app.on("browser-window-created", (_event, window) => {
   const record = url => {
-    if (url.endsWith("/setup.html") && !localSettings.includes(window)) {
+    if (isLocalSettingsURL(url) && !localSettings.includes(window)) {
       localSettings.push(window);
       // Chromium's headless platform gives new native windows a 1x1 off-screen frame. Exercise the same request the
       // person made by making that test window visible; on native runners production show()/focus() already did this.
@@ -62,7 +63,7 @@ app.on("browser-window-created", (_event, window) => {
         window.show();
       }
     }
-    if (headless && !url.endsWith("/setup.html") && !url.startsWith("devtools:") && window.getBounds().width < 600) {
+    if (headless && !isLocalSettingsURL(url) && !url.startsWith("devtools:") && window.getBounds().width < 600) {
       // A replacement hub window has the same headless sizing issue as the first one.
       window.setBounds({ x: 0, y: 0, width: 1280, height: 840 });
       window.show();
@@ -394,7 +395,7 @@ async function main() {
   await mkdir(output, { recursive: true });
   const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
   win = await created;
-  win.webContents.on("console-message", event => { if (event.level === "error") consoleErrors.push(String(event.message).slice(0, 300)); });
+  win.webContents.on("console-message", event => { if (event.level === "error") consoleErrors.push(`${String(event.message).slice(0, 300)} (${event.sourceId}:${event.lineNumber})`); });
   await until("first load", () => !win.webContents.isLoading() && win.webContents.getURL().startsWith(hub.href), 45_000);
   // installDesktopIPC clears its channels when it installs; these observers are added after it, beside the real handlers.
   ipcMain.on("desktop:notify", (_event, value) => { if (value && typeof value === "object") notifyRequests.push({ title: value.title, body: value.body, tag: value.tag, route: value.route }); });

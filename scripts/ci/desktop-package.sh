@@ -19,10 +19,6 @@ case "$target" in
   *) printf 'usage: scripts/ci/desktop-package.sh mac|win\n' >&2; exit 2 ;;
 esac
 args=(--"$platform" --publish never)
-if [[ "$target" == win ]]; then
-  # Keep the same unpacked app for the first-run gate. electron-builder target names follow the platform option.
-  args+=(--dir)
-fi
 if [[ -n "${PERSONA_DESKTOP_VERSION:-}" ]]; then
   if [[ ! "$PERSONA_DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
     printf 'desktop-package: FAIL PERSONA_DESKTOP_VERSION is not a semantic version: %s\n' "$PERSONA_DESKTOP_VERSION" >&2
@@ -52,4 +48,13 @@ if [[ -n "${CSC_LINK:-}" ]]; then
 else
   printf 'desktop-package: no signing certificate supplied; producing an explicitly unsigned development package\n'
   ci_run 'Desktop unsigned package' 2400 npm --prefix desktop run dist:unsigned -- "${args[@]}"
+fi
+if [[ "$target" == win ]]; then
+  # Keep NSIS and its update metadata in the original build. A second directory-only build supplies the exact app
+  # for first-run testing without executing an installer on a persistent machine.
+  config=electron-builder.yml
+  if [[ -z "${CSC_LINK:-}" ]]; then
+    config=electron-builder.unsigned.yml
+  fi
+  ci_run 'Desktop unpacked first-run package' 2400 node desktop/node_modules/electron-builder/cli.js --projectDir desktop --config "$config" --win dir --x64 --publish never
 fi

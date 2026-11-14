@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { SETUP_URL, setupResourceURL } from "../src/setup-resources.js";
 
@@ -12,6 +13,12 @@ test("the trusted setup protocol serves exactly its three public resources", () 
   assert.match(allowed(SETUP_URL), /\/setup\/setup\.html$/);
   assert.match(allowed("persona-setup://app/setup.css"), /\/setup\/setup\.css$/);
   assert.match(allowed("persona-setup://app/setup.cjs"), /\/setup\/setup\.cjs$/);
+});
+
+test("the development driver identifies only the trusted local setup origin", () => {
+  const source = readFileSync(new URL("../../scripts/e2e-main.mjs", import.meta.url), "utf8");
+  assert.match(source, /const isLocalSettingsURL = url => url === "persona-setup:\/\/app\/setup\.html"/);
+  assert.doesNotMatch(source, /url\.endsWith\("\/setup\.html"\)/);
 });
 
 test("no renderer-controlled path can reach another asar resource", () => {

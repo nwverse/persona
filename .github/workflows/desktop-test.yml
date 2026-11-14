@@ -89,7 +89,7 @@ jobs:
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
         run: scripts/ci/desktop-package.sh mac
-      - name: Packaged universal app first-run acceptance
+      - name: Unsigned macOS packaged setup; hub acceptance requires a valid signature
         if: ${{ !cancelled() }}
         env:
           PERSONA_DESKTOP_TEST_PACKAGE: desktop/release/Persona-${{ env.PERSONA_DESKTOP_VERSION || '0.1.0' }}-mac-universal.zip

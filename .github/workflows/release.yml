@@ -178,6 +178,21 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           # Gatekeeper accepts only a Developer ID signature with a notarization ticket.
           spctl --assess --type execute --verbose=2 "$app"
+      - name: Build the web client for signed desktop first-run acceptance
+        run: scripts/ci/desktop-web.sh
+      - name: Signed macOS packaged first-run acceptance
+        env:
+          PERSONA_DESKTOP_VERSION: ${{ needs.desktop-gate.outputs.version }}
+          PERSONA_DESKTOP_TEST_SIGNED_MAC: '1'
+          PERSONA_DESKTOP_TEST_PACKAGE: desktop/release/Persona-${{ needs.desktop-gate.outputs.version }}-mac-universal.zip
+        run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persona-desktop-release-macos-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: persona-desktop-release-macos
@@ -186,6 +201,8 @@ jobs:
             desktop/release/*.zip
             desktop/release/*.blockmap
             desktop/release/*-mac.yml
+            desktop/release/first-run/**/result.json
+            desktop/release/first-run/**/*.png
           if-no-files-found: error
           retention-days: 7
   desktop-win:

@@ -4,11 +4,13 @@
 //
 // Builds the ordinary unsigned production app for the current host, launches its unchanged entry point with an empty
 // profile and no hub environment, and drives its existing windows through a temporary CDP socket on loopback. This is
-// not a physical-device or signed-release test. macOS uses its packaged universal app; Windows runs the same build's
-// unpacked app so it cannot replace a production-identity install. Linux is supplementary, not a shipping target.
+// not a physical-device test. macOS unsigned CI checks setup and explicitly blocks hub acceptance pending a valid
+// signature; PERSONA_DESKTOP_TEST_SIGNED_MAC=1 requires the release job's Developer ID signed, notarized ZIP.
+// Windows runs an unpacked build from the same configuration as NSIS so it cannot replace a production-identity
+// install. Linux is supplementary, not a shipping target.
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createReadStream, existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -18,6 +20,7 @@ import { createRequire } from "node:module";
 import { getCurrentFuseWire, FuseState, FuseV1Options } from "@electron/fuses";
 import { DesktopCDP } from "./first-run-cdp.mjs";
 import { startGateway } from "./smoke-gateway.mjs";
+import { firstRunVerdict } from "./first-run-verdict.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("@electron/asar");
@@ -30,7 +33,9 @@ const platform = process.platform;
 const npm = platform === "win32" ? "npm.cmd" : "npm";
 const owned = new Set();
 const steps = [];
-let work, hub, gateway, log = "", failure;
+let work, hub, gateway, log = "", failure, macSignature;
+let artifactSHA256, buildConfiguration;
+const blocked = [];
 const clients = [];
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 const step = (name, ok, detail) => {
@@ -118,7 +123,7 @@ async function build() {
     need("build the web client for the local hub", (await run(npm, ["--prefix", "web", "run", "build"], { seconds: 1200, quiet: true })).code === 0);
   }
   const target = platform === "win32" ? ["--win", "dir", "--x64"] : platform === "darwin" ? ["--mac", "--universal"] : ["--linux", "dir", "--x64"];
-  const result = await run(process.execPath, [join(desktop, "node_modules", "electron-builder", "cli.js"), "--projectDir", desktop, "--config", process.env.PERSONA_DESKTOP_TEST_BUILD_CONFIG ?? "electron-builder.unsigned.yml", ...target, "--publish", "never"], {
+  const result = await run(process.execPath, [join(desktop, "node_modules", "electron-builder", "cli.js"), "--projectDir", desktop, "--config", buildConfiguration, ...target, "--publish", "never"], {
     cwd: root, seconds: 1500,
     env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.desktop", CSC_IDENTITY_AUTO_DISCOVERY: "false" },
   });
@@ -143,7 +148,19 @@ async function executable() {
     await mkdir(installed);
     need("unpack the macOS ZIP", (await run("ditto", ["-x", "-k", archive, installed])).code === 0);
     const file = join(installed, "Persona.app", "Contents", "MacOS", "Persona");
-    need("ad-hoc signature only, no certificate", (await run("codesign", ["--force", "--deep", "--sign", "-", join(installed, "Persona.app")])).code === 0);
+    const identity = await run("codesign", ["-dvvv", join(installed, "Persona.app")], { quiet: true });
+    const authority = identity.text.match(/^Authority=(.+)$/m)?.[1];
+    const designated = await run("codesign", ["-d", "--requirements", "-", join(installed, "Persona.app")], { quiet: true });
+    const team = designated.text.match(/team-identifier=([A-Z0-9]+)/)?.[1];
+    if (process.env.PERSONA_DESKTOP_TEST_SIGNED_MAC === "1") {
+      need("the release package has a consistent Developer ID team signature", identity.code === 0 && authority?.startsWith("Developer ID Application:") && !!team && team !== "not set", { authority: authority ?? "unavailable", team: team ?? "unavailable" });
+      macSignature = "developer-id";
+    } else {
+      // This launches the unsigned development artifact; it is not Developer ID acceptance and must not change its
+      // bundle identifier or designated requirement to make Keychain behave differently.
+      need("ad-hoc signature only for the unsigned development launch", (await run("codesign", ["--force", "--deep", "--sign", "-", join(installed, "Persona.app")])).code === 0);
+      macSignature = "ad-hoc";
+    }
     return { file, installed };
   }
   return { file: join(desktop, "release", "linux-unpacked", "persona-desktop"), installed: undefined };
@@ -173,9 +190,12 @@ async function launch(file, profile, home, linkLog) {
   const debugPort = await freePort();
   const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1", PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1", ...(linkLog ? { PERSONA_TEST_LINK_LOG: linkLog } : {}) };
   for (const name of Object.keys(env)) if (name === "PERSONA_HUB_URL" || name.startsWith("PERSONA_DESKTOP_E2E") || name === "PERSONA_DESKTOP_SMOKE" || name === "ELECTRON_RUN_AS_NODE" || name === "NODE_OPTIONS") delete env[name];
+  for (const name of ["PERSONA_DESKTOP_REQUIRE_SIGNING", "PERSONA_DESKTOP_TEST_SIGNED_MAC", "PERSONA_DESKTOP_TEST_PACKAGE", "PERSONA_DESKTOP_TEST_BUILD_CONFIG", "PERSONA_DESKTOP_APP_ID", "CSC_LINK", "CSC_KEY_PASSWORD", "CSC_IDENTITY_AUTO_DISCOVERY", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"]) delete env[name];
+  need("build and signing environment stays outside the app", !env.PERSONA_DESKTOP_REQUIRE_SIGNING && !env.PERSONA_DESKTOP_TEST_SIGNED_MAC && !env.CSC_LINK && !env.APPLE_API_KEY);
   need("the packaged app has no Node runtime overrides", !env.ELECTRON_RUN_AS_NODE && !env.NODE_OPTIONS);
   const args = [`--user-data-dir=${profile}`, `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`];
-  if (platform === "linux") args.unshift("--no-sandbox", "--disable-gpu");
+  if (platform === "linux") args.unshift("--disable-gpu");
+  need("the acceptance launcher does not disable the Chromium sandbox", !args.includes("--no-sandbox"));
   const child = spawn(file, args, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32" });
   owned.add(child);
   const keep = data => { log += data; };
@@ -271,6 +291,16 @@ process.stdin.on("end", () => {
   const commands = (await readFile(record, "utf8")).split("\n").filter(Boolean).map(line => JSON.parse(line));
   need("Link pairing uses fixed argv and stdin, with no service installation", commands.some(command => command.argv.join(" ") === "pair -" && command.stdin === linkURL) && commands.every(command => command.argv[0] === "status" || command.argv.join(" ") === "pair -"), commands);
   need("status and command output stay redacted", !(await setup.evaluate("document.body.innerText")).includes("must-not-reach-the-renderer") && !(await setup.evaluate("document.body.innerText")).includes("must-not-appear"));
+  if (macSignature === "ad-hoc") {
+    blocked.push({
+      scenario: "hub setup, web pairing and chat",
+      reason: "EnableCookieEncryption requires a valid consistent macOS code signature for Keychain access; an ad-hoc development signature is not signed-release acceptance",
+      uncovered: ["submit the hub address", "web sign-in and pairing", "enter the existing chat page"],
+      requiredEnvironment: "the administrator-approved Developer ID signed and notarized release workflow",
+    });
+    await stop(child);
+    return;
+  }
   await setup.evaluate(`document.querySelector('#hub').value = ${JSON.stringify(gateway.url)}; document.querySelector('#connect').requestSubmit(); true`);
   const main = await client.pageFor("the hub's own login page", target => target.url.startsWith(gateway.url));
   await until("hub login form", () => main.evaluate("!!document.querySelector('form input[type=text]')"));
@@ -289,10 +319,41 @@ process.stdin.on("end", () => {
 
 async function main() {
   if (platform === "linux") need("a display is available", !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY), "run under Xvfb; Linux is supplementary evidence");
+  if (process.env.PERSONA_DESKTOP_TEST_PACKAGE && process.env.PERSONA_DESKTOP_TEST_BUILD_CONFIG) {
+    throw new Error("An existing artifact is checked directly; a separate build configuration cannot change it");
+  }
+  const suppliedConfig = process.env.PERSONA_DESKTOP_TEST_BUILD_CONFIG;
+  const config = suppliedConfig ? resolve(suppliedConfig) : join(desktop, "electron-builder.unsigned.yml");
+  if (!suppliedConfig || config === join(desktop, "electron-builder.unsigned.yml")) {
+    buildConfiguration = config;
+  } else {
+    const source = JSON.parse(await readFile(config, "utf8"));
+    if (resolve(config, "..", source.extends) !== join(desktop, "electron-builder.unsigned.yml") || Object.keys(source).some(key => key !== "extends" && key !== "electronDownload") || typeof source.electronDownload?.checksums !== "object") {
+      throw new Error("A local build config may only extend the checked unsigned config with Electron download checksums");
+    }
+    buildConfiguration = config;
+  }
+  if (process.env.PERSONA_DESKTOP_TEST_SIGNED_MAC === "1" && platform !== "darwin") {
+    throw new Error("The signed first-run gate currently accepts only a macOS release artifact");
+  }
+  if (platform === "darwin" && process.env.PERSONA_DESKTOP_TEST_SIGNED_MAC === "1" && !process.env.PERSONA_DESKTOP_TEST_PACKAGE) {
+    throw new Error("The signed first-run gate requires the exact universal ZIP produced by the release package step");
+  }
   work = await mkdtemp(join(tmpdir(), "persona-first-run-test-"));
   await mkdir(output, { recursive: true });
   await build();
   const { file, installed } = await executable();
+  if (platform === "darwin" && !process.env.PERSONA_DESKTOP_TEST_PACKAGE) {
+    // The locally produced .app is the tested artifact; CI hashes the exact supplied universal ZIP.
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(file)) hash.update(chunk);
+    artifactSHA256 = `universal-app-executable:${hash.digest("hex")}`;
+  } else {
+    const archive = platform === "darwin" ? resolve(process.env.PERSONA_DESKTOP_TEST_PACKAGE) : file;
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(archive)) hash.update(chunk);
+    artifactSHA256 = hash.digest("hex");
+  }
   await fuseCheck(file);
   await packageCheck(file);
   hub = await startHub();
@@ -315,10 +376,21 @@ try { result = await main(); } catch (error) { failure = error instanceof Error 
 await cleanup().catch(error => { failure ??= String(error); });
 clearTimeout(timeout);
 await mkdir(output, { recursive: true });
-const report = JSON.stringify({ ok: !failure, platform, arch: process.arch, shippingTarget: platform !== "linux", ...(failure ? { failure } : {}), ...result, steps, scenarios: clients.map(client => client.diagnostics()) }, null, 2);
+const report = JSON.stringify({
+  ...firstRunVerdict({ platform, signature: macSignature, failure, blocked, passed: steps.length }),
+  arch: process.arch,
+  shippingTarget: platform !== "linux",
+  ...(failure ? { failure } : {}),
+  ...(artifactSHA256 ? { artifactSHA256 } : {}),
+  ...(buildConfiguration ? { buildConfiguration } : {}),
+  ...result,
+  steps,
+  scenarios: clients.map(client => client.diagnostics()),
+}, null, 2);
 const clean = value => value.replaceAll(work ?? "<temporary directory>", "<temporary directory>").replaceAll(homedir(), "<home>").replaceAll(hub?.token ?? "<no token>", "<run token>");
 await writeFile(join(output, "result.json"), `${clean(report)}\n`, "utf8");
 await writeFile(join(output, "electron.log"), clean(log), "utf8");
 await writeFile(join(output, "hub.log"), clean(hub?.text() ?? ""), "utf8");
-console.log(`Desktop packaged first-run (${platform}/${process.arch}): ${failure ? `FAIL (${failure})` : "PASS"}; evidence ${output}`);
-process.exitCode = failure || steps.length === 0 || steps.some(step => !step.ok) ? 1 : 0;
+const verdict = firstRunVerdict({ platform, signature: macSignature, failure, blocked, passed: steps.length });
+console.log(`Desktop packaged first-run (${platform}/${process.arch}): ${verdict.label}; evidence ${output}`);
+process.exitCode = verdict.ok && steps.length > 0 && steps.every(step => step.ok) ? 0 : 1;

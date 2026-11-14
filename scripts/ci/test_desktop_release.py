@@ -87,12 +87,14 @@ class DesktopPackageScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("not a semantic version", result.stderr)
 
-    def test_windows_packages_include_the_same_unpacked_app_for_first_run(self):
-        # --dir is electron-builder's boolean unpacked target; NSIS remains in the inherited config.
+    def test_windows_keeps_nsis_and_builds_an_unpacked_first_run_artifact(self):
         script = PACKAGE.read_text()
-        self.assertIn('args+=(--dir)', script)
+        self.assertNotIn('args+=(--dir)', script)
         self.assertNotIn('args+=(dir)', script)
         self.assertNotIn('args+=(nsis dir)', script)
+        self.assertIn('run dist -- "${args[@]}"', script)
+        self.assertIn('run dist:unsigned -- "${args[@]}"', script)
+        self.assertIn('--win dir --x64 --publish never', script)
 
     def test_no_registered_identity_is_written_into_the_repository(self):
         production = yaml.load((ROOT / "desktop/electron-builder.yml").read_text(), Loader=yaml.BaseLoader)
@@ -129,7 +131,21 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
             self.assertEqual(build["env"]["PERSONA_DESKTOP_APP_ID"], "${{ secrets.PERSONA_DESKTOP_APP_ID }}")
             index = steps.index(build)
             self.assertIn(verify, steps[index + 1]["run"])
-            self.assertIn("upload-artifact", steps[index + 2]["uses"])
+            if name == "desktop-mac":
+                first_run = next(step for step in steps if step.get("name") == "Signed macOS packaged first-run acceptance")
+                self.assertEqual(first_run["env"]["PERSONA_DESKTOP_TEST_SIGNED_MAC"], "1")
+                self.assertEqual(first_run["env"]["PERSONA_DESKTOP_TEST_PACKAGE"], "desktop/release/Persona-${{ needs.desktop-gate.outputs.version }}-mac-universal.zip")
+                self.assertIn("first-run-test.mjs", first_run["run"])
+                self.assertLess(steps.index(first_run), next(i for i, step in enumerate(steps) if step.get("with", {}).get("name") == "persona-desktop-release-macos"))
+                evidence = next(step for step in steps if step.get("with", {}).get("name") == "persona-desktop-release-macos")
+                self.assertIn("first-run/**/result.json", evidence["with"]["path"])
+                self.assertIn("first-run/**/*.png", evidence["with"]["path"])
+                self.assertIn("desktop-web.sh", next(step for step in steps if step.get("name") == "Build the web client for signed desktop first-run acceptance")["run"])
+                web_build = next(step for step in steps if step.get("name") == "Build the web client for signed desktop first-run acceptance")
+                self.assertLess(steps.index(web_build), steps.index(first_run))
+                self.assertNotIn("persona-desktop-signed-first-run-web-dist", str(steps))
+            else:
+                self.assertIn("upload-artifact", steps[index + 2]["uses"])
 
     def test_missing_secrets_do_not_fail_the_release(self):
         # Skipped desktop jobs leave the image and Release jobs untouched, and nothing desktop is needed by them.
