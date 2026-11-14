@@ -36,6 +36,8 @@ struct VNCPage: View {
     @State private var hubTrips = HubRoundTrips()
     /// The app is in front: the round trip to the hub is timed only then.
     @State private var appActive = true
+    /// The mobile-data question shows (#6396, `ScreenMobileDataCard`).
+    @State private var mobileDataCard = false
     /// `-showScreenFallbackDemo`'s reason, for screenshots of the fallback line (#3954); the real one is `fallback`.
     @State private var fallbackDemo: ScreenVideoFallback?
     /// The not-allowed line's "How to turn it on" is showing its one sentence.
@@ -77,6 +79,17 @@ struct VNCPage: View {
                 #if os(iOS) || os(visionOS)
                 if let f = fallback { fallbackBanner(f) }
                 #endif
+                #if os(iOS)
+                if mobileDataCard {
+                    ScreenMobileDataCard { choice in
+                        ScreenMobileData.choose(choice)
+                        withAnimation(Theme.Motion.standard) { mobileDataCard = false }
+                    } close: {
+                        withAnimation(Theme.Motion.standard) { mobileDataCard = false }
+                    }
+                    .transition(.opacity)
+                }
+                #endif
                 ZStack {
                     Color.black
                     if let s = session { content(s) }
@@ -113,6 +126,10 @@ struct VNCPage: View {
             if args.contains("-showScreenVideoDemo") { picture = .video }
             if args.contains("-showScreenStatsDemo") { statsOn = true }
             if args.contains("-showScreenFallbackDemo") { fallbackDemo = .lost }
+            // `-showScreenMobileData`: the mobile-data question, for screenshots (#6396).
+            #if os(iOS)
+            if args.contains("-showScreenMobileData") { mobileDataCard = true }
+            #endif
             #endif
             #endif
             #if os(iOS) && canImport(PersonaScreenKit)
