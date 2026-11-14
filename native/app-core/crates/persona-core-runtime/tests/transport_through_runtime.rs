@@ -486,6 +486,33 @@ fn a_frame_is_routed_by_its_full_chat_path() {
 }
 
 #[test]
+fn a_frame_is_routed_by_a_hub_group_path() {
+    // iOS prefixes a non-default hub group as `group|machine_id/session_id`; that form must route too, and a
+    // different group's frame must not land in this chat.
+    let host = Arc::new(Recorder::default());
+    let runtime = open_chat(&host, "work|m1/s1");
+    let body = r#"{"type":"items","machine_id":"m1","session_id":"s1","items":[{"id":"a#0","seq":1,"role":"user","kind":"text"}],"to_seq":1}"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: "work|m1/s1".into(),
+        payload: Payload::Frame { body: body.into() },
+    })));
+    let (patch, effects) = drain_chat(&runtime, &host, "work|m1/s1");
+    assert_eq!(patch.ops.len(), 1, "the grouped chat receives its frame");
+    assert!(effects.is_empty(), "a matching grouped path is not rejected");
+
+    // A frame carries no group, so any group prefix routes to that chat; what must still be refused is a frame
+    // for a different machine or session.
+    let host = Arc::new(Recorder::default());
+    let runtime = open_chat(&host, "work|other/s1");
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: "work|other/s1".into(),
+        payload: Payload::Frame { body: body.into() },
+    })));
+    let (_, effects) = drain_chat(&runtime, &host, "work|other/s1");
+    assert!(matches!(&effects[..], [Effect::Rejected { reason }] if reason.contains("another chat")));
+}
+
+#[test]
 fn a_frame_for_another_chat_is_rejected() {
     let host = Arc::new(Recorder::default());
     let runtime = open(&host);

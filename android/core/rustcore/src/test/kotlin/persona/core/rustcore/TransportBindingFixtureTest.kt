@@ -20,7 +20,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 import persona.core.contracts.JsonCodec
 import persona.core.rustcore.wire.Action
@@ -129,12 +128,12 @@ class TransportBindingFixtureTest {
     }
 
     @Test fun exactCaseSet() {
+        // Every case of the three files is either replayed here, a frame of another type, or owned by another
+        // decoder: an added or dropped case changes one of these sets and fails the test.
+        val all = listOf("items.json", "item_events.json", "compatibility.json").flatMap { corpus(it) }
+        val others = all.filter { it.name !in IN_SCOPE }.map { it.name }.toSortedSet()
+        assertEquals(OTHER_FRAMES.toSortedSet() + OUT_OF_SCOPE.toSortedSet(), others)
         assertEquals(IN_SCOPE.toSortedSet(), cases().map { it.name }.toSortedSet())
-        // Events of other types in the same files: the frame decoder must say "not an items frame" for each one.
-        val others = corpus("compatibility.json")
-            .filter { it.decoder == "compat_event" && it.name !in IN_SCOPE }
-            .map { it.name }
-        assertEquals(OTHER_FRAMES.toSortedSet(), others.toSortedSet())
     }
 
     @Test fun httpPagesThroughTheBinding() = replay(cases().filter { !it.isFrame })
@@ -153,7 +152,8 @@ class TransportBindingFixtureTest {
                 // byte. A payload can also replace an item the prelude already had, so compare with the expected
                 // merge of prelude and payload rather than assuming a fresh list.
                 assertEquals("${case.name}: the published items", case.mergedItems(), harness.items)
-                // Every item of the payload crossed the boundary byte for byte, whatever else the merge retained.
+                // Each op carries the raw text of one of the payload's items (the merged list above also holds
+                // prelude items the payload never carried, which is why this reads case.raw.items, not that list).
                 for (op in harness.patch.ops) {
                     when (op) {
                         is ListOp.Insert -> assertTrue("${case.name}: insert bytes", op.json in case.raw.items)
@@ -163,7 +163,21 @@ class TransportBindingFixtureTest {
                 }
                 case.checkFields(harness)
                 assertEquals("${case.name}: requests", case.expectedRequests, harness.requests().map { it.json() })
+                // Every field the fixture asserts was checked by a rule above; a pointer nobody checks is a silent
+                // gap in this replay, not a pass.
+                case.checkCoverage()
             }
+        }
+    }
+
+    /**
+     * Every expected pointer is either checked against the published state above or is a page field a patch cannot
+     * re-encode, which the requests assert through the continuity result it drove. A pointer in neither set is a
+     * silent gap in this replay, so a new expected field fails here until someone places it.
+     */
+    private fun Case.checkCoverage() {
+        for (pointer in fields.keys - CHECKED_POINTERS) {
+            assertTrue("$name $pointer: an expected field no rule checks", pointer in CONTINUITY_POINTERS)
         }
     }
 
@@ -381,6 +395,11 @@ class TransportBindingFixtureTest {
                 // The page's own pagination and history are what the decoder read and the reducer applied.
                 pointer == "/has_more" -> harness.patch.has_more?.let(::JsonPrimitive)
                 pointer == "/history" -> harness.patch.history?.let(::JsonPrimitive)
+                // The whole item array: as many of the payload's items arrived as the merge added or replaced.
+                pointer == "/items" -> {
+                    assertEquals("$label: the payload's item count", raw.items.size, addedItems(harness))
+                    want
+                }
                 pointer.startsWith("/items/") -> itemField(pointer, harness)
                 // The remaining page fields (from_seq, to_seq, more_after, backlog, more) are not re-encodable from
                 // a patch: they are asserted through the continuity result they drove, in expectedRequests.
@@ -396,14 +415,29 @@ class TransportBindingFixtureTest {
         }
     }
 
+    /** How many of the payload's items the merge added or replaced, counted independently of the raw reader. */
+    private fun Case.addedItems(harness: Harness): Int =
+        harness.items.count { itemId(it) in inputIds() } - prelude.items.count { itemId(it) in inputIds() }
+
+    /** The payload items' ids as the parsed input reports them, a second opinion next to [RawJson]. */
+    private fun Case.inputIds(): Set<String> =
+        (input["items"] as? JsonArray)?.map { it.jsonObject.getValue("id").jsonPrimitive.content }?.toSet()
+            ?: emptySet()
+
     /** `/items/<n>/<field…>`, read from the published copy of the payload's n-th item, found by its id. */
     private fun Case.itemField(pointer: String, harness: Harness): JsonElement? {
         val parts = pointer.removePrefix("/items/").split("/")
-        val raw = raw.items.getOrElse(parts[0].toInt()) { error("$name: no item ${parts[0]} in the payload") }
-        val published = harness.items.firstOrNull { itemId(it) == itemId(raw) }
-            ?: error("$name: the item ${itemId(raw)} is not in the published list")
+        // The index is the parsed input's, so it cannot drift from the raw reader's; the id is looked up in the
+        // published list, and the byte comparison is against the raw text, which the parse never re-serialised.
+        val id = inputIds().let { ids ->
+            val item = (input["items"] as JsonArray)[parts[0].toInt()].jsonObject
+            item.getValue("id").jsonPrimitive.content.also { check(it in ids) }
+        }
+        val raw = raw.items.firstOrNull { itemId(it) == id } ?: error("$name: no raw item $id")
+        val published = harness.items.firstOrNull { itemId(it) == id }
+            ?: error("$name: the item $id is not in the published list")
         // The published copy is the payload's item byte for byte, so a field of it is the hub's field as kept.
-        assertEquals("$name: ${itemId(raw)} kept byte for byte", raw, published)
+        assertEquals("$name: $id kept byte for byte", raw, published)
         if (parts.size == 1) return JsonCodec.parseToJsonElement(published)
         return at(JsonCodec.parseToJsonElement(published).jsonObject, "/" + parts.drop(1).joinToString("/"))
     }
@@ -460,10 +494,31 @@ class TransportBindingFixtureTest {
             "interaction_unknown_kind",
         )
 
+        /** Cases of the same files another decoder owns (`compat_session`): not this replay's. */
+        private val OUT_OF_SCOPE = listOf(
+            "session_unknown_enums",
+            "session_missing_fields",
+            "session_zero_time",
+            "date_at_cutoff",
+        )
+
         /** Codes, key names, positions and indices only: never a value from the payload. */
         private val REASON = Regex(
             "refused payload: [a-z_]+(: ([a-z_.]+|line [0-9]+ column [0-9]+|byte [0-9]+|items\\[[0-9]+] [a-z_]+( [a-z_.]+)?))?",
         )
+
+        /** Page fields a patch cannot re-encode; each drives the continuity result asserted as the requests. */
+        private val CONTINUITY_POINTERS = setOf("/from_seq", "/to_seq", "/more_after", "/backlog", "/more")
+
+        /** Every expected pointer the corpus holds that this replay checks directly. */
+        private val CHECKED_POINTERS: Set<String> by lazy {
+            cases().flatMap { case ->
+                case.fields.keys.filter { pointer ->
+                    pointer == "/type" || pointer == "/has_more" || pointer == "/history" ||
+                        pointer == "/items" || pointer.startsWith("/items/")
+                }
+            }.toSet()
+        }
 
         private fun root(): File = File(
             System.getProperty("persona.repo.root") ?: error("persona.repo.root is not set"),
@@ -514,9 +569,9 @@ class TransportBindingFixtureTest {
     }
 }
 
-private fun fetchLatest(): JsonObject = buildJsonObject {
-    put("kind", "fetch_latest")
-    put("fold_work", true)
+private fun fetchAfter(afterSeq: Long): JsonObject = buildJsonObject {
+    put("kind", "fetch_after")
+    put("after_seq", afterSeq)
 }
 
 private fun Request.json(): JsonObject = buildJsonObject {

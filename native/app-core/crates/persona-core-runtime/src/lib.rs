@@ -565,11 +565,17 @@ fn payload_step(session: &mut Session, chat: &str, payload: Payload) -> Result<O
             // iOS's `ServerEvent.decode` drops a frame it cannot decode; that is not a failure of the chat.
             Err(_) => return Ok(None),
             Ok(Frame::Items(frame)) => {
-                // The frame names its own chat. The client's chat id is either `machine_id/session_id`
-                // (iOS's `SessionKey.path`) or one of the two ids alone; anything else routed the frame wrongly,
-                // so report it rather than apply another chat's items here.
+                // The frame names its own machine and session but no hub group, so the client's chat id may be
+                // `machine_id/session_id`, iOS's `group|machine_id/session_id` for a non-default group, or either
+                // bare id. Anything else routed the frame wrongly: report it rather than apply another chat's items.
                 let full = format!("{}/{}", frame.machine_id, frame.session_id);
-                if chat != full && frame.machine_id != chat && frame.session_id != chat {
+                let routed = chat == full
+                    || chat
+                        .strip_suffix(full.as_str())
+                        .is_some_and(|prefix| prefix.ends_with('|'))
+                    || frame.machine_id == chat
+                    || frame.session_id == chat;
+                if !routed {
                     return Err("payload frame is for another chat".into());
                 }
                 session.received(frame.into_batch())
