@@ -135,6 +135,18 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 #endif
             }
             .navigationSplitViewStyle(.balanced)
+            #if DEBUG
+            // The perf UI tests' cue (`FrameProbe.toggleSidebar`): the Sidebar layout's column folded or brought back as
+            // its buttons do it.
+            .onAppear {
+                guard listKey == "sidebar.list" else { return }
+                FrameProbe.sidebarToggle = { [columns = $columns] in
+                    withAnimation(Theme.Motion.layout) {
+                        columns.wrappedValue = columns.wrappedValue == .detailOnly ? SplitColumns.shown : .detailOnly
+                    }
+                }
+            }
+            #endif
             .modifier(SidebarTopFill(shown: columns != .detailOnly, color: columnColor))
             #if os(iOS)
             .modifier(SplitListMemory(columns: $columns, key: listKey, overlays: $overlays, state: columnState))

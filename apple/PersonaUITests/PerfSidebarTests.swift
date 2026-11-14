@@ -37,6 +37,20 @@ final class PerfSidebarTests: PerfTestCase {
         }
     }
 
+    /// The same, on the app's cue (`FrameProbe.toggleSidebar`): the app flips the column with its buttons' animation and
+    /// the test only waits, so the measured frames are the app's alone; `-perfCounts YES` adds the views' bodies run
+    /// meanwhile, and each frame's interval and main-thread time are in `frames.json` (`deltas_ms`, `busies_ms`).
+    @MainActor func testSidebarHideAndShowByCue() throws {
+        let app = launch(Self.args + ["-perfCounts", "YES"], ready: XCUIApplication().descendants(matching: .any)["sidebar-main"].firstMatch)
+        guard app.windows.firstMatch.frame.width > 900 else { throw XCTSkip("the iPad on its side only") }
+        measureFrames(metrics()) {
+            for _ in 0..<6 { // hide, show, three times: the column out again at the end
+                darwinPost("com.persona.perf.sidebar.toggle")
+                usleep(1_200_000)
+            }
+        }
+    }
+
     /// A finger's drag from the line beside the column out of the way, then from the screen's edge back, three times.
     /// Since #4206 pictures of the screen follow the finger and the split changes once; before, the same drag resized the
     /// column under the finger down to its least width and closed it past that (#2624's handle), and the drag back from
