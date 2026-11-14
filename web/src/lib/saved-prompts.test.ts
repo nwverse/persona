@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // The user's saved prompts (#7329): the "/" rows they make, the checks said before asking the hub, a name suggested from a
 // message, and the one list the page follows (read again on hello, on assistant_saved_prompts and when another assistant
 // becomes the current one; an assistant from before them answers 404).
@@ -64,7 +65,8 @@ vi.mock("./store", async (original) => ({
     return () => void hub.listeners.get(type)?.delete(l);
   },
 }));
-import { chooseManager, resetManagerChoice } from "./manager-choice";
+import { api, handleUnauthorized, setPairedToken, setToken } from "./api";
+import { chooseManager, resetManagerChoice, setRosterDefault } from "./manager-choice";
 import {
   deleteSavedPrompt,
   moveSavedPrompt,
@@ -85,6 +87,7 @@ const prompt = (id: string, name: string, text = `${name} text`): SavedPrompt =>
 const rows = () => hub.rows;
 
 beforeEach(() => {
+  localStorage.clear();
   hub.listeners.clear();
   hub.prompts.clear();
   hub.calls.length = 0;
@@ -217,4 +220,119 @@ describe("the list the page follows", () => {
     await settle();
     expect(hub.calls.filter((c) => c.method === "GET")).toHaveLength(gets + 1);
   });
+});
+
+
+describe("pending requests belong to their original assistant and sign-in", () => {
+  const methods = ["create", "edit", "delete", "order"] as const;
+  it.each(methods.flatMap((method) => ["switch", "switch-back", "sign-in"].map((change) => ({ method, change }))))(
+    "ignores a late $method after $change without reloading the new list",
+    async ({ method, change }) => {
+      const old = [prompt("sp1", "old-one"), prompt("sp2", "old-two")];
+      const fresh = [prompt("sp1", "fresh-one"), prompt("sp2", "fresh-two")];
+      hub.prompts.set("assistant", old);
+      hub.prompts.set("m-other", fresh);
+      startSavedPrompts();
+      await settle();
+      let finish!: (value: unknown) => void;
+      vi.mocked(api).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+      const pending = method === "create" ? saveSavedPrompt(null, { name: "old-new", text: "Old owner's text" })
+        : method === "edit" ? saveSavedPrompt("sp1", { name: "old-edited", text: "Old owner's edit" })
+        : method === "delete" ? deleteSavedPrompt("sp1") : moveSavedPrompt("sp2", -1);
+      if (change === "sign-in") {
+        hub.prompts.set("assistant", fresh);
+        setPairedToken("synthetic-replacement-token");
+      } else {
+        chooseManager("m-other");
+        if (change === "switch-back") {
+          hub.prompts.set("assistant", fresh);
+          chooseManager(null);
+        }
+      }
+      await settle();
+      // Read the replacement even on the old implementation, which did not subscribe to sign-in changes.
+      if (change === "sign-in") { emit("hello"); await settle(); }
+      expect(rows().map((r) => r.word)).toEqual(["/fresh-one", "/fresh-two"]);
+      const calls = hub.calls.length;
+      finish(method === "order" ? { prompts: [...old].reverse() } : { prompt: prompt("sp1", "old-result") });
+      await pending;
+      await settle();
+      expect(rows().map((r) => r.word)).toEqual(["/fresh-one", "/fresh-two"]);
+      expect(hub.calls).toHaveLength(calls);
+    },
+  );
+
+  it("does not reload the replacement owner after an old order refusal", async () => {
+    hub.prompts.set("assistant", [prompt("sp1", "old-one"), prompt("sp2", "old-two")]);
+    hub.prompts.set("m-other", [prompt("sp1", "fresh")]);
+    startSavedPrompts(); await settle();
+    let fail!: (reason: Error) => void;
+    vi.mocked(api).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const pending = moveSavedPrompt("sp2", -1).catch((e: Error) => e);
+    chooseManager("m-other"); await settle();
+    const calls = hub.calls.length;
+    fail(new Error("old order refused"));
+    expect((await pending as Error).message).toBe("old order refused");
+    await settle();
+    expect(hub.calls).toHaveLength(calls);
+    expect(rows().map((r) => r.word)).toEqual(["/fresh"]);
+  });
+
+  it("clears the old credential's rows and fences its pending read on same-token pairing", async () => {
+    hub.prompts.set("assistant", [prompt("sp1", "old")]);
+    startSavedPrompts(); await settle();
+    let finish!: (value: unknown) => void;
+    vi.mocked(api).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    emit("hello");
+    hub.prompts.set("assistant", [prompt("sp2", "replacement")]);
+    setPairedToken("");
+    expect(rows()).toEqual([]);
+    await settle();
+    expect(rows().map((r) => r.word)).toEqual(["/replacement"]);
+    finish({ prompts: [prompt("sp3", "late-old")] }); await settle();
+    expect(rows().map((r) => r.word)).toEqual(["/replacement"]);
+  });
+
+  it("retires a mutation when the roster replaces the default assistant", async () => {
+    startSavedPrompts(); await settle();
+    let finish!: (value: unknown) => void;
+    vi.mocked(api).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = saveSavedPrompt(null, { name: "old", text: "Old" });
+    setRosterDefault("m-replacement"); await settle();
+    const calls = hub.calls.length;
+    finish({ prompt: prompt("sp1", "old") }); await pending; await settle();
+    expect(rows()).toEqual([]);
+    expect(hub.calls).toHaveLength(calls);
+  });
+});
+
+
+it("does not let a retired assistant's real 401 sign out the current assistant", async () => {
+  setToken("synthetic-current-token");
+  hub.prompts.set("m-other", [prompt("sp9", "current")]);
+  startSavedPrompts(); await settle();
+  const real = await vi.importActual<typeof import("./api")>("./api");
+  let finish!: (response: Response) => void;
+  const fetcher = vi.fn((_url: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>((resolve) => { finish = resolve; }));
+  const unauthorized = vi.fn();
+  vi.stubGlobal("fetch", fetcher);
+  handleUnauthorized(unauthorized);
+  try {
+    vi.mocked(api).mockImplementationOnce(real.api);
+    const pending = saveSavedPrompt(null, { name: "old", text: "Old assistant" }).catch((e: Error) => e);
+    chooseManager("m-other"); await settle();
+    const calls = hub.calls.length;
+    finish(new Response(JSON.stringify({ error: "old assistant refused", code: "unauthorized" }),
+      { status: 401, headers: { "Content-Type": "application/json" } }));
+    expect((await pending as Error).message).toBe("old assistant refused");
+    expect(unauthorized).not.toHaveBeenCalled();
+    expect(rows().map((r) => r.word)).toEqual(["/current"]);
+    expect(hub.calls).toHaveLength(calls);
+    const headers = new Headers(fetcher.mock.calls[0][1]?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer synthetic-current-token");
+    expect(headers.get("X-Persona-Manager")).toBe("assistant");
+  } finally {
+    handleUnauthorized(() => {});
+    vi.unstubAllGlobals();
+  }
 });
