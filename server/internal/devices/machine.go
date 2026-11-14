@@ -84,6 +84,10 @@ type Machine struct {
 	mu   sync.Mutex
 	peer *rpc.Peer
 	info proto.NodeInfo
+	// pingPeer is the connection measureNodes' last ping went on, pingMisses how many pings in a row it left
+	// unanswered there (paths_view.go).
+	pingPeer   *rpc.Peer
+	pingMisses int
 	// online: shown online (its node answered on the current connection, or warm); connectedAt: when the node's
 	// current connection began.
 	online      bool
