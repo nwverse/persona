@@ -7,14 +7,16 @@
 
 pub mod wire;
 
-#[cfg(target_os = "android")]
+pub use persona_core::transport;
+
+#[cfg(any(target_os = "android", feature = "test-support"))]
 mod diagnostics;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", feature = "test-support"))]
 use diagnostics::{Diagnostics, scheduler_switches};
 
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", feature = "test-support"))]
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -23,7 +25,8 @@ use std::time::{Duration, Instant};
 
 use persona_core::Item;
 use persona_core::continuity::{Batch, Session, Step};
-use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, WireBatch};
+use persona_core::transport::{DecodeError, Frame, LatestPage};
+use wire::{Action, ChatEvent, ChatPatch, ChatSnapshot, Effect, ListOp, Payload, WireBatch};
 
 /// The client's side: called on the core's worker thread, so implementations must be thread-safe and quick.
 pub trait Host: Send + Sync + 'static {
@@ -39,15 +42,22 @@ enum Message {
 }
 
 #[derive(Default)]
+struct Queue {
+    pending: u64,
+    stopping: bool,
+}
+
+#[derive(Default)]
 struct Shared {
     patches: Mutex<Patches>,
-    /// Actions queued and not yet applied, for `flush`.
-    pending: Mutex<u64>,
+    /// Pending accounting, the stop flag and action sends share one lock. An action accepted before shutdown is
+    /// processed before Stop; no later action can be accepted into an abandoned queue.
+    queue: Mutex<Queue>,
     idle: Condvar,
     /// Once-lock means ordinary dispatch/drain only read a null pointer; all instrumentation is opt-in.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     diagnostics: std::sync::OnceLock<Arc<Diagnostics>>,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     worker_thread: std::sync::atomic::AtomicU64,
 }
 
@@ -66,7 +76,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct Runtime {
     sender: Sender<Message>,
     shared: Arc<Shared>,
-    worker: Option<JoinHandle<()>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    /// Registry-backed clients own shutdown explicitly; ordinary leased operations never take its JoinHandle.
+    join_on_drop: bool,
 }
 
 impl Runtime {
@@ -81,29 +93,42 @@ impl Runtime {
         Runtime {
             sender,
             shared,
-            worker: Some(worker),
+            worker: Mutex::new(Some(worker)),
+            join_on_drop: true,
         }
     }
 
     /// Queues an encoded `wire::Action`. Never blocks on the worker.
     pub fn dispatch(&self, action: &[u8]) -> bool {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         let sent = if self.shared.diagnostics.get().is_some() {
-            let mut sent = Ok(());
+            let mut sent = Err(std::sync::mpsc::SendError(Message::Stop));
             diagnostics::measure_queue(&self.shared, || {
-                *diagnostics::timed_lock(&self.shared, &self.shared.pending, false) += 1;
+                let mut queue = diagnostics::timed_lock(&self.shared, &self.shared.queue, false);
+                if queue.stopping {
+                    return;
+                }
+                queue.pending += 1;
                 diagnostics::measure_send(&self.shared, || {
                     sent = self.sender.send(Message::Action(action.to_vec()));
                 });
             });
             sent
         } else {
-            *lock(&self.shared.pending) += 1;
+            let mut queue = lock(&self.shared.queue);
+            if queue.stopping {
+                return false;
+            }
+            queue.pending += 1;
             self.sender.send(Message::Action(action.to_vec()))
         };
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", feature = "test-support")))]
         let sent = {
-            *lock(&self.shared.pending) += 1;
+            let mut queue = lock(&self.shared.queue);
+            if queue.stopping {
+                return false;
+            }
+            queue.pending += 1;
             self.sender.send(Message::Action(action.to_vec()))
         };
         if sent.is_ok() {
@@ -116,11 +141,11 @@ impl Runtime {
     /// The chat's encoded `wire::ChatPatch` since the last successful drain. Encoding and removal are committed in
     /// that order: a failed encode leaves the pending operations and wake available for the next drain.
     pub fn drain(&self, chat: &str) -> Vec<u8> {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         let mut patches = diagnostics::timed_lock(&self.shared, &self.shared.patches, true);
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", feature = "test-support")))]
         let mut patches = lock(&self.shared.patches);
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         {
             diagnostics::measure_patch_held(&self.shared, || {
                 let started = Instant::now();
@@ -140,7 +165,7 @@ impl Runtime {
                 encoded
             })
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", feature = "test-support")))]
         {
             let patch = patches.chats.get(chat).cloned().unwrap_or_default();
             let encoded = wire::encode(&patch);
@@ -155,20 +180,25 @@ impl Runtime {
     /// Waits until every queued action is applied, up to `timeout`. Zero checks once without waiting. For tests and
     /// shutdown; never on a main thread.
     pub fn flush(&self, timeout: Duration) -> bool {
-        let mut pending = lock(&self.shared.pending);
         if timeout.is_zero() {
-            return *pending == 0;
+            return self
+                .shared
+                .queue
+                .try_lock()
+                .map(|queue| queue.pending == 0)
+                .unwrap_or(false);
         }
         let deadline = Instant::now() + timeout;
-        while *pending > 0 {
+        let mut queue = lock(&self.shared.queue);
+        while queue.pending > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return false;
             }
-            pending = self
+            queue = self
                 .shared
                 .idle
-                .wait_timeout(pending, left)
+                .wait_timeout(queue, left)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
@@ -176,13 +206,13 @@ impl Runtime {
     }
 
     /// Same wait as [flush], with opt-in caller timing outside the original benchmark spans.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     pub fn flush_diagnostic(&self, timeout: Duration) -> bool {
         self.flush(timeout)
     }
     /// Cumulative opt-in timings, off the ordinary dispatch/drain path. Nanosecond values are inclusive spans, so
     /// nested queue and lock diagnostics overlap. Scheduler counters are zero when /proc cannot be read.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     pub fn diagnostics(&self) -> Vec<i64> {
         let counters = self
             .shared
@@ -193,7 +223,8 @@ impl Runtime {
         let worker = self.shared.worker_thread.load(Ordering::Relaxed);
         let (worker_voluntary, worker_involuntary) = scheduler_switches(worker);
         let (caller_voluntary, caller_involuntary) = scheduler_switches(0);
-        vec![
+        #[allow(unused_mut)]
+        let mut values = vec![
             counters.pending_lock.load(Ordering::Relaxed) as i64,
             counters.pending_switches.load(Ordering::Relaxed) as i64,
             counters.pending_lock_calls.load(Ordering::Relaxed) as i64,
@@ -218,18 +249,57 @@ impl Runtime {
             worker_involuntary as i64,
             caller_voluntary as i64,
             caller_involuntary as i64,
-        ]
+        ];
+        #[cfg(feature = "test-support")]
+        values.push(counters.pending_lock_without_proc.load(Ordering::Relaxed) as i64);
+        values
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", feature = "test-support"))]
     pub fn enable_diagnostics(&self) {
         self.shared.diagnostics.get_or_init(|| Arc::new(Diagnostics::default()));
     }
 
+    /// Requests worker shutdown and joins it outside any handle-registry lock. An ordinary operation must never call
+    /// this on its final lease: only the client's close/shutdown operation owns worker termination.
+    pub fn shutdown(&self) {
+        self.stop();
+        self.join_worker();
+    }
+
+    /// Mark that a client registry has already requested shutdown. Ordinary borrowed calls may finish their operation,
+    /// but only the close path may wait for the worker and release its host.
+    pub fn shutdown_requested(&self) -> bool {
+        lock(&self.shared.queue).stopping
+    }
+
+    fn join_worker(&self) {
+        let worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take();
+        // Drop the mutex guard before joining: the host's release callback may reenter shutdown through a weak lease.
+        if let Some(worker) = worker
+            && worker.thread().id() != std::thread::current().id()
+        {
+            let _ = worker.join();
+        }
+    }
+
+    /// Registry handles own worker shutdown, independently of any ordinary lease's destruction.
+    pub fn set_explicit_shutdown(&mut self) {
+        self.join_on_drop = false;
+    }
+
+    fn stop(&self) {
+        let mut queue = lock(&self.shared.queue);
+        if !queue.stopping {
+            queue.stopping = true;
+            let _ = self.sender.send(Message::Stop);
+        }
+    }
+
     fn done(&self, count: u64) {
-        let mut pending = lock(&self.shared.pending);
-        *pending = pending.saturating_sub(count);
-        if *pending == 0 {
+        let mut queue = lock(&self.shared.queue);
+        queue.pending = queue.pending.saturating_sub(count);
+        if queue.pending == 0 {
             self.shared.idle.notify_all();
         }
     }
@@ -237,10 +307,13 @@ impl Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        let _ = self.sender.send(Message::Stop);
-        if let Some(worker) = self.worker.take() {
-            // The host's release callback runs on the worker. A final handle released there must not join itself.
-            if worker.thread().id() != std::thread::current().id() {
+        // A direct Runtime requests stop on drop. A registry close owns stopping explicitly, so an ordinary
+        // borrowed lease only releases its Arc and never changes queue state or joins the worker.
+        if self.join_on_drop {
+            self.stop();
+            if let Some(worker) = self.worker.get_mut().unwrap_or_else(PoisonError::into_inner).take()
+                && worker.thread().id() != std::thread::current().id()
+            {
                 let _ = worker.join();
             }
         }
@@ -269,7 +342,7 @@ impl Worker {
     }
 
     fn run(mut self, receiver: Receiver<Message>) {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         self.shared
             .worker_thread
             .store(diagnostics::thread_id(), Ordering::Relaxed);
@@ -278,9 +351,9 @@ impl Worker {
                 Ok(Message::Stop) | Err(_) => return,
                 Ok(Message::Action(bytes)) => {
                     self.guarded(|worker| worker.action(&bytes));
-                    let mut pending = lock(&self.shared.pending);
-                    *pending = pending.saturating_sub(1);
-                    if *pending == 0 {
+                    let mut queue = lock(&self.shared.queue);
+                    queue.pending = queue.pending.saturating_sub(1);
+                    if queue.pending == 0 {
                         self.shared.idle.notify_all();
                     }
                 }
@@ -296,7 +369,7 @@ impl Worker {
     }
 
     fn reject(&self, reason: String) {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         if let Some(diagnostics) = self.shared.diagnostics.get() {
             let started = Instant::now();
             let encoded = wire::encode(&Effect::Rejected { reason });
@@ -310,9 +383,9 @@ impl Worker {
     }
 
     fn action(&mut self, bytes: &[u8]) {
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         let started = Instant::now();
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         if let Some(diagnostics) = self.shared.diagnostics.get() {
             diagnostics::increment(&diagnostics.counters.worker_actions);
         }
@@ -352,7 +425,7 @@ impl Worker {
             }
             Action::Chat { chat, event } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("event for a chat that is not open: {chat}"));
+                    return self.reject("event for a chat that is not open".into());
                 };
                 let step = match apply(&mut state.session, event) {
                     Ok(step) => step,
@@ -360,15 +433,26 @@ impl Worker {
                 };
                 self.after_step(&chat, step);
             }
+            Action::WirePayload { chat, payload } => {
+                let Some(state) = self.chats.get_mut(&chat) else {
+                    return self.reject("payload for a chat that is not open".into());
+                };
+                let step = match payload_step(&mut state.session, &chat, payload) {
+                    Ok(Some(step)) => step,
+                    Ok(None) => return,
+                    Err(error) => return self.reject(error),
+                };
+                self.after_step(&chat, step);
+            }
             Action::ContinueFill { chat } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("fill for a chat that is not open: {chat}"));
+                    return self.reject("fill for a chat that is not open".into());
                 };
                 let step = state.session.continue_fill();
                 self.after_step(&chat, step);
             }
         }
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", feature = "test-support"))]
         if let Some(diagnostics) = self.shared.diagnostics.get() {
             diagnostics::add(&diagnostics.counters.worker_decode_apply, started);
         }
@@ -376,7 +460,7 @@ impl Worker {
 
     fn after_step(&mut self, chat: &str, step: Step) {
         for request in step.requests {
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", feature = "test-support"))]
             if let Some(diagnostics) = self.shared.diagnostics.get() {
                 let started = Instant::now();
                 let encoded = wire::encode(&Effect::Fetch {
@@ -431,7 +515,7 @@ impl Worker {
             }
         };
         if let Some(version) = wake {
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", feature = "test-support"))]
             if let Some(diagnostics) = self.shared.diagnostics.get() {
                 let started = Instant::now();
                 self.host.changed(version);
@@ -441,6 +525,64 @@ impl Worker {
             self.host.changed(version);
         }
     }
+}
+
+/// A refused payload, reported without any of its content: a reason code, and key names or positions only
+/// (`transport::DecodeError`). The chat id is not content either, but it is not part of the decoder's errors.
+fn refused(error: DecodeError) -> String {
+    format!("refused payload: {error}")
+}
+
+/// Applies a transport payload to its chat. `Ok(None)` is a frame that is not an `items` frame or one iOS would
+/// drop, so it is not an error and changes nothing.
+fn payload_step(session: &mut Session, chat: &str, payload: Payload) -> Result<Option<Step>, String> {
+    let step = match payload {
+        Payload::Latest { body } => {
+            session.received(transport::decode_latest(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Newer { body } => {
+            session.after(transport::decode_newer(body.as_bytes()).map_err(refused)?.into_batch())
+        }
+        Payload::Reloaded { body } => {
+            let LatestPage {
+                items,
+                has_more,
+                history,
+                to_seq,
+            } = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.reload(items, history, to_seq, has_more)
+        }
+        Payload::Older { body } => {
+            let page = transport::decode_latest(body.as_bytes()).map_err(refused)?;
+            session.older(page.items, page.has_more)
+        }
+        Payload::Range { body } => {
+            let (items, more) = transport::decode_range(body.as_bytes()).map_err(refused)?.into_parts();
+            session.range(items, more)
+        }
+        Payload::Frame { body } => match transport::decode_frame(body.as_bytes()) {
+            Ok(Frame::Other) => return Ok(None),
+            // iOS's `ServerEvent.decode` drops a frame it cannot decode; that is not a failure of the chat.
+            Err(_) => return Ok(None),
+            Ok(Frame::Items(frame)) => {
+                // The frame names its own machine and session but no hub group, so the client's chat id may be
+                // `machine_id/session_id`, iOS's `group|machine_id/session_id` for a non-default group, or either
+                // bare id. Anything else routed the frame wrongly: report it rather than apply another chat's items.
+                let full = format!("{}/{}", frame.machine_id, frame.session_id);
+                let routed = chat == full
+                    || chat
+                        .strip_suffix(full.as_str())
+                        .is_some_and(|prefix| prefix.ends_with('|'))
+                    || frame.machine_id == chat
+                    || frame.session_id == chat;
+                if !routed {
+                    return Err("payload frame is for another chat".into());
+                }
+                session.received(frame.into_batch())
+            }
+        },
+    };
+    Ok(Some(step))
 }
 
 fn items_from(json: &str) -> Result<Vec<Item>, String> {
@@ -615,7 +757,7 @@ mod tests {
             fn changed(&self, _version: u64) {}
             fn run(&self, _effect: &[u8]) {}
         }
-        let runtime = Runtime::new(Arc::new(NoopHost));
+        let runtime = Arc::new(Runtime::new(Arc::new(NoopHost)));
         assert!(runtime.flush(Duration::ZERO));
         let action = wire::encode(&Action::OpenChat {
             chat: "probe".into(),
@@ -626,12 +768,18 @@ mod tests {
         }
         assert!(!runtime.flush(Duration::ZERO));
         assert!(runtime.flush(Duration::from_secs(5)));
+        // A contended pending lock must not turn a zero-duration probe into an unbounded wait.
+        let guard = lock(&runtime.shared.queue);
+        assert!(!runtime.flush(Duration::ZERO));
+        drop(guard);
+        assert!(runtime.flush(Duration::ZERO));
+        runtime.shutdown();
     }
 
     #[test]
-    fn worker_release_does_not_join_itself() {
+    fn worker_host_release_runs_on_the_worker_without_joining_itself() {
         struct ReleaseHost {
-            runtime: Arc<Mutex<Option<Runtime>>>,
+            released: std::sync::mpsc::Sender<()>,
         }
         impl Host for ReleaseHost {
             fn changed(&self, _version: u64) {}
@@ -639,18 +787,19 @@ mod tests {
         }
         impl Drop for ReleaseHost {
             fn drop(&mut self) {
-                self.runtime.lock().unwrap().take();
+                let _ = self.released.send(());
             }
         }
-        let runtime = Arc::new(Mutex::new(None));
-        *runtime.lock().unwrap() = Some(Runtime::new(Arc::new(ReleaseHost {
-            runtime: runtime.clone(),
-        })));
-        let guard = runtime.lock().unwrap();
-        guard.as_ref().unwrap().dispatch(&wire::encode(&Action::OpenChat {
+        let (released, released_rx) = std::sync::mpsc::channel();
+        let runtime = Runtime::new(Arc::new(ReleaseHost { released }));
+        assert!(runtime.dispatch(&wire::encode(&Action::OpenChat {
             chat: "release".into(),
             snapshot: ChatSnapshot::default(),
-        }));
-        assert!(guard.as_ref().unwrap().flush(Duration::from_secs(5)));
+        })));
+        assert!(runtime.flush(Duration::from_secs(5)));
+        runtime.shutdown();
+        released_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker host release must complete without joining itself");
     }
 }

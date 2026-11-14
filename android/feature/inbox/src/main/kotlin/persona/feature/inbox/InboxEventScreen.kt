@@ -27,9 +27,10 @@ import persona.core.domain.inbox.InboxTier
 import persona.core.navigation.Navigator
 
 /**
- * An inbox event's page (inbox phase 1): the source-specific meta and "View original", the current state, the suggestion,
- * ✦ Summary, Recap, then the Handling chain (its three newest entries, all once expanded) and Related. Only items with
- * event fields open here ([inboxRowPage]). Record lookup and its loading / missing / failed states belong to the history package.
+ * An inbox item's detail: source-specific meta and "View original", the current state, the suggestion, ✦ Summary, Recap,
+ * then the Handling chain (its three newest entries, all once expanded) and Related. Items with event fields, and legacy
+ * chat/mail items whose originals must stay unmounted until an explicit source action, open here ([inboxRowPage]). Record
+ * lookup and its loading / missing / failed states belong to the history package.
  */
 @Composable
 fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, navigator: Navigator) {
@@ -138,15 +139,13 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             }
         }
         val suggestion = record.event.suggestion
-        if (suggestion == null || record.item.isDone) {
-            if (nowText != null) item("event-state") {
-                EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
-                    key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), stateActions)
-            } else if (oldMark != null) item("event-state") {
-                EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), stateActions)
-            } else item("event-state") {
-                EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), stateActions)
-            }
+        if (nowText != null) item("event-state") {
+            EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
+                key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), stateActions)
+        } else if (oldMark != null && oldMark !is EventMark.Suggests) item("event-state") {
+            EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), stateActions)
+        } else item("event-state") {
+            EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), stateActions)
         }
         record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
             item("event-summary") {

@@ -6,6 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
+import { webVideo } from "./video";
 
 type FakeRFB = EventTarget & { canvas: HTMLCanvasElement };
 const rfbs = vi.hoisted(() => [] as FakeRFB[]);
@@ -54,8 +55,13 @@ const connect = async () => {
 };
 const button = () => host.querySelector<HTMLButtonElement>('[data-testid="screen-video"]');
 const rows = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+const menuAppears = () => vi.waitFor(async () => {
+  await act(async () => {});
+  expect(button()).not.toBeNull();
+}, { timeout: 3000 });
 
-// The picture menu is a chunk of its own: loaded once here, its lazy import resolves within a flush however busy the run.
+// Preload the chunk; each mounted page still commits its own import callback.
+// Positive cases therefore wait for the actual button rather than another fixed flush.
 beforeAll(async () => {
   await import("./ScreenMenu");
 });
@@ -63,12 +69,14 @@ beforeAll(async () => {
 beforeEach(() => {
   rfbs.length = 0;
   status.video = { version: 1, codecs: ["hevc", "h264"] };
+  webVideo.plays = true; // the switcher as it will be once the browser plays video (not yet: see the last test)
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
 });
 
 afterEach(() => {
+  webVideo.plays = false;
   act(() => root.unmount());
   host.remove();
   localStorage.clear();
@@ -79,6 +87,7 @@ describe("the picture switcher when the Mac advertises video", () => {
   it("offers Video / VNC, adds Quality for video, and keeps the choice per Mac", async () => {
     await open();
     await connect();
+    await menuAppears();
     expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_vnc") }));
 
     act(() => button()!.click());
@@ -110,6 +119,7 @@ describe("the picture switcher when the Mac advertises video", () => {
     localStorage.setItem("persona.screen.picture.macbook", "video");
     await open();
     await connect();
+    await menuAppears();
     expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_video") }));
     act(() => button()!.click());
     expect(rows(), "Video, VNC, and the three quality biases").toHaveLength(5);
@@ -135,5 +145,12 @@ describe("the picture switcher otherwise", () => {
     await open(true);
     await connect();
     expect(button()).toBeNull();
+  });
+
+  it("is not offered while this browser can't play video, even for a Mac that advertises it", async () => {
+    webVideo.plays = false; // as shipped until the web's decoder lands
+    await open();
+    await connect();
+    expect(button(), "the web keeps RFB and shows no Video it can't play").toBeNull();
   });
 });

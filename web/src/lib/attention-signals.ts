@@ -8,6 +8,7 @@ import { useCounts, useAgentSessions } from "./sessions";
 import { getState, useStore, onHello, send, appSocketReady, connect, disconnect, DESKTOP_UNREGISTER_FEATURE } from "./store";
 import { answeredTags, attentionSoundEnabled, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
 import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, systemNotifyActive, onSystemNotifyChange, wants, managerMuted } from "./notify";
+import { webPushFlag } from "./web-push-flag";
 import { defaultManager } from "./manager-choice";
 import { failedTagsOver, listenForNotificationClicks } from "./notification-answer";
 import { isMuted } from "./session-actions";
@@ -246,7 +247,9 @@ export function useAttentionSignals(label: string, pane: { mid: string; sid: str
     if (!desktop) return;
     const reconcile = () => {
       if (!appSocketReady()) return;
-      if (desktop.desktopPresence().active && systemNotifyActive()) {
+      // A newer web app can run in an older desktop: missing additive capabilities retain the browser behavior.
+      const active = desktop.desktopPresence?.().active ?? true;
+      if (active && systemNotifyActive()) {
         send({ type: "register_desktop", device_name: desktop.deviceName });
         return;
       }
@@ -256,14 +259,14 @@ export function useAttentionSignals(label: string, pane: { mid: string; sid: str
     const offHello = onHello(reconcile);
     // Recovery must also work after an old hub's socket-close withdrawal: there is no new hello without reconnecting.
     const restore = () => {
-      if (desktop.desktopPresence().active && systemNotifyActive()) connect();
+      if ((desktop.desktopPresence?.().active ?? true) && systemNotifyActive()) connect();
       reconcile();
     };
-    const offPresence = desktop.onPresenceChange(restore);
+    const offPresence = desktop.onPresenceChange?.(restore) ?? (() => {});
     const offNotifications = onSystemNotifyChange(restore);
-    const offNotification = desktop.onOpenNotification((route) => {
+    const offNotification = desktop.onOpenNotification?.((route: string) => {
       if (route.startsWith("/") && !route.startsWith("//") && !route.includes("\\")) navigate(stripBase(route));
-    });
+    }) ?? (() => {});
     return () => { offHello(); offPresence(); offNotifications(); offNotification(); };
   }, []);
 
@@ -296,6 +299,8 @@ export function useAttentionSignals(label: string, pane: { mid: string; sid: str
   const interactions = useStore((s) => s.interactions);
   useEffect(() => {
     if (loaded) loadNotifyPrefs().catch(() => {}); // the cached copy stays when the hub can't say
+    // Web Push on in this browser (#7459): its subscription is still the hub's, in this page's language
+    if (loaded && webPushFlag()) void import("./web-push").then((m) => m.syncWebPush());
   }, [loaded]);
   const key = pane ? agentKey({ machine_id: pane.mid, session_id: pane.sid }) : undefined;
   // read when an event fires, not when the effect ran
@@ -337,6 +342,11 @@ export function useAttentionSignals(label: string, pane: { mid: string; sid: str
       closeNotification(BATCH_TAG);
     }
     for (const tag of settled) if (tag.endsWith("#needs")) announced.current.delete(tag.slice(0, -"#needs".length));
+    // what was pushed while every page was closed (#7459) goes too once its event is over, as the page's own do
+    if (webPushFlag()) {
+      const pending = new Set(interactions.map((ix) => ix.id));
+      void import("./web-push").then((m) => m.settlePushed(next, pending));
+    }
     prev.current = next;
     turns.current = trackTurns(turns.current, sessions, now);
     const prefs = notifyPrefs();

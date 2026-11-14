@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## A read that only handles the expected failure loads forever (2026-11-14, workflow board)
+
+The board's switch started as "not answered yet" (`enabled: null`) and its read handled only 404; a 500 left it null,
+so `/workspace-board` and Settings showed their loaders until the next reconnect. Any state that a page draws as
+"loading" needs an exit on every failure: keep the reason next to it and draw it with Retry. The same page also read
+every 503 as "this hub has no board, update it", while the manager answers 503 `assistant_offline` while it restarts:
+tell an unsupported hub from a passing failure by the error's `code` (`not_supported`), not by its status, and offer
+Retry only for what a retry can fix. A message about the hub's version belongs on its own, without the controls of a
+page that cannot work there. The switch's module is on the first screen and its pages are lazy: exporting its read for
+their Retry renamed the first screen's imports (ja +120 B), while handing `retry` out through the hook they already
+import, and keeping the 404 as the stored failure rather than a flag of its own, kept it within a few dozen bytes of main.
+
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
 The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.
@@ -121,9 +133,21 @@ and each merge moved what it compresses against. For the same reason a lazy spli
 alone: the sections' view is about 1.5 KB minified and compressed on its own, and moving it to its own chunk took 407 B
 off. Measure the branch and `main` at the same commit, after the last merge, and write that pair beside
 `FIRST_SCREEN_BUDGET`; never carry a delta over from an earlier base, and never estimate a split from a module's own
-size. A build under its budget prints no numbers: build a scratch checkout with the constant set to 1 B, and the error
-names every language's count. While the PR waits, `main` may raise the budget for its own changes: merge it, keep its
-note, and append yours with a new pair.
+size. Every build prints each language's count (#7418; before, a build under its budget printed none, and the way to
+see them was a scratch build with the constant at 1 B). While the PR waits, `main` may raise the budget for its own
+changes: merge it, keep its note, and append yours with a new pair.
+
+## A startup namespace ships every one of its strings in every first screen (#7418)
+
+The first-screen budget had 0 B of room after weeks of raises of 11 B, 25 B and 187 B, while the startup catalog sent
+whole namespaces for a key or two: `settings` (157 keys) for the sidebar's Avatar label, `terminal-full` (46) for one
+shortcut's name, `todos` (274) for 26 kicker and stage words, and five listed namespaces that no first-screen code named
+any more. That was about 54 KB of raw Japanese the first screen never read; ja pays the most, its strings being the
+longest in bytes. Listing those keys (`settings.avatar` in `startup-namespaces.json` takes every key that begins with
+it) took 8.3 to 8.8 KB off each language, and keeping test files and e2e scripts out of Tailwind's scan 157 B more:
+their assertions and fixtures (`not.toContain("outline-white")`, `[typed:zzz]`) had been written into every page's
+stylesheet. Before raising the budget, look at what the first screen sends and never reads: per startup namespace, the
+keys the built first-screen chunks name against all of its keys, and the CSS rules only words in tests produce.
 
 ## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
 
@@ -1202,3 +1226,10 @@ px, while `offsetHeight` and the computed height say 44. Reduced motion only sho
 frame is still drawn. Wait for the panel's animations before measuring:
 `await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)))`
 (`web/e2e/standing-authorizations.mjs`).
+
+## Testing Web Push in Playwright needs a real profile (2026-11-14, #7459)
+
+- Chrome has no push messaging in an incognito-like context, and every `browser.newContext()` is one: `pushManager.subscribe` fails with "AbortError: Registration failed - permission denied" whatever permissions are granted, headless or not. `chromium.launchPersistentContext(<temp dir>)` gives a real profile, where headless Chrome subscribes at FCM and receives pushes; drop `--disable-background-networking` from Playwright's default switches (`ignoreDefaultArgs`), which push needs.
+- A push can be handed to the service worker without a push service: DevTools' `ServiceWorker.deliverPushMessage` with the registration id from `ServiceWorker.workerRegistrationUpdated` (`web/e2e/web-push.mjs`).
+- FCM now and then answers 410 for a subscription a fresh headless profile made moments before; subscribing again works. A live check retries once that way instead of failing.
+- Vite's dev server registers no service worker (`lib/pwa.ts`): anything that depends on it is checked against the built app under `vite preview`, which keeps the dev server's `/api` proxy.
