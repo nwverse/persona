@@ -1,4 +1,6 @@
-import { Theme } from '@kit.ArkUI';
+import { Theme, SymbolGlyphModifier } from '@kit.ArkUI';
+import { ComposerOverlayWorkspace, ComposerOverlaySession } from '../models/ComposerOverlayWorkspace';
+import { composerPopupLayout, ComposerPopupLayout } from '../core/ComposerPopupLayout';
 import { util } from '@kit.ArkTS';
 import { FoldSplitContainer, HoverModeStatus, FrameCallback, LengthMetrics } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -22,7 +24,7 @@ import { ChatAttachments, ChatAttachment } from '../models/ChatAttachments';
 import { AttachmentStrip } from './AttachmentStrip';
 import { common } from '@kit.AbilityKit';
 import { previewAttachment } from '../platform/NativePreview';
-import { mergeConversationTimeline, TimelineMessage, TimelineCard } from '../core/ConversationTimeline';
+import { mergeConversationTimeline, reconcileTimelineRows, TimelineMessage, TimelineCard } from '../core/ConversationTimeline';
 import { ClientModel } from '../models/ClientModel';
 import { ChatMessage, Decision, ResourceRow, Wire } from '../models/Wire';
 import { Tokens } from '../design/Tokens';
@@ -40,6 +42,24 @@ class ConversationFrame extends FrameCallback {
   private action: () => void;
   constructor(action: () => void) { super(); this.action = action; }
   onFrame(_time: number): void { this.action(); }
+}
+
+class ComposerChoice implements AttributeModifier<ListItemAttribute> {
+  readonly session: ComposerOverlaySession; readonly key: string; readonly title: ResourceStr;
+  readonly symbol: Resource | undefined; readonly action: (() => void) | undefined;
+  constructor(session: ComposerOverlaySession, key: string, title: ResourceStr, symbol?: Resource, action?: () => void) {
+    this.session = session; this.key = key; this.title = title; this.symbol = symbol; this.action = action;
+  }
+  applyNormalAttribute(node: ListItemAttribute): void {
+    node.accessibilityGroup(true);
+    if (typeof this.title === 'string') node.accessibilityText(this.title);
+    else node.accessibilityText(this.title);
+  }
+}
+class ComposerActionIntent {
+  readonly owner: string; readonly preserveInput: boolean; readonly previous: number;
+  request: number = -1;
+  constructor(owner: string, preserveInput: boolean, previous: number) { this.owner = owner; this.preserveInput = preserveInput; this.previous = previous; }
 }
 
 @ComponentV2
@@ -188,12 +208,21 @@ export struct Conversation {
   private questionNodeId: string = 'chat.question.' + util.generateRandomUUID();
   private questionLayoutReady: boolean = false;
   private presentedQuestion: QuestionSheet | undefined;
+  @Local chooser: ComposerOverlayWorkspace = new ComposerOverlayWorkspace();
+  @Local chooserItems: ComposerChoice[] = [];
+  @Local chooserHeights: number[] = [];
+  private actionIntent: ComposerActionIntent | undefined;
+  @Local editorLeft: number = 0;
+  @Local editorTop: number = 0;
+  @Local editorWidth: number = 0;
+  @Local editorHeight: number = 0;
+  @Local contentTop: number = 0;
+  private editorAnchorId: string = 'chat.editor.' + util.generateRandomUUID();
   @Local attachmentSheet: boolean = false;
   @Local contextKind: string = '';
   @Local attachmentInset: number = 0;
   private attachmentNodeId: string = 'chat.attachment.' + util.generateRandomUUID();
   private attachmentLayoutReady: boolean = false;
-  @Local attachmentHeights: number[] = [Tokens.input, Tokens.input, Tokens.input, Tokens.input, Tokens.input];
   private expandedComposer(): boolean { return this.fieldFocused || !!this.model.draft || this.attachments.attachments.length > 0 || this.environment.fontScale >= 1.5 || this.composerWidth < Tokens.compactPane || (this.composerColumns() - this.leftColumns() - this.sendColumns()) * this.composerWidth / this.composerColumns() < Tokens.minimumInput; }
   private verticalActions(): boolean { return this.environment.fontScale >= 1.5 || this.composerWidth < Tokens.composerNarrowActions; }
   private composerColumns(): number { return 12; }
@@ -209,10 +238,6 @@ export struct Conversation {
     if (Math.abs(inset - this.attachmentInset) > 0.1) this.attachmentInset = inset;
   }
   @Monitor('environment.safeBottomPx') safeBottomChanged(): void { this.measureAttachment(); this.measureQuestion(); }
-  private attachmentHeight(): number {
-    const context = this.getUIContext();
-    return context.px2vp(this.attachmentHeights.reduce((sum: number, value: number) => sum + Math.round(context.vp2px(value)), 0) + 4 * Math.round(context.vp2px(Tokens.divider)));
-  }
   private async selectContext(row: ResourceRow): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), target = this.model.target();
     if (this.sending || !this.attachmentSheet || !this.active) return;
@@ -221,30 +246,138 @@ export struct Conversation {
       if (await this.model.addDraftContext(row, target, generation, scope) && this.active && this.model.owns(generation, scope) && this.model.target() === target) this.attachmentSheet = false;
     } finally { this.sending = false; }
   }
-  @Builder attachmentChoice(kind: string, title: string, index: number) {
-    ListItem() {
-      Row({ space: Tokens.inset }) {
-        SymbolGlyph(kind === 'photos' ? Symbols.apps : kind === 'files' || kind === 'knowledge' ? Symbols.document : kind === 'todo' ? Symbols.calendar : Symbols.inbox).fontSize(Tokens.symbolFont).fontColor([Colors.link])
-        Text(title).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
-      }.constraintSize({ minHeight: Tokens.input }).padding({ left: Tokens.page, right: Tokens.page }).width('100%')
-        .onAreaChange((_old: Area, area: Area) => { const height = Number(area.height); if (Math.abs(height - this.attachmentHeights[index]) > 0.1) { const next = this.attachmentHeights.slice(); next[index] = height; this.attachmentHeights = next; } })
-    }.enabled(kind === 'photos' || kind === 'files' || this.model.connected).onClick(() => {
-      if (kind === 'photos' || kind === 'files') { this.attachmentSheet = false; if (kind === 'photos') this.attachments.choosePhotos(); else this.attachments.chooseFiles(); }
-      else this.contextKind = kind;
-    }).id('chat.attachment.choice.' + kind)
+  private chooserLayout(): ComposerPopupLayout {
+    const heights = this.chooserHeights.length ? this.chooserHeights : [Tokens.input], context = this.getUIContext();
+    const naturalHeight = context.px2vp(heights.reduce((sum: number, value: number) => sum + Math.round(context.vp2px(value)), 0) + Math.max(0, heights.length - 1) * Math.round(context.vp2px(Tokens.divider)));
+    return composerPopupLayout({ left: this.editorLeft, top: this.editorTop, width: this.editorWidth, height: this.editorHeight },
+      { width: this.getUIContext().px2vp(this.environment.windowWidthPx) || this.availableWidth,
+        top: this.getUIContext().px2vp(this.environment.safeTopPx), bottom: this.contentTop + this.availableHeight },
+      Math.max(...heights), naturalHeight, this.environment.fontScale,
+      { ordinaryWidth: Tokens.popupWidth, maximumWidth: Tokens.readingMax, margin: Tokens.page });
+  }
+  private preserveInput(event: ClickEvent): boolean { return this.fieldFocused && event.source === SourceType.TouchScreen; }
+  private assignChooser(session: ComposerOverlaySession): void {
+    this.chooserItems = session.kind === 'attachments' ? [
+      new ComposerChoice(session, 'photos', tr('photos'), Symbols.apps),
+      new ComposerChoice(session, 'files', tr('files'), Symbols.document),
+      new ComposerChoice(session, 'knowledge', tr('knowledge'), Symbols.document),
+      new ComposerChoice(session, 'todo', tr('todos'), Symbols.calendar),
+      new ComposerChoice(session, 'inbox', tr('inbox'), Symbols.inbox)
+    ] : this.actionItems.map((item: SheetInfo, index: number) => new ComposerChoice(session, String(index), item.title, undefined, item.action));
+    this.chooserHeights = this.chooserItems.map(() => Tokens.input * Math.max(1, this.environment.fontScale));
+  }
+  private openAttachmentChooser(event: ClickEvent): void {
+    if (!this.composerAvailable() || this.sending || this.attachments.busy || this.model.draftLoading) return;
+    this.actionIntent = undefined;
+    this.contextKind = ''; this.attachmentSheet = false;
+    const session = this.chooser.open(this.model, this.active, 'attachments', 0, this.preserveInput(event));
+    if (session) this.assignChooser(session);
+  }
+  private composerOwnerKey(): string { return JSON.stringify([this.model.scope(), this.model.connectionGeneration(), this.model.target()]); }
+  private composerAvailable(): boolean { return this.active && !this.model.decision && this.model.canCompose(); }
+  private openComposerActions(event: ClickEvent): void {
+    if (!this.composerAvailable() || !this.showContextMenu) return;
+    this.actionIntent = new ComposerActionIntent(this.composerOwnerKey(), this.preserveInput(event), this.actionsRequest);
+    this.onShowActions();
+  }
+  private openFallbackActions(): void { if (!this.active || !this.showContextMenu || this.composerAvailable()) return; this.actionIntent = undefined; this.chooser.retire(); this.onShowActions(); }
+  @Monitor('active', 'model.profile', 'model.selected', 'model.selected.raw', 'model.sessions', 'model.connected', 'model.decision', 'actionsVisible', 'actionsRequest', 'showContextMenu')
+  chooserContextChanged(): void { this.syncChooser(); }
+  private syncChooser(): void {
+    if (!this.composerAvailable()) {
+      const previous = this.chooser.session, intent = this.actionIntent; this.actionIntent = undefined; this.chooser.retire();
+      this.attachmentSheet = false; this.contextKind = '';
+      if (previous?.kind === 'actions') this.onHideActions(previous.request);
+      if (intent && intent.owner === this.composerOwnerKey() && this.actionsVisible) this.onHideActions(this.actionsRequest);
+      return;
+    }
+    if (!this.showContextMenu) {
+      const previous = this.chooser.session, intent = this.actionIntent; this.actionIntent = undefined;
+      if (previous?.kind === 'actions') { this.chooser.retire(); this.onHideActions(previous.request); }
+      if (intent && intent.owner === this.composerOwnerKey() && this.actionsVisible) this.onHideActions(this.actionsRequest);
+    }
+    this.chooser.sync(this.model, true);
+    const current = this.chooser.session;
+    if (current?.kind === 'actions' && (!this.actionsVisible || current.request !== this.actionsRequest)) this.closeChooser(current);
+    const intent = this.actionIntent;
+    if (!intent) return;
+    if (!this.actionsVisible || intent.owner !== this.composerOwnerKey()) { this.actionIntent = undefined; return; }
+    if (intent.request < 0) { if (intent.previous === this.actionsRequest) return; intent.request = this.actionsRequest; }
+    if (intent.request !== this.actionsRequest) { this.actionIntent = undefined; return; }
+    if (this.chooser.shown && this.chooser.session) { this.closeChooser(this.chooser.session); }
+    if (this.chooser.presenting) return;
+    const session = this.chooser.open(this.model, true, 'actions', intent.request, intent.preserveInput);
+    if (session) { this.assignChooser(session); this.actionIntent = undefined; }
+  }
+  private closeChooser(session: ComposerOverlaySession): void {
+    if (this.chooser.close(session) && session.kind === 'actions') this.onHideActions(session.request);
+  }
+  private finishChooser(session: ComposerOverlaySession): void {
+    if (this.chooser.finish(session) && session.kind === 'actions') this.onHideActions(session.request);
+    this.syncChooser();
+  }
+  private chooseItem(choice: ComposerChoice): void {
+    const session = choice.session;
+    if (!this.composerAvailable()) { this.chooser.retire(); return; }
+    this.chooser.sync(this.model, true);
+    if (session.owner !== this.model || !this.chooser.current(session) || session.kind === 'actions' && (!this.actionsVisible || session.request !== this.actionsRequest)) return;
+    if (session.kind === 'actions') { this.closeChooser(session); choice.action?.(); return; }
+    const local = choice.key === 'photos' || choice.key === 'files';
+    if (!local && !this.chooser.current(session, true)) return;
+    this.closeChooser(session);
+    if (choice.key === 'photos') this.attachments.choosePhotos();
+    else if (choice.key === 'files') this.attachments.chooseFiles();
+    else { this.contextKind = choice.key; this.attachmentSheet = true; }
+  }
+  private itemEnabled(choice: ComposerChoice): boolean {
+    return this.composerAvailable() && choice.session.owner === this.model && this.chooser.current(choice.session, choice.session.kind === 'attachments' && !['photos', 'files'].includes(choice.key));
+  }
+  private nativeChooser(kind: string): boolean { const session = this.chooser.session; return this.chooser.shown && session?.kind === kind && !session.preserveInput; }
+  private recordChooserHeight(choice: ComposerChoice, index: number, height: number): void {
+    if (!this.chooser.current(choice.session) || this.chooserItems[index] !== choice || !Number.isFinite(height) || height <= 0 || Math.abs(height - this.chooserHeights[index]) <= 0.5) return;
+    const next = this.chooserHeights.slice(); next[index] = height; this.chooserHeights = next;
+  }
+  private attachmentMenuOptions(): MenuOptions {
+    const session = this.chooser.session;
+    return { onWillAppear: () => { if (session) this.chooser.begin(session); }, onDidDisappear: () => { if (session) this.finishChooser(session); } };
+  }
+  private chooserPopupOptions(): CustomPopupOptions {
+    const session = this.chooser.session, layout = this.chooserLayout();
+    return { builder: (): void => this.chooserContent(), focusable: false, mask: true, autoCancel: true,
+      placement: layout.side === 'left' ? Placement.LeftTop : layout.side === 'right' ? Placement.RightTop : layout.side === 'below' ? Placement.BottomLeft : Placement.TopLeft,
+      keyboardAvoidMode: KeyboardAvoidMode.DEFAULT, avoidTarget: AvoidanceMode.AVOID_AROUND_TARGET,
+      onStateChange: (event: PopupStateChangeParam): void => { if (!session) return; if (event.isVisible) this.chooser.begin(session); else this.finishChooser(session); },
+      onWillDismiss: (action: DismissPopupAction): void => { if (session) this.closeChooser(session); action.dismiss(); } };
+  }
+  @Builder chooserContent() {
+    List() {
+      ForEach(this.chooserItems, (choice: ComposerChoice, index: number) => {
+        ListItem() {
+          Row({ space: Tokens.inset }) {
+            if (choice.symbol) SymbolGlyph(choice.symbol).fontSize(Tokens.symbolFont).fontColor([Colors.link]).width(Tokens.symbol)
+            Text(choice.title).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+          }.constraintSize({ minHeight: Tokens.input }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap }).width('100%')
+            .onAreaChange((_old: Area, area: Area) => this.recordChooserHeight(choice, index, Number(area.height)))
+        }.enabled(this.itemEnabled(choice)).onClick(() => this.chooseItem(choice)).attributeModifier(choice)
+          .id('chat.' + (choice.session.kind === 'attachments' ? 'attachment.choice.' : 'action.choice.') + choice.key)
+      }, (choice: ComposerChoice) => choice.session.id + ':' + choice.key)
+    }.width(this.chooserLayout().width).height(this.chooserLayout().maximumHeight).scrollBar(BarState.Auto)
+      .divider({ strokeWidth: Tokens.divider, startMargin: Tokens.page, endMargin: Tokens.page, color: Colors.divider })
+  }
+  @Builder attachmentNativeMenu() {
+    Menu() {
+      ForEach(this.chooserItems, (choice: ComposerChoice) => {
+        MenuItem({ content: choice.title, symbolStartIcon: choice.symbol ? new SymbolGlyphModifier(choice.symbol) : undefined })
+          .constraintSize({ minHeight: Tokens.touch }).enabled(this.itemEnabled(choice)).onClick(() => this.chooseItem(choice))
+          .id('chat.' + (choice.session.kind === 'attachments' ? 'attachment.choice.' : 'action.choice.') + choice.key)
+      }, (choice: ComposerChoice) => choice.session.id + ':' + choice.key)
+    }
   }
   @Builder attachmentContent() {
     Column() {
       if (this.contextKind) ContextPicker({ model: this.model, kind: this.contextKind, active: this.active && this.attachmentSheet,
         onSelect: (row: ResourceRow) => this.selectContext(row), onRetired: () => this.attachmentSheet = false })
-      else List() {
-        this.attachmentChoice('photos', tr('photos'), 0)
-        this.attachmentChoice('files', tr('files'), 1)
-        this.attachmentChoice('knowledge', tr('knowledge'), 2)
-        this.attachmentChoice('todo', tr('todos'), 3)
-        this.attachmentChoice('inbox', tr('inbox'), 4)
-      }.width('100%').height(this.attachmentHeight()).scrollBar(BarState.Auto).divider({ strokeWidth: Tokens.divider, startMargin: Tokens.input, endMargin: Tokens.card, color: Colors.divider })
-    }.width('100%').height(this.contextKind ? '100%' : undefined).padding({ bottom: this.attachmentInset + Tokens.footer }).id(this.attachmentNodeId)
+    }.width('100%').height('100%').padding({ bottom: this.attachmentInset + Tokens.footer }).id(this.attachmentNodeId)
       .onAreaChange(() => this.measureAttachment())
   }
 
@@ -310,12 +443,6 @@ export struct Conversation {
     const host = this.getUIContext().getHostContext(), key = this.attachmentKey; if (!host) return;
     try { await previewAttachment(host as common.UIAbilityContext, item.localPath, item.name, item.mime); }
     catch (_) { if (key === this.attachmentKey) this.attachments.errorKey = 'preview_unavailable'; }
-  }
-  @Builder attachmentMenu() {
-    Menu() {
-      MenuItem({ content: tr('photos') }).onClick(() => this.attachments.choosePhotos())
-      MenuItem({ content: tr('files') }).onClick(() => this.attachments.chooseFiles())
-    }
   }
   private syncRevision(): void {
     if (!this.active || !this.model.connected || !this.model.isChat() || this.model.demo) {
@@ -426,6 +553,9 @@ export struct Conversation {
     try { await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, message.text)); }
     catch (_) { if (this.model.owns(generation, scope) && this.model.target() === target) this.model.error = 'failed'; }
   }
+  private messageMenuBuilder(entry: RepeatItem<ConversationLine>): CustomBuilder {
+    return (): void => { const message = entry.item.message; if (message) this.messageMenu(message); };
+  }
   @Builder messageMenu(message: ChatMessage) {
     Menu() {
       if (message.text) MenuItem({ content: tr('copy') }).onClick(() => this.copyMessage(message))
@@ -450,17 +580,17 @@ export struct Conversation {
       .map((item: Record<string, Object>): TimelineCard => { const id = Wire.text(item, 'id'), stamp = Date.parse(Wire.text(item, 'at')); cards.set(id, item); return { id: id, at: Number.isFinite(stamp) ? stamp : 0 }; });
     const lines = mergeConversationTimeline(inputs, activities).map((entry) => new ConversationLine(entry.id, messages.get(entry.messageId), cards.get(entry.cardId)));
     this.model.personaQuestions.forEach((request: Decision) => lines.push(new ConversationLine('persona-question:' + request.id, undefined, undefined, request)));
-    this.lines = lines;
+    reconcileTimelineRows(this.lines, lines);
   }
   aboutToAppear(): void {
-    this.questions.sync(this.model, this.active);
+    this.questions.sync(this.model, this.active); this.chooser.sync(this.model, this.active);
     this.syncReading(); this.syncFeed(); this.syncAttachments(); this.syncTimeline(); this.syncRevision(); this.primaryStopChanged();
     const target = this.model.target(); this.model.loadView('work:' + target).then((value: string) => {
       if (target === this.model.target() && value) { try { this.expanded = Wire.strings(Wire.parse(value), 'expanded'); } catch (_) {} }
     });
   }
   aboutToDisappear(): void {
-    this.questions.retire();
+    this.questions.retire(); this.actionIntent = undefined; this.chooser.retire();
     this.onPrimaryStop(false); this.saveReading(); this.readingEpoch++;
     if (this.feedTimer !== -1) clearTimeout(this.feedTimer); this.feedTimer = -1; this.feed.close(); this.feedKey = '';
     this.attachmentKey = ''; this.attachments.close(); this.invalidateRevisionMenuContext(); this.revisionContextKey = '';
@@ -491,40 +621,40 @@ export struct Conversation {
     if (!this.active || this.sending || this.model.demo || image.target !== this.model.target() || this.attachmentKey !== image.target) return;
     void attachments.editReceivedImage(image.data, image.mime, image.target, image.scope, image.generation, image.hub);
   }
-  @Builder message(message: ChatMessage) {
+  @Builder message(entry: RepeatItem<ConversationLine>) {
     Column({ space: Tokens.gap }) {
-      if (message.work) {
-        Button(tr('work_summary'), { type: ButtonType.Normal }).onClick(() => { this.toggle(message.id); if (this.expanded.includes(message.id)) this.model.expandWork(message); })
+      if (entry.item.message!.work) {
+        Button(tr('work_summary'), { type: ButtonType.Normal }).onClick(() => { this.toggle(entry.item.message!.id); if (this.expanded.includes(entry.item.message!.id)) this.model.expandWork(entry.item.message!); })
           .fontColor($r('sys.color.font_secondary')).backgroundColor(Color.Transparent).height(Tokens.touch)
-        if (this.expanded.includes(message.id)) {
-          Text(message.work).fontFamily('monospace').fontSize(Tokens.meta).copyOption(CopyOptions.LocalDevice)
+        if (this.expanded.includes(entry.item.message!.id)) {
+          Text(entry.item.message!.work).fontFamily('monospace').fontSize(Tokens.meta).copyOption(CopyOptions.LocalDevice)
         }
       }
-      if (message.localImageCount > 0) Text(tr('photos') + ' · ' + message.localImageCount).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-      if (message.source) Text(message.source).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
-      if (message.ownerTarget === this.model.target()) ForEach(message.imagePaths, (path: string, index: number) => {
+      if (entry.item.message!.localImageCount > 0) Text(tr('photos') + ' · ' + entry.item.message!.localImageCount).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+      if (entry.item.message!.source) Text(entry.item.message!.source).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
+      if (entry.item.message!.ownerTarget === this.model.target()) ForEach(entry.item.message!.imagePaths, (path: string, index: number) => {
         TranscriptImage({ model: this.model, remotePath: path, active: this.active,
-          sourceKey: this.imageKey(message, 'path', path, index), galleryEntries: this.imageGallery,
-          galleryIndex: this.imageIndex(message, 'path', path, index), onEdit: (image: LoadedMessageImage) => this.editReceivedImage(image) })
-      }, (path: string, index: number) => this.imageKey(message, 'path', path, index))
-      ForEach(message.filePaths, (path: string) => { Button(path.split('/').pop() || path, { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.onOpenFile(path)) }, (path: string) => path)
-      if (message.imageId && message.ownerTarget === this.model.target()) TranscriptImage({ model: this.model, itemId: message.imageId, active: this.active,
-        sourceKey: this.imageKey(message, 'item', message.imageId), galleryEntries: this.imageGallery,
-        galleryIndex: this.imageIndex(message, 'item', message.imageId), onEdit: (image: LoadedMessageImage) => this.editReceivedImage(image) })
-      if (message.text) {
-        WithTheme({ colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT, theme: nativeMessageTheme(this.look, this.model.style, message.role === 'user', this.environment.dark) }) {
-        MessageSurface({ own: message.role === 'user', maximum: message.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
-          if (message.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: message, active: this.active, onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
-          else MarkdownText({ text: message.text, fitContent: message.role === 'user', onLink: (address: string) => this.onLink(address) })
+          sourceKey: this.imageKey(entry.item.message!, 'path', path, index), galleryEntries: this.imageGallery,
+          galleryIndex: this.imageIndex(entry.item.message!, 'path', path, index), onEdit: (image: LoadedMessageImage) => this.editReceivedImage(image) })
+      }, (path: string, index: number) => this.imageKey(entry.item.message!, 'path', path, index))
+      ForEach(entry.item.message!.filePaths, (path: string) => { Button(path.split('/').pop() || path, { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.onOpenFile(path)) }, (path: string) => path)
+      if (entry.item.message!.imageId && entry.item.message!.ownerTarget === this.model.target()) TranscriptImage({ model: this.model, itemId: entry.item.message!.imageId, active: this.active,
+        sourceKey: this.imageKey(entry.item.message!, 'item', entry.item.message!.imageId), galleryEntries: this.imageGallery,
+        galleryIndex: this.imageIndex(entry.item.message!, 'item', entry.item.message!.imageId), onEdit: (image: LoadedMessageImage) => this.editReceivedImage(image) })
+      if (entry.item.message!.text) {
+        WithTheme({ colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT, theme: nativeMessageTheme(this.look, this.model.style, entry.item.message!.role === 'user', this.environment.dark) }) {
+        MessageSurface({ own: entry.item.message!.role === 'user', maximum: entry.item.message!.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
+          if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: entry.item.message!, active: this.active, onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
+          else MarkdownText({ text: entry.item.message!.text, fitContent: entry.item.message!.role === 'user', onLink: (address: string) => this.onLink(address) })
         }
         }
       }
-      if (message.deliveryState && message.deliveryState !== 'done' && !message.failed) Text(tr(message.deliveryState === 'unknown' ? 'result_unknown' : message.deliveryState)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-      if (message.failed) Text(tr('failed')).fontColor($r('app.color.persona_danger')).fontSize(Tokens.meta)
-      if (message.localOperation && this.model.canCheckLocalMessage(message.localOperation)) Button(tr('checked'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.confirmChecked(message.localOperation))
-      if (message.localOperation && this.model.canRestoreMessage(message.localOperation)) Button(tr('restore_draft'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.restoreDraft(message))
-    }.width('100%').alignItems(message.role === 'user' ? HorizontalAlign.End : HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap })
-      .bindContextMenu(this.messageMenu(message), ResponseType.LongPress)
+      if (entry.item.message!.deliveryState && entry.item.message!.deliveryState !== 'done' && !entry.item.message!.failed) Text(tr(entry.item.message!.deliveryState === 'unknown' ? 'result_unknown' : entry.item.message!.deliveryState)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+      if (entry.item.message!.failed) Text(tr('failed')).fontColor($r('app.color.persona_danger')).fontSize(Tokens.meta)
+      if (entry.item.message!.localOperation && this.model.canCheckLocalMessage(entry.item.message!.localOperation)) Button(tr('checked'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.confirmChecked(entry.item.message!.localOperation))
+      if (entry.item.message!.localOperation && this.model.canRestoreMessage(entry.item.message!.localOperation)) Button(tr('restore_draft'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).onClick(() => this.restoreDraft(entry.item.message!))
+    }.width('100%').alignItems(entry.item.message!.role === 'user' ? HorizontalAlign.End : HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap })
+      .bindContextMenu(this.messageMenuBuilder(entry), ResponseType.LongPress)
   }
   @Builder actionsMenu() {
     Menu() {
@@ -567,12 +697,12 @@ export struct Conversation {
         if (this.model.hasMoreMessages || this.feed.nextCursor) ListItem() { Button(tr('load_more')).onClick(() => { this.atEnd = false; this.model.loadOlder(); this.feed.loadMore(); }) }
         Repeat(this.lines).each((entry: RepeatItem<ConversationLine>) => {
           ListItem() {
-            if (entry.item.message) this.message(entry.item.message)
+            if (entry.item.message) this.message(entry)
             else if (entry.item.card) AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), item: entry.item.card, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
               onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
-            else if (entry.item.decision) this.questionCard(entry.item.decision)
+            else if (entry.item.decision) this.questionCard(entry)
           }.id('chat.line.' + entry.item.id)
-        }).key((line: ConversationLine) => line.id)
+        }).key((line: ConversationLine) => line.id).virtualScroll({ totalCount: this.lines.length, reusable: false })
       }.layoutWeight(1).width('100%').id('chat.transcript')
         .bindSheet(this.questions.shown, this.questionContent(), { title: { title: tr('interaction_question_reopen') }, height: SheetSize.LARGE, keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true, onWillAppear: () => this.presentedQuestion = this.questions.beginPresentation(), onAppear: () => { this.questionLayoutReady = true; this.measureQuestion(); }, onWillDismiss: (action: DismissSheetAction) => this.questions.dismiss(this.presentedQuestion, () => action.dismiss()), onDisappear: () => { this.questionLayoutReady = false; this.questions.endPresentation(this.presentedQuestion); this.presentedQuestion = undefined; } })
         .maintainVisibleContentPosition(true).onScrollIndex((start: number) => { this.firstVisibleIndex = start; this.recordReading(start); }).onDidScroll(() => this.recordReading(this.firstVisibleIndex)).onReachEnd(() => { if (this.active && !this.readingRestoring) { this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; } })
@@ -582,6 +712,7 @@ export struct Conversation {
 
   private openQuestion(request: Decision): void {
     if (!this.active) return;
+    if (this.chooser.session) this.closeChooser(this.chooser.session);
     this.attachmentSheet = false; this.contextKind = '';
     this.questions.open(this.model, this.active, request);
   }
@@ -589,13 +720,13 @@ export struct Conversation {
   private questionLink(sheet: QuestionSheet): (address: string) => void {
     const valid = this.questions.ticket(sheet); return (address: string): void => { if (valid()) this.onLink(address); };
   }
-  @Builder questionCard(request: Decision) {
-    if (['open', 'pending', 'unknown'].includes(request.status)) Column({ space: Tokens.gap }) {
-      Text(questionPrompt(request) || tr('question')).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-      Button(tr(request.status === 'open' ? 'interaction_question_reopen' : request.status === 'unknown' ? 'result_unknown' : 'pending')).attributeModifier(ButtonStyles.secondary).width('100%')
-        .enabled(this.active && this.model.canApprove() && request.status === 'open').onClick(() => this.openQuestion(request)).id('interaction.open.' + request.id)
+  @Builder questionCard(entry: RepeatItem<ConversationLine>) {
+    if (['open', 'pending', 'unknown'].includes(entry.item.decision!.status)) Column({ space: Tokens.gap }) {
+      Text(questionPrompt(entry.item.decision!) || tr('question')).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+      Button(tr(entry.item.decision!.status === 'open' ? 'interaction_question_reopen' : entry.item.decision!.status === 'unknown' ? 'result_unknown' : 'pending')).attributeModifier(ButtonStyles.secondary).width('100%')
+        .enabled(this.active && this.model.canApprove() && entry.item.decision!.status === 'open').onClick(() => this.openQuestion(entry.item.decision!)).id('interaction.open.' + entry.item.decision!.id)
     }.width('100%').padding(Tokens.page).alignItems(HorizontalAlign.Start).backgroundColor(Colors.question).borderRadius(Tokens.card)
-    else InteractionDecisionForm({ model: this.model, request: request, readOnly: true, onLink: (address: string) => this.onLink(address) })
+    else InteractionDecisionForm({ model: this.model, request: entry.item.decision!, readOnly: true, onLink: (address: string) => this.onLink(address) })
   }
   @Builder questionContent() {
     Column() {
@@ -625,15 +756,18 @@ export struct Conversation {
             .height(this.expandedComposer() ? undefined : Tokens.touch)
             .enabled(!this.sending && !this.model.draftLoading).onFocus(() => this.fieldFocused = true).onBlur(() => this.fieldFocused = false)
             .onChange((value: string) => this.model.updateDraft(value)).id('chat.input')
-        }
+        }.id(this.editorAnchorId)
+          .onAreaChange((_old: Area, area: Area) => { this.editorLeft = Number(area.globalPosition.x); this.editorTop = Number(area.globalPosition.y); this.editorWidth = Number(area.width); this.editorHeight = Number(area.height); })
+          .bindPopup(this.chooser.shown && this.chooser.session?.preserveInput === true, this.chooserPopupOptions())
         if (!this.model.demo || this.showContextMenu) GridCol({ span: this.verticalActions() ? this.composerColumns() : this.leftColumns(), order: this.expandedComposer() ? this.verticalActions() ? 2 : 1 : 0 }) {
           Row({ space: Tokens.gap }) {
             if (!this.model.demo) Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.plus).fontSize(Tokens.symbolFont).fontColor([Colors.ink]) }
               .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('attach'))
-              .enabled(!this.sending && !this.attachments.busy && !this.model.draftLoading).onClick(() => { this.contextKind = ''; this.attachmentSheet = true; }).id('chat.attach')
+              .enabled(!this.sending && !this.attachments.busy && !this.model.draftLoading).onClick((event: ClickEvent) => this.openAttachmentChooser(event)).id('chat.attach')
+              .bindMenu(this.nativeChooser('attachments'), this.attachmentNativeMenu, this.attachmentMenuOptions())
             if (this.showContextMenu) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-              .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.onShowActions())
-              .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more')
+              .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick((event: ClickEvent) => this.openComposerActions(event))
+              .bindMenu(this.nativeChooser('actions'), this.attachmentNativeMenu, this.attachmentMenuOptions()).id('chat.more')
           }.width('100%').constraintSize({ minHeight: Tokens.touch }).alignItems(VerticalAlign.Center)
         }
         if (this.expandedComposer()) GridCol({ span: this.verticalActions() ? this.composerColumns() : this.composerColumns() - this.leftColumns() - this.sendColumns(), order: 3 }) {
@@ -661,7 +795,7 @@ export struct Conversation {
           }, (request: Decision) => request.id)
         }
       if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.onShowActions())
+        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
       if (this.hasNew && !this.atEnd) Button(tr('latest')).onClick(() => { this.scroller.scrollEdge(Edge.Bottom); this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; })
       if (this.model.canCompose() && !this.model.decision) {
@@ -695,10 +829,11 @@ export struct Conversation {
           .height(Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight())))
       }
     }.width('100%').height('100%').backgroundColor(Colors.canvas).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
-      .bindSheet($$this.attachmentSheet, this.attachmentContent(), { title: { title: tr(this.contextKind === 'knowledge' ? 'knowledge' : this.contextKind === 'todo' ? 'todos' : this.contextKind === 'inbox' ? 'inbox' : 'attach') }, height: this.contextKind ? SheetSize.LARGE : SheetSize.FIT_CONTENT, preferType: this.availableWidth > Tokens.readingMax ? SheetType.CENTER : SheetType.BOTTOM, showClose: true, onAppear: () => { this.attachmentLayoutReady = true; this.measureAttachment(); }, onDisappear: () => this.attachmentLayoutReady = false })
+      .bindSheet($$this.attachmentSheet, this.attachmentContent(), { title: { title: tr(this.contextKind === 'knowledge' ? 'knowledge' : this.contextKind === 'todo' ? 'todos' : this.contextKind === 'inbox' ? 'inbox' : 'attach') }, height: SheetSize.LARGE, preferType: this.availableWidth > Tokens.readingMax ? SheetType.CENTER : SheetType.BOTTOM, showClose: true, onAppear: () => { this.attachmentLayoutReady = true; this.measureAttachment(); }, onDisappear: () => this.attachmentLayoutReady = false })
       .onAreaChange((_before: Area, area: Area): void => {
       const height = Number(area.height);
       const width = Number(area.width);
+      this.contentTop = Number(area.globalPosition.y);
       if (Number.isFinite(width) && width > 0 && Math.abs(width - this.availableWidth) > 1) this.availableWidth = width;
       if (Number.isFinite(height) && height > 0 && Math.abs(height - this.availableHeight) > 1) this.availableHeight = height;
     })

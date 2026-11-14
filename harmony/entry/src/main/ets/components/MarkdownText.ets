@@ -161,7 +161,7 @@ export struct MarkdownText {
   build() {
     Column({ space: Tokens.gap }) {
       ForEach(this.blocks, (block: MarkdownBlock) => this.blockView(block),
-        (block: MarkdownBlock, index: number) => 'block.' + String(index))
+        (block: MarkdownBlock, index: number) => 'block.' + String(index) + ':' + JSON.stringify(block))
     }.width(this.fitContent ? undefined : '100%').alignItems(HorizontalAlign.Start)
   }
 }

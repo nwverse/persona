@@ -15,7 +15,7 @@ registerHooks({
     if (url === 'native-environment:ability') return {format:'module',shortCircuit:true,source:'export const ConfigurationConstant={ColorMode:{COLOR_MODE_DARK:0,COLOR_MODE_LIGHT:1}};'};
     if (url === 'native-environment:display') return { format: 'module', shortCircuit: true, source: `
       const s = globalThis.__personaNativeEnvironment;
-      export const window = {AvoidAreaType:{TYPE_NAVIGATION_INDICATOR:3}};
+      export const window = {AvoidAreaType:{TYPE_NAVIGATION_INDICATOR:3,TYPE_SYSTEM:0}};
       export const display = { isFoldable: () => s.foldable, getCurrentFoldCreaseRegion() {
         if (s.failure) throw new Error('display unavailable'); return s.region;
       } };
@@ -56,3 +56,5 @@ test('window geometry and native navigation avoidance update together and listen
 test('native color mode follows resolved configuration without resetting for unrelated updates',()=>{
  const environment=new NativeEnvironment();environment.update({colorMode:0});assert.equal(environment.dark,true);environment.update({fontSizeScale:2});assert.equal(environment.dark,true);environment.update({colorMode:1});assert.equal(environment.dark,false);
 });
+
+test('popup geometry uses native window width and the window-relative top avoidance',()=>{const e=new NativeEnvironment(),handlers=new Map();let rect={top:140,width:1260,height:2720};const win={getWindowProperties:()=>({windowRect:rect}),getWindowAvoidArea:type=>type===0?{topRect:{height:117}}:{bottomRect:{height:84}},on:(key,fn)=>handlers.set(key,fn),off:()=>{}};e.bindWindow(win);assert.equal(e.windowWidthPx,1260);assert.equal(e.safeTopPx,117);rect={top:240,width:2584,height:1828};handlers.get('windowRectChange')({rect});assert.equal(e.windowWidthPx,2584);assert.equal(e.safeTopPx,117);e.unbindWindow();});

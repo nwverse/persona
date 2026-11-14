@@ -19,6 +19,7 @@ export class Tokens {
   static readonly lineHeight: number = 24;
   static readonly inputLines: number = 144;
   static readonly compactPane: number = 340;
+  static readonly popupWidth: number = 280;
   static readonly headerSegment: number = 192;
   static readonly minimumInput: number = 160;
   static readonly hairline: number = 1;

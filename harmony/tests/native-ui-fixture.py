@@ -264,7 +264,8 @@ def transcript(after_seq=None, control=None, before_seq=None):
              'text': 'This conversation contains synthetic plan and receipt examples.'},
         ]
 
-    items = all_items
+    paged = reading_case and optional_bool(control, 'reading_paged') is True and optional_bool(control, 'reading_prepend') is True
+    items = [item for item in all_items if item['seq'] >= 40] if paged and before_seq is None else all_items
     if after_seq is not None:
         items = [item for item in items if item['seq'] > after_seq]
     elif before_seq is not None:
@@ -278,7 +279,7 @@ def transcript(after_seq=None, control=None, before_seq=None):
         'items': items,
         'history': TRANSCRIPT_HISTORY,
         'to_seq': to_seq,
-        'backlog': False, 'has_more': False, 'more_after': False,
+        'backlog': False, 'has_more': paged and before_seq is None, 'more_after': False,
     }
     # Like the Hub span, an after cursor is the lower continuation boundary,
     # even when the first returned row is the following sequence or is absent.

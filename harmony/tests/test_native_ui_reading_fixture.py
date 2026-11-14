@@ -135,5 +135,19 @@ class ReadingFixtureTests(unittest.TestCase):
                          {key: value for key, value in recovered_lead.items() if key != 'state'})
 
 
+    def test_paged_reading_requires_explicit_older_fetch_and_preserves_the_live_cursor(self):
+        control = {'reading_case': True, 'reading_prepend': True, 'reading_paged': True}
+        latest = fixture.transcript(control=control)
+        self.assertEqual([item['seq'] for item in latest['items']], list(range(40, 60)))
+        self.assertTrue(latest['has_more'])
+        older = fixture.transcript(before_seq=40, control=control)
+        self.assertEqual([item['seq'] for item in older['items']], list(range(20, 40)))
+        self.assertFalse(older['has_more'])
+        self.assertEqual(older['from_seq'], 20)
+        append = fixture.transcript(after_seq=59, control={**control, 'reading_append': True})
+        self.assertEqual([item['seq'] for item in append['items']], list(range(60, 65)))
+        self.assertEqual(append['from_seq'], 59)
+        self.assertTrue(append['has_more'])
+
 if __name__ == '__main__':
     unittest.main()

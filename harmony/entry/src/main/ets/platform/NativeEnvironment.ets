@@ -8,6 +8,8 @@ export class NativeEnvironment {
   @Trace dark: boolean = false;
   @Trace fontScale: number = 1;
   @Trace safeBottomPx: number = 0;
+  @Trace safeTopPx: number = 0;
+  @Trace windowWidthPx: number = 0;
   private windowRef: window.Window | undefined;
   private sizeChanged: (size: window.Size) => void = (_size: window.Size): void => this.refreshWindow();
   private rectChanged: (event: window.RectChangeOptions) => void = (_event: window.RectChangeOptions): void => this.refreshWindow();
@@ -31,6 +33,8 @@ export class NativeEnvironment {
       const rect = this.windowRef.getWindowProperties().windowRect;
       const bottom = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height;
       this.safeBottomPx = rect.top + rect.height - bottom;
+      this.windowWidthPx = Number.isFinite(rect.width) ? rect.width : 0;
+      this.safeTopPx = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect?.height || 0;
     } catch (_) {}
   }
 
