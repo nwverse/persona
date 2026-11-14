@@ -50,8 +50,8 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 function Probe() {
-  const { sessions, loaded } = useFullAgentSessions();
-  return <output data-loaded={loaded} data-states={sessions.map((s) => s.state).join(",")} data-titles={sessions.map((s) => s.title).join(",")}>{sessions.map((s) => s.session_id).join(",")}</output>;
+  const { sessions, loaded, failed } = useFullAgentSessions();
+  return <output data-loaded={loaded} data-failed={failed} data-states={sessions.map((s) => s.state).join(",")} data-titles={sessions.map((s) => s.title).join(",")}>{sessions.map((s) => s.session_id).join(",")}</output>;
 }
 const publish = (patch: Partial<typeof fixture.state>) => {
   fixture.state = { ...fixture.state, ...patch };
@@ -438,6 +438,8 @@ describe("complete session snapshots for the sidebar fallback", () => {
     expect(fixture.api).toHaveBeenCalledTimes(2);
     expect(host.textContent).toBe("previous");
     expect(host.querySelector("output")!.dataset.loaded).toBe("true");
+    // the rows it has are still the agents: a later failed read does not make them unknown
+    expect(host.querySelector("output")!.dataset.failed).toBe("false");
   });
 
   it("retries an initial failure even when the hub sends no further hints", async () => {
@@ -448,6 +450,27 @@ describe("complete session snapshots for the sidebar fallback", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(host.textContent).toBe("recovered");
     expect(host.querySelector("output")!.dataset.loaded).toBe("true");
+  });
+
+  it("says its first read failed, so a page shows the agents as unknown and not as none, until a retry reads them", async () => {
+    const first = deferred();
+    fixture.api.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ sessions: [row("recovered")] });
+    await mount();
+    expect(host.querySelector("output")!.dataset.failed).toBe("false"); // being read: loading, not failed
+    await act(async () => { first.reject(new Error("offline")); });
+    expect(host.querySelector("output")!.dataset.loaded).toBe("false");
+    expect(host.querySelector("output")!.dataset.failed).toBe("true");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(host.querySelector("output")!.dataset.loaded).toBe("true");
+    expect(host.querySelector("output")!.dataset.failed).toBe("false");
+  });
+
+  it("never says an old hub's pushed list failed", async () => {
+    fixture.state = { ...fixture.state, features: [], sessions: { demo: [row("pushed")] } };
+    await mount();
+    expect(host.textContent).toBe("pushed");
+    expect(host.querySelector("output")!.dataset.failed).toBe("false");
+    expect(fixture.api).not.toHaveBeenCalled();
   });
 
   it("clears on reset and rejects a late response even with unchanged credentials", async () => {
