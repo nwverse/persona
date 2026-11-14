@@ -12,8 +12,9 @@ import (
 )
 
 // A background supervisor's rounds (#7315): each is resumed at the end of the conversation's first turn, so every round's
-// message hangs from that line, beside the rounds before it. The shapes are what Claude Code 2.1.322 writes for
-// `--resume <id> --resume-session-at <uuid>`, reduced to the fields the reader looks at.
+// message hangs from that line, beside the rounds before it. The shapes are the tree Claude Code 2.1.322 writes for
+// `--resume <id> --resume-session-at <uuid>`, reduced to its messages, answers and turn ends; the attachment lines it
+// also writes around each turn are in branch_round_shapes_test.go.
 
 // roundText is a supervision message as the manager renders a round of it (the marker on its own line), or without the
 // marker when marked is false.
