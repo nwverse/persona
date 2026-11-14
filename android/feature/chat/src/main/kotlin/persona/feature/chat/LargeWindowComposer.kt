@@ -40,6 +40,7 @@ import persona.core.designsystem.ComposerHardwareActions
 import persona.core.designsystem.LocalComposerHardware
 import persona.core.designsystem.LocalLargeWindowInput
 import persona.core.designsystem.ModelPillWidth
+import persona.core.designsystem.hardwareShortcutTextInput
 
 /**
  * The production chat composer with large-window input integrations. Compact windows disable every integration but keep
@@ -191,7 +192,7 @@ fun LargeWindowComposer(
             ComposerKeyAction.Collapse,
             ComposerKeyAction.PassThrough -> false
         }
-    }.dragAndDropTarget(
+    }.then(if (state.value.composition == null) Modifier.hardwareShortcutTextInput() else Modifier).dragAndDropTarget(
         shouldStartDragAndDrop = { event ->
             currentCanDrop && composerDropAccepts(event.toAndroidDragEvent().clipDescription)
         },

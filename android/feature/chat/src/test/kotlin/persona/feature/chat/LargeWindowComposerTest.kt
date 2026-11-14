@@ -1,6 +1,8 @@
 package persona.feature.chat
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.isFocused
@@ -9,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.input.key.Key
@@ -23,6 +26,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.SessionKey
+import persona.core.designsystem.HardwareShortcutHost
 import persona.core.designsystem.LocalLargeWindowInput
 import persona.core.designsystem.PersonaTheme
 
@@ -140,6 +144,35 @@ class LargeWindowComposerTest {
         }
         assertEquals(1, sent)
         assertEquals(TextRange(2), state.value.selection)
+    }
+
+    @Test fun smallComposerHelpLeavesTextCtrlChordsAndCompositionAlone() {
+        val state = ChatComposerState()
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides true) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    HardwareShortcutHost(Modifier.fillMaxSize()) {
+                        LargeWindowComposer(SessionKey("box", "s1"), state, working = false, sending = false,
+                            canClear = false, service = null, onSend = {}, onCommand = {}, onNotice = {})
+                    }
+                }
+            }
+        }
+        val field = rule.onNode(hasSetTextAction())
+        field.performClick()
+        field.performTextInput("a")
+        assertEquals("a", state.value.text)
+        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.C) } }
+        rule.onNodeWithTag("keyboard-shortcuts").assertDoesNotExist()
+        state.value = TextFieldValue("中文", TextRange(2), TextRange(0, 2))
+        rule.waitForIdle()
+        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.Slash) } }
+        rule.onNodeWithTag("keyboard-shortcuts").assertDoesNotExist()
+        assertEquals("中文/", state.value.text)
+        state.value = TextFieldValue("中文", TextRange(2))
+        rule.waitForIdle()
+        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.Slash) } }
+        rule.onNodeWithTag("keyboard-shortcuts").assertExists()
     }
 
     @Test fun expandedEditorSendsOnceAndEscapeOnlyCollapses() {
