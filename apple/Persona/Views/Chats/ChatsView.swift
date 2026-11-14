@@ -324,10 +324,9 @@ struct ChatsView: View {
         // Closing the search before a push from its results redraws the navigation with it, as when the list was
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
-        let destinations = AgentsDestinations(path: pushing, unifiedPath: unified == nil ? nil : pushing)
         SplitNavigation(path: pushing, listKey: unified == nil ? "agents.list" : "sidebar.list",
-                        destinations: destinations, pageSwitch: pageTabSwitch) {
-            navigationColumn
+                        destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
+            listColumn
         } empty: {
             if unified != nil {
                 // The Sidebar layout (#6332): the page beside the sidebar starts at the Persona conversation, the root
@@ -392,9 +391,11 @@ struct ChatsView: View {
         }
     }
 
-    /// The list column and its chrome, kept out of `body` so Xcode 26.0 can type-check the navigation split in parts.
-    private var navigationColumn: some View {
-        agentsColumn
+    /// The list column: its own property, so Xcode 26.0 type-checks it apart from the split around it (#5333, #7173).
+    /// Erased at its base (#6735): unoptimized, this getter reserves a stack slot for every modifier below, each holding
+    /// the whole column (`AgentsListStackTests`).
+    private var listColumn: some View {
+        AnyView(agentsColumn)
             #if os(iOS) || os(visionOS)
             .environment(header)
             #endif
