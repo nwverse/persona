@@ -24,7 +24,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, testAppId, updaterCacheName } from "./update-test-cache.mjs";
+import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, shipItJobLabel, testAppId, updaterCacheName, windowsRegistryKeys } from "./update-test-cache.mjs";
 
 const OLD = "0.9.0";
 const NEW = "0.9.1";
@@ -213,6 +213,61 @@ async function windowsRunning(image) {
   return text.toLowerCase().includes(image.toLowerCase());
 }
 
+/** Query, then remove only this run's exact random keys; never enumerate or reset the account's registry. */
+async function removeOwnedWindowsRegistryKeys() {
+  const keys = windowsRegistryKeys(runPaths.identity);
+  const failures = [];
+  for (const key of keys) {
+    const query = await run("reg", ["query", key], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
+    if (query.code !== 0) {
+      if (query.code !== 1) failures.push(`NSIS registry query failed for ${key}: ${query.error?.message ?? `exit ${query.code}`}`);
+      continue;
+    }
+    const result = await run("reg", ["delete", key, "/f"], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
+    if (result.code !== 0) failures.push(`NSIS registry cleanup failed for ${key}: ${result.error?.message ?? `exit ${result.code}`}`);
+  }
+  for (const key of keys) {
+    const after = await run("reg", ["query", key], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
+    if (after.code === 0) failures.push(`NSIS registry key remains after cleanup: ${key}`);
+    else if (after.code !== 1) failures.push(`NSIS registry verification failed for ${key}: ${after.error?.message ?? `exit ${after.code}`}`);
+  }
+  return failures;
+}
+async function windowsRegistryState() {
+  const keys = windowsRegistryKeys(runPaths.identity);
+  const script = `$ErrorActionPreference='Stop'; ${JSON.stringify(keys)} | ForEach-Object { $key = $_ -replace '^HKCU\\\\', 'HKCU:\\'; [PSCustomObject]@{ Name = $_; Exists = Test-Path -LiteralPath $key } } | ConvertTo-Json -Compress`;
+  const { code, text } = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { seconds: 60, quiet: true });
+  if (code !== 0) throw new Error(`could not inspect this run's NSIS registry keys (exit ${code})`);
+  const parsed = JSON.parse(text);
+  return Object.fromEntries((Array.isArray(parsed) ? parsed : [parsed]).map(entry => [entry.Name, entry.Exists === true]));
+}
+
+/** ShipIt's launchd registration is separate from its owned files. Query and remove only this run's random label. */
+async function removeOwnedShipItJob() {
+  const label = shipItJobLabel(runPaths.identity);
+  const domain = `gui/${process.getuid()}`;
+  const inspect = await run("launchctl", ["print", `${domain}/${label}`], { seconds: 30, quiet: true }).catch(error => ({ code: -1, error }));
+  if (inspect.code !== 0) {
+    if (inspect.code === 113) return [];
+    return [`could not inspect this run's ShipIt job: ${inspect.error?.message ?? `exit ${inspect.code}`}`];
+  }
+  const removed = await run("launchctl", ["bootout", `${domain}/${label}`], { seconds: 30, quiet: true }).catch(error => ({ code: -1, error }));
+  if (removed.code !== 0) return [`ShipIt job removal failed: ${removed.error?.message ?? `exit ${removed.code}`}`];
+  const after = await run("launchctl", ["print", `${domain}/${label}`], { seconds: 30, quiet: true }).catch(error => ({ code: -1, error }));
+  return after.code === 113 ? [] : [`ShipIt job remains registered after removal (query exit ${after.code})`];
+}
+
+async function assertNativeStateAbsent() {
+  if (platform === "win32") {
+    const state = await windowsRegistryState();
+    need("this run's NSIS registry keys do not already belong to another run", Object.values(state).every(exists => !exists), state);
+  } else if (platform === "darwin") {
+    const label = shipItJobLabel(runPaths.identity);
+    const result = await run("launchctl", ["print", `gui/${process.getuid()}/${label}`], { seconds: 30, quiet: true });
+    need("this run's Squirrel launchd label is not already registered", result.code === 113, `query exit ${result.code}`);
+  }
+}
+
 const cacheDirectory = () => runPaths.cache;
 
 async function main() {
@@ -224,6 +279,7 @@ async function main() {
   await prepareRunPaths(runPaths);
   cacheIdentity = updaterCacheName(runPaths.identity);
   await mkdir(join(work, "tmp"));
+  await assertNativeStateAbsent();
   const { code } = await run(npm, ["run", "build"], { seconds: 600, quiet: true, shell: platform === "win32" });
   need("compile", code === 0);
   const port = await serve();
@@ -291,6 +347,9 @@ async function main() {
     // Read before the app quits: installing moves this file away.
     const downloaded = await sha512(settled.file).catch(() => undefined);
     need("the downloaded package's sha512 matches the feed", downloaded === next.sha512, basename(settled.file));
+    if (platform === "win32") {
+      need("the real NSIS updater installs only inside this run's temporary directory", await watch(profile, 180, all => all.find(entry => entry.event === "nsis-install"))?.installDirectory === installed, installed);
+    }
   }
 
   let install;
@@ -361,7 +420,9 @@ async function cleanup() {
       const result = await run(uninstaller, ["/S", `_?=${join(work, "app")}`], { seconds: 300, verbatim: true, quiet: true }).catch(error => ({ code: -1, error }));
       if (result.code !== 0) failures.push(`uninstall: ${result.error?.message ?? `exit ${result.code}`}`);
     }
+    failures.push(...await removeOwnedWindowsRegistryKeys());
   }
+  if (platform === "darwin") failures.push(...await removeOwnedShipItJob());
   if (runPaths) failures.push(...await removeOwnedRunPaths(runPaths));
   let removed = false;
   for (let attempt = 0; attempt < 5 && !removed; attempt++) {

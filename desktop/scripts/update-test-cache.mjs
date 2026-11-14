@@ -1,5 +1,5 @@
 // Paths belonging to one update-test run. Every removable path is below the run's own root.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join, sep } from "node:path";
 
@@ -12,14 +12,23 @@ export const createCacheIdentity = () => {
 /** Stable within a run, distinct between runs. Only the update-test config receives this placeholder identity. */
 export const testAppId = identity => `com.example.persona.update-test.${identity.slice("persona-desktop-update-test-".length)}`;
 
-/** Explicitly reproduce electron-builder's NSIS default, so the GUID's per-run ownership is visible at the call site. */
+/** The GUID itself is owned by this run; do not derive it from another run's app ID or registry state. */
 export function nsisGuid(identity) {
-  const bytes = createHash("sha1").update(Buffer.from("6ba7b8129dad11d180b400c04fd430c8", "hex")).update(testAppId(identity)).digest();
-  bytes[6] = bytes[6] & 0x0f | 0x50;
-  bytes[8] = bytes[8] & 0x3f | 0x80;
-  const hex = bytes.subarray(0, 16).toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  const uuid = testAppId(identity).slice("com.example.persona.update-test.".length);
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(uuid)) throw new Error("update-test identity has no run UUID");
+  return uuid;
 }
+
+export function windowsRegistryPaths(identity) {
+  const guid = nsisGuid(identity);
+  return {
+    install: `HKCU\\Software\\${guid}`,
+    uninstall: `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${guid}`,
+  };
+}
+
+export const shipItJobLabel = identity => `${testAppId(identity)}.ShipIt`;
+export const windowsRegistryKeys = identity => Object.values(windowsRegistryPaths(identity));
 
 /** Must match electron-builder: sanitized extraMetadata.name.toLowerCase() + "-updater". */
 export const updaterCacheName = identity => {

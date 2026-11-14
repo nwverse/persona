@@ -9,12 +9,16 @@
 #   - a separate, per-run app ID and package name. The harness overrides both from one random identity, stable for the
 #     old and new versions in that run. This owns the updater cache, macOS Squirrel job and Windows NSIS uninstall key;
 #     neither another update test nor a real Persona install or unsigned development build shares those identities.
+#     These disposable packages create no shared desktop or Start-menu shortcuts.
 extends: ./electron-builder.unsigned.yml
 appId: com.example.persona.update-test
 productName: Persona Update Test
 extraMetadata:
   name: persona-desktop-update-test
   main: update-test/main.mjs
+nsis:
+  createDesktopShortcut: false
+  createStartMenuShortcut: false
 files:
   - dist/**
   - update-test/**

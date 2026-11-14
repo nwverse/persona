@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, testAppId, updaterCacheName } from "./update-test-cache.mjs";
-
-const { UUID } = createRequire(import.meta.url)("builder-util-runtime");
+import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, shipItJobLabel, testAppId, updaterCacheName, windowsRegistryKeys } from "./update-test-cache.mjs";
 
 test("test-only application and NSIS identities are stable in a run and unique across runs", () => {
   const identity = createCacheIdentity();
@@ -14,8 +11,15 @@ test("test-only application and NSIS identities are stable in a run and unique a
   assert.equal(testAppId(identity), testAppId(identity));
   assert.notEqual(testAppId(identity), testAppId(other));
   assert.match(testAppId(identity), /^com\.example\.persona\.update-test\.[a-f0-9-]{36}$/);
-  assert.equal(nsisGuid(identity), UUID.v5(testAppId(identity), UUID.OID));
+  assert.equal(nsisGuid(identity), identity.slice(-36));
+  assert.match(nsisGuid(identity), /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
   assert.notEqual(nsisGuid(identity), nsisGuid(other));
+  assert.deepEqual(windowsRegistryKeys(identity), [
+    `HKCU\\Software\\${nsisGuid(identity)}`,
+    `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${nsisGuid(identity)}`,
+  ]);
+  assert.ok(windowsRegistryKeys(identity).every(key => !windowsRegistryKeys(other).includes(key)));
+  assert.notEqual(shipItJobLabel(identity), shipItJobLabel(other));
 });
 
 const marker = async path => {
@@ -84,9 +88,21 @@ test("cleanup refuses a foreign path and reports a failed removal separately", a
   assert.deepEqual(failures.filter(failure => failure.startsWith("Squirrel cache:")), []);
 });
 
+test("native cleanup is scoped to this run's exact job and NSIS keys", async () => {
+  const script = await readFile(new URL("./update-test.mjs", import.meta.url), "utf8");
+  const entry = await readFile(new URL("../update-test/main.mjs", import.meta.url), "utf8");
+  const config = await readFile(new URL("../electron-builder.update-test.yml", import.meta.url), "utf8");
+  assert.match(script, /launchctl", \["bootout", `\$\{domain\}\/\$\{label\}`\]/);
+  assert.match(script, /run\("reg", \["delete", key, "\/f"\]/);
+  assert.match(script, /entry\.event === "nsis-install"/);
+  assert.match(entry, /installDirectory: autoUpdater\.installDirectory \?\? null/);
+  assert.match(config, /createDesktopShortcut: false/);
+  assert.match(config, /createStartMenuShortcut: false/);
+  assert.doesNotMatch(script, /reg(?:istry)?[^;\n]*(?:delete|clear|reset)[^;\n]*HKCU(?![^;\n]*key)/i);
+});
+
 test("the harness uses the test-only cache override, not a fixed HOME cache deletion", async () => {
   const script = await readFile(new URL("./update-test.mjs", import.meta.url), "utf8");
-  assert.match(script, /extraMetadata\.name=\$\{cacheIdentity\}/);
   assert.match(script, /-c\.appId=\$\{testAppId\(runPaths\.identity\)\}/);
   assert.match(script, /-c\.nsis\.guid=\$\{nsisGuid\(runPaths\.identity\)\}/);
   assert.match(script, /updaterCacheDirName: \$\{cacheIdentity\}\$/);
