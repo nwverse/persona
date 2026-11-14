@@ -588,7 +588,13 @@ func (d *Devices) BusUp() {
 		m.mu.Lock()
 		list := slices.Clone(m.sessions)
 		has := m.online || m.warmLocked(time.Now()) || len(list) > 0
+		unknown := list == nil && !m.sessionsListed
 		m.mu.Unlock()
+		if unknown {
+			// No snapshot has arrived on the current connection: nil is unknown, not an empty snapshot.
+			// The initial forward or an existing refresh path publishes the real list once a call succeeds.
+			continue
+		}
 		if has {
 			if list == nil {
 				list = []proto.Session{}
@@ -715,6 +721,12 @@ func wireError(err error) error {
 // Notify is devices.notify: a one-way event to a machine's node, queued for it (notes.go): the bus's read loop goes
 // on at once.
 func (d *Devices) Notify(p devicewire.NodeEvent) {
+	if p.Event == proto.EventMCPWait {
+		var update proto.MCPWaitEvent
+		if json.Unmarshal(p.Params, &update) != nil || !proto.ValidMCPWaitCallID(update.CallID) {
+			return // correlation is optional, but an invalid id must never consume the machine's note budget
+		}
+	}
 	if strings.HasPrefix(p.Event, "session.codex.takeover.") {
 		return
 	}
