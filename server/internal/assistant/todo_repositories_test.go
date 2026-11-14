@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func TestTodoRepositoryHTTPJourneyAndLegacyCompatibility(t *testing.T) {
@@ -147,5 +148,175 @@ func TestTodoRepositoryToolsAndTransportCompatibility(t *testing.T) {
 	set, err = s.readTodoRepositories(t.Context(), rows[0].ID)
 	if err != nil || set.Repositories[0].CatalogState != "removed" || len(set.Repositories[0].Links) != 1 {
 		t.Fatal(set, err)
+	}
+}
+
+func TestTodoRepositoryAgentReportsUseUnifiedStore(t *testing.T) {
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	s, _ := repositoryService(t, database)
+	todo, err := s.createPlainTodo(t.Context(), "Reported work", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := "Opened https://github.com/example/web/pull/7 and https://github.com/example/web/pull/8; https://gitlab.example.com/team/api/-/merge_requests/7"
+	s.advanceTaskReply(t.Context(), todo, "", "", text)
+	set, err := s.readTodoRepositories(t.Context(), todo.ID)
+	if err != nil || len(set.Repositories) != 2 || len(set.Repositories[0].Links) != 2 {
+		t.Fatal(set, err)
+	}
+	if got := todoNow(s, todo.ID); got.Stage != "review" || got.DoneAt != nil {
+		t.Fatal("association changed task completion", got)
+	}
+	args, _ := json.Marshal(map[string]any{"id": todo.ID, "urls": []string{"https://github.com/example/web/issues/12"}})
+	if _, err = s.toolTodoRepositoryLinksAdd(t.Context(), "", "", "todo_repository_links_add", args); err != nil {
+		t.Fatal(err)
+	}
+	text, err = s.toolTodoGet(t.Context(), json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
+	if err != nil || !strings.Contains(text, "issues/12") || !strings.Contains(text, "pull/7") || !strings.Contains(text, "pull/8") {
+		t.Fatal("agent context omitted associations", text, err)
+	}
+}
+
+func TestAgentRepositoryToolsStayOnTheirOwnTodo(t *testing.T) {
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	e := newTodoEnv(t, database)
+	e.f.setSessions("box", proto.Session{SessionID: "linked"}, proto.Session{SessionID: "idle"})
+	own, other := e.create("Related work").ID, e.create("Other work").ID
+	e.must("PUT", "/api/v1/todos/"+own+"/agents/box/linked", "")
+	args, _ := json.Marshal(map[string]any{"id": own, "urls": []string{"https://github.com/example/web/pull/7"}})
+	res := e.s.mcpCall(t.Context(), "box", "linked", "todo_repository_links_add", args, false)
+	if res.IsError || !strings.Contains(res.Content[0].Text, "pull/7") {
+		t.Fatal(res)
+	}
+	read := func(session, id string) proto.ToolResult {
+		return e.s.mcpCall(t.Context(), "box", session, "todo_repositories_get", json.RawMessage(fmt.Sprintf(`{"id":%q}`, id)), false)
+	}
+	if got := read("linked", own); got.IsError || !strings.Contains(got.Content[0].Text, "pull/7") {
+		t.Fatal(got)
+	}
+	for _, v := range [][2]string{{"linked", other}, {"idle", own}, {"", own}} {
+		if got := read(v[0], v[1]); !got.IsError {
+			t.Fatal("unscoped repository access", v, got)
+		}
+	}
+	for _, name := range []string{"todo_repository_links_add", "todo_repository_links_set", "todo_repositories_set"} {
+		if got := e.s.mcpCall(t.Context(), "box", "linked", name, json.RawMessage(fmt.Sprintf(`{"id":%q}`, other)), false); !got.IsError {
+			t.Fatal("foreign write accepted", name, got)
+		}
+	}
+	if got, err := database.TodoRepositories(t.Context(), other); err != nil || got.Revision != 0 {
+		t.Fatal("foreign Todo changed", got, err)
+	}
+}
+
+func TestTodoRepositoryReportsNotifyWithoutChangingLegacyProgress(t *testing.T) {
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	f := newFakeHub()
+	s := New(Options{Hub: f, Store: func() Store { return database }})
+	todo, err := s.createPlainTodo(t.Context(), "Reported work", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := "https://github.com/example/web/pull/7"
+	s.advanceTaskReply(t.Context(), todo, "", "", first)
+	todo = todoNow(s, todo.ID)
+	before := strings.Count(f.eventTypes(), "todos")
+	s.advanceTaskReply(t.Context(), todo, "", "", first+" https://github.com/example/web/pull/8")
+	after := strings.Count(f.eventTypes(), "todos")
+	if after <= before {
+		t.Fatal("new association with unchanged legacy stage/PR sent no update")
+	}
+	s.advanceTaskReply(t.Context(), todo, "", "", first+" https://github.com/example/web/pull/8")
+	if got := strings.Count(f.eventTypes(), "todos"); got != after {
+		t.Fatal("replayed links emitted another update", after, got)
+	}
+	// Metadata limits do not change the old stage/delivery path.
+	urls := []string{}
+	for n := 9; n <= 56; n++ {
+		urls = append(urls, fmt.Sprintf("https://github.com/example/web/pull/%d", n))
+	}
+	if err := s.importTodoRepositoryLinks(t.Context(), todo.ID, urls, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	s.setTaskStage(t.Context(), todo.ID, "merge", "https://github.com/example/web/pull/57")
+	if got := todoNow(s, todo.ID); got.Stage != "merge" || got.DoneAt != nil {
+		t.Fatal("metadata limit changed legacy progress", got)
+	}
+}
+
+func TestTodoRepositoryLegacyPRsImportOnceBeforeFirstEdit(t *testing.T) {
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	s, _ := repositoryService(t, database)
+	todo, err := s.createPlainTodo(t.Context(), "Historic work", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.PutSetting(t.Context(), reportStagesKey, map[string]todoStage{todo.ID: {Stage: "review", PR: "https://github.com/example/web/pull/8", PRs: []string{"https://github.com/example/web/pull/7"}}}); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = repositoryService(t, database)
+	path := "/api/v1/todos/" + todo.ID + "/repositories"
+	if w := placeDo(s, "", "PUT", path, `{"expected_revision":0,"expected_catalog_revision":0,"repositories":[]}`); w.Code != 409 {
+		t.Fatal("edit missed historical PRs", w.Code, w.Body)
+	}
+	set, err := s.readTodoRepositories(t.Context(), todo.ID)
+	if err != nil || len(set.Repositories) != 1 || len(set.Repositories[0].Links) != 2 {
+		t.Fatal("historical links lost", set, err)
+	}
+	if w := placeDo(s, "", "PUT", path, fmt.Sprintf(`{"expected_revision":%d,"expected_catalog_revision":0,"repositories":[]}`, set.Revision)); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	next, _ := repositoryService(t, database)
+	got, err := next.readTodoRepositories(t.Context(), todo.ID)
+	if err != nil || len(got.Repositories) != 0 {
+		t.Fatal("removed history returned on restart", got, err)
+	}
+	if old := todoNow(next, todo.ID); old.Stage != "review" || old.PRURL != "https://github.com/example/web/pull/8" {
+		t.Fatal("legacy progress changed", old)
+	}
+	text, err := next.toolTodoGet(t.Context(), json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
+	if err != nil || strings.Contains(text, "/pull/7") || strings.Contains(text, "/pull/8") || !strings.Contains(text, "stage review") {
+		t.Fatal("agent context resurrected removed legacy PR", text, err)
+	}
+	next.advanceTaskReply(t.Context(), todoNow(next, todo.ID), "", "", "Opened https://code.example.com/Example/Api/pull/17.")
+	got, err = next.readTodoRepositories(t.Context(), todo.ID)
+	if err != nil || len(got.Repositories) != 1 || got.Repositories[0].SourceSnapshot.Identity.InstanceURL != "https://code.example.com" {
+		t.Fatal("self-hosted PR was not linked", got, err)
+	}
+}
+
+func TestTodoRepositoryEmptyTodoNeedsNoCatalog(t *testing.T) {
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	s, _ := repositoryService(t, database)
+	todo, err := s.createPlainTodo(t.Context(), "Plain work", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.PutSetting(t.Context(), repository.CatalogKey, "invalid catalog"); err != nil {
+		t.Fatal(err)
+	}
+	text, err := s.toolTodoGet(t.Context(), json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
+	if err != nil || !strings.Contains(text, "Plain work") {
+		t.Fatal("ordinary Todo gained a catalog dependency", text, err)
 	}
 }

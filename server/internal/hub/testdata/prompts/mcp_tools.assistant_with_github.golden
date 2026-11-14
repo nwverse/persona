@@ -2447,6 +2447,183 @@
     }
   },
   {
+    "name": "todo_repositories_get",
+    "description": "Read repository associations and all linked issues/PRs for one to-do in this assistant. This is metadata only; saved source snapshots can differ from the current repository catalog. No Git or remote API call is made.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "todo_repositories_set",
+    "description": "Replace the business repository associations of a to-do. Read todo_repositories_get and repositories_list first, and supply their exact revisions. An explicit empty array removes associations only, without deleting code or changing task progress. Existing source snapshots remain unchanged; remove and reselect a repository to adopt a changed catalog identity. Associations remain editable after execution. Omitted per-repository links preserve existing links; [] clears them. On conflict read again and reconcile, never blindly retry.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "expected_revision",
+        "expected_catalog_revision",
+        "repositories"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expected_catalog_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repositories": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": [
+              "repo_id"
+            ],
+            "properties": {
+              "repo_id": {
+                "type": "string"
+              },
+              "directory_alias": {
+                "type": "string"
+              },
+              "requested_ref": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "default",
+                      "branch",
+                      "tag",
+                      "commit",
+                      "ref"
+                    ]
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "issue",
+                        "pull_request"
+                      ]
+                    },
+                    "number": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "todo_repository_links_set",
+    "description": "Replace one repository's issue/PR links using the exact revision from todo_repositories_get. Each entry is either {url} or {kind,number}; links must belong to the saved repository identity. Multiple PRs are independent, and task progress and completion remain independently verified. [] clears links. On conflict read again and reconcile.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "repo_id",
+        "expected_revision",
+        "links"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "repo_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "issue",
+                  "pull_request"
+                ]
+              },
+              "number": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "todo_repository_links_add",
+    "description": "Add issue/PR URLs to an existing to-do. Use this after finding or opening related work, without asking the user to edit metadata manually. The manager derives and groups repository identities, preserving existing aliases, refs and source snapshots. A repository need not be preconfigured. Duplicate URLs do not duplicate links; an explicit call may restore a previously removed link. The batch is atomic. Read todo_get or todo_repositories_get for current associations; use the revision-checked set tools for removal or replacement. Links are context, never evidence by themselves that work is merged, deployed or complete.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "urls"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "urls": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "todo_list",
     "description": "List the user's Persona to-dos (the To-dos page in the app, not Feishu tasks): open ones and failed starts by default, earliest due first (those without a due date last), each with its id, title, state, priority, project, due date, reminder and the agents on it, and the first line of its notes. Times are in the user's time zone. Filter by state, by due date (due_before / due_after: a day or a moment), overdue ones only, with or without agents, by knowledge-base project, by kind (concerns only), or a word in the title or notes. Use it before changing a to-do, to find its id; ask with todo_get for one in full.",
     "input_schema": {
@@ -2502,7 +2679,7 @@
   },
   {
     "name": "todo_get",
-    "description": "One of the user's Persona to-dos in full: its title, state, priority, due date, reminder (and whether it was pushed), when it was made and changed, the conversation and plan it came from when it is a task, its notes, the agents that work or worked on it, and the decisions in force on it.",
+    "description": "One of the user's Persona to-dos in full: its title, state, priority, due date, reminder (and whether it was pushed), when it was made and changed, the conversation and plan it came from when it is a task, its notes, the agents that work or worked on it, and the decisions in force on it. Includes its canonical repository and issue/PR associations. Manage discovered links with todo_repository_links_add, or use the revision-checked association tools for edits and removal. Historical PR references are imported once; related PRs do not determine task completion.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2518,7 +2695,7 @@
   },
   {
     "name": "todo_create",
-    "description": "Add a to-do to the user's Persona to-dos, when the user asks you to note something to do or to remind them of it (or agrees to your suggestion): it shows on the To-dos page of the app, sorted by its due date, and with remind set the phone is pushed about it at that time. It is the user's own to-do, with no agent on it: work for an agent is task_plan. Done at once, nothing to confirm. An open to-do with the same title and due date is not made twice: you get that one back. Write the title as the thing to do (short, the user's language); put links, amounts and details in notes. Read due dates and times in the user's time zone; when only the day is known, give the day. When it clearly belongs to one of the user's areas of work, give project: the To-dos page groups to-dos by it. With kind concern it records a concern of the user's instead: open until you report its outcome with concern_report. In a leader conversation it records a piece of your direction's work instead: it shows under your direction as not started, you supervise it, and to have an agent do it you use task_plan with its todo_id (no second to-do); finish one done without an agent with todo_complete.",
+    "description": "Add a to-do to the user's Persona to-dos, when the user asks you to note something to do or to remind them of it (or agrees to your suggestion): it shows on the To-dos page of the app, sorted by its due date, and with remind set the phone is pushed about it at that time. It is the user's own to-do, with no agent on it: work for an agent is task_plan. Done at once, nothing to confirm. An open to-do with the same title and due date is not made twice: you get that one back. Write the title as the thing to do (short, the user's language); put links, amounts and details in notes. Read due dates and times in the user's time zone; when only the day is known, give the day. When it clearly belongs to one of the user's areas of work, give project: the To-dos page groups to-dos by it. With kind concern it records a concern of the user's instead: open until you report its outcome with concern_report. In a leader conversation it records a piece of your direction's work instead: it shows under your direction as not started, you supervise it, and to have an agent do it you use task_plan with its todo_id (no second to-do); finish one done without an agent with todo_complete. Repository links are optional metadata, saved atomically with this to-do. Use repositories_list for saved IDs and catalog_revision. They do not create directories or change task progress. If a matching to-do already exists, this call refuses supplied bindings; use todo_repositories_get and todo_repositories_set to edit it.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2561,6 +2738,80 @@
         "project": {
           "type": "string",
           "description": "the knowledge-base project it belongs to: the slug or name of an existing project, usually a long-term one for an area of the user's work (kb_list projects). Set it when the area is clear; never make up a near-duplicate of an existing project"
+        },
+        "repository_bindings": {
+          "type": "object",
+          "required": [
+            "catalog_revision",
+            "repositories"
+          ],
+          "properties": {
+            "catalog_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "repositories": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "required": [
+                  "repo_id"
+                ],
+                "properties": {
+                  "repo_id": {
+                    "type": "string"
+                  },
+                  "directory_alias": {
+                    "type": "string"
+                  },
+                  "requested_ref": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "default",
+                          "branch",
+                          "tag",
+                          "commit",
+                          "ref"
+                        ]
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "links": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "issue",
+                            "pull_request"
+                          ]
+                        },
+                        "number": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
         }
       }
     }

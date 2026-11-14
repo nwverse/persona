@@ -901,12 +901,29 @@ operations never touch association storage. The catalog response and
 conflicts preserve the client draft and require reconciliation. Read failures
 never masquerade as an empty set.
 
-`todo_repositories_get`, `todo_repositories_set` and `todo_repository_links_set`
-expose the same manager-owned store. `todo_get` points to the dedicated association read without adding a catalog
-read dependency to the old tool. `todo_create` accepts the optional creation object; a matching
+`todo_repositories_get`, `todo_repositories_set`, `todo_repository_links_set` and
+`todo_repository_links_add` expose the same manager-owned store. `todo_get` includes
+its canonical associations. The additive tool accepts `{id, urls}` (one to 50 exact
+issue/PR URLs), infers repository groups offline and needs no preconfigured catalog.
+It preserves source snapshots, aliases and requested refs. Assistant conversations
+can manage their manager's to-dos; task Agents can read or edit only their actively
+linked open to-do, with its ID available through `todo_decisions`. Empty ordinary
+to-dos need no catalog read. `todo_create` accepts the optional creation object; a matching
 existing Todo with supplied bindings is explicitly refused so callers can read
 and edit that Todo without silently discarding associations. Writes retain the
 existing outbound confirmation rule for health conversations.
+
+Existing `pr_url` / `prs` references are imported once before the first association
+read or edit. New Agent reports append every supported PR URL to this same store,
+including self-hosted instances; old stage and delivery fields retain their existing
+judgment semantics. A stored receipt prevents historical imports and repeated reports
+from restoring links removed by the user. An explicit additive call can restore them.
+Imports and interactive edits lock the same Todo and commit atomically; changes
+broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
+Metadata import errors are logged without blocking the legacy progress path; explicit
+tool and HTTP failures remain errors. Link-derived repositories absent from the
+catalog have `catalog_state: "unlisted"`; recording a URL performs no repository
+verification, remote lookup or catalog mutation.
 
 Shared Go types and validators: `server/internal/assistant/repository/task.go`.
 Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:

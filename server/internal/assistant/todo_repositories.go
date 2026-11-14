@@ -103,6 +103,9 @@ func (s *Service) readTodoRepositories(ctx context.Context, id string) (reposito
 	if !ok {
 		return repository.TaskSet{}, repository.Problem("store_unavailable")
 	}
+	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
+		return repository.TaskSet{}, err
+	}
 	set, err := st.TodoRepositories(ctx, id)
 	if err != nil {
 		return set, err
@@ -110,12 +113,15 @@ func (s *Service) readTodoRepositories(ctx context.Context, id string) (reposito
 	return s.describeTodoRepositories(ctx, set)
 }
 func (s *Service) describeTodoRepositories(ctx context.Context, set repository.TaskSet) (repository.TaskSet, error) {
+	set.Manager = s.managerIdentity()
+	if len(set.Repositories) == 0 {
+		return set, nil
+	}
 	doc, err := s.repositoryDocument(ctx)
 	if err != nil {
 		return set, err
 	}
 	catalog := doc.taskCatalog()
-	set.Manager = s.managerIdentity()
 	for i, row := range set.Repositories {
 		set.Repositories[i].CatalogState = repository.CatalogState(row, catalog)
 	}
@@ -125,6 +131,9 @@ func (s *Service) setTodoRepositories(ctx context.Context, id string, in reposit
 	st, ok := s.store().(todoRepositoryStore)
 	if !ok {
 		return repository.TaskSet{}, repository.Problem("store_unavailable")
+	}
+	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
+		return repository.TaskSet{}, err
 	}
 	set, err := st.SetTodoRepositories(ctx, id, in)
 	if err != nil {
@@ -138,6 +147,9 @@ func (s *Service) setTodoRepositoryLinks(ctx context.Context, id, repoID string,
 	st, ok := s.store().(todoRepositoryStore)
 	if !ok {
 		return repository.TaskSet{}, repository.Problem("store_unavailable")
+	}
+	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
+		return repository.TaskSet{}, err
 	}
 	set, err := st.SetTodoRepositoryLinks(ctx, id, repoID, in)
 	if err != nil {

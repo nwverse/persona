@@ -1,4 +1,4 @@
-Replace one repository's issue/PR links using the exact revision from todo_repositories_get. Each entry is either {url} or {kind,number}; links must belong to the saved repository identity. Multiple PRs are independent, and these links never replace legacy PR progress or completion. [] clears links. On conflict read again and reconcile.
+Replace one repository's issue/PR links using the exact revision from todo_repositories_get. Each entry is either {url} or {kind,number}; links must belong to the saved repository identity. Multiple PRs are independent, and task progress and completion remain independently verified. [] clears links. On conflict read again and reconcile.
 
 ```json
 {

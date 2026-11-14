@@ -136,3 +136,131 @@ func TestTodoRepositoriesConcurrentRevisionsAndSnapshotRollback(t *testing.T) {
 		t.Fatal("partial preparation consumer", found, err)
 	}
 }
+
+func TestTodoRepositoryImportsAndRemovalStayUnified(t *testing.T) {
+	d := open(t)
+	ctx := t.Context()
+	row := TodoRow{ID: "reported", Title: "Work", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := d.CreateTodo(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	urls := []string{"https://github.com/example/web/pull/7", "https://github.com/example/web/pull/8", "https://github.com/example/api/pull/7"}
+	set, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, urls, "legacy")
+	if err != nil || len(set.Repositories) != 2 || len(set.Repositories[0].Links) != 2 {
+		t.Fatal(set, err)
+	}
+	revision := set.Revision
+	again, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, urls, "report")
+	if err != nil || again.Revision != revision {
+		t.Fatal("replayed report changed the set", again, err)
+	}
+	zero := int64(0)
+	cleared, err := d.SetTodoRepositories(ctx, row.ID, repository.SetInput{ExpectedRevision: &revision, ExpectedCatalogRevision: &zero, Repositories: []repository.TaskInput{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"legacy", "report"} {
+		got, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, urls, source)
+		if err != nil || len(got.Repositories) != 0 || got.Revision != cleared.Revision {
+			t.Fatal("removed links returned", source, got, err)
+		}
+	}
+	restored, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, urls[:1], "explicit")
+	if err != nil || len(restored.Repositories) != 1 {
+		t.Fatal("explicit agent edit could not restore", restored, err)
+	}
+	if _, _, err = d.ImportTodoRepositoryLinks(ctx, row.ID, []string{"https://github.com/example/web/pull/9", "https://github.com/example/web/pull/not-a-number"}, "explicit"); err == nil {
+		t.Fatal("partial invalid batch saved")
+	}
+	unchanged, _ := d.TodoRepositories(ctx, row.ID)
+	if !reflect.DeepEqual(restored, unchanged) {
+		t.Fatal("invalid batch partially saved")
+	}
+	if err := d.DeleteTodo(ctx, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM todo_repository_link_receipts WHERE todo_id=$1`, row.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("receipt orphan", count, err)
+	}
+}
+
+func TestTodoRepositoryImportCanonicalReceiptAfterRestart(t *testing.T) {
+	d := open(t)
+	ctx := t.Context()
+	row := TodoRow{ID: "canonical-receipt", Title: "Work", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := d.CreateTodo(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	raw := "https://gitlab.example.com/team/api/merge_requests/7"
+	set, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, []string{raw}, "explicit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Remove the inferred row, then replay its canonical form after reopening the database.
+	canonical := set.Repositories[0].Links[0].CanonicalURL
+	zero := int64(0)
+	cleared, err := d.SetTodoRepositories(ctx, row.ID, repository.SetInput{ExpectedRevision: &set.Revision, ExpectedCatalogRevision: &zero, Repositories: []repository.TaskInput{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := Open(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	got, _, err := next.ImportTodoRepositoryLinks(ctx, row.ID, []string{canonical}, "report")
+	if err != nil || got.Revision != cleared.Revision || len(got.Repositories) != 0 {
+		t.Fatal("canonical replay resurrected removed link", got, err)
+	}
+}
+
+func TestTodoRepositoryConcurrentReportsAndInteractiveEdit(t *testing.T) {
+	d := open(t)
+	ctx := t.Context()
+	row := TodoRow{ID: "concurrent-reports", Title: "Work", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := d.CreateTodo(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	base, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, []string{"https://github.com/example/web/pull/1"}, "explicit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 3)
+	for _, raw := range []string{"https://github.com/example/web/pull/2", "https://github.com/example/api/pull/2"} {
+		go func() {
+			<-start
+			_, _, err := d.ImportTodoRepositoryLinks(ctx, row.ID, []string{raw}, "report")
+			results <- err
+		}()
+	}
+	zero := int64(0)
+	go func() {
+		<-start
+		_, err := d.SetTodoRepositories(ctx, row.ID, repository.SetInput{ExpectedRevision: &base.Revision, ExpectedCatalogRevision: &zero, Repositories: []repository.TaskInput{}})
+		results <- err
+	}()
+	close(start)
+	for range 3 {
+		if err := <-results; err != nil && !errors.Is(err, repository.Problem("revision_conflict")) {
+			t.Fatal(err)
+		}
+	}
+	got, err := d.TodoRepositories(ctx, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	urls := repositoryURLs(got.Repositories)
+	for _, want := range []string{"https://github.com/example/web/pull/2", "https://github.com/example/api/pull/2"} {
+		found := false
+		for _, url := range urls {
+			if url == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("concurrent report lost", want, got)
+		}
+	}
+}

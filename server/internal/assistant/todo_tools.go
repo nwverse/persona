@@ -183,7 +183,11 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 		b.WriteString("\n")
 	}
 	if t.Stage != "" || t.PRURL != "" {
-		fmt.Fprintf(&b, "stage %s %s\n", cmpOr(t.Stage, "-"), t.PRURL)
+		if _, canonical := s.store().(todoRepositoryStore); canonical {
+			fmt.Fprintf(&b, "stage %s\n", cmpOr(t.Stage, "-"))
+		} else {
+			fmt.Fprintf(&b, "stage %s %s\n", cmpOr(t.Stage, "-"), t.PRURL)
+		}
 	}
 	if strings.TrimSpace(t.Notes) != "" {
 		b.WriteString("notes:\n" + clip(strings.TrimSpace(t.Notes), 4000) + "\n")
@@ -230,7 +234,11 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 		}
 	}
 	if _, ok := s.store().(todoRepositoryStore); ok {
-		fmt.Fprintf(&b, "repository associations: todo_repositories_get {\"id\":%q}\n", t.ID)
+		set, err := s.readTodoRepositories(ctx, t.ID)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(formatTodoRepositoryContext(set))
 	}
 	return b.String(), nil
 }
