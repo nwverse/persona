@@ -278,8 +278,11 @@ export function Kbd({ children }: { children: React.ReactNode }) {
  *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
  *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed.
  *  `min-w-0`: the grid's implicit column's `auto` minimum is the item's content-based minimum, so one child that cannot
- *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262). */
-export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing. */ sidebarFold?: boolean }) {
+ *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262).
+ *  A sidebar fold is lazy unless it says otherwise: a folded group holds no rows, so the sidebar costs what is open,
+ *  not every Agent (with 400 Agents its folded groups kept about 8,800 elements, laid out on every page switch). */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy: lazyProp, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing; lazy by default. */ sidebarFold?: boolean }) {
+  const lazy = lazyProp ?? sidebarFold;
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout

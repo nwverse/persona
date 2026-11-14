@@ -269,7 +269,7 @@ describe("the sidebar shell across store pushes", () => {
     expect(buildTodoAgentGroups).toHaveBeenCalled();
     expect(renders.get("sidebar.theme_system")).toBeGreaterThan(0);
     expect(host.textContent).toContain("1/2");
-    expect(row()?.closest("[inert]")).toBeTruthy(); // the agent moves into the folded Recent section
+    expect(row()).toBeNull(); // the agent moves into the folded Recent section, which mounts no rows
     await push({ type: "machines", machines });
     expect(host.textContent).toContain("Home · Laptop");
     expect(host.textContent).toContain("2/2");
