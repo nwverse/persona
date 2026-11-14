@@ -198,8 +198,9 @@ async function launch(file, profile, home, linkLog) {
   const args = [`--user-data-dir=${profile}`, `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`];
   if (platform === "linux") args.unshift("--disable-gpu");
   delete env.CHROME_DEVEL_SANDBOX;
-  const forbiddenSandboxFlag = args.find(arg => /^--(?:no-sandbox|disable-setuid-sandbox|disable-namespace-sandbox)(?:=|$)/.test(arg));
-  need("the acceptance launcher does not disable the Chromium sandbox", !forbiddenSandboxFlag && !env.CHROME_DEVEL_SANDBOX);
+  delete env.ELECTRON_DISABLE_SANDBOX;
+  const forbiddenSandboxFlag = args.find(arg => /^--(?:no-sandbox|disable-setuid-sandbox|disable-namespace-sandbox|no-zygote-sandbox)(?:=|$)/.test(arg));
+  need("the acceptance launcher does not disable the Chromium sandbox", !forbiddenSandboxFlag && !env.CHROME_DEVEL_SANDBOX && !env.ELECTRON_DISABLE_SANDBOX);
   const child = spawn(file, args, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32" });
   owned.add(child);
   const keep = data => { log += data; };
