@@ -198,8 +198,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}()
 	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
 	leader := background || to != here.Main && s.isLeader(ctx, to)
+	fresh := background && !backgroundKeepsContext(here) // a round that starts from the first turn (supervise_round.go)
 	render := func(list []prompts.SuperviseEntry) string {
-		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
+		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Fresh: fresh, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 			BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
 			LeaderStuck:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:             slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
@@ -428,6 +429,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		e.Review = &prompts.SuperviseReviewed{State: a.State, Count: a.Count, Blocking: a.Blocking, Findings: a.Findings, Error: a.Error}
 	}
 	s.briefEntry(ctx, t.ID, &e) // what was asked, in the owner's words (task_brief_digest.go)
+	e.LastReview = s.lastReviewEntry(ctx, v)
 	if g.Kind == sigEscalated {
 		e.Recommend = g.Ask // the leader's recommendation (escalate)
 		e.Asks = g.Cards

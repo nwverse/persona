@@ -464,14 +464,25 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	}
 	params := map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
 		"once_id": relayMsgID(to, msg)} // every try of it under one id: the node sends it once (relay_once.go)
+	round := false
 	if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
+		// A supervision message rendered as a round starts from the first turn (supervise_round.go): what the text says
+		// and the switch now decide, also for one queued before a restart or a change of the switch.
+		round = msg.Tool == superviseTool && !backgroundKeepsContext(s.settings(ctx)) && prompts.IsSuperviseRound(msg.Text)
+		if round {
+			params[superviseRoundParam] = true
+		}
 	}
-	if err := s.call(ctx, machine, DeviceAssistantSend, params, nil); err != nil {
+	var res superviseRoundReply
+	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
 		if msg.Tool == superviseTool && !relayInDoubt(err) { // in doubt, drainRelays lets go once it knows it did not go in
 			s.releasePushes(ctx, to)
 		}
 		return err
+	}
+	if round {
+		s.superviseRoundAnswered(to, res)
 	}
 	s.relayDelivered(ctx, to, msg)
 	return nil

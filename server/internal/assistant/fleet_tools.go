@@ -101,7 +101,10 @@ func (s *Service) phoneTools(ctx context.Context) []proto.Tool {
 }
 
 // sessionMCPTools are machine's conversation session's tools: a guest conversation's only its own (guest.go; the
-// node saying it is one, the hub not knowing it or not able to tell: none), any other's mcpTools.
+// node saying it is one, the hub not knowing it or not able to tell: none), any other's mcpTools. The set the process
+// asked for (mcp.tools tool_set, on ctx: toolSetOf): "supervise", a background supervisor's round, narrows an
+// assistant conversation's list to the round's (roundTools, supervise_round.go); none, or one this manager does not
+// know, is the whole list.
 func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, assistant, guestHint bool) []proto.Tool {
 	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
 	allowed, guest, err := s.guestOf(ctx, machine, session)
@@ -127,6 +130,8 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...) // a task leader's task_plan (task_leader.go)
 			tools = append(tools, s.spawnTools(ctx, machine, session)...)
+		} else if toolSetOf(ctx) == toolSetSupervise {
+			tools = roundTools(tools)
 		}
 		return tools
 	}

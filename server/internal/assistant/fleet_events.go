@@ -148,6 +148,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		out, err := s.mailAttachment(ctx, machine, p)
 		return out, true, err
 	case "mcp.tools":
+		ctx = withToolSet(ctx, params) // a narrower set the process asks for (supervise_round.go)
 		var p struct {
 			Assistant bool   `json:"assistant"`
 			SessionID string `json:"session_id"`

@@ -736,6 +736,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 
 		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
 		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
+
+		// SuperviseRound: assistant.send of a round of the background supervisor, resumed at the end of its first turn
+		// (assistant_round.go); the answer says whether it was (context, why).
+		SuperviseRound bool `json:"supervise_round"`
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -1276,6 +1280,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			sctx = withGuestKind(sctx, p.Guest.Tools, p.Guest.Kind)
 		}
+		var round *roundResult
+		if p.SuperviseRound && p.SessionID != "" && p.NewSessionID == "" && p.Guest == nil {
+			sctx, round = withSuperviseRound(sctx)
+		}
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
@@ -1310,11 +1318,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if err == nil && id == "" {
 				id = p.SessionID // the same message asked again while it went: the conversation it went to
 			}
-			return map[string]any{"session_id": id}, err
+			return round.answer(map[string]any{"session_id": id}), err
 		}
 		if p.NewSessionID == "" || opts.ClientMsgID == "" {
 			id, err := send()
-			return map[string]any{"session_id": id}, err
+			return round.answer(map[string]any{"session_id": id}), err
 		}
 		// A start under a given id with its first message's client_msg_id (a meeting's room, its follow-up, Just me's
 		// new main chat): sent once, and its transcript item carries the id, as a session.send's (echo.go).

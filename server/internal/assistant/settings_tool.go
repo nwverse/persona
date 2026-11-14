@@ -181,6 +181,19 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainSupervisesOwnTasks(ctx)), nil },
 			set: s.setMainSupervisesOwnTasks},
+		{Setting: Setting{Key: "assistant.background_supervisor_keeps_context", Title: "The background supervisor keeps every round in context", Actions: getSet,
+			About: "off (the default): each round of the background supervisor starts from its first turn, in the same conversation: " +
+				"it reads its start brief and that round's supervision message, with only the rules for that round's kinds of " +
+				"signal and only the tools supervision uses; what earlier rounds settled is on the tasks (brief, scope changes, " +
+				"decisions, the last review). on: from the next round, one long conversation again that keeps each later round " +
+				"in context, with every rule and all of the assistant's tools, as before (rounds already run from the first " +
+				"turn stay on their own branches, out of that context). Applies from the next round (one already running " +
+				"finishes as it is)",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(backgroundKeepsContext(s.settings(ctx))), nil
+			},
+			set: s.setBackgroundSupervisorKeepsContext},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -317,7 +330,7 @@ var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
-	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
+	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
 	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "model_profiles.tiers": "title_model_tiers",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -595,6 +608,15 @@ func (s *Service) setMainSupervisesOwnTasks(ctx context.Context, v json.RawMessa
 	}, func(v *Settings) **bool { return &v.MainSupervisesOwnTasks },
 		"assistant.main_supervises_own_tasks is %v for the signals raised from now on (open tasks keep running; what the "+
 			"background supervisor was already sent it finishes).")
+}
+
+func (s *Service) setBackgroundSupervisorKeepsContext(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, func(ctx context.Context) bool { return backgroundKeepsContext(s.settings(ctx)) },
+		"assistant.background_supervisor_keeps_context is unchanged", func(l i18n.Lang, before, after string) string {
+			return i18n.T(l, "assistant-settings_tool.change_background_supervisor_keeps_context", i18n.Args{"before": before, "after": after})
+		}, func(v *Settings) **bool { return &v.BackgroundSupervisorKeepsContext },
+		"assistant.background_supervisor_keeps_context is %v from the background supervisor's next round (one running now "+
+			"finishes as it is).")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.

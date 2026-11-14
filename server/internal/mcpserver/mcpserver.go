@@ -415,8 +415,12 @@ func listTools(ctx context.Context) ([]map[string]any, error) {
 }
 
 func listToolsOnce(ctx context.Context) ([]map[string]any, error) {
-	line, err := dialNode(ctx, map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
-		"pane": nodeclient.HookPane(os.Getenv)}) // the pane names the agent whose tools these are (a task leader's task_plan)
+	req := map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
+		"pane": nodeclient.HookPane(os.Getenv)} // the pane names the agent whose tools these are (a task leader's task_plan)
+	if set := toolSet(); set != "" {
+		req["tool_set"] = set
+	}
+	line, err := dialNode(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("Persona node is not reachable: %w", err)
 	}
@@ -457,6 +461,10 @@ func isAssistant() bool { return identity.Getenv("PERSONA_ASSISTANT") == "1" }
 // isGuest: a guest conversation's process (node/assistant_guest.go). The hub knows its guests itself; this is its word
 // for one the hub cannot tell about, which then gets nothing.
 func isGuest() bool { return identity.Getenv("PERSONA_GUEST") == "1" }
+
+// toolSet is the narrower tool set the process was started with (PERSONA_TOOL_SET: "supervise", a background
+// supervisor's round, node/assistant_round.go); "" for the whole list.
+func toolSet() string { return identity.Getenv("PERSONA_TOOL_SET") }
 
 func sessionID() string {
 	if id := identity.Getenv("PERSONA_SESSION_ID"); id != "" {

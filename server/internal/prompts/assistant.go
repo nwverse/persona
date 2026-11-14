@@ -707,6 +707,39 @@ type Supervise struct {
 	Decisions bool
 	// Inbox: an entry is new Inbox messages from other people about the task (#4293).
 	Inbox bool
+	// Fresh: it goes to the background supervisor as a round that starts from a clean context (#7315): only the rules
+	// for its entries' kinds (Has, Closeouts), a line on where what earlier rounds settled is kept, the round marker
+	// (SuperviseRoundMarker) and each entry's last review. Not Fresh renders as before, byte for byte.
+	Fresh bool
+}
+
+// Has says whether the rules for one of kinds go in: always when the message is not Fresh, else when an entry is of one
+// of them ("report:<kind>" for a report of that kind, as "report:done").
+func (s Supervise) Has(kinds ...string) bool {
+	if !s.Fresh {
+		return true
+	}
+	for _, e := range s.Entries {
+		for _, k := range kinds {
+			if e.Kind == k || e.Kind == "report" && k == "report:"+e.Report {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Closeouts says whether the rule for closeouts goes in: always when the message is not Fresh, else when an entry has one.
+func (s Supervise) Closeouts() bool {
+	if !s.Fresh {
+		return true
+	}
+	for _, e := range s.Entries {
+		if e.Closeout != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
@@ -756,6 +789,15 @@ type SuperviseEntry struct {
 	Dropped                             []string
 	// inbox: the Inbox item the new messages came in, the newest when several did.
 	Inbox *SuperviseInbox
+	// LastReview: the task's last review, shown only in a Fresh message (#7315): a round that does not see the earlier
+	// ones does not ask or send back the same thing again. nil when it was never reviewed.
+	LastReview *SuperviseLastReview
+}
+
+// SuperviseLastReview is a task's last task_review as a Fresh supervision message repeats it: the verdict, when (local
+// "01-02 15:04") and its reason or note, clipped.
+type SuperviseLastReview struct {
+	Verdict, At, Note string
 }
 
 // SuperviseInbox is the Inbox item an inbox entry names (#4293): its id, title (the chat's name or the mail's subject),

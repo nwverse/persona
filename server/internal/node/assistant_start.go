@@ -175,6 +175,12 @@ func missingFrom(launcher string, lines []string, notFound bool) string {
 // spawnAssistant starts the conversation's process for its launcher's agent: claude -p (spawnClaude) or codex
 // app-server (spawnCodex). A new Codex conversation (id "") gets its id from Codex.
 func (n *Node) spawnAssistant(id, cwd, launcher string, resume, spare bool, options ...modelExecution) (*assistantProc, error) {
+	return n.spawnAssistantWith(id, cwd, launcher, resume, spare, spawnRound{}, options...)
+}
+
+// spawnAssistantWith is spawnAssistant for a round of the background supervisor too (round, assistant_round.go): a Claude
+// process resumed at its anchor with the round's tools. Only Claude takes a round (superviseRound).
+func (n *Node) spawnAssistantWith(id, cwd, launcher string, resume, spare bool, round spawnRound, options ...modelExecution) (*assistantProc, error) {
 	done, err := n.reload.enter()
 	if err != nil {
 		return nil, err
@@ -186,25 +192,46 @@ func (n *Node) spawnAssistant(id, cwd, launcher string, resume, spare bool, opti
 	if id == "" {
 		id = newUUID()
 	}
-	return n.spawnClaude(id, cwd, launcher, resume, spare, options...)
+	return n.spawnClaudeWith(id, cwd, launcher, resume, spare, round, options...)
 }
 
 func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) (mcpJSON string, toolFlags []string) {
+	return n.claudeAssistantMCPAndToolsFor(id, cwd, legacyMCP, "")
+}
+
+// claudeAssistantMCPAndToolsFor is claudeAssistantMCPAndTools for a process with tool set toolSet ("" the assistant's
+// own): a supervision round (roundToolSet) mounts only Persona's server, which asks the manager for the round's tools,
+// with no extension or other MCP server (--strict-mcp-config) and only the built-ins roundBuiltinTools.
+func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, toolSet string) (mcpJSON string, toolFlags []string) {
 	if guest := n.guestOf(id); guest != nil { // assistant_guest.go: nothing else of the below
 		return n.guestMCPAndTools(id, guest, legacyMCP)
 	}
 	// Per-process MCP config: the assistant-only tools (ask_user, agents_*, lark_*…) and the conversation they act for.
+	env := assistantMCPEnv(id, n.dir)
+	if toolSet != "" {
+		env["PERSONA_TOOL_SET"] = toolSet
+	}
 	servers := map[string]any{"persona": map[string]any{
-		"command": n.bin, "args": []string{"mcp"}, "env": assistantMCPEnv(id, n.dir),
+		"command": n.bin, "args": []string{"mcp"}, "env": env,
 	}}
 	// The extensions' MCP servers whose command is on this machine (assistant_mcp.go).
-	extra, allow, deny := assistantMCPServers(n.assistantLark(context.Background()).MCPServers)
-	for name, s := range extra {
-		servers[name] = s
+	var allow, deny []string
+	builtins := assistantBuiltinTools
+	if toolSet == "" {
+		var extra map[string]any
+		extra, allow, deny = assistantMCPServers(n.assistantLark(context.Background()).MCPServers)
+		for name, s := range extra {
+			servers[name] = s
+		}
+	} else {
+		builtins = roundBuiltinTools
 	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": compat.MCPRegistrationServers(servers, legacyMCP)})
 	allow = append(allow, healthReportRules(cwd)...) // healthdeny.go
-	toolFlags = []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", assistantBuiltinTools}
+	toolFlags = []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", builtins}
+	if toolSet != "" {
+		toolFlags = append(toolFlags, "--strict-mcp-config")
+	}
 	// One --disallowedTools with a word per rule (it takes several, up to the next flag): a path may hold a comma.
 	if len(deny) > 0 {
 		deny = []string{strings.Join(deny, ",")}
@@ -233,6 +260,13 @@ func (n *Node) assistantCLICommand(shell, launcher, cwd string, args, env []stri
 }
 
 func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options ...modelExecution) (*assistantProc, error) {
+	return n.spawnClaudeWith(id, cwd, launcher, resume, spare, spawnRound{}, options...)
+}
+
+func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, round spawnRound, options ...modelExecution) (*assistantProc, error) {
+	if round.anchor != "" && (!resume || spare || n.guestOf(id) != nil || executionOption(options).Runtime != "") {
+		return nil, errors.New("a supervision round resumes a Claude conversation on the CLI")
+	}
 	execution := executionOption(options)
 	if err := execution.check(launcher); err != nil {
 		return nil, err
@@ -282,7 +316,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	// blocks under the old namespace remain valid on a resume with only Persona offered (verified on Claude Code 2.1.322);
 	// an old hub that still addresses the legacy namespace keeps the alias.
 	legacyMCP := !n.hubSupportsPersonaContracts()
-	_, toolFlags := n.claudeAssistantMCPAndTools(id, cwd, legacyMCP)
+	_, toolFlags := n.claudeAssistantMCPAndToolsFor(id, cwd, legacyMCP, round.toolSet)
 	args = append(args, toolFlags...)
 	model := execution.Model
 	if model == "" && resume && execution.Fingerprint != "" && n.guestOf(id) == nil {
@@ -303,6 +337,9 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	}
 	if resume {
 		args = append(args, "--resume", id)
+		if round.anchor != "" { // the end of its first turn (assistant_round.go)
+			args = append(args, "--resume-session-at", round.anchor)
+		}
 	} else {
 		args = append(args, "--session-id", id)
 	}
@@ -424,7 +461,8 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	started = true
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: execution, fingerprint: n.executionFingerprint(launcher, execution),
-		instructions: instructions, fallback: fallback, personaMCPOnly: !legacyMCP, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared()}
+		instructions: instructions, fallback: fallback, personaMCPOnly: !legacyMCP, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
+		round: round.anchor != ""}
 	if first != nil {
 		p.runtime = proto.AssistantRuntimeAgentSDK
 		if err := p.write(first); err != nil {
