@@ -157,6 +157,8 @@ type plannedEvent struct {
 	// The model's words for it; under the fallback only a new one's title and rule tier (the connector's).
 	title, summary, tier, reason string
 	urgent                       bool
+	// settled: the model says this batch closed the open event (SettledReplied, SettledOver; inbox_settle.go).
+	settled string
 }
 
 // relateBatch relates one batch: by the model, else by the connector's fallback; then has each event written.
@@ -287,6 +289,7 @@ type groupAnswer struct {
 		Urgent    bool   `json:"urgent"`
 		Reopen    *bool  `json:"reopen"`
 		Continues string `json:"continues"`
+		Settled   string `json:"settled"`
 	} `json:"events"`
 }
 
@@ -479,6 +482,10 @@ func checkGroupAnswer(out groupAnswer, fresh []string, seen map[string]groupEven
 				pe.reopen = d.Reopen
 			}
 			pe.existing = ev
+		}
+		// Settled only means something for an event left open and not in "Needs you"; any other value is ignored.
+		if (d.Settled == SettledReplied || d.Settled == SettledOver) && d.Tier != TierAction && !seen[ev].Done {
+			pe.settled = d.Settled
 		}
 		plan.events = append(plan.events, pe)
 	}
@@ -821,7 +828,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	if !keepDone && !it.handled() { // what an event's conversation handles keeps its tier
 		policyChanged = b.applyPolicyTier(it)
 	}
-	it.TriagedAt = it.Last
+	it.TriagedAt, it.TriageRev = it.Last, inboxTriageRev
 	switch {
 	case fallbackFloorRaised && !policyChanged && higherTier(tierBefore, it.Tier) != tierBefore:
 		// Only an actual final rise from this batch's fallback rule floor bypasses noteTriaged's same-text dedup: a
@@ -845,6 +852,9 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	}
 	if m != nil && it.open() {
 		b.fileMuted(it, now, m.Name)
+	}
+	if byModel && e.settled != "" && !keepDone && it.open() && it.Tier != TierAction && !it.handled() && currentSuggestion(it) == nil {
+		b.settleItem(it, e.settled, clip(oneLine(e.reason), 30), "", "", now)
 	}
 	b.items[it.ID] = it
 	delete(b.listMemo.kept, it.ID) // saved after the batch's other appends (writeGroup): listed as it is meanwhile

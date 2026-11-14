@@ -43,6 +43,28 @@ type InboxGroup struct {
 
 func RenderInboxGroup(g InboxGroup) string { return render("inbox/group", g) }
 
+// InboxSettled is the system prompt that says whether an open "Needs you" event is over, given what came after it in
+// its conversation (inbox/settled; assistant/inbox_settle.go).
+type InboxSettled struct {
+	Owner string // "" is the Chinese "you"
+}
+
+func RenderInboxSettled(s InboxSettled) string { return render("inbox/settled", s) }
+
+// InboxSettledInput is the event and the messages after it (inbox/settled_input), oldest first.
+type InboxSettledInput struct {
+	Title, Summary, Context string
+	Later                   []InboxSettledLine
+}
+
+// InboxSettledLine is one message after the event: At as "01-02 15:04" ("" unknown), Mine the owner's own.
+type InboxSettledLine struct {
+	At, Sender, Text string
+	Mine             bool
+}
+
+func RenderInboxSettledInput(in InboxSettledInput) string { return render("inbox/settled_input", in) }
+
 // InboxGroupInput is one batch as the model reads it, with the tool calls made so far (inbox/group_input).
 type InboxGroupInput struct {
 	Thread  string

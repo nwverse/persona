@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,17 @@ import (
 
 const triageConcurrency = 4
 
+// inboxTriageRev is the revision of the tier criteria (prompts/inbox/tiers.md). Every tiering stamps it on the item
+// (TriageRev), the model's or the rules'. Raise it when the criteria change in a way that should reach items already
+// sorted: each open "Needs you" item tiered under an older revision is sorted again once by the model (retriageStale),
+// retriagePerPass of them a pass; under the current one a rule tier stays final (TestInboxFallbackIsFinal).
+// 1: "Needs you" is only what is aimed at the owner; pushes, alerts, chatter, @all notices and requests to others or to
+// bots are FYI (#7986).
+const inboxTriageRev = 1
+
+// retriagePerPass is how many stale items one triage pass sorts again, besides the items with new content.
+const retriagePerPass = 24
+
 // triageInbox sorts open items whose content changed since they were last looked at into "Needs you" / "FYI" / "Noise"
 // with a one-line summary (the small-task model, inbox.triage). It runs in the background; one pass at a time.
 func (s *Service) triageInbox(ctx context.Context) {
@@ -24,7 +36,7 @@ func (s *Service) triageInbox(ctx context.Context) {
 		return
 	}
 	b.mu.Lock()
-	var todo []*InboxItem
+	var todo, stale []*InboxItem
 	for _, it := range b.items {
 		if it.open() && it.TriagedAt != it.Last && it.Context != "" {
 			if it.handled() { // what joins an event being handled follows it: its conversation decides (inbox_handle.go)
@@ -32,7 +44,15 @@ func (s *Service) triageInbox(ctx context.Context) {
 				continue
 			}
 			todo = append(todo, it)
+		} else if b.retriageStale(it) {
+			stale = append(stale, it)
 		}
+	}
+	// The oldest criteria's items go first, the newest activity first among them; each is tried once a run.
+	slices.SortFunc(stale, func(x, y *InboxItem) int { return y.UpdatedAt.Compare(x.UpdatedAt) })
+	for _, it := range stale[:min(len(stale), retriagePerPass)] {
+		b.retriaged[it.ID] = true
+		todo = append(todo, it)
 	}
 	b.mu.Unlock()
 	if len(todo) == 0 {
@@ -88,15 +108,22 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 		// The model's connection is held (quota used up, busy): not triaged, so a pass after it is back asks again.
 		// Meanwhile an untriaged item sits in its rule tier rather than in "Needs you".
 		if it.Tier == "" && fallback != "" {
-			it.Tier, it.Reason = fallback, b.byRules()
+			it.Tier, it.Reason, it.TriageRev = fallback, b.byRules(), inboxTriageRev
 			b.applyPolicyTier(it)
 			return settled()
 		}
 		return nil
 	case v.state == "":
-		it.Tier, it.Summary, it.Reason = v.tier, v.summary, v.reason
+		it.Tier, it.Reason = v.tier, v.reason
+		if !keepsWords(it) { // a title and summary the assistant or the user wrote stay
+			it.Summary = v.summary
+		}
 		it.Urgent = v.urgent && v.tier == TierAction
-	case fallback == "":
+		if it.Group != nil { // an event sorted again: its tier is the model's now, not its connector's rule
+			it.TriagedBy = "model"
+		}
+	case fallback == "" || it.TriagedAt == last:
+		// No fallback, or sorted before (retriageStale): what it shows stays.
 		return nil
 	default:
 		if v.err != nil {
@@ -106,13 +133,30 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 	}
 	b.applyPolicyTier(it) // the user's policy has the last word on the tier (inbox_policies.go)
 	b.liftMerged(it)      // a merged row stays at its rows' highest tier (inbox_merge.go, #7230)
-	it.TriagedAt = last
+	it.TriagedAt, it.TriageRev = last, inboxTriageRev
 	b.noteTriaged(it)
 	// Triage can settle an item read elsewhere while it was still untriaged (not one filed while the model thought).
 	if it.Read && it.Tier != TierAction && it.open() {
 		b.file(it, time.Now(), "read")
 	}
 	return settled()
+}
+
+// retriageStale: an open "Needs you" item whose tier the model gave under older criteria (inboxTriageRev), not yet
+// sorted again this run. Left out: what an event's conversation handles or a suggestion waits on, a tier a policy sets
+// (it would set it again), a connector's rule tier that never goes to the model, and items without text. Under b.mu.
+func (b *inboxBook) retriageStale(it *InboxItem) bool {
+	if !it.open() || it.Tier != TierAction || it.TriageRev >= inboxTriageRev || it.Context == "" || it.TriagedAt != it.Last ||
+		it.handled() || currentSuggestion(it) != nil || b.retriaged[it.ID] {
+		return false
+	}
+	if it.Connector != nil && it.Connector.RuleTier != "" && it.Group == nil && it.TriagedBy == "" && it.Summary == "" {
+		return false // a connector's rule tier (a review request, a document comment): never the model's
+	}
+	if p := b.policyOf(it); p != nil && p.Tier != "" {
+		return false
+	}
+	return true
 }
 
 // Why the model gave no tier (a triage verdict's state, GET /api/v1/inbox triage.state), the most telling first.

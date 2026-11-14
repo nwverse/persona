@@ -95,6 +95,29 @@ func (b *inboxBook) mailReadElsewhere(it *InboxItem, now time.Time) {
 	}
 }
 
+// mailAnswered files an open mail item as replied when one of its mails on the page carries IMAP \Answered (the owner
+// replied from a mail client) and no unread mail of the thread came after that one, whatever its tier, under b.mu. An
+// item its processing conversation handles or that has a suggestion is left to that. Reports whether it filed the item.
+func (b *inboxBook) mailAnswered(it *InboxItem, list, unseen []assistantwire.InboxMailSummary, now time.Time) bool {
+	if it.Mail == nil || !it.open() || it.handled() || currentSuggestion(it) != nil {
+		return false
+	}
+	var answered uint32
+	for _, m := range list {
+		if m.Answered && slices.Contains(it.Mail.UIDs, m.UID) {
+			answered = max(answered, m.UID)
+		}
+	}
+	if answered == 0 || slices.ContainsFunc(unseen, func(m assistantwire.InboxMailSummary) bool { return m.UID > answered }) {
+		return false
+	}
+	b.roundWrite(it)
+	b.noteSelfReplied(it, now)
+	it.Read = true
+	it.done(now, "replied")
+	return true
+}
+
 var replyPrefix = lazyre.New(`(?i)^\s*((re|fw|fwd|aw|回复|答复|转发)\s*[:：]\s*|\[[^\]]{1,30}\]\s*)+`)
 
 // mailThread is what keeps replies in one item: the subject without Re: / Fwd: / [list] prefixes. A subject that is
@@ -168,6 +191,10 @@ func (b *inboxBook) applyMail(a assistantwire.InboxMailAccount, msgs []assistant
 		}
 		if len(held) > 0 {
 			unseen = slices.DeleteFunc(unseen, func(m assistantwire.InboxMailSummary) bool { return held[m.UID] })
+		}
+		if open != nil && b.mailAnswered(open, list, unseen, now) {
+			changed = append(changed, open)
+			continue
 		}
 		if len(unseen) == 0 {
 			// Read in another client (or past the window): done unless it needs the user (mailReadElsewhere).

@@ -171,7 +171,20 @@ a summary up to 40 characters, and a short reason:
   (the user's original words, such as Lark-plugin Triage rules `triage_rules`; `docs/protocol/connector-protocol.md`). The item **uses only its own rules**, with no global `inbox.rules` appended.
   Only items without rules use global ones. Default tier criteria above are unchanged; user rules remain last and authoritative. Rules are stored with the item (not listed), updated from each new version when activity arrives,
   up to 4000 characters. The assistant can change plugin-source rules (`inbox.rules.<plugin>` in `persona_settings`, confirmed on the phone; `docs/assistant/assistant.md`). Built-in GitHub and Messages connectors do not yet have their own rules (the Telegram extension has `triage_rules`).
-- When uncertain between action / fyi, choose action. If the model cannot triage (unconfigured, no quota / concurrency full, error, timeout), use fallback rules (private chat / mention of me → action; everyone-only mention without me → fyi, an announcement; group → fyi; direct mail → fyi; others → noise), with reason "Rule-based."
+- **Needs you is what is aimed at the owner** (#7986). The criteria list what is *not* Needs you: requests that @ someone
+  else or a bot / on-call assistant / agent, group discussions that neither @ nor name the owner, automated alerts, monitoring
+  and capacity reports, on-call and ticket notices (unless one assigns the owner to act now), @all notices, small talk, threads
+  already answered or closed (or answered by the owner), and Persona's own Lark bot pushes and cards ("要你批准", "在问你",
+  "请验收", "任务进展" and the like, which the app handles). When unsure, the question is whether someone waits on the owner or
+  the owner's own work slips; it used to be "choose action", and direct chats and @me defaulted to action.
+  Grouping (`group.md`) also spells out what the batch's `（@了我）` / `（@所有人）` markers mean: without them a group message
+  did not @ the owner, and a name @'d in the text is someone else. The user's own rules are unchanged and still come last and win.
+- **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
+  records the one the model sorted it under (`triage_rev`, kept, not listed). Each triage pass also takes up to 24 open Needs you
+  items sorted under an older revision (newest activity first), skipping those a conversation handles, a suggestion waits on, a
+  policy sets or a connector's rule tier decided, and asks the model again with `triage.md`. A new tier records a `triaged` chain
+  entry as usual; a model failure leaves the item as it was (no rule tier replaces the model's), and each item is tried once a run.
+- If the model cannot triage (unconfigured, no quota / concurrency full, error, timeout), use fallback rules (private chat / mention of me → action; everyone-only mention without me → fyi, an announcement; group → fyi; direct mail → fyi; others → noise), with reason "Rule-based."
   Connector items use their rule-provided fallback (`tier`). Model-triaged items (empty `tier`) from hub-owned connectors (GitHub, Telegram, Messages) still fall back to noise.
   **Plugin-provided connectors have no fallback**: noise would silently hide items the user must see (below).
 - **Scope (requested 2026-11-04)**: "Triage before admission" and "No admission without fallback" below **apply only to plugin-provided connectors** (installed plugins or plugins in the manager's manager.json, not bundled personad connectors;
@@ -656,6 +669,38 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
 - Read elsewhere (Lark / another mail client; for mail also gone from INBOX or past the window, on the page or off it, #5993): mark `read`; non-Needs you items become done (`done_by=read`). Needs you remains open, but unread count becomes zero and me / everyone mention flags clear (no longer unread mentions). Rule-tiered items are retiered using current rules after reading; no longer Needs you means done.
   Already-read open items with remaining unread count or stale rule tiers (read before a rule change) are reconciled next round (#798).
 - A reply by me in Lark (latest chat message is mine, newer than the item) handles it (`done_by=replied`).
+- What the owner handled elsewhere is filed too: see "Handled elsewhere" below.
+
+## Handled elsewhere (2026-11-15, #7986)
+
+An open item the owner already dealt with in the source, or that was closed there, leaves the Inbox by itself. Every filing
+writes a chain entry saying why, can be reopened as usual (`done:false`, bulk `reopen`), and records its evidence on the
+item (`settled_of`, kept, not listed) so a reopened item is not filed again on the same messages, only on newer ones.
+Code: `assistant/inbox_settle.go`.
+
+- **Grouping says so** (`group.md`): for an open event, the model may answer `"settled": "replied"` (the owner's own lines in
+  the batch answered it) or `"over"` (the other side said it's done, no longer needed, or someone else answered). It is taken
+  only for a tier other than action, and not for an event its conversation handles or a suggestion waits on: `replied` files it
+  `done_by=replied` with a `self_replied` entry, `over` files it `done_by=manager` with a `done` entry ("Looks settled in the
+  conversation") whose `detail` is the model's reason. Any other value is ignored.
+- **A pass over the conversation**: the owner's own messages never start a batch (connectors hand in other people's messages), so
+  after each round a background pass (one at a time) looks at up to 8 open Needs you events of a grouping connector, each at most
+  every 20 minutes, the longest unasked first. It reads 5 messages either side of the event's newest message from someone else
+  (`InboxLark.reply_to`) through the connector's `messages_around` group tool (whose `mine` marks the owner's messages; the hub
+  cuts an answer past 8 KB, so the pass reads what is whole) and decides:
+  - a message of the owner's after the event in a direct chat, or in a group one that quotes or sits in the thread of the
+    event's messages, is a reply: `done_by=replied`, a `self_replied` entry linking that position, without a model;
+  - anything else after the event (the owner's unrelated message in a group, other people's messages) goes to the triage model
+    with `settled.md`: `replied`, `over` (filed as above) or `open` (left alone, the default when unsure);
+  - nothing after the event: nothing to do.
+- **Mail answered from another client**: the mail page carries IMAP `\Answered` (`InboxMailSummary.answered`); an open mail
+  item with an answered mail on the page is `done_by=replied` with a `self_replied` entry, whatever its tier, unless a
+  conversation handles it or a suggestion waits.
+- **Its to-do finished**: an open item linked to a to-do (`agent.todo_id`, `inbox_task_links.go`) whose to-do is done (not
+  cancelled), after a closed task's continuation was followed, is filed `done_by=manager` with a `done` entry ("Its task is
+  done") linking the to-do. An item with the AI twin's processing conversation is left to it (its judge links the item to the
+  task carrying the work on).
+- Not covered: emoji reactions. The Lark plugin's group tool doesn't say who reacted; reading them needs the plugin.
 - Lark collection reads messages without holding a lock. If an item is marked done during the read (manually or in bulk), newly read messages create another item rather than merge into the done one (previously swallowed and invisible, #1105).
 
 ## Mark All as Done (2026-11-04, #1105)
