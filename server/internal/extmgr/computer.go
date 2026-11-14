@@ -413,40 +413,37 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	default:
 		return proto.TextResult("give script (run_script) or steps (run_steps)", true)
 	}
-	// Never System Settings or a permission prompt (#4336, computer_protected.go), before any card.
+	// Never System Settings or a permission prompt (#4336, #7560, computer_protected.go), before any card.
 	if a.Script != "" && !whole {
 		h.logf("[%s] computer_run refused: a script whose apps cannot all be read", m.cfg.ID)
 		return proto.TextResult(protectedapps.UnreadableScript, true)
 	}
 	var known []protectedapps.App
-	if !lcu {
-		known = h.knownApps(ctx, m)
-	}
-	for _, x := range h.appsOn(ctx, m, apps, known) {
-		if protectedApp(x) {
-			h.logf("[%s] computer_run refused: protected app %s", m.cfg.ID, strings.TrimPrefix(x.BundleID, "name:"))
-			return proto.TextResult(refusedText(m.name(), "it would operate "+x.Name), true)
+	// guard checks this call, or one of its steps alone, on the Mac as it is now (protectedapps.Look.Check). LCU asks
+	// before touching any app, and those questions are refused for these (computer_lcu.go): it only checks names here.
+	guard := func(string, map[string]any) protectedapps.Verdict { return protectedapps.Verdict{} }
+	if lcu {
+		for _, x := range h.appsOn(ctx, m, apps, nil) {
+			if protectedApp(x) {
+				h.logf("[%s] computer_run refused: protected app %s", m.cfg.ID, strings.TrimPrefix(x.BundleID, "name:"))
+				return proto.TextResult(refusedText(m.name(), "it would operate "+x.Name), true)
+			}
+		}
+	} else {
+		guard = func(tool string, in map[string]any) protectedapps.Verdict {
+			raw, _ := json.Marshal(in)
+			look := h.protectedLook(ctx, m, known)
+			v := look.Check(m.name(), tool, raw)
+			known = look.Apps()
+			return v
 		}
 	}
-	// LCU asks before touching any app, and those questions are refused for these (computer_lcu.go).
-	onScreen := func() *proto.ToolResult {
-		found, ok := h.protectedOnScreen(ctx, m, &known)
-		switch {
-		case !ok:
-			h.logf("[%s] computer_run refused: the windows could not be read", m.cfg.ID)
-			res := proto.TextResult(protectedapps.Unchecked, true)
-			return &res
-		case len(found) > 0:
-			h.logf("[%s] computer_run refused: protected app on screen", m.cfg.ID)
-			res := proto.TextResult(refusedText(m.name(), strings.Join(found, ", ")+" is open on its screen"), true)
-			return &res
-		}
-		return nil
+	refuse := func(v protectedapps.Verdict) proto.ToolResult {
+		h.logf("[%s] computer_run refused (%s): %s", m.cfg.ID, v.Rule, v.App)
+		return proto.TextResult(v.Why, true)
 	}
-	if !lcu {
-		if res := onScreen(); res != nil {
-			return *res
-		}
+	if v := guard(tool, in); v.Why != "" {
+		return refuse(v)
 	}
 	what := computerSummary(h.userLang(), m.name(), tool, a.Script, a.Steps)
 	asked, ok := h.approveApps(ctx, m, h.assistantAsker(sessionID, m.cfg.ID), name, apps, whole, args, known)
@@ -454,16 +451,18 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 	if refused {
 		return declined(computerLogWhat(tool, a.Script, a.Steps))
 	}
-	if !lcu && (asked || h.cua().Confirm) { // a card may have waited minutes: look again
-		if res := onScreen(); res != nil {
-			return *res
+	if asked || h.cua().Confirm { // a card may have waited minutes: look again
+		if v := guard(tool, in); v.Why != "" {
+			return refuse(v)
 		}
 	}
 	start := time.Now()
 	var res *proto.ComputerResult
 	var stopped string
 	if !lcu && tool == "run_steps" && unnamedSteps(a.App, a.Steps) {
-		res, stopped, err = h.runStepsOneByOne(ctx, m, session, sessionID, a.Steps, a.Observe, &known)
+		res, stopped, err = h.runStepsOneByOne(ctx, m, session, sessionID, a.Steps, a.Observe, func(step json.RawMessage) protectedapps.Verdict {
+			return guard("run_steps", map[string]any{"steps": []json.RawMessage{step}})
+		})
 	} else {
 		res, err = h.computerCall(ctx, m, session, sessionID, tool, in)
 	}
@@ -473,8 +472,7 @@ func (h *Manager) callComputerTool(ctx context.Context, sessionID, name string, 
 		return proto.TextResult(err.Error(), true)
 	}
 	if stopped != "" {
-		h.logf("[%s] computer_run refused partway: protected app on screen", m.cfg.ID)
-		return proto.TextResult(refusedText(m.name(), stopped), true)
+		return proto.TextResult(stopped, true)
 	}
 	return computerResult(res)
 }
