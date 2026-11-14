@@ -17,7 +17,7 @@ vi.mock("react-dom", async (importOriginal) => ({
   createPortal: (children: React.ReactNode) => children,
 }));
 
-const fake = vi.hoisted(() => ({ loaded: true, sessions: [] as Session[], interactions: [] as Interaction[], machines: [] as Machine[], todos: [] as Todo[], answered: {} as Record<string, unknown>, conn: undefined as "connecting" | "online" | "offline" | undefined, list: "loaded" as "loaded" | "loading" | "failed" }));
+const fake = vi.hoisted(() => ({ loaded: true, sessions: [] as Session[], interactions: [] as Interaction[], machines: [] as Machine[], todos: [] as Todo[], answered: {} as Record<string, unknown>, conn: undefined as "connecting" | "online" | "offline" | undefined, list: "loaded" as "loaded" | "loading" | "failed", partial: false }));
 
 vi.mock("../lib/store", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/store")>();
@@ -25,7 +25,7 @@ vi.mock("../lib/store", async (importOriginal) => {
 });
 vi.mock("../lib/sessions", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/sessions")>();
-  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions), interactions: fake.interactions.length }), useAgentListStatus: () => fake.list };
+  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions), interactions: fake.interactions.length }), useAgentListStatus: () => ({ status: fake.list, whole: fake.list === "loaded" && !fake.partial }) };
 });
 
 // the extensions' overview cards are not this test's
@@ -181,6 +181,18 @@ describe("the overview", () => {
       const plain = as("failed", () => render([], [], { machines: [mac] }));
       expect(plain.match(/data-machine-line="true">([^<]*)</)?.[1]).toBe("在线");
       expect(render([], [], { machines: [studio] }).match(/data-machine-line="true">([^<]*)</)?.[1]).toBe("0 个 Agent · macOS 26.1");
+    });
+
+    it("gives no computer a count of only the list's first pages", () => {
+      fake.partial = true;
+      try {
+        const html = render([agent(1, 0, "working")], [], { machines: [studio] });
+        expect(html.match(/data-machine-line="true">([^<]*)</)?.[1]).toBe("macOS 26.1");
+        // the summary is the hub's count of every agent: it stays
+        expect(html).toContain("1 个工作中");
+      } finally {
+        fake.partial = false;
+      }
     });
 
     it("says it is loading while the list is read", () => {

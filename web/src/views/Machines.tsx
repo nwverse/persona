@@ -295,7 +295,7 @@ const cardKey = (m: Machine) => JSON.stringify({ ...m, last_seen: !!m.last_seen 
 
 /** By computer: its agents that are not offline (the assistant's conversations are not agents), and how many of them
  *  work. */
-export function agentCounts(list: readonly Session[]): Map<string, readonly [number, number]> {
+function agentCounts(list: readonly Session[]): Map<string, readonly [number, number]> {
   const by = new Map<string, [number, number]>();
   for (const s of list) {
     if (s.assistant) continue;

@@ -19,9 +19,9 @@ import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { useScopedAgentSessions, useScopedCounts, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
+import { useScopedAgentListStatus, useScopedAgentSessions, useScopedCounts, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { getSession, useStore, withTaskRows } from "../lib/store";
-import { retryAgentList, useAgentListStatus } from "../lib/sessions";
+import { retryAgentList } from "../lib/sessions";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
 import { heldDelivery, makeSessionLookup, orphanedLine, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
@@ -57,14 +57,17 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   const online = useStore((s) => s.conn === "online");
   const noMachines = loaded && machines.length === 0;
   const counts = useScopedCounts();
-  // a hub that pages its Agents list may not have answered it yet, or failed to: then nobody knows how many agents
-  // there are, and the page says so instead of counting none
-  const list = useAgentListStatus();
+  // The list the agents and counts come from (a paging hub's first pages, or with several assistants the complete list)
+  // may not have been read yet, or its read failed: then nobody knows how many agents there are, and the page says so
+  // instead of counting none. `whole`: it holds every agent, so each computer's can be counted.
+  const { status: list, whole } = useScopedAgentListStatus();
   const now = useNow(5000, counts.working > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
   // something to do, and "Mark all as seen" marks every unread agent, wherever its tab is filed
   const { groups, unread, markAllAt, quiet } = useMemo(() => homeOverview(sessions, interactions), [sessions, interactions]);
+  // the list's read failed: the line under the greeting says so, with Retry (with no computer, adding one comes first)
+  const failed = loaded && list === "failed" && !(quiet && noMachines);
   // every open task with where it stands (#6450, the web side of the Lark bot's /tasks)
   const todos = useScopedTodos();
   const taskRows = useStore((s) => s.taskRows);
@@ -107,17 +110,12 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
           <div style={{ animation: `fade-up 420ms ${EASE} both` }}>
             <h1 className="text-[22px] font-semibold tracking-tight text-ink">{greeting()}</h1>
             <div className="mt-1 flex items-center gap-2">
-              {loaded && list === "failed" && !(quiet && noMachines) ? (
-                <>
-                  <Icon name="alertCircle" size={14} className="shrink-0 text-red" />
-                  <p className="min-w-0 text-[13.5px] text-ink-2" role="status">{t("home.agents_failed")}</p>
-                  <Button size="sm" icon="retry" onClick={retryAgentList}>{t("home.retry")}</Button>
-                </>
-              ) : (
-                <p className="min-w-0 flex-1 text-[13.5px] text-ink-2">
-                  {!loaded ? (online ? t("home.loading") : t("home.connecting")) : quiet && noMachines ? t("home.no_machines_summary") : list === "loading" ? t("home.loading") : quiet ? t("home.all_quiet") : summary(counts, interactions.length)}
-                </p>
-              )}
+              {failed && <Icon name="alertCircle" size={14} className="shrink-0 text-red" />}
+              {/* one live region for the whole line, mounted throughout: a screen reader hears it change, to the failure too */}
+              <p className={cx("min-w-0 text-[13.5px] text-ink-2", !failed && "flex-1")} role="status">
+                {failed ? t("home.agents_failed") : !loaded ? (online ? t("home.loading") : t("home.connecting")) : quiet && noMachines ? t("home.no_machines_summary") : list === "loading" ? t("home.loading") : quiet ? t("home.all_quiet") : summary(counts, interactions.length)}
+              </p>
+              {failed && <Button size="sm" icon="retry" onClick={retryAgentList}>{t("home.retry")}</Button>}
               {loaded && markAllAt === "summary" && markAll}
             </div>
           </div>
@@ -233,8 +231,9 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
                 {machines.map((m) => {
                   const mine = m.online ? sessions.filter((s) => s.machine_id === m.id && stateOf(s) !== "offline") : [];
-                  // its agents' count only once the list is in: "0 agents" for a list that never came would be wrong
-                  const line = m.online ? [list === "loaded" && t("home.machine_agents", { count: mine.length }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
+                  // its agents' count only from a list that holds them all: "0 agents" for a list that never came, or
+                  // a count of the first pages only, would be wrong (the Machines page counts the complete list)
+                  const line = m.online ? [whole && t("home.machine_agents", { count: mine.length }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
                   const hub = hubLabel(m, machines);
                   const detail = { name: "machine" as const, mid: m.id };
                   return (

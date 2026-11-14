@@ -25,10 +25,11 @@ export function MachineMetricsSummary({ machine, metrics }: { machine: Machine; 
   const usage = metrics?.usage;
   const minute = Math.floor(now / 60) * 60;
   const tokenPoints = usage?.recent.map((cpu, i) => ({ t: minute - (usage.recent.length - 1 - i) * 60, cpu })) ?? [];
-  // A column is at least as wide as the widest value it can show ("↓ 1000 KB/s" is 94 px at the standard text size):
-  // narrower, a card at 1024 px cut the network's unit ("↓ 2.58 M…") and read as another number. Fewer columns instead.
+  // A column is at least as wide as the widest value it can show ("↓ 1023 MB/s", 98 px at the standard text size: a
+  // rate keeps four digits up to 1023 before the next unit, as the app's MetricFormat): narrower, a card at 1024 px cut
+  // the network's unit ("↓ 2.58 M…") and read as another number. Fewer columns instead.
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(6rem,1fr))] gap-x-3 gap-y-3 px-4 py-3" data-testid="machine-metrics-summary">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(6.25rem,1fr))] gap-x-3 gap-y-3 px-4 py-3" data-testid="machine-metrics-summary">
       <MetricCell label="CPU" value={percent(cpu)} detail={t("machines.load_value", { value: load(known(latest?.load)) })} severity={level(cpu, 75, 90)}>
         <Spark points={points} end={now} />
       </MetricCell>

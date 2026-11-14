@@ -14,6 +14,7 @@ import { connect, flushPushes, getState, reset } from "../lib/store";
 import type { Machine, Session } from "../lib/types";
 import { Machines } from "./Machines";
 import { MachineDetail } from "./machines/MachineDetail";
+import { SpacePage } from "./SpacePage";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -40,10 +41,12 @@ const machines: Machine[] = [
 const row = (machine_id: string, session_id: string, state: Session["state"], patch: Partial<Session> = {}): Session => ({
   machine_id, session_id, title: `任务 ${session_id}`, cwd: "/code", status: state === "working" ? "working" : "idle", state, updated_at: "2026-11-14T00:00:00Z", ...patch,
 });
-// MacBook: two agents, one working, one stopped (not counted) and a Persona conversation (no agent); NAS: one waiting
+// MacBook: two agents in the space "weather", one working, one stopped (not counted) and a Persona conversation (no
+// agent); NAS: one waiting
+const weather = { space_kind: "herdr", space_id: "w1", space_name: "weather" } as const;
 const rows: Session[] = [
-  row("mac", "m1", "idle"),
-  row("mac", "m2", "working"),
+  row("mac", "m1", "idle", weather),
+  row("mac", "m2", "working", weather),
   row("mac", "m3", "offline"),
   row("mac", "p1", "idle", { assistant: true }),
   row("nas", "n1", "needs_you"),
@@ -174,6 +177,53 @@ describe("on a hub that pages its Agents list", () => {
     expect(agentsHeading()).toBe("Agent");
     expect(agentsBox()?.getAttribute("data-agents")).toBe("failed");
     expect(agentsBox()?.textContent).toBe("没能读到这台电脑的 Agent，稍后会再试。");
+  });
+});
+
+describe("a space's page on a hub that pages its Agents list", () => {
+  const space = () => act(() => root.render(<SpacePage mid="mac" space="weather" onToggleSidebar={() => {}} />));
+
+  it("lists the space's agents, which the computer's page links to", async () => {
+    await hello(["sessions_list", "sessions_lookup"]);
+    history.replaceState(null, "", "/machines/mac");
+    act(() => root.render(<MachineDetail mid="mac" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.querySelector('a[href="/space/mac/weather"]')).not.toBeNull();
+    history.replaceState(null, "", "/space/mac/weather");
+    space();
+    await flush();
+    expect(host.textContent).toContain("任务 m1");
+    expect(host.textContent).toContain("任务 m2");
+    expect(host.textContent).not.toContain("找不到这个空间");
+  });
+
+  it("is not 'not found' while the agents are read, nor when they can't be: it says so, with Retry", async () => {
+    full = "hold";
+    await hello(["sessions_list", "sessions_lookup"]);
+    space();
+    await flush();
+    expect(host.textContent).not.toContain("找不到这个空间");
+    expect(host.querySelector("[data-agents]")).toBeNull(); // loading
+    await act(async () => { held.forEach((go) => go()); });
+    await flush();
+    expect(host.querySelector("[data-agents]")?.getAttribute("data-agents")).toBe("failed");
+    expect(host.textContent).toContain("没能读到这个空间的 Agent");
+    expect(host.textContent).not.toContain("找不到这个空间");
+    // Retry reads them at once, not at the complete list's next try
+    full = "ok";
+    const before = fullReads;
+    const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === "重试");
+    await act(async () => { retry!.click(); });
+    await flush();
+    expect(fullReads).toBe(before + 1);
+    expect(host.textContent).toContain("任务 m2");
+  });
+
+  it("still says a space with no agents is not found, once they are read", async () => {
+    await hello(["sessions_list", "sessions_lookup"]);
+    act(() => root.render(<SpacePage mid="mac" space="gone" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.textContent).toContain("找不到这个空间");
   });
 });
 
