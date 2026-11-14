@@ -2,11 +2,11 @@
 // (lib/terminals.ts, the /terminal page's data). `>` first (or ⌘⇧P) is command mode: the registered commands with their
 // shortcuts, and whatever other modules add through registerContextCommands (lib/palette.ts). docs/web/web.md"Keyboard shortcuts".
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { enc, api, errorText } from "../lib/api";
+import { enc, api } from "../lib/api";
 import { machineWithHub } from "../lib/mesh";
 import { createPortal } from "react-dom";
 import { ago, sessionTitle, shortPath, stateOf, tabLabel } from "../lib/format";
-import { appCommands, commandKeys, contextCommands, filterCommands, inboxHits, orderGroups, parseQuery, placeHits, openPaletteWith, setPaletteQuery, terminalHits, usePalette, type InboxHit, type MachinePanes, type PaletteCommand, type PlaceHit, type PlaceInput, type TerminalHit } from "../lib/palette";
+import { appCommands, commandKeys, contextCommands, filterCommands, inboxHits, matchPaletteWords, orderGroups, parseQuery, placeHits, openPaletteWith, setPaletteQuery, terminalHits, usePalette, type InboxHit, type MachinePanes, type PaletteCommand, type PlaceHit, type PlaceInput, type TerminalHit } from "../lib/palette";
 import { isDone, itemRoute, useInbox, type InboxItem } from "../lib/inbox";
 import { useNavPages } from "./Sidebar";
 import type { EvidenceSnippet } from "../lib/agent-chatlist-filter";
@@ -115,12 +115,7 @@ const chatTitle = (s: Session, persona: boolean) => (persona ? conversationTitle
 /** A chat's match by its title (starting with what was typed 100, containing it 80), then every word in its folder,
  *  computer or last line (40): a Persona chat's, and an Agent's until lib/agent-search.ts has loaded. */
 function score(s: Session, q: string, machine: string, persona = false): number {
-  if (!q) return 1;
-  const title = chatTitle(s, persona).toLowerCase();
-  if (title.startsWith(q)) return 100;
-  if (title.includes(q)) return 80;
-  const hay = [s.cwd, s.space_name, s.slot_name, machine, s.last_text].join(" ").toLowerCase();
-  return q.split(/\s+/).every((w) => hay.includes(w) || title.includes(w)) ? 40 : 0;
+  return matchPaletteWords(chatTitle(s, persona), q, [s.cwd, s.space_name, s.slot_name, machine, s.last_text].join(" "));
 }
 
 const HOME: Route = { name: "home" };
@@ -149,21 +144,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const saved = useSavedSearches(open && mode === "jump", savedPanel);
   const managing = savedPanel?.scope === saved.scope ? savedPanel : null;
   useEffect(() => { if (savedPanel && !managing) setSavedPanel(null); }, [savedPanel, managing]);
-  // the Agents list's matcher (#6589), loaded with the first query typed as the manager's chat search is: the palette is
-  // idle-tier (src/startup-preload.ts IDLE_TIER_BUDGET); until then an Agent matches as a Persona chat does
-  const [agentSearch, setAgentSearch] = useState<typeof import("./palette/SearchSupport") | null>(null);
-  const [searchLoadError, setSearchLoadError] = useState("");
-  const [searchAttempt, setSearchAttempt] = useState(0);
-  const retrySearchImport = () => { setSearchLoadError(""); setSearchAttempt((value) => value + 1); };
-  // the Filter beside the field asks for it too, its first click before anything is typed
-  const [conditions, wantConditions] = useState(false);
-  const wantsAgentSearch = open && !managing && mode === "jump" && (text !== "" || conditions) && !agentSearch;
-  useEffect(() => {
-    if (!wantsAgentSearch) return;
-    let live = true;
-    void import("./palette/SearchSupport").then((loaded) => { if (live) setAgentSearch(loaded); }, (error) => { if (live) setSearchLoadError(errorText(error)); });
-    return () => { live = false; };
-  }, [wantsAgentSearch, searchAttempt]);
+  // Both search tools arrive with the opened palette, outside its idle chunk. Their data lifetimes remain
+  // independent: saved queries follow the default manager; runtime matches are hub-wide and require typed input.
+  const agentSearch = saved.module;
   // `machine:`, `project:`, `is:pinned`, `since:`… speak of Agent sessions: with one, only they are listed (#6589)
   const operators = mode === "jump" && Boolean(agentSearch?.hasSearchOperators(text));
   const [selection, setSelection] = useState<{ query: string; key: string }>({ query: q, key: "" });
@@ -180,7 +163,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   // hub matches the query as text; its operators are the complete list's)
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const runtimeSearchOn = useStore((s) => s.features.includes("sessions_search"));
-  const runtimeSearch = useRuntimeSearch({ open: open && !managing, jump: mode === "jump", query: text, capable: runtimeSearchOn, bounded, module: agentSearch, loadError: searchLoadError, retryImport: retrySearchImport });
+  const runtimeSearch = useRuntimeSearch({ open: open && !managing, jump: mode === "jump", query: text, capable: runtimeSearchOn, bounded, module: agentSearch, loadError: saved.failed ? t("palette.saved_searches_failed") : "", owner: saved.owner });
   const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
   const todosSupported = useStore((s) => s.todosSupported);
   const several = useScope().several;
@@ -202,9 +185,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
       ...pages.map((p) => ({ key: p.k, title: p.label, icon: p.icon, to: p.to })),
       // the Sessions and Terminal page's Terminals list (#4754): every plain terminal, to open one and type
       ...(panesOn ? [{ key: "terminals", title: t("palette.place_terminals"), icon: "terminal" as const, to: { name: "terminal", view: "terminals" } as Route }] : []),
-    ].map((p) => ({ ...p, words: saved.module?.placeWords(p.key) ?? agentSearch?.placeWords(p.key) ?? "" })),
+    ].map((p) => ({ ...p, words: agentSearch?.placeWords(p.key) ?? "" })),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `pages` is new each render; pagesKey says what it holds
-    [hasAssistant, pagesKey, panesOn, saved.module, agentSearch],
+    [hasAssistant, pagesKey, panesOn, agentSearch],
   );
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
   const list = useRef<HTMLDivElement>(null);
@@ -444,7 +427,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
             className="min-w-0 flex-1 bg-transparent text-[14px] text-ink outline-none placeholder:text-ink-3"
           />
           {/* the Agents list's filter choices, written into the query as its operators (#6589) */}
-          {!command && <AgentConditions query={text} onQuery={(next) => setQ(next && `${next} `)} search={agentSearch} want={() => wantConditions(true)} sessions={sessions} onDone={() => input.current?.focus({ preventScroll: true })} />}
+          {!command && <AgentConditions query={text} onQuery={(next) => setQ(next && `${next} `)} search={agentSearch} want={saved.retry} sessions={sessions} onDone={() => input.current?.focus({ preventScroll: true })} />}
           {!command && <IconButton icon="book" label={t("palette.saved_searches")} disabled={!saved.module || !saved.model} onClick={() => manage()} />}
           {/* the key hints are for a keyboard: a touch screen has none (#1996) */}
           <span className="contents [@media(pointer:coarse)]:hidden">
@@ -591,42 +574,13 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
             </div>
           )}
           {!command && runtimeSearch.Notice && <runtimeSearch.Notice search={runtimeSearch} onReturnFocus={() => input.current?.focus({ preventScroll: true })} />}
-          {!command && !runtimeSearch.Notice && searchLoadError && <div role="alert" className="relative z-10 px-2.5 py-2 text-xs text-red">{searchLoadError}<button type="button" className="ml-2 text-accent-ink underline" onClick={retrySearchImport}>{t("runtime-search.retry")}</button></div>}
           {!command && <FilesNotice status={files.status} text={text} count={files.rows.length} />}
-          {shown.length === 0 && !command && files.status !== "loading" && !runtimeSearch.loading && !runtimeSearch.error && !runtimeSearch.moreError && (
-            <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
-              <span className="flex size-9 items-center justify-center rounded-full bg-field text-ink-3 shadow-hairline">
-                <Icon name="search" size={15} />
-              </span>
-              <div>
-                <p className="text-[13px] font-medium text-ink">{t("palette.no_results", { query: q })}</p>
-                <p className="mt-0.5 text-[12px] text-ink-3">{t("palette.no_results_hint")}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onNewAgent();
-                }}
-                className="rounded-control px-2.5 py-1 text-[12.5px] font-medium text-accent-ink hover:bg-accent-tint"
-              >
-                {t("palette.new_agent")}
-              </button>
-            </div>
-          )}
+          {shown.length === 0 && !command && files.status !== "loading" && !runtimeSearch.loading && !runtimeSearch.error && !runtimeSearch.moreError && saved.module &&
+            <saved.module.EmptySearch query={q} onNewAgent={() => { onClose(); onNewAgent(); }} />}
         </div>
-        {!command && text && saved.state.document?.can_write && !saved.state.readonly && !saved.state.unsupported && <div className="border-t border-line px-4 py-2"><button type="button" className="text-sm text-accent-ink hover:underline disabled:opacity-50" disabled={saved.state.busy || saved.state.loading} onClick={() => manage(true)}>{t("palette.save_search")}</button></div>}
+        {!command && saved.module && <saved.module.SavedSearchFooter query={text} state={saved.state} onSave={() => manage(true)} />}
         {!command && saved.failed && <div role="alert" className="px-4 py-2 text-xs text-red">{t("palette.saved_searches_failed")} <button type="button" className="text-accent-ink underline" onClick={saved.retry}>{t("palette.saved_searches_retry")}</button></div>}
-        {listable && (
-          <button type="button" onClick={filterList} data-testid="palette-filter-list" className="flex w-full items-center gap-2.5 border-t border-line px-4 py-2.5 text-left hover:bg-hover">
-            <span className="flex size-5 shrink-0 items-center justify-center"><Icon name="filter" size={13} className="text-ink-3" /></span>
-            <span className="min-w-0 flex-1 truncate text-meta text-ink">{t("palette.filter_agents_list", { query: text })}</span>
-            <span className="flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:hidden">
-              <Kbd>⇧</Kbd>
-              <Kbd>↵</Kbd>
-            </span>
-          </button>
-        )}
+        {listable && saved.module && <saved.module.FilterAgentsList query={text} onFilter={filterList} />}
         <div className="flex items-center gap-3 border-t border-line bg-inset px-4 py-2 text-[11px] text-ink-3 [@media(pointer:coarse)]:hidden">
           <span className="flex items-center gap-1">
             <Kbd>↑</Kbd>

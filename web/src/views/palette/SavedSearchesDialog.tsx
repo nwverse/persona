@@ -2,11 +2,11 @@ import { forwardRef, useEffect, useId, useLayoutEffect, useRef, useState, useSyn
 import { t } from "../../i18n";
 import { fromDefaultManager } from "../../lib/manager-choice";
 import { onHubEvent } from "../../lib/store";
-import { SavedAgentSearchesModel, savedSearchProblem, SAVED_SEARCH_LIMIT, SAVED_SEARCH_NAME_MAX, type SavedAgentSearch } from "../../lib/saved-agent-searches";
-import { Button, Dialog, IconButton, Loading } from "../../ui/atoms";
+import { SavedAgentSearchesModel, savedSearchProblem, SAVED_SEARCH_LIMIT, SAVED_SEARCH_NAME_MAX, type SavedAgentSearch, type SavedAgentSearchesSnapshot } from "../../lib/saved-agent-searches";
+import { Button, Dialog, IconButton, Kbd, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 export { SavedAgentSearchesModel };
-export { placeWords } from "./PlaceWords";
+export * from "./SearchSupport";
 const word = (key: string, values?: Parameters<typeof t>[1]) => t(`saved-agent-searches.${key}`, values);
 
 /** The open palette and its replacement dialog share one reader, without polling while either is closed. */
@@ -162,4 +162,27 @@ export function SavedSearchesDialog({ model, initialQuery, onReturn, onApply }: 
       </>}
     </div>
   </Dialog>;
+}
+
+/** Search-only presentation stays with the intent-loaded tools rather than growing the idle palette bundle. */
+export function SavedSearchFooter({ query, state, onSave }: { query: string; state: SavedAgentSearchesSnapshot; onSave: () => void }) {
+  if (!query || !state.document?.can_write || state.readonly || state.unsupported) return null;
+  return <div className="border-t border-line px-4 py-2"><button type="button" className="text-sm text-accent-ink hover:underline disabled:opacity-50" disabled={state.busy || state.loading} onClick={onSave}>{t("palette.save_search")}</button></div>;
+}
+
+export function EmptySearch({ query, onNewAgent }: { query: string; onNewAgent: () => void }) {
+  return <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+    <span className="flex size-9 items-center justify-center rounded-full bg-field text-ink-3 shadow-hairline"><Icon name="search" size={15} /></span>
+    <div><p className="text-meta font-medium text-ink">{t("palette.no_results", { query })}</p><p className="mt-0.5 text-label text-ink-3">{t("palette.no_results_hint")}</p></div>
+    <button type="button" onClick={onNewAgent} className="rounded-control px-2.5 py-1 text-label font-medium text-accent-ink hover:bg-accent-tint">{t("palette.new_agent")}</button>
+  </div>;
+}
+
+/** The list-filter action is only relevant after a search; keep its presentation with the query tools. */
+export function FilterAgentsList({ query, onFilter }: { query: string; onFilter: () => void }) {
+  return <button type="button" onClick={onFilter} data-testid="palette-filter-list" className="flex w-full items-center gap-2.5 border-t border-line px-4 py-2.5 text-left hover:bg-hover">
+    <span className="flex size-5 shrink-0 items-center justify-center"><Icon name="filter" size={13} className="text-ink-3" /></span>
+    <span className="min-w-0 flex-1 truncate text-meta text-ink">{t("palette.filter_agents_list", { query })}</span>
+    <span className="flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:hidden"><Kbd>⇧</Kbd><Kbd>↵</Kbd></span>
+  </button>;
 }

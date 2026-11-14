@@ -46,6 +46,6 @@
   "since_30d": "30 日以内",
   "saved_searches": "保存した検索",
   "save_search": "検索を保存",
-  "saved_searches_failed": "保存した検索を読み込めませんでした。",
+  "saved_searches_failed": "検索ツールを読み込めませんでした。",
   "saved_searches_retry": "再試行"
 }

@@ -29,5 +29,5 @@ export function useSavedSearches(open: boolean, panel: SavedSearchPanel | null) 
     if (!active || !model || !module) return;
     return module.followSavedSearches(model);
   }, [active, model, module]);
-  return { scope, model, state, module, failed, retry: () => { setFailed(false); setAttempt((value) => value + 1); } };
+  return { owner, scope, model, state, module, failed, retry: () => { setFailed(false); setAttempt((value) => value + 1); } };
 }

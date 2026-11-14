@@ -25,7 +25,7 @@ const id = (n: number) => `search_${n.toString(16).padStart(24, "0")}`;
 const item = (n: number, name = `Search ${n}`, query = `machine:computer project:repo${n}`): SavedAgentSearch => ({ id: id(n), name, query, created_at: "2026-11-14T12:00:00Z", updated_at: "2026-11-14T12:00:00Z" });
 let doc: SavedAgentSearches;
 let host: HTMLDivElement, root: Root;
-let requests: { method: string; path: string; headers: Headers; signal?: AbortSignal | null; body?: SavedSearchMutation & { revision: string } }[];
+let requests: { method: string; path: string; url: URL; headers: Headers; signal?: AbortSignal | null; body?: SavedSearchMutation & { revision: string } }[];
 let custom: ((request: typeof requests[number]) => Promise<Response> | undefined) | undefined;
 let serial: number;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -74,8 +74,8 @@ beforeEach(() => {
   reset(); resetManagerChoice(); setRosterDefault("assistant");
   Object.assign(getState(), { loaded: true, features: [], machines: [], sessions: {}, sessionSummaries: [], assistant: null });
   vi.stubGlobal("fetch", vi.fn((input: string, init: RequestInit = {}) => {
-    const path = new URL(input, "http://example.invalid").pathname;
-    const request = { method: init.method ?? "GET", path, headers: new Headers(init.headers), signal: init.signal, body: init.body ? JSON.parse(String(init.body)) : undefined };
+    const url = new URL(input, "http://example.invalid"), path = url.pathname;
+    const request = { url, method: init.method ?? "GET", path, headers: new Headers(init.headers), signal: init.signal, body: init.body ? JSON.parse(String(init.body)) : undefined };
     requests.push(request);
     const response = custom?.(request); if (response) return response;
     if (path !== "/api/v1/saved-agent-searches") return Promise.resolve(json({}));
@@ -103,6 +103,31 @@ describe("saved searches in the palette", () => {
     act(() => document.querySelector('[role="combobox"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     await settle(); expect(getPalette().query).toBe("state:working needle"); expect(getPalette().open).toBe(true);
     expect(writes()).toHaveLength(1);
+  });
+
+  it("applies a saved shortcut to the complete runtime search and preserves that query through Save", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      Object.assign(getState(), { features: ["sessions_list", "sessions_search"], sessionSummaries: [] });
+      const found = { machine_id: "computer", session_id: "outside-browser-window", title: "Older indexed task", cwd: "/work/repo1", status: "idle", state: "idle", updated_at: "2026-11-14T12:00:00Z" };
+      custom = (request) => request.url.searchParams.has("search") ? Promise.resolve(json({ sessions: [found], search_hits: { '["computer","outside-browser-window"]': { score: 35 } }, total: 1, has_more: false, revision: "frozen-result", remove: [] })) : undefined;
+      await show();
+      expect(requests.filter((request) => request.url.searchParams.has("search"))).toHaveLength(0);
+      const shortcut = document.querySelector<HTMLElement>(`[data-saved-search-quick="${id(1)}"]`)!;
+      act(() => shortcut.click()); await settle();
+      await act(async () => { vi.advanceTimersByTime(210); }); await settle();
+      expect(getPalette().query).toBe(item(1).query);
+      expect(document.querySelector('[role="listbox"]')?.textContent).toContain("Older indexed task");
+      expect(requests.filter((request) => request.url.searchParams.has("search")).map((request) => request.url.searchParams.get("search"))).toEqual([item(1).query]);
+      await act(async () => buttons().find((element) => element.textContent === t("palette.save_search"))!.click()); await settle();
+      expect(dialogs()).toHaveLength(1); expect(editorField("query").value).toBe(item(1).query);
+      fill("name", "Shared quick filter"); await press("save");
+      await act(async () => { vi.advanceTimersByTime(210); }); await settle();
+      expect(getPalette().query).toBe(item(1).query);
+      expect(document.querySelector('[role="listbox"]')?.textContent).toContain("Older indexed task");
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0].body).toMatchObject({ action: "add", name: "Shared quick filter", query: item(1).query });
+    } finally { vi.useRealTimers(); }
   });
 
   it("manages edit, reorder, delete and revision-guarded Undo in a single dialog", async () => {
