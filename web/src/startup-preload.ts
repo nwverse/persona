@@ -292,7 +292,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
 // own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
 // 192 B on top of #7339's.
-export const FIRST_SCREEN_BUDGET = 480_494;
+// The usability audit of 11-14, Persona chat (titles, dock, trays, send failures): a cut-off waiting card's answer row
+// saying what it answers and the stack's "N pending" (Interactions, views/chat/card-cut.ts), one home per request in
+// the trays (lib/assistant-entries.ts), Esc on the trays and their quiet empty entries, a leader's direction name and a
+// context tag's title in the header, the not-found title, a space's own placeholder: ja 480,494 B on main at 6602a9ef3
+// to 481,167 B, +673 B (en 476,803 B to 477,460 B, zh-Hans 477,783 B to 478,441 B). The not-found notice and its words
+// are a chunk of their own (views/chat/NotFoundNotice.tsx, namespace chat-notfoundnotice), loaded only when it shows;
+// the idle tier goes from 43,098 B to 43,103 B, under its ceiling. The budget moves by these 673 B.
+export const FIRST_SCREEN_BUDGET = 481_167;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
