@@ -114,16 +114,17 @@ sideways when a large font no longer fits them. The open tray is the chip's sele
   board, and task/Agent details plus routing controls remain accessible. The old chips were navigation and task routing,
   not an Agent-based message filter; this change does not invent a new conversation filter.
 
-Task plan/task/receipt/review/report cards, including historical ones, are no longer rendered in the conversation. A
-small dispatched line names each dispatched task (**Dispatched: <title> · Open**, or every title when there are several) and
-opens that task's detail sheet, never the whole tray (#3700); the task row in Progress is the only card. Tools and
+Task plan/task/receipt/review/report cards, including historical ones, are no longer rendered in the conversation. Each
+Agent a dispatch started or a task took over is one hand-off card (↳, title, New / Already active / Resumed, when it last
+moved and its state, ↗). A card with an Agent opens that Agent's page; before an Agent is up it opens the task. It never
+opens the whole tray (#3700, #5110). Tools and
 intermediate narration remain under a default-collapsed **Checked N places** summary, which can be opened manually.
 Housekeeping notices (compaction, restarts, schedule setup) are hidden while dates remain. Explicit message-source
 metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
 Original events and background records remain inspectable rather than being deleted from history.
 
 On Glass the conversation draws the hub's task records as iOS does ([chats](../plans/android-ios-alignment/chats.md) C13):
-`AssistantTaskCards.isBackgroundEvent(inline = true)` keeps only plans and task cards (the dispatched line stands for them)
+`AssistantTaskCards.isBackgroundEvent(inline = true)` keeps only plans and task cards (the hand-off cards stand for them)
 behind, except a plan nobody started (`AssistantTaskCards.drawnPlans`, below), and `FeedLine` draws the receipt (its PR button and **View**), the review line, the report as
 "task → @Persona" and Persona's hand-off as "Persona → @task" (both in Persona's box, the first three lines and **Expand**,
 `ExchangeHeader` / `ExchangeText` in `feature/chat/AgentExchange.kt`), the user's own word to a task as "Me → @task" in the
@@ -141,7 +142,7 @@ A plan nobody started is a line of the Glass conversation too, at the end of the
 started like this**; each task with its number when there are several, where it would run as chips that wrap, and why; **Start
 these directly**; a task's model chip is its short name ("Opus 4.8", `planModelLabel`), the Edit field keeps the raw id; then **Start** / **Start N tasks**, **Edit** and **Don't start**, in one row while Start's whole label fits and
 stacked (Start above the other two) when it would be cut), a dismissed one reads **Not started · N
-tasks**. A started plan is the dispatched line in the card's place, and the card follows the store's latest plan, so a sheet that
+tasks**. A started plan is the hand-off cards in the card's place, and the card follows the store's latest plan, so a sheet that
 kept the plan it was opened with (the tray's Review) says **✓ Started N tasks** instead of offering Start again. Tests:
 `TaskRecordsTest` (core/domain), `PlanCardConversationTest`, `PlanCardFailureReasonTest`.
 
@@ -270,6 +271,31 @@ without opening sockets. JVM Native-rendered component captures are separate evi
 - **Connection diagnostics** opens over its caller. The toolbar arrow and Android Back dismiss it, keeping the pairing input or checklist scroll position.
 
 ## Aligning the Agents list and the Machines page (#3038)
+
+**Child sessions (#5140)**
+
+For Agents readers, `folded_under` is the hub's authoritative parent on the same machine. `foldRows` leaves a child
+out of the Agents list, dock and their counts while that parent is listed; missing parents stay rows. The parent uses
+`Session.foldedState`: Needs you wins, then a working child, except the parent's own unread result or unanswered reply.
+Its preview speaks for its own request first, else its child's. Board keeps that child's question on a visible preview
+line even with metadata; an accessibility-only preview would hide what needs the reader. Other rows keep their layout.
+The running-subagent count is the larger of the own
+and child rollups, never their sum. Bounded root pages and counts request `roots=1` only with `sessions_hierarchy`;
+complete membership retains child rows for local projections. Fleet and Live Activity counts keep the protocol's
+separate definition (`docs/protocol/protocol.md`, "Session hierarchy"). Older hubs retain the Subtasks behavior below.
+
+In every style, the parent's chat places each child by `started_at` inside the exchange's folded work, reusing the
+subagent task card. Opening a card reads its own transcript; full text is fetched from that child too. A paged chat
+reads an initial `parent_session_id` baseline and responds to `sessions_list` invalidations with `since` deltas.
+All cursor pages succeed before upserts, removals and the checkpoint commit; expired checkpoints read a new baseline.
+Held rows count toward coverage, so a complete, settled and unchanged list needs no read on resume and has no polling timer.
+Child requests keep their original answer target but have one parent home (`Interaction.homeKey`), with
+**From subagent · title**. Missing child metadata keeps the ordinary approval policy until the child's capabilities arrive.
+Links show the requested cached page immediately, look up metadata only while online, and move to the parent with the
+child card expanded only when that parent row exists. Covered by `SessionHierarchyTest`, `ChildSessionsTest`,
+`ChildSessionCardsTest`, `ChildSessionListTest`, `HttpHierarchyTest`, `ChildSessionHomeTest`, `ChildSessionHomeStateTest`,
+`RequestApprovalTest`, `FoldedSessionsShotsTest` and
+`ChildSessionsShotsTest` (Glass, Brief and Board, light/dark).
 
 - **Sorting**: the list settings have "Sort: **Status first** / **Recently updated**" (iOS `AgentSort`, stored on the device). With recently updated, sessions in each group sort only by time, and active spaces, repositories and computers sort by their newest session, first. With status first the sections stay the same; only the order inside a section is by time. The logic is in `AgentList.kt` in `core:domain` (`AgentListSettings.sort`).
 - **Subtasks** (`CodexTaskForest.kt` in `core:domain`): a subtask is a session another one started: a Codex subagent, or a runtime's delegated session, such as a Paseo agent another agent created (#4494), whichever agent runs it; terminal panes never are. Its parent, on the same computer, is the session its `parent_session_id` names, of any source (a Codex thread's subagents sit under the runtime session that runs the thread); with no `parent_session_id`, the one Codex thread its `parent_thread_id` names; failing those, the session its `root_session_id` names. It sits under its parent's row in **Subtasks (N)**, folded until opened, finished ones included. One that the list of running sessions draws (Running, and the running part of All) hangs there only while that list draws a row above it too: a working agent whose creator was let go is a row of its own, where it would otherwise be drawn nowhere. No count includes a subtask, wherever it is drawn: quick filters, computer chips and headers, group headers, and the Machines page's card and **Running sessions**, which leave it out (`machineSessions`); the hub's fleet summary (ongoing notification, widget, tile) counts a runtime's the same way. Outside the Agents list (#4769): the floating capsule's **Unread**, its count, the badge and the completion notices leave it out as the Unread count does (`capsuleNotifiableUnreadSessions`; it is read under its parent in Agents). The flat lists of what goes on, the main chat's dock (**Needs you** / **In progress** and **All**, `dockAgents`), the capsule's activity and a knowledge project's **Agents** (`projectAgents`), leave it out while they show its parent, or a session above that, as `codexTaskForest` hangs a running one only under a drawn row (`foldedSubtasks`): the dock shows a task's agents as the task, so the agents one created are in the task's row, and the row's background line counts the ones still running where the host reports them (a Paseo creator does). A working one whose creator the list does not show (finished, or let go) stays an entry of its own there. The launcher's recent-agent shortcuts take the Running list's rule (`RecentAgents`). A subtask that needs the user is a row of its own instead, in Needs you and counted, until it no longer does (`isNestedSubtask`; `docs/design/DESIGN_SYSTEM.md` ("Sessions that need the user")); the node already sends a runtime session that waits for the user without its parent, and the app's rule covers the rest. Opened under a quick filter and then answered, it stays where it was until the filter or the list is left, like any opened row (`openedRowsOfTheirOwn`). A row under Subtasks offers no **Pin**, since Pinned lists rows of their own only; one already pinned offers **Unpin**. Checked by `CodexTaskForestTest`, `CodexTaskTreeTest`, `AgentsHomeAffordancesTest`, `MachinesTest`, `TaskDockTest`, `CapsuleSessionsTest`, `KnowledgePresentationTest`, `ShortcutTextTest`, `CodexTaskTreeShotsTest` (three styles × light / dark, `build/runtime-subtask-shots/`), and for the dock and the capsule `AssistantTraysShotsTest.subtasksAreInTheirCreatorsRowInEveryStyle` (`feature/chat/build/assistant-trays-shots/subtasks-*`) and `CapsuleSubtasksShotsTest` (`app/build/capsule-subtasks-shots/`).
