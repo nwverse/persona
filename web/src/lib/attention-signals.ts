@@ -6,7 +6,7 @@ import { agentKey } from "./pins";
 import { homeKey } from "./folded-rows";
 import { useCounts, useAgentSessions } from "./sessions";
 import { getState, useStore, onHello, send, appSocketReady, connect, disconnect, DESKTOP_UNREGISTER_FEATURE } from "./store";
-import { answeredTags, attentionSoundEnabled, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
+import { answeredTags, attentionSoundEnabled, onAttentionSoundChange, badgeText, batchDue, finishedBatch, detectNewCards, detectTransitions, pickEvent, rateLimiter, SETTLE_MS, settledTags, suppressed, tabTitle, trackTurns, type Turn } from "./attention";
 import { claimNotification, closeNotification, dismissNotification, releaseClaim, FRONT_BEAT_MS, inQuietHours, loadNotifyPrefs, markFront, notificationText, notifyPrefs, waitingCard, otherTabInFront, postNotification, systemNotifyAllowed, systemNotifyActive, onSystemNotifyChange, wants, managerMuted } from "./notify";
 import { defaultManager } from "./manager-choice";
 import { failedTagsOver, listenForNotificationClicks } from "./notification-answer";
@@ -114,19 +114,54 @@ export function setFaviconBadge(needs: number): void {
 let ctx: AudioContext | undefined;
 let gestured = false;
 
-/** Browsers only start audio after a user gesture: until one has happened nothing plays (and nothing is queued). */
-export function armAudio(): void {
-  if (typeof window === "undefined") return;
-  const unlock = () => {
-    gestured = true;
-    try {
-      ctx ??= new AudioContext();
-      void ctx.resume();
-    } catch {
-      // no WebAudio here: silent
-    }
+function unlock() {
+  gestured = true;
+  try {
+    ctx ??= new AudioContext();
+    void ctx.resume();
+  } catch {
+    // no WebAudio here: silent
+  }
+}
+
+const GESTURES = ["pointerdown", "keydown", "touchend"] as const;
+
+/**
+ * Browsers only start audio after a user gesture: until one has happened nothing plays (and nothing is queued). Making
+ * the AudioContext takes 80–130 ms of the gesture it runs in, so it is made only for the alert sound, which is off by
+ * default: on the first gesture once it is on, or at once when it is switched on by a click or a key (Settings ›
+ * Notifications), which is a gesture itself. With it off, the page's first key or click pays nothing. Returns the cleanup.
+ */
+export function armAudio(): () => void {
+  if (typeof window === "undefined") return () => {};
+  let armed = false;
+  const onGesture = () => {
+    disarm();
+    unlock();
   };
-  for (const ev of ["pointerdown", "keydown", "touchend"]) window.addEventListener(ev, unlock, { once: true, capture: true });
+  const disarm = () => {
+    if (!armed) return;
+    armed = false;
+    for (const ev of GESTURES) window.removeEventListener(ev, onGesture, { capture: true });
+  };
+  const follow = () => {
+    if (!attentionSoundEnabled()) return disarm();
+    if (ctx?.state === "running") return;
+    if (typeof navigator !== "undefined" && navigator.userActivation?.isActive) {
+      disarm();
+      unlock();
+      return;
+    }
+    if (armed) return;
+    armed = true;
+    for (const ev of GESTURES) window.addEventListener(ev, onGesture, { capture: true });
+  };
+  follow();
+  const off = onAttentionSoundChange(follow);
+  return () => {
+    off();
+    disarm();
+  };
 }
 
 // [frequency Hz, start s, length s, peak gain]
