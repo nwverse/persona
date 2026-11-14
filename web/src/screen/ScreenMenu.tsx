@@ -19,16 +19,18 @@ const qualityLabel = (q: ScreenQuality) =>
 
 /** The picture and (for video) quality the live screen uses, remembered per Mac. `onPicture` / `onQuality` persist and
  *  apply the choice; the parent holds the current value so the menu reads it back as the chosen radio. */
-export default function ScreenMenu({ picture, quality, onPicture, onQuality }: {
+export default function ScreenMenu({ picture, quality, onPicture, onQuality, qualityOffered = false }: {
   picture: ScreenPicture;
   quality: ScreenQuality;
   onPicture: (p: ScreenPicture) => void;
   onQuality: (q: ScreenQuality) => void;
+  /** Quality only when it can do something: the helper has tiers and so does this page (#6396, video.ts webTiers). */
+  qualityOffered?: boolean;
 }) {
   const [at, setAt] = useState<HTMLElement | null>(null); // the button, while the menu is open
   const items: MenuItem[] = [
     ...PICTURES.map((p): MenuItem => ({ key: `picture-${p}`, label: pictureLabel(p), radio: true, checked: picture === p, onSelect: () => onPicture(p) })),
-    ...(picture === "video"
+    ...(picture === "video" && qualityOffered
       ? [
           { key: "quality", label: t("screen-video.quality"), heading: true, divider: true, onSelect: () => {} } as MenuItem,
           ...QUALITIES.map((q): MenuItem => ({ key: `quality-${q}`, label: qualityLabel(q), radio: true, checked: quality === q, onSelect: () => onQuality(q) })),

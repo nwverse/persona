@@ -662,13 +662,33 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
   heartbeat's kind of ping) and shows the median of the last 5 from the last 20 s (`HubRoundTrips`). It is the same leg
   the web overlay times ("Connection stats on the web"), and like it never sits on the first line. Bitrates have two
   decimals under 1 Mbps, one above, as on the web.
-- **Browser** (#6558, in progress; nothing on the page uses it yet): `web/src/screen/video-wire.ts` frames the wire as
-  `PersonaScreenKit` does, both replaying `spec/fixtures/screen-video` (written from Swift's own messages by
-  `ScreenVideoFixtureTests`), and `video-bitstream.ts` turns `format` into what WebCodecs' `VideoDecoder` takes: the
-  codec string (`hvc1.1.6.L93.B0`, `avc1.64001F`) and the HEVC or AVC decoder configuration record, for the 4-byte NAL
-  lengths every `frame` carries. `node web/e2e/screen-video-decode.mjs <web URL>` decodes the mock's HEVC and H.264
-  fixtures, every frame, in a real browser. The mock plays `fixture.bin` (HEVC) or `fixture-h264.bin` as the helper picks
-  its codec: the first of `start.codecs` it has, else H.264, which is what a browser without HEVC gets.
+- **Browser** (#6558; off for users until it has been checked on a real Mac in each browser: `video.ts` `webVideo.plays`,
+  on only in a development server started with `VITE_SCREEN_VIDEO=1`):
+  - **Wire and decoding**: `web/src/screen/video-wire.ts` frames the wire as `PersonaScreenKit` does (both replay
+    `spec/fixtures/screen-video`, written from Swift's own messages by `ScreenVideoFixtureTests`); `video-bitstream.ts`
+    turns `format` into WebCodecs' codec string (`hvc1.1.6.L93.B0`, `avc1.64001F`) and decoder configuration record.
+  - **What the browser offers** (`video-probe.ts`, once a page): WebCodecs exists only on a secure address (https or
+    localhost); HEVC counts only with a hardware decoder, H.264 either way (`isConfigSupported`, never the user agent).
+    `start.codecs` is what passed, HEVC first; nothing passed means no Picture switcher and VNC.
+  - **The channel** (`video-stream.ts`, `video-link.ts`, `VideoPicture.tsx`, a chunk loaded only for a Mac that offers
+    video): the RFB connection carries a `pair`, and once it signs in the page opens `…/screen/video/connect` with it
+    over the hub's relay (a transport function, where #6398's browser route will plug in). Each picture is decoded as
+    it comes, the newest of a burst drawn on a canvas over noVNC's at `hello.rect` (noVNC's canvas stays underneath,
+    clear, and keeps the pointer and keyboard), and a `report` goes back for every frame. While video shows, noVNC's
+    update requests are held (`rfb-hold.ts`, a guarded hook on `RFB.messages.fbUpdateRequest`; the last one goes out
+    when video stops). The iPhone's rules: video by default where it plays, one display at a time, back to VNC with the
+    same three lines (the Mac locked, video stopped, not allowed with "How to turn it on"), 3 s of silence, 30 s doubling
+    to 5 min, reset after a minute of video, and nothing while the tab is in the background. A decoder that fails on the
+    stream before any picture means this browser can't play it: no switcher, no retry on that page.
+  - **Connection stats**: video mode shows the iPhone's lines (Video · Via hub · total; bitrate · fps · codec · size;
+    capture · encode · network · decode); over VNC, when the Mac offers video but this page can't play it, one line
+    says why: not a secure address, a browser that can't play it, or a decoder that couldn't start.
+  - **Tests**: `video-wire.test.ts`, `video-bitstream.test.ts`, `video-probe.test.ts`, `video-stream.test.ts`,
+    `video-link.test.ts`, `rfb-hold.test.ts` (on the real noVNC), `VideoPicture.test.tsx`, `ScreenView.video.test.tsx`;
+    `node web/e2e/screen-video-decode.mjs <web URL>` decodes both fixtures in a real browser, and
+    `node web/e2e/screen-video.mjs <web URL> <mock hub URL>` runs the page against the mock's helper side
+    (`MOCK_SCREEN_VIDEO=1`, which plays `fixture.bin` (HEVC) or `fixture-h264.bin` as the helper picks from
+    `start.codecs`).
 - **Permission and login**: only input on that Mac answers macOS's Screen Recording question — someone at the Mac, or
   the user's own taps through Screen Sharing. Nothing in Persona answers it, and Agents' computer-use calls can't target
   System Settings' Privacy & Security or the system alert. Video needs the same login as Screen Sharing (the `pair`
