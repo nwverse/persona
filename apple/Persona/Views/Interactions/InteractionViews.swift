@@ -512,6 +512,9 @@ struct QuestionForm: View {
     /// Several questions (#2970): the review shown before the answers go.
     @State private var reviewing = false
     @State private var failureHeight: CGFloat = 0
+    /// A single-select pick's step to the next question while its pause runs (#6549): the next pick or Previous / Next
+    /// cancels it. Not read in `body`.
+    @State private var pendingStep: Task<Void, Never>?
     @FocusState private var otherFocused: Bool
 
     private var questions: [Question] { interaction.questions ?? [] }
@@ -711,7 +714,7 @@ struct QuestionForm: View {
                     .disabled(isSending)
             }
             if page > 0 {
-                Button { withAnimation(Theme.Motion.standard) { page -= 1 } } label: { Text("Previous [Interaction Views 39b1c2]").lineLimit(1) }
+                Button { pendingStep?.cancel(); withAnimation(Theme.Motion.standard) { page -= 1 } } label: { Text("Previous [Interaction Views 39b1c2]").lineLimit(1) }
                     .themedButton()
             }
             Spacer(minLength: 0)
@@ -752,13 +755,19 @@ struct QuestionForm: View {
         if questions.count == 1 {
             submit() // one question, one choice: the tap is the answer
         } else if page < questions.count - 1 {
-            Task { try? await Task.sleep(for: .milliseconds(250)); withAnimation(Theme.Motion.standard) { page += 1 } }
+            let from = page // a newer pick starts the pause again, Previous / Next cancel it (QuestionSteps.step, #6549)
+            pendingStep = QuestionSteps.step(replacing: pendingStep) {
+                if let next = QuestionSteps.next(after: from, now: page, count: questions.count) {
+                    withAnimation(Theme.Motion.standard) { page = next }
+                }
+            }
         }
     }
 
     private var isLast: Bool { page >= questions.count - 1 || allAnswered }
 
     private func advance() {
+        pendingStep?.cancel()
         if isLast { submit() } else { withAnimation(Theme.Motion.standard) { page += 1 } }
     }
 
