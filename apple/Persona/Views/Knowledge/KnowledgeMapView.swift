@@ -6,7 +6,6 @@ import SwiftUI
 struct KnowledgeMapView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.knowledgeSettingsAPI) private var inheritedAPI
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var capturedAPI: APIClient?
 
     enum Shown: String, Hashable { case topics, projects }
@@ -22,18 +21,18 @@ struct KnowledgeMapView: View {
     @State private var sheet: KBOpenPoint?
     @State private var pushed: KBMapTarget?
     @State private var settings = false
-    /// Two columns: a regular width with room for both (an iPad in landscape, or without its sidebar).
+    /// Two columns: room for both (`Theme.Size.knowledgeMapTwoColumns`).
     @State private var wide = false
 
     var body: some View {
         GeometryReader { geo in
-            let twoColumns = sizeClass == .regular && geo.size.width >= Theme.Size.sidebarMin + Theme.Size.splitDetailMin
+            let twoColumns = geo.size.width >= Theme.Size.knowledgeMapTwoColumns
             Group {
                 if twoColumns {
                     HStack(spacing: Theme.Space.flush) {
-                        outline(wide: true).frame(minWidth: Theme.Size.sidebarMin, maxWidth: .infinity)
+                        outline(wide: true).frame(maxWidth: .infinity)
                         Divider()
-                        detailColumn.frame(minWidth: Theme.Size.splitDetailMin, maxWidth: .infinity)
+                        detailColumn.frame(maxWidth: .infinity)
                     }
                 } else {
                     outline(wide: false)

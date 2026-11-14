@@ -2539,8 +2539,8 @@ as a `KBPill`, Pitfall and Open question in `Theme.caution`), each level indente
 Folding uses the app's fold chevron (`Theme.Icon.disclosure`, turned when open, a 44 pt target) rather than the web's
 round +/−, as every other fold on iOS. What starts open is the web's: the six biggest topics onto their subtopics, every
 subtopic closed, more than three loose points beside subtopics under one closed Other. Tapping a point opens its sheet,
-a topic or a project its page. On a wide iPad (regular width with room for `Theme.Size.sidebarMin` +
-`Theme.Size.splitDetailMin`) the outline sits beside a detail column for the selected node, the web map's side panel.
+a topic or a project its page. From `Theme.Size.knowledgeMapTwoColumns` of width (any iPad in landscape, a 13-inch one upright beside its
+sidebar) the outline sits beside a detail column for the selected node, the web map's side panel.
 Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
 
 ## Repository link preview

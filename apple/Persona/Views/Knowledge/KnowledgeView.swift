@@ -148,7 +148,10 @@ struct KnowledgeView: View {
             #endif
             if let q = UserDefaults.standard.string(forKey: "showKnowledgeSearch") { query = q }
             // `-showKnowledgeMap YES`: the knowledge map pushed (screenshots).
-            if UserDefaults.standard.bool(forKey: "showKnowledgeMap") { showMap = true }
+            // A moment later: pushed while this page is still being pushed, the map was dropped now and then.
+            if UserDefaults.standard.bool(forKey: "showKnowledgeMap") {
+                Task { try? await Task.sleep(for: .seconds(1)); showMap = true }
+            }
             if let k = UserDefaults.standard.string(forKey: "showKnowledgeKind").flatMap(KBKind.init(rawValue:)) { kind = k }
             if let ref = UserDefaults.standard.string(forKey: "showKnowledgeEntry"), let slash = ref.firstIndex(of: "/") {
                 let id = String(ref[ref.index(after: slash)...])
