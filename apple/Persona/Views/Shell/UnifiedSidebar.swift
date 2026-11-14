@@ -122,6 +122,9 @@ struct UnifiedSidebarColumn<Agents: View>: View {
             persona(.footer)
         }
         .coordinateSpace(.named(UnifiedSidebar.columnSpace))
+        // Typing in the page beside it brings the keyboard up under both: the column stays where it is, its foot
+        // (New Chat, Search, Settings) not riding up with the keyboard (#4206, the owner). It holds no field of its own.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .modifier(AssistantSidebarPresenters(ui: state.ui, open: open))
         .background { UnifiedSidebar.columnColor.ignoresSafeArea() }
         // A container: on its own the identifier went onto every element in it, the rows' own lost.

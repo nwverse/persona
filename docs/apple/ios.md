@@ -854,7 +854,8 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   one vertical line, their names on another (#4206): the head and the main conversation (held over the list) start where
   the list's rows do, measured on the Pages heading (`AssistantSidebarUI.rowsLeading`; the list's own margin differs by
   device), the head's face moved by what centres it on the symbols' column and its name brought to the titles' line
-  (`AssistantSwitcherHeader.faceGap`).
+  (`AssistantSwitcherHeader.faceGap`). The column does not make way for the keyboard (`ignoresSafeArea(.keyboard)`, #4206, the
+  owner): typing in the page beside it, its foot stays where it is instead of riding up and squeezing the list.
 - **Search** (#4206, the owner; it replaced #6332's field in the head, which filtered the column in place): the foot's
   Search opens the whole-window search (`AssistantFullSearch`, the open Duo's from #3705) at every width, with two
   scopes over the results: **Chats**, Persona's, as #3705's and #7123's (titles, last messages, and what was said, from
