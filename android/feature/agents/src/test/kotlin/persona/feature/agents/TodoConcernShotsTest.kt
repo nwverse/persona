@@ -34,7 +34,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.contracts.ReviewCheck
 import persona.core.contracts.Session
+import persona.core.contracts.Supervision
+import persona.core.contracts.TaskReview
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
 import persona.core.designsystem.AppStyle
@@ -165,6 +168,34 @@ class TodoConcernShotsTest {
         rule.onNodeWithContentDescription("Concern", useUnmergedTree = true).assertIsDisplayed()
         assertEquals("Concern is spoken once", 1,
             rule.onAllNodesWithContentDescription("Concern", useUnmergedTree = true).fetchSemanticsNodes().size)
+    }
+
+    @Test fun acceptedConcernAtRestShowsOpenStateAndConcernTags() {
+        val criteria = (1..8).map { "c$it" }
+        val accepted = Todo(
+            "accepted-concern",
+            title = "Review answer",
+            createdAt = ago(500), updatedAt = ago(3), origin = "main",
+            agents = listOf(TodoAgent("m", "idle", linkedAt = ago(400))),
+            supervision = Supervision(
+                supervisor = "main", doneWhen = criteria, state = "accepted", round = 1,
+                reviews = listOf(TaskReview(at = ago(5), verdict = "accepted", checks = criteria.take(5).map { ReviewCheck(it, true) })),
+            ),
+        ).withKind("concern")
+        val idle = Session("m", "idle", state = "idle", status = "idle", updatedAt = ago(2))
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                    TodosScreen(listOf(accepted), listOf(idle), null, onBack = {}, onOpenTodo = {}, now = now)
+                }
+            }
+        }
+        rule.waitForIdle()
+        val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+        File(out(), "todos-concern-accepted-at-rest-glass-light-en.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        rule.onNodeWithContentDescription("Concern", useUnmergedTree = true).assertIsDisplayed()
+        assertFalse("an accepted open concern never shows Accepted", has("Accepted"))
+        rule.onNodeWithText("Follow up", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test fun closedConcernInExpandedRelatedRowIsLabelled() {

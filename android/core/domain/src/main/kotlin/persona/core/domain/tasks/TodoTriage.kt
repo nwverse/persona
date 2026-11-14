@@ -204,9 +204,10 @@ fun Todo.bucket(lookup: (SessionKey) -> Session?, now: Long, restoredAt: Long = 
 fun Todo.checksAsOpen(t: Triage?): Boolean =
     !isDone || !startError.isNullOrEmpty() && t?.rule == TriageRule.FailedStart && t.section == TriageSection.Waiting
 
-/** An accepted task its hub reopened with more work, with nothing of it running or asking: it reads Accepted, not Follow up. */
+/** An accepted task its hub reopened with more work, with nothing of it running or asking: it reads Accepted, not Follow up.
+ * An open concern still waits for its report, so neither Accepted nor its done styling applies (#3582). */
 fun Todo.acceptedAtRest(lookup: (SessionKey) -> Session?): Boolean =
-    !isDone && acceptanceStands && triageStatus(lookup).let {
+    kind != "concern" && !isDone && acceptanceStands && triageStatus(lookup).let {
         it == TriageStatus.FollowUp || it == TriageStatus.Unread || it == TriageStatus.NotStarted
     }
 
