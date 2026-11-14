@@ -235,7 +235,8 @@ class ProbeTests(unittest.TestCase):
         rows = [{"metric": metric, "sample": index, "value_us": 1.25,
                  "measured_on_main_thread": True} for metric in metrics for index in range(1_000)]
         page = {"scope": "100-item diagnostic", "samples": [40.0] * 1_000,
-                "worker_flush_is_outside_timed_span": True, "patch_op_count": 100}
+                "worker_flush_is_outside_timed_span": True, "patch_op_count": 100,
+                "warmups_per_metric": 100, "samples_per_metric": 1_000}
         boundary = {"raw_samples": rows, "warmups_per_metric": 100, "samples_per_metric": 1_000,
                     "worker_flush_is_outside_timed_spans": True, "patch_op_counts": [1] * 1_000}
         result = self.summary([boundary, page])
@@ -245,12 +246,13 @@ class ProbeTests(unittest.TestCase):
     def test_stream_requires_trace_completion_and_cannot_replace_glide_acceptance(self):
         rows = [sample(60, i == 0, f"stream-{i}", action="stream", sample_source="mock-recorded-markdown-trace",
                        text_changes=100, trace_id="markdown", trace_completed=True, trace_subscribed=True,
-                       trace_live_cleared=True, trace_completion_count=1, trace_expected_utf16=2578)
+                       trace_live_cleared=True, trace_completion_count=1, trace_expected_utf16=2578,
+                       trace_session_id="server/b2e4d6f8-0000-4000-8000-000000000004")
                 for i in range(3)]
         result = self.summary(rows, expected_iterations=2)
         self.assertTrue(result["complete"], result["issues"])
         for field in ("trace_id", "trace_completed", "trace_subscribed", "trace_live_cleared",
-                      "trace_completion_count", "trace_expected_utf16", "text_changes"):
+                      "trace_completion_count", "trace_expected_utf16", "text_changes", "trace_session_id"):
             with self.subTest(field=field):
                 invalid = copy.deepcopy(rows)
                 del invalid[1][field]
@@ -276,6 +278,9 @@ class ProbeTests(unittest.TestCase):
     def test_empty_or_incomplete_microbenchmark_is_not_complete(self):
         for report in ({"raw_samples": []}, {"raw_samples": [], "warmups_per_metric": 0},
                        {"samples": [1.0] * 999, "scope": "100-item diagnostic",
+                        "worker_flush_is_outside_timed_span": True, "patch_op_count": 100,
+                        "warmups_per_metric": 100, "samples_per_metric": 1_000},
+                       {"samples": [1.0] * 1_000, "scope": "100-item diagnostic",
                         "worker_flush_is_outside_timed_span": True, "patch_op_count": 100}):
             with self.subTest(report=report):
                 result = self.summary([report])

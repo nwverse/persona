@@ -107,7 +107,9 @@ Independent recomputation used `apple-package-report.py` on payload directories 
 ZIPs. Every archived file entry, executable SHA-256 and every numeric delta matched the original report. The new report
 is `/tmp/persona-6871-package-verified-third/package-size.json`. Recompression is not expected to reproduce ZIP bytes
 because archive metadata differs; the original ZIP hashes themselves match the report. This verifies the preserved
-comparison without rebuilding the deleted DerivedData.
+comparison without rebuilding the deleted DerivedData. The later XCFramework `Inputs.stamp` hash differs
+(`25a99b363f…` in the original, `b006ab8224…` in the recomputation); only the extracted payload entries, executable
+hashes and numeric deltas are reproduced, not the old XCFramework stamp or complete source snapshot.
 
 ZIP bytes are a local compressed-transport diagnostic, not App Store processed, thinned or download size. The store
 download gate and physical-device acceptance remain open. An earlier ordinary Release attempt at this base failed at

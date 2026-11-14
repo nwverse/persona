@@ -21547,7 +21547,7 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                 if late:
                     # As a real hub can: the turn's end clears the stream before the transcript line is read (&late=ms).
                     send({"type": "delta", "machine_id": mid, "session_id": sid, "text": ""})
-                    if state is not None:
+                    if state is not None and state["session_id"] == sid:
                         state["live_cleared"] = True
                     time.sleep(late / 1000)
                 items = ITEMS[sid]

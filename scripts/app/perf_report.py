@@ -280,9 +280,10 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             ids = [sample.get("run_id") for sample in samples]
             if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
                 issues.append("every launch observation needs a distinct run_id")
+            if any(sample.get("name") != ident.removesuffix("()") or sample.get("action") != "launch"
+                   for sample in samples):
+                issues.append("launch observation has the wrong test name or action")
             for sample in samples:
-                if sample.get("name") != ident.removesuffix("()") or sample.get("action") != "launch":
-                    issues.append("launch observation has the wrong test name or action")
                 if sample.get("expected_iterations") != expected_iterations:
                     issues.append("launch observation has missing or conflicting expected_iterations")
                 if not isinstance(sample.get("process_id"), str) or not sample["process_id"]:
@@ -334,6 +335,9 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             if not isinstance(rows, list) or len(rows) != 10:
                 issues.append("core lifecycle must contain ten samples")
                 continue
+            if not all(isinstance(row, dict) for row in rows):
+                issues.append("every core lifecycle cycle must be an object")
+                continue
             if [row.get("cycle") for row in rows] != list(range(1, 11)):
                 issues.append("core lifecycle cycles must be unique and ordered 1...10")
             for row in rows:
@@ -342,8 +346,8 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
                     issues.append("invalid core lifecycle footprint")
                 elif row["phys_footprint_bytes"] - baseline != row["delta_from_warmed_bytes"]:
                     issues.append("core lifecycle delta is inconsistent with its baseline")
-            if finite(sample.get("final_delta_bytes")) and sample["final_delta_bytes"] != rows[-1].get("delta_from_warmed_bytes"):
-                issues.append("final_delta_bytes does not match the last cycle")
+            if not finite(sample.get("final_delta_bytes")) or sample["final_delta_bytes"] != rows[-1].get("delta_from_warmed_bytes"):
+                issues.append("final_delta_bytes is missing, invalid or does not match the last cycle")
             probe["statistics"]["final_minus_warmed_bytes"] = {"value": rows[-1].get("delta_from_warmed_bytes")}
             probe["medians"]["final_minus_warmed_bytes"] = rows[-1].get("delta_from_warmed_bytes")
         probe["trust"] = "core_ten_create_open_close_phys_footprint"
@@ -379,7 +383,8 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
             if "samples" in sample:
                 if not isinstance(sample.get("scope"), str) or "100-item" not in sample["scope"] \
                         or sample.get("worker_flush_is_outside_timed_span") is not True \
-                        or sample.get("patch_op_count") != 100:
+                        or sample.get("patch_op_count") != 100 or sample.get("warmups_per_metric") != 100 \
+                        or sample.get("samples_per_metric") != 1_000:
                     issues.append("large-page sample lacks its 100-item timing-boundary metadata")
                 values = sample["samples"]
                 if len(values) != 1_000 or not all(finite(value) and value >= 0 for value in values):
@@ -468,6 +473,7 @@ def summarize_probe(ident, records, expected_iterations=None, log_summaries=(), 
                 issues.append(f"{prefix}: stream requires its recorded trace source")
             if sample.get("trace_id") != "markdown" or sample.get("trace_completed") is not True \
                     or sample.get("trace_subscribed") is not True or sample.get("trace_live_cleared") is not True \
+                    or sample.get("trace_session_id") != "server/b2e4d6f8-0000-4000-8000-000000000004" \
                     or sample.get("trace_completion_count") != 1 or not finite(sample.get("trace_expected_utf16")) \
                     or sample["trace_expected_utf16"] <= 0 or not finite(sample.get("text_changes")) \
                     or sample["text_changes"] <= 0:

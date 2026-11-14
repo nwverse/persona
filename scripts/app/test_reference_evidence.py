@@ -8,6 +8,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RAW = ROOT / "docs/archive/apple/reference-measurements-6871/raw"
+ARCHIVE = RAW.parent
 
 
 def read(name):
@@ -92,6 +93,35 @@ class ReferenceEvidenceTests(unittest.TestCase):
             self.assertEqual(row["phys_footprint_bytes"] - rows["baseline_phys_footprint_bytes"],
                              row["delta_from_warmed_bytes"])
         self.assertEqual(rows["final_delta_bytes"], 16384)
+    def test_launch_metric_and_device_provenance_are_retained(self):
+        report = json.loads((ARCHIVE / "launch-report.json").read_text())
+        test = report["tests"]["PerfReferenceTests/testNativeFirstFrame()"]
+        metric = test["metrics"]["com.apple.dt.XCTMetric_ApplicationLaunch-AppLaunch.duration"]
+        self.assertEqual(metric["values"], [5.26995975, 5.611702416, 6.161564292])
+        manifest = json.loads((ARCHIVE / "launch-export-manifest.json").read_text())
+        self.assertEqual(manifest[0]["attachments"][0]["deviceId"], "58B70B19-21DA-4051-B017-0D828579958A")
+        self.assertIn("source_dirty: yes", (ARCHIVE / "launch-environment.txt").read_text())
+        binding = json.loads((ARCHIVE / "binding-export-manifest.json").read_text())
+        self.assertEqual(len(binding), 3)
+        self.assertTrue(all(item["attachments"][0]["deviceId"] == "58B70B19-21DA-4051-B017-0D828579958A"
+                            for item in binding))
+
+    def test_package_reports_reproduce_payload_not_store_size(self):
+        original = json.loads((ARCHIVE / "package-original.json").read_text())
+        recomputed = json.loads((ARCHIVE / "package-recomputed.json").read_text())
+        self.assertEqual(original["delta_bytes"], recomputed["delta_bytes"])
+        self.assertEqual(original["delta_bytes"], {"logical_payload_bytes": 763346, "allocated_payload_bytes": 761856,
+                                                    "executable_bytes": 763344, "compressed_zip_bytes": 355744})
+        for variant in ("with_core", "without_core"):
+            self.assertEqual(original[variant]["files"], recomputed[variant]["files"])
+            self.assertEqual(original[variant]["executable_sha256"], recomputed[variant]["executable_sha256"])
+        self.assertEqual(original["compressed"]["with_core"]["sha256"],
+                         "29df55283674ada57586576bee80acdda16f1eee0f7418f33991de123f7a7cc0")
+        self.assertEqual(original["compressed"]["without_core"]["sha256"],
+                         "aae48553d05749052092f133cc458be71cdbe9e8ea6e47a29bbe5c06622ceef3")
+        self.assertNotEqual(original["xcframework_provenance"], recomputed["xcframework_provenance"])
+        self.assertEqual(original["store_download_size"], "not_measured")
+        self.assertEqual(original["phase1_download_gate_status"], "open")
 
 
 if __name__ == "__main__":

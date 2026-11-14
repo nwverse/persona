@@ -199,7 +199,7 @@ import UIKit
         if name == contextNotice {
             // Reference launches carry immutable identity in their launch arguments; already-running suites use the
             // synthetic hub's authenticated context because changing XCUIApplication.launchArguments is not a bridge.
-            runUsesLaunchArguments = !run.isEmpty
+            runUsesLaunchArguments = !(run["run_id"] as? String ?? "").isEmpty
             activeRun = run
         } else if name == glideNotice {
             Task { await runGlide() }
@@ -207,14 +207,43 @@ import UIKit
             let model = AppModel.shared
             model.selectedTab = model.selectedTab == .chats ? .assistant : .chats
         } else if name == start {
-            activeRun = run
             if stats.running { stats.stop(label: "probe") }
             stats.start()
+            let launchRun = run
+            if let id = launchRun["run_id"] as? String, !id.isEmpty {
+                activeRun = launchRun
+            } else {
+                activeRun = nil
+                Task { await captureMockRun(launchRun) }
+            }
         } else if name == stop, stats.running {
             let run = activeRun
             activeRun = nil
             Task { await uploadStop(stats.stop(label: "probe"), run: run) }
         }
+    }
+
+    private static func captureMockRun(_ fallback: [String: Any]) async {
+        guard let hub = AppModel.shared.api?.config else { return }
+        var request = URLRequest(url: hub.url.appending(path: "mock/frames_context"), timeoutInterval: 10)
+        hub.authorize(&request)
+        guard let run = try? await mockContext(request) else { return }
+        if FrameStats.shared.running {
+            activeRun = run
+        } else if activeRun == nil {
+            // A very short interaction can stop before the context arrives. Keep the same identity for its upload;
+            // never merge the mutable hub context into a later run.
+            activeRun = fallback
+            activeRun?.merge(run) { _, current in current }
+        }
+    }
+
+    private static func mockContext(_ request: URLRequest) async throws -> [String: Any]? {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let run = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              !(run["run_id"] as? String ?? "").isEmpty else { return nil }
+        return run
     }
 
     private static func uploadStop(_ result: [String: Any], run: [String: Any]?) async {
@@ -235,15 +264,13 @@ import UIKit
     private static func runGlide() async {
         guard let hub = AppModel.shared.api?.config else { return }
         var context = activeRun ?? [:]
-        if !runUsesLaunchArguments || context["run_id"] == nil {
+        if !runUsesLaunchArguments || (context["run_id"] as? String ?? "").isEmpty {
             var request = URLRequest(url: hub.url.appending(path: "mock/frames_context"), timeoutInterval: 10)
             hub.authorize(&request)
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  (response as? HTTPURLResponse)?.statusCode == 200,
-                  let fetched = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            guard let fetched = try? await mockContext(request) else { return }
             context = fetched
         }
-        guard !runUsesLaunchArguments || context["run_id"] != nil else { return }
+        guard !runUsesLaunchArguments || !(context["run_id"] as? String ?? "").isEmpty else { return }
         context["sample_source"] = "app-list-glide"
         let stats = FrameStats.shared
         if stats.running {

@@ -1,0 +1,65 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "4D228984-DDC0-4440-86CC-1BB89BEAF0C7.json",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "frames_0_E738A4D1-DBC1-4D03-9E82-D91046C04BDD.json",
+        "timestamp" : 1794636817.37
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "67503932-45DB-4433-B748-53B476DE2073.txt",
+        "isAssociatedWithFailure" : true,
+        "suggestedHumanReadableName" : "Complete Issue Description.txt"
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "6CEA0E48-E828-4F38-AED8-9F710C0723EA.txt",
+        "isAssociatedWithFailure" : true,
+        "suggestedHumanReadableName" : "Complete Issue Description.txt"
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "771E2FD6-F77F-4F44-8ACB-7E1BFE27B2E8.txt",
+        "isAssociatedWithFailure" : true,
+        "suggestedHumanReadableName" : "Complete Issue Description.txt"
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "137DCC32-A64A-417F-8F9A-AE92ECD3241A.txt",
+        "isAssociatedWithFailure" : true,
+        "suggestedHumanReadableName" : "Complete Issue Description.txt"
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "1DD984A0-3700-488E-8EDD-77E86EB95DD1.txt",
+        "isAssociatedWithFailure" : true,
+        "suggestedHumanReadableName" : "Complete Issue Description.txt"
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "E2EC8F92-3E94-4944-BC2D-B501FD628E18.txt",
+        "isAssociatedWithFailure" : true,
+        "suggestedHumanReadableName" : "Complete Issue Description.txt"
+      }
+    ],
+    "testIdentifier" : "PerfReferenceTests/testNativeFirstFrame()",
+    "testIdentifierURL" : "test://com.apple.xcode/Persona/PersonaUITests/PerfReferenceTests/testNativeFirstFrame"
+  }
+]

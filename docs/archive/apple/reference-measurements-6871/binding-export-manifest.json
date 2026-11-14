@@ -1,0 +1,47 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "FDE5DD35-999C-4CB6-A72A-369EF3F190D0.json",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "frames_0_B9135451-5716-4F24-80D5-A47CF77E5A4F.json",
+        "timestamp" : 1794638454.711
+      }
+    ],
+    "testIdentifier" : "PersonaCoreReferencePerformanceTests/testCoreTenOpenCloseMemory()",
+    "testIdentifierURL" : "test://com.apple.xcode/Persona/PersonaTests/PersonaCoreReferencePerformanceTests/testCoreTenOpenCloseMemory"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "B2631CA6-A7F1-44D2-985E-2604AC49E25E.json",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "frames_0_7B4E1AB5-C7BD-4ECC-8ADA-49ECB2B9252F.json",
+        "timestamp" : 1794638454.887
+      }
+    ],
+    "testIdentifier" : "PersonaCoreReferencePerformanceTests/testDispatchDrainAndNativeInputCosts()",
+    "testIdentifierURL" : "test://com.apple.xcode/Persona/PersonaTests/PersonaCoreReferencePerformanceTests/testDispatchDrainAndNativeInputCosts"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "58B70B19-21DA-4051-B017-0D828579958A",
+        "deviceName" : "Persona 6871 Reference Measurements",
+        "exportedFileName" : "4C86F9B9-DD5E-4709-9313-21CDE326432B.json",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "frames_0_A9D91431-5533-487B-8C28-BEAB47830B2B.json",
+        "timestamp" : 1794638455.18
+      }
+    ],
+    "testIdentifier" : "PersonaCoreReferencePerformanceTests/testOneHundredItemPageDrainDecodeApply()",
+    "testIdentifierURL" : "test://com.apple.xcode/Persona/PersonaTests/PersonaCoreReferencePerformanceTests/testOneHundredItemPageDrainDecodeApply"
+  }
+]

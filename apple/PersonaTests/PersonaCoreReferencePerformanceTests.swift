@@ -140,6 +140,7 @@ final class PersonaCoreReferencePerformanceTests: XCTestCase {
         }
         try attach(["scope": "100-item snapshot; drain/bincode decode/string-list apply, not ChatStore or a presented frame",
                     "samples": timings, "statistics": summary(timings), "patch_op_count": operations,
+                    "warmups_per_metric": Self.warmups, "samples_per_metric": Self.samples,
                     "input_json_utf8_bytes": snapshot.itemsJson.utf8.count,
                     "budget_drain_decode_apply_p99_us": 1_000, "worker_flush_is_outside_timed_span": true])
     }
@@ -156,12 +157,13 @@ final class PersonaCoreReferencePerformanceTests: XCTestCase {
             if index == 0 {
                 baseline = bytes // warm up allocators and the first worker before taking the baseline
             } else {
-                samples.append(["cycle": index, "phys_footprint_bytes": bytes, "delta_from_warmed_bytes": bytes - baseline])
+                samples.append(["cycle": index, "phys_footprint_bytes": bytes, "delta_from_warmed_bytes": bytes - baseline,
+                                "close_returned": true, "swift_client_released": released == nil])
             }
         }
         let finalDelta = (samples.last?["delta_from_warmed_bytes"] as? Int) ?? Int.max
         XCTAssertLessThanOrEqual(finalDelta, 5 * 1_024 * 1_024, "ten C-core open/close cycles exceeded the 5 MiB budget")
-        try attach(["scope": "ten create/open/drain/close cycles, C destruction completed off the main thread",
+        try attach(["scope": "ten create/open/drain/close cycles; awaited close returns after native worker shutdown, with Swift release checks",
                     "warmup_cycles": 1, "cycles": 10, "baseline_phys_footprint_bytes": baseline,
                     "final_delta_bytes": finalDelta, "budget_final_delta_bytes": 5 * 1_024 * 1_024, "samples": samples])
     }

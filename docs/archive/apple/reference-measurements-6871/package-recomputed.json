@@ -1,0 +1,952 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "local_ios_app_payload_comparison",
+  "with_core": {
+    "path": "/private/tmp/persona-6871-verified-with-payload/Persona.app",
+    "regular_file_count": 88,
+    "logical_payload_bytes": 127845039,
+    "allocated_payload_bytes": 128061440,
+    "executable_bytes": 75247376,
+    "executable_sha256": "751d44b55dfc500300e357803c4a69652bb210d78a87d3fec250890702cd9985",
+    "core_symbol_count_retained_max_200": 0,
+    "core_symbols": [],
+    "static_core_framework_present": false,
+    "mach_o": {
+      "uuid": "UUID: CA37C83F-38DA-3552-9422-F01363C26903 (arm64) /private/tmp/persona-6871-verified-with-payload/Persona.app/Persona\n",
+      "size": "Segment __PAGEZERO: 4294967296 (zero fill) \nSegment __TEXT: 70549504\n\tSection __text: 57237888\n\tSection __stubs: 47184\n\tSection __objc_stubs: 39680\n\tSection __objc_methlist: 15628\n\tSection __const: 1821908\n\tSection __constg_swiftt: 356716\n\tSection __swift5_typeref: 7312435\n\tSection __objc_classname: 27360\n\tSection __objc_methname: 92512\n\tSection __objc_methtype: 20917\n\tSection __swift5_reflstr: 208920\n\tSection __swift5_fieldmd: 488540\n\tSection __swift5_builtin: 5480\n\tSection __swift5_assocty: 86584\n\tSection __cstring: 612052\n\tSection __swift5_capture: 278472\n\tSection __swift5_proto: 62876\n\tSection __swift5_types: 29056\n\tSection __swift_as_entry: 16588\n\tSection __swift_as_ret: 19436\n\tSection __swift_as_cont: 37624\n\tSection __swift5_protos: 488\n\tSection __swift5_mpenum: 2384\n\tSection __swift5_entry: 8\n\tSection __swift5_types2: 16\n\tSection __gcc_except_tab: 14200\n\tSection __unwind_info: 608832\n\tSection __eh_frame: 1071992\n\tSection __oslogstring: 3557\n\ttotal 70519333\nSegment __DATA_CONST: 1753088\n\tSection __const: 1657240\n\tSection __objc_classlist: 4624\n\tSection __objc_catlist: 16\n\tSection __objc_protolist: 784\n\tSection __objc_imageinfo: 8\n\tSection __objc_protorefs: 392\n\tSection __got: 83152\n\ttotal 1746216\nSegment __DATA: 3260416\n\tSection __objc_const: 208208\n\tSection __objc_selrefs: 14440\n\tSection __objc_data: 44696\n\tSection __data: 953137\n\tSection __s_async_hook: 416\n\tSection __swift56_hooks: 176\n\tSection __thread_vars: 288\n\tSection __thread_data: 72\n\tSection __thread_bss: 96 (zerofill)\n\tSection __bss: 2007032 (zerofill)\n\tSection __common: 20972 (zerofill)\n\ttotal 3249533\nSegment __LINKEDIT: 1720320\ntotal 4372250624\n",
+      "filetype": "/private/tmp/persona-6871-verified-with-payload/Persona.app/Persona: Mach-O 64-bit executable arm64\n"
+    },
+    "files": [
+      {
+        "relative_path": "AppIcon60x60@2x.png",
+        "bytes": 19335,
+        "sha256": "b563664f2ce8f3db138004f487572f7c46f1956a170516c7ddf9498ae97d677b"
+      },
+      {
+        "relative_path": "AppIcon76x76@2x~ipad.png",
+        "bytes": 28172,
+        "sha256": "b190e9139a8fceaca564e97cb225b69a4ef827baf635c566a6797b7749cabbac"
+      },
+      {
+        "relative_path": "Assets.car",
+        "bytes": 14935768,
+        "sha256": "2efa0b3c875ea6f5297b6207d6d2a2ef9d15f5652406bab0fda5767725a01dfb"
+      },
+      {
+        "relative_path": "Demo.json",
+        "bytes": 145325,
+        "sha256": "f1c0b3f82c4714b70d1e53429678b3727d53a072664ff0e7dbbe5dd86a07a210"
+      },
+      {
+        "relative_path": "Info.plist",
+        "bytes": 9029,
+        "sha256": "6fbe1fb9df5ae241383628becc1f68b0c9c5be377cf05b63ddb7f4c384772318"
+      },
+      {
+        "relative_path": "JetBrainsMono-Bold.ttf",
+        "bytes": 277828,
+        "sha256": "5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb"
+      },
+      {
+        "relative_path": "JetBrainsMono-Regular.ttf",
+        "bytes": 273900,
+        "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f"
+      },
+      {
+        "relative_path": "KaTeX-LICENSE.txt",
+        "bytes": 1107,
+        "sha256": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3"
+      },
+      {
+        "relative_path": "Metadata.appintents/extract.actionsdata",
+        "bytes": 70683,
+        "sha256": "f8648ce78b4115f43bb37987bdb02c9a932cd0b26974dc9313fa5ab7f9183368"
+      },
+      {
+        "relative_path": "Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "Persona",
+        "bytes": 75247376,
+        "sha256": "751d44b55dfc500300e357803c4a69652bb210d78a87d3fec250890702cd9985"
+      },
+      {
+        "relative_path": "PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0"
+      },
+      {
+        "relative_path": "PlugIns/PersonaNotify.appex/Info.plist",
+        "bytes": 1025,
+        "sha256": "1c40b8a026954162f319021224a5b10590108823ad02545f7ebab7837e5d32ee"
+      },
+      {
+        "relative_path": "PlugIns/PersonaNotify.appex/PersonaNotify",
+        "bytes": 196424,
+        "sha256": "8c1f35d41ce11c36029c709705b61f031eaa4babe12b606b70f706b385634ac6"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/Info.plist",
+        "bytes": 1328,
+        "sha256": "fbaf7d9e28750d47957021792777bf1699a1b9fba6299afbc2d9da6cef91d6fb"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/Metadata.appintents/extract.actionsdata",
+        "bytes": 8895,
+        "sha256": "b87e55843775bcf005013f3a2730d3f4406048d185e9d5b19df34207104e66b1"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/PersonaShare",
+        "bytes": 3313912,
+        "sha256": "3b15aea9f261f3016426fe09305c50a02bccd05ddbcd1348cf3d745fdf0a5ab1"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/Info.plist",
+        "bytes": 947,
+        "sha256": "25e7eac13661e845ad0a9cfe1159ba8be943950a3eb6d3a992a76b432be81c95"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/Metadata.appintents/extract.actionsdata",
+        "bytes": 31092,
+        "sha256": "aa1b91b7a7e913170a000263151bc24fb87e146b3164dc6ec6c4d83c3c8de7b1"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/PersonaWidgets",
+        "bytes": 2146376,
+        "sha256": "a02163a9615b7e4d36b5b3a4a41dd69bf7a08542a8b3709b5a4f9490f9fb6085"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Assets.car",
+        "bytes": 1222456,
+        "sha256": "4251fdb16a9f188cd7dbbf1750a54018c649d3eef46486331911cc190762f8cd"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Info.plist",
+        "bytes": 1490,
+        "sha256": "8d57ed748d326573b762d571e8a60bae8386c041bc9be8fa0aba151dfb4aa17e"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Metadata.appintents/extract.actionsdata",
+        "bytes": 8807,
+        "sha256": "4c8595aac92733d68d2682f4304b27aade798ce5221dc7ee4bdb2feaa8cce8cf"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Persona",
+        "bytes": 11351740,
+        "sha256": "05c3fe835428a997cdf969a64e0e8eaef4de45a0ab28114d7ab1359b91edd976"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/Info.plist",
+        "bytes": 910,
+        "sha256": "dd03b9a16d76ee2826f54f5e7abf7735d97c239c2007e885a9a1867a8a5fa46d"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/Metadata.appintents/extract.actionsdata",
+        "bytes": 3321,
+        "sha256": "9b6b9911de16280e4afcb86dc84292c1284e5c8615ca891175b522e3895d51b4"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/PersonaWatchWidgets",
+        "bytes": 2618280,
+        "sha256": "6186d45eaa50373323f3737f60398369b416b64c1430e33cc84869b757c5c555"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "Watch/Persona.app/en.lproj/InfoPlist.strings",
+        "bytes": 370,
+        "sha256": "90932c7088e962d027dbe201349833cc962f5b27af436c8a17cba06e12db9ffc"
+      },
+      {
+        "relative_path": "Watch/Persona.app/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "Watch/Persona.app/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "Watch/Persona.app/ja.lproj/InfoPlist.strings",
+        "bytes": 341,
+        "sha256": "7140fd658c39b9ba1d0b41adb63e665ec8383f389fd044741bf6f67105e47599"
+      },
+      {
+        "relative_path": "Watch/Persona.app/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "Watch/Persona.app/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "Watch/Persona.app/zh-Hans.lproj/InfoPlist.strings",
+        "bytes": 305,
+        "sha256": "55e392631c7fc1d8b95fa97f762df746416d0c0d63ce4265f69058d9c18e673f"
+      },
+      {
+        "relative_path": "Watch/Persona.app/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "Watch/Persona.app/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "en.lproj/AppShortcuts.strings",
+        "bytes": 1631,
+        "sha256": "ed258ce479d67e4b57e2cc5e7517c686b2a7750399de9c3e995215dfdb8c3ade"
+      },
+      {
+        "relative_path": "en.lproj/InfoPlist.strings",
+        "bytes": 4600,
+        "sha256": "9cbe428e148a4b1ff28d1fb115a3f8fe21b02408dd497ee0dfcb15475dc2c913"
+      },
+      {
+        "relative_path": "en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "en.lproj/nlu.appintents/487032d15135267dd3ce02b90b63f8db.version",
+        "bytes": 1,
+        "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+      },
+      {
+        "relative_path": "en.lproj/nlu.appintents/nlu.lzfse",
+        "bytes": 3919,
+        "sha256": "9cd0d85f7befad1ca7e51f6ea720fe66cc69252d38ab6e791a77602e12bfef20"
+      },
+      {
+        "relative_path": "ja.lproj/AppShortcuts.strings",
+        "bytes": 3772,
+        "sha256": "14638cfb2faf417c4da8eac5a35cdb35f3b02eacded0c51b37d685f79b12bca4"
+      },
+      {
+        "relative_path": "ja.lproj/InfoPlist.strings",
+        "bytes": 3697,
+        "sha256": "142d23fc746dde48ccd6ae067a36cead898e2c78de8936e30b91bcc4ef995ab0"
+      },
+      {
+        "relative_path": "ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "ja.lproj/nlu.appintents/dad5dc5b698924c8e202a00dd727ae25.version",
+        "bytes": 1,
+        "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+      },
+      {
+        "relative_path": "ja.lproj/nlu.appintents/nlu.lzfse",
+        "bytes": 4202,
+        "sha256": "e4b88d211982a8f3d936d93794be83835a89e13d8c7838cdb0f3217356deaeeb"
+      },
+      {
+        "relative_path": "katex.min.css",
+        "bytes": 367453,
+        "sha256": "c87d2b61698d44a07331ee70f61e01ec7afa1c102903403c03f1f7d44fa4f746"
+      },
+      {
+        "relative_path": "katex.min.js",
+        "bytes": 276701,
+        "sha256": "e8d885505949f3a5f4abdd5dd0d53696bd1371ad26ffbf4f310dcd77c8cdae89"
+      },
+      {
+        "relative_path": "mermaid-LICENSE.txt",
+        "bytes": 1089,
+        "sha256": "ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80"
+      },
+      {
+        "relative_path": "mermaid.min.js",
+        "bytes": 5537838,
+        "sha256": "336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3"
+      },
+      {
+        "relative_path": "preview_pick.js",
+        "bytes": 2924,
+        "sha256": "6005808c1518beeb886154b7c18b7b3d3911e998bdffdcae8a49a32ff4b4fd2d"
+      },
+      {
+        "relative_path": "render.html",
+        "bytes": 1113,
+        "sha256": "aae231a2b7266e1510d3e46abe33ee491e36fbd14644381ff1f59f091b7fbfc8"
+      },
+      {
+        "relative_path": "render.js",
+        "bytes": 3403,
+        "sha256": "f410ce4c52d0bc701ad9993ec69caf77287262b72394b6fc929532ab638a41c1"
+      },
+      {
+        "relative_path": "swift-crypto_Crypto.bundle/Info.plist",
+        "bytes": 687,
+        "sha256": "e3034019d132c63a029610a4869edf8baf9c6fc3741bbe414ab0e0ede55cbd55"
+      },
+      {
+        "relative_path": "swift-crypto_Crypto.bundle/PrivacyInfo.xcprivacy",
+        "bytes": 398,
+        "sha256": "42fb8a30dd8d7ba0900e1bf17fe64ed8c12cfdb8a9c791ab6b4e1eceb0f299c0"
+      },
+      {
+        "relative_path": "swift-nio_NIOPosix.bundle/Info.plist",
+        "bytes": 685,
+        "sha256": "031461d6820b273ef3f95701560d4d9171088f798262957775af707d4e948e68"
+      },
+      {
+        "relative_path": "swift-nio_NIOPosix.bundle/PrivacyInfo.xcprivacy",
+        "bytes": 599,
+        "sha256": "982f20d820bc4460acc9d4116c3e6c8ec837f717dc82edbb7308f7400515c909"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/AppShortcuts.strings",
+        "bytes": 3097,
+        "sha256": "36468b41b81854dfeca99138302347d1164ba24258a55e49ee64ebb829a0f73b"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/InfoPlist.strings",
+        "bytes": 3054,
+        "sha256": "8f3cececa0a6b67bde930186d08b0e6e9f1e9462b7b6eb23ff829f3c7abb0f0c"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/nlu.appintents/07e57bee9ddc4de913f93bdc7c78131c.version",
+        "bytes": 1,
+        "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/nlu.appintents/nlu.lzfse",
+        "bytes": 1371,
+        "sha256": "4518ad5cfeb43a1caa1d356e108e53822c932cec177c0626d942b2e2c28c7011"
+      }
+    ]
+  },
+  "without_core": {
+    "path": "/private/tmp/persona-6871-verified-without-payload/Persona.app",
+    "regular_file_count": 88,
+    "logical_payload_bytes": 127081693,
+    "allocated_payload_bytes": 127299584,
+    "executable_bytes": 74484032,
+    "executable_sha256": "af9fe46d4dfd0ca9cd123d92f211e14ecdc0a3f9737fc453cf209f92724b25c4",
+    "core_symbol_count_retained_max_200": 0,
+    "core_symbols": [],
+    "static_core_framework_present": false,
+    "mach_o": {
+      "uuid": "UUID: 96417815-DBF1-3B07-BBD5-FA649CB1F527 (arm64) /private/tmp/persona-6871-verified-without-payload/Persona.app/Persona\n",
+      "size": "Segment __PAGEZERO: 4294967296 (zero fill) \nSegment __TEXT: 69877760\n\tSection __text: 56714068\n\tSection __stubs: 46776\n\tSection __objc_stubs: 39680\n\tSection __objc_methlist: 15628\n\tSection __const: 1778144\n\tSection __constg_swiftt: 353736\n\tSection __swift5_typeref: 7310691\n\tSection __objc_classname: 26864\n\tSection __objc_methname: 92464\n\tSection __objc_methtype: 20917\n\tSection __swift5_reflstr: 207880\n\tSection __swift5_fieldmd: 486512\n\tSection __swift5_builtin: 5340\n\tSection __swift5_assocty: 86584\n\tSection __cstring: 601248\n\tSection __swift5_capture: 275320\n\tSection __swift5_proto: 62692\n\tSection __swift5_types: 28912\n\tSection __swift_as_entry: 16588\n\tSection __swift_as_ret: 19436\n\tSection __swift_as_cont: 37624\n\tSection __swift5_protos: 480\n\tSection __swift5_mpenum: 2268\n\tSection __swift5_entry: 8\n\tSection __swift5_types2: 16\n\tSection __unwind_info: 596144\n\tSection __eh_frame: 1013760\n\tSection __oslogstring: 3557\n\ttotal 69843337\nSegment __DATA_CONST: 1736704\n\tSection __const: 1639272\n\tSection __objc_classlist: 4552\n\tSection __objc_catlist: 16\n\tSection __objc_protolist: 784\n\tSection __objc_imageinfo: 8\n\tSection __objc_protorefs: 392\n\tSection __got: 82784\n\ttotal 1727808\nSegment __DATA: 3244032\n\tSection __objc_const: 206296\n\tSection __objc_selrefs: 14440\n\tSection __objc_data: 44696\n\tSection __data: 946273\n\tSection __s_async_hook: 416\n\tSection __swift56_hooks: 176\n\tSection __thread_vars: 48\n\tSection __thread_bss: 16 (zerofill)\n\tSection __bss: 2001360 (zerofill)\n\tSection __common: 20900 (zerofill)\n\ttotal 3234621\nSegment __LINKEDIT: 1671168\ntotal 4371496960\n",
+      "filetype": "/private/tmp/persona-6871-verified-without-payload/Persona.app/Persona: Mach-O 64-bit executable arm64\n"
+    },
+    "files": [
+      {
+        "relative_path": "AppIcon60x60@2x.png",
+        "bytes": 19335,
+        "sha256": "b563664f2ce8f3db138004f487572f7c46f1956a170516c7ddf9498ae97d677b"
+      },
+      {
+        "relative_path": "AppIcon76x76@2x~ipad.png",
+        "bytes": 28172,
+        "sha256": "b190e9139a8fceaca564e97cb225b69a4ef827baf635c566a6797b7749cabbac"
+      },
+      {
+        "relative_path": "Assets.car",
+        "bytes": 14935768,
+        "sha256": "e4cc88085c199b1696cf8d31d9d0e28e2b12b6c9938a723e8399d964d61a537a"
+      },
+      {
+        "relative_path": "Demo.json",
+        "bytes": 145325,
+        "sha256": "f1c0b3f82c4714b70d1e53429678b3727d53a072664ff0e7dbbe5dd86a07a210"
+      },
+      {
+        "relative_path": "Info.plist",
+        "bytes": 9028,
+        "sha256": "b76b3ee24e5a949e29daac4c0fcb09e867e5f2b620e029a20ab873449c230c75"
+      },
+      {
+        "relative_path": "JetBrainsMono-Bold.ttf",
+        "bytes": 277828,
+        "sha256": "5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb"
+      },
+      {
+        "relative_path": "JetBrainsMono-Regular.ttf",
+        "bytes": 273900,
+        "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f"
+      },
+      {
+        "relative_path": "KaTeX-LICENSE.txt",
+        "bytes": 1107,
+        "sha256": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3"
+      },
+      {
+        "relative_path": "Metadata.appintents/extract.actionsdata",
+        "bytes": 70683,
+        "sha256": "466f4269673c148b9358d2f84c03adeb57dd24ba4cdcf3a6c9c2a74a6342f0c6"
+      },
+      {
+        "relative_path": "Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "Persona",
+        "bytes": 74484032,
+        "sha256": "af9fe46d4dfd0ca9cd123d92f211e14ecdc0a3f9737fc453cf209f92724b25c4"
+      },
+      {
+        "relative_path": "PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0"
+      },
+      {
+        "relative_path": "PlugIns/PersonaNotify.appex/Info.plist",
+        "bytes": 1025,
+        "sha256": "1c40b8a026954162f319021224a5b10590108823ad02545f7ebab7837e5d32ee"
+      },
+      {
+        "relative_path": "PlugIns/PersonaNotify.appex/PersonaNotify",
+        "bytes": 196424,
+        "sha256": "e30570825e7b955c4060c7c290cf9a057619bc663e545406a64589fff5edb887"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/Info.plist",
+        "bytes": 1328,
+        "sha256": "fbaf7d9e28750d47957021792777bf1699a1b9fba6299afbc2d9da6cef91d6fb"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/Metadata.appintents/extract.actionsdata",
+        "bytes": 8895,
+        "sha256": "905aa9a899e3456beb05ae9fcb8e63439ca212d40b29cb4c8d389cccd46dd31e"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/PersonaShare",
+        "bytes": 3313912,
+        "sha256": "8b2f8525203bf7da8ce393c3a4a7c7ce3a22d3a15f7a5b92b19ff6b6aab8fb95"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "PlugIns/PersonaShare.appex/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/Info.plist",
+        "bytes": 947,
+        "sha256": "25e7eac13661e845ad0a9cfe1159ba8be943950a3eb6d3a992a76b432be81c95"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/Metadata.appintents/extract.actionsdata",
+        "bytes": 31092,
+        "sha256": "171334036f156b5e53bdf742f2bdd7ee1a98b0a0dd60c37257bbdd8c533b7d77"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/PersonaWidgets",
+        "bytes": 2146376,
+        "sha256": "b1d1ffc5b24bfeb1d3afa5afd1f087fe1856152414d58f0f7c60d37c911647a3"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "PlugIns/PersonaWidgets.appex/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Assets.car",
+        "bytes": 1222456,
+        "sha256": "4251fdb16a9f188cd7dbbf1750a54018c649d3eef46486331911cc190762f8cd"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Info.plist",
+        "bytes": 1490,
+        "sha256": "8d57ed748d326573b762d571e8a60bae8386c041bc9be8fa0aba151dfb4aa17e"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Metadata.appintents/extract.actionsdata",
+        "bytes": 8807,
+        "sha256": "61aba00220f070076ad1c20017cb4c74892e6997879ea76ed98dec2609abe2fc"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "Watch/Persona.app/Persona",
+        "bytes": 11351740,
+        "sha256": "c4e607878311f4e8996c406a85ff25f9844bfb6e59162b00450fd685f6727daa"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/Info.plist",
+        "bytes": 910,
+        "sha256": "dd03b9a16d76ee2826f54f5e7abf7735d97c239c2007e885a9a1867a8a5fa46d"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/Metadata.appintents/extract.actionsdata",
+        "bytes": 3321,
+        "sha256": "9b6b9911de16280e4afcb86dc84292c1284e5c8615ca891175b522e3895d51b4"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/Metadata.appintents/version.json",
+        "bytes": 53,
+        "sha256": "9734d5bb42c949505a719cbca76baa9736fb9678e638b43ff527c200d3d9dea1"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/PersonaWatchWidgets",
+        "bytes": 2618280,
+        "sha256": "7f2e6f23f7d1c81c777953b88441e00fa5d3744bb49f0a6bd580fc5d0fe79d9e"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "Watch/Persona.app/PlugIns/PersonaWatchWidgets.appex/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "Watch/Persona.app/en.lproj/InfoPlist.strings",
+        "bytes": 370,
+        "sha256": "90932c7088e962d027dbe201349833cc962f5b27af436c8a17cba06e12db9ffc"
+      },
+      {
+        "relative_path": "Watch/Persona.app/en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "Watch/Persona.app/en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "Watch/Persona.app/ja.lproj/InfoPlist.strings",
+        "bytes": 341,
+        "sha256": "7140fd658c39b9ba1d0b41adb63e665ec8383f389fd044741bf6f67105e47599"
+      },
+      {
+        "relative_path": "Watch/Persona.app/ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "Watch/Persona.app/ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "Watch/Persona.app/zh-Hans.lproj/InfoPlist.strings",
+        "bytes": 305,
+        "sha256": "55e392631c7fc1d8b95fa97f762df746416d0c0d63ce4265f69058d9c18e673f"
+      },
+      {
+        "relative_path": "Watch/Persona.app/zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "Watch/Persona.app/zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "en.lproj/AppShortcuts.strings",
+        "bytes": 1631,
+        "sha256": "ed258ce479d67e4b57e2cc5e7517c686b2a7750399de9c3e995215dfdb8c3ade"
+      },
+      {
+        "relative_path": "en.lproj/InfoPlist.strings",
+        "bytes": 4600,
+        "sha256": "9cbe428e148a4b1ff28d1fb115a3f8fe21b02408dd497ee0dfcb15475dc2c913"
+      },
+      {
+        "relative_path": "en.lproj/Localizable.strings",
+        "bytes": 479116,
+        "sha256": "b65552eb69ce5141e034aed1f90335a17ea91a183f4986f8c336b57e78a660bc"
+      },
+      {
+        "relative_path": "en.lproj/Localizable.stringsdict",
+        "bytes": 26772,
+        "sha256": "250db040dbe0bfac39ef8635b6d554c55c0817e078a1af5e400981c975a26dd7"
+      },
+      {
+        "relative_path": "en.lproj/nlu.appintents/039eb2ec6ad2e008880813a96fb7e229.version",
+        "bytes": 1,
+        "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+      },
+      {
+        "relative_path": "en.lproj/nlu.appintents/nlu.lzfse",
+        "bytes": 3917,
+        "sha256": "996de93fd44437559ba785c99cd8a69d3ce75f6a96826c366381554e88af8498"
+      },
+      {
+        "relative_path": "ja.lproj/AppShortcuts.strings",
+        "bytes": 3772,
+        "sha256": "14638cfb2faf417c4da8eac5a35cdb35f3b02eacded0c51b37d685f79b12bca4"
+      },
+      {
+        "relative_path": "ja.lproj/InfoPlist.strings",
+        "bytes": 3697,
+        "sha256": "142d23fc746dde48ccd6ae067a36cead898e2c78de8936e30b91bcc4ef995ab0"
+      },
+      {
+        "relative_path": "ja.lproj/Localizable.strings",
+        "bytes": 765170,
+        "sha256": "e97bfbd96acc616c0deb2233bf8f3b12c53cdd178ec453247d798df742f7f0b5"
+      },
+      {
+        "relative_path": "ja.lproj/Localizable.stringsdict",
+        "bytes": 873,
+        "sha256": "25f03857151eab040392440e22cb0f7ca89fb657d722f0e013ab9dd002f1c585"
+      },
+      {
+        "relative_path": "ja.lproj/nlu.appintents/7910748d26a8e33f9fb71253554628ba.version",
+        "bytes": 1,
+        "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+      },
+      {
+        "relative_path": "ja.lproj/nlu.appintents/nlu.lzfse",
+        "bytes": 4203,
+        "sha256": "01de419d37ea5ee43eab32c3e5435a92d8308c973cd021b9db5511e108617d5f"
+      },
+      {
+        "relative_path": "katex.min.css",
+        "bytes": 367453,
+        "sha256": "c87d2b61698d44a07331ee70f61e01ec7afa1c102903403c03f1f7d44fa4f746"
+      },
+      {
+        "relative_path": "katex.min.js",
+        "bytes": 276701,
+        "sha256": "e8d885505949f3a5f4abdd5dd0d53696bd1371ad26ffbf4f310dcd77c8cdae89"
+      },
+      {
+        "relative_path": "mermaid-LICENSE.txt",
+        "bytes": 1089,
+        "sha256": "ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80"
+      },
+      {
+        "relative_path": "mermaid.min.js",
+        "bytes": 5537838,
+        "sha256": "336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3"
+      },
+      {
+        "relative_path": "preview_pick.js",
+        "bytes": 2924,
+        "sha256": "6005808c1518beeb886154b7c18b7b3d3911e998bdffdcae8a49a32ff4b4fd2d"
+      },
+      {
+        "relative_path": "render.html",
+        "bytes": 1113,
+        "sha256": "aae231a2b7266e1510d3e46abe33ee491e36fbd14644381ff1f59f091b7fbfc8"
+      },
+      {
+        "relative_path": "render.js",
+        "bytes": 3403,
+        "sha256": "f410ce4c52d0bc701ad9993ec69caf77287262b72394b6fc929532ab638a41c1"
+      },
+      {
+        "relative_path": "swift-crypto_Crypto.bundle/Info.plist",
+        "bytes": 687,
+        "sha256": "e3034019d132c63a029610a4869edf8baf9c6fc3741bbe414ab0e0ede55cbd55"
+      },
+      {
+        "relative_path": "swift-crypto_Crypto.bundle/PrivacyInfo.xcprivacy",
+        "bytes": 398,
+        "sha256": "42fb8a30dd8d7ba0900e1bf17fe64ed8c12cfdb8a9c791ab6b4e1eceb0f299c0"
+      },
+      {
+        "relative_path": "swift-nio_NIOPosix.bundle/Info.plist",
+        "bytes": 685,
+        "sha256": "031461d6820b273ef3f95701560d4d9171088f798262957775af707d4e948e68"
+      },
+      {
+        "relative_path": "swift-nio_NIOPosix.bundle/PrivacyInfo.xcprivacy",
+        "bytes": 599,
+        "sha256": "982f20d820bc4460acc9d4116c3e6c8ec837f717dc82edbb7308f7400515c909"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/AppShortcuts.strings",
+        "bytes": 3097,
+        "sha256": "36468b41b81854dfeca99138302347d1164ba24258a55e49ee64ebb829a0f73b"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/InfoPlist.strings",
+        "bytes": 3054,
+        "sha256": "8f3cececa0a6b67bde930186d08b0e6e9f1e9462b7b6eb23ff829f3c7abb0f0c"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/Localizable.strings",
+        "bytes": 668424,
+        "sha256": "69355a3df450287adf4e488fadcac00544ae753e74bc8a1c140614d8c7927970"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/Localizable.stringsdict",
+        "bytes": 841,
+        "sha256": "2cfc9b52fc63d6dea72e500fb63758177ab83c88e4070e3243cee69a7f54d723"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/nlu.appintents/9b7242b7d7faa9b1d14b7d086722b6bc.version",
+        "bytes": 1,
+        "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+      },
+      {
+        "relative_path": "zh-Hans.lproj/nlu.appintents/nlu.lzfse",
+        "bytes": 1371,
+        "sha256": "0504b6ae656560e1cfca43156ce2ae97116086d4f60f6d35dee3d6c0671eae1f"
+      }
+    ]
+  },
+  "compressed": {
+    "without_core": {
+      "path": "/tmp/persona-6871-package-verified-third/without-core.zip",
+      "compressed_zip_bytes": 60500929,
+      "sha256": "2c8f4272313e71d580a14c217b17276330817b6dad731bbc04d3f357bc110bfb",
+      "meaning": "local compressed transport proxy; not App Store download size"
+    },
+    "with_core": {
+      "path": "/tmp/persona-6871-package-verified-third/with-core.zip",
+      "compressed_zip_bytes": 60856673,
+      "sha256": "a114c7be3f6d299c5164f8047f9a9d1f81b6400d36d568491db9ed8c2ec62bd5",
+      "meaning": "local compressed transport proxy; not App Store download size"
+    }
+  },
+  "delta_bytes": {
+    "logical_payload_bytes": 763346,
+    "allocated_payload_bytes": 761856,
+    "executable_bytes": 763344,
+    "compressed_zip_bytes": 355744
+  },
+  "xcframework_provenance": {
+    "inputs_stamp_sha256": "b006ab82242a679da4448c4ae1bd835e4475e2f092360c1823d12c7cacfa2d96",
+    "note": "static archive slices are source diagnostics, not linked-app payload"
+  },
+  "store_download_size": "not_measured",
+  "phase1_download_gate_status": "open",
+  "limitations": [
+    "No App Store Connect processing, per-device thinning, store export, TestFlight or physical-device artifact was used.",
+    "Static linkage may select no core objects when production code does not reference them; zero delta does not estimate future integration cost.",
+    "Logical, allocated, Mach-O and locally compressed bytes are different quantities; ZIP is not store download size.",
+    "Raw XCFramework archives, unselected slices, debug symbols, test runners and dSYMs are not installed app payload."
+  ]
+}

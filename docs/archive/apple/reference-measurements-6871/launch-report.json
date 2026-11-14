@@ -1,0 +1,279 @@
+{
+  "schema_version": 2,
+  "input_directory": "/private/tmp/persona-6871-final-launch-second",
+  "expected_iterations": 3,
+  "extraction": [
+    {
+      "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+      "statuses": {
+        "command": [
+          "xcrun",
+          "xcresulttool",
+          "get",
+          "test-results",
+          "tests",
+          "--path",
+          "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+          "--compact"
+        ],
+        "status": "ok",
+        "returncode": 0,
+        "stderr": "",
+        "test_count": 1
+      },
+      "metrics": {
+        "command": [
+          "xcrun",
+          "xcresulttool",
+          "get",
+          "test-results",
+          "metrics",
+          "--path",
+          "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+          "--compact"
+        ],
+        "status": "ok",
+        "returncode": 0,
+        "stderr": "",
+        "test_count": 1
+      },
+      "attachments": {
+        "command": [
+          "xcrun",
+          "xcresulttool",
+          "export",
+          "attachments",
+          "--path",
+          "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+          "--output-path",
+          "<fresh temporary directory>"
+        ],
+        "status": "ok",
+        "returncode": 0,
+        "stderr": "",
+        "frame_test_count": 1,
+        "sample_count": 4
+      }
+    }
+  ],
+  "issues": [],
+  "tests": {
+    "PerfReferenceTests/testNativeFirstFrame()": {
+      "suite": "reference",
+      "result": "Passed",
+      "metrics": {
+        "com.apple.dt.XCTMetric_ApplicationLaunch-AppLaunch.duration": {
+          "name": "Duration (AppLaunch)",
+          "unit": "s",
+          "values": [
+            5.26995975,
+            5.611702416,
+            6.161564292
+          ],
+          "runs": [
+            {
+              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "device": {
+                "deviceId": "58B70B19-21DA-4051-B017-0D828579958A",
+                "deviceName": "Persona 6871 Reference Measurements"
+              },
+              "configuration": {
+                "configurationId": "1",
+                "configurationName": "Test Scheme Action"
+              },
+              "raw_metric": {
+                "baselineAverage": 0,
+                "baselineName": "",
+                "displayName": "Duration (AppLaunch)",
+                "identifier": "com.apple.dt.XCTMetric_ApplicationLaunch-AppLaunch.duration",
+                "maxPercentRegression": 10,
+                "maxPercentRelativeStandardDeviation": 10,
+                "maxRegression": 0,
+                "maxStandardDeviation": 10,
+                "measurements": [
+                  5.26995975,
+                  5.611702416,
+                  6.161564292
+                ],
+                "polarity": "prefers smaller",
+                "unitOfMeasurement": "s"
+              }
+            }
+          ],
+          "median": 5.611702416
+        }
+      },
+      "issues": [],
+      "bundles": [
+        "/private/tmp/persona-6871-final-launch-second/reference.xcresult"
+      ],
+      "probe": {
+        "source": "frames_attachment",
+        "trust": "native_view_appearance_not_presented_frame",
+        "raw_samples": [
+          {
+            "sample": {
+              "action": "launch",
+              "expected_iterations": 3,
+              "is_main_thread": true,
+              "kind": "first_frame",
+              "name": "PerfReferenceTests/testNativeFirstFrame",
+              "observation_id": "582AC834-41A9-44BA-BB21-E7F5B3CD94DF",
+              "phys_footprint_bytes": 37734944,
+              "resident_size_bytes": 366510080,
+              "run_id": "01F32306-AD44-409C-B1F2-E6425CB5C3D1",
+              "source": "native-ios-process",
+              "test": "PerfReferenceTests/testNativeFirstFrame",
+              "view_appearance_ms": 1479.2590416036546,
+              "warm_up": true
+            },
+            "provenance": {
+              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
+              "attachment": {
+                "configurationName": "Test Scheme Action",
+                "deviceId": "58B70B19-21DA-4051-B017-0D828579958A",
+                "deviceName": "Persona 6871 Reference Measurements",
+                "exportedFileName": "4D228984-DDC0-4440-86CC-1BB89BEAF0C7.json",
+                "isAssociatedWithFailure": false,
+                "suggestedHumanReadableName": "frames_0_E738A4D1-DBC1-4D03-9E82-D91046C04BDD.json",
+                "timestamp": 1794636817.37
+              },
+              "sample_index": 0
+            }
+          },
+          {
+            "sample": {
+              "action": "launch",
+              "expected_iterations": 3,
+              "is_main_thread": true,
+              "kind": "first_frame",
+              "name": "PerfReferenceTests/testNativeFirstFrame",
+              "observation_id": "A8B91716-5FBE-4538-8AD7-88BE9CD831D0",
+              "phys_footprint_bytes": 39881296,
+              "resident_size_bytes": 370802688,
+              "run_id": "AF6E7089-65C6-449E-AA85-0F89A86B6DDF",
+              "source": "native-ios-process",
+              "test": "PerfReferenceTests/testNativeFirstFrame",
+              "view_appearance_ms": 635.7039166614413,
+              "warm_up": false
+            },
+            "provenance": {
+              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
+              "attachment": {
+                "configurationName": "Test Scheme Action",
+                "deviceId": "58B70B19-21DA-4051-B017-0D828579958A",
+                "deviceName": "Persona 6871 Reference Measurements",
+                "exportedFileName": "4D228984-DDC0-4440-86CC-1BB89BEAF0C7.json",
+                "isAssociatedWithFailure": false,
+                "suggestedHumanReadableName": "frames_0_E738A4D1-DBC1-4D03-9E82-D91046C04BDD.json",
+                "timestamp": 1794636817.37
+              },
+              "sample_index": 1
+            }
+          },
+          {
+            "sample": {
+              "action": "launch",
+              "expected_iterations": 3,
+              "is_main_thread": true,
+              "kind": "first_frame",
+              "name": "PerfReferenceTests/testNativeFirstFrame",
+              "observation_id": "96D941DC-17E0-4256-89F6-1BD1500D74AF",
+              "phys_footprint_bytes": 39815760,
+              "resident_size_bytes": 371277824,
+              "run_id": "45C9258B-BA02-4C13-91E4-D1EA77C54D09",
+              "source": "native-ios-process",
+              "test": "PerfReferenceTests/testNativeFirstFrame",
+              "view_appearance_ms": 1328.5042501520365,
+              "warm_up": false
+            },
+            "provenance": {
+              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
+              "attachment": {
+                "configurationName": "Test Scheme Action",
+                "deviceId": "58B70B19-21DA-4051-B017-0D828579958A",
+                "deviceName": "Persona 6871 Reference Measurements",
+                "exportedFileName": "4D228984-DDC0-4440-86CC-1BB89BEAF0C7.json",
+                "isAssociatedWithFailure": false,
+                "suggestedHumanReadableName": "frames_0_E738A4D1-DBC1-4D03-9E82-D91046C04BDD.json",
+                "timestamp": 1794636817.37
+              },
+              "sample_index": 2
+            }
+          },
+          {
+            "sample": {
+              "action": "launch",
+              "expected_iterations": 3,
+              "is_main_thread": true,
+              "kind": "first_frame",
+              "name": "PerfReferenceTests/testNativeFirstFrame",
+              "observation_id": "EB48B36D-9DFD-4E14-BDBF-1ED8E49F6F56",
+              "phys_footprint_bytes": 40258128,
+              "resident_size_bytes": 371982336,
+              "run_id": "ABE54E83-E804-4C26-B13B-3F2A50BAFB12",
+              "source": "native-ios-process",
+              "test": "PerfReferenceTests/testNativeFirstFrame",
+              "view_appearance_ms": 1689.3055418040603,
+              "warm_up": false
+            },
+            "provenance": {
+              "bundle": "/private/tmp/persona-6871-final-launch-second/reference.xcresult",
+              "test_identifier": "PerfReferenceTests/testNativeFirstFrame()",
+              "attachment": {
+                "configurationName": "Test Scheme Action",
+                "deviceId": "58B70B19-21DA-4051-B017-0D828579958A",
+                "deviceName": "Persona 6871 Reference Measurements",
+                "exportedFileName": "4D228984-DDC0-4440-86CC-1BB89BEAF0C7.json",
+                "isAssociatedWithFailure": false,
+                "suggestedHumanReadableName": "frames_0_E738A4D1-DBC1-4D03-9E82-D91046C04BDD.json",
+                "timestamp": 1794636817.37
+              },
+              "sample_index": 3
+            }
+          }
+        ],
+        "log_fallback": [],
+        "issues": [],
+        "warnings": [],
+        "statistics": {
+          "view_appearance_ms": {
+            "values": [
+              1479.2590416036546,
+              635.7039166614413,
+              1328.5042501520365,
+              1689.3055418040603
+            ],
+            "median": 1403.8816458778456
+          }
+        },
+        "medians": {
+          "view_appearance_ms": 1403.8816458778456
+        },
+        "expected_iterations": 3,
+        "complete": true,
+        "acceptance_eligible": false,
+        "raw_count": 4,
+        "measured_count": 4,
+        "excluded_warm_up_indices": [],
+        "statistic_sample_indices": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "complete": true,
+      "acceptance_eligible": false
+    }
+  },
+  "complete": true,
+  "acceptance_eligible": false,
+  "acceptance_scope": "tagged glide sample integrity only; not presented FPS",
+  "status": "diagnostic_complete",
+  "expected_iterations_source": "cli",
+  "mode": "diagnostic"
+}
