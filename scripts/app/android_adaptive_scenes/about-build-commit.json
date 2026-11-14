@@ -11,13 +11,13 @@
     },
     {
       "step": "open",
-      "link": "persona://open?target=settings&page=about",
+      "page": "about",
       "probePage": "About and updates"
     },
     {
       "step": "capture",
       "name": "about-build-commit",
-      "state": "about"
+      "state": "settings"
     }
   ],
   "manualScenes": [
