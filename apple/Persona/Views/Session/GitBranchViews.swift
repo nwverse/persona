@@ -97,7 +97,7 @@ struct GitBranchesSheet: View {
                     Text("No branch matches").foregroundStyle(.secondary)
                 }
             } footer: {
-                if branches.contains(where: { $0.remote == true }) {
+                if shown.contains(where: { $0.remote == true }) {
                     Text("Tapping a remote branch makes a local branch here that tracks it.")
                 }
             }
@@ -181,6 +181,7 @@ struct GitStashesSheet: View {
     @State private var message = ""
     @State private var untracked = true
     @State private var dropping: GitStashEntry?
+    @FocusState private var typing: Bool
 
     private var stashing: Bool { if case .stash = writer.busy { true } else { false } }
 
@@ -189,6 +190,8 @@ struct GitStashesSheet: View {
             List {
                 Section {
                     TextField("What the changes are (optional)", text: $message)
+                        .focused($typing)
+                        .submitLabel(.done)
                         .accessibilityIdentifier("git.stash.message")
                     Toggle("Include New Files", isOn: $untracked)
                     Button { Task { await act(.push(message: message, untracked: untracked)) } } label: {
@@ -268,7 +271,7 @@ struct GitStashesSheet: View {
             HStack(spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(e.message).font(Theme.Font.secondaryMedium).foregroundStyle(Color.primary).lineLimit(2)
-                    if let d = e.date { Text(Fmt.relative(d)).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1) }
+                    if let d = e.date { Text(Fmt.relative(d)).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: Theme.Space.s)
                 if busy { ProgressView() } else { ThemedIcon(Theme.Icon.more).foregroundStyle(Theme.accent) }
@@ -288,6 +291,7 @@ struct GitStashesSheet: View {
             switch op {
             case .push:
                 message = ""
+                typing = false
                 model.toast = Toast(String(localized: "Changes stashed"), style: .success)
             case .apply: model.toast = Toast(String(localized: "Stash applied (it is kept)"), style: .success)
             case .pop: model.toast = Toast(String(localized: "Stash popped"), style: .success)
