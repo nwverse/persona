@@ -165,7 +165,7 @@ func (i *Index) searchResult(o Options) (*result, error) {
 	for _, id := range o.AllowedMachines {
 		allowed[id] = true
 	}
-	r := &result{counts: emptyCounts(i.revisionToken()), ordered: true, searchHits: map[string]SearchHit{}}
+	r := &result{counts: emptyCounts(i.revisionToken(), o.Roots), ordered: true, searchHits: map[string]SearchHit{}}
 	f := o.filters()
 	document := func(record *record) (*searchRecord, error) {
 		if record.searchDocument == nil {
