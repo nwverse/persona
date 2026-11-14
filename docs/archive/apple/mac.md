@@ -1,17 +1,11 @@
-# macOS App
+# macOS App (retired)
 
-**Status: frozen.** The native Mac app gets bug fixes, security fixes and the changes that keep it building, nothing else.
-New features skip it, and no other desktop client (Electron, Tauri, a WebView shell) takes its place.
-The Mac target compiles the iOS app's code (`Shared/`, `Persona/`), so iOS work reaches it as a side effect, and that code must keep building for the Mac.
-New features need no Mac-only code (`apple/Mac/`), no Mac screenshots and no Mac acceptance. Plans and rules elsewhere that name iOS / Mac, or every client, cover the Mac app only within these limits.
+**Historical record, not a maintained product guide.** #6770 removes `PersonaMac` and moves the desktop shell to Electron around the existing web app ([desktop.md](../../desktop/desktop.md)). The text below records the former native client and its measurements, not instructions to keep building it.
 
-On a computer, use the web app, in the browser or installed as an app ([web.md](../web/web.md), "On computers").
-Persona Link adds what a browser cannot do ([link.md](../operations/link.md), "On computers: the web app and Persona Link").
-A desktop need goes into the web app first, and into Persona Link only when the browser cannot meet it.
+**Former status: frozen.** The native Mac app got bug fixes, security fixes and the changes that kept it building, nothing else.
+New features skipped it. The Mac target compiled the iOS app's code (`Shared/`, `Persona/`), inside a Mac-specific shell (`apple/Mac/`). It used native macOS interaction. The rest of this page describes the former app.
 
-The native macOS version of Persona (the `PersonaMac` target and scheme in `apple/`) shares the iOS App's logic layer (`Shared/`, `Persona/App`) and content views,
-inside a Mac-specific shell (`apple/Mac/`): windows, sidebar, toolbar, menus, shortcuts and menu bar. It uses native macOS interaction. Fixes must not drop scrolling and animation below 60 fps
-(120 fps on ProMotion displays). The rest of this page describes the app as it is.
+On a computer, use the desktop app and independently installable Persona Link ([desktop.md](../../desktop/desktop.md)). The desktop app reuses the existing web UI; the Link CLI/service remains separate.
 
 ## Approach
 

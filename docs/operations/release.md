@@ -314,7 +314,9 @@ python3 scripts/release/asc_testflight.py external   # create the group, enable/
   (`docs/apple/ios.md`, "Demo mode"). Review notes (`review.notes`) must give that entry and its limits, and explain that full use
   requires the user's own self-hosted hub. Never give reviewers access to a developer's personal hub or private data.
 
-## Mac version (2026-11-02)
+## Retired native Mac version (2026-11-02)
+
+**This native `PersonaMac` distribution path is retired (#6770). Do not run it for new desktop releases.** The Electron desktop's universal macOS DMG/ZIP, unsigned development configuration and separate signing/notarization gates are in [desktop.md](../desktop/desktop.md). The former TestFlight Mac build process is retained below only as a historical record; it is not evidence that an Electron Developer ID or Windows signing identity exists.
 
 The Mac App (target and scheme `PersonaMac`) shares the iPhone's bundle id, so it is **the same app record** in App Store Connect (macOS platform added, version 1.0),
 and uses the same TestFlight: the same Internal / Friends groups and public link. Testers install TestFlight on a Mac to see Mac builds.
@@ -331,7 +333,7 @@ and uses the same TestFlight: the same Internal / Friends groups and public link
 - **Info.plist**: `LSApplicationCategoryType` (productivity) and all permission descriptions are defined in the `PersonaMac` target in `apple/project.yml`.
 - **Sandbox**: `com.apple.security.app-sandbox`, plus networking (client and local server for port forwarding), user-selected files, contacts / calendar / location / photos,
   microphone / camera (entitlements in `project.yml`).
-- **Push** (since 2026-11-02, `docs/apple/mac.md` ("Remote push (Mac)")): `com.apple.developer.aps-environment` (the macOS name; iOS uses `aps-environment`).
+- **Push** (historical, since 2026-11-02): `com.apple.developer.aps-environment` (the macOS name; iOS uses `aps-environment`).
   The App ID is UNIVERSAL and already has Push Notifications enabled, so no developer-account change is needed; the archive has `development`, and cloud signing at App Store export changes it to `production`.
   The package also includes notification service extension `PersonaNotify.appex` (target `PersonaMacNotify`, module / notification main class still `PersonaNotify`, in `Contents/PlugIns/`, sandbox + `.push` keychain group, #432).
   Its bundle id is the same as the iPhone extension's (UNIVERSAL App ID); cloud signing creates its Mac profile at export. `entitlements.py sign / check` signs and checks it too.

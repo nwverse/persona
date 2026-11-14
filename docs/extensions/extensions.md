@@ -2517,7 +2517,7 @@ The component showcase's version 6 pages are `web/src/showcase/v6` (with their p
 **iOS** (#827) draws all of it, with the rest of UI version 5, and sends 6: whole pages and the native stream (`ExtensionUIContext.pageVersion`,
 `ExtensionPageStream.uiVersion`) and the app's own cards and sections (`ExtensionUIContext.cardVersion`; version 4–5's code components there read-only, `ExtensionCodeSummary`),
 every `ExtensionViewModel` saying what the app's renderer draws (`drawnByApp`). Widgets, the watch and the system extensions keep the Shared version, 3: they draw none of it.
-The frozen Mac app compiles the same code but keeps what it reported before (pages 4, the stream 5, cards 3), so the hub goes on downgrading for it (`docs/apple/mac.md`: new features skip it).
+The retired native Mac app compiled the same code but kept what it reported before (pages 4, the stream 5, cards 3), so the hub downgraded for it (`docs/archive/apple/mac.md`: new features skipped it).
 See "App: Settings › Extensions" below for each part. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)

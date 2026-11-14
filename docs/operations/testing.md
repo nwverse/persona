@@ -1235,7 +1235,7 @@ Video `simctl io recordVideo`, extract `scripts/diag/stream-scroll/vidpick.swift
 Screenshots/probes aren't enough for streaming stability (probes read SwiftUI positions one beat off screen, docs/lessons/ios.md); record simulator and measure frames.
 `SIM=<udid> OUT=/tmp/stream-shots scripts/diag/stream-scroll/run-ios.sh [cases…]` starts mock per case, records video, retrieves `-scrollTrace`;
 `scripts/diag/stream-scroll/analyze.sh /tmp/stream-shots` measures displacement/backward jumps/large one-frame changes (reply disappears), plus last-row/input distance in following cases;
-`vidpick.swift` extracts timestamps. Cases: long streaming follow, clear→final message, history during stream, ↓, upward drag during stream, running turn, working Agents. Mac: docs/apple/mac.md ("Scroll experiments").
+`vidpick.swift` extracts timestamps. Cases: long streaming follow, clear→final message, history during stream, ↓, upward drag during stream, running turn, working Agents. Historical native Mac scroll experiments: docs/archive/apple/mac.md ("Scroll experiments").
 
 ## Jank measurement (dropped frames)
 

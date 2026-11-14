@@ -37,7 +37,7 @@ The seven product design principles, with their rules, how to check each one and
 
 This is the project-level design specification. It describes what the code uses today. Apple (iOS first, then watchOS, macOS, visionOS) is the reference implementation. Web and Android are checked against it. Where the code and an older doc disagree, the code wins and the disagreement is listed in section 8.
 
-Scope: tokens, components, interaction patterns, content, dark mode, Dynamic Type and the accessibility baseline. Out of scope: the frozen Mac layout (see `docs/apple/mac.md`) and server-rendered copy beyond the voice rules in section 5. The compliance review against Apple's Human Interface Guidelines is in `docs/design/HIG_AUDIT.md`.
+Scope: tokens, components, interaction patterns, content, dark mode, Dynamic Type and the accessibility baseline. The desktop app reuses the web UI rather than creating another design system; its local setup follows OS defaults (`docs/desktop/desktop.md`). Out of scope: the retired native Mac layout and server-rendered copy beyond the voice rules in section 5. The compliance review against Apple's Human Interface Guidelines is in `docs/design/HIG_AUDIT.md`.
 
 ### 1.1 Where each thing lives
 

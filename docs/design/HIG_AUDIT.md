@@ -57,7 +57,7 @@ Severity:
 
 Checked: touch targets, Dynamic Type, dark mode, contrast, VoiceOver labels and traits, Reduce Motion and Reduce Transparency, SF Symbols, system components, navigation, safe areas, feedback and haptics, notifications and permissions, plus the watch app, complications, widgets, Live Activity, Mac and visionOS code.
 
-Limitations: static review only. Hit areas, contrast ratios and heights were computed from code, not measured on a device. Increase Contrast rendering and real safe-area and keyboard behavior were not exercised on a device; the layout, safe-area and keyboard dimension was reviewed by reading the code and yielded three P2 findings (HIG-083 to HIG-085), with no safe-area or keyboard-overlap defect found beyond them. The Mac app is frozen (see `docs/apple/mac-design.md`), so Mac findings matter only for bug fixes. Findings that failed verification are listed in the appendix.
+Limitations: static review only. Hit areas, contrast ratios and heights were computed from code, not measured on a device. Increase Contrast rendering and real safe-area and keyboard behavior were not exercised on a device; the layout, safe-area and keyboard dimension was reviewed by reading the code and yielded three P2 findings (HIG-083 to HIG-085), with no safe-area or keyboard-overlap defect found beyond them. The native Mac app was frozen (see `docs/archive/apple/mac-design.md`), so Mac findings mattered only for bug fixes. Findings that failed verification are listed in the appendix.
 
 ## 3. Checklist
 
