@@ -1,8 +1,11 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -258,7 +261,9 @@ func TestALetGoQuestionsCardOutlivesItsTurnOnTheQueue(t *testing.T) {
 	if _, up := a.s.pendingIx(ix.ID); !up {
 		t.Fatal("the node's connection ending took the card down")
 	}
-	time.Sleep(50 * time.Millisecond)
+	// NodeDetached returns once its own work is done, but a push it decided on goes out on a goroutine (deliver): every
+	// push still on its way has to land before the count says anything.
+	waitFor(t, "the pushes under way to land", func() bool { return pushesUnderWay() == 0 })
 	if n := len(a.f.pushed()); n != 1 {
 		t.Fatalf("%d pushes, want the card's one", n)
 	}
@@ -293,6 +298,27 @@ func TestALetGoQuestionsCardOutlivesItsTurnOnTheQueue(t *testing.T) {
 		return false
 	})
 	waitFor(t, "the question gone once its answer went", func() bool { return len(next.pendingQuestions()) == 0 })
+}
+
+// pushesUnderWay counts the pushes the managers decided on that have not reached their hub yet: the goroutines deliver
+// starts to hand one over, and notifyInteraction's while it asks Persona Link first. A goroutine is listed from its go
+// statement until it returns, so once a call has returned and this is 0, every push the call set off is in the hub's
+// pushes. The functions are named through method expressions, so renaming one cannot leave this counting nothing.
+func pushesUnderWay() int {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	count := 0
+	for _, by := range []any{(*Service).deliver, (*Service).notifyInteraction} {
+		count += bytes.Count(buf, []byte("\ncreated by "+runtime.FuncForPC(reflect.ValueOf(by).Pointer()).Name()+" in goroutine "))
+	}
+	return count
 }
 
 // askLaterSpokeOrKept: a record of question id is kept among the questions asked without waiting (ask_later.go).
