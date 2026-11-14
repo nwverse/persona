@@ -120,11 +120,12 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   // capped above the source: its bottom fades while there is more below, so a cut-off row reads as more to scroll to
   const box = useRef<HTMLDivElement>(null);
   const fold = useFoldScroll(box, embedded, [item]);
+  const hasConversation = Boolean(item.handling?.machine_id && item.handling.session_id);
   const body = (
     <div ref={box} {...fold} className={embedded ? "min-h-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"} data-event-body={embedded ? "embedded" : ""}>
       <div className={cx("mx-auto flex max-w-[760px] flex-col px-4 sm:px-6", embedded ? "gap-3 py-3" : "gap-4 py-4")}>
-        {(!done || now !== undefined) && <HandlingLine item={item} now={now} />}
-        {done && now === undefined && item.done_by === "manager" && (
+        {(!done || now !== undefined || hasConversation) && <HandlingLine item={item} now={now} />}
+        {done && now === undefined && item.done_by === "manager" && !hasConversation && (
           <p className="flex items-center gap-2 text-[12.5px] text-ink-2" data-event-manager-done>
             <Icon name="check" size={13} stroke={2.4} className="shrink-0 text-green" />
             {t("inbox-inboxevent.manager_done")}
@@ -167,8 +168,9 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const done = isDone(item);
   const canSay = !done && !item.suggestion;
   const failed = canSay && (handlingFailed(item) || item.now === "failed");
+  const showPreparing = !done && preparing(item);
   if (!h && !canSay && now === undefined) return null;
-  const word = now ?? handlingWord(item);
+  const word = now ?? (done ? (item.done_by === "manager" ? t("inbox-inboxevent.manager_done") : undefined) : handlingWord(item));
   const working = h?.state === "looking" || h?.state === "agent";
   const to = h?.machine_id && h.session_id ? conversation(h.machine_id, h.session_id) : undefined;
   const instruct = async (words: string) => {
@@ -203,10 +205,10 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   ) : null);
   const showSay = sayOpen && canSay && !failed;
   const actions = (open || action) ? <div className="flex shrink-0 items-center gap-2" data-event-status-actions>{open}{action}</div> : null;
-  if (!preparing(item) && !failed && !word && !action && !showSay) return null;
+  if (!showPreparing && !failed && !word && !(done && open) && !action && !showSay) return null;
   return (
     <div className="flex flex-col gap-2">
-      {preparing(item) ? (
+      {showPreparing ? (
         <div className="flex min-w-0 flex-col gap-2 rounded-[10px] bg-inset p-3 text-[12.5px] shadow-hairline sm:flex-row sm:items-center" data-event-preparing>
           <div className="flex min-w-0 items-center gap-2 sm:flex-1">
             <Spinner size={12} />
@@ -230,7 +232,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
           </div>
           {actions}
         </div>
-      ) : action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
+      ) : (done && open) || action ? <div className="flex justify-end gap-2">{open}{action}</div> : null}
       {showSay && (
         <div className="flex flex-col gap-2" data-event-say>
           <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
@@ -464,6 +466,14 @@ function ChainIcon({ item, e }: { item: InboxItem; e: ChainEntry }) {
   );
 }
 
+/** The Agent session a step links, or none for the processing conversation and non-Agent steps. */
+function agentSession(e: ChainEntry): { key: string; machine: string; session: string } | undefined {
+  if (e.kind !== "agent" && e.kind !== "agent_stopped") return undefined;
+  const link = e.link as Record<string, unknown> | undefined;
+  if (link?.type !== "session" || typeof link.machine_id !== "string" || typeof link.session_id !== "string") return undefined;
+  return { key: `${link.machine_id}\u0000${link.session_id}`, machine: link.machine_id, session: link.session_id };
+}
+
 /** The handling chain: folded to the three newest entries, "Show all (N)" shows them all, oldest first. */
 export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
   const view = useInboxView();
@@ -481,6 +491,11 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
   const all = item.chain ?? [];
   if (!all.length) return null;
   const rows = chainRows(all, open);
+  const latestAgent = new Map<string, string>();
+  for (const e of all) {
+    const link = agentSession(e);
+    if (link) latestAgent.set(link.key, e.id);
+  }
   const tap = (x: ChainTap) => {
     if (x.kind === "source") {
       if (x.url) {
@@ -491,10 +506,9 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
     } else if (x.kind === "route") openFromInbox(x.route);
   };
   const agentState = (e: ChainEntry) => {
-    if (e.kind !== "agent" && e.kind !== "agent_stopped") return undefined;
-    const link = e.link as Record<string, unknown> | undefined;
-    if (link?.type !== "session" || typeof link.machine_id !== "string" || typeof link.session_id !== "string") return undefined;
-    const session = sessions[link.machine_id]?.find((s) => s.session_id === link.session_id);
+    const link = agentSession(e);
+    if (!link || latestAgent.get(link.key) !== e.id) return undefined;
+    const session = sessions[link.machine]?.find((s) => s.session_id === link.session);
     return session ? stateName(stateOf(session)) : undefined;
   };
   return (
