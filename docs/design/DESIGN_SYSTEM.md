@@ -1440,11 +1440,13 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **One count, per session**: the Agents list's Needs you section, its Needs you filter and the tab's badge count the sessions that wait for the user, each once, its requests in its row oldest first, the way `docs/assistant/managers.md` ("Counts") counts an assistant's waiting agents (principle 4). The Inbox's Agent section and the Assistant's composer entries open the same requests; the composer's entries count tasks (`docs/assistant/unified-entry.md`).
 - **Background rounds and supervisors** (#4314, `docs/assistant/assistant.md` "Background rounds"): in the main conversation a round another conversation, a scheduled task or a follow-up started reuses the quiet supervision record, one muted line `@<source> · Background round` that always opens, never a new component; a round that asked or told the user stays shown. While that switch is on, the composer's Needs you groups rows under the conversation supervising them, this one's first, with a plain caption header and no other change: the same rows, order within a group and count.
 - **Cut off** (web, 2026-11-14): the dock's cards over the composer keep to their cap (55% of the visible height, #5375) and
-  scroll; a card whose answer row stands at the box's bottom edge while what it answers is out of view above says so in
-  that row: its title and what it asks (the command, the question) beside the answers, a click bringing the whole card
-  into view with the focus on it. While any card of several is cut off, the first says **N pending** at the end of its
-  kicker row (the room that row already has), so the stack never hides how many it holds. Wherever an Allow is in view,
-  what it allows is in view too.
+  scroll; a card whose answer row stands at the box's bottom edge while the end of its body is under that row or below
+  the box says so in that row: its title and what it asks (the command) beside the answers, the whole of it as the
+  tooltip, a click bringing the whole card into view with the focus on it. A card that asks only its title (a question)
+  says it only while the title is out of view too: the line never repeats what is in view. While any card of several is
+  cut off, the first says **N pending** at the end of its kicker row (the room that row already has), on a narrow screen
+  once the stack is opened in full (folded, its "N more" row says it), so the stack never hides how many it holds.
+  Wherever an Allow is in view, what it allows is in view too.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
 - **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
 - **One scroll, the answers in view** (iOS and iPadOS, #6605): a card scrolls in one place at most. A lone card fits the

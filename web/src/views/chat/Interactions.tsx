@@ -26,7 +26,7 @@ import { Markdown } from "../../ui/Markdown";
 import { permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
 import { DIFF_TOOLS, DiffBlocks, editDiffs } from "./ActionRow";
 import { cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnswered } from "./dock";
-import { useCutBelow } from "./card-cut";
+import { useCardCut } from "./card-cut";
 import { ScrollFold } from "./fold-scroll";
 import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
@@ -122,7 +122,9 @@ export function Card({ title, kicker, onDismiss, busy, children, footer, looking
   const from = useContext(AskedFrom);
   // the answer row stuck at the bottom of the box while the card's body is below it: the row says what it answers
   const end = useRef<HTMLDivElement>(null);
-  const cut = useCutBelow(end);
+  const head = useRef<HTMLDivElement>(null);
+  const row = useRef<HTMLDivElement>(null);
+  const { cut, titleShown } = useCardCut(end, head, row);
   const about = useContext(CardAbout);
   const stack = useContext(StackCount);
   const report = useContext(CutReport);
@@ -133,6 +135,9 @@ export function Card({ title, kicker, onDismiss, busy, children, footer, looking
     return () => report(cutKey, false);
   }, [report, cutKey, cut]);
   const answers = about && about !== title ? `${title} · ${about}` : title;
+  // said while what it answers is out of view: always for a card that asks more than its title (a command, a plan), for
+  // one that asks only its title (a question) while the title is out of view too, never a repeat of what is in view
+  const says = cut && (answers !== title || !titleShown);
   // brings the whole card into view (its title and command over its answers) and the focus onto it, as the line goes
   const reveal = (e: React.MouseEvent<HTMLButtonElement>) => {
     const card = e.currentTarget.closest<HTMLElement>("[data-pending-card]");
@@ -155,7 +160,7 @@ export function Card({ title, kicker, onDismiss, busy, children, footer, looking
                 </span>
               )}
             </div>
-            <div className="text-[13.5px] font-medium text-ink">{title}</div>
+            <div ref={head} className="text-[13.5px] font-medium text-ink">{title}</div>
           </div>
           {/* the stack goes on below the box: how many it holds, in the room this row has at its end */}
           {stack > 1 && (
@@ -190,10 +195,11 @@ export function Card({ title, kicker, onDismiss, busy, children, footer, looking
       {/* data-card-actions: what answers the card (with hand back above), for the sync scenarios (spec/fixtures/sync) */}
       {/* while cut, the line saying what it answers sits in the row before its main answers (the row's last group), so
           the row keeps its height where it fits: a row as tall as before is in view as before */}
-      <div data-card-actions className={cx("sticky -bottom-1 flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2", (sending || cut) && "flex-wrap", cut && "[&>:last-child]:order-2")}>
-        {cut && (
-          <button type="button" data-card-answers onClick={reveal} title={t("chat-interactions.show_card")} aria-label={`${t("chat-interactions.show_card")}: ${answers}`} className="touch-hit order-1 flex min-w-0 flex-1 basis-40 items-center gap-1.5 text-left text-xs text-ink-2 transition-colors hover:text-ink max-sm:order-first max-sm:basis-full">
-            <Icon name="arrowUp" size={12} stroke={2.2} className="shrink-0 text-ink-3" />
+      {/* its tooltip is the whole of what it says (the line truncates a long command); its icon is not the send arrow */}
+      <div ref={row} data-card-actions className={cx("sticky -bottom-1 flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2", (sending || says) && "flex-wrap", says && "[&>:last-child]:order-2")}>
+        {says && (
+          <button type="button" data-card-answers onClick={reveal} title={answers} aria-label={`${t("chat-interactions.show_card")}: ${answers}`} className="touch-hit order-1 flex min-w-0 flex-1 basis-40 items-center gap-1.5 text-left text-xs text-ink-2 transition-colors hover:text-ink max-sm:order-first max-sm:basis-full">
+            <Icon name="unfold" size={12} stroke={2.2} className="shrink-0 text-ink-3" />
             <span className="min-w-0 truncate">{answers}</span>
           </button>
         )}
@@ -1302,7 +1308,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   useEffect(() => {
     if (!count) setOpen(false);
   }, [count]);
-  // the cards cut off below the box (each Card says): while any is, a wide stack of two or more says how many it holds
+  // the cards cut off below the box (each Card says): while any is, a stack of two or more says how many it holds
   const [cutCards, setCutCards] = useState<ReadonlySet<string>>(() => new Set());
   const report = useCallback((key: string, cut: boolean) => setCutCards((had) => {
     if (had.has(key) === cut) return had;
@@ -1315,19 +1321,18 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   if (!count && !answered.length && !delegated.length) return null;
   const shown = showsAnswered({ narrow, keyboard, open, short });
   const done = shown ? [...delegated.map((d) => <DelegatedCard key={d.ix.id} d={d} />), ...answered.map((a) => <AnsweredCard key={a.ix.id} card={a} />)] : [];
-  const cards = interactions.map((ix) => <InteractionCard key={ix.id} ix={ix} />);
+  // how many the stack holds, said on its first card while any of them is cut off: a wide stack, or a narrow one opened
+  // in full (folded, its "N more" row says it). Each card has its own keyed provider, so a card moving up to first as the
+  // one above it goes keeps its node, its typed answer and its focus.
+  const stack = count > 1 && cutCards.size > 0 && (!narrow || full > 1) ? count : 0;
+  const cards = interactions.map((ix, i) => (
+    <CutReport.Provider key={ix.id} value={report}>
+      <StackCount.Provider value={i === 0 ? stack : 0}><InteractionCard ix={ix} /></StackCount.Provider>
+    </CutReport.Provider>
+  ));
   // only right after answering here (the "Answered" receipt shows), never while this chat still has a card: no jump, no nag
   const onward = !count && shown && answered.length > 0 && offerNext ? <NextWaitingRow {...offerNext} /> : null;
-  if (!narrow) {
-    return (
-      <CutReport.Provider value={report}>
-        {done}
-        <StackCount.Provider value={count > 1 && cutCards.size > 0 ? count : 0}>{cards[0]}</StackCount.Provider>
-        {cards.slice(1)}
-        {onward}
-      </CutReport.Provider>
-    );
-  }
+  if (!narrow) return <>{done}{cards}{onward}</>;
   const more = summary?.kind === "more";
   return (
     <div className="flex min-h-0 shrink flex-col gap-2">
