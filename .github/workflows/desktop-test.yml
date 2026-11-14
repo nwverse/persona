@@ -40,7 +40,7 @@ jobs:
       # The acceptance smoke loads the built web client the way the hub serves it. It is built once here (its sign-in
       # module needs Go) and handed to the macOS and Windows jobs, which need neither Go nor the web's dependencies.
       - name: Build the web client for the desktop smoke
-        run: npm --prefix web ci && npm --prefix web run build
+        run: scripts/ci/desktop-web.sh
       - uses: actions/upload-artifact@v4
         with:
           name: persona-desktop-web-dist
