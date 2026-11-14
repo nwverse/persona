@@ -245,19 +245,48 @@ func TestServeSendsProgressWhileACallWaits(t *testing.T) {
 		call.tick.beat()
 	}
 	waitFor(t, "three progress lines", func() bool { return progressCount(t, out) >= 3 })
+	call.tick.beat() // already due when the call ends: it may precede the answer, but may never follow it
 	call.stop()
-	waitFor(t, "the answer", func() bool { return strings.Contains(out.String(), `"id":7`) })
+	waitFor(t, "the answer", func() bool {
+		for _, line := range lines(t, out.String()) {
+			if string(line.ID) == "7" {
+				return true
+			}
+		}
+		return false
+	})
 	<-call.tick.stopped
-	call.tick.beat() // a beat that was due must not come after the answer
+	send(`{"jsonrpc":"2.0","id":9,"method":"ping"}`) // a later response fences every write the tool goroutine could still make
+	waitFor(t, "the post-answer ping", func() bool {
+		for _, line := range lines(t, out.String()) {
+			if string(line.ID) == "9" {
+				return true
+			}
+		}
+		return false
+	})
 	end()
 
 	all := lines(t, out.String())
-	last := all[len(all)-1]
-	if string(last.ID) != "7" || !strings.Contains(out.String(), `"saved"`) {
-		t.Fatalf("the answer is not the last line: %s", out.String())
+	result := -1
+	for i, line := range all {
+		if string(line.ID) == "7" {
+			result = i
+			break
+		}
+	}
+	if result < 0 || !strings.Contains(out.String(), `"saved"`) {
+		t.Fatalf("the tool result is missing: %s", out.String())
+	}
+	before, after := all[:result], all[result+1:]
+	if len(before) != 3 && len(before) != 4 {
+		t.Fatalf("the queued beat produced %d pre-result lines, want three or four: %s", len(before), out.String())
+	}
+	if len(after) != 1 || string(after[0].ID) != "9" || after[0].Method != "" {
+		t.Fatalf("anything other than the ping followed the result: %s", out.String())
 	}
 	prev := 0.0
-	for _, l := range all[:len(all)-1] {
+	for _, l := range before {
 		if l.Method != "notifications/progress" || string(l.Params.ProgressToken) != `"tok-7"` || l.ID != nil {
 			t.Fatalf("not a progress line for tok-7: %+v", l)
 		}

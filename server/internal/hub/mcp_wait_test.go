@@ -61,6 +61,37 @@ func TestMCPWaitReporterUsesCurrentManagerCapability(t *testing.T) {
 	}
 }
 
+func TestMCPWaitReporterChecksMachineOwnership(t *testing.T) {
+	h := newTestHub(t)
+	var notices bytes.Buffer
+	h.bus.current = map[string]*busConn{assistantwire.AssistantID: {
+		peer: rpc.New("manager", &notices), presence: busPresence{Capabilities: []string{assistantwire.CapabilityMCPWait}},
+	}}
+	const callID = "99999999-9999-4999-8999-999999999999"
+	h.devices.kept = map[string]string{"computer": "other-manager"}
+	if report := h.mcpWaitReporter(assistantwire.AssistantID, "computer", callID); report != nil {
+		t.Fatal("a manager received a reporter for another manager's machine")
+	}
+
+	h.devices.kept["computer"] = assistantwire.AssistantID
+	report := h.mcpWaitReporter(assistantwire.AssistantID, "computer", callID)
+	if report == nil {
+		t.Fatal("the owning manager did not get a reporter")
+	}
+	report(proto.MCPWaitApproval)
+	var first json.RawMessage
+	if err := json.NewDecoder(&notices).Decode(&first); err != nil {
+		t.Fatalf("the owning manager's relay is missing: %v", err)
+	}
+
+	h.devices.kept["computer"] = "other-manager"
+	report(proto.MCPWaitComputer)
+	var extra json.RawMessage
+	if err := json.NewDecoder(&notices).Decode(&extra); err == nil {
+		t.Fatalf("an existing reporter followed the machine to another manager: %s", extra)
+	}
+}
+
 func TestHubApprovalWaitReportsApprovalThenComputer(t *testing.T) {
 	h := newTestHub(t)
 	started := make(chan struct{})
@@ -139,5 +170,46 @@ func TestCallPhoneReportsApprovalThenComputer(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("phone result did not return")
+	}
+}
+
+func TestCallPhoneDoesNotReportApprovalForUnconfirmedTool(t *testing.T) {
+	h := newTestHub(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	phone := &client{hub: h, device: "credential-ios", role: roleFull, out: make(chan []byte, 1)}
+	addTestClient(h, phone)
+	h.onClientMessage(ctx, phone, []byte(`{"type":"register_phone","tools":[{"name":"phone_device_info"}]}`))
+	kinds := make(chan proto.MCPWaitKind, 2)
+	done := make(chan proto.ToolResult, 1)
+	go func() {
+		done <- h.callPhoneWithWait(ctx, "phone_device_info", json.RawMessage(`{}`), func(kind proto.MCPWaitKind) { kinds <- kind })
+	}()
+	var call struct {
+		CallID string `json:"call_id"`
+	}
+	select {
+	case data := <-phone.out:
+		if err := json.Unmarshal(data, &call); err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the unconfirmed phone call was not sent")
+	}
+	reply, _ := json.Marshal(map[string]any{"type": "tool_result", "call_id": call.CallID,
+		"content": []proto.Content{{Type: "text", Text: "ok"}}})
+	h.onClientMessage(ctx, phone, reply)
+	select {
+	case result := <-done:
+		if result.IsError {
+			t.Fatalf("unconfirmed phone result = %+v", result)
+		}
+	case <-ctx.Done():
+		t.Fatal("the unconfirmed phone call did not return")
+	}
+	select {
+	case kind := <-kinds:
+		t.Fatalf("an unconfirmed phone tool reported %q", kind)
+	default:
 	}
 }

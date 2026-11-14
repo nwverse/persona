@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -23,6 +24,113 @@ import (
 func TestNodeAnnouncesMCPWaitCapability(t *testing.T) {
 	if !slices.Contains((&Node{}).capabilities(), nodeproto.MCPWait) {
 		t.Fatal("the node does not advertise nested MCP wait correlation")
+	}
+}
+
+type mcpWaitRecordingConn struct {
+	net.Conn
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (c *mcpWaitRecordingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buffer.Write(p)
+}
+
+func (c *mcpWaitRecordingConn) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buffer.String()
+}
+
+func (c *mcpWaitRecordingConn) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buffer.Len()
+}
+
+func (c *mcpWaitRecordingConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestMCPWaitUpdateHeldAcrossFinishWritesNothing(t *testing.T) {
+	n := &Node{}
+	n.hubMCPWait.Store(true)
+	conn := &mcpWaitRecordingConn{}
+	id, pending := n.beginMCPWait(conn)
+	if pending == nil {
+		t.Fatal("the opted-in call was not registered")
+	}
+	// Hold the looked-up pointer across the final write, exactly as an event that lost the race with finish does.
+	n.mcpWaitMu.Lock()
+	held := n.mcpWaits[id]
+	n.mcpWaitMu.Unlock()
+	if held != pending {
+		t.Fatal("the registry did not return the pending call")
+	}
+	n.finishMCPWait(id, pending, proto.TextResult("done", false))
+	held.update(proto.MCPWaitApproval)
+
+	lines := strings.Split(strings.TrimSpace(conn.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("a held update followed the final response: %q", conn.String())
+	}
+	var final map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(lines[0]), &final); err != nil || final["content"] == nil || final["wait_kind"] != nil {
+		t.Fatalf("the only line is not the final response: %s (%v)", lines[0], err)
+	}
+}
+
+func TestNodeServeDispatchesMCPWait(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "pn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	t.Setenv("PERSONA_HOME", filepath.Join(home, ".persona"))
+	n, err := New("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(n.starts.close)
+	n.logger.SetOutput(io.Discard)
+	n.hubMCPWait.Store(true)
+	conn := &mcpWaitRecordingConn{}
+	id, pending := n.beginMCPWait(conn)
+	if pending == nil {
+		t.Fatal("the opted-in call was not registered")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n2hR, n2hW := io.Pipe()
+	h2nR, h2nW := io.Pipe()
+	hub := rpc.New("h", h2nW)
+	hub.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
+		return map[string]any{}, nil
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- n.Serve(ctx, h2nR, n2hW) }()
+	go func() { _ = hub.Serve(ctx, n2hR) }()
+	defer func() {
+		_ = n2hW.Close()
+		_ = h2nW.Close()
+		cancel()
+		select {
+		case <-serveDone:
+		case <-time.After(5 * time.Second):
+			t.Error("Node.Serve did not stop")
+		}
+	}()
+
+	params, _ := json.Marshal(proto.MCPWaitEvent{CallID: id, Kind: proto.MCPWaitApproval})
+	if err := hub.Notify(proto.EventMCPWait, json.RawMessage(params)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "Node.Serve to dispatch mcp.wait", func() bool { return conn.Len() > 0 })
+	if got := strings.TrimSpace(conn.String()); got != `{"wait_kind":"approval"}` {
+		t.Fatalf("the real event dispatch wrote %q", got)
 	}
 }
 
