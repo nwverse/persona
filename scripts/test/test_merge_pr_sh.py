@@ -24,6 +24,9 @@ _spec = importlib.util.spec_from_file_location("privacy_check", SCRIPTS / "priva
 _privacy_check = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_privacy_check)
 CONFIG_ENV = set(_privacy_check.CONFIG_ENV)
+# The automated merge (docs/operations/pr-review-automation.md) takes the same lock.
+sys.path.insert(0, str(SCRIPTS / "operations"))
+import pr_watch_merge  # noqa: E402
 
 FAKE_GH = r'''
 import json, os, sys
@@ -185,28 +188,39 @@ class MergePrTests(unittest.TestCase):
             self.assertEqual(self.merges(calls), [])
 
     def test_a_held_lock_makes_the_merge_wait(self):
-        """Another merge holding persona-pr-merge.lock (flock, or msvcrt.locking on Windows) blocks this one."""
-        head = self.open_pr()
-        self.state.write_text(json.dumps({"pr": self.view(head), "at_merge": None}))
-        fd = os.open(self.repo / ".git/persona-pr-merge.lock", os.O_RDWR | os.O_CREAT, 0o600)
-        try:
+        """Another merge-pr.sh (flock, or msvcrt.locking on Windows) or pr_watch_merge holding the lock blocks this one."""
+        def raw_lock():
+            fd = os.open(self.repo / ".git/persona-pr-merge.lock", os.O_RDWR | os.O_CREAT, 0o600)
             if os.name == "nt":
                 import msvcrt
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
                 fcntl.flock(fd, fcntl.LOCK_EX)
-            proc = subprocess.Popen(["bash", str(self.repo / "scripts/hooks/merge-pr.sh"), "7"], cwd=self.repo,
-                                    env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            self.addCleanup(lambda: proc.poll() is None and proc.kill())
-            with self.assertRaises(subprocess.TimeoutExpired):
-                proc.wait(timeout=3)
-            self.assertFalse(self.log.exists())  # gh has not run
-        finally:
-            os.close(fd)  # releases the lock
-        out, err = proc.communicate(timeout=60)
-        self.assertEqual(proc.returncode, 0, out + err)
-        self.assertEqual(len(self.merges([json.loads(line) for line in self.log.read_text().splitlines()])), 1)
+            return lambda: os.close(fd)
+
+        def watcher_lock():
+            return pr_watch_merge.merge_lock(str(self.repo)).close
+
+        for name, hold in (("merge-pr.sh", raw_lock), ("pr_watch_merge", watcher_lock)):
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                self.state.write_text(json.dumps({"pr": self.view(self.open_pr()), "at_merge": None}))
+                release = hold()
+                try:
+                    proc = subprocess.Popen(["bash", str(self.repo / "scripts/hooks/merge-pr.sh"), "7"],
+                                            cwd=self.repo, env=self.env, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, text=True)
+                    self.addCleanup(lambda p=proc: p.poll() is None and p.kill())
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        proc.wait(timeout=3)
+                    self.assertFalse(self.log.exists())  # gh has not run
+                finally:
+                    release()
+                out, err = proc.communicate(timeout=60)
+                self.assertEqual(proc.returncode, 0, out + err)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(len(self.merges(calls)), 1)
 
     def test_a_non_number_is_refused_before_gh_runs(self):
         result, calls = self.merge_pr(self.view("0" * 40), arg="7a")
