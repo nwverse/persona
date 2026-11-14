@@ -68,12 +68,18 @@ function exited(child, message) {
   error.fatal = true;
   return error;
 }
-function stop(child) {
+async function stop(child) {
   if (!child || childExited(child)) return;
+  const closed = new Promise(resolve => child.once("close", resolve));
   try {
     if (platform === "win32") spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
     else process.kill(-child.pid, "SIGKILL");
   } catch { /* already exited */ }
+  // Do not start the next scenario until this app's single-instance identity has gone away.
+  let timer;
+  try {
+    await Promise.race([closed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("packaged app did not exit within 10 seconds")), 10000); })]);
+  } finally { clearTimeout(timer); }
 }
 async function freePort() {
   const probe = createServer();
@@ -103,12 +109,15 @@ async function startHub() {
 }
 async function build() {
   need("compile the production app", (await run(npm, ["--prefix", "desktop", "run", "build"], { quiet: true })).code === 0);
-  if (platform === "darwin" && process.env.PERSONA_DESKTOP_TEST_PACKAGE) return;
+  if (process.env.PERSONA_DESKTOP_TEST_PACKAGE) {
+    need("the preceding package step produced the explicit test artifact", existsSync(resolve(process.env.PERSONA_DESKTOP_TEST_PACKAGE)), process.env.PERSONA_DESKTOP_TEST_PACKAGE);
+    return;
+  }
   if (!existsSync(join(root, "web", "dist", "index.html"))) {
     need("install the web client for the local hub", (await run(npm, ["--prefix", "web", "ci"], { seconds: 900, quiet: true })).code === 0);
     need("build the web client for the local hub", (await run(npm, ["--prefix", "web", "run", "build"], { seconds: 1200, quiet: true })).code === 0);
   }
-  const target = platform === "win32" ? ["--win", "nsis", "dir", "--x64"] : platform === "darwin" ? ["--mac", "--universal"] : ["--linux", "dir", "--x64"];
+  const target = platform === "win32" ? ["--win", "dir", "--x64"] : platform === "darwin" ? ["--mac", "--universal"] : ["--linux", "dir", "--x64"];
   const result = await run(process.execPath, [join(desktop, "node_modules", "electron-builder", "cli.js"), "--projectDir", desktop, "--config", process.env.PERSONA_DESKTOP_TEST_BUILD_CONFIG ?? "electron-builder.unsigned.yml", ...target, "--publish", "never"], {
     cwd: root, seconds: 1500,
     env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.desktop", CSC_IDENTITY_AUTO_DISCOVERY: "false" },
@@ -122,7 +131,9 @@ async function executable() {
     // Run the exact app files packaged by this build, not the production-identity NSIS installer. Installing that
     // would replace an existing per-user installation on a persistent runner. The isolated-AppId update test owns
     // NSIS install/update acceptance; this gate covers first-run loading and the setup/Link/hub path.
-    return { file: join(desktop, "release", "win-unpacked", "Persona.exe"), installed: undefined };
+    const file = supplied ? resolve(supplied) : join(desktop, "release", "win-unpacked", "Persona.exe");
+    need("the packaged Windows executable exists", existsSync(file), file);
+    return { file, installed: undefined };
   }
   if (platform === "darwin") {
     const candidates = supplied ? [resolve(supplied)] : (await readdir(join(desktop, "release"))).filter(name => /^Persona-.*-mac-universal\.zip$/.test(name)).map(name => join(desktop, "release", name));
@@ -149,7 +160,7 @@ async function fuseCheck(file) {
 }
 async function packageCheck(file) {
   const archive = platform === "darwin" ? join(file, "..", "..", "Resources", "app.asar") : platform === "win32" ? join(file, "..", "resources", "app.asar") : join(desktop, "release", "linux-unpacked", "resources", "app.asar");
-  const files = asar.listPackage(archive).map(name => name.replaceAll("\\", "/"));
+  const files = asar.listPackage(archive).map(name => `/${name.replaceAll("\\", "/").replace(/^\/+/, "")}`);
   const publicResources = ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"];
   const allowed = new Set(publicResources);
   const missing = publicResources.filter(name => !files.includes(name));
@@ -159,7 +170,7 @@ async function packageCheck(file) {
 }
 async function launch(file, profile, home, linkLog) {
   const debugPort = await freePort();
-  const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1", ...(linkLog ? { PERSONA_TEST_LINK_LOG: linkLog } : {}) };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1", PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1", ...(linkLog ? { PERSONA_TEST_LINK_LOG: linkLog } : {}) };
   for (const name of Object.keys(env)) if (name === "PERSONA_HUB_URL" || name.startsWith("PERSONA_DESKTOP_E2E") || name === "PERSONA_DESKTOP_SMOKE" || name === "ELECTRON_RUN_AS_NODE" || name === "NODE_OPTIONS") delete env[name];
   need("the packaged app has no Node runtime overrides", !env.ELECTRON_RUN_AS_NODE && !env.NODE_OPTIONS);
   const args = [`--user-data-dir=${profile}`, `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`];
@@ -209,7 +220,7 @@ async function absentScenario(file) {
   await setup.evaluate("document.querySelector('#hub').value = 'persona-setup://app/setup.html'; document.querySelector('#connect').requestSubmit(); true");
   await until("invalid hub address stays recoverable", () => setup.evaluate("!document.querySelector('#error').hidden && !!document.querySelector('#error').textContent"));
   need("an invalid hub does not get saved or open a window", setup.url() === "persona-setup://app/setup.html" && !existsSync(join(profile, "desktop-state.json")));
-  stop(child);
+  await stop(child);
 }
 async function pairedScenario(file) {
   const home = join(work, "home-link");
@@ -272,7 +283,7 @@ process.stdin.on("end", () => {
   await until("the hub's main chat content", () => main.evaluate("!!document.querySelector('main [data-chat-content]')"));
   await screenshot(main, "04-entered-hub");
   need("the packaged first-run path reaches the existing web app", main.url().startsWith(gateway.url));
-  stop(child);
+  await stop(child);
 }
 
 async function main() {
@@ -291,7 +302,7 @@ async function main() {
 }
 
 async function cleanup() {
-  for (const child of owned) stop(child);
+  for (const child of owned) await stop(child);
   await sleep(owned.size ? 2000 : 0);
   await gateway?.close().catch(() => {});
   for (const client of clients) client.close();

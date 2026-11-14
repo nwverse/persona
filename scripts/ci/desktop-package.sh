@@ -19,6 +19,10 @@ case "$target" in
   *) printf 'usage: scripts/ci/desktop-package.sh mac|win\n' >&2; exit 2 ;;
 esac
 args=(--"$platform" --publish never)
+if [[ "$target" == win ]]; then
+  # Keep the same unpacked app for the first-run gate. NSIS installation/update uses the isolated-AppId test instead.
+  args+=(dir)
+fi
 if [[ -n "${PERSONA_DESKTOP_VERSION:-}" ]]; then
   if [[ ! "$PERSONA_DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
     printf 'desktop-package: FAIL PERSONA_DESKTOP_VERSION is not a semantic version: %s\n' "$PERSONA_DESKTOP_VERSION" >&2

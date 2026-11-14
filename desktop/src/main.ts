@@ -228,8 +228,10 @@ else {
     });
     const saved = await store().read<{ hub?: string }>();
     try { hub = parseHubAddress(process.env.PERSONA_HUB_URL ?? saved?.hub ?? ""); } catch { hub = undefined; }
-    for (const scheme of ["persona", "jarvis"]) {
-      if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
+    if (process.env.PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION !== "1") {
+      for (const scheme of ["persona", "jarvis"]) {
+        if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
+      }
     }
     if (hub) await showMain();
     else await showSetup();
