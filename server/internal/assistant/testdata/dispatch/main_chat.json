@@ -1,0 +1,86 @@
+{
+  "about": "Behaviour checks for the main-chat dispatch decision (#4829, docs/assistant/unified-entry.md Dispatch): what the assistant does with one user message. Synthetic cases only. tasks: what task_plan should carry (empty: no task). start: how those tasks start per the hub's own rule (auto: every task read-only or user-requested; card: something waits for Start; none: no tasks). asks_user: an ask_user to the owner instead of a guess. direct_tools_any: instant-tier tool prefixes, any of which passes.",
+  "scenarios": [
+    {
+      "name": "instant-reminder",
+      "title": "明早提醒发周报",
+      "message": "明早 9 点提醒我给张三发周报",
+      "machines": [],
+      "projects": [],
+      "expect": {
+        "tasks": [],
+        "start": "none",
+        "asks_user": false,
+        "direct_tools_any": ["schedule_", "phone_", "notify_"]
+      }
+    },
+    {
+      "name": "readonly-research-autostart",
+      "title": "只读排查直接开任务",
+      "message": "看看 web 首页最近为什么变慢了，先别改代码，给我个结论",
+      "machines": [{"id": "mac", "note": "近期在 ~/code/app 有 Agent 活动"}],
+      "projects": [{"name": "app", "dir": "~/code/app"}],
+      "expect": {
+        "tasks": [{"title": "排查首页变慢", "machine": "mac", "dir": "~/code/app", "permission": "plan", "user_requested": false}],
+        "start": "auto",
+        "asks_user": false,
+        "direct_tools_any": []
+      }
+    },
+    {
+      "name": "code-change-plan-first",
+      "title": "改代码先出计划卡",
+      "message": "我想让设置页支持自定义主题色，你排一下",
+      "machines": [{"id": "mac", "note": "近期在 ~/code/app 有 Agent 活动"}],
+      "projects": [{"name": "app", "dir": "~/code/app"}],
+      "expect": {
+        "tasks": [{"title": "设置页自定义主题色", "machine": "mac", "dir": "~/code/app", "permission": "default", "user_requested": false}],
+        "start": "card",
+        "asks_user": false,
+        "direct_tools_any": []
+      }
+    },
+    {
+      "name": "explicit-request-starts",
+      "title": "明说让 Agent 做就直接开",
+      "message": "开个 Agent，把 README 里指向旧域名 example.net 的链接直接修了",
+      "machines": [{"id": "mac", "note": "近期在 ~/code/app 有 Agent 活动"}],
+      "projects": [{"name": "app", "dir": "~/code/app"}],
+      "expect": {
+        "tasks": [{"title": "修 README 旧链接", "machine": "mac", "dir": "~/code/app", "permission": "default", "user_requested": true}],
+        "start": "auto",
+        "asks_user": false,
+        "direct_tools_any": []
+      }
+    },
+    {
+      "name": "split-two-requests",
+      "title": "一句话两件事拆开",
+      "message": "帮我查一下竞品 X 的定价写个对比，另外让 Agent 把 app 里的错别字扫一遍修掉",
+      "machines": [{"id": "mac", "note": "近期在 ~/code/app 有 Agent 活动"}],
+      "projects": [{"name": "app", "dir": "~/code/app"}],
+      "expect": {
+        "tasks": [
+          {"title": "竞品定价对比", "machine": "mac", "dir": "~/code/app", "permission": "plan", "user_requested": false},
+          {"title": "清理错别字", "machine": "mac", "dir": "~/code/app", "permission": "default", "user_requested": true}
+        ],
+        "start": "auto",
+        "asks_user": false,
+        "direct_tools_any": []
+      }
+    },
+    {
+      "name": "missing-info-asks",
+      "title": "推不出来就问不猜",
+      "message": "把线上那个 502 修了",
+      "machines": [],
+      "projects": [],
+      "expect": {
+        "tasks": [],
+        "start": "none",
+        "asks_user": true,
+        "direct_tools_any": []
+      }
+    }
+  ]
+}
