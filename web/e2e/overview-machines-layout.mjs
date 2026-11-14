@@ -1,7 +1,8 @@
 // The Machines page and Overview at desktop widths (audit items 3, 25, 30 and 76; docs/web/web.md "Overview" and
 // "Machines and settings"). On a hub that pages its Agents list, each computer card counts that computer's agents (the
 // hub's own list, read here too), its state and its versions keep a gap between them, and no metric's value is cut
-// ("↓ 2.58 M…", nor the widest a rate can be, "↓ 1023 MB/s"); on Overview an extension's lone card is one of the page's
+// ("↓ 2.58 M…", nor the widest a rate can be, "↓ 1023 MB/s"), and its metrics are one row or two columns, never three
+// with one left alone (four in a row at 1280 and 1920 px); on Overview an extension's lone card is one of the page's
 // two columns from 1440 px, not the whole width, and the whole width at 1280 px. When the list Overview counts from (the
 // paged list with one assistant, the complete list with several) fails, its summary says so with Retry and no computer
 // says "0 agents"; Retry brings the counts back. Light and dark screenshots of each.
@@ -184,8 +185,11 @@ try {
           range.selectNodeContents(v);
           return { text: v.textContent, cut: range.getBoundingClientRect().width > v.getBoundingClientRect().width + 0.01 };
         });
+        const grid = s.querySelector("[data-testid=machine-metrics-summary]");
         return {
           name: s.querySelector("h2")?.textContent ?? "",
+          cells: grid.children.length,
+          columns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
           agents: state.getAttribute("data-agents"),
           footer: state.textContent,
           gap: shown ? versions.getBoundingClientRect().left - state.getBoundingClientRect().right : null,
@@ -200,6 +204,9 @@ try {
         if (c.gap !== null) check(c.gap >= 8, `${theme} ${width}: ${c.name}'s state and versions keep a gap`, `${c.gap.toFixed(1)} px`);
         const cut = c.values.filter((v) => v.cut).map((v) => v.text);
         check(cut.length === 0, `${theme} ${width}: ${c.name} shows every value whole`, cut.join(", ") || c.values.map((v) => v.text).join(" | "));
+        // one row, or two columns: never three with the fourth alone below them; four in a row at 1280 and 1920 px
+        const row = width >= 1280;
+        check(row ? c.columns === c.cells : c.columns === c.cells || c.columns === 2, `${theme} ${width}: ${c.name}'s metrics are ${row ? "one row" : "one row or two columns"}`, `${c.columns} columns for ${c.cells}`);
       }
       check(cards.some((c) => c.values.some((v) => v.text === "↓ 1023 MB/s" && !v.cut)), `${theme} ${width}: the widest rate, ↓ 1023 MB/s, is shown whole`);
       check(errors.length === 0, `${theme} ${width}: no page errors on Machines`, errors.join("; "));
