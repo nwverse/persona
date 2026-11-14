@@ -22,15 +22,14 @@ import { href, inWorkView, navigate, onLinkClick, type Route, routePath, useRout
 import { agentChatKey, noteChatShown, personaChatKey } from "./lib/recent-chats";
 import { ago, sessionTitle, shortPath } from "./lib/format";
 import type { Session } from "./lib/types";
-import { unreachable } from "./lib/shell";
 import { useTabLookup } from "./lib/tab-lookup";
 import { ConnectionPill } from "./views/ConnectionPill";
 import { NARROW, useKeyboardFrame, useMedia } from "./lib/viewport";
-import { connect, disconnect, reset, type State, useStore } from "./lib/store";
+import { connect, disconnect, reset, type State, useHubUnreachable, useStore } from "./lib/store";
 import { watchRoster } from "./lib/managers";
 import { t } from "./i18n";
 import { Button, cx, EASE, IconButton, Loading, Spinner, Toasts } from "./ui/atoms";
-import { focusables, trapTab } from "./ui/overlay";
+import { focusables, trapTabIn } from "./ui/overlay";
 import { Empty } from "./views/session/files/parts";
 import { AgentsPage } from "./views/AgentsPage";
 import { AgentArchives } from "./views/agents/AgentArchives";
@@ -362,7 +361,7 @@ function Shell() {
       if (document.querySelector("[role=menu]") || document.querySelectorAll("[role=dialog]").length > 1) return;
       if (e.key === "Tab" && drawerBox.current) {
         const list = focusables(drawerBox.current);
-        const to = trapTab(list.length, list.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+        const to = trapTabIn(drawerBox.current, list, e.shiftKey);
         if (to === null) return;
         e.preventDefault();
         list[to]?.focus();
@@ -417,10 +416,9 @@ function Shell() {
       : route.name === "request" ? t("request-page.title") : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "settings" ? t("app.title_settings")
       : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "extension" ? extensionTitle || t("app.title_extension") : route.name === "subscriptions" ? t("app.title_subscriptions") : t("app.title_home");
 
-  // never reached the hub: say so with a way to try again, instead of pages loading forever (kept through a retry)
-  const [away, setAway] = useState(false);
-  const offline = unreachable(away, conn, loaded);
-  if (offline !== away) setAway(offline);
+  // never reached the hub: say so with a way to try again, instead of pages loading forever (kept through a retry); the
+  // Agents list reads the same flag, so the two always agree
+  const offline = useHubUnreachable();
   let main: React.ReactNode;
   if (offline) main = <Offline onToggleSidebar={toggle} trying={conn === "connecting"} />;
   else switch (route.name) {
