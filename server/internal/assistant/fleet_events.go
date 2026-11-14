@@ -141,14 +141,14 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		out, err := s.mailAttachment(ctx, machine, p)
 		return out, true, err
 	case "mcp.tools":
+		ctx = withToolSet(ctx, params) // a narrower set the process asks for (supervise_round.go)
 		var p struct {
 			Assistant bool   `json:"assistant"`
 			SessionID string `json:"session_id"`
-			Guest     bool   `json:"guest"`    // the node's word that it is a guest conversation (guest.go)
-			ToolSet   string `json:"tool_set"` // a narrower set the process asks for (supervise_round.go)
+			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
 		}
 		_ = json.Unmarshal(params, &p)
-		return map[string]any{"tools": s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.ToolSet)}, true, nil
+		return map[string]any{"tools": s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest)}, true, nil
 	case "mcp.call":
 		var p struct {
 			Name      string          `json:"name"`

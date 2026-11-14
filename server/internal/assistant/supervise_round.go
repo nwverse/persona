@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sync"
@@ -39,6 +40,26 @@ const superviseRoundParam = "supervise_round"
 
 // toolSetSupervise is the round's tool set as its process asks for it (mcp.tools tool_set).
 const toolSetSupervise = "supervise"
+
+type toolSetKey struct{}
+
+// withToolSet is ctx carrying the tool set an mcp.tools request asks for (its tool_set), for sessionMCPTools: ctx as
+// it is when the request names none.
+func withToolSet(ctx context.Context, params json.RawMessage) context.Context {
+	var p struct {
+		ToolSet string `json:"tool_set"`
+	}
+	if json.Unmarshal(params, &p) != nil || p.ToolSet == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolSetKey{}, p.ToolSet)
+}
+
+// toolSetOf is the tool set withToolSet put on ctx, "" for none.
+func toolSetOf(ctx context.Context) string {
+	set, _ := ctx.Value(toolSetKey{}).(string)
+	return set
+}
 
 // roundToolNames are the tools a round lists: the ones the background supervisor was seen using, and the ones its
 // supervision message tells it to use (ask_escalate for a card, list_followups beside the follow-ups, kb_get beside
