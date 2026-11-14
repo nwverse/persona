@@ -104,6 +104,7 @@ struct InboxEventBlocks: View {
             }
             if !item.isDone, let s = item.currentSuggestion {
                 InboxSuggestionCard(item: item, suggestion: s, model: model, edit: edit)
+                    .id(s.version)
             } else if let notice = model.notice {
                 Label(notice, systemImage: Theme.Icon.info).font(Theme.Font.captionMedium).foregroundStyle(Theme.caution).lineLimit(1)
             }
@@ -244,6 +245,23 @@ struct InboxSuggestionCard: View {
     var suggestion: InboxItem.Suggestion
     var model: InboxSuggestionModel
     var edit: () -> Void
+    // A to-do suggestion's fields (#6480): its title, due day, All Day and time, sent as they stand
+    @State private var todoTitle: String
+    @State private var todoDay: Date?
+    @State private var todoAllDay: Bool
+    @State private var todoTime: Date
+
+    init(item: InboxItem, suggestion: InboxItem.Suggestion, model: InboxSuggestionModel, edit: @escaping () -> Void) {
+        self.item = item
+        self.suggestion = suggestion
+        self.model = model
+        self.edit = edit
+        let due = InboxDue.parts(suggestion.due)
+        _todoTitle = State(initialValue: suggestion.text)
+        _todoDay = State(initialValue: due.day)
+        _todoAllDay = State(initialValue: due.time == nil)
+        _todoTime = State(initialValue: due.time ?? Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: .now) ?? .now)
+    }
 
     var body: some View {
         let s = suggestion
@@ -260,12 +278,16 @@ struct InboxSuggestionCard: View {
                 Label(notice, systemImage: Theme.Icon.info).font(Theme.Font.captionMedium).foregroundStyle(Theme.caution).lineLimit(1)
                     .accessibilityIdentifier("inbox.suggestion.stale")
             }
-            Text(s.text)
-                .font(Theme.Font.secondary)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if s.kind == "todo" && !s.isHandback {
+                InboxTodoFields(title: $todoTitle, day: $todoDay, allDay: $todoAllDay, time: $todoTime)
+            } else {
+                Text(s.text)
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let note = s.note, !note.isEmpty {
                 Text(note).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -311,7 +333,12 @@ struct InboxSuggestionCard: View {
                 .accessibilityIdentifier("inbox.suggestion.edit")
         case .confirm(let title):
             InboxSuggestionButton(title: title, prominent: true, spinning: model.busy == "confirm", fill: fill) {
-                Task { await model.confirm(s) }
+                if s.kind == "todo" && !s.isHandback {
+                    let due = InboxDue.string(day: todoDay, allDay: todoAllDay, time: todoTime)
+                    Task { await model.confirm(s, text: todoTitle, due: due) }
+                } else {
+                    Task { await model.confirm(s) }
+                }
             }
             .accessibilityIdentifier("inbox.suggestion.confirm")
         }
@@ -456,6 +483,8 @@ struct InboxChainSection: View {
     var openSource: ((InboxSourceRoute) -> Void)?
     @State private var all = false
     @State private var opened: Set<String> = []
+    /// The to-do a chain entry links (the row was added to to-dos, #6480), opened in a sheet.
+    @State private var todo: TodoDetailRoute?
     /// The whole chain of an item listed with part of it (`InboxItem.chainCut`, #4742), read when the section appears.
     @State private var whole: [InboxItem.ChainEntry]?
 
@@ -484,6 +513,12 @@ struct InboxChainSection: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox.chain")
             .task(id: CutChain(key: item.key, count: item.chainCount)) { await readWhole() }
+            .sheet(item: $todo) { r in
+                NavigationStack { TodoDetailView(todoID: r.id).macSheetDone { todo = nil } }
+                #if os(macOS)
+                .macSheet()
+                #endif
+            }
         }
     }
 
@@ -597,6 +632,9 @@ struct InboxChainSection: View {
             } else {
                 label() // not in the inbox any more
             }
+        case .todo(let id):
+            Button { todo = TodoDetailRoute(id: id) } label: { label() }.buttonStyle(.plain)
+                .accessibilityIdentifier("inbox.chain.todo")
         case .inline:
             Button { toggle(e) } label: { label() }.buttonStyle(.plain)
                 .accessibilityIdentifier("inbox.chain.expand")
