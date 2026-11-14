@@ -53,7 +53,7 @@
  "web/src/views/Home.tsx": 27,
  "web/src/views/Hubs.tsx": 7,
  "web/src/views/LauncherBlockedHelp.tsx": 10,
- "web/src/views/LinkTodoDialog.tsx": 7,
+ "web/src/views/LinkTodoDialog.tsx": 5,
  "web/src/views/Login.tsx": 13,
  "web/src/views/Machines.tsx": 18,
  "web/src/views/ManagerInstall.tsx": 8,
