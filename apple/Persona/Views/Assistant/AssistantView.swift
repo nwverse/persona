@@ -445,8 +445,6 @@ struct AssistantView: View {
                 let sidebarAt = UserDefaults.standard.double(forKey: "openAssistantSidebar")
                 if sidebarAt > 0 { activeDrawer.progress = min(sidebarAt, 1) }
                 else if UserDefaults.standard.bool(forKey: "openAssistantSidebar") { activeDrawer.progress = 1 }
-                // `-showSplitDetailOnly YES`: the iPad's list column put away, the page the whole width (screenshots).
-                if UserDefaults.standard.bool(forKey: "showSplitDetailOnly") { columns = .detailOnly }
                 #if os(iOS)
                 let rounds = UserDefaults.standard.integer(forKey: "showDrawerAutoDrag")
                 if rounds > 0 { Task { await DrawerAutoDrag(drawer: activeDrawer).run(rounds: rounds) } }
