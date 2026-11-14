@@ -152,6 +152,10 @@ def open_todo(theme, width, legacy=False, large=False):
     new_tab(f"{WEB}/todos?id={TODO_ID}")
     wait_for_load()
     cdp("Page.enable")
+    # A production build registers its service worker: its cached shell carries the previous build's asset names, so the
+    # reloaded page would run old code. Unregister and clear its caches (a dev server has none).
+    js("navigator.serviceWorker?.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister())))")
+    js("caches?.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k))))")
     cdp("Page.addScriptToEvaluateOnNewDocument", source=fixture_source(legacy=legacy))
     cdp("Page.reload")
     wait_for_load()
