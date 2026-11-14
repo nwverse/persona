@@ -425,7 +425,7 @@ impl Worker {
             }
             Action::Chat { chat, event } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("event for a chat that is not open: {chat}"));
+                    return self.reject("event for a chat that is not open".into());
                 };
                 let step = match apply(&mut state.session, event) {
                     Ok(step) => step,
@@ -435,7 +435,7 @@ impl Worker {
             }
             Action::WirePayload { chat, payload } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("payload for a chat that is not open: {chat}"));
+                    return self.reject("payload for a chat that is not open".into());
                 };
                 let step = match payload_step(&mut state.session, &chat, payload) {
                     Ok(Some(step)) => step,
@@ -446,7 +446,7 @@ impl Worker {
             }
             Action::ContinueFill { chat } => {
                 let Some(state) = self.chats.get_mut(&chat) else {
-                    return self.reject(format!("fill for a chat that is not open: {chat}"));
+                    return self.reject("fill for a chat that is not open".into());
                 };
                 let step = state.session.continue_fill();
                 self.after_step(&chat, step);

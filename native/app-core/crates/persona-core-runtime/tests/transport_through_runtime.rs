@@ -256,13 +256,15 @@ fn wire_payloads_decode_once_and_keep_the_item_bytes() {
             assert!(inserted.is_empty(), "{}: a range page without an open fold", case.name);
         } else {
             assert_eq!(inserted.len(), items.len(), "{}: every item arrives", case.name);
-            for (op, item) in inserted.iter().zip(&items) {
+            let raws = raw_items(&case.input_text);
+            assert_eq!(raws.len(), items.len(), "{}: the scanner finds every item", case.name);
+            for (op, (index, item)) in inserted.iter().zip(items.iter().enumerate()) {
                 let (json, id) = match op {
                     ListOp::Insert { json, id, .. } | ListOp::Update { json, id, .. } => (json, id),
                     ListOp::Remove { .. } => panic!("{}: a removal for a fresh chat", case.name),
                 };
                 assert_eq!(id, item["id"].as_str().unwrap(), "{}: the item's id", case.name);
-                let want = raw_item_text(&case.input_text, item["id"].as_str().unwrap());
+                let want = raws[index].clone();
                 assert_eq!(json, &want, "{}: the item's bytes are kept", case.name);
                 checked_items += 1;
             }
@@ -292,13 +294,40 @@ fn wire_payloads_decode_once_and_keep_the_item_bytes() {
 }
 
 /// The raw text of one item inside an `input` document, by its id, for the byte comparison.
-fn raw_item_text(input_text: &str, id: &str) -> String {
-    let at = input_text
-        .find(&format!("\"id\": \"{id}\""))
-        .unwrap_or_else(|| panic!("item {id}"));
-    let start = input_text[..at].rfind('{').expect("the item's opening brace");
-    let end = scan_value_end(&input_text[start..]);
-    input_text[start..start + end].to_owned()
+/// Every item's raw text inside an `input` document, in the order they appear, found by scanning the `items`
+/// array rather than by id: a repeated id must not compare one item against another's source text.
+fn raw_items(input_text: &str) -> Vec<String> {
+    let items_at = input_text.find("\"items\"").expect("the items key");
+    let Some(array_start) = input_text[items_at..].find('[').map(|at| at + items_at) else {
+        return Vec::new(); // `items: null`, as in items_legacy_null.
+    };
+    let array = &input_text[array_start..];
+    let mut result = Vec::new();
+    let mut index = 1; // past the opening bracket
+    while index < array.len() {
+        let rest = &array[index..];
+        let Some(item_start) = rest.find(|c: char| !c.is_whitespace()) else {
+            break;
+        };
+        let start = index + item_start;
+        if array.as_bytes()[start] == b']' {
+            break;
+        }
+        let end = scan_value_end(&array[start..]);
+        result.push(array[start..start + end].to_owned());
+        index = start + end;
+        // Past the comma, if there is one.
+        let rest = &array[index..];
+        let Some(comma) = rest.find(|c: char| !c.is_whitespace()) else {
+            break;
+        };
+        if array.as_bytes()[index + comma] == b',' {
+            index += comma + 1;
+        } else {
+            break;
+        }
+    }
+    result
 }
 
 #[test]
@@ -559,12 +588,22 @@ fn a_reloaded_page_replaces_the_transcript() {
 }
 
 #[test]
+fn the_raw_scanner_keeps_duplicate_ids_apart() {
+    let input =
+        r#"{"items":[{"id":"a#0","seq":1,"text":"first"},{"id":"a#0","seq":2,"text":"second"}],"has_more":false}"#;
+    let raws = raw_items(input);
+    assert_eq!(raws.len(), 2);
+    assert!(raws[0].contains("first"), "the first item's own text: {}", raws[0]);
+    assert!(raws[1].contains("second"), "the second item's own text: {}", raws[1]);
+    assert_eq!(raw_items(r#"{"items":null}"#).len(), 0);
+}
+
+#[test]
 fn the_raw_text_scanner_covers_the_whole_input() {
     for case in cases() {
         let reparsed: Value = serde_json::from_str(&case.input_text).expect("the raw text is JSON");
         assert_eq!(reparsed, case.input, "{}: the raw text is the case's input", case.name);
-        for item in items_of(&case.input) {
-            let raw = raw_item_text(&case.input_text, item["id"].as_str().unwrap());
+        for (raw, item) in raw_items(&case.input_text).into_iter().zip(items_of(&case.input)) {
             let reparsed: Value = serde_json::from_str(&raw).expect("the item's raw text is JSON");
             assert_eq!(reparsed, item, "{}: the item's raw text", case.name);
         }
