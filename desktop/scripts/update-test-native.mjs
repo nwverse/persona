@@ -1,5 +1,6 @@
 // Bounded, injected command operations for update-test native ownership checks and cleanup.
 // Production supplies run(); tests supply a double. No helper in this file invokes a platform command itself.
+const isRegistryAbsent = result => result.code === 1 && /unable to find the specified (?:registry key|registry key or value)|cannot find the path specified/i.test(result.text ?? "");
 export async function inspectWindowsRegistryKeys({ keys, run }) {
   const script = `$ErrorActionPreference='Stop'; ${JSON.stringify(keys)} | ForEach-Object { $key = $_ -replace '^HKCU\\\\', 'HKCU:\\'; [PSCustomObject]@{ Name = $_; Exists = Test-Path -LiteralPath $key; InstallLocation = (Get-ItemPropertyValue -LiteralPath $key -Name InstallLocation -ErrorAction SilentlyContinue) } } | ConvertTo-Json -Compress`;
   const { code, text } = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { seconds: 60, quiet: true });
@@ -15,11 +16,11 @@ export async function readWindowsInstallLocations({ keys, run }) {
   for (const key of keys) {
     const query = await run("reg", ["query", key, "/v", "InstallLocation"], { seconds: 60, quiet: true })
       .catch(error => ({ code: -1, error }));
-    // reg uses exit 1 for an absent key or value; other failures are not evidence of absence.
-    locations[key] = query.code === 1
+    // Exit 1 alone is ambiguous: access denied is not absence. Only the explicit not-found diagnostic qualifies.
+    locations[key] = isRegistryAbsent(query)
       ? { exists: false }
       : query.code !== 0
-        ? { error: query.error?.message ?? `exit ${query.code}` }
+        ? { error: query.error?.message ?? `exit ${query.code}${query.text ? `: ${query.text}` : ""}` }
         : { exists: true, ...parseWindowsInstallLocation(query.text) };
   }
   return locations;
@@ -35,7 +36,7 @@ export async function removeOwnedWindowsRegistryKeys({ keys, run }) {
   for (const key of keys) {
     const query = await run("reg", ["query", key], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
     if (query.code !== 0) {
-      if (query.code !== 1) failures.push(`NSIS registry query failed for ${key}: ${query.error?.message ?? `exit ${query.code}`}`);
+      if (!isRegistryAbsent(query)) failures.push(`NSIS registry query failed for ${key}: ${query.error?.message ?? `exit ${query.code}${query.text ? `: ${query.text}` : ""}`}`);
       continue;
     }
     const result = await run("reg", ["delete", key, "/f"], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
@@ -44,7 +45,7 @@ export async function removeOwnedWindowsRegistryKeys({ keys, run }) {
   for (const key of keys) {
     const after = await run("reg", ["query", key], { seconds: 60, quiet: true }).catch(error => ({ code: -1, error }));
     if (after.code === 0) failures.push(`NSIS registry key remains after cleanup: ${key}`);
-    else if (after.code !== 1) failures.push(`NSIS registry verification failed for ${key}: ${after.error?.message ?? `exit ${after.code}`}`);
+    else if (!isRegistryAbsent(after)) failures.push(`NSIS registry verification failed for ${key}: ${after.error?.message ?? `exit ${after.code}${after.text ? `: ${after.text}` : ""}`}`);
   }
   return failures;
 }

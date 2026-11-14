@@ -16,16 +16,17 @@ const record = entry => appendFileSync(join(directory, "update-test.jsonl"), `${
 app.isDefaultProtocolClient = () => true;
 app.setAsDefaultProtocolClient = () => false;
 
-// Keep the production updater implementation, but expose the arguments it actually gives its NSIS install operation.
+// Keep the production updater implementation and its full argument list, but expose its NSIS install operation.
 // The real executable path is receipt evidence. electron-updater's optional installDirectory is diagnostic only:
 // locked NsisUpdater does not assign it, and it does not report the destination NSIS chooses through /D or its GUID key.
 if (process.platform === "win32") {
   const install = autoUpdater.install.bind(autoUpdater);
-  autoUpdater.install = options => {
+  autoUpdater.install = (...args) => {
+    const [options] = args;
     const executable = app.getPath("exe");
     const executableDirectory = dirname(executable);
-    record({ event: "nsis-install", options, executable, executableDirectory, updaterInstallDirectory: autoUpdater.installDirectory ?? null, executableInRunDirectory: process.env.PERSONA_UPDATE_TEST_EXECUTABLE_DIR === undefined ? null : executableDirectory === process.env.PERSONA_UPDATE_TEST_EXECUTABLE_DIR });
-    return install(options);
+    record({ event: "nsis-install", options, executable, executableDirectory, updaterInstallDirectory: autoUpdater.installDirectory ?? null, executableInRunDirectory: process.env.PERSONA_UPDATE_TEST_EXECUTABLE_DIR === undefined ? null : executableDirectory === process.env.PERSONA_UPDATE_TEST_EXECUTABLE_DIR, forwardedArguments: args.map(argument => typeof argument === "boolean" ? argument : typeof argument) });
+    return install(...args);
   };
 }
 

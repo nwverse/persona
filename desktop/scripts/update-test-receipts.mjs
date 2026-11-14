@@ -9,7 +9,7 @@ const sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds)
 export function packagedUpdateConfigPath(buildDirectory, platform, architecture = process.arch) {
   let parts;
   if (platform === "win32") parts = ["win-unpacked", "resources", "app-update.yml"];
-  else if (platform === "darwin") parts = [`mac-${architecture}`, `${PRODUCT}.app`, "Contents", "Resources", "app-update.yml"];
+  else if (platform === "darwin") parts = [architecture === "x64" ? "mac" : `mac-${architecture}`, `${PRODUCT}.app`, "Contents", "Resources", "app-update.yml"];
   else if (platform === "linux") parts = ["linux-unpacked", "resources", "app-update.yml"];
   else throw new Error(`unsupported update-test platform: ${platform}`);
   return join(buildDirectory, ...parts);
@@ -19,9 +19,14 @@ export function readPackagedUpdateConfig(buildDirectory, platform, architecture)
   return readFile(packagedUpdateConfigPath(buildDirectory, platform, architecture), "utf8");
 }
 
-export function readUpdateTestEvents(profile) {
-  return readFile(join(profile, "update-test.jsonl"), "utf8")
-    .then(text => text.split("\n").filter(Boolean).map(line => JSON.parse(line)), () => []);
+export async function readUpdateTestEvents(profile) {
+  let text;
+  try { text = await readFile(join(profile, "update-test.jsonl"), "utf8"); }
+  catch (error) { if (error?.code === "ENOENT") return []; throw error; }
+  // A writer can be between lines; retry that partial last line, never a malformed complete record or an I/O failure.
+  const lines = text.split("\n");
+  if (lines.at(-1) !== "") lines.pop();
+  return lines.filter(Boolean).map(line => JSON.parse(line));
 }
 
 /** Poll the app's real event file until the predicate returns a value or the deadline passes. */
@@ -44,6 +49,6 @@ export function isNsisInstallAt(event, expectedExecutableDirectory) {
  * remains diagnostic and is deliberately not part of this verdict.
  */
 export async function watchForNsisInstall(profile, seconds, expectedExecutableDirectory, options) {
-  const event = await watchUpdateTestEvents(profile, seconds, events => events.find(entry => entry.event === "nsis-install"), options);
+  const event = await watchUpdateTestEvents(profile, seconds, events => events.find(entry => isNsisInstallAt(entry, expectedExecutableDirectory)), options);
   return { event, matchesExpectedDirectory: isNsisInstallAt(event, expectedExecutableDirectory) };
 }

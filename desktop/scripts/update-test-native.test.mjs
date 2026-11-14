@@ -51,7 +51,7 @@ test("NSIS InstallLocation reg queries preserve this run's exact keys and parse 
   assert.deepEqual(parseWindowsInstallLocation(text), { installLocation: "C:\\owned\\app" });
   const { calls, run } = double([
     { command: `reg query ${keys[0]}`, text },
-    { command: `reg query ${keys[1]}`, code: 1 },
+    { command: `reg query ${keys[1]}`, code: 1, text: "ERROR: The system was unable to find the specified registry key or value." },
   ]);
   assert.deepEqual(await readWindowsInstallLocations({ keys, run }), {
     [keys[0]]: { exists: true, installLocation: "C:\\owned\\app" },
@@ -71,8 +71,9 @@ test("NSIS receipt failures and empty values are not reported as destination evi
 test("registry cleanup deletes and rechecks only this run's exact keys", async () => {
   const replies = [
     { code: 0 }, { code: 0 }, // query/delete install key
-    { code: 1 },              // uninstall key absent: no delete
-    { code: 1 }, { code: 1 }, // both absent after cleanup
+    { code: 1, text: "ERROR: The system was unable to find the specified registry key or value." }, // uninstall key absent: no delete
+    { code: 1, text: "ERROR: The system was unable to find the specified registry key or value." },
+    { code: 1, text: "ERROR: The system was unable to find the specified registry key or value." }, // both absent after cleanup
   ];
   const { calls, run } = double(replies);
   assert.deepEqual(await removeOwnedWindowsRegistryKeys({ keys, run }), []);
@@ -90,8 +91,18 @@ test("registry cleanup preserves query/delete/recheck failures", async () => {
   assert.match((await removeOwnedWindowsRegistryKeys({ keys, run: queryFailed.run })).join("\n"), /query failed.*exit 5/);
   const deleteFailed = double([{ code: 0 }, { code: 5 }, { code: 1 }, { code: 1 }, { code: 1 }]);
   assert.match((await removeOwnedWindowsRegistryKeys({ keys, run: deleteFailed.run })).join("\n"), /cleanup failed.*exit 5/);
-  const remains = double([{ code: 1 }, { code: 1 }, { code: 0 }, { code: 1 }]);
+  const remains = double([{ code: 1, text: "ERROR: The system was unable to find the specified registry key or value." }, { code: 1, text: "ERROR: The system was unable to find the specified registry key or value." }, { code: 0 }, { code: 1, text: "ERROR: The system was unable to find the specified registry key or value." }]);
   assert.match((await removeOwnedWindowsRegistryKeys({ keys, run: remains.run })).join("\n"), /remains after cleanup/);
+});
+
+test("registry access denial is never mistaken for absence", async () => {
+  const denied = double([{ code: 1, text: "ERROR: Access is denied." }]);
+  assert.match((await readWindowsInstallLocations({ keys: [keys[0]], run: denied.run }))[keys[0]].error, /exit 1.*Access is denied/);
+  const cleanup = double([{ code: 1, text: "ERROR: Access is denied." }, { code: 1, text: "ERROR: The system was unable to find the specified registry key or value." }, { code: 1, text: "ERROR: Access is denied." }, { code: 1, text: "ERROR: The system was unable to find the specified registry key or value." }]);
+  const failures = await removeOwnedWindowsRegistryKeys({ keys, run: cleanup.run });
+  assert.equal(failures.length, 2);
+  assert.match(failures.join("\n"), /query failed[\s\S]*Access is denied[\s\S]*verification failed[\s\S]*Access is denied/);
+  assert.equal(cleanup.calls.filter(call => call.args[0] === "delete").length, 0);
 });
 
 test("ShipIt cleanup handles absence, removal, and failed recheck with only its run label", async () => {

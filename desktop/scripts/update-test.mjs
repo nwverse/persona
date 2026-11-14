@@ -311,11 +311,6 @@ async function main() {
     if (platform === "win32") {
       const receipt = await watchForNsisInstall(profile, 180, installed);
       need("the real NSIS updater runs inside this run's temporary directory", receipt.matchesExpectedDirectory && receipt.event.executableInRunDirectory === true, receipt.event ?? { expectedExecutableDirectory: installed });
-      const registry = await readWindowsInstallLocations({ keys: windowsRegistryKeys(runPaths.identity), run });
-      const installKey = windowsRegistryKeys(runPaths.identity)[0];
-      // Diagnostic only: the running executable and the post-install version are the pass/fail evidence. NSIS may
-      // write or replace this value later during installation; an unavailable intermediate read is not fabricated.
-      step("read NSIS's own GUID InstallLocation (diagnostic; not a pass/fail verdict)", true, registry[installKey]);
     }
   }
 
@@ -369,6 +364,13 @@ async function main() {
     await exited(second, 30);
     need("the reopened app reports the new version", again?.[0]?.event === "start" && again[0].version === NEW, again?.[0]);
     need("the new version finds nothing newer", again.some(entry => entry.event === "current" && entry.version === NEW), again.at(-1));
+    if (platform === "win32") {
+      const [installKey] = windowsRegistryKeys(runPaths.identity);
+      const registry = await readWindowsInstallLocations({ keys: [installKey], run });
+      const receipt = registry[installKey];
+      // Read after the version and current-feed checks, so the actual registry receipt cannot be an early install read.
+      need("NSIS's own GUID InstallLocation is this run's directory", receipt.exists === true && receipt.installLocation === installed, receipt);
+    }
     install = "installed on quit; the reopened app reports the new version";
   }
   return { old: OLD, new: NEW, feed: next, install };
