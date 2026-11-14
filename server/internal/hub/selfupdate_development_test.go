@@ -25,13 +25,17 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 			h, machine, target, execs := updatingHub(t, p, "release")
 			u := h.upd
 			u.client = newUpdater(h).client
-			t.Setenv("PERSONA_NODE_BINARIES", t.TempDir())
+			nodes := t.TempDir()
+			t.Setenv("PERSONA_NODE_BINARIES", nodes)
+			stale := filepath.Join(nodes, "personad-windows-amd64")
+			os.WriteFile(stale, []byte("newer package before rollback"), 0600)
 			u.loaded, u.settings.Source, u.settings.DevelopmentAuto = true, "web-dev", true
 			h.build.Commit = strings.Repeat("a", 40)
 			h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}}
 			data := filepath.Join(h.cfg.dir, "current-history")
 			os.WriteFile(data, []byte("messages created after the backup"), 0600)
 			version := update.DevelopmentVersion{ID: "snapshot-fixture", Version: "web-dev-older", Build: 202611010001, Commit: strings.Repeat("b", 40), UpdatedAt: "2026-11-01T10:00:00Z"}
+			prepared := filepath.Join(u.dir, "development", "prepare_backup-fixture", "artifacts")
 			phases := make(chan string, 8)
 			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
 				phases <- operation
@@ -46,7 +50,10 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 					if input["backup_id"] != version.ID {
 						return errors.New("wrong backup")
 					}
-					artifacts := t.TempDir()
+					artifacts := prepared
+					if err := os.MkdirAll(artifacts, 0700); err != nil {
+						return err
+					}
 					script := []byte(fmt.Sprintf("#!/bin/sh\necho %s\necho 'channel release, build %d'\n", version.Version, version.Build))
 					os.WriteFile(filepath.Join(artifacts, "personad-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
 					response = map[string]any{"artifacts": artifacts}
@@ -95,6 +102,15 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 					}
 					return v.State == "waiting_idle"
 				})
+				if u.view().Latest.Newer || u.view().Latest.Released != nil {
+					t.Fatal("historical backup advertised as a new release")
+				}
+				if _, err := os.Stat(prepared); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("owned build scratch was not removed", err)
+				}
+				if _, err := os.Stat(filepath.Join(u.stagedDir(version.Build), "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); err != nil {
+					t.Fatal("idle wait lost the staged program", err)
+				}
 				if w := request("/api/v1/hub/update/backups/" + version.ID + "/apply"); w.Code != 409 {
 					t.Fatal("duplicate application accepted")
 				}
@@ -109,6 +125,12 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 				}
 				h.version, h.build.Number, h.build.Commit = pending.ToVersion, pending.ToBuild, version.Commit
 				u.confirm(context.Background(), pending)
+				if data, _ := os.ReadFile(filepath.Join(nodes, "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); !strings.Contains(string(data), version.Version) {
+					t.Fatal("rollback lost the staged historical Node package")
+				}
+				if data, _ := os.ReadFile(stale + ".prev"); string(data) != "newer package before rollback" {
+					t.Fatal("rollback did not preserve the stale live Node package")
+				}
 				if u.view().State != "updated" || u.view().Development.CurrentUpdatedAt == "" {
 					t.Fatal("missing successful installation time")
 				}
@@ -128,6 +150,33 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 				t.Fatal("current state was not backed up")
 			}
 		})
+	}
+}
+
+func TestDevelopmentBackupsAPIDistinguishesFailureFromEmptyList(t *testing.T) {
+	h := newTestHub(t)
+	u := h.upd
+	u.loaded, u.settings.Source = true, "web-dev"
+	h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}}
+	failed := true
+	u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, _ any) error {
+		if failed {
+			return errors.New("fixture unavailable backup directory")
+		}
+		return nil
+	}
+	api := http.NewServeMux()
+	u.routes(api)
+	for _, want := range []int{http.StatusConflict, http.StatusOK} {
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/hub/update/backups", nil))
+		if w.Code != want {
+			t.Fatalf("%d: %s", w.Code, w.Body.String())
+		}
+		if !failed && strings.TrimSpace(w.Body.String()) != `{"backups":[]}` {
+			t.Fatal(w.Body.String())
+		}
+		failed = false
 	}
 }
 
@@ -213,8 +262,12 @@ func TestDevelopmentSettingsOptInAndActiveChannelGuard(t *testing.T) {
 		t.Fatal("explicit automatic choice lost")
 	}
 	for _, source := range []string{"release", "web-dev"} {
+		u.settings.DevelopmentBackup = &update.DevelopmentBackup{ID: "previous-channel"}
 		if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"source":%q}`, source)); w.Code != 200 {
 			t.Fatal(w.Body.String())
+		}
+		if u.settings.DevelopmentBackup != nil {
+			t.Fatal("channel switch retained the previous backup receipt")
 		}
 	}
 	if u.settings.DevelopmentAuto {
@@ -226,6 +279,69 @@ func TestDevelopmentSettingsOptInAndActiveChannelGuard(t *testing.T) {
 	}
 	if w := nodePolicyRequest(t, u, http.MethodPut, `{"source":"release"}`); w.Code != 409 {
 		t.Fatal("changed source across unresolved effects")
+	}
+}
+
+func TestDevelopmentRepeatedCheckDoesNotMutatePublishedCandidate(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprint(active), func(t *testing.T) {
+			h := newTestHub(t)
+			u := h.upd
+			h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}}
+			candidate := &update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40)}
+			published := &update.Published{Manifest: &update.Manifest{Version: "frozen", Build: 202611130001}, Development: candidate}
+			u.release, u.running = published, active
+			u.settings.History = []updateRecord{{Source: "web-dev", Commit: candidate.Commit, Result: "rolled_back", ToBuild: 202611120001, ToVersion: "previous-attempt"}}
+			u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, result any) error {
+				*result.(*update.DevelopmentCandidate) = *candidate
+				return nil
+			}
+			r, err := u.checkDevelopment(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if published.Manifest.Version != "frozen" || published.Manifest.Build != 202611130001 {
+				t.Fatal("check rewrote the published/installing manifest")
+			}
+			if r.Manifest.Version != "previous-attempt" {
+				t.Fatal("rollback attempt identity was lost")
+			}
+			if active && u.release != published {
+				t.Fatal("active candidate was replaced")
+			}
+		})
+	}
+}
+
+func TestDevelopmentHeldHistorySkipsUnbuiltBadAndUnresolvedCandidates(t *testing.T) {
+	for _, scenario := range []string{"unbuilt", "known-bad", "unresolved", "held"} {
+		t.Run(scenario, func(t *testing.T) {
+			h := newTestHub(t)
+			u := h.upd
+			u.loaded, u.settings.Source, u.settings.DevelopmentAuto = true, "web-dev", true
+			h.build.Commit = strings.Repeat("a", 40)
+			commit := strings.Repeat("b", 40)
+			ancestors, _ := update.EncodeAncestors([]string{commit})
+			u.release = &update.Published{Manifest: &update.Manifest{Version: "candidate", Build: 202611130001, Ancestors: ancestors}, Development: &update.DevelopmentCandidate{Commit: commit}}
+			switch scenario {
+			case "unbuilt":
+				u.release.Manifest.Ancestors = ""
+			case "known-bad":
+				u.settings.DevelopmentBad = []string{commit}
+			case "unresolved":
+				if err := update.BeginDevelopmentAdoption(u.dir, update.Pending{ToBuild: 202611130001, Development: u.release.Development}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			u.noteHeld(context.Background())
+			if scenario == "held" {
+				if len(u.settings.History) != 1 || u.settings.History[0].Source != "web-dev" || u.settings.History[0].Commit != commit {
+					t.Fatal("missing attributed hold", u.settings.History)
+				}
+			} else if len(u.settings.History) != 0 {
+				t.Fatal("false held reason", u.settings.History)
+			}
+		})
 	}
 }
 

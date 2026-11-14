@@ -91,8 +91,12 @@ and asset-graph checks, but skips the release's first-screen/idle performance bu
 normal `npm run build` budgets are unchanged. Bootstrap and target source must contain this
 development build command; an older target without it fails before adoption. All components
 share the same commit, version and build identity; automatic
-adoption also retains the existing ancestry guard. An unknown/dirty installed commit requires
-a manual first update. The binaries retain the `release` ABI/channel for existing self-checks;
+adoption also retains the existing ancestry guard. Fetch depth and the returned ancestor list
+are capped at 1024; if the installed commit cannot be proved within that window, automatic
+adoption stops and a manual update is required. An unknown/dirty installed commit also requires
+a manual first update. Verified programs and Node packages are copied into independent updater
+staging before the disposable checkout is removed; staging survives the idle wait and process
+switch until confirmation or rollback. The binaries retain the `release` ABI/channel for existing self-checks;
 the independent persisted `source: web-dev` identifies this update channel.
 
 After compilation and the existing idle wait, before changing executables, the helper makes
@@ -106,7 +110,8 @@ a recovery point under `<runtime>/update/development-backups`. It includes:
   symlinks fail closed; they need an explicit storage layout change before this path is usable.
 - Separate compressed copies of the current `personad` and existing Hub/Manager programs,
   with hashes, original paths, installed version/build/commit and installation/backup times.
-  Matching locally available Node packages for registered platforms are saved too. Each snapshot
+  All matching locally available Node packages are saved, including platforms with no currently
+  registered computer; symlinks and packages marked as another version are excluded. Each snapshot
   retains its own matching programs rather than depending on the single latest `.prev`.
 
 Writers remain paused across **all** database dumps and the file archive. A dump must have its
@@ -128,8 +133,10 @@ failure stops adoption; it can temporarily leave more than three valid snapshots
 discard recovery evidence. The API retains the last snapshot/rotation receipt; the Web selector
 lists available program versions. Private phase logs are `update/development/<operation>.log`.
 
-The existing standalone `web/` override is set aside in the same update transaction so the new
-embedded UI actually serves; rollback restores that override and all swapped programs. After
+The data archive intentionally captures the existing standalone `web/` override before it is
+set aside in the same update transaction so the new embedded UI actually serves. Failed adoption
+restores that override and all swapped programs. Explicit **Apply backup** installs saved programs
+and their embedded Web only; it never extracts this data archive or its standalone override. After
 Hub confirmation, compiled node packages are installed locally even with automatic fleet updates
 off, so **Redeploy** can use the matching build. Fleet installation still requires the separate
 `auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages

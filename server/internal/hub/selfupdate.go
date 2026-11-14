@@ -722,7 +722,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 			v.Latest.Commit, v.Latest.Branch = r.Development.Commit, r.Development.Branch
 			v.Latest.UpdatedAt = r.Development.UpdatedAt
 			v.Latest.BackupID = r.Development.BackupID
-			v.Latest.Newer = r.Development.Commit != u.h.build.Commit
+			v.Latest.Newer = u.candidateNewer(r)
 			v.Latest.Bad = v.Latest.Bad || slices.Contains(u.settings.DevelopmentBad, r.Development.Commit)
 			if r.Manifest.Ancestors != "" {
 				v.Latest.Held = u.developmentHold(r.Manifest)

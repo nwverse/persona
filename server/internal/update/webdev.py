@@ -24,6 +24,9 @@ OWNER = "persona-web-development-backup-v1"
 REPOSITORY = "https://github.com/nwverse/persona.git"
 NAME = re.compile(r"snapshot-[0-9]{20}-[a-f0-9]{12}")
 PLATFORMS = {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64"}
+# Automatic adoption must prove ancestry within this bounded history window.
+# Older/divergent installations can still explicitly choose a manual update.
+HISTORY_LIMIT = 1024
 
 
 def run(argv, cwd=None, env=None, output=False, timeout=1800):
@@ -69,6 +72,22 @@ def sync_dir(path):
         os.close(fd)
 
 
+def lock_backup(lock):
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        raise ValueError("another backup or prepare is in progress") from exc
+
+
+def failure_detail(exc):
+    # Do not stringify subprocess errors: their argv can contain credentials.
+    if isinstance(exc, ValueError):
+        return str(exc)
+    if isinstance(exc, subprocess.CalledProcessError):
+        return f"CalledProcessError (exit {exc.returncode})"
+    return type(exc).__name__
+
+
 def resolve(request):
     refs = run(["git", "ls-remote", REPOSITORY, "refs/heads/main"], output=True)
     match = re.fullmatch(r"([a-f0-9]{40})\trefs/heads/main\n?", refs)
@@ -93,7 +112,7 @@ def build(request):
     run(["git", "init", "--quiet", str(source)])
     run(["git", "-C", str(source), "remote", "add", "origin", REPOSITORY])
     # Fetch the captured object, never a moving branch head; detached checkout only.
-    run(["git", "-C", str(source), "fetch", "--no-tags", "origin", selected["commit"]])
+    run(["git", "-C", str(source), "fetch", f"--depth={HISTORY_LIMIT}", "--filter=blob:none", "--no-tags", "origin", selected["commit"]])
     run(["git", "-C", str(source), "checkout", "--detach", selected["commit"]])
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", CGO_ENABLED="0")
     web, server = source / "web", source / "server"
@@ -125,7 +144,7 @@ def build(request):
                  "-o", str(binary), "./cmd/" + program], server, dict(env, GOOS=goos, GOARCH=arch))
             with binary.open("rb") as src, gzip.open(artifacts / (binary.name + ".gz"), "wb") as dst:
                 shutil.copyfileobj(src, dst)
-    ancestors = run(["git", "rev-list", selected["commit"]], source, output=True).splitlines()
+    ancestors = run(["git", "rev-list", f"--max-count={HISTORY_LIMIT}", selected["commit"]], source, output=True).splitlines()
     return {"ancestors": ancestors, "artifacts": str(artifacts)}
 
 
@@ -211,7 +230,7 @@ def prepare_backup(request):
         raise ValueError("invalid snapshot ID")
     store = backup_store(request)
     with (store / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_backup(lock)
         path = store / ident
         version = backup_version(path)
         m = verify(path)
@@ -278,7 +297,7 @@ def snapshot(request):
     if store.is_symlink():
         raise ValueError("linked backup directory")
     with (store / ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_backup(lock)
         coordination = store / "coordination-pending.json"
         if coordination.exists():
             raise ValueError("previous writer coordination needs recovery; inspect the retained marker")
@@ -293,6 +312,7 @@ def snapshot(request):
                     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "platform": request.get("platform", ""),
                     "roots": [str(p) for p in roots], "databases": len(databases), "programs": {}, "nodes": {}, "files": {}}
         write_json(coordination, {"owner": OWNER, "snapshot": ident, "phase": "quiescing"})
+        snapshot_error = None
         try:
             try:
                 print("development backup: pausing writers", flush=True)
@@ -357,20 +377,39 @@ def snapshot(request):
                             dst.write(chunk)
                     manifest["files"][artifact.name] = digest(artifact)
                     manifest["programs"][name] = {"file": artifact.name, "target": path, "sha256": native.hexdigest()}
-                for platform, path in request.get("node_packages", {}).items():
-                    if platform not in PLATFORMS:
-                        raise ValueError("unknown Node platform")
+                # Preserve all locally available packages for the installed
+                # version, including platforms with no currently registered Node.
+                node_dir = Path(request["node_directory"]) if request.get("node_directory") else None
+                if node_dir is not None and node_dir.is_symlink():
+                    raise ValueError("linked Node package directory")
+                for platform in sorted(PLATFORMS) if node_dir is not None else []:
+                    path = node_dir / ("personad-" + platform)
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    version = path.with_name(path.name + ".version")
+                    if version.exists() and version.read_text().strip() != request["from_version"]:
+                        continue
                     artifact = temporary / ("node-" + platform + ".gz")
                     with Path(path).open("rb") as src, gzip.open(artifact, "wb") as dst:
                         shutil.copyfileobj(src, dst)
                     manifest["files"][artifact.name] = digest(artifact)
                     manifest["nodes"][platform] = {"file": artifact.name, "sha256": digest(Path(path))}
                 write_json(temporary / "manifest.json", manifest)
+            except BaseException as exc:
+                snapshot_error = exc
+                print("development backup: snapshot failed: " + failure_detail(exc), file=sys.stderr, flush=True)
+                raise
             finally:
                 # Even partially failed quiesce hooks can have stopped a writer.
                 # A failed resume preserves its marker and blocks adoption/retry.
                 print("development backup: resuming writers", flush=True)
-                run(backup["resume"], timeout=60)
+                try:
+                    run(backup["resume"], timeout=60)
+                except BaseException as exc:
+                    print("development backup: resume failed: " + failure_detail(exc), file=sys.stderr, flush=True)
+                    if snapshot_error is not None:
+                        raise exc from snapshot_error
+                    raise
                 coordination.unlink()
                 sync_dir(store)
             for member in temporary.iterdir():
@@ -420,6 +459,5 @@ if __name__ == "__main__":
         main()
     except BaseException as exc:
         # Child output is in a private local log; no exception/DSN/argv enters the API.
-        detail = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
-        print("Development update helper failed: " + detail, file=sys.stderr)
+        print("Development update helper failed: " + failure_detail(exc), file=sys.stderr)
         sys.exit(1)

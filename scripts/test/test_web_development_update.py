@@ -1,6 +1,9 @@
 """Isolated Git, process and history fixtures for Web development updates."""
-import importlib.util
+import contextlib
+import fcntl
 import gzip
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -50,6 +53,9 @@ class DevelopmentFixtures(unittest.TestCase):
             file.write_text(content)
         self.git("add", ".")
         self.git("commit", "-m", "First fixture")
+        (self.repo / "earlier").write_text("previous history")
+        self.git("add", ".")
+        self.git("commit", "-m", "Selected fixture")
         repository = patch.object(webdev, "REPOSITORY", self.repo.as_uri())
         repository.start()
         self.addCleanup(repository.stop)
@@ -76,8 +82,11 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         self.tool("npm", fixture)
         work = self.root / "build"
         work.mkdir()
-        built = webdev.build({"platforms":["linux-amd64", "darwin-arm64"], "work":str(work), "candidate":selected,
-                              "version":"web-dev-fixture", "build":202611130001, "platform":"linux-amd64"})
+        with patch.object(webdev, "HISTORY_LIMIT", 1):
+            built = webdev.build({"platforms":["linux-amd64", "darwin-arm64"], "work":str(work), "candidate":selected,
+                                  "version":"web-dev-fixture", "build":202611130001, "platform":"linux-amd64"})
+        self.assertEqual(built["ancestors"], [selected["commit"]])
+        self.assertEqual(subprocess.check_output(["git", "-C", str(work/"source"), "rev-list", "--count", "HEAD"], text=True).strip(), "1")
         self.assertEqual((work / "personad-linux-amd64").read_text().strip(), selected["commit"])
         self.assertNotEqual(selected["commit"], self.git("rev-parse", "HEAD"))
         self.assertEqual({p.name for p in Path(built["artifacts"]).glob("*.gz")}, {
@@ -95,6 +104,8 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         (runtime / "hub.json").write_text(json.dumps({"database_url":"fixture-only"}))
         (runtime / "secret.key").write_bytes(b"fixture-key")
         (runtime / "data/history.txt").write_text("synthetic history")
+        (runtime / "web").mkdir()
+        (runtime / "web/index.html").write_bytes(b"saved web override")
         binary = self.root / "personad"
         binary.write_bytes(b"fixture installed program")
         database = self.root / "database.json"
@@ -126,6 +137,7 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         with tarfile.open(snapshots[-1]/"files.tar.gz") as archive:
             self.assertEqual(archive.extractfile("root-0/data/history.txt").read(), b"synthetic history")
             self.assertEqual(archive.extractfile("root-0/secret.key").read(), b"fixture-key")
+            self.assertEqual(archive.extractfile("root-0/web/index.html").read(), b"saved web override")
             self.assertFalse(any("update/development-backups" in m.name for m in archive))
         unrelated = store / "manual-backup"
         unrelated.mkdir()
@@ -142,15 +154,24 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
         request = self.history_fixture()
         request.update(from_version="web-dev-old", from_commit="b"*40, from_build=202611120001,
                        from_updated_at="2026-11-12T10:00:00Z", platform="linux-amd64")
-        node = self.root / "node-arm64"
+        node_dir = self.root / "nodes"
+        node_dir.mkdir()
+        node = node_dir / "personad-linux-arm64"
         node.write_bytes(b"old arm64 node")
-        request["node_packages"] = {"linux-arm64": str(node)}
+        (node_dir / "personad-linux-arm64.version").write_text("web-dev-old\n")
+        (node_dir / "personad-windows-amd64").write_bytes(b"another version")
+        (node_dir / "personad-windows-amd64.version").write_text("other-version")
+        (node_dir / "personad-darwin-arm64").symlink_to(node)
+        request["node_directory"] = str(node_dir)
         receipt = webdev.snapshot(request)
+        manifest = webdev.verify(Path(request["runtime"])/"update/development-backups"/receipt["id"])
+        self.assertEqual(set(manifest["nodes"]), {"linux-arm64"})
         for _ in range(2):
             webdev.snapshot(request)
         runtime = Path(request["runtime"])
         current = {runtime/"data/history.txt": b"new messages", runtime/"secret.key": b"current key",
-                   self.root/"database.json": b"current database", self.root/"personad": b"current program"}
+                   self.root/"database.json": b"current database", self.root/"personad": b"current program",
+                   runtime/"web/index.html": b"current web override"}
         for file, content in current.items():
             file.write_bytes(content)
         versions = webdev.backups(request)["backups"]
@@ -193,6 +214,32 @@ if pathlib.Path(sys.argv[0]).name == 'go' and args[0] == 'build':
             webdev.snapshot(request)
         with self.assertRaisesRegex(ValueError,"coordination needs recovery"):
             webdev.snapshot(request)
+
+    def test_backup_and_resume_failures_both_reach_private_log(self):
+        request = self.history_fixture()
+        self.tool("pg_dump", "raise SystemExit(7)\n")
+        request["config"]["backup"]["resume"] = [self.tool("resume-fails", "raise SystemExit(2)\n")]
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log), self.assertRaises(subprocess.CalledProcessError) as caught:
+            webdev.snapshot(request)
+        self.assertEqual(caught.exception.returncode, 2)
+        self.assertEqual(caught.exception.__cause__.returncode, 7)
+        self.assertIn("snapshot failed: CalledProcessError (exit 7)", log.getvalue())
+        self.assertIn("resume failed: CalledProcessError (exit 2)", log.getvalue())
+        self.assertNotIn("effective-fixture-database", log.getvalue())
+        store = Path(request["runtime"])/"update/development-backups"
+        self.assertTrue((store/"coordination-pending.json").exists())
+        self.assertEqual(list(store.glob("snapshot-*")), [])
+
+    def test_snapshot_and_prepare_report_lock_contention(self):
+        request = self.history_fixture()
+        receipt = webdev.snapshot(request)
+        store = Path(request["runtime"])/"update/development-backups"
+        with (store/".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for operation, payload in [(webdev.snapshot, request), (webdev.prepare_backup, dict(request, backup_id=receipt["id"]))]:
+                with self.subTest(operation=operation.__name__), self.assertRaisesRegex(ValueError, "another backup or prepare is in progress"):
+                    operation(payload)
 
     def test_real_writer_is_quiesced_for_the_whole_snapshot(self):
         request = self.history_fixture()

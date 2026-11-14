@@ -71,7 +71,8 @@ func (u *updater) noteHeld(ctx context.Context) {
 	}
 	u.mu.Lock()
 	r := u.release
-	if !u.autoLocked() || u.updateActiveLocked() || !u.candidateNewer(r) || slices.Contains(u.settings.Bad, r.Manifest.Build) {
+	if !u.autoLocked() || u.updateActiveLocked() || u.adoptionUnresolved() || !u.candidateNewer(r) || slices.Contains(u.settings.Bad, r.Manifest.Build) ||
+		(r.Development != nil && (r.Manifest.Ancestors == "" || slices.Contains(u.settings.DevelopmentBad, r.Development.Commit))) {
 		u.mu.Unlock()
 		return
 	}
@@ -90,8 +91,12 @@ func (u *updater) noteHeld(ctx context.Context) {
 	}
 	u.h.logf("update: %s is newer but not installed by itself: %s", r.Manifest.Version, why)
 	now := time.Now()
-	u.record(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
-		Started: now, Ended: now, Result: "held", Reason: why, Auto: true})
+	record := updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
+		Started: now, Ended: now, Result: "held", Reason: why, Auto: true}
+	if r.Development != nil {
+		record.Source, record.Commit = "web-dev", r.Development.Commit
+	}
+	u.record(ctx, record)
 }
 
 // check reads the release now (a Docker hub: its image's tags).

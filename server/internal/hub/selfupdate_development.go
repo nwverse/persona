@@ -73,7 +73,7 @@ func (u *updater) candidateNewer(r *update.Published) bool {
 		return false
 	}
 	if r.Development != nil {
-		return r.Development.Commit != u.h.build.Commit
+		return r.Development.BackupID == "" && r.Development.Commit != u.h.build.Commit
 	}
 	return u.h.build.Newer(r.Manifest.Build)
 }
@@ -127,7 +127,10 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 	// A repeated check of the same object retains the attempt identity (including
 	// its bad-build marker), rather than creating a new build to bypass rollback.
 	if u.release != nil && u.release.Development != nil && u.release.Development.BackupID == "" && u.release.Development.Commit == candidate.Commit {
-		r = u.release
+		copy := *u.release
+		manifest := *copy.Manifest
+		copy.Manifest = &manifest
+		r = &copy
 	}
 	for _, record := range u.settings.History {
 		if record.Source == "web-dev" && record.Commit == candidate.Commit && record.Result == "rolled_back" {
@@ -217,28 +220,6 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		}
 	}
 	var backup update.DevelopmentBackup
-	nodes := map[string]string{}
-	for _, platform := range u.developmentPlatforms() {
-		path := filepath.Join(identity.NodeBinaryDir(), "personad-"+platform)
-		info, err := os.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		version, err := os.ReadFile(path + ".version")
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		if err == nil && strings.TrimSpace(string(version)) != u.h.version {
-			continue
-		}
-		nodes[platform] = path
-	}
 	u.mu.Lock()
 	updatedAt := u.currentUpdatedAtLocked()
 	u.mu.Unlock()
@@ -246,7 +227,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		"runtime": u.h.cfg.dir, "candidate": r.Development, "hub_database": u.h.cfg.DatabaseURL,
 		"from_version": u.h.version, "from_commit": u.h.build.Commit, "from_build": u.h.build.Number,
 		"from_updated_at": updatedAt, "platform": runtime.GOOS + "-" + runtime.GOARCH,
-		"executables": programs, "node_packages": nodes}, &backup)
+		"executables": programs, "node_directory": identity.NodeBinaryDir()}, &backup)
 	if err != nil {
 		return nil, err
 	}

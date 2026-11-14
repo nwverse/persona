@@ -7,12 +7,14 @@ import type { HubUpdateStatus } from "../../lib/hub-update";
 
 let status: HubUpdateStatus;
 const saved: unknown[] = [];
+let backupReads = 0;
+const events = new Map<string, (message: { update?: HubUpdateStatus }) => void>();
 vi.mock("../../lib/hub-update", async (original) => ({
   ...await original<typeof import("../../lib/hub-update")>(),
   hubUpdate: async () => status,
   hubUpdateHistory: async () => [],
-  hubUpdateBackups: async () => [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
-    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }],
+  hubUpdateBackups: async () => { backupReads++; return [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
+    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }]; },
   applyHubUpdateBackup: async (id: string) => {
     saved.push({ backup: id });
     status = { ...status, state: "applying_backup", auto: false };
@@ -26,14 +28,16 @@ vi.mock("../../lib/hub-update", async (original) => ({
 }));
 vi.mock("../../lib/store", async (original) => ({
   ...await original<typeof import("../../lib/store")>(),
-  onHubEvent: () => () => { },
+  onHubEvent: (type: string, callback: (message: { update?: HubUpdateStatus }) => void) => {
+    events.set(type, callback); return () => { events.delete(type); };
+  },
   useStore: () => [],
 }));
 vi.mock("./ExtensionDownloadMirrors", () => ({ ExtensionDownloadMirrors: () => null }));
 const { HubSettings } = await import("./HubSettings");
 let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement;
-afterEach(() => { act(() => root?.unmount()); host?.remove(); saved.length = 0; });
+afterEach(() => { act(() => root?.unmount()); host?.remove(); saved.length = 0; backupReads = 0; events.clear(); });
 
 async function mount(state = "available") {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -84,6 +88,17 @@ it("confirms program-only restoration and applies the selected backup", async ()
   await act(async () => confirm.click());
   expect(saved).toEqual([{ backup: "snapshot-fixture" }]);
   expect((host.querySelector('select[aria-label="Update version"]') as HTMLSelectElement).disabled).toBe(true);
+});
+
+it("refreshes backups when an update finishes without a changed build or receipt", async () => {
+  await mount();
+  expect(backupReads).toBe(1);
+  for (const state of ["building", "backing_up", "waiting_idle", "confirming"]) {
+    await act(async () => events.get("hub_update")!({ update: { ...status, state } }));
+  }
+  expect(backupReads).toBe(1);
+  await act(async () => events.get("hub_update")!({ update: { ...status, state: "updated" } }));
+  expect(backupReads).toBe(2);
 });
 
 it.each(["building", "backing_up", "applying_backup"])("keeps channel and duplicate actions disabled while %s", async state => {

@@ -68,9 +68,11 @@ function HubUpdates() {
   }, []);
 
   useEffect(() => {
-    if (status?.source === "web-dev") void loadBackups();
+    if (status?.source === "web-dev") {
+      if (!updateWorking(status)) void loadBackups();
+    }
     else { setBackups([]); setSelectedVersion(""); setConfirmBackup(false); }
-  }, [status?.source, status?.build, status?.backup?.id, loadBackups]);
+  }, [status?.source, status?.state, status?.backup?.id, loadBackups]);
 
   useEffect(() => {
     void load();

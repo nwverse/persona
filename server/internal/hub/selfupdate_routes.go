@@ -122,6 +122,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			}
 			u.settings.Source = *body.Source
 			u.settings.DevelopmentAuto = false // entering a channel never opts into automatic adoption
+			u.settings.DevelopmentBackup = nil
 		}
 		if body.AutoUpdateNodes != nil {
 			enabled := *body.AutoUpdateNodes

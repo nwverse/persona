@@ -2,7 +2,6 @@ package hub
 
 import (
 	"context"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/update"
@@ -18,11 +17,13 @@ func (u *updater) developmentBackups(ctx context.Context) ([]update.DevelopmentV
 	var out struct {
 		Backups []update.DevelopmentVersion `json:"backups"`
 	}
-	err := u.runDevelopment(ctx, "backups", map[string]any{"runtime": u.h.cfg.dir}, &out)
+	if err := u.runDevelopment(ctx, "backups", map[string]any{"runtime": u.h.cfg.dir}, &out); err != nil {
+		return nil, err
+	}
 	if out.Backups == nil {
 		out.Backups = []update.DevelopmentVersion{}
 	}
-	return out.Backups, err
+	return out.Backups, nil
 }
 
 // Explicit program rollback uses the same installer, idle wait and confirmation.
@@ -67,8 +68,8 @@ func (u *updater) beginDevelopmentRestore(ctx context.Context, id string) error 
 		return err
 	}
 	r := &update.Published{
-		Manifest:    &update.Manifest{Version: chosen.Version, Build: chosen.Build, Commit: chosen.Commit, Released: time.Now()},
-		Development: &update.DevelopmentCandidate{Branch: "main", Commit: chosen.Commit, BackupID: chosen.ID},
+		Manifest:    &update.Manifest{Version: chosen.Version, Build: chosen.Build, Commit: chosen.Commit},
+		Development: &update.DevelopmentCandidate{Branch: "main", Commit: chosen.Commit, BackupID: chosen.ID, UpdatedAt: chosen.UpdatedAt},
 	}
 	u.release = r
 	u.running, u.now = true, false

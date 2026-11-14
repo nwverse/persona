@@ -46,7 +46,23 @@ func (u *updater) begin(ctx context.Context, now bool) error {
 		return errNoUpdate
 	}
 	if r.Development == nil {
-		if err := u.unreplaced(r.Manifest); err != nil {
+		// Service discovery can wait for systemctl/plutil. Keep status/settings
+		// responsive, then verify the selection before reserving this object.
+		u.mu.Unlock()
+		err := u.unreplaced(r.Manifest)
+		u.mu.Lock()
+		if u.checking || u.release != r || u.adoptionUnresolved() {
+			u.mu.Unlock()
+			return errUpdateBusy
+		}
+		if u.updateActiveLocked() {
+			if now {
+				u.now = true
+			}
+			u.mu.Unlock()
+			return nil
+		}
+		if err != nil {
 			u.mu.Unlock()
 			return err
 		}
@@ -181,6 +197,9 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		programs[name] = pb
 	}
 	if r.Development != nil {
+		// Every program and Node package has an independent verified copy in
+		// staged. Only the disposable checkout/build output is removed here;
+		// staged survives idle waiting and exec until confirmation/rollback.
 		u.removeDevelopmentBuild(r)
 		u.mu.Lock()
 		r.Source = ""
