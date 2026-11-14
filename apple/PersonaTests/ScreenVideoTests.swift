@@ -142,6 +142,33 @@ struct ScreenVideoTests {
         #expect(second?.totalMs == 17, "capture 0 + encode 5 + network 8 + decode 4")
     }
 
+    /// The round trip to the hub the overlay shows (#6558): the median of the last five from the last 20 s, as the web
+    /// overlay's, so one slow answer doesn't make it jump and an old one isn't shown.
+    @Test func theHubRoundTripIsTheMedianOfTheRecentOnes() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var trips = HubRoundTrips()
+        #expect(trips.median(at: t0) == nil, "none yet: no number")
+        trips.add(ms: .nan, at: t0)
+        trips.add(ms: -1, at: t0)
+        #expect(trips.median(at: t0) == nil, "not a time: not counted")
+        trips.add(ms: 20, at: t0)
+        #expect(trips.median(at: t0) == 20)
+        trips.add(ms: 400, at: t0.addingTimeInterval(2)) // one slow answer
+        trips.add(ms: 22, at: t0.addingTimeInterval(4))
+        #expect(trips.median(at: t0.addingTimeInterval(4)) == 22)
+        for i in 0..<HubRoundTrips.kept { trips.add(ms: 30, at: t0.addingTimeInterval(6 + Double(i))) }
+        #expect(trips.median(at: t0.addingTimeInterval(10)) == 30, "only the last five count")
+        #expect(trips.median(at: t0.addingTimeInterval(10 + HubRoundTrips.fresh + 1)) == nil, "stale: the app was away")
+    }
+
+    /// Bitrates as the overlay writes them: two decimals under 1 Mbps, so a small stream doesn't read as 0.0 (the web's
+    /// rule).
+    @Test func smallBitratesKeepTwoDecimals() {
+        #expect(ScreenStats.mbpsText(12.34) == "12.3 Mbps")
+        #expect(ScreenStats.mbpsText(1) == "1.0 Mbps")
+        #expect(ScreenStats.mbpsText(0.034) == "0.03 Mbps")
+    }
+
     @Test func aFrameThatDoesNotDecodeEnds() async throws {
         var bytes = try Self.prefix(messages: 2)
         bytes += Array(ScreenVideoMessage.frame(VideoFrame(number: 1, captureMicros: 0, flags: .keyframe, sample: Data([0, 0, 0, 4, 1, 2, 3, 4]))).framed())
@@ -197,6 +224,32 @@ struct ScreenVideoTests {
         #expect(link.fallback == nil)
         #expect(said == [.locked, nil])
         link.want(nil)
+    }
+
+    /// ⋯ › Quality only once the helper says it has quality tiers (#6396): the fixture's helper, from before them, says
+    /// nothing, so none is offered; a hello with `features: ["tiers"]` offers it.
+    @MainActor @Test func qualityWaitsForAHelperWithTiers() async throws {
+        let link = ScreenVideoLink()
+        let t = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        link.transport = { _ in t }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { link.showing }
+        #expect(!link.tiers)
+        guard case var .hello(h) = try Self.messages()[0] else { Issue.record("the fixture starts with hello"); return }
+        h.features = ["tiers"]
+        t.feed(Array(ScreenVideoMessage.hello(h).framed()))
+        try await Self.until { link.tiers }
+        link.want(nil)
+    }
+
+    /// ⋯ › Quality needs this app's side of the tiers too (#6396): a release can pair a helper with tiers and an app
+    /// without them, and then nothing is offered. The iPhone's tier policy turns `appSupported` on.
+    @Test func qualityAlsoWaitsForThisAppsTiers() {
+        #expect(!ScreenTiers.appSupported, "on with the iPhone's tier policy (#6396), not before")
+        #expect(!ScreenTiers.offered(helperHasTiers: true))
+        #expect(ScreenTiers.offered(helperHasTiers: true, appSupported: true))
+        #expect(!ScreenTiers.offered(helperHasTiers: false, appSupported: true))
     }
 
     /// Retries that fail as the first drop did keep the same line: it never blinks off and on between them.
