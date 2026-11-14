@@ -21,14 +21,14 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createCacheIdentity, createRunPaths, prepareRunPaths, removeOwnedRunPaths, updaterCacheName } from "./update-test-cache.mjs";
 
 const OLD = "0.9.0";
 const NEW = "0.9.1";
 const PRODUCT = "Persona Update Test";
-const CACHE = "persona-desktop-update-test-updater";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const output = resolve(process.argv[2] ?? join(root, "release", "update-test", "result"));
 const platform = process.platform;
@@ -40,6 +40,8 @@ let appLog = "";
 let work;
 let server;
 let feed;
+let runPaths;
+let cacheIdentity;
 
 const sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds));
 const step = (name, ok, detail) => { steps.push({ name, ok, ...(detail === undefined ? {} : { detail }) }); console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail === undefined ? "" : ` ${typeof detail === "string" ? detail : JSON.stringify(detail)}`}`); };
@@ -138,7 +140,7 @@ async function build(version, port) {
   const target = platform === "win32" ? ["--win", "nsis", "--x64"] : platform === "darwin" ? ["--mac", "zip", `--${process.arch}`] : ["--linux", "AppImage", "--x64"];
   const { code, text } = await run(process.execPath, [
     join(root, "node_modules", "electron-builder", "cli.js"), "--config", "electron-builder.update-test.yml", ...target, "--publish", "never",
-    `-c.publish.url=http://127.0.0.1:${port}/`, `-c.extraMetadata.version=${version}`, `-c.directories.output=${directory}`,
+    `-c.publish.url=http://127.0.0.1:${port}/`, `-c.extraMetadata.version=${version}`, `-c.extraMetadata.name=${cacheIdentity}`, `-c.directories.output=${directory}`,
   ], { seconds: 1500, quiet: true, env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.update-test", CSC_IDENTITY_AUTO_DISCOVERY: "false" } });
   if (code !== 0) console.log(text);
   need(`build ${version}`, code === 0, `exit ${code}`);
@@ -171,7 +173,7 @@ async function watch(profile, seconds, done) {
 
 function launch(executable, profile) {
   // An AppImage unpacks itself where FUSE is missing; keep that inside this test's own directory.
-  const env = { ...process.env, ...(platform === "linux" ? { APPIMAGE_EXTRACT_AND_RUN: "1", TMPDIR: join(work, "tmp") } : {}) };
+  const env = { ...process.env, ...runPaths.environment, ...(platform === "linux" ? { APPIMAGE_EXTRACT_AND_RUN: "1", TMPDIR: join(work, "tmp") } : {}) };
   for (const name of ["PERSONA_HUB_URL", "PERSONA_DESKTOP_DISABLE_UPDATE", "PERSONA_DESKTOP_SMOKE", "ELECTRON_RUN_AS_NODE"]) delete env[name];
   const args = [`--user-data-dir=${profile}`];
   if (platform === "linux") args.push("--no-sandbox", "--disable-gpu");
@@ -208,17 +210,16 @@ async function windowsRunning(image) {
   return text.toLowerCase().includes(image.toLowerCase());
 }
 
-function cacheDirectory() {
-  if (platform === "win32") return join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), CACHE);
-  if (platform === "darwin") return join(homedir(), "Library", "Caches", CACHE);
-  return join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), CACHE);
-}
+const cacheDirectory = () => runPaths.cache;
 
 async function main() {
   await mkdir(output, { recursive: true });
   // The tray is drawn by GTK on Linux, which stops the whole app when there is no display (Xvfb is enough).
   if (platform === "linux") need("a display is available", !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY), "run under Xvfb on a computer without one");
   work = await mkdtemp(join(tmpdir(), "persona-update-test-"));
+  runPaths = createRunPaths(work, createCacheIdentity());
+  await prepareRunPaths(runPaths);
+  cacheIdentity = updaterCacheName(runPaths.identity);
   await mkdir(join(work, "tmp"));
   const { code } = await run(npm, ["run", "build"], { seconds: 600, quiet: true, shell: platform === "win32" });
   need("compile", code === 0);
@@ -263,7 +264,6 @@ async function main() {
   // A saved hub, as on any computer where Persona is already set up; the first-run setup window is not under test here.
   await mkdir(profile, { recursive: true });
   await writeFile(join(profile, "desktop-state.json"), `${JSON.stringify({ hub: `http://127.0.0.1:${port}/` })}\n`, "utf8");
-  await rm(cacheDirectory(), { recursive: true, force: true });
   const first = launch(executable, profile);
   // "Ready" is the moment the update can be installed. On macOS that is Squirrel.Mac's own verdict on the file,
   // which arrives after electron-updater's download event; a refusal arrives as an error instead.
@@ -344,36 +344,45 @@ async function main() {
 }
 
 async function cleanup() {
+  const failures = [];
   for (const child of owned) stop(child);
   await sleep(owned.size > 0 ? 2000 : 0);
   if (server) await new Promise(done => { server.closeAllConnections(); server.close(done); });
-  if (!work) return;
+  if (!work) return failures;
   if (platform === "win32") {
     const uninstaller = join(work, "app", `Uninstall ${PRODUCT}.exe`);
     // _?= makes the uninstaller run in place and wait, so the directory can be removed afterwards.
-    if (await stat(uninstaller).then(() => true, () => false)) await run(uninstaller, ["/S", `_?=${join(work, "app")}`], { seconds: 300, verbatim: true, quiet: true }).catch(() => undefined);
+    if (await stat(uninstaller).then(() => true, () => false)) {
+      const result = await run(uninstaller, ["/S", `_?=${join(work, "app")}`], { seconds: 300, verbatim: true, quiet: true }).catch(error => ({ code: -1, error }));
+      if (result.code !== 0) failures.push(`uninstall: ${result.error?.message ?? `exit ${result.code}`}`);
+    }
   }
-  await rm(cacheDirectory(), { recursive: true, force: true }).catch(() => undefined);
-  // Squirrel.Mac keeps the update it unpacked, accepted or not, under the test build's placeholder app ID.
-  if (platform === "darwin") await rm(join(homedir(), "Library", "Caches", "com.example.persona.desktop.ShipIt"), { recursive: true, force: true }).catch(() => undefined);
-  // The AppImage started by the updater itself (see above) runs with the test build's default profile.
-  if (platform === "linux") await rm(join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "persona-desktop-update-test"), { recursive: true, force: true }).catch(() => undefined);
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try { await rm(work, { recursive: true, force: true }); break; } catch { await sleep(2000); }
+  if (runPaths) failures.push(...await removeOwnedRunPaths(runPaths));
+  let removed = false;
+  for (let attempt = 0; attempt < 5 && !removed; attempt++) {
+    try { await rm(work, { recursive: true, force: true }); removed = true; }
+    catch (error) { if (attempt === 4) failures.push(`temporary directory: ${error.message}`); else await sleep(2000); }
   }
+  return failures;
 }
 
 let result;
 let failure;
 const limit = setTimeout(() => { console.log(`Desktop update test (${platform}): TIMEOUT`); for (const child of owned) stop(child); process.exit(1); }, 75 * 60 * 1000);
+let cleanupFailure;
 try { result = await main(); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
 const profileEvents = work ? await events(join(work, "profile")) : [];
-await cleanup().catch(() => undefined);
+try {
+  const failures = await cleanup();
+  if (failures.length > 0) cleanupFailure = failures.join("; ");
+} catch (error) { cleanupFailure = error instanceof Error ? error.message : String(error); }
+step("cleanup of this run's owned temporary files", !cleanupFailure, cleanupFailure);
+if (cleanupFailure && !failure) failure = `cleanup failed: ${cleanupFailure}`;
 clearTimeout(limit);
 // Temporary and home paths are this computer's business, not the report's.
 let log = appLog;
-let report = JSON.stringify({ ok: !failure, platform, arch: process.arch, ...(failure ? { failure } : {}), ...result, steps, events: profileEvents, requests }, null, 2);
-for (const [path, name] of [[work, "<temporary directory>"], [homedir(), "<home>"]]) {
+let report = JSON.stringify({ ok: !failure, platform, arch: process.arch, ...(failure ? { failure } : {}), ...(cleanupFailure ? { cleanup: "failed", cleanupFailure } : { cleanup: "succeeded" }), ...result, steps, events: profileEvents, requests }, null, 2);
+for (const [path, name] of [[work, "<temporary directory>"], [runPaths?.home, "<temporary home>"]]) {
   if (!path) continue;
   report = report.replaceAll(JSON.stringify(path).slice(1, -1), name).replaceAll(path, name);
   log = log.replaceAll(path, name);
