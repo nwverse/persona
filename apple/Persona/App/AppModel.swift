@@ -1760,6 +1760,9 @@ final class AppModel {
 
     private func didConnect(_ group: String) {
         guard let link = link(group) else { return }
+        #if DEBUG || PERF_SIGNPOST
+        PerfTrace.event("Connected")
+        #endif
         registerPhone(link)
         // Phone tool results answered while the socket was down: the hub matches them to their calls by call_id (#4456).
         toolResults.flush(group: group, on: link.live)
@@ -3430,8 +3433,14 @@ final class AppModel {
 
     private func restoreSnapshot() {
         var allMachines: [Machine] = [], allSessions: [Session] = [], allInteractions: [Interaction] = []
+        #if DEBUG || PERF_SIGNPOST
+        var restoredAny = false
+        #endif
         for g in groupIDs {
             guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self, in: stateFolder) else { continue }
+            #if DEBUG || PERF_SIGNPOST
+            restoredAny = true
+            #endif
             allMachines += snap.machines.map { var m = $0; m.group = g; return m }
             allSessions += snap.sessions.map { var s = $0; s.group = g; return s }
             allInteractions += snap.interactions.map { var i = $0; i.group = g; return i }
@@ -3449,6 +3458,9 @@ final class AppModel {
         interactions = Dictionary(allInteractions.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         assistantConfig = heldAssistant(hub?.group ?? "")
         followedScope = assistantScope // what was just restored was worked out for it
+        #if DEBUG || PERF_SIGNPOST
+        if restoredAny { PerfTrace.event("Snapshot restored") }
+        #endif
     }
 
     /// The snapshot waiting for its turn, written now: the app is going to the background or quitting.

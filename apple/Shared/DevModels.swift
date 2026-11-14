@@ -80,6 +80,42 @@ nonisolated struct GitWriteResult: Decodable, Sendable {
     var commit: GitCommit?
     /// What git said (a push's summary).
     var output: String?
+    /// The stash list after a stash write (#7015).
+    var stashes: [GitStashEntry]?
+}
+
+/// A branch to switch to (#7015, `git/branches`): local ones, then remote ones without a local branch of the same name.
+nonisolated struct GitBranch: Decodable, Identifiable, Hashable, Sendable {
+    var name: String
+    var remote: Bool?
+    var current: Bool?
+    var upstream: String?
+    var hash: String
+    var subject: String
+    var date: Date?
+    var id: String { (remote == true ? "r:" : "l:") + name }
+
+    /// What a switch asks for: a remote branch's name without its remote ("origin/release" → "release"); the node
+    /// makes a local branch tracking it.
+    var switchName: String {
+        guard remote == true, let slash = name.firstIndex(of: "/") else { return name }
+        return String(name[name.index(after: slash)...])
+    }
+}
+
+/// One stash (#7015). `oid` names it whatever the stack does since: a node without it gets no writes.
+nonisolated struct GitStashEntry: Decodable, Identifiable, Hashable, Sendable {
+    var index: Int
+    var oid: String?
+    var message: String
+    var date: Date?
+    var id: String { (oid ?? "legacy") + ":\(index)" }
+
+    /// The node said which stash this is (40 or 64 hex digits), so apply, pop and drop can't reach another one.
+    var hasIdentity: Bool {
+        guard let oid, oid.count == 40 || oid.count == 64 else { return false }
+        return oid.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+    }
 }
 
 nonisolated struct GitPullResult: Codable, Hashable, Sendable {
@@ -190,6 +226,30 @@ extension APIClient {
     /// Pushes the branch to its upstream, never forced; setUpstream makes one on origin for a branch without one.
     func gitPush(machine: String, cwd: String, setUpstream: Bool) async throws -> GitWriteResult {
         try await post(mp(machine) + "/git/push", body: GitPushRequest(cwd: cwd, setUpstream: setUpstream), timeout: 100)
+    }
+    private struct BranchesResponse: Decodable { var branches: [GitBranch] }
+    /// The branches to switch to (#7015): local ones, then remote ones without a local one, newest first.
+    func gitBranches(machine: String, cwd: String) async throws -> [GitBranch] {
+        try await get(mp(machine) + "/git/branches", query: ["cwd": cwd], as: BranchesResponse.self).branches
+    }
+    private struct GitSwitchRequest: Encodable { var cwd, branch: String; var create: Bool }
+    /// Switches to branch, or makes it here with create. Uncommitted files the branch has differently are refused
+    /// (`git_conflict` with the files), never overwritten; the other uncommitted changes go along.
+    func gitSwitch(machine: String, cwd: String, branch: String, create: Bool) async throws -> GitWriteResult {
+        try await post(mp(machine) + "/git/switch", body: GitSwitchRequest(cwd: cwd, branch: branch, create: create), timeout: 100)
+    }
+    private struct GitStashRequest: Encodable {
+        var cwd, op: String
+        var index: Int?
+        var oid, message: String?
+        var untracked: Bool?
+    }
+    /// A stash write (op push, list, apply, pop or drop): apply, pop and drop name the stash by index and oid, so a
+    /// stack that moved is refused (`git_stash_stale`).
+    func gitStash(machine: String, cwd: String, op: String, entry: GitStashEntry? = nil, message: String? = nil,
+                  untracked: Bool? = nil) async throws -> GitWriteResult {
+        try await post(mp(machine) + "/git/stash", body: GitStashRequest(cwd: cwd, op: op, index: entry?.index, oid: entry?.oid,
+                                                                       message: message, untracked: untracked), timeout: 100)
     }
     func gitDiff(machine: String, cwd: String, path: String, staged: Bool) async throws -> GitDiff {
         try await get(mp(machine) + "/git/diff", query: ["cwd": cwd, "path": path, "staged": staged ? "1" : "0"])
