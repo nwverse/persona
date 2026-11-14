@@ -70,8 +70,11 @@ final class SidebarLayoutTests: XCTestCase {
         let tabs = app.buttons.matching(NSPredicate(format: "label == 'Agents' OR label == 'Persona'")).allElementsBoundByIndex
             .filter { $0.exists && $0.frame.maxY < main.frame.minY - 20 }
         XCTAssertTrue(tabs.isEmpty, "the tabs are still there: \(tabs.map(\.label))")
-        // New Chat and Settings at the foot.
+        // New Chat and Settings at the foot. That New Chat is the only one (#4206): none on the page's top bar or on the
+        // Persona Chats heading.
         XCTAssertTrue(element("sidebar-new").exists && element("sidebar-settings").exists)
+        XCTAssertFalse(element("assistant-new").exists, "a New Chat on the page beside the sidebar")
+        XCTAssertFalse(element("sidebar-chats-new").exists, "a New Chat on the Persona Chats heading")
         shot("home")
 
         // Inbox replaces the conversation beside the sidebar.

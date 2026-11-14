@@ -282,6 +282,7 @@ struct AssistantView: View {
                             sidebarShown: sidebarColumnShown,
                             sidebarCounts: embedded,
                             drawerTitle: drawerPage,
+                            newChatInSidebar: embedded && widthClass == .regular || padPlaces,
                             openSidebar: toggleSidebar,
                             // In a health conversation New opens Health's new conversation page, whose list has the
                             // space's past ones (#4329); elsewhere the assistant's.

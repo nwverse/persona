@@ -840,14 +840,16 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   (its switcher) and Search; the main conversation held at the top while the rest scrolls (as the web's, #5581); one
   list, the Agents list (`AgentsList`, `sidebarRows`) with the Persona sidebar's rows over its own
   (`AssistantSidebar(part: .rows)`): **Pages** (Recordings, Inbox, To-dos, Scheduled Tasks, Knowledge, Health, Machines,
-  Messages when it is on, the extensions' pages) and **Persona Chats** (✎ New Chat on the heading, Pinned, Recent, All
-  Chats), each heading folding its section (remembered, `sidebar.fold.places` / `sidebar.fold.chats`; folded Pages keeps
+  Messages when it is on, the extensions' pages) and **Persona Chats** (Pinned, Recent, All Chats), each heading folding
+  its section (remembered, `sidebar.fold.places` / `sidebar.fold.chats`; folded Pages keeps
   the Inbox and To-dos counts); then the Agents' heading with the list's ⋯, Personal Agents and New Session, the quick
   filters and the grouping, Needs You and the groups, the same rows as the Agents page. At the foot: "N need you ↓"
   (`SidebarNeedsJump`, the count the Separate layout's switch and tabs show, `agentsWaiting`) in a band of its own above
   the usage, so it never covers a row; a tap scrolls the list to the Agents' Needs You, the arrow says which way it is.
   Then the two fullest subscription accounts (`SidebarUsageStrip`, `UsageWindows.top`; a tap opens Machines), New Chat
-  and Settings. The parts share their search and dialogs through `AssistantSidebarUI`, presented around the column
+  and Settings. That New Chat is the only one wherever the sidebar has it at its foot beside the page (#4206, the owner):
+  the page's top bar keeps its place empty, so the face stays in the middle (`AssistantTopBar.newChatInSidebar`; the
+  iPad's Persona column in the Separate layout too), and the Persona Chats heading has none. A phone keeps the top bar's. The parts share their search and dialogs through `AssistantSidebarUI`, presented around the column
   (`AssistantSidebarPresenters`): a sheet on a list row went with the row as it scrolled away. Search's words filter
   Persona's chats and the Agents under them.
 - **Its color** (`UnifiedSidebar.columnColor`, #4206, #4855): one neutral near-white / near-black down the whole column,
