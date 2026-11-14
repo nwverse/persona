@@ -1,7 +1,7 @@
 // Real workflow board with synthetic HTTP/WebSocket responses only. No live hub, Agent or browser profile.
 // node web/e2e/workspace-board-bulk.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
 
@@ -56,16 +56,18 @@ function applyChanges(board, request) {
   return next;
 }
 
-async function open(browser, size, theme, mode = "normal") {
-  const run = { size, theme, mode, writes: [], errors: [], blocked: [], hellos: 0 };
+async function open(browser, size, theme, mode = "normal", language = "en", textSize = "standard") {
+  const strings = JSON.parse(await readFile(new URL(`../src/i18n/locales/${language}/workspaceboard.json`, import.meta.url), "utf8"));
+  const run = { size, theme, mode, language, textSize, writes: [], errors: [], blocked: [], hellos: 0 };
   result.runs.push(run);
   const context = await browser.newContext({ viewport: size === "wide" ? { width: 1440, height: 1000 } : { width: 390, height: 844 }, colorScheme: theme, reducedMotion: "reduce", hasTouch: size === "narrow", isMobile: size === "narrow", serviceWorkers: "block" });
-  await context.addInitScript(({ theme }) => {
+  await context.addInitScript(({ theme, language, textSize }) => {
     localStorage.setItem("persona.token", "synthetic-board-token");
-    localStorage.setItem("persona.language", "en");
+    localStorage.setItem("persona.language", language);
+    localStorage.setItem("persona.text-size", textSize);
     localStorage.setItem("persona.theme", theme);
     localStorage.setItem("persona.workspace-board.view", "manual");
-  }, { theme });
+  }, { theme, language, textSize });
   let board = fixture(mode), rejection;
   await context.route("**/*", async (route) => {
     const request = route.request(), url = new URL(request.url());
@@ -120,7 +122,7 @@ async function open(browser, size, theme, mode = "normal") {
     if (message.type() === "error" && !/Failed to load resource: the server responded with a status of (409|500)/.test(message.text())) run.errors.push(message.text());
   });
   await page.goto(`${base.origin}/workspace-board`);
-  await page.getByRole("heading", { name: "Workflow board", exact: true }).waitFor();
+  await page.getByRole("heading", { name: strings.title, exact: true }).waitFor();
   await page.locator('[data-card-id="alpha"]').waitFor();
   assert.equal(new URL(page.url()).pathname, "/workspace-board");
   assert((await page.title()).length > 0, "The application has a page title");
@@ -129,28 +131,29 @@ async function open(browser, size, theme, mode = "normal") {
     await page.waitForTimeout(250); // Finish the UI's finite color/shadow transitions before capture.
     assert.equal(await page.locator("vite-error-overlay").count(), 0, "No framework overlay");
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "No horizontal page overflow");
-    const filename = `${size}-${theme}-${mode}-${state}.png`;
+    const variant = `${language !== "en" ? `-${language}` : ""}${textSize !== "standard" ? `-${textSize}` : ""}`;
+    const filename = `${size}-${theme}-${mode}${variant}-${state}.png`;
     await page.screenshot({ path: join(output, filename) });
     result.screenshots.push(filename);
   };
   const chooseColumn = async (value) => {
-    const picker = page.getByRole("combobox", { name: "Choose a column", exact: true });
+    const picker = page.getByRole("combobox", { name: strings.pick_column, exact: true });
     if (await picker.isVisible()) await picker.selectOption(value);
   };
   const select = async (...names) => {
-    if (!await page.getByRole("button", { name: "Done selecting", exact: true }).count()) await page.getByRole("button", { name: "Select cards", exact: true }).click();
-    for (const name of names) await page.getByRole("checkbox", { name: `Select ${name} workspace`, exact: true }).check();
+    if (!await page.getByRole("button", { name: strings.selection_done, exact: true }).count()) await page.getByRole("button", { name: strings.select_cards, exact: true }).click();
+    for (const name of names) await page.getByRole("checkbox", { name: strings.select_card.replace("{card}", `${name} workspace`), exact: true }).check();
   };
   const undo = async () => {
     const rev = board.revision;
-    await page.getByRole("button", { name: "Undo last change", exact: true }).click();
+    await page.getByRole("button", { name: strings.bulk_undo, exact: true }).click();
     await waitUntil(() => board.revision > rev, "Undo reached the fixture");
-    await page.getByRole("button", { name: "Undo last change", exact: true }).waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: strings.bulk_undo, exact: true }).waitFor({ state: "hidden" });
   };
   const finish = async () => {
-    if (await page.getByRole("button", { name: "Done selecting", exact: true }).count()) await page.getByRole("button", { name: "Done selecting", exact: true }).click();
+    if (await page.getByRole("button", { name: strings.selection_done, exact: true }).count()) await page.getByRole("button", { name: strings.selection_done, exact: true }).click();
   };
-  return { context, page, run, shot, chooseColumn, select, undo, finish, getBoard: () => board, rejectNext: (status) => { rejection = status; } };
+  return { context, page, run, shot, strings, chooseColumn, select, undo, finish, getBoard: () => board, rejectNext: (status) => { rejection = status; } };
 }
 
 async function normal(browser, size, theme) {
@@ -276,10 +279,47 @@ async function refusedWrite(browser, status) {
   } finally { await x.context.close(); }
 }
 
+async function presentation(browser, language, textSize) {
+  const x = await open(browser, "narrow", "dark", "normal", language, textSize);
+  const { page, strings: s, run } = x;
+  try {
+    if (textSize === "large") assert.equal(await page.locator("html").getAttribute("data-text-size"), "large", "The app's real Large text setting is active");
+    await x.shot("presentation-initial");
+    await page.getByRole("button", { name: s.select_cards, exact: true }).click();
+    const alpha = page.getByRole("checkbox", { name: s.select_card.replace("{card}", "Alpha workspace"), exact: true });
+    assert.equal(await alpha.evaluate((el) => el === document.activeElement), true, "Entering selection focuses the first visible checkbox");
+    await x.select("Alpha", "Beta");
+    await page.getByText(s.selected_count.replace("{count}", "2"), { exact: true }).waitFor();
+    const actions = page.getByRole("group", { name: s.selection_actions, exact: true });
+    const bounds = await actions.getByRole("button").evaluateAll((els) => els.map((el) => {
+      const rect = el.getBoundingClientRect();
+      return { label: el.textContent, left: rect.left, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight };
+    }));
+    assert(bounds.every((b) => b.left >= 0 && b.right <= b.width && b.bottom <= b.height), "Every bulk action fits in the narrow viewport");
+    assert(!(await actions.innerText()).includes("workspaceboard."), "Localized controls never expose translation keys");
+    await x.shot("presentation-selected");
+    await actions.getByRole("button", { name: s.bulk_archive, exact: true }).click();
+    await waitUntil(() => x.getBoard().cards.filter((item) => ["alpha", "beta"].includes(item.id)).every((item) => item.archived), "Localized Archive performs one batch");
+    assert.equal(run.writes.length, 1);
+    await x.undo();
+    assert(x.getBoard().cards.every((item) => !item.archived));
+    await x.finish();
+    assert.equal(await page.getByTestId("board-select-cards").evaluate((el) => el === document.activeElement), true, "Leaving selection returns focus to its entry button");
+    assert.deepEqual(run.errors, []);
+    assert.deepEqual(run.blocked, []);
+    result.checks.push(`narrow/dark/${language}/${textSize}: real preference, localized controls, focus handoff, viewport fit, Archive and Undo`);
+  } catch (error) {
+    await page.screenshot({ path: join(output, `${language}-${textSize}-failure.png`) }).catch(() => {});
+    await writeFile(join(output, `${language}-${textSize}-failure.txt`), await page.locator("body").innerText().catch(() => "Page unavailable"));
+    throw error;
+  } finally { await x.context.close(); }
+}
+
 let browser;
 try {
   browser = await chromium.launch({ ...(executable ? { executablePath: executable } : { channel: "chrome" }), headless: true });
   for (const theme of ["light", "dark"]) for (const size of ["wide", "narrow"]) await normal(browser, size, theme);
+  for (const [language, textSize] of [["en", "large"], ["zh-Hans", "standard"], ["ja", "standard"]]) await presentation(browser, language, textSize);
   for (const status of [500, 409]) await refusedWrite(browser, status);
   for (const mode of ["legacy", "readonly"]) {
     const x = await open(browser, "wide", "light", mode);
