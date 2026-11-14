@@ -31,8 +31,8 @@ struct RevealPlanTests {
         String(decoding: Array(s.utf16.dropFirst(r.lowerBound).prefix(r.count)), as: UTF16.self)
     }
 
-    /// At every length of the text as it grows: the text up to a block's end splits into the blocks before it, with that
-    /// block as the tail, exactly as `split` cuts the whole text.
+    /// At every length of the text as it grows: the text up to a block's end splits into the blocks before it,
+    /// with that block as the tail, exactly as `split` cuts the whole text.
     @Test func blocksAreSplitsPieces() {
         let text = Self.reply
         for n in stride(from: 1, through: text.utf16.count, by: 1) {

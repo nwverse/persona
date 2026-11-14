@@ -114,7 +114,9 @@ public nonisolated struct RevealPlan: Equatable, Sendable {
     /// UTF-16 length of what is shown.
     public static func make(blocks: [Range<Int>], lineEnds: [Int], shown: Int) -> RevealPlan {
         guard let last = blocks.last else { return RevealPlan(layoutEnd: 0, blockStart: 0, fraction: 1) }
-        if shown >= last.upperBound { return RevealPlan(layoutEnd: last.upperBound, blockStart: last.lowerBound, fraction: 1) }
+        if shown >= last.upperBound {
+            return RevealPlan(layoutEnd: last.upperBound, blockStart: last.lowerBound, fraction: 1)
+        }
         // The block the shown part ends in: the last one starting before it (a shown part ending in the blank line
         // after a block is that block, whole).
         let block = blocks.last { $0.lowerBound < shown } ?? blocks[0]

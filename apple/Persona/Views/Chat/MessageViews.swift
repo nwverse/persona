@@ -1140,8 +1140,9 @@ private struct StreamingMarkdown: View, Equatable {
     }
 }
 
-/// The block being written, laid out to the end of the line the reveal is in and drawn as far as it has come (`fraction`). The only
-/// view that reads the frames: a frame changes its text renderer, which redraws the text without laying it out.
+/// The block being written, laid out to the end of the line the reveal is in and drawn as far as it has come
+/// (`fraction`). The only view that reads the frames: a frame changes its text renderer (which still takes part in
+/// layout, #7135).
 private struct RevealedTail: View {
     var tail: String
     var reveal: StreamRevealClock?
