@@ -965,7 +965,10 @@ struct AssistantSidebar: View {
                 EmptyView()
             } tally: { placesTally }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(UnifiedSidebar.columnSpace)).minX } action: { x in
-                if ui.rowsLeading != x { ui.rowsLeading = x }
+                // Only where the rows are: as the column slides away its space moves and this read -376 for a moment,
+                // which laid the head and the main conversation out again twice per fold, once 376 pt off (#4206).
+                guard x >= 0, ui.rowsLeading != x else { return }
+                ui.rowsLeading = x
             }
             if !placesFolded { actions(all) }
             // No New Chat on the heading: the column has one, its foot's (#4206, the owner).
