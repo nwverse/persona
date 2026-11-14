@@ -230,11 +230,14 @@ fun ChatLinkHost(
                         }
                     }, onWebpage = { nativeWebpage = it }) { title, whole -> nativeTitle = title; nativeWhole = whole }
                 }
-                if (view != null) DisposableEffect(view, picks) {
-                    view.picks = picks
-                    view.onPick = picked
-                    view.onExternal = { external = it }
-                    onDispose { pool.release(view) }
+                if (view != null) {
+                    // Only the view going away releases it: a change of picks must not destroy the page being shown.
+                    SideEffect { view.picks = picks }
+                    DisposableEffect(view) {
+                        view.onPick = picked
+                        view.onExternal = { external = it }
+                        onDispose { pool.release(view) }
+                    }
                 }
                 fun close() { scope.launch { drag.animateTo(LinkDetent.Hidden) } }
                 fun back() { if (view != null && !view.gone && view.canGoBack()) view.goBack() else close() }

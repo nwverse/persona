@@ -18,9 +18,13 @@ import androidx.webkit.*
 import java.util.concurrent.Executors
 import org.json.JSONTokener
 import kotlinx.coroutines.CompletableDeferred
+import persona.core.domain.ports.PortLinks
 
 /** Owned by one chat host; never retains a departed activity or a different account. */
-internal class ChatWebViewPool(private val context: Context) {
+internal class ChatWebViewPool(
+    private val context: Context,
+    private val viewFactory: (Context) -> ChatSelectionWebView = { ChatSelectionWebView(it) },
+) {
     /** At most this many pages live (each is a renderer): the one on screen and up to three preloaded links. */
     private val limit = 4
     private val pages = LinkedHashMap<String, ChatSelectionWebView>(limit, 0.75f, true)
@@ -88,13 +92,24 @@ internal class ChatWebViewPool(private val context: Context) {
         trim()
     }
 
+    fun existing(url: String): ChatSelectionWebView? = pages[url]
+
     fun release(view: ChatSelectionWebView) {
-        if (view !in pages.values) return
+        val entry = pages.entries.firstOrNull { it.value === view } ?: return
+        val url = entry.key
         view.onPick = null; view.onExternal = null
         mute(view, true)
         (view.parent as? ViewGroup)?.removeView(view)
         view.onPause()
         if (active === view) active = null
+        if (url in noCache) return
+
+        // An ordinary view serves one opening: its browsed page and history go, and a fresh view waits on the original URL.
+        pages.remove(url)
+        speculative.remove(url)
+        view.destroy()
+        // A loopback address is the phone's own: never loaded ahead, even when it was not opened as a forwarded port.
+        if (PortLinks.link(url) == null) preload(url)
     }
 
     private fun trim() {
@@ -126,7 +141,7 @@ internal class ChatWebViewPool(private val context: Context) {
     }
 
     @Suppress("SetJavaScriptEnabled")
-    private fun create() = ChatSelectionWebView(context).apply {
+    private fun create() = viewFactory(context).apply {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.allowFileAccess = false
@@ -206,7 +221,7 @@ internal enum class ChatLinkPick(@StringRes val label: Int) {
     Edit(R.string.chat_web_pick_edit), Context(R.string.chat_web_pick_context), HandToPersona(R.string.chat_web_pick_hand),
 }
 
-internal class ChatSelectionWebView(context: Context) : WebView(context) {
+internal open class ChatSelectionWebView(context: Context) : WebView(context) {
     /** The items put first in the text selection menu, in this order. */
     var picks: List<ChatLinkPick> = listOf(ChatLinkPick.Edit, ChatLinkPick.Context)
     var onPick: ((ChatLinkPick, ChatLinkContext) -> Unit)? = null
