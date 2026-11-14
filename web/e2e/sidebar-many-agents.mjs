@@ -14,6 +14,7 @@ assert(/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(web ?? "") && output, "usa
 mkdirSync(output, { recursive: true });
 // the list's metrics (web/src/ui/list-metrics.ts windowHead / windowPart)
 const HEAD = 30, PART = 20;
+// the first rows and the parts around the open row (the list's last row, always drawn, comes on top where it counts)
 const BOUND = HEAD + 3 * PART;
 const results = [];
 let browser;
@@ -111,7 +112,8 @@ try {
   {
     const { context, page } = await open({ width: 1280, height: 800, theme: "light", unfold: true });
     await page.goto(`${web}/overview`);
-    await page.waitForSelector(`${group("aside")} [data-rows-part]`, { timeout: 60_000 });
+    // a part's mark is hidden: attached is all it can be
+    await page.waitForSelector(`${group("aside")} [data-rows-part]`, { state: "attached", timeout: 60_000 });
     await settle(page);
     const shown = await page.evaluate(() => document.querySelectorAll('aside [data-tree-branch="todo:none"] a[href^="/s/"]').length);
     check("the sidebar's open long group draws a bounded number of rows", shown <= BOUND, `${shown} rows`);
@@ -162,7 +164,7 @@ try {
       const r = row.getBoundingClientRect(), b = scroller.getBoundingClientRect();
       return { drawn: true, inView: r.top >= b.top && r.bottom <= b.bottom, rows };
     }, target);
-    check("an Agent opened deep in a folded group: the group opens and its row is in view", reveal.drawn && reveal.inView && reveal.rows <= BOUND + 2 * PART, `${reveal.rows} rows drawn`);
+    check("an Agent opened deep in a folded group: the group opens and its row is in view", reveal.drawn && reveal.inView && reveal.rows <= BOUND + 2 * PART + 1, `${reveal.rows} rows drawn`);
     await page.screenshot({ path: join(output, "sidebar-folded-open-agent-wide.png") });
     await context.close();
   }
