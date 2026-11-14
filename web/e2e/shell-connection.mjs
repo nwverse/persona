@@ -6,7 +6,8 @@
 //   38  a credential the hub stops taking while the page is open goes to the sign-in page with "signed out" within
 //       seconds (the fake hub's /mock/reject), not "can't reach the hub" for a minute
 //   39  /a/<an id the hub doesn't have> says the conversation isn't there, with the way back and no box left loading
-//   42  an address that is no page says so and keeps the address, instead of drawing Overview under it
+//   42  an address that is no page says so and keeps the address, instead of drawing Overview under it; a knowledge
+//       entry the hub doesn't have says so in the shared empty state, not on the entry's page with its id
 //   86  the Offline state's English line wraps between words ("make sure the" is never cut inside "the")
 //   87  the reconnect pill covers none of the page's fields, buttons or titles (the fake hub's /mock/down), on a phone
 //       and a wide window
@@ -38,7 +39,7 @@ const watchdog = setTimeout(() => { console.log("VERDICT TIMEOUT shell connectio
 
 const locales = join(dirname(fileURLToPath(import.meta.url)), "../src/i18n/locales");
 const words = (lang, ns) => JSON.parse(readFileSync(join(locales, lang, `${ns}.json`), "utf8"));
-const zh = { app: words("zh-Hans", "app"), sidebar: words("zh-Hans", "sidebar"), notFound: words("zh-Hans", "not-found"), login: words("zh-Hans", "login") };
+const zh = { app: words("zh-Hans", "app"), sidebar: words("zh-Hans", "sidebar"), notFound: words("zh-Hans", "not-found"), login: words("zh-Hans", "login"), agents: words("zh-Hans", "agents-agentsview"), kbDetail: words("zh-Hans", "knowledge-kbdetail") };
 const en = { app: words("en", "app") };
 
 const failures = [];
@@ -130,10 +131,24 @@ try {
     await shoot(p, `42-unknown-${theme}`);
     await p.click(`main button:has-text("${zh.notFound.page_back}")`);
     check(await p.waitForURL((u) => u.pathname === "/overview", { timeout: 10_000 }).then(() => true, () => false), `42 ${theme}: with the way to Overview`, p.url());
+    await p.goto(`${web}/kb/people/does-not-exist`);
+    const kbGone = await p.waitForFunction((title) => document.querySelector("main [role=status]")?.textContent?.includes(title), zh.notFound.kb_title, { timeout: 15_000 }).then(() => true, () => false);
+    check(kbGone, `42 ${theme}: a knowledge entry the hub doesn't have says it isn't there`);
+    // the entry's side of the page (beside the list on a wide window)
+    const kbPage = await p.evaluate(() => {
+      const side = document.querySelector("main [role=status]")?.closest("section");
+      return { h1: side?.querySelectorAll("h1").length, disabled: side?.querySelectorAll("button:disabled").length };
+    });
+    check(kbPage.h1 === 0 && kbPage.disabled === 0, `42 ${theme}: not the entry's page (no title made of its id, no buttons that can't be used)`, JSON.stringify(kbPage));
+    await sleep(400); // the empty state fades in
+    await shoot(p, `42-kb-gone-${theme}`);
     await p.goto(`${web}/a/does-not-exist`);
-    const missing = await p.waitForFunction((title) => document.querySelector("main h1")?.textContent === title, zh.notFound.agent_title, { timeout: 15_000 }).then(() => true, () => false);
+    const missing = await p.waitForFunction((title) => document.querySelector("main [role=status]")?.textContent?.includes(title), zh.notFound.agent_title, { timeout: 15_000 }).then(() => true, () => false);
     check(missing, `39 ${theme}: /a/<missing> says the conversation isn't there`);
+    const agentPage = await p.evaluate((title) => ({ h1: document.querySelector("main h1")?.textContent, said: document.querySelector("main")?.innerText.split(title).length - 1 }), zh.notFound.agent_title);
+    check(agentPage.h1 === zh.agents.title && agentPage.said === 1, `39 ${theme}: the header names the list, and the missing conversation is said once`, JSON.stringify(agentPage));
     check(await p.locator("main textarea").count() === 0, `39 ${theme}: no message box left loading`);
+    await sleep(400); // the empty state fades in
     await shoot(p, `39-missing-agent-${theme}`);
     await p.click(`main button:has-text("${zh.notFound.agent_back}")`);
     check(await p.waitForURL((u) => u.pathname === "/a", { timeout: 10_000 }).then(() => true, () => false), `39 ${theme}: with the way back to the list`, p.url());

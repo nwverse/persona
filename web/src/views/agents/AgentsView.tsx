@@ -331,8 +331,9 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
 function MissingAgent({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   return (
     <div className="flex h-full flex-col">
-      <Header title={t("not-found.agent_title")} onToggleSidebar={onToggleSidebar} />
-      {/* as a space that is gone (SpacePage): the shared empty state and the way back, no composer */}
+      {/* as a space that is gone (SpacePage): the header names where this is (the list's name), the shared empty state
+          says what is missing once, with the way back, and there is no composer */}
+      <Header title={t("agents-agentsview.title")} onToggleSidebar={onToggleSidebar} />
       <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" role="status">
         <Empty
           icon="chat"

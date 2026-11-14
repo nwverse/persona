@@ -56,6 +56,7 @@ import { askPersona } from "../../lib/outbox";
 import { openNewAgent } from "../../lib/new-agent";
 import { DayDialog, MessageView, MomentDialog, TagEditor } from "./KBDialogs";
 import { ErrorBox } from "./KBList";
+import { Empty } from "../session/files/parts";
 import { Badges, Card, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
@@ -160,7 +161,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
       if (!valid()) return false;
       const missing = err instanceof ApiError && err.status === 404;
       setGone(missing);
-      if (!isAbort(err)) setError(missing ? t("not-found.kb_gone") : errorText(err));
+      if (!isAbort(err)) setError(errorText(err));
       throw err;
     }
   }, [kind, id, query, auth, current]);
@@ -208,6 +209,28 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const recent = d?.kind === "chats" ? parseRecent(d.recent) : [];
   const into = typeof d?.meta?.merged_into === "string" ? d.meta.merged_into : "";
   const moments = d?.moments ?? [];
+
+  // An entry the hub has no such entry for: the shared empty state and the way back, as a page or a personal Agent's
+  // conversation that isn't there (NotFound, AgentsView), not the entry's page with its id, disabled buttons and a red
+  // box (web usability audit item 42). The header names the list it would be in.
+  if (gone && !d)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-1.5 border-b border-line px-3 sm:px-4">
+          <IconButton icon="sidebar" label={t("knowledge-kbdetail.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
+          <IconButton icon="chevronLeft" label={t("knowledge-kbdetail.back")} onClick={onBack} className="@3xl:hidden" />
+          <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink-2">{isKind(kind) ? kindTitle(kind) : t("app.title_kb")}</span>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" role="status">
+          <Empty
+            icon="book"
+            title={t("not-found.kb_title")}
+            detail={t("not-found.kb_detail")}
+            action={<Button tone="secondary" icon="arrowLeft" onClick={onBack}>{t("knowledge-kbdetail.back")}</Button>}
+          />
+        </div>
+      </div>
+    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -267,7 +290,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
           )}
           {(d ? reloadError : error) && (
             <div className="mt-6">
-              <ErrorBox text={d ? reloadError : error} onRetry={!d && gone ? undefined : () => setRetry((x) => x + 1)} />
+              <ErrorBox text={d ? reloadError : error} onRetry={() => setRetry((x) => x + 1)} />
             </div>
           )}
 

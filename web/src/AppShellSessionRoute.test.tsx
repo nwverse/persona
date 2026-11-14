@@ -252,3 +252,25 @@ describe("an address that is no page (web usability audit item 42)", () => {
     expect(location.pathname).toBe("/overview");
   });
 });
+
+describe("the reconnect pill (web usability audit item 87)", () => {
+  it("is a strip at the top of the page's column that pushes the page down, never a layer over its header or fields", async () => {
+    await open("/overview");
+    act(() => Object.assign(getState(), { loaded: true, conn: "offline" }));
+    act(() => root.render(<App />));
+    await flush();
+    const main = host.querySelector("main")!;
+    const pill = main.querySelector("[data-connection-pill]");
+    expect(pill).not.toBeNull();
+    // the strip comes first in <main>'s column, and the page's box after it
+    const strip = main.firstElementChild!;
+    expect(strip.contains(pill)).toBe(true);
+    expect(strip.nextElementSibling?.contains(pill)).toBe(false);
+    expect(main.className).toMatch(/\bflex-col\b/);
+    // nothing between the pill and <main> takes it out of the flow
+    for (let el = pill!.parentElement; el && el !== main; el = el.parentElement) expect(el.className).not.toMatch(/\b(absolute|fixed)\b/);
+    // once still, the strip doesn't clip the pill's details, which open over the page
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    expect(strip.querySelector(".overflow-hidden")).toBeNull();
+  });
+});

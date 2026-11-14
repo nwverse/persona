@@ -176,6 +176,7 @@ export function TodosView({
   }, [everyTodo, ownTodos, selectedId]);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosError = useStore((s) => s.todosError);
+  const todosSupported = useStore((s) => s.todosSupported);
   // the current assistant offline (several assistants): the hub's merged list leaves it out, so none here means it
   // couldn't answer; the page says so instead of the empty one
   const offline = useShownOffline();
@@ -231,8 +232,9 @@ export function TodosView({
     if (selectedId) setActiveId(selectedId);
   }, [selectedId]);
   // A link to a to-do the list doesn't have (deleted, or an old link): said once, and the address loses it, so another
-  // to-do is not shown under it (web usability audit item 42)
-  const linkGone = todosLoaded && !todosError && Boolean(selectedId) && !todos.some((td) => td.id === selectedId);
+  // to-do is not shown under it (web usability audit item 42). Not while the list can't tell: the current assistant
+  // offline (the merged list leaves its to-dos out) or a hub without to-dos (an empty list); the link is kept for later.
+  const linkGone = todosLoaded && !todosError && todosSupported && !offline && Boolean(selectedId) && !todos.some((td) => td.id === selectedId);
   useEffect(() => {
     if (!linkGone) return;
     toast(t("not-found.todo_gone"));

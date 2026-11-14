@@ -12,6 +12,8 @@ vi.hoisted(() => {
 });
 
 const api = vi.fn(async (_path: string, _init?: unknown): Promise<unknown> => ({}));
+// the roster as the hub gives it when a test has several assistants (the page reads it again)
+const roster = vi.hoisted(() => ({ list: null as unknown }));
 vi.mock("../lib/api", async (orig) => ({ ...(await orig<typeof import("../lib/api")>()), api: (path: string, init?: unknown) => api(path, init) }));
 const toast = vi.fn();
 vi.mock("../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../ui/atoms")>()), toast: (...a: unknown[]) => toast(...a) }));
@@ -20,6 +22,8 @@ const { getState } = await import("../lib/store");
 const { TodosView } = await import("./Todos");
 const { t } = await import("../i18n");
 const { useRoute } = await import("../lib/router");
+const { chooseManager, resetManagerChoice } = await import("../lib/manager-choice");
+const { setRoster } = await import("../lib/managers");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,9 +46,9 @@ function Page() {
 
 beforeEach(() => {
   api.mockReset();
-  api.mockImplementation(async (path: string) => (path.endsWith("/launchers") ? { launchers: [] } : {}));
+  api.mockImplementation(async (path: string) => (path.endsWith("/launchers") ? { launchers: [] } : path === "/managers" && roster.list ? roster.list : {}));
   toast.mockReset();
-  seed({ todos: [todo("t1", "Release checklist"), todo("t2", "deploy web")], todosLoaded: true, todosError: null, machines: [], sessions: {} });
+  seed({ todos: [todo("t1", "Release checklist"), todo("t2", "deploy web")], todosLoaded: true, todosError: null, todosSupported: true, machines: [], sessions: {} });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -53,6 +57,9 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   document.body.innerHTML = "";
+  roster.list = null;
+  setRoster(null);
+  resetManagerChoice();
   seed(before);
   history.replaceState(null, "", "/");
 });
@@ -79,6 +86,39 @@ describe("a link to a to-do that isn't there", () => {
     await flush();
     expect(gone()).toHaveLength(0);
     expect(location.search).toBe("?id=nope");
+  });
+
+  it("keeps the link on a hub without to-dos, whose list is empty", async () => {
+    seed({ todos: [], todosSupported: false });
+    history.replaceState(null, "", "/todos?id=t9");
+    await act(async () => root.render(<Page />));
+    await flush();
+    expect(gone()).toHaveLength(0);
+    expect(location.search).toBe("?id=t9");
+  });
+
+  it("keeps the link while the current assistant is offline, its to-dos left out of the list, and says it once it is back", async () => {
+    const list = (homeOnline: boolean) => ({
+      default: "assistant",
+      managers: [
+        { id: "assistant", name: "Assistant", online: true },
+        { id: "m-home", name: "Home", online: homeOnline, last_seen: iso(3 * 3_600_000) },
+      ],
+    });
+    roster.list = list(false);
+    setRoster(list(false));
+    act(() => chooseManager("m-home"));
+    history.replaceState(null, "", "/todos?id=t9");
+    await act(async () => root.render(<Page />));
+    await flush();
+    expect(gone()).toHaveLength(0);
+    expect(location.search).toBe("?id=t9");
+    // back online and still without it: now it is gone
+    roster.list = list(true);
+    await act(async () => setRoster(list(true)));
+    await flush();
+    expect(gone()).toHaveLength(1);
+    expect(location.search).toBe("");
   });
 
   it("is not what deleting the open to-do here says", async () => {

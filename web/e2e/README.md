@@ -168,7 +168,9 @@ Needs a fake hub of its own: the runner takes it down (`/mock/down`) and refuses
 (`/mock/reject`), and puts both back at the end. In Chrome, light and dark, it checks that folding the sidebar to its
 rail by the keyboard leaves the focus on the rail's expand button and opening it again on the collapse button; that an
 Agent's page names its browser tab after the session's title; that an unknown address says **Page not found** and
-keeps the address, and `/a/<missing>` says the conversation isn't there with no message box left loading; that the
+keeps the address, a knowledge entry the hub doesn't have says **Entry not found** in the shared empty state (no
+title made of its id, no disabled buttons), and `/a/<missing>` says the conversation isn't there once, under the list's
+name, with no message box left loading; that the
 first key press makes no `AudioContext` while the alert sound is off and one when it is on; that the reconnect pill
 covers none of the to-dos' fields, buttons or titles at 390 px and 1280 px, and its details open over the page; that
 the English Offline line wraps only between words; and that a credential refused while the page is open reaches the

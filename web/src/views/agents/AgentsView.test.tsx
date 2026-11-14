@@ -71,7 +71,10 @@ describe("a link to a personal agent's conversation the hub doesn't have (web us
     state.list = { ...state.list, sessions: [], hints: [] };
     state.messages = () => Promise.reject(new ApiError(404, "not found", { error: "not found" }));
     await act(async () => root.render(<AgentsView id="does-not-exist" onToggleSidebar={() => {}} />));
-    expect(document.querySelector("h1")?.textContent).toBe(t("not-found.agent_title"));
+    // the header names the list it belongs to; what is missing is said once, in the empty state
+    expect(document.querySelector("h1")?.textContent).toBe(t("agents-agentsview.title"));
+    expect(document.querySelector("[role=status]")?.textContent).toContain(t("not-found.agent_title"));
+    expect(document.body.textContent?.split(t("not-found.agent_title")).length).toBe(2);
     expect(document.body.textContent).toContain(t("not-found.agent_detail"));
     expect(document.body.textContent).not.toContain("404");
     expect(document.querySelector("textarea")).toBeNull();

@@ -1,7 +1,8 @@
 // A browser whose credential the hub stopped taking while the page is open (removed in Settings › Devices, web usability
 // audit item 38): the socket's handshake is refused, and a browser can't read why, so the page used to retry for about a
 // minute as if the hub were out of reach. Now an attempt the hub refused asks once with an ordinary read; its 401 goes to
-// the sign-in page (api's handleUnauthorized). A hub that is really out of reach is not asked anything more.
+// the sign-in page (api's handleUnauthorized). A hub that is really out of reach, or a proxy's 5xx for a hub that is
+// down, is not asked anything more.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connect, reset } from "./store";
 import { handleUnauthorized } from "./api";
@@ -83,6 +84,15 @@ describe("a socket the hub refused", () => {
 
   it("asks nothing more when the hub is out of reach", async () => {
     answers["/api/v1/health"] = () => Promise.reject(new TypeError("Failed to fetch"));
+    connect();
+    FakeSocket.all.at(-1)!.refuse();
+    await settle();
+    expect(paths()).toEqual(["/api/v1/health"]);
+    expect(signedOut).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing more when a proxy in front answers 502 for a hub that is down", async () => {
+    answers["/api/v1/health"] = () => Promise.resolve(new Response("Bad Gateway", { status: 502, headers: { "Content-Type": "text/plain" } }));
     connect();
     FakeSocket.all.at(-1)!.refuse();
     await settle();
