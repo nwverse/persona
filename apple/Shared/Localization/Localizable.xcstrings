@@ -11081,6 +11081,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld uncommitted changes go along. If the other branch has any of those files differently, nothing is switched and they are listed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld uncommitted change goes along. If the other branch has that file differently, nothing is switched and the file is listed."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld uncommitted changes go along. If the other branch has any of those files differently, nothing is switched and they are listed."
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットしていない変更%1$lld件も一緒に移ります。切り替え先でファイルが異なる場合は切り替えず、ファイルを表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 处未提交的改动会一起带过去。如果目标分支上这些文件有不一样的，就不切换，并列出文件。"
+          }
+        }
+      }
+    },
     "%lld unread [Assistant Sidebar b212c1]" : {
       "localizations" : {
         "en" : {
@@ -23020,6 +23055,29 @@
       },
       "extractionState" : "manual"
     },
+    "Applied with conflicts in these files: resolve them, then commit. The stash is kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applied with conflicts in these files: resolve them, then commit. The stash is kept."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用しましたが、これらのファイルで競合しています。解決してからコミットしてください。スタッシュは残してあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已应用，但这些文件有冲突：解决后再提交。贮藏仍保留。"
+          }
+        }
+      }
+    },
     "Applies To" : {
       "localizations" : {
         "en" : {
@@ -23065,6 +23123,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Apply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用"
+          }
+        }
+      }
     },
     "Apply %lld %@" : {
       "comment" : "BeautifulUI looks this up in the app's catalog (#5574)",
@@ -28240,6 +28321,29 @@
       },
       "extractionState" : "manual"
     },
+    "Branches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Branches"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支"
+          }
+        }
+      }
+    },
     "Briefing" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -28306,6 +28410,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "明るさ：%1$@"
+          }
+        }
+      }
+    },
+    "Bring the changes back and keep this stash" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bring the changes back and keep this stash"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更を戻し、スタッシュは残す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改动拿回来，贮藏留着"
+          }
+        }
+      }
+    },
+    "Bring the changes back and remove this stash" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bring the changes back and remove this stash"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更を戻し、スタッシュは削除する"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改动拿回来，贮藏删掉"
           }
         }
       }
@@ -32784,6 +32934,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Changes stashed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes stashed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更をスタッシュしました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收起改动"
+          }
+        }
+      }
     },
     "Changes take effect from the next run. Current tasks aren't interrupted and past data isn't reprocessed. Permission settings don't change with the model." : {
       "localizations" : {
@@ -44435,6 +44608,29 @@
         }
       }
     },
+    "Couldn't Read the Branches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Read the Branches"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチを読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到分支"
+          }
+        }
+      }
+    },
     "Couldn't Read the Dev Servers" : {
       "localizations" : {
         "en" : {
@@ -49143,6 +49339,52 @@
       },
       "extractionState" : "manual"
     },
+    "Create %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create %1$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ を作成しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建 %1$@？"
+          }
+        }
+      }
+    },
+    "Create Branch “%@” from Here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create Branch “%1$@” from Here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここからブランチ「%1$@」を作成"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从这里新建分支「%1$@」"
+          }
+        }
+      }
+    },
     "Create a custom app on the Lark Open Platform and enable the Bot capability" : {
       "localizations" : {
         "en" : {
@@ -49372,6 +49614,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Created branch %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Created branch %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチ %1$@ を作成しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已新建分支 %1$@"
+          }
+        }
+      }
     },
     "Credentials are stored encrypted on the hub and only given to this channel. You may need to pair once afterward; whoever pairs becomes this channel's owner." : {
       "localizations" : {
@@ -57094,6 +57359,52 @@
         }
       }
     },
+    "Drop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "破棄"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃"
+          }
+        }
+      }
+    },
+    "Drop This Stash?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop This Stash?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このスタッシュを破棄しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃这份贮藏？"
+          }
+        }
+      }
+    },
     "Drop to add to the message" : {
       "localizations" : {
         "en" : {
@@ -57116,6 +57427,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Drop…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "破棄…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃…"
+          }
+        }
+      }
     },
     "Due" : {
       "extractionState" : "manual",
@@ -63083,6 +63417,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在「%1$@」里查找"
+          }
+        }
+      }
+    },
+    "Find or name a branch" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Find or name a branch"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ブランチを検索、または新しい名前"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找或输入新分支名"
           }
         }
       }
@@ -71745,6 +72102,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "受信トレイ"
+          }
+        }
+      }
+    },
+    "Include New Files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Include New Files"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいファイルも含める"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包括新文件"
           }
         }
       }
@@ -92695,6 +93075,29 @@
       },
       "extractionState" : "manual"
     },
+    "No branch matches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No branch matches"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一致するブランチはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的分支"
+          }
+        }
+      }
+    },
     "No changes to show" : {
       "localizations" : {
         "zh-Hans" : {
@@ -95329,6 +95732,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "サブスクリプションの使用量はまだありません"
+          }
+        }
+      }
+    },
+    "No such branch, or that name can't be used" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No such branch, or that name can't be used"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのブランチはないか、その名前は使えません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有这个分支，或者这个名字不能用"
           }
         }
       }
@@ -99868,6 +100294,29 @@
         }
       }
     },
+    "Nothing stashed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing stashed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有收起的改动"
+          }
+        }
+      }
+    },
     "Nothing to clean up" : {
       "localizations" : {
         "en" : {
@@ -100002,6 +100451,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有可发送的内容：剪贴板是空的，或者没有允许粘贴"
+          }
+        }
+      }
+    },
+    "Nothing to stash, or that stash is gone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing to stash, or that stash is gone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュする変更がないか、そのスタッシュはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有可收起的改动，或者那份贮藏已经没了"
           }
         }
       }
@@ -101567,6 +102039,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开"
+          }
+        }
+      }
+    },
+    "On %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ に切り替えました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已切到 %1$@"
           }
         }
       }
@@ -113169,6 +113664,29 @@
       },
       "extractionState" : "manual"
     },
+    "Pop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pop"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り出す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取回"
+          }
+        }
+      }
+    },
     "Port" : {
       "localizations" : {
         "en" : {
@@ -115184,6 +115702,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "把手机的剪贴板（或传入的文字）放到电脑的剪贴板上。需要先在 Persona 里给这台电脑打开剪贴板共享。"
+          }
+        }
+      }
+    },
+    "Puts your uncommitted changes away so the folder is clean; bring them back from the list below." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puts your uncommitted changes away so the folder is clean; bring them back from the list below."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットしていない変更をしまって作業フォルダをきれいにします。下の一覧から戻せます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把未提交的改动先收起来，工作区就干净了；之后可以从下面取回。"
           }
         }
       }
@@ -120176,6 +120717,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Remote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモート"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端"
+          }
+        }
+      }
     },
     "Remote updates fetched" : {
       "localizations" : {
@@ -126774,6 +127338,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Safe stash removal is unavailable for this repository." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Safe stash removal is unavailable for this repository."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリポジトリではスタッシュを安全に削除できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个仓库不支持安全删除贮藏。"
+          }
+        }
+      }
     },
     "Safely pulls the latest upstream code without merging or overwriting local changes" : {
       "localizations" : {
@@ -140314,6 +140901,144 @@
         }
       }
     },
+    "Stash Changes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash Changes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更をスタッシュ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起改动"
+          }
+        }
+      }
+    },
+    "Stash applied (it is kept)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash applied (it is kept)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用しました（スタッシュは残ります）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已应用（贮藏仍保留）"
+          }
+        }
+      }
+    },
+    "Stash dropped" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash dropped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "破棄しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已丢弃"
+          }
+        }
+      }
+    },
+    "Stash popped" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stash popped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り出しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取回"
+          }
+        }
+      }
+    },
+    "Stashed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stashed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュ済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已贮藏"
+          }
+        }
+      }
+    },
+    "Stashes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stashes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "贮藏"
+          }
+        }
+      }
+    },
     "State Cards [Agent Row Style]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -143550,6 +144275,29 @@
       },
       "extractionState" : "manual"
     },
+    "Switch to %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to %1$@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ に切り替えますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到 %1$@？"
+          }
+        }
+      }
+    },
     "Switch to new version" : {
       "localizations" : {
         "en" : {
@@ -145449,6 +146197,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "タップで停止"
+          }
+        }
+      }
+    },
+    "Tapping a remote branch makes a local branch here that tracks it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tapping a remote branch makes a local branch here that tracks it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートのブランチをタップすると、それを追跡するローカルブランチをここに作ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点远端分支会在这里建一个跟踪它的本地分支。"
           }
         }
       }
@@ -154573,6 +155344,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "长期授权刚才有变动，请再试一次。"
+          }
+        }
+      }
+    },
+    "The stash list changed. Refresh and select the stash again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The stash list changed. Refresh and select the stash again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュ一覧が変更されました。更新して再度選択してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "贮藏列表变了。刷新后重新选择贮藏。"
           }
         }
       }
@@ -169515,6 +170309,29 @@
         }
       }
     },
+    "Update Persona on this computer to apply, pop or drop stashes safely." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Persona on this computer to apply, pop or drop stashes safely."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スタッシュを安全に適用・取り出し・削除するには、このコンピュータの Persona を更新してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请更新这台电脑上的 Persona，才能安全地应用、取回或丢弃贮藏。"
+          }
+        }
+      }
+    },
     "Update This Computer to Preview" : {
       "localizations" : {
         "en" : {
@@ -176284,6 +177101,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "What the changes are (optional)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What the changes are (optional)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "変更の説明（任意）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些改动是什么（可不填）"
+          }
+        }
+      }
     },
     "What to Review" : {
       "localizations" : {
@@ -191351,6 +192191,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%1$@」を元に戻せません：同じ名前の新しいプロジェクトがあります。"
+          }
+        }
+      }
+    },
+    "“%@” is deleted and can't be brought back from here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@” is deleted and can't be brought back from here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」は削除され、ここからは戻せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」会被删除，在这里无法找回。"
           }
         }
       }

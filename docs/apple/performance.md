@@ -336,7 +336,12 @@ launch. Everything before the first frame is time the user stares at the launch 
 - `apple/PersonaWatch/PersonaWatchApp.swift:6`: the watch's `WatchModel()` reads the keychain and the pet manifest and starts polling in `init`.
 
 **Do.** Show the cached state, then connect. Mark launch phases with `PerfTrace.event` so Instruments' Points of Interest
-show where the time went.
+show where the time went. `Snapshot restored` follows a successfully decoded cached snapshot and publication of its values;
+`First frame (root appeared)` is the once-per-process root-appearance boundary immediately before SwiftUI submits the first
+frame (the system launch metric, not this proxy, is the displayed-frame timestamp); `Connected` enters `AppModel.didConnect`
+after the socket reaches `.connected` and before registration and refetch work. They add no dynamic detail or file IO; their
+only new state is one static Bool, and their logging cost is the existing `PerfTrace.event` path (including its lazy OSLog
+setup). They compile only in DEBUG / PERF_SIGNPOST builds.
 
 **Check.** The App Launch template in Instruments (simulator or device), `XCTApplicationLaunchMetric` in a UI test, and the
 launch histogram in Xcode Organizer for TestFlight builds.
@@ -393,7 +398,8 @@ Start from a reproduction, measure the base, change one thing, measure again.
      their causes and long updates); App Launch; Allocations and Leaks. Animation Hitches needs a device.
    - Signposts: `PerfTrace.event("Name", detail)` (`apple/Persona/App/PerfSignpost.swift`, subsystem `Persona.Performance`,
      Points of Interest) marks moments. For a span, use an `OSSignposter` interval in the same subsystem, compiled under
-     `#if DEBUG || PERF_SIGNPOST`.
+     `#if DEBUG || PERF_SIGNPOST`. The launch marks are `Snapshot restored`, `First frame (root appeared)` and `Connected`;
+     the middle mark is an app-side pre-submission proxy, while the system's launch metric records the displayed frame.
 4. **Count redraws.** Add `PerfTrace.body("ViewName")` at the top of a heavy `body`; launch with `-perfCounts YES`.
    `PerfCount` counts bodies and the main thread's time from each push to the next idle run loop. When a modal sheet or
    overlay hitches, check the background page's counters too (`ChatView`, `ChatTranscript.body`): presenting on the shell
@@ -415,6 +421,16 @@ Start from a reproduction, measure the base, change one thing, measure again.
    "Probes and assertions") expose state for UI tests. The suites in `scripts/app/perf-test.sh` (`PerfAgentsTests`,
    `PerfAssistantTests`, `PerfComposerTests`, …) do this with `XCTHitchMetric` and report through
    `scripts/app/perf_report.py`.
+
+   `scripts/app/perf-test.sh launch` instead runs `PerfLaunchTests` with `XCTApplicationLaunchMetric` and no frame probe.
+   Cold launches reset the saved pairing and delete the development snapshot before each fresh process; the host-side test
+   runner performs that deletion in its assigned simulator's container, without changing app-side cleanup. Warm launches
+   first verify the large mock data and the durable snapshot from an unmeasured seed; screen probes run only in that seed,
+   never in a measured launch. The measured warm launches use the saved pairing. XCTest discards its own warm-up, so these
+   are fresh pairing/snapshot-state and restored-snapshot process launches with warm OS caches, not a rebooted-device cold
+   series. Other persisted launch inputs (transcripts, drafts, outbox and personas) stay untouched; the lane measures their
+   existing loading rather than changing it. The report keeps every retained value and shows cold / warm median, range and
+   spread in milliseconds. The 400 ms recent-iPhone budget is not a simulator failure gate.
 7. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
    (#4265).
 
@@ -426,12 +442,12 @@ Report the device or simulator, OS, build settings, data set, number of runs and
 | --- | --- | --- |
 | `scripts/test/test_apple_perf_patterns.py` | Ratchet over Swift under `apple/` (tests excluded): `UserDefaults.synchronize()`, `TimelineView(.animation…)` without `paused:`, and localization lookups with an explicit locale (`interfaceText(`, `String(localized:…, locale:)`; P4). Each file's counts (`scripts/test/apple_perf_baseline.json`) may only go down; a call verified to be fine is marked `// perf-ok: <reason>`. After removing calls, run it with `--update`; `--list` prints every counted call. Runs in `scripts/ci/python-tests.py`. | Implemented |
 | `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push, who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
-| `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page | Existing, run by hand |
+| `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page, plus cold / warm first-frame launch timing | Existing, run by hand |
 | `scripts/test/isolation-lint.sh` | Isolation lint over Swift under `apple/` (tests excluded): Photos fetches, `SecItemCopyMatching`, `Data` / `String(contentsOf:)`, directory listings and `UIImage(data:)` / `(contentsOfFile:)` / `NSImage(data:)`, each with where it runs: on the main actor, off it, or unknown. Only the first and the last count; each file's counts (`scripts/test/apple_isolation_baseline.json`) may only go down, and no comment clears a call ("Isolation lint"). Runs in `scripts/ci/apple.sh`. | Implemented, #4262 |
 | `scripts/test/test_apple_state_initial_values.py` | P3 ratchet over Swift under `apple/`, including tests: class construction in `@State` with non-trivial `init` bodies or eager stored-property initial values. Each file/type count (`scripts/test/apple_state_initial_values_baseline.json`) may only go down; new entries start at zero. `--update` lowers the baseline; `--list` prints every counted site and its reason. Automatically discovered by `scripts/ci/python-tests.py` in the scripts lane. | Implemented, #4263 |
 | DEBUG main-thread watchdog | A background thread pings the main run loop and logs a `PerfTrace.event` plus a main-thread sample when it is blocked over 100 ms, so UI tests and runtime CLI scenarios catch blocks without Instruments | Implemented, #4264 |
 | MetricKit | Subscribe `MXMetricManager` in TestFlight builds; send hang (`MXHangDiagnostic`), launch and memory payloads into Copy Diagnostics | Proposed, #4265 |
-| Launch metric | A UI test with `XCTApplicationLaunchMetric` in `scripts/app/perf-test.sh` | Proposed, #4266 |
+| Launch metric | `PerfLaunchTests` measures fresh-state and snapshot-restored process launches with `XCTApplicationLaunchMetric`; `scripts/app/perf-test.sh launch` uses the large mock and `perf_report.py` reports median, range and spread without a simulator device-budget gate | Implemented, #4266; run by hand |
 
 ### Isolation lint
 
@@ -613,7 +629,7 @@ Grep counts are across `apple/` without tests; they are leads to read, not each 
 
 **Instrumentation that exists**
 
-`PerfTrace` / `PerfCount` (`apple/Persona/App/PerfSignpost.swift`), `MainThreadWatchdog`, `FrameStats`, `apple/PersonaUITests/PerfTestCase.swift` (`XCTHitchMetric`, scroll and navigation signpost metrics, `XCTClockMetric`), `RenderBudgetTests`. The retired native Mac's instrumentation was removed with that target. No `OSSignposter` intervals, no MetricKit.
+`PerfTrace` / `PerfCount` (`apple/Persona/App/PerfSignpost.swift`), `MainThreadWatchdog`, `FrameStats`, `apple/PersonaUITests/PerfTestCase.swift` (`XCTHitchMetric`, scroll and navigation signpost metrics, `XCTClockMetric`), `PerfLaunchTests` (`XCTApplicationLaunchMetric`, no frame probe), `RenderBudgetTests`. The retired native Mac's instrumentation was removed with that target. No `OSSignposter` intervals, no MetricKit.
 
 ## Sources
 
