@@ -894,6 +894,9 @@ nonisolated enum Theme {
         static let loudInk = 1.0
         /// After stop or send, how long the recognizer may take for its last words before the bar settles for what it has.
         static let finalWait: Duration = .milliseconds(1200)
+        /// The bar's parts while it is off: drawn, but not seen. Fully transparent, SwiftUI skips drawing them, and their first
+        /// drawing (the symbols, the circles, the wave) landed on the frames right after the tap.
+        static let hiddenInk = 0.001
         /// The composer's row under the bar leaves the accessibility tree this long after the bar opens, past its spring.
         static let treeAfter: Duration = .milliseconds(450)
         /// The bar's haptic generator is prepared this long after the bar opens, past the first frames of its spring.

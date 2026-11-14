@@ -144,7 +144,7 @@ struct DictationBar: View {
                 // Opens out from the right (where the mic was) and folds into the button that closed the bar.
                 .scaleEffect(x: on || reduceMotion ? 1 : 0.01, y: 1,
                              anchor: on || model.closing != .cancel ? .trailing : .leading)
-                .opacity(on ? 1 : 0)
+                .opacity(on ? 1 : Theme.DictationBar.hiddenInk)
                 // VoiceOver reads the wave as where dictation stands, between ✕ and ■.
                 .accessibilityElement()
                 .accessibilityLabel(ending == nil ? String(localized: "Listening…") : String(localized: "Transcribing…"))
@@ -172,7 +172,7 @@ private struct BarPart: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scaleEffect(on || reduceMotion ? 1 : Theme.Motion.dictationButtonFrom)
-            .opacity(on ? 1 : 0)
+            .opacity(on ? 1 : Theme.DictationBar.hiddenInk)
             .animation(reduceMotion ? Theme.Motion.state : on ? Theme.Motion.dictationButtonsIn : Theme.Motion.dictationButtonsOut,
                        value: on)
             .accessibilityHidden(!on)
