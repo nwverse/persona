@@ -7,7 +7,7 @@
     "rewriteRelativeImportExtensions": true,
     "lib": ["ES2022", "DOM"],
     "outDir": "dist-preload",
-    "rootDir": "src",
+    "rootDir": "..",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -16,5 +16,5 @@
     "sourceMap": true,
     "types": ["node"]
   },
-  "include": ["src/preload.cts", "src/setup-preload.cts", "src/contract.cts", "src/link-contract.cts", "src/notification-permission.cts"]
+  "include": ["src/preload.cts", "src/setup-preload.cts", "src/contract.cts", "src/link-contract.cts", "src/notification-permission.cts", "../spec/desktop-bridge.d.ts"]
 }

@@ -2388,6 +2388,11 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
+                    # Start what the owner asked for right away (#2559), on by default; the workspace a dispatched task
+                    # prefers (#3659); fixing unhelpful session names (#4965): on, at most once, no regular updates.
+                    # Left out with MOCK_LEGACY_HUB (Agent Follow-Up, #7005).
+                    "start_requested_tasks": True, "task_workspace_preference": "prefer-existing",
+                    "agent_auto_naming": True, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
@@ -2417,7 +2422,10 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
+                   agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
+                   agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -26327,6 +26335,22 @@ class H(BaseHTTPRequestHandler):
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
                     return self.send_json({"error": "archive_closed_days must be 0–3650"}, 400)
                 ASSISTANT_CONFIG["archive_closed_days"] = days
+            # As the hub's profile_write.go: checked before anything changes; the session-name settings only from a
+            # request that names its manager (#4965).
+            naming = [k for k in ("agent_auto_naming", "agent_auto_naming_max", "agent_auto_naming_interval_hours") if k in body]
+            if naming and not self.headers.get("X-Persona-Manager"):
+                return self.send_json({"error": "Name the assistant this setting is for.", "code": "manager_required"}, 400)
+            for key, (low, high) in (("agent_auto_naming_max", (1, 1000)), ("agent_auto_naming_interval_hours", (0, 8760))):
+                if key in body and (type(body[key]) is not int or not low <= body[key] <= high):
+                    return self.send_json({"error": "%s must be %d–%d" % (key, low, high)}, 400)
+            if "task_workspace_preference" in body and body["task_workspace_preference"] not in ("prefer-existing", "prefer-new"):
+                return self.send_json({"error": "task_workspace_preference must be prefer-existing or prefer-new"}, 400)
+            for key in ("start_requested_tasks", "agent_auto_naming"):
+                if isinstance(body.get(key), bool):
+                    ASSISTANT_CONFIG[key] = body[key]
+            for key in ("agent_auto_naming_max", "agent_auto_naming_interval_hours", "task_workspace_preference"):
+                if key in body:
+                    ASSISTANT_CONFIG[key] = body[key]
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):

@@ -23,6 +23,12 @@ When an installed Link is present, the desktop's local setup page can show its r
 
 Preloads expose fixed operations, not arbitrary IPC, WebSocket messages, paths, tokens or process execution. Desktop IPC checks the owning window, current main frame and expected origin. Link commands use only `~/.persona/bin/persona-link` (`.exe` on Windows), fixed argv, no shell and pairing input on stdin. Status returns only the state and names needed by the UI, not `link.json`, internal addresses, PIDs, logs or node errors. Per-window handlers are removed when that window closes.
 
+### One bridge type, additive compatibility
+
+`spec/desktop-bridge.d.ts` is the single pure-type `DesktopBridge` contract shared by the web renderer and desktop preload. `web/` and `desktop/` remain separate build roots: both use `import type` and neither bundles a runtime module from that file. The hub-window preload annotates its complete implementation with `satisfies DesktopBridge`; web mocks use the same type. Runtime route validation and the local setup-window's separate privileged contract are not part of this type-only file.
+
+**Compatibility rule:** the desktop application may update more slowly than the hub-hosted web it loads. Version 1 therefore only adds capabilities. The web checks for an additive method or field before using it and keeps its browser fallback when an older desktop does not provide it. A removed or incompatible method, parameter, return value or meaning requires incrementing `version` and an explicit migration, never silently changing the version-1 contract.
+
 Closing the main window hides it to the tray while the signed-in renderer stays alive. The tray opens the current main window, not a destroyed setup window; explicit Quit exits. Only the desktop app itself is controlled by launch at login, not the Link service. macOS may still require approval in System Settings, which the setting must report rather than claim success.
 
 ## Packaging and verification
@@ -35,6 +41,6 @@ The real smoke starts an isolated Vite server and the repository's synthetic hub
 
 ## Migration boundaries
 
-The retired `PersonaMac` target and the native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. The Mac menu bar UI and Windows `linktray` are removed only after the independent Link installation, pairing/reconnect/status/service controls and Persona Screen packaging have a verified replacement. The CLI/service must continue to work without the desktop app.
+The retired `PersonaMac` target and native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. The old Mac menu bar UI and Windows `linktray` are removed too: independent Link installation, pairing/reconnect/status/service controls and Persona Screen packaging now use the CLI and fixed desktop setup bridge. The CLI/service works without the desktop app; Mac uses launchd `com.persona.link`, Windows retains its scheduled task.
 
-Remaining platform acceptance, signed/notarized artifacts, Windows installation, a published auto-update and final old-tray removal belong to the migration issue (#6770), not to a claim that the shell alone completes the migration.
+Remaining platform acceptance, signed/notarized artifacts, Windows installation and a published auto-update belong to the migration issue (#6770), not to a claim that the shell or independent Link packaging completes the migration.
