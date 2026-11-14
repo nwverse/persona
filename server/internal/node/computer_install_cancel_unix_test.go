@@ -49,16 +49,18 @@ func TestInstallCuaCancellationKillsInstallerTree(t *testing.T) {
 
 // jobCancelledWithin reports whether the install job reaches the cancelled state within d. Unlike waitWithin it does
 // not fail the test: a cancellation that misses its soft deadline runs its own cleanup and names the failure itself.
+// The deadline is checked before every state read, like the baseline for-condition: once d has passed no state is
+// read, so a cancellation first observed past the deadline cannot be accepted.
 func jobCancelledWithin(d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if j := currentJob(); j != nil && j.State == "cancelled" {
-			return true
-		}
 		if !time.Now().Before(deadline) {
 			return false
+		}
+		if j := currentJob(); j != nil && j.State == "cancelled" {
+			return true
 		}
 		<-ticker.C
 	}

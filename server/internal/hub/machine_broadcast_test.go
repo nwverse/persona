@@ -39,29 +39,47 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 		close(oldDone)
 	}()
 
-	deadline := 3 * time.Second
-	eventually(t, deadline, "the old broadcast to block on m2", func() bool {
+	// One absolute deadline shared by all three polls: the second and third phases only get the time left in the
+	// original three-second budget, as in the baseline loops. The ticker stands in for the baseline's millisecond
+	// sleep because this file has no fixed-sleep allowance in scripts/ci/sleep_baseline.json.
+	end := time.Now().Add(3 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
 		buf := make([]byte, 1<<20)
 		n := runtime.Stack(buf, true)
 		stack := string(buf[:n])
+		blocked := false
 		for _, gr := range strings.Split(stack, "\n\n") {
 			if strings.Contains(gr, "sync.Mutex.Lock") &&
 				strings.Contains(gr, "hub.(*Machine).snapshot") &&
 				strings.Contains(gr, "hub.(*Hub).broadcastMachines") {
-				return true
+				blocked = true
+				break
 			}
 		}
-		return false
-	})
+		if blocked {
+			break
+		}
+		if !time.Now().Before(end) {
+			unlockM2()
+			t.Fatalf("old broadcast did not reach m2:\n%s", stack)
+		}
+		<-tick.C
+	}
 
 	goneDone := make(chan struct{})
 	go func() {
 		h.machineGone("m2")
 		close(goneDone)
 	}()
-	eventually(t, deadline, "machineGone to remove m2", func() bool {
-		return len(h.machinesNow()) == 1
-	})
+	for len(h.machinesNow()) != 1 {
+		if !time.Now().Before(end) {
+			unlockM2()
+			t.Fatal("machineGone did not remove m2")
+		}
+		<-tick.C
+	}
 
 	reportDone := make(chan struct{})
 	go func() {
@@ -70,12 +88,19 @@ func TestMachineBroadcastStaleAfterRealRemovalAndReport(t *testing.T) {
 		}}})
 		close(reportDone)
 	}()
-	eventually(t, deadline, "the manager report to bring m1 online", func() bool {
+	for {
 		m1.mu.Lock()
 		online := m1.online
 		m1.mu.Unlock()
-		return online
-	})
+		if online {
+			break
+		}
+		if !time.Now().Before(end) {
+			unlockM2()
+			t.Fatal("manager report did not bring m1 online")
+		}
+		<-tick.C
+	}
 	unlockM2()
 
 	for name, done := range map[string]<-chan struct{}{"old": oldDone, "removal": goneDone, "report": reportDone} {
