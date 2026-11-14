@@ -141,6 +141,10 @@
       "value": "刷新"
     },
     {
+      "name": "idle",
+      "value": "待机"
+    },
+    {
       "name": "offline",
       "value": "离线"
     },

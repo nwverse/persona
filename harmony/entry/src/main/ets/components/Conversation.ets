@@ -127,6 +127,8 @@ export struct Conversation {
   private readingRestoring: boolean = true;
   private readingAnchorReady: boolean = false;
   private readingFetching: boolean = false;
+  @Local readingLoading: boolean = false;
+  private readingMotion: number = 0;
   private readingCursors: Set<string> = new Set();
   @Local readingFailed: boolean = false;
   private firstVisibleIndex: number = 0;
@@ -181,6 +183,32 @@ export struct Conversation {
     } finally { if (epoch === this.readingEpoch) { this.readingFetching = false; if (!this.readingFailed) this.scheduleReading(); } }
   }
   private readingProgress(): string { return JSON.stringify([this.model.transcriptItems().map((item) => item.id), this.model.hasMoreMessages, this.feed.nextCursor]); }
+  private visibleReadingAnchor(): ReadingAnchor | undefined {
+    const prefix = this.readingPrefix(), index = Math.max(prefix, this.firstVisibleIndex), line = this.lines[index - prefix];
+    if (!line) return undefined;
+    try {
+      const rect = this.scroller.getItemRect(index);
+      if (Number.isFinite(rect.y) && Number.isFinite(rect.height) && rect.height > 0) return { id: line.readingId, offset: rect.y, atEnd: false };
+    } catch (_) {}
+    return undefined;
+  }
+  private async loadEarlier(): Promise<void> {
+    if (!this.active || this.readingLoading || this.readingRestoring) return;
+    const anchor = this.visibleReadingAnchor(), owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    const epoch = this.readingEpoch, key = this.readingKey, motion = this.readingMotion;
+    const valid = (): boolean => this.active && this.model === owner && owner.owns(generation, scope) && owner.target() === target && this.readingEpoch === epoch && this.readingKey === key && this.readingMotion === motion;
+    this.atEnd = false; this.readingLoading = true;
+    try {
+      await Promise.all([owner.hasMoreMessages ? owner.loadOlder() : Promise.resolve(true), this.feed.nextCursor ? this.feed.loadMore() : Promise.resolve(true)]);
+      if (anchor && valid()) this.getUIContext().postFrameCallback(new ConversationFrame(() => {
+        if (!valid()) return;
+        const index = readingAnchorIndex(this.lines.map((line: ConversationLine) => line.readingId), anchor);
+        if (index < 0) return;
+        this.scroller.scrollToIndex(index + this.readingPrefix(), false, ScrollAlign.START, { extraOffset: LengthMetrics.vp(-anchor.offset) });
+        this.anchor = anchor; this.atEnd = false;
+      }));
+    } finally { this.readingLoading = false; }
+  }
   private retryReading(): void {
     if (!this.readingAnchorReady) { this.readingKey = ''; this.syncReading(); }
     else { this.readingCursors.clear(); this.readingFailed = false; this.scheduleReading(); }
@@ -392,7 +420,7 @@ export struct Conversation {
     else if (this.atEnd) this.getUIContext().postFrameCallback(new ConversationFrame(() => { if (this.active && this.atEnd && !this.readingRestoring) this.scroller.scrollEdge(Edge.Bottom); })); else this.hasNew = true;
   }
   @Monitor('feed.items', 'feed.hasLoaded') feedChanged(): void { this.syncTimeline(); if (this.readingRestoring) this.scheduleReading(); else if (this.atEnd) this.getUIContext().postFrameCallback(new ConversationFrame(() => { if (this.active && this.atEnd && !this.readingRestoring) this.scroller.scrollEdge(Edge.Bottom); })); else this.hasNew = true; }
-  @Monitor('active', 'model.selected', 'model.connected') feedContextChanged(): void { if (!this.active) this.saveReading(); else this.syncReading(); this.syncFeed(); this.syncAttachments(); this.syncRevision(); }
+  @Monitor('active', 'model.selected', 'model.connected') feedContextChanged(): void { if (!this.active) { this.readingMotion++; this.saveReading(); } else this.syncReading(); this.syncFeed(); this.syncAttachments(); this.syncRevision(); }
   @Monitor('model.decision') decisionChanged(): void { this.refreshFeed(); }
   @Monitor('active', 'model.selected', 'model.profile', 'model.connected', 'model.personaQuestions')
   questionsContextChanged(): void { this.questions.sync(this.model, this.active); }
@@ -694,7 +722,7 @@ export struct Conversation {
           AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), dockOnly: true, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
             onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
         }
-        if (this.model.hasMoreMessages || this.feed.nextCursor) ListItem() { Button(tr('load_more')).onClick(() => { this.atEnd = false; this.model.loadOlder(); this.feed.loadMore(); }) }
+        if (this.model.hasMoreMessages || this.feed.nextCursor) ListItem() { Button(tr('load_more')).enabled(!this.readingLoading).onClick(() => this.loadEarlier()) }
         Repeat(this.lines).each((entry: RepeatItem<ConversationLine>) => {
           ListItem() {
             if (entry.item.message) this.message(entry)
@@ -705,7 +733,7 @@ export struct Conversation {
         }).key((line: ConversationLine) => line.id).virtualScroll({ totalCount: this.lines.length, reusable: false })
       }.layoutWeight(1).width('100%').id('chat.transcript')
         .bindSheet(this.questions.shown, this.questionContent(), { title: { title: tr('interaction_question_reopen') }, height: SheetSize.LARGE, keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true, onWillAppear: () => this.presentedQuestion = this.questions.beginPresentation(), onAppear: () => { this.questionLayoutReady = true; this.measureQuestion(); }, onWillDismiss: (action: DismissSheetAction) => this.questions.dismiss(this.presentedQuestion, () => action.dismiss()), onDisappear: () => { this.questionLayoutReady = false; this.questions.endPresentation(this.presentedQuestion); this.presentedQuestion = undefined; } })
-        .maintainVisibleContentPosition(true).onScrollIndex((start: number) => { this.firstVisibleIndex = start; this.recordReading(start); }).onDidScroll(() => this.recordReading(this.firstVisibleIndex)).onReachEnd(() => { if (this.active && !this.readingRestoring) { this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; } })
+        .maintainVisibleContentPosition(true).onScrollStart(() => this.readingMotion++).onScrollIndex((start: number) => { this.firstVisibleIndex = start; this.recordReading(start); }).onDidScroll(() => this.recordReading(this.firstVisibleIndex)).onReachEnd(() => { if (this.active && !this.readingRestoring) { this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; } })
         .onScrollFrameBegin((offset: number) => { if (offset < 0 && !this.readingRestoring) { this.atEnd = false; this.anchor.atEnd = false; } return { offsetRemain: offset }; })
     }.width('100%').constraintSize({ maxWidth: Tokens.readingMax }).height('100%')
   }

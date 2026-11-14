@@ -63,6 +63,7 @@ export struct AgentListPage {
   @Param retainWorkspace: boolean = false;
   private editingAdmission: (() => boolean) | undefined;
   @Param selectedRow: ResourceRow = new ResourceRow();
+  @Param selectionVisible: boolean = true;
   @Local refreshing: boolean = false;
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Event onOpen: (row: ResourceRow) => void = () => {};
@@ -368,6 +369,9 @@ export struct AgentListPage {
     }.alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
   }
 
+  private isRowSelected(binding: BoundAgentRow): boolean {
+    return this.selectionVisible && this.workspace.selectedKey === binding.presentation.selectionKey;
+  }
   @Builder agentRow(binding: BoundAgentRow) {
     ListItem() {
       Row({ space: Tokens.gap }) {
@@ -393,8 +397,8 @@ export struct AgentListPage {
         .padding({ left: this.rail ? Tokens.inset : Tokens.page, right: this.rail ? Tokens.inset : Tokens.page, top: this.look.density === 'compact' ? Tokens.gap : Tokens.inset,
           bottom: this.look.density === 'compact' ? Tokens.gap : Tokens.inset })
     }.accessibilityGroup(true).accessibilityText((binding.bound.value.title || tr('agent_untitled')) + ' · ' + binding.presentation.metadata.slice(0, 2).filter((value: string) => !!value).join(' · ') + ' · ' + this.rowStatus(binding.presentation))
-      .selectable(true).selected(this.workspace.selectedKey === binding.presentation.selectionKey)
-      .backgroundColor(this.workspace.selectedKey === binding.presentation.selectionKey ? Colors.selection : Colors.canvas)
+      .selectable(true).selected(this.isRowSelected(binding))
+      .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.canvas)
       .onClick(() => this.openRow(binding.bound.value))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.onVisible(binding.bound.value, visible ? ratio : 0))
       .onDisAppear(() => this.onVisible(binding.bound.value, 0))
@@ -479,8 +483,8 @@ export struct AgentListPage {
         .divider({ strokeWidth: Tokens.hairline, startMargin: Tokens.page + Tokens.avatar + Tokens.gap,
           endMargin: Tokens.page, color: Colors.divider })
       }.width('100%').layoutWeight(1).onRefreshing(() => { this.workspace.setReadingDetail(false); this.workspace.refresh(this.model).finally(() => { this.workspace.setReadingDetail(this.readingDetail); this.refreshing = false; }); })
-    }.width('100%').height('100%').backgroundColor(Colors.canvas)
       .bindSheet($$this.filterSheetOpen, this.filterSheet(), { title: { title: tr('agent_filters_title') }, height: SheetSize.LARGE, showClose: true })
+    }.width('100%').height('100%').backgroundColor(Colors.canvas)
       .bindSheet($$this.editorOpen, this.renameForm(), { title: { title: tr('rename') }, height: SheetSize.MEDIUM, showClose: true })
   }
 }

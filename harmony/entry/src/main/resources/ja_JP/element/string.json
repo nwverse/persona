@@ -141,6 +141,10 @@
       "value": "更新"
     },
     {
+      "name": "idle",
+      "value": "待機"
+    },
+    {
       "name": "offline",
       "value": "オフライン"
     },

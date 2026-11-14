@@ -517,6 +517,8 @@ def main():
                 return self.tracked_reply(method, path, 200, {'default': MANAGER, 'managers': [
                     {'id': MANAGER, 'name': 'Assistant', 'default': True, 'role': 'assistant'},
                 ]})
+            if path in ('/api/v1/pins', '/api/v1/mutes'):
+                return self.tracked_reply(method, path, 200, {'spaces': [], 'sessions': [], 'allowed': []})
             if path == '/api/v1/sessions':
                 agent_working = optional_bool(state.control(), 'agent_working')
                 return self.tracked_reply(method, path, 200, {

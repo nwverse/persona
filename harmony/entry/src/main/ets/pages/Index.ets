@@ -139,11 +139,23 @@ struct Index {
     return name === 'conversation' && this.detailModel === this.model && this.peer() === 0 && this.wide() && !this.rail() &&
       this.model.target() === this.model.target(row) && visible >= 0.99;
   }
-  @Builder peerTitle() {
-    Row() {
-      if (this.environment.fontScale >= 1.5) {
+  @Local shellPeerWidth: number = 0;
+  @Local mainPeerWidth: number = 0;
+  private peerUsesSelect(main: boolean): boolean {
+    const width = main ? this.mainPeerWidth : this.shellPeerWidth;
+    return this.environment.fontScale >= 1.5 || width > 0 && width < (this.wide() ? Tokens.headerWideSegment : Tokens.headerSegment);
+  }
+  private measurePeerSlot(main: boolean, measured: number): void {
+    const width = measured;
+    if (!Number.isFinite(width) || width <= 0 || Math.abs(width - (main ? this.mainPeerWidth : this.shellPeerWidth)) <= 1) return;
+    if (main) this.mainPeerWidth = width; else this.shellPeerWidth = width;
+  }
+  @Builder peerTitle(main: boolean = false) {
+    Row({ space: Tokens.gap }) {
+      Row() {
+      if (this.peerUsesSelect(main)) {
         Select([{ value: tr('persona') }, { value: tr('agents') }]).selected(this.peer()).value(tr(this.peer() === 1 ? 'agents' : 'persona'))
-          .font({ size: String(Tokens.body * Math.min(this.environment.fontScale, Tokens.chromeFontMaxScale)) + 'vp' }).width(this.wide() ? 176 : Tokens.headerSegment).onSelect((index: number) => this.selectPeer(index)).id('shell.peer')
+          .font({ size: String(Tokens.body * Math.min(this.environment.fontScale, Tokens.chromeFontMaxScale)) + 'vp' }).width('100%').constraintSize({ maxWidth: this.wide() ? Tokens.headerWideSegment : Tokens.headerSegment }).onSelect((index: number) => this.selectPeer(index)).id('shell.peer')
       } else {
         CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([{ text: tr('persona') }, { text: tr('agents') }]),
           selectedIndex: this.peer(), $selectedIndex: (index: number) => this.selectPeer(index),
@@ -151,9 +163,12 @@ struct Index {
           itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control),
           itemFontSize: LengthMetrics.fp(Tokens.body), itemSelectedFontSize: LengthMetrics.fp(Tokens.body),
           itemMinHeight: LengthMetrics.vp(Tokens.chrome - Tokens.fine), buttonMinHeight: LengthMetrics.vp(Tokens.chrome) })
-          .width(this.wide() ? 176 : Tokens.headerSegment).responseRegion({ x: 0, y: -Tokens.fine, width: '100%', height: Tokens.touch }).id('shell.peer')
+          .width('100%').constraintSize({ maxWidth: this.wide() ? Tokens.headerWideSegment : Tokens.headerSegment }).responseRegion({ x: 0, y: -Tokens.fine, width: '100%', height: Tokens.touch }).id('shell.peer')
       }
-    }.height(this.headerHeight()).padding({ left: Tokens.page }).alignItems(VerticalAlign.Center)
+      }.layoutWeight(1).height(this.headerHeight())
+        .onAreaChange((_old: Area, area: Area) => this.measurePeerSlot(main, Number(area.width)))
+      this.shellMenu()
+    }.width('100%').height(this.headerHeight()).padding({ left: Tokens.page }).alignItems(VerticalAlign.Center)
   }
   private selectPeer(index: number): void {
     if (index === this.model.section) return;
@@ -465,8 +480,7 @@ struct Index {
     }.height(this.headerHeight()).alignItems(VerticalAlign.Center).padding({ right: Tokens.page })
   }
   @Builder destinationMenus(name: string, param: Object) {
-    if (this.mainDestination(name, param) && !this.wide()) this.shellMenu()
-    else Row({ space: Tokens.gap }) {
+    if (!this.mainDestination(name, param)) Row({ space: Tokens.gap }) {
       ForEach(this.destinationMenuItems(name, param), (item: NavigationMenuItem) => {
         Button({ type: ButtonType.Circle }) {
           if (item.symbolIcon) SymbolGlyph().attributeModifier(item.symbolIcon).fontSize(Tokens.symbolFont)
@@ -537,7 +551,6 @@ struct Index {
   private destinationMenuItems(name: string, param: Object): NavigationMenuItem[] {
     if (name === 'settings' && this.isAdminPage(this.settingsKind(param))) return this.adminMenus(name, param);
     if (name === 'extension' && this.applicationAllowed(param)) return this.extensionMenus(name, param);
-    if (this.mainDestination(name, param) && !this.wide()) return this.menus();
     if (this.mainDestination(name, param)) return [];
     if (name === 'session' || name === 'conversation') return [{ value: tr('more'), icon: $r('sys.media.ohos_ic_public_more'), isEnabled: this.targetReady(name, param), action: () => this.showChatActions(name, param) }];
     return [];
@@ -612,13 +625,13 @@ struct Index {
     List({ space: Tokens.section }) {
       if (this.model.error) ListItem() { this.connectionState() }
       ListItemGroup() {
-      ListItem() { Row({ space: Tokens.inset }) { Image(this.look.avatarUri || $r('app.media.foreground')).width(Tokens.symbol).height(Tokens.symbol).objectFit(ImageFit.Contain); Text(tr('main_chat')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).layoutWeight(1) }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).constraintSize({ minHeight: Tokens.header }).width('100%') }.selectable(true).selected(this.detailModel === this.model && this.detailModel.selected.id === this.model.mainId && this.detailModel.selected.kind === 'conversation' && (!this.model.mainMachineId || this.detailModel.selected.machine === this.model.mainMachineId))
+      ListItem() { Row({ space: Tokens.inset }) { Image(this.look.avatarUri || $r('app.media.foreground')).width(Tokens.symbol).height(Tokens.symbol).objectFit(ImageFit.Contain); Text(tr('main_chat')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).layoutWeight(1) }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).constraintSize({ minHeight: Tokens.header }).width('100%') }.selectable(true).selected(this.chatSelectionShown('conversation') && this.detailModel === this.model && this.detailModel.selected.id === this.model.mainId && this.detailModel.selected.kind === 'conversation' && (!this.model.mainMachineId || this.detailModel.selected.machine === this.model.mainMachineId))
         .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { this.mainRowVisible = visible ? ratio : 0; const row = new ResourceRow(this.model.mainId, '', 'conversation'); row.manager = this.model.profile.manager; row.machine = this.model.mainMachineId; row.session = row.id; if (row.id && row.machine) { this.rowVisibility.set(this.model.scope() + this.model.target(row), visible ? ratio : 0); this.visibilityEpoch++; } })
         .onDisAppear(() => this.mainRowVisible = 0).onClick(() => this.openMain()).id('persona.main')
       ForEach(this.conversationRowBindings, (binding: BoundRow<ResourceRow>) => {
         ListItem() {
           Row({ space: Tokens.inset }) { SymbolGlyph(Symbols.spaces).fontSize(Tokens.symbolFont).fontColor([Colors.secondary]).width(Tokens.symbol); Text(binding.value.title).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }) }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).constraintSize({ minHeight: Tokens.touch }).width('100%')
-        }.selectable(true).selected(this.detailModel === this.model && this.model.target() === this.model.target(binding.value))
+        }.selectable(true).selected(this.chatSelectionShown('conversation') && this.detailModel === this.model && this.model.target() === this.model.target(binding.value))
           .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { this.rowVisibility.set(this.model.scope() + this.model.target(binding.value), visible ? ratio : 0); if (this.model.target() === this.model.target(binding.value)) this.visibilityEpoch++; })
           .onDisAppear(() => { this.rowVisibility.delete(this.model.scope() + this.model.target(binding.value)); this.visibilityEpoch++; }).onClick(() => this.openRow(binding.value))
       }, (binding: BoundRow<ResourceRow>) => binding.key)
@@ -634,8 +647,15 @@ struct Index {
       }.backgroundColor(Colors.canvas).borderRadius(Tokens.card)
     }.width('100%').height('100%').backgroundColor(Colors.grouped).padding({ bottom: Tokens.listTail })
   }
+  private chatSelectionShown(kind: string): boolean {
+    return !!this.activeChild && this.stack.getAllPathName().includes(kind);
+  }
+  private readingAgentDetail(): boolean {
+    return this.model.section === 1 && this.detailModel.selected.kind === 'session' &&
+      (!!this.activeChild || this.stack.getAllPathName().includes('session'));
+  }
   @Builder agentsList() {
-    AgentListPage({ model: this.model, workspace: this.agentWorkspace, retainWorkspace: true, active: this.model.section === 1, selectedRow: this.detailModel.selected, rail: this.rail(), readingDetail: this.model.section === 1 && !!this.activeChild && this.detailModel.selected.kind === 'session',
+    AgentListPage({ model: this.model, workspace: this.agentWorkspace, retainWorkspace: true, active: this.model.section === 1, selectedRow: this.detailModel.selected, selectionVisible: this.chatSelectionShown('session'), rail: this.rail(), readingDetail: this.readingAgentDetail(),
       onOpen: (row: ResourceRow) => this.openRow(row), onVisible: (row: ResourceRow, ratio: number) => {
         this.rowVisibility.set(this.model.scope() + row.key(), ratio); if (row.key() === this.detailModel.selected.key()) this.visibilityEpoch++;
       } })
@@ -787,7 +807,7 @@ struct Index {
     }.width('100%').height('100%').justifyContent(FlexAlign.Center)
   }
   @Builder destinationTitle(name: string, param: Object) {
-    if (this.mainDestination(name, param) && !this.wide()) this.peerTitle()
+    if (this.mainDestination(name, param) && !this.wide()) this.peerTitle(true)
     else Text(this.destinationTitleText(name, param)).height(this.headerHeight()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
   }
   private destinationTitleText(name: string, param: Object): string {
@@ -887,7 +907,7 @@ struct Index {
           .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true })
       } else {
         Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
-          .hideBackButton(true).hideTitleBar(this.rail()).menus(this.shellMenu())
+          .hideBackButton(true).hideTitleBar(this.rail()).menus([])
           .toolbarConfiguration(this.rail() ? [{ value: tr('expand'), icon: $r('sys.media.ohos_ic_public_arrow_right'), action: () => this.collapsed = false }] : [])
           .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
           .navBarWidth(this.rail() ? Tokens.collapsed : Tokens.master).navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [Tokens.masterMin, Tokens.masterMax])

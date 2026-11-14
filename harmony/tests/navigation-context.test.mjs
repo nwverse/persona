@@ -5,6 +5,7 @@ import {readFileSync} from 'node:fs';
 import {registerHooks,stripTypeScriptTypes} from 'node:module';
 registerHooks({resolve(s,c,n){if(c.parentURL?.endsWith('NavigationContext.ets')&&s==='./Wire')return {url:new URL('./Wire.ets',c.parentURL).href,shortCircuit:true};return n(s,c);},load(u,c,n){if(u.endsWith('.ets'))return{format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(u),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};return n(u,c);}});
 const {NavigationContext}=await import('../entry/src/main/ets/models/NavigationContext.ets');
+const {Tokens}=await import('../entry/src/main/ets/design/Tokens.ets');
 const {ResourceRow,Wire}=await import('../entry/src/main/ets/models/Wire.ets');
 // Load the real shell's navigation methods, excluding only ArkUI builders and platform lifecycle surfaces.
 const source=readFileSync(new URL('../entry/src/main/ets/pages/Index.ets',import.meta.url),'utf8');
@@ -14,8 +15,8 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown'];
-const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire);
+const names=['chatSelectionShown','peerUsesSelect','measurePeerSlot','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown'];
+const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','Tokens','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire,Tokens);
 function row(id='source',manager='owner-b',kind='conversation'){const r=new ResourceRow(id,id,kind);r.manager=manager;r.machine='machine';r.session=id;return r;}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
 function fixture(){const shell=new NativeNavigation(),pushed=[];let gen=1;
@@ -191,4 +192,27 @@ test('tapping main during its initial read waits and fulfills the latest explici
 test('leaving before a queued main read finishes retires the explicit destination request',async()=>{
  const {shell,primary,pushed}=fixture(),first=deferred();let reads=0;primary.section=0;primary.repo=()=>({async call(){reads++;return first.promise;}});shell.navigationIntent=0;shell.defaultMainPending=false;
  const background=shell.resolveMainDestination(),tap=shell.openMain();shell.routeRevision++;first.resolve({main:'main',machine_id:'machine',conversations:[{id:'main'}]});await background;await tap;assert.equal(reads,1);assert.equal(pushed.length,0);
+});
+
+test('reading an Agent retains its queue across native background visibility, and releases on true exit',()=>{
+ const {shell,primary,pushed}=fixture();primary.section=1;primary.selected=row('agent','owner-a','session');shell.activeChild='shown-session';pushed.push({name:'session'});assert.equal(shell.readingAgentDetail(),true);
+ shell.activeChild='';assert.equal(shell.readingAgentDetail(),true);pushed.push({name:'history'});assert.equal(shell.readingAgentDetail(),true);
+ pushed.splice(0);assert.equal(shell.readingAgentDetail(),false);pushed.push({name:'settings'});assert.equal(shell.readingAgentDetail(),false);
+ pushed.push({name:'session'});primary.section=0;assert.equal(shell.readingAgentDetail(),false);primary.section=1;primary.selected.kind='conversation';assert.equal(shell.readingAgentDetail(),false);
+});
+
+test('each native title host switches peer controls only for its own measured slot',()=>{
+ const {shell}=fixture();Object.assign(shell,{environment:{fontScale:1},wide:()=>true,shellPeerWidth:0,mainPeerWidth:0});
+ assert.equal(shell.peerUsesSelect(false),false);assert.equal(shell.peerUsesSelect(true),false);
+ shell.measurePeerSlot(false,150);assert.equal(shell.peerUsesSelect(false),true);assert.equal(shell.peerUsesSelect(true),false);
+ shell.measurePeerSlot(true,220);assert.equal(shell.peerUsesSelect(true),false);
+ for(const width of [0,NaN,Infinity,150.5])shell.measurePeerSlot(false,width);assert.equal(shell.shellPeerWidth,150);
+ shell.measurePeerSlot(false,220);assert.equal(shell.peerUsesSelect(false),false);shell.environment.fontScale=2;assert.equal(shell.peerUsesSelect(true),true);
+});
+
+test('a cached chat selection is highlighted only while its destination context is displayed',()=>{
+ const {shell,pushed}=fixture();shell.activeChild='';assert.equal(shell.chatSelectionShown('conversation'),false);
+ pushed.push({name:'settings'});shell.activeChild='settings';assert.equal(shell.chatSelectionShown('conversation'),false);assert.equal(shell.chatSelectionShown('session'),false);
+ pushed.splice(0);pushed.push({name:'session'},{name:'history'});shell.activeChild='history';assert.equal(shell.chatSelectionShown('session'),true);
+ shell.activeChild='';assert.equal(shell.chatSelectionShown('session'),false);pushed.splice(0);pushed.push({name:'conversation'});shell.activeChild='chat';assert.equal(shell.chatSelectionShown('conversation'),true);
 });

@@ -44,7 +44,7 @@ const BoundAgentGroup = new Function('return ' + stripTypeScriptTypes(classCode(
 
 function pageClass(wire, translate) {
   return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows',
-    stripTypeScriptTypes('class Page {\n' + ['syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor']
+    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor']
       .map(methodCode).join('\n') + '\n}\n') + '\nreturn Page;')(
         BoundAgentRow, AgentRowPresentation, BoundAgentGroup, wire, translate,
         { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows);
@@ -180,7 +180,10 @@ test('row rendering reads the projection instead of parsing ResourceRow data or 
   assert.match(render, /binding\.presentation\.metadata/);
   assert.match(render, /binding\.presentation\.recentContent/);
   assert.match(render, /this\.rowTime\(binding\.presentation\)/);
-  assert.match(render, /this\.workspace\.selectedKey === binding\.presentation\.selectionKey/);
+  assert.match(render, /this\.isRowSelected\(binding\)/);
+  const selection = methodCode('isRowSelected');
+  assert.match(selection, /this\.workspace\.selectedKey === binding\.presentation\.selectionKey/);
+  assert.doesNotMatch(selection, /\.data\(\)|Wire\.parse|workspace\.isSelected\(/);
   assert.doesNotMatch(render, /workspace\.isSelected\(/);
   assert.doesNotMatch(render, /\.data\(\)|Wire\.parse|rowMetadata\(/);
 
@@ -189,4 +192,16 @@ test('row rendering reads the projection instead of parsing ResourceRow data or 
   const menu = source.slice(menuStart, menuEnd);
   assert.match(menu, /binding\.presentation\.spaceName/);
   assert.doesNotMatch(menu, /\.data\(\)|Wire\.parse/);
+});
+
+test('idle status uses the same localized words for the row and its spoken label',()=>{
+ for(const [locale,label] of [['base','Idle'],['en_US','Idle'],['zh_CN','待机'],['ja_JP','待機']]){
+  const catalog=JSON.parse(readFileSync(new URL('../entry/src/main/resources/'+locale+'/element/string.json',import.meta.url),'utf8'));
+  const labels=new Map(catalog.string.map(item=>[item.name,item.value]));const Page=pageClass({},key=>labels.get(key)||key);const page=new Page();
+  assert.equal(page.rowStatus({status:'idle'}),label);
+ }
+});
+
+test('visible selection can clear on Home without changing the cached selected Agent',()=>{
+ const Page=pageClass({},key=>key),page=new Page(),binding={presentation:{selectionKey:'agent'}};page.workspace={selectedKey:'agent'};page.selectionVisible=true;assert.equal(page.isRowSelected(binding),true);page.selectionVisible=false;assert.equal(page.isRowSelected(binding),false);assert.equal(page.workspace.selectedKey,'agent');page.selectionVisible=true;assert.equal(page.isRowSelected(binding),true);
 });
