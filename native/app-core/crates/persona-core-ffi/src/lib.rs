@@ -162,20 +162,15 @@ pub unsafe extern "C" fn persona_core_drain(
     chat: *const u8,
     length: usize,
 ) -> PersonaCoreBytes {
-    if runtime(core).is_none() {
+    let Some(runtime) = runtime(core) else {
         // Android treats a closed handle as no patch. Preserve an empty encoded patch for a live, unchanged chat.
         return PersonaCoreBytes::empty();
-    }
+    };
     let Ok(chat) = std::str::from_utf8(unsafe { slice(chat, length) }) else {
         return PersonaCoreBytes::empty();
     };
-    catch_unwind(AssertUnwindSafe(|| {
-        let Some(runtime) = runtime(core) else {
-            return Vec::new();
-        };
-        runtime.drain(chat)
-    }))
-    .map_or_else(|_| PersonaCoreBytes::empty(), PersonaCoreBytes::from_vec)
+    catch_unwind(AssertUnwindSafe(|| runtime.drain(chat)))
+        .map_or_else(|_| PersonaCoreBytes::empty(), PersonaCoreBytes::from_vec)
 }
 
 /// # Safety
