@@ -555,6 +555,83 @@ fn a_frame_for_another_chat_is_rejected() {
 }
 
 #[test]
+fn a_range_page_reaches_an_open_fold() {
+    // A range page without an opened fold is ignored, but the real path must be covered: open a fold first, then
+    // answer it with the wire corpus's range page, and require the opened work and its continuation request.
+    let host = Arc::new(Recorder::default());
+    let runtime = open(&host);
+    let fold = r#"{"id":"fold:entry_thinking#0","seq":2,"role":"assistant","kind":"fold","fold":{"items":3,"tools":1,"thoughts":1,"through_seq":4,"through_id":"entry_result#0"}}"#;
+    let first = format!(r#"{{"items":[{fold}],"has_more":false,"to_seq":2}}"#);
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Latest { body: first },
+    })));
+    drain(&runtime, &host);
+    assert!(runtime.dispatch(&wire::encode(&Action::Chat {
+        chat: CHAT.into(),
+        event: ChatEvent::OpenFold {
+            fold_id: "fold:entry_thinking#0".into()
+        },
+    })));
+    let (_, effects) = drain(&runtime, &host);
+    assert!(
+        matches!(
+            &effects[..],
+            [Effect::Fetch {
+                request: persona_core::continuity::Request::FetchRange {
+                    from_seq: 2,
+                    through_seq: 4
+                },
+                ..
+            }]
+        ),
+        "opening the fold asks for its range: {effects:?}"
+    );
+    let page = r#"{"items":[{"id":"entry_text#0","seq":3,"role":"user","kind":"text","text":"inside the fold"}],"more":false}"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Range { body: page.into() },
+    })));
+    let (patch, effects) = drain(&runtime, &host);
+    assert!(!patch.ops.is_empty(), "the opened fold publishes its items: {patch:?}");
+    assert!(patch.ops.iter().any(|op| matches!(op, ListOp::Insert { json, .. } | ListOp::Update { json, .. } if json.contains("inside the fold"))),
+        "the range page's item arrives: {patch:?}");
+    assert!(
+        effects.is_empty(),
+        "a complete range asks for nothing more: {effects:?}"
+    );
+}
+
+#[test]
+fn an_older_page_loads_history() {
+    // `Payload::Older` must reach `Session::older`, not `received`: it extends the list backwards and answers
+    // whether older history remains.
+    let host = Arc::new(Recorder::default());
+    let runtime = open(&host);
+    let latest = r#"{"items":[{"id":"b#0","seq":5,"role":"user","kind":"text"}],"has_more":true,"to_seq":5}"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Latest { body: latest.into() },
+    })));
+    drain(&runtime, &host);
+    let older = r#"{"items":[{"id":"a#0","seq":2,"role":"user","kind":"text","text":"earlier"}],"has_more":false}"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Older { body: older.into() },
+    })));
+    let (patch, effects) = drain(&runtime, &host);
+    assert_eq!(patch.has_more, Some(false), "the older page answers has_more");
+    assert!(
+        patch
+            .ops
+            .iter()
+            .any(|op| matches!(op, ListOp::Insert { json, .. } if json.contains("earlier"))),
+        "the older item arrives: {patch:?}"
+    );
+    assert!(effects.is_empty(), "an older page asks for nothing: {effects:?}");
+}
+
+#[test]
 fn a_reloaded_page_replaces_the_transcript() {
     let host = Arc::new(Recorder::default());
     let runtime = open(&host);

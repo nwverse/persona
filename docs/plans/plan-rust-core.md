@@ -395,9 +395,10 @@ Phase 2 lands in several PRs.
     request it answers. The worker decodes it with `persona_core::transport`; `dispatch` only queues the bytes. A
     frame of another type is ignored, and a frame iOS would drop is dropped without an error.
   - Replays of the same 17 wire cases, with the JSON exactly as the files hold it: through the runtime (32 items
-    byte for byte, and each case against the equivalent hand-built `ChatEvent`), through the real JNI binding and
-    through ArkTS plus the transport decoder on the host. The generated Kotlin, Swift and ArkTS codecs gain the new
-    variant; no client uses it yet.
+    byte for byte; every case except the opened-fold range page is also compared with the equivalent hand-built
+    `ChatEvent`, and separate tests drive a range page into an opened fold and an older page into history), through
+    the real JNI binding and through ArkTS plus the transport decoder on the host. The generated Kotlin, Swift and
+    ArkTS codecs gain the new variant; no client uses it yet.
   - Host measurement (best of 8, debug build): dispatching a 200 KB page costs about 21 µs against 1.8 µs for a
     small action, i.e. a copy, not a decode. The optimized Android benchmark and its budgets are unchanged.
   - Also fixed here: `ItemError`'s message quoted serde's error text, which repeats the offending value, so a

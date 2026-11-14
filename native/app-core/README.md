@@ -145,8 +145,9 @@ The same decoders are reached by `Action::WirePayload { chat, payload }` (`perso
 `Frame` of another type is ignored and one iOS would drop is dropped without an error. A refused page is an
 `Effect::Rejected` whose reason is a code and protocol key names, never payload content.
 `crates/persona-core-runtime/tests/transport_through_runtime.rs` replays the 17 wire cases through it with the JSON
-exactly as the files hold it: 32 items checked byte for byte, each case also compared with the equivalent hand-built
-`ChatEvent`, plus refusal, other-frame and dispatch-cost tests. The same corpus is replayed through the real JNI
+exactly as the files hold it: 32 items checked byte for byte, every case except the opened-fold range page also
+compared with the equivalent hand-built `ChatEvent`, plus separate tests that drive a range page into an opened fold
+and an older page into history, and refusal, other-frame and dispatch-cost tests. The same corpus is replayed through the real JNI
 binding (`TransportBindingFixtureTest` in `:core:rustcore`) and through ArkTS and the transport decoder on the host
 (`harmony/tests/core-host/transport.test.mjs`); both are host evidence, not device runs.
 
