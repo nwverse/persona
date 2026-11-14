@@ -63,8 +63,12 @@ globalThis.nativeCoreState = state;
 const wire = await import('../entry/src/main/ets/core/rustcore/Wire.ts');
 const { awaitDeliveredEffects, drainCore } = await import('../entry/src/ohosTest/ets/test/NativeCore.test.ets');
 
+function fetchRequest(chat = 'fixture') {
+  return {kind: 'fetch_after', after_seq: 9};
+}
+
 function fetchEffect(chat = 'fixture') {
-  return {kind: 'fetch', chat, request: {kind: 'fetch_latest', fold_work: false}};
+  return {kind: 'fetch', chat, request: fetchRequest(chat)};
 }
 
 function patch(version = 1) {
@@ -76,7 +80,8 @@ function patch(version = 1) {
 test('effect delivery waits for a queued callback, not a synchronous effect array', {timeout: 1000}, async () => {
   const effects = [];
   let completed = false;
-  const pending = awaitDeliveredEffects(effects, 1, 'delayed effect', 200).then(() => { completed = true; });
+  const pending = awaitDeliveredEffects(effects, [fetchRequest()], 'delayed effect', 200);
+  pending.then(() => { completed = true; });
   setTimeout(() => { effects.push(fetchEffect()); }, 15);
   assert.equal(completed, false, 'the wait must yield before its predicate is satisfied');
   await pending;
@@ -87,16 +92,16 @@ test('zero-effect steps yield to the event loop and reject stale callbacks', asy
   const effects = [];
   let delivered = false;
   setTimeout(() => { delivered = true; }, 0);
-  await awaitDeliveredEffects(effects, 0, 'no effects', 25);
+  await awaitDeliveredEffects(effects, [], 'no effects', 25);
   assert.equal(delivered, true, 'a zero-effect step must still yield before clearing the shared array');
-  await assert.rejects(awaitDeliveredEffects([fetchEffect()], 0, 'stale effect', 25), /expected 0 effects, received 1/);
+  await assert.rejects(awaitDeliveredEffects([fetchEffect()], [], 'stale effect', 25), /expected \[\], received|unexpected extra effects/);
 });
 
 test('a late effect after a no-patch action is still part of that step', {timeout: 1000}, async () => {
   patch(0);
   const effects = state.effects = [];
   const list = [];
-  const pending = drainCore(1, 'fixture', list, effects, 1, 'no-patch effect');
+  const pending = drainCore(1, 'fixture', list, effects, [fetchRequest()], 'no-patch effect');
   let completed = false;
   pending.then(() => { completed = true; });
   setTimeout(() => { effects.push(fetchEffect()); }, 15);
@@ -108,16 +113,21 @@ test('a late effect after a no-patch action is still part of that step', {timeou
 
 test('missing effects fail within the supplied bound instead of passing an empty request comparison', async () => {
   const started = Date.now();
-  await assert.rejects(awaitDeliveredEffects([], 1, 'missing effect', 30), /expected 1 effects, received 0/);
+  await assert.rejects(awaitDeliveredEffects([], [fetchRequest()], 'missing effect', 30), /expected 1 effects, received 0/);
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 20 && elapsed < 1000, `bounded wait took ${elapsed}ms`);
 });
 
-test('duplicate effects are rejected during the bounded quiet interval', async () => {
-  const effects = [fetchEffect()];
-  const pending = awaitDeliveredEffects(effects, 1, 'duplicate effect', 200);
-  setTimeout(() => { effects.push(fetchEffect()); }, 15);
-  await assert.rejects(pending, /late or duplicate effects/);
+test('duplicate effects are rejected by the exact request sequence', async () => {
+  const effects = [fetchEffect(), fetchEffect()];
+  await assert.rejects(awaitDeliveredEffects(effects, [fetchRequest()], 'duplicate effect', 200),
+    /unexpected extra effects before the expected request sequence/);
+});
+
+test('a stale effect cannot satisfy a later step with the same request', async () => {
+  await assert.rejects(awaitDeliveredEffects([fetchEffect()], [], 'previous no-effect step', 30), /expected \[\], received|unexpected extra effects/);
+  const different = {kind: 'fetch', chat: 'fixture', request: {kind: 'fetch_after', after_seq: 8}};
+  await assert.rejects(awaitDeliveredEffects([different], [fetchRequest()], 'different step', 30), /after_seq.*8/);
 });
 
 test('drainCore flushes, waits for the action effects, then drains and applies its patch', {timeout: 1000}, async () => {
@@ -127,7 +137,7 @@ test('drainCore flushes, waits for the action effects, then drains and applies i
   const effects = state.effects = [];
   const list = [];
   patch();
-  const pending = drainCore(1, 'fixture', list, effects, 1, 'delayed drain');
+  const pending = drainCore(1, 'fixture', list, effects, [fetchRequest()], 'delayed drain');
   assert.equal(state.flushes, 1);
   assert.equal(state.drains, 0, 'a synchronous drain would observe no queued NAPI effects');
   setTimeout(() => { effects.push(fetchEffect()); }, 15);
