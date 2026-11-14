@@ -241,10 +241,13 @@ func TestMCPWaitComputerElicitRequiresLiveCall(t *testing.T) {
 func TestMCPWaitComputerElicitUsesRegisteredOrigin(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
 	const callID = "22222222-2222-4222-8222-222222222222"
-	ft.s.mcpWaitContext(context.Background(), "mac", callID, true)
+	outer := ft.s.mcpWaitContext(context.Background(), "mac", callID, true)
+	defer ft.s.endMCPWait(outer)
 	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
+	resumeOuter := pushMCPWait(outer, proto.MCPWaitApproval)
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitApproval)
 	ft.s.SetExtensions(&mcpWaitElicitExtension{answer: func(ctx context.Context) (map[string]any, error) {
-		resume := pushMCPWait(ctx, proto.MCPWaitApproval)
+		resume := pushMCPWait(ctx, proto.MCPWaitAnswer)
 		resume()
 		return map[string]any{"action": "cancel"}, nil
 	}})
@@ -252,13 +255,68 @@ func TestMCPWaitComputerElicitUsesRegisteredOrigin(t *testing.T) {
 	if _, handled, err := ft.s.NodeRequest(context.Background(), "target", "computer.elicit", params); !handled || err != nil {
 		t.Fatalf("computer.elicit handled = %v, err = %v", handled, err)
 	}
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitAnswer)
 	nextMCPWaitEvent(t, events, callID, proto.MCPWaitApproval)
+	resumeOuter()
 	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
+}
+
+func TestMCPWaitRestoreOutOfOrder(t *testing.T) {
+	ft, events := newMCPWaitTest(t)
+	const callID = "88888888-8888-4888-8888-888888888888"
+	ctx := ft.s.mcpWaitContext(context.Background(), "mac", callID, true)
+	defer ft.s.endMCPWait(ctx)
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
+	resumeApproval := pushMCPWait(ctx, proto.MCPWaitApproval)
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitApproval)
+	resumeAnswer := pushMCPWait(ctx, proto.MCPWaitAnswer)
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitAnswer)
+
+	resumeApproval() // the permission closed; only the newer question is still open
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitAnswer)
+	resumeAnswer()
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
+
+	const sameKindID = "88888888-8888-4888-8888-888888888889"
+	sameKindCtx := ft.s.mcpWaitContext(context.Background(), "mac", sameKindID, true)
+	defer ft.s.endMCPWait(sameKindCtx)
+	nextMCPWaitEvent(t, events, sameKindID, proto.MCPWaitComputer)
+	first := pushMCPWait(sameKindCtx, proto.MCPWaitApproval)
+	nextMCPWaitEvent(t, events, sameKindID, proto.MCPWaitApproval)
+	second := pushMCPWait(sameKindCtx, proto.MCPWaitApproval)
+	nextMCPWaitEvent(t, events, sameKindID, proto.MCPWaitApproval)
+	first()
+	nextMCPWaitEvent(t, events, sameKindID, proto.MCPWaitApproval)
+	second()
+	nextMCPWaitEvent(t, events, sameKindID, proto.MCPWaitComputer)
+}
+
+func TestMCPWaitEndBlocksHeldElicitReporter(t *testing.T) {
+	ft, events := newMCPWaitTest(t)
+	const callID = "99999999-9999-4999-8999-999999999999"
+	outer := ft.s.mcpWaitContext(context.Background(), "mac", callID, true)
+	nextMCPWaitEvent(t, events, callID, proto.MCPWaitComputer)
+	held := ft.s.mcpWaitElicitContext(context.Background(), callID)
+	ft.s.endMCPWait(outer)
+	resume := pushMCPWait(held, proto.MCPWaitApproval)
+	resume()
+	select {
+	case event := <-events:
+		t.Fatalf("a held elicitation reporter published after its outer call returned: %s", event.Params)
+	default:
+	}
+	ft.s.mcpWaitMu.Lock()
+	_, live := ft.s.mcpWaits[callID]
+	ft.s.mcpWaitMu.Unlock()
+	if live {
+		t.Fatal("the completed call stayed registered")
+	}
 }
 
 func TestMCPWaitNestedWaitRestoresPreviousKind(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
 	ctx := ft.s.mcpWaitContext(context.Background(), "mac", "10000000-0000-4000-8000-000000000008", true)
+	defer ft.s.endMCPWait(ctx)
 	nextMCPWaitEvent(t, events, "10000000-0000-4000-8000-000000000008", proto.MCPWaitComputer)
 	resumeApproval := pushMCPWait(ctx, proto.MCPWaitApproval)
 	nextMCPWaitEvent(t, events, "10000000-0000-4000-8000-000000000008", proto.MCPWaitApproval)

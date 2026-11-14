@@ -10,15 +10,23 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// mcpWaitReporter belongs to one pending node request. Its stack restores an outer wait if interactions nest; with
-// no interaction left, the remote call is running on the computer again.
+type mcpWaitEntry struct {
+	id   uint64
+	kind proto.MCPWaitKind
+}
+
+// mcpWaitReporter belongs to one pending node request. Each open interaction has its own entry; resolving one removes
+// that entry, and the newest remaining kind wins. With no interaction left, remote execution is the base state again.
 type mcpWaitReporter struct {
 	machine string
 	callID  string
 	notify  func(devicewire.NodeEvent)
 
 	mu    sync.Mutex
-	stack []proto.MCPWaitKind
+	next  uint64
+	base  proto.MCPWaitKind
+	stack []mcpWaitEntry
+	done  bool
 }
 
 type mcpWaitContextKey struct{}
@@ -35,7 +43,7 @@ func (s *Service) mcpWaitContext(ctx context.Context, machine, callID string, en
 	if !enabled || !proto.ValidMCPWaitCallID(callID) || !ok {
 		return ctx
 	}
-	r := &mcpWaitReporter{machine: machine, callID: callID, notify: notifier.Notify}
+	r := &mcpWaitReporter{machine: machine, callID: callID, notify: notifier.Notify, base: proto.MCPWaitComputer}
 	r.mu.Lock()
 	s.mcpWaitMu.Lock()
 	if s.mcpWaits[callID] != nil {
@@ -48,7 +56,7 @@ func (s *Service) mcpWaitContext(ctx context.Context, machine, callID string, en
 	}
 	s.mcpWaits[callID] = r
 	s.mcpWaitMu.Unlock()
-	r.publishLocked(proto.MCPWaitComputer)
+	r.publishLocked(r.base)
 	r.mu.Unlock()
 	return context.WithValue(mcpwait.WithCall(ctx, callID), mcpWaitContextKey{}, r)
 }
@@ -74,6 +82,9 @@ func (s *Service) endMCPWait(ctx context.Context) {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.done = true
 	s.mcpWaitMu.Lock()
 	if s.mcpWaits[r.callID] == r {
 		delete(s.mcpWaits, r.callID)
@@ -87,6 +98,9 @@ func mcpWaitFrom(ctx context.Context) *mcpWaitReporter {
 }
 
 func (r *mcpWaitReporter) publishLocked(kind proto.MCPWaitKind) {
+	if r.done {
+		return
+	}
 	params, err := json.Marshal(proto.MCPWaitEvent{CallID: r.callID, Kind: proto.NormalizeMCPWaitKind(kind)})
 	if err != nil {
 		return
@@ -94,8 +108,8 @@ func (r *mcpWaitReporter) publishLocked(kind proto.MCPWaitKind) {
 	r.notify(devicewire.NodeEvent{MachineID: r.machine, Event: proto.EventMCPWait, Params: params})
 }
 
-// pushMCPWait publishes kind and returns the one-time restoration of the previous kind (computer at the outermost
-// level). The restoration is deferred by the interaction owner, so resolution and cancellation both move the call on.
+// pushMCPWait publishes kind and returns a one-time restoration that removes this push's own entry. Resolution order
+// therefore does not matter: the newest entry still open wins, with the call's base state underneath every card.
 func pushMCPWait(ctx context.Context, kind proto.MCPWaitKind) func() {
 	r := mcpWaitFrom(ctx)
 	if r == nil {
@@ -103,22 +117,39 @@ func pushMCPWait(ctx context.Context, kind proto.MCPWaitKind) func() {
 	}
 	kind = proto.NormalizeMCPWaitKind(kind)
 	r.mu.Lock()
-	r.stack = append(r.stack, kind)
+	if r.done {
+		r.mu.Unlock()
+		return func() {}
+	}
+	r.next++
+	entry := mcpWaitEntry{id: r.next, kind: kind}
+	r.stack = append(r.stack, entry)
 	r.publishLocked(kind)
 	r.mu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			r.mu.Lock()
-			if len(r.stack) > 0 {
-				r.stack = r.stack[:len(r.stack)-1]
+			defer r.mu.Unlock()
+			if r.done {
+				return
 			}
-			previous := proto.MCPWaitComputer
-			if len(r.stack) > 0 {
-				previous = r.stack[len(r.stack)-1]
+			at := -1
+			for i := range r.stack {
+				if r.stack[i].id == entry.id {
+					at = i
+					break
+				}
 			}
-			r.publishLocked(previous)
-			r.mu.Unlock()
+			if at < 0 {
+				return
+			}
+			r.stack = append(r.stack[:at], r.stack[at+1:]...)
+			current := r.base
+			if len(r.stack) > 0 {
+				current = r.stack[len(r.stack)-1].kind
+			}
+			r.publishLocked(current)
 		})
 	}
 }
