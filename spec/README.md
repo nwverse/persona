@@ -30,6 +30,7 @@ spec/
     minutes-overview/ the minutes' summary card: bold places, cleaning, the fallback and its Markdown, checked by the hub, the mock, iOS and web
     tool-names/       tool names, subjects and arguments in words, checked by Android (iOS later)
     chat-search/      what search in chat and the assistant's chat index find of each item, checked by web (Go and Android later)
+    screen-link/      the live screen's session wire, checked by the node (Go) and the iPhone (PersonaScreenKit)
     tokens/           设计 token 的校验夹具（如该领域提供）
   tokens/             设计 token 的来源文件，见 D7
 ```
@@ -43,7 +44,7 @@ spec/
 | sort | 见各自 [README](fixtures/sort/README.md) |
 | answer | 见各自 [README](fixtures/answer/README.md) |
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
-| wire | 见各自 [README](fixtures/wire/README.md) |
+| wire | 见各自 [README](fixtures/wire/README.md). The `items`, `items_after`, `items_range` cases and the `items` events are also replayed by the shared Rust core's `transport` decoders (`native/app-core`, `cargo test`), #7385 |
 | injected | 见各自 [README](fixtures/injected/README.md)：hub 注入给模型的消息（任务通知、定时任务……）怎么认 |
 | comments | [README](fixtures/comments/README.md): the `> Comment N` / `Code comment N` / `Element comment N` blocks a message leads with, written and read back by the web app and the iOS app (#151) |
 | attention | [README](fixtures/attention/README.md): Persona Link's "Needs you" summary counts what the web app's badge counts, checked by Go and the web app |
@@ -57,6 +58,7 @@ spec/
 | star-prompt | [README](fixtures/star-prompt/README.md): when the GitHub star prompts show, the empty Agents pill, the milestone card after enough Agents started and the onboarding toast, checked by the web app and Android (#5761; iOS with #5910) |
 | meeting-echo | [README](fixtures/meeting-echo/README.md): which transcript lines of a meeting are Persona's own answer heard by the microphone (they overlap a stretch it spoke in and their words match what it said; a stretch saved without text keeps the time rule), checked by the hub and the iOS app (#5905) |
 | minutes-overview | [README](fixtures/minutes-overview/README.md): the minutes' summary card (#6563), which places of a text are bold (each `strong` entry's first occurrence after the one before), how a client cleans a malformed overview and when it falls back to the minutes as before, and the hub's Markdown of the same minutes, checked by the hub, the mock hub, the iPhone and the web |
+| screen-link | [README](fixtures/screen-link/README.md): the live screen's session wire (#6398), every message framed byte for byte alike by the node and the iPhone's client |
 | tokens | 见各自 [README](tokens/README.md)；校验夹具如放在 `fixtures/tokens/`，结构由该领域 README 说明 |
 
 ## 夹具约定

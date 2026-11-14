@@ -292,12 +292,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
 // own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
 // 192 B on top of #7339's.
+// A folded-search retry now clears its partial warning only after every requested fold has loaded; real failures and
+// budget caps still show it (#7389). Measured: en 476,854 B, ja 480,545 B, zh-Hans 477,834 B. The budget moves by 51 B.
 // Overview's honest counts (web audit items 30 and 85): the summary says Loading… once the hub is connected, says it
 // couldn't read a paging hub's Agents list with Retry and leaves each computer's count out meanwhile, and never builds an
 // empty sentence; the complete Agents list says when its first read failed (audit item 3; the Machines pages' words are
-// in machines-machinedetail, outside the first screen). ja 480,709 B against 480,494 B on main at 6602a9ef3, +215 B
-// (en 477,005 B against 476,803 B, zh-Hans 477,993 B against 477,783 B). The budget moves by these 215 B.
-export const FIRST_SCREEN_BUDGET = 480_709;
+// in machines-machinedetail, outside the first screen). Measured in one environment against main at 608510018: ja
+// 480,562 B to 480,752 B, +190 B (en 476,871 B to 477,048 B, zh-Hans 477,851 B to 478,036 B). The budget moves by these
+// 190 B. That main measured 17 B over its own 480,545 B there; this entry does not cover those.
+export const FIRST_SCREEN_BUDGET = 480_735;
+
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

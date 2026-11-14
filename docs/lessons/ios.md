@@ -297,6 +297,12 @@ objects, bounds and references; malformed layouts keep raw scanning. Keep config
 original bytes, decode unreachable string objects too, and still scan data, padding and trailing bytes. Do not fix
 this by changing a locale, allowing an address or rearranging the generated plist.
 
+## Rust dependency panic paths in a Release archive (#7394)
+
+- Rust dependencies carry their source paths in panic metadata, so an Apple XCFramework can include the build Mac's home and Cargo registry address even when the app has no such string in its source. `check_bundle_privacy.py` correctly rejects that main executable.
+- Set `--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona` in `native/app-core/scripts/build-apple.sh` for every Apple target. This changes only debug/panic paths, not the runtime code or the privacy scanner's exemptions; verify the actual exported archive with `check_bundle_privacy.py`.
+- A successful archive does not prove the package can ship: the bundle privacy scan runs after it, before export and upload. Keep that gate.
+
 ## Device names in Siri intent descriptions (#3113)
 
 App Store Connect can commit an upload but reject it before the build appears in TestFlight. Validation code 90626 rejected a meeting-recording App Intent description containing `iPhone`, even though archive, export, purpose strings and entitlements passed. Keep the intent description device-neutral in Swift and in every catalog translation; changing a permission purpose string does not fix Siri metadata. If a committed upload never appears, inspect the upload's state and errors instead of re-uploading the same package or treating the wait timeout as success.
@@ -2538,3 +2544,15 @@ that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder 
   simulator (iOS 27) and on some on an iPad one; a second tap a few seconds later always went through. Turning
   autocorrection off did not change it. `FilesActionsTests`, which takes a screenshot between typing and tapping, saw it
   once. Tap again while the alert stays up, then check what reached the mock; a single tap reads as an app bug.
+
+## A row opened at the oldest end jumped 100 pt: the pin let go too early (2026-11-14, #7237)
+
+- At the oldest end of the chat the list rests about 100 pt past the end its own arithmetic gives (`within`), and UIKit sets
+  it back to that end once the content size follows a pass after the row grew. A held row was clamped to `within`, so it went
+  up by the difference, and the hold ended on SwiftUI's first report of the row, which still said it had not moved (SwiftUI
+  reports the position its own layout gives, ahead of the scroll view). Your own long message and a work line both did it.
+- `ChatPin` now remembers how far past the end the list was when the hold began (`Held.slack`) and allows it, and a hold
+  does not end until the row has said its content grew and the list is where the hold wants it. Evidence: per-frame row top
+  (`UnfoldTrace`) constant on opening and folding at the oldest end; `UnfoldTests.testWorkLineAtTheOldestEnd` with
+  `MOCK_LONG_HISTORY=oldest` and `-showOldest`. A stale report is not proof the list is there: also read the offset
+  (`-scrollTrace`, the `why` column of the pin says how the last hold ended).
