@@ -279,6 +279,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		params["session_id"] = expectID
 	}
 	s.setPlanThen(ctx, m.ID, params)
+	sentAt := time.Now()
 	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 	skipped, refused := s.ultracodeRefusal(ctx, err, params)
 	if refused {
@@ -300,9 +301,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			// node may not have had the start at all. Wait for the link to come back and look once more; still
 			// nothing, the caller starts it once again (#7511). A link that stayed up is a busy node: no retry.
 			if s.startLinkDown(ctx, m.ID, err) {
-				back := s.waitMachineBack(m.ID)
+				back := s.waitMachineBack(ctx, m.ID)
 				if back {
-					if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
+					// A start that may have reached the node is looked for until the node's own start has run out
+					// of time, so a retry never opens a second agent beside one still being built (#6540).
+					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
 						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
 						return m.ID, sess.SessionID, nil
 					}
@@ -351,10 +354,17 @@ var (
 // machine that cannot answer confirms nothing: the caller keeps its failure behavior, and nothing is started
 // elsewhere.
 func (s *Service) adoptTaskStartSession(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool) (proto.Session, bool) {
+	return s.adoptTaskStartSessionUntil(ctx, m, launcher, cwd, expectID, knownIDs, time.Time{})
+}
+
+// adoptTaskStartSessionUntil is adoptTaskStartSession that keeps looking until until when that is later than
+// taskStartAdoptWait from now.
+func (s *Service) adoptTaskStartSessionUntil(ctx context.Context, m Device, launcher, cwd, expectID string, knownIDs map[string]bool, until time.Time) (proto.Session, bool) {
 	if knownIDs == nil {
 		return proto.Session{}, false
 	}
-	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartAdoptWait)
+	wait := max(taskStartAdoptWait, time.Until(until))
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
 	for {
 		if sess, ok := s.adoptStartedSession(actx, m, launcher, cwd, expectID, knownIDs); ok {

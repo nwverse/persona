@@ -20,10 +20,11 @@ func linkHub(t *testing.T, wait time.Duration) (*Service, *fakeHub) {
 	f.slowStart = false
 	f.down = map[string]bool{}
 	f.mu.Unlock()
+	f.downLists = map[string]int{}
 	s.taskRetry = wait
-	old := taskReconnectPoll
-	taskReconnectPoll = 10 * time.Millisecond
-	t.Cleanup(func() { taskReconnectPoll = old })
+	oldPoll, oldBudget := taskReconnectPoll, nodeStartBudget
+	taskReconnectPoll, nodeStartBudget = 10*time.Millisecond, 0
+	t.Cleanup(func() { taskReconnectPoll, nodeStartBudget = oldPoll, oldBudget })
 	return s, f
 }
 
@@ -143,12 +144,7 @@ func TestTaskStartWaitWithTheMachineGoneRetriesOnceItIsBack(t *testing.T) {
 	starts := 0
 	f.onStart = func(f *fakeHub, _ map[string]any) {
 		if starts++; starts == 1 {
-			f.down["box"] = true
-			time.AfterFunc(1500*time.Millisecond, func() { // still down after the machine's list was asked (1 s)
-				f.mu.Lock()
-				f.down["box"] = false
-				f.mu.Unlock()
-			})
+			f.downLists["box"] = 1 // off line when the hub looks after the wait, back when it looks again
 			return
 		}
 		f.slowStart = false
@@ -160,4 +156,37 @@ func TestTaskStartWaitWithTheMachineGoneRetriesOnceItIsBack(t *testing.T) {
 		t.Fatalf("starts %v, want two", starts)
 	}
 	noHealthRecord(t, s)
+}
+
+// A start that may have reached the node is looked for until the node's own start would have run out of time before
+// it is started again: a node still building the first session shows it in that time, and no second agent opens.
+func TestTaskStartLinkDropWaitsOutTheNodesStartBeforeRetrying(t *testing.T) {
+	s, f := linkHub(t, 5*time.Second)
+	nodeStartBudget = 4 * time.Second // longer than both looks (1 s each) and the reconnect
+	dropFirstStart(f, 100*time.Millisecond, nil)
+	f.mu.Lock()
+	var startID string
+	inner := f.onStart
+	f.onStart = func(f *fakeHub, p map[string]any) {
+		if startID == "" {
+			startID, _ = p["session_id"].(string)
+			// The node finishes the first session 3 s in: after both 1 s looks, within its own budget.
+			time.AfterFunc(3*time.Second, func() {
+				f.mu.Lock()
+				f.sessions["box"] = []proto.Session{{SessionID: startID, MachineID: "box", Cwd: "/code/app", Agent: "claude", Launcher: "claude",
+					StartedByPersona: true, Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().UTC()}}
+				f.mu.Unlock()
+			})
+		}
+		inner(f, p)
+	}
+	f.mu.Unlock()
+	todo := startReconcileTask(t, s, "box", machineFixed)
+	waitFor(t, "the first session to be adopted", func() bool { return len(todoNow(s, todo.ID).Agents) == 1 })
+	if starts := taskStartMachines(f); len(starts) != 1 {
+		t.Fatalf("starts %v: a second agent was started beside one the node was still building", starts)
+	}
+	if got := todoNow(s, todo.ID).Agents[0].SessionID; got != startID {
+		t.Fatalf("linked %s, want the first start's %s", got, startID)
+	}
 }

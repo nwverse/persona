@@ -408,7 +408,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			case <-ctx.Done():
 			}
 			if ctx.Err() == nil {
-				s.waitMachineBack(t.Machine)
+				s.waitMachineBack(ctx, t.Machine)
 			}
 			if ctx.Err() == nil {
 				mid, sid, err = s.startTaskAgent(ctx, &t, retry)

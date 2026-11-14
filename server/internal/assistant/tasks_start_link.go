@@ -6,13 +6,15 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // A task start whose answer the link to its machine took with it (#7511): the hub's link to a computer can go
 // half-open and come back a minute or two later (a proxy in the way, a network blink), and every start out on it
 // fails with "rpc: connection closed" or "context deadline exceeded" although the computer is fine. The machine's own
-// list is asked first (#6540); when it shows nothing, the start waits for the link to come back, asks the list once
-// more, and only then starts the agent once again. The wait follows the link (the machine back online), not a fixed
+// list is asked first (#6540); when it shows nothing, the start waits for the link to come back, asks the list again
+// (until the node's own start would have run out of time, when the request may have reached it), and only then
+// starts the agent once again. The wait follows the link (the machine back online), not a fixed
 // delay. None of it counts against the launcher (recordStartFailure skips link failures and waits that ran out).
 
 // taskReconnectWait bounds how long a task start waits for its machine's link to come back before its one retry
@@ -60,21 +62,42 @@ func (s *Service) machineUp(ctx context.Context, machine string) bool {
 	return ok && m.Online && m.Reachable
 }
 
-// waitMachineBack waits until machine is connected again, at most reconnectWait; true when it is.
-func (s *Service) waitMachineBack(machine string) bool {
+// waitMachineBack waits until machine is connected again, at most reconnectWait; true when it is. ctx may be spent
+// already (the start's own wait ran out on the dead link): the wait is bounded by reconnectWait alone.
+func (s *Service) waitMachineBack(ctx context.Context, machine string) bool {
 	limit := s.reconnectWait()
-	poll := min(taskReconnectPoll, max(limit/8, time.Millisecond))
-	deadline := time.Now().Add(limit)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
+	defer cancel()
+	tick := time.NewTicker(min(taskReconnectPoll, max(limit/8, time.Millisecond)))
+	defer tick.Stop()
 	for {
-		if s.machineUp(context.Background(), machine) {
+		if s.machineUp(ctx, machine) {
 			return true
 		}
-		left := time.Until(deadline)
-		if left <= 0 {
+		select {
+		case <-ctx.Done():
 			return false
+		case <-tick.C:
 		}
-		time.Sleep(min(poll, left))
 	}
+}
+
+// nodeStartBudget is how long a node may take over a session start before it gives up on it itself (the node's
+// startWait: claude's start and ready waits and a margin, 4m30s by default), with some slack. A var for tests.
+var nodeStartBudget = 5 * time.Minute
+
+// startMayHaveArrived is how long after sentAt a start the link took may still be under way on its node: the node's
+// own budget when the request was written (the link dropped with it out, or the wait ran out); zero for one that
+// provably never left (closed before writing, no connection).
+func startMayHaveArrived(err error, sentAt time.Time) time.Time {
+	if errors.Is(err, rpc.ErrDropped) || startWaitEnded(err) {
+		return sentAt.Add(nodeStartBudget)
+	}
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Message == rpc.ErrClosed.Error() {
+		return sentAt.Add(nodeStartBudget) // a hub on the way: whether it was written there is not known
+	}
+	return time.Time{}
 }
 
 // linkFailureText is what a task's card says of a start that failed on the link or on a node that did not answer
