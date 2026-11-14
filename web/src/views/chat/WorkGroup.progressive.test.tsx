@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 // Opening a long work summary (audit item 90: 650 commands with notes, about 8,000 elements) draws the first screenful
-// with the tap and the rest in idle batches (work-budget.ts), across nested groups too; a search hit inside it draws
-// everything at once so the hit's row is there; a live group draws everything.
+// with the tap and the rest in idle batches (work-budget.ts), across nested groups too; a search hit or a jump to a call
+// inside it draws everything at once so the row asked for is there; a live group draws everything.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Step } from "../../lib/turns";
 import type { WorkGroupNode, WorkNode } from "../../lib/work-groups";
 import { forgetExpanded } from "./expanded";
+import { openToCall, useCallSeeker } from "./jump";
 import { clearReveal, revealItem } from "./search-reveal";
 import { FIRST_STEPS, STEP_BATCH, stepWeight, withinBudget } from "./work-budget";
 import { WorkGroup, type WorkProps } from "./WorkGroup";
@@ -24,6 +25,11 @@ const tool = (n: number): Step => ({
 const steps = (from: number, count: number): WorkNode[] => Array.from({ length: count }, (_, i) => ({ kind: "step", step: tool(from + i) }));
 const flat = (count: number, live = false): WorkGroupNode => ({ kind: "group", id: "work-big", children: steps(1, count), live, startedAt: T0, durationMs: 4_200_000 });
 const props: WorkProps = { mid: "m", sid: "s", scope: "big:", expandFold: async () => {}, agentStatus: () => "completed" };
+/** An exchange's work as SegmentView draws it: its groups answer "Jump to the step that started it" (jump.ts). */
+function Exchange({ g }: { g: WorkGroupNode }) {
+  useCallSeeker(props.scope, [g]);
+  return <WorkGroup g={g} p={props} />;
+}
 
 let host: HTMLDivElement;
 let root: Root;
@@ -92,6 +98,32 @@ describe("a long work summary opens a screenful at a time (audit item 90)", () =
     expect(rows()).toBe(FIRST_STEPS);
     act(() => revealItem("big:", "t290#0"));
     expect(rows()).toBe(300);
+  });
+
+  it("a jump to a call deep inside (a background task's notice, a subagent or child link) draws its row at once", () => {
+    const g = flat(650);
+    act(() => root.render(<Exchange g={g} />));
+    let found = false;
+    // ChatView.jumpToCall → seekCall → openToCall: the same update opens the group and draws step 600's row
+    act(() => void (found = openToCall("big:", "c-600")));
+    expect(found).toBe(true);
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    expect(rows()).toBe(650);
+    expect(host.querySelector('[data-tool-use="c-600"]')).not.toBeNull();
+  });
+
+  it("a jump into a group already open with part of its steps draws the rest at once", () => {
+    act(() => root.render(<Exchange g={flat(300)} />));
+    act(() => header().click());
+    expect(rows()).toBe(FIRST_STEPS);
+    act(() => void openToCall("big:", "c-290"));
+    expect(rows()).toBe(300);
+    expect(host.querySelector('[data-tool-use="c-290"]')).not.toBeNull();
+    // closed and opened again by hand: the first screenful again
+    act(() => header().click());
+    act(() => vi.advanceTimersByTime(500));
+    act(() => header().click());
+    expect(rows()).toBe(FIRST_STEPS);
   });
 
   it("closing and opening again starts from the first screenful", () => {

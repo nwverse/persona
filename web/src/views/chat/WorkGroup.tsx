@@ -105,8 +105,8 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
     if (next) for (const f of foldsOf(g)) if (f.fold) openFoldRange(p.scope, f.seq, f.fold.through_seq);
   };
   // a long trace is drawn a screenful at a time (work-budget.ts): the outermost group keeps the budget, nested ones draw
-  // what it leaves them
-  const budget = useStepBudget(open && !p.nested, stepWeight(g) - 1, g.live);
+  // what it leaves them; a jump to a call in it (jump.ts) draws it whole
+  const budget = useStepBudget(p.nested ? undefined : key, open && !p.nested, stepWeight(g) - 1, g.live);
   const drawn = p.nested ? limit : budget.drawn;
   // a search hit inside it (search-reveal.ts): it opens, with every step drawn so the hit's row is there to land on,
   // and "Back to where you were" closes it again
