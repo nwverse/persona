@@ -216,6 +216,15 @@ class TodoTriageTest {
         assertEquals(TriageSection.Other to TriageRule.Rest, t.section to t.rule)
     }
 
+    // Shared case: concern_closed_failed_start_old
+    @Test fun concernClosedFailedStartOldSharedCase() {
+        val t = atShared(sharedTodo(
+            "concern-closed-failed", "Answer the closed launch question", "2026-11-01T00:00:00.000Z", "2026-11-08T00:00:00.000Z",
+            doneAt = "2026-11-08T00:00:00.000Z", doneBy = "reported", startError = "no launcher",
+        ))
+        assertEquals(TriageSection.Done to TriageRule.FailedStart, t.section to t.rule)
+    }
+
     // Shared case: concern_accepted
     @Test fun concernAcceptedSharedCase() {
         val t = atShared(sharedTodo(
