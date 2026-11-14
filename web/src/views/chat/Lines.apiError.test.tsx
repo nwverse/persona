@@ -46,6 +46,26 @@ describe("a model error's fix", () => {
     history.replaceState(null, "", "/");
   });
 
+  it("keeps the launcher on text-derived fallback fixes", () => {
+    for (const kind of ["line", "banner"] as const) {
+      history.replaceState(null, "", "/");
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      const props = { line: line("Invalid API key · Fix external API key"), assistant: true, launcher: "team-relay" };
+      act(() => root.render(kind === "line"
+        ? <ChatLineView {...props} mid="m" sid="s" expandFold={async () => {}} />
+        : <ErrorBanner {...props} onDismiss={() => {}} />));
+      expect(host.textContent).toContain("team-relay ·");
+      const repair = [...host.querySelectorAll("button")].find((b) => b.textContent === "去修")!;
+      act(() => repair.click());
+      expect(location.pathname + location.search).toBe("/settings?tab=models&launcher=team-relay");
+      act(() => root.unmount());
+      host.remove();
+    }
+    history.replaceState(null, "", "/");
+  });
+
   it("does not point an agent session at Persona's settings", () => {
     expect(banner("Invalid API key · Fix external API key", false)).not.toContain("去修");
   });

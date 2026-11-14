@@ -1897,6 +1897,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         sid={sid}
                         streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
+                        launcher={session?.launcher}
                         fix={d.line.id === lastLine?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
@@ -2017,6 +2018,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             line={bannerError}
             assistant={assistant}
             limit={bannerError.id === limitOn ? limitLine : undefined}
+            launcher={session?.launcher}
             fix={turnFix}
             onRetry={canRetry ? () => void retryError() : undefined}
             onEditLastMessage={onEditLastMessage}

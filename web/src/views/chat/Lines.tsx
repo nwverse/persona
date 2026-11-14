@@ -30,6 +30,8 @@ export interface LineProps {
   expandFold: (f: Item) => Promise<void>;
   /** A Persona conversation: a model error's text may name a fix in Persona's settings. */
   assistant?: boolean;
+  /** The session's launcher keeps a text-derived fallback fix scoped when the hub has no turn_error_code. */
+  launcher?: string;
   /** The hub's word on what to fix for the turn's model error (the session's turn_error_code): the chat's last line only,
    *  so its record reads as its banner did. */
   fix?: { title: string; detail: string; action: string; launcher?: string } | null;
@@ -52,7 +54,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, assistant, fix, limit, trace, offscreen, busy }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, assistant, launcher, fix, limit, trace, offscreen, busy }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} />;
@@ -82,7 +84,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, assistant, fix, limit
       // composer (ErrorBanner), while this error is the one the chat stopped on
       if (limit) return <UsageLimitLine text={limit} />;
       // the fix points at Persona's model settings: only for Persona's own conversations
-      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={assistant ? (fix ?? turnErrorFix(line.info.code)) : null} />;
+      return <APIErrorCard info={line.info} count={line.count} at={line.item.ts} fix={assistant ? (fix ?? turnErrorFix(line.info.code, launcher)) : null} />;
   }
 }
 
@@ -319,9 +321,11 @@ export const errorKey = (line: APIErrorLine) => `${line.id}#${line.count}`;
 
 /** The error the chat stopped on, over the composer (cindy's ErrorBanner, #5313): the card the chat would draw, with what
  *  can be done about it now (Fix it, Retry, Edit last message) and ✕. While it is here the chat leaves the line out. */
-export function ErrorBanner({ line, assistant, limit, fix, onRetry, onEditLastMessage, onDismiss }: {
+export function ErrorBanner({ line, assistant, launcher, limit, fix, onRetry, onEditLastMessage, onDismiss }: {
   line: APIErrorLine;
   assistant?: boolean;
+  /** The session's launcher keeps a text-derived fallback fix scoped when the hub has no turn_error_code. */
+  launcher?: string;
   /** Waiting out a subscription usage limit: the banner says when it resets, as the line would. */
   limit?: string;
   /** The hub's word on what to fix for the turn's model error (the session's turn_error_code). */
@@ -333,7 +337,7 @@ export function ErrorBanner({ line, assistant, limit, fix, onRetry, onEditLastMe
 }) {
   if (limit) return <UsageLimitLine text={limit} onDismiss={onDismiss} />;
   // the text-derived fix points at Persona's model settings: only for Persona's own conversations
-  const f = assistant ? (fix ?? turnErrorFix(line.info.code)) : null;
+  const f = assistant ? (fix ?? turnErrorFix(line.info.code, launcher)) : null;
   return (
     <APIErrorCard
       info={line.info}
