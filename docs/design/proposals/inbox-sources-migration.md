@@ -59,8 +59,8 @@ Replying, the twin and read state go through the connector that the subscription
 
 ### 3a. A migrated subscription keeps the built-in's identity
 
-A built-in's default subscription is marked `migrates: <connector id>` (one per connector, one per mail account). Its
-Inbox items use the built-in's source id and item ids, not `sub_<hex>`. Existing mutes, policies, done threads,
+A built-in's default subscription has a fixed id, `sub_m_<connector id>` (one per connector, one per mail account; P5a,
+#6265). Its Inbox items use the built-in's source id and item ids, not `sub_<hex>`. Existing mutes, policies, done threads,
 `read_error` keys and knowledge-base chats then match without rewriting state, as `MigratableConnectors` does. Only the
 manager can create such a subscription. It can't be duplicated, and deleting it means switching the migration back (3g).
 
@@ -80,6 +80,13 @@ the read tool's JSON like the existing fields:
 
 Recipes without the new fields behave as today. The SDK's wire types and `schema/` change with them.
 
+For a built-in whose rows carry more than a recipe can map (iMessage: one row per conversation, done when the owner
+replied, Needs you for a direct message, an `sms:` link, the last messages as context), a recipe in `things` mode
+reads a tool that answers the rows ready-made (the owner's choice on 2026-11-13; #6296). The connector computes them
+with the code its `Collect` uses, and the subscription only schedules, keeps, switches and delivers them, so the rows
+before and after the switch are the same by construction. Each such source proves it with a test that compares its
+`Collect` and its tool's rows field by field on the same fixtures.
+
 ### 3c. Reply goes to the subscription's connector
 
 For an item from a subscription with `reply_to`, the assistant sends `inbox.reply {source, reply, send_id}` as today.
@@ -96,12 +103,16 @@ knowledge-base chat (`chatOf`). The twin's escalation rules don't change.
 
 ### 3e. Real time
 
-- A connector's `changed` event also starts a run of that connector's subscriptions, within `callGap` and the hourly
-  cap, so a migrated source is as fast as its built-in (at most a few seconds behind a kick instead of 5 minutes).
-- Sources that push rather than poll (Lark's events) use a push source owned by an extension. The extension's program
-  sends items with the push source's fields plus the new identity and reply fields, under the same 20-a-push and
-  300-an-hour limits. Only the extension that owns a push source may push to it. That replaces "only a paired device
-  over HTTP" for this case, and the device path stays as it is.
+- A connector's `changed` event also starts a run of that connector's subscriptions (P4a, #6247): people's at most
+  once a minute, within `callGap` and the hourly cap.
+- A switched built-in's default subscription runs 3 seconds after `changed`, as the Inbox's own kick of the built-in
+  does (`inboxDebounce`), a burst of events once. Its runs replace the built-in's `Collect` calls one for one, so they
+  are outside the subscriptions' hourly budget and call gap; a pause the connector asked for still holds (P4b, #6381).
+- Its rows come from a generic `inbox_things` that the subscriptions add to every connector with an Inbox, answering
+  the connector's `Collect` (or the connector's own `inbox_things`, as iMessage's). Lark's events reach the Inbox as
+  fast as today with no new protocol: the Lark extension already sends `changed` and answers `Collect`.
+- The round's entry for a switched source carries its built-in's abilities (settle, group, meta, kinds, migrated), as
+  `readConnectors` gives them, so nothing it does is lost at the switch.
 
 ### 3f. The knowledge base stays on the built-in path at first
 
@@ -112,22 +123,26 @@ either way.
 
 ### 3g. Switching, compatibility and rollback
 
-- **Per source**, a manager setting `inbox.migrated: [<connector id>…]`, changed from Inbox Sources with one
-  confirmation:
+- **Per source**, the default subscription's `migrated` mark (P5a, #6265; it takes the place of a separate
+  `inbox.migrated` setting), changed from Inbox Sources with one confirmation:
   - **On**: the built-in's Inbox feed goes off and its default subscription on, in one step. The subscription's
-    catch-up starts from the built-in's last delivered item, not from `catchupBack`'s day before, so nothing comes in
-    twice.
+    catch-up reaches `catchupBack`'s day before and comes as rows, never a digest: the rows the built-in already
+    brought are known by their item ids (3a), so nothing is missed and nothing comes in twice (as built in P5a).
   - **Off**: the reverse. The subscription stays, off, with its seen keys, so switching on again re-delivers nothing.
 - **Defaults**: an existing install keeps the built-in until the owner switches it. A new install gets a source's
   default subscription instead of its built-in once that source has run switched on, on the owner's hub, for a week
   without a difference (decision 6).
-- **Mixed versions**:
-  - The manager reports `inbox_sources_migrated`, and the clients show the switch only with it.
+- **Mixed versions** (as built in P5a: `docs/extensions/subscriptions.md` "Built-in sources switched to their default
+  subscription"):
+  - The default subscription's own destination switches stay off in storage, so a manager that does not know the mark
+    never pulls it, and the built-in's feed, never switched off, comes back on a rollback. The switch is on the
+    manager-drawn pages, so no client feature flag is needed.
   - An assistant without the new reply routing must not get `CanReply` for those items. The assistant reports that it
     routes them (part of P2), and the manager sets `CanReply` only then, so nothing offers a reply that fails.
   - An older manager ignores `migrates` and the new recipe fields. Without the setting it never switches, so rolling
     back the hub restores the built-ins.
-- **Docs**: the rows go into `docs/protocol/rolling-upgrade-compatibility.md`, which today covers only the rename.
+- **Docs**: `docs/extensions/subscriptions.md` "Built-in sources switched to their default subscription" holds the
+  mixed-version behavior (`docs/protocol/rolling-upgrade-compatibility.md` stays the rename's checklist).
 
 ## 4. Order
 
@@ -138,10 +153,10 @@ Smallest gap first, so each step proves part of the design before the harder sou
 | P1 | Recipe fields: P1a `sender_id`, `chat`, `chat_name` (#6165); P1b `seen` (#6176); P1c a failing pull shows as the source's read error at once (#6189) | 3b |
 | P2 | The `reply_to` field; reply through the subscription's connector (#6198). The apps already offer Draft only with `CanReply` | 3b, 3c |
 | P3 | The twin's source info and knowledge-base chat for subscription items (#6222) | 3d |
-| P4 | `changed` starts runs; extension-owned push sources | 3e |
-| P5 | `migrates`, the switch, catch-up from the last item, rollback, `inbox_sources_migrated` | 3a, 3g |
-| M1 | **iMessage**: no reply to carry over; needs `seen`, `sender_id`, `chat` and the `changed` kick | P1, P4, P5 |
-| M2 | **GitHub**: comments as replies, inferred read, repo mutes. Its read tools first need a notifications tool | P1–P5 |
+| P4 | P4a `changed` starts runs (#6247); P4b a generic `inbox_things` over `Collect`, a switched source 3 seconds after `changed`, its built-in's abilities in the round (#6381) | 3e |
+| P5 | P5a the default subscription's fixed id and `migrated` mark, delivery under the built-in's id, catch-up as rows, rollback (#6265); P5b the switch on the Inbox Sources pages, with M1 (#6345) | 3a, 3g |
+| M1 | **iMessage**: a `things` recipe over its `inbox_things` tool (#6296, #6317), the `changed` kick, the switch on the pages (P5b) | P4a, P5, things |
+| M2 | **GitHub**: a `things` recipe over the generic `inbox_things` (P4b), so comments as replies, inferred read and repo mutes stay its `Collect`'s; a comparison test; the switch held back from the pages until M1's week is over (#6404) | P4b, P5 |
 | M3 | **Lark**: JSON read tools for `larkcli` first, then its events through a push source, replies | P1–P5 |
 | M4 | **Mail**, one subscription per account: replies with threading, seen flags and off-page settling, read errors per account, translations | P1–P5 |
 | K1… | Each source's knowledge-base feed, once the subscription path has what it uses (3f) | per source |
@@ -157,8 +172,17 @@ only after it has run switched on, on the owner's hub, for a week without a diff
    for the source. Its default subscription doesn't ask again as a new subscription would.
 3. **Knowledge base (3f)**: the Inbox feed moves first. Each source's archive is a later step, once the subscription
    path has what the source uses.
-4. **Real time (3e)**: Lark's events come through a push source owned by an extension. Lark keeps no built-in event
-   path.
+4. **Real time (3e)**, changed on 2026-11-13 (P4b, #6381): no push sources owned by extensions. A switched source's
+   default subscription reads a generic `inbox_things` that answers the connector's `Collect`, and runs 3 seconds after
+   its `changed` event. It was first decided that Lark's events would come through a push source owned by an
+   extension. The owner chose this instead because:
+   - it adds no extension protocol (no new method in the schema, two SDKs and the docs);
+   - the private Lark extension needs no change: it already sends `changed` and answers `Collect`;
+   - the rows are the built-in's by construction (the same `Collect`), where pushed items would have to be proven equal
+     to the connector's state;
+   - it is as fast as the built-in today (its kick's 3 seconds).
+
+   Each connector's `Collect` must have no side effects, which its M step's comparison test confirms.
 5. **Order (4)**: iMessage, GitHub, Lark, mail.
 6. **New installs (3g)**: a source switches on new installs only after it has run switched on, on the owner's hub, for
    a week without a difference. It doesn't wait for the other sources.

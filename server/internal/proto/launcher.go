@@ -9,7 +9,7 @@ type Launcher struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
 	Model   string `json:"model"`
-	// Source: "zshrc" (a function in the machine's ~/.zshrc), "path" (a wrapper script on its PATH, node/pathlaunchers.go) or "persona" (managed in Settings › Models, the manager's assistant/models_launchers.go). Empty
+	// Source: "zshrc" (a function in the machine's ~/.zshrc), "path" (a wrapper script on its PATH, node/pathlaunchers.go), "persona" (managed in Settings › Models, the manager's assistant/models_launchers.go) "claude_desktop" (claude-desktop, a new session in Claude's desktop app, node/claudedesktop_new.go) or "codex_app" (codex-app, a new chat in the Codex App, node/codexapp_new.go). Empty
 	// from an older node: zshrc.
 	Source string `json:"source,omitempty"`
 	// Agent is what it starts when not Claude Code: "codex" (plain codex, or an alias running it; docs/integrations/codex.md
@@ -120,6 +120,8 @@ type AgentModel struct {
 	// Efforts: the thinking efforts it takes, weakest first; none: no effort setting.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// ServiceTiers: the speed choices this model natively advertises (Codex's serviceTiers), unchanged.
+	ServiceTiers []ServiceTier `json:"service_tiers,omitempty"`
 	// Custom: an id the user typed that the agent's own list does not have, remembered on the hub for this machine
 	// and launcher after it ran (#1644, assistant/models_custom.go); listed after the agent's own, most recent first.
 	// Its efforts are not known, so none are given.

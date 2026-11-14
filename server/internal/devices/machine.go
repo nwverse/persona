@@ -405,6 +405,9 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := m.command(ctx)
+	if via == "ssh" {
+		stopSSHTreeOnCancel(cmd)
+	}
 	// Bound pipe draining if a node descendant inherits stdout or stderr.
 	cmd.WaitDelay = shutdownStepTimeout
 	stdin, err := cmd.StdinPipe()
@@ -416,7 +419,8 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 		// This machine's node is ended the way a hub that went away ends it, by EOF on its stdin: it stops the
 		// assistant's conversations, whose processes lead their own groups, and exits (node.Serve). Killed straight
 		// away, as the default Cancel does, it left them running beside the ones the next node started for the same
-		// conversations (#4259). An ssh node's own end sees EOF when ssh is killed, so ssh keeps the default.
+		// conversations (#4259). A local node's children need this graceful stop. An ssh node's own end instead sees
+		// EOF when its process group is killed; its ProxyCommand cannot outlive it either.
 		cmd.Cancel = stdin.Close
 		cmd.WaitDelay = localNodeStopGrace
 	}
@@ -471,6 +475,9 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 			case <-time.After(shutdownStepTimeout):
 			}
 			_ = cmd.Wait()
+			if via == "ssh" {
+				sweepSSHProcessTree(cmd.Process.Pid)
+			}
 		},
 	}, nil
 }
@@ -503,6 +510,16 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		}
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), key)}
 	}
+	if (method == "session.skills" || method == "session.send") && !nodeHas(info, nodeproto.SessionSkills) {
+		var fields struct {
+			SkillOwner string `json:"skill_owner"`
+		}
+		raw, _ := json.Marshal(params)
+		_ = json.Unmarshal(raw, &fields)
+		if method == "session.skills" || method == "session.send" && strings.HasPrefix(fields.SkillOwner, "agents:") {
+			return refusalSessionSkillNode()
+		}
+	}
 	if !nodeHas(info, nodeproto.ModelConfiguration) && (method == "assistant.send" || method == "assistant.warm" || devicewire.IsSessionStart(method) || method == "session.send") {
 		raw, _ := json.Marshal(params)
 		var fields struct {
@@ -532,6 +549,17 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		_ = json.Unmarshal(raw, &fields)
 		if fields.ConfigDir != "" {
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_assistant_config_dir")}
+		}
+	}
+	if method == "assistant.send" && !nodeHas(info, nodeproto.AssistantServiceTier) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			ServiceTier string `json:"service_tier"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if fields.ServiceTier != "" {
+			// An older node would start the conversation at Standard and drop an explicit, billable Fast choice.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_assistant_service_tier")}
 		}
 	}
 	if method == "session.send" && !nodeHas(info, nodeproto.LauncherSwitchNow) {

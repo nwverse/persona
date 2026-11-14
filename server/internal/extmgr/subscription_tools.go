@@ -258,6 +258,7 @@ func recipeFormat() map[string]any {
 		"modes": map[string]string{
 			wire.ConnectorSubscriptionModeItems:    "new items, each kept once (a JSON result with a list)",
 			wire.ConnectorSubscriptionModeSnapshot: "the result as one state kept when it changes (any result; text can only be a snapshot); at most hourly, daily by default",
+			wire.ConnectorSubscriptionModeThings:   "a tool that answers Inbox rows ready-made (a connector's own inbox_things): kept and handed to the Inbox as they are; group_by thread, no fields, Inbox only",
 		},
 		"kinds": wire.ConnectorSubscriptionKinds,
 		"group_by": map[string]string{
@@ -823,7 +824,7 @@ func (h *Manager) toolSubscriptionRun(ctx context.Context, args json.RawMessage)
 		if err != nil {
 			return nil, err
 		}
-		if len(runs) > 0 && !runs[0].At.Before(asked) {
+		if len(runs) > 0 && runs[0].Trigger == subscriptions.TriggerNow && !runs[0].At.Before(asked) {
 			run := runs[0]
 			items := []heldSample{}
 			if run.New > 0 {

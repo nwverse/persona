@@ -225,7 +225,10 @@ data class BackgroundTask(
     val isWorkflow: Boolean get() = kind == "workflow"
 }
 
-/** What a session with a [Session.sourceKind] allows; a missing field is a refusal (docs/protocol/protocol.md "Codex sources and capabilities"). */
+/**
+ * What a session with a [Session.sourceKind] allows; a missing field is a refusal (docs/protocol/protocol.md "Codex sources
+ * and capabilities"), except the optional ones, whose null keeps the app's own rule.
+ */
 @KeepGeneratedSerializer
 @Serializable(with = SessionCapabilitiesSerializer::class)
 data class SessionCapabilities(
@@ -237,6 +240,16 @@ data class SessionCapabilities(
     val attach: Boolean = false,
     /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
     val modes: Boolean? = null,
+    /** Close the agent, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
+    val close: Boolean? = null,
+    /** Rename it, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
+    val rename: Boolean? = null,
+    /** Switch its model through `POST …/modes`; null from an older node: the app keeps its Claude-in-a-terminal rule. */
+    val model: Boolean? = null,
+    /** Rewind to before one of your messages; null from an older node: the app keeps its Claude-in-a-terminal rule. */
+    val rewind: Boolean? = null,
+    /** A rewind may put the files back too ("Code and conversation"); null from an older node: as its [rewind] rule says. */
+    @SerialName("rewind_code") val rewindCode: Boolean? = null,
 )
 
 /**
@@ -652,6 +665,8 @@ data class Item(
     @SerialName("wake") val wake: Boolean? = null,
     val task: TaskNote? = null,
     val fold: Fold? = null,
+    /** A user-visible action hidden in this work range; repeated full items retain it as on iOS. */
+    @SerialName("supervision_user") val supervisionUser: Boolean? = null,
     @SerialName("turn_duration") val turnDuration: TurnDuration? = null,
     /** The client message id of the message sent from a phone that this item came from (#968): its text, images,
      *  queued copy, or the notice it became. Older hubs never send it. */
@@ -772,6 +787,8 @@ data class Injected(
     val line: String = "",
     /** followup once | daily | interval: what the task asks. */
     val detail: String? = null,
+    /** system/supervise: info | triage | user — "user" must stay visible in the chat (web `supervisionVisible`); older hubs omit it. */
+    val level: String? = null,
 )
 
 object InjectedSerializer : WireSerializer<Injected>(Injected.generatedSerializer())

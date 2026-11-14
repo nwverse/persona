@@ -13,19 +13,16 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
     var chevron: Bool
     @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let stacked = typeSize.isAccessibilitySize
         HStack(spacing: Theme.Space.m) {
             leading
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(row.title).font(Theme.Font.body).lineLimit(stacked ? 3 : 1).minimumScaleFactor(stacked ? 1 : 0.8)
-                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(stacked ? 4 : 2) }
-                if stacked { details(lines: 2) }
+                Text(row.title).font(Theme.Font.body).lineLimit(1).minimumScaleFactor(0.8)
+                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer(minLength: Theme.Space.s)
-            if !stacked { details(lines: 1) }
+            details(lines: 1)
             if let action = row.action, model?.selected(action.id) == true {
                 ThemedIcon(Theme.Icon.success).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
                     .accessibilityLabel("Selected [Extension Components 7ecf1c]")
@@ -41,8 +38,7 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
         .contentShape(.rect)
     }
 
-    /// The trend (UI version 6), the value and the badge: after the title's column, or under the title at the
-    /// accessibility sizes.
+    /// The trend (UI version 6), the value and the badge: after the title's column.
     @ViewBuilder private func details(lines: Int) -> some View {
         // UI version 6: its trend before its value.
         if let spark = row.spark { ExtensionSparkLine(spark: spark) }
@@ -61,6 +57,18 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
             ExtensionRemoteImage(url: url)
                 .scaledFrame(width: wide ? Theme.Size.box80 : Theme.Size.box50, height: Theme.Size.box50)
                 .clipShape(.rect(cornerRadius: Theme.Radius.badge))
+                .accessibilityHidden(true)
+        } else if let t = row.thumbnail, let path = t.path {
+            // UI version 6: the extension's own picture, served by the hub for this page.
+            let wide = t.aspect == ExtensionThumbnailAspect.wide
+            ExtensionPicture(src: ExtensionImageSource(path: path), model: model, points: wide ? Theme.Size.box80 : Theme.Size.box50)
+                .scaledFrame(width: wide ? Theme.Size.box80 : Theme.Size.box50, height: Theme.Size.box50)
+                .clipShape(.rect(cornerRadius: Theme.Radius.badge))
+                .accessibilityHidden(true)
+        } else if let a = row.avatar, let path = a.path, a.url == nil {
+            ExtensionPicture(src: ExtensionImageSource(path: path), model: model, points: Theme.Size.wellL)
+                .scaledFrame(width: Theme.Size.wellL, height: Theme.Size.wellL)
+                .clipShape(.circle)
                 .accessibilityHidden(true)
         } else if let a = row.avatar, a.url != nil || a.text?.isEmpty == false {
             Group {

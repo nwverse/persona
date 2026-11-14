@@ -121,8 +121,6 @@ internal fun AgentsScreen(
     val starState = starPrompt?.state?.collectAsStateWithLifecycle()?.value
     val context = androidx.compose.ui.platform.LocalContext.current
     var menu by remember { mutableStateOf(false) }
-    // The grouping pill's Group By picker (iOS's), groupings only (#4338 A4).
-    var groupingMenu by remember { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val homeChrome = LocalHomeChrome.current != null
     val firstPageIncomplete = !page.loaded && page.list.groups.isEmpty()
@@ -378,11 +376,17 @@ internal fun AgentsScreen(
             item("quick-filters") {
                 // "Lark groups" / "Terminal" (#2526) only while they have agents (or are chosen), as iOS and the web.
                 val shown = AgentQuickFilter.shown(page.settings.quick, quickCounts)
-                HomeAgentFilters(shown.map { filter ->
+                val bays = shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else quickCounts[filter] ?: 0, filter.state?.designStatus,
                         icon = PersonaIcons.backgroundWaiting.takeIf { filter == AgentQuickFilter.BackgroundWaiting },
                         waiting = filter == AgentQuickFilter.BackgroundWaiting)
-                }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
+                }
+                if (homeChrome) JAgentFilterCapsule(bays, shown.indexOf(page.settings.quick), { model.filter(shown[it]) },
+                    groupLabel = "${stringResource(R.string.agents_group_by)}: ${page.preferences.grouping.label}",
+                    groupActions = groupings.map { grouping ->
+                        JAction(grouping.label, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })
+                    }, modifier = Modifier.padding(vertical = Tokens.Space.s))
+                else HomeAgentFilters(bays, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
             }
             // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
             // is chosen in a sheet and its chips don't show, so nothing else on the page says so. A tap shows every computer.
@@ -394,13 +398,6 @@ internal fun AgentsScreen(
                         .semantics { onClick(label = hint) { model.machine(""); onMachineSelected(""); true } },
                         selected = true, onClick = { model.machine(""); onMachineSelected("") },
                         role = Role.Button, trailingIcon = persona.core.designsystem.icons.PersonaIcons.clear)
-                }
-            }
-            if (homeChrome) item("grouping") {
-                Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
-                    // As iOS: the grouping's own icon, its name and a chevron, opening a Group By picker.
-                    JChip(page.preferences.grouping.label, onClick = { groupingMenu = true }, icon = page.preferences.grouping.icon,
-                        role = Role.Button, trailingIcon = PersonaIcons.expand)
                 }
             }
             // "botmux" (web #2786): show or hide botmux's sessions in this list, kept on this phone.
@@ -722,9 +719,6 @@ internal fun AgentsScreen(
         if (requestsInMenu) add(JAction(stringResource(R.string.agents_requests_history), icon = PersonaIcons.waitsForYou,
             onClick = { allRequests = true }))
     }, { menu = false }, title = stringResource(R.string.agents_action_list_settings), note = stringResource(R.string.agents_menu_note))
-    if (groupingMenu) JActionSheet(groupings.map { grouping ->
-        JAction(grouping.label, grouping.icon, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })
-    }, { groupingMenu = false }, title = stringResource(R.string.agents_group_by))
     archiveTarget?.let { target ->
         JDialog(onDismiss = { archiveTarget = null }, title = stringResource(R.string.agents_action_archive),
             text = stringResource(R.string.agents_archive_confirm, target.displayTitle),
@@ -1072,9 +1066,12 @@ internal fun AgentTabEntryRow(
     )
 }
 
-/** Swiping a row left closes the agent (iOS): only a live agent in a terminal pane, while nothing else is being saved. */
+/**
+ * Swiping a row left closes the agent (iOS): only a live agent that closes from here (in a terminal pane, or a runtime's
+ * session whose node says so, #6294), while nothing else is being saved.
+ */
 internal fun closeSwipe(row: AgentSession, busy: Boolean, close: () -> Unit): (() -> Unit)? =
-    close.takeIf { row.session.isLive && row.session.canTerminal && !row.session.assistant && !busy }
+    close.takeIf { row.session.isLive && row.session.canClose && !row.session.assistant && !busy }
 
 /**
  * The session actions are shared by the home list and the space page. A [nested] row, drawn under its parent's
@@ -1109,8 +1106,9 @@ internal fun AgentSessionMenuItems(
             add(JAction(stringResource(R.string.agents_action_link_todo), PhIcons.ListChecks, enabled = !busy, onClick = onLinkTodo))
         }
         onAttach?.let { add(JAction(stringResource(R.string.agents_action_attach), PhIcons.PlugsConnected, enabled = !busy, onClick = it)) }
-        // Renaming changes the terminal tab and Claude's /rename; a session without a terminal has neither.
-        if (session.canTerminal) add(JAction(stringResource(R.string.agents_action_rename), PhIcons.NotePencil, enabled = !busy, onClick = onRename))
+        // Renaming changes the terminal tab and Claude's /rename; a session without a terminal renames where its node says it
+        // can (a runtime's title, #6294).
+        if (session.canRename) add(JAction(stringResource(R.string.agents_action_rename), PhIcons.NotePencil, enabled = !busy, onClick = onRename))
         if (session.loop != null && session.canSend) add(JAction(stringResource(R.string.agents_action_stop_loop), enabled = !busy, onClick = onStopLoop))
         add(JAction(stringResource(R.string.agents_action_handoff), onClick = onHandoff))
         if (row.state == AgentState.Unread) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
@@ -1118,7 +1116,8 @@ internal fun AgentSessionMenuItems(
         session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { copy(command, null) })) }
         add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
         add(JAction(stringResource(R.string.agents_action_open_session), onClick = onOpen))
-        if (session.isLive && session.canTerminal) add(JAction(stringResource(R.string.agents_action_close_agent), destructive = true, enabled = !busy, onClick = onClose))
+        // Its pane quits, or a runtime's session ends where its node says it can (#6294).
+        if (session.isLive && session.canClose) add(JAction(stringResource(R.string.agents_action_close_agent), destructive = true, enabled = !busy, onClick = onClose))
         if (session.canDelete && onDelete != null) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !busy, onClick = onDelete))
     }
 }
@@ -1138,10 +1137,14 @@ internal val RepoLevel.kind: String @Composable get() = stringResource(when (thi
     RepoLevel.MainCheckout -> R.string.agents_repo_main_checkout
     RepoLevel.Worktree -> R.string.agents_repo_worktree
 })
-internal val RepoLevel.icon get() = when (this) {
+/**
+ * The level's leading icon. Non-main worktrees carry none: their name and the extra indentation identify them, as on
+ * the web sidebar; [AgentSpaceHeader] already treats a null icon as no mark.
+ */
+internal val RepoLevel.icon: PhIcon? get() = when (this) {
     RepoLevel.Repository -> PhIcons.Folder
     RepoLevel.MainCheckout -> PhIcons.House
-    RepoLevel.Worktree -> PhIcons.GitBranch
+    RepoLevel.Worktree -> null
 }
 /** The grouping's own icon, as iOS's `DevGrouping.symbol`. */
 private val AgentGrouping.icon: PhIcon get() = when (this) {

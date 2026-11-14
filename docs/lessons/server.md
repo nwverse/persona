@@ -1,5 +1,20 @@
 # Lessons: hub / node and networking
 
+## An update waits only for what its restart interrupts (2026-11-13, #6364)
+
+A node update counted every session on the computer as busy: working, background tasks, running subagents, questions on the phone. On a computer whose terminal Agents always run a background workflow it never went through, and the queued update survived hub restarts. The resident node restarts by exec in place and stops only its own headless conversations (`ResidentReload.Prepare`); terminal Agents are other processes and keep running. Before adding a wait in front of a restart, list what that restart actually stops and wait for that, as the hub self-update's `updateBusy` does. When the rule lives on both sides of a connection, gate the new rule on a capability: the hub's lighter wait in front of an old node's strict commit check would re-send the whole build on every refusal. And let the side that enforces the rule report its verdict rather than have the other side rebuild it from rows: the hub first rebuilt the node's check from `sessions.list` rows, but a node never marks its headless rows `Assistant` (the hub's assistant manager adds that later), so the hub saw a busy main chat as idle and re-sent the build until it settled. The node now answers `update_busy`.
+
+## A saved position that fails must be able to expire (2026-11-13, #6310)
+
+Paginated source subscriptions (#5990) commit the next page's cursor with each page, and a failed run kept it, so every
+retry asked for the same page. A page token that expired between pages (a manager restart, a connector outage, a long
+backoff) is refused every time: the subscription failed for days while a call without the cursor answered fine, and
+only editing the recipe got it out. Before pagination a failed run simply pulled again. Any resumable position (a
+cursor, an offset, an upload id) needs a way back to a fresh start that does not depend on the user: here a page
+that fails in two runs in a row is dropped and the pull starts again from the window's start, the dedup keys holding
+back what was delivered, while one transient failure still resumes. Test a position that goes bad between runs, not
+only one that stays good across a restart.
+
 ## A name taken from a counter of attempts is not a free name (2026-11-13, #6024)
 
 The hub edge named each new slot by alternating on a counter of slots started (`'a' + slots%2`), assuming every
@@ -11,6 +26,60 @@ retries a version that failed in standby at the next hourly check, so two failed
 resource after what is in use now (the slot that served last), not after how many attempts were made, and let a
 process's clean-up remove only what it made: the edge notes any socket file already at a slot's path when it starts
 it and leaves that file alone. A test of one failed switch passed for this reason; test failures in a row.
+
+## An index over files answers only for the files it read, and is measured on text that varies (2026-11-13, #1273)
+
+The knowledge base's search index (`server/internal/kb/search_index.go`) is kept beside files that people, Agents and
+the import all write, so "is the index current?" has no single answer. What made it safe was asking it a smaller
+question: it may rule a file out only when the file's path, mtime and size are exactly the ones it read, and
+everything else is read by the scan that existed before. Then a missing, half-built, stale or damaged index can only
+cost time, and the tests compare results with the scan instead of trusting an invalidation scheme. Three things went
+wrong on the way. The first benchmark archive repeated one line four million times: its index was 22 MB and built in
+13 s, while text with a long tail of rare characters and words gave 155 MB and 30 s, and the first design, which kept
+every segment's key table in memory, peaked at 1.1 GB on it against a 1 GB target (the keys now stay on disk in
+blocks, with one entry per block in memory). An index that outlives the process also outlives what a cache forgave:
+a writer whose index directory is removed under it, a reader in another process after the writer merged, and entries
+of deleted text that no search uses but that stay on disk until something rewrites them each needed their own rule
+and test. And a lane that runs on every round runs on every kick: one `stat` per file is cheap once and not every five
+seconds.
+
+## Checksums inside a file do not say it is the file you read before (2026-11-13, #1273)
+
+The search index's segments were named from a counter kept in the manifest, and every part of a segment was under a
+checksum. A reader keeps a segment's file table in memory and opens the file by name for each query. Review found the
+hole between the two: remove `.search`, rename one day file, and the rebuild writes a second `seg-000001.idx` of the
+same size with its files numbered differently; a read-only store that still held the first one's table read the new
+lists through it, every checksum passed, and a search lost a result. A checksum stored in a file proves the file agrees
+with itself, not with what a reader remembers of an earlier file under that name. Two rules came out of it: a name is
+never given to other content (64 random bits in each file name; a counter starts again whenever the thing it counts
+does), and whoever keeps part of a file in memory checks on every open that the file is still that one (a random id in
+the footer, compared with the footer it read). The same review found a data race that no test had shown, because only
+an opt-in harness ran a search, an update and the removal of the directory at once: what the doc calls safe to do at
+any time needs a default test that does it at that time, under `-race`. And the new tests took 70 s on Linux and
+968 s on a shared Mac, at 20% CPU: their cost was file opens (2.4 million of them), which one machine does in
+microseconds and another in most of a millisecond. Count the system calls of a test that walks directories
+(`strace -f -c -e trace=%file,%desc`) instead of trusting its seconds on the machine it was written on.
+
+## A stat and a read are two moments, and a path is not a file (2026-11-14, #1273)
+
+The search index's update looked at every file (`stat`), then read the ones it had to, and kept each file's keys
+under the mtime and size the look had seen, checking only that the bytes read were of that size. Review found what
+lies between: the file is replaced by other text of the same size after the look, the update reads that, and the first
+text comes back under its own mtime later (moved back, or restored by a sync or backup tool). The index then held the
+second text's keys under the first one's mtime and size, the entry matched the file exactly, and searches passed over
+it for words it holds, in every later run and every new process. Nobody had set an mtime or made two versions with one
+mtime and size: the index had invented the pair itself, and on a first build the window was the whole run. What an
+entry says has to be true when it is written: these bytes had this mtime and size. So the file is opened once, asked
+through the handle before the first byte and after the last, read through the same handle, and kept only when both
+answers are the look's. Each of the three parts is needed, and each has a test that fails without it: without the
+first look a file written back in place after the read passes; without the second, one written in place before it;
+and a second `stat` of the path, instead of the handle, is answered by whatever file is there by then. A test of
+this needs a hook at the moment, not a sleep (`searchIndex.hook`). The same review found two more of the kind
+"decided once, true for ever": a flag set after the state it described had been replaced (a read-only store marked
+broken with nothing left to compare, for good; set such a flag under the lock and only if the state is still the one
+it is about), and an error class matched by type (`*json.SyntaxError`, `*json.UnmarshalTypeError`) that missed a
+third kind of decode error, so every run failed the same way and nothing was ever rebuilt (say "this file is not
+valid" where it is decoded, and match that).
 
 ## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
 
@@ -1469,6 +1538,14 @@ allowing concurrent "set key" to pair a key with an unintended address; and only
 checking/deleting under the same operation lock in `SetConfig` / `SetSecret`. Address changes delete unconditionally (idempotent); `SecretsSet` only decides response wording.
 For future safety-driven delete/reject decisions, don't rely on error-swallowing read APIs or split check-then-write in handlers.
 
+## One large message on the bus holds up everything behind it (2026-11-13, #6574)
+
+- The bus between the hub and a manager is one WebSocket: `rpc.Peer` writes one message at a time, coder/websocket writes a message as one frame (it even compresses the whole message into a buffer first), and the reader decodes a whole line before it looks at the next. A 22 MB attachment inside `http.request` became a 30 MB line, and every other call to that manager (cards, to-dos, session lists, phone tools) waited until it was written. Compression makes the blocker smaller, not shorter-lived, and photos, PDFs and audio barely compress anyway.
+- On a slow link the same frame breaks the connection: the keepalive's ping waits at most 5 s for the frame lock (`writeControl`, hard-coded), so a frame that takes longer to drain drops the bus with every call on it, the upload included ("Heartbeat timeouts on slow links" below).
+- Move the bytes, not the request: `http.request_streamed` keeps the whole envelope (auth, caller, receipts, the answer) on the bus and sends only a large body on a relay of its own, in 256 KiB messages, read whole before the route runs. Nothing about the request's meaning changes, so there is nothing to keep in step but the body. A stream that fails is refused before anything ran, so the hub can send the request inline after it without running it twice.
+- Separate HTTP requests were never ordered by the bus (the hub reads each body before calling, the manager runs each call in its own goroutine), so a side stream breaks no order anyone relied on: a flow that needs one request after another waits for the first's answer.
+- Prove a stall with a control: `TestLargeBodyDoesNotHoldUpTheBus` throttles the manager's reads and measures a small call during a large upload both ways (3 ms streamed, 2.5 s inline). Without the inline run failing its own bound, a too-fast test link would pass for a fix.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -1968,7 +2045,13 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
 - When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
-- The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`).
+- The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`). A later sparse to-do id rode in that same optional pointer rather than taking `Item` past the class again (#7200); `TestItemBatchFitsItsSizeClass` now checks the 150-row batch beside the type, with no architecture-specific struct size.
+
+## A fact about a directory does not go on every row in it (2026-11-13, #994)
+
+- #4637 put a project identity on each session (`inventory` on `proto.Session`, more attributes on `sessionlist.Item`) so the paged list could group a repository across computers. `Item` went from 200 to 328 bytes, a 150-row reindex allocated 17% more, two allocation guards failed, and it was reverted the same day (#4744). `proto.Session` is at 1,528 bytes with one spare byte, so a new string there costs every row copied anywhere 256 bytes.
+- A repository's remote is the same for every row in a directory and changes about never. The catalog (`server/internal/hub/sessions_catalog.go`) keeps it per directory instead: the index counts the filtered rows by machine and project in one scan when a client asks, and the hub asks each directory's computer what it holds (`git.status` with `identity_only`, which the nodes already answer), remembering the answer for 30 minutes. No row, item, push or page changed, and the allocation guards did not move.
+- Before adding a per-row attribute, ask what it is a fact about. If many rows share it through something they already carry (a directory, a machine, a space), keep it beside that key and look it up where it is shown.
 
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
@@ -2003,6 +2086,11 @@ same spread, and the Mac's `sshd-session` already has TCP_NODELAY (lsof `-T f`: 
 - The manager ran the hub machine's node (`node --stdio`) with `exec.CommandContext` and the default `Cancel`, a SIGKILL. The node puts each assistant process in its own group (`Setpgid`, so `stop()` can end its background tasks), and nothing ties that group to the node: a SIGKILLed node leaves its conversations running. Before blue-green switching, the systemd restart's cgroup kill hid this; a switch keeps the unit, so the old Claude processes went on beside the ones the next node resumed for the same conversations, and the next node rightly refused them the assistant's tools.
 - A child that must not outlive its parent needs the parent to stop it, and the parent needs time to: end such a process the way its peer going away ends it (EOF on stdin) with a bounded grace before the kill (`cmd.Cancel`, `cmd.WaitDelay`), and have it stop its own children and wait for them before it exits. Stopping them in a goroutine is not enough: `Serve` returned and the process exited before the goroutine's SIGKILL fallback ran (`stopAndWait`).
 - A test that kills the parent and looks for the child catches both halves; one that only checks the parent's exit status does not.
+
+## Killing ssh must include its ProxyCommand (2026-11-13, #6251)
+
+- `exec.CommandContext`'s default `Cancel` kills only ssh. Its ProxyCommand stays alive and is adopted by the service manager; when that command holds a relay connection, it can compete with the replacement ssh connection for replies. `WaitDelay` only bounds pipe draining and does not kill the surviving child.
+- Start ssh in its own process group (`osproc.GroupAttr`) and override `cmd.Cancel` to stop its descendants, not only its own pid. On Unix stop the process group and, after `Wait` reaps ssh, call `osproc.SweepGroup` so a child forked concurrently with the signal cannot survive. On Windows `taskkill /T` loses the tree once its root has exited, so walk the remaining descendants in a process snapshot instead. Do not apply this to the hub machine's local node: that one still needs stdin EOF and its graceful-stop grace period. The regression test abandons a real `Machine.connect` handshake with ssh both running and already exited, and checks the ProxyCommand child's pid, not just ssh's exit.
 
 ## A field in `proto.Session` is paid on every copy (#4342)
 
@@ -2118,6 +2206,13 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 - Hand a message on with the id it came with, or with none. A made-up id deduplicates nothing either: it is new on every retry. A message without an id leaves its line without one, and the apps match it by its words.
 - In-repo runtimes (DSH, Antigravity) did not tie their lines, so nothing showed it. The test that does is a fake runtime that ties its line as the protocol allows (`TestAssistantOnARuntimeSendsTheMessagesOwnID`).
 
+## The hub tree's GOMAXPROCS: the hub's own children start capped (2026-11-12, #3533)
+
+- The edge, the slot and the built-in manager each kept a P per core: 25 to 30 threads each on a 64-core host, although they are I/O-bound like the node, which caps itself at 4 (#2590 above). A cap set with `runtime.GOMAXPROCS` at a process's entry comes too late for what its start-up already did with every P: the edge, capped at its entry, keeps 25 to 28 threads and about 10 MB anonymous, against 10 threads and 8 MB when it starts with `GOMAXPROCS=4`. Only a process started with the variable gets the whole saving.
+- So the edge caps itself in place (it holds the ports and is never run again) and starts the slot with `GOMAXPROCS=4` and a marker, `PERSONA_GOMAXPROCS_CAP=4`; the slot starts the manager the same way (`procs.ChildEnv`, `server/internal/procs/procs.go`). The marker says the variable is the hub's, not the user's: `procs.AtStart` takes both out, so the node, Agents and tools they start keep their own default, and keeps the cap for its own `ChildEnv`. A `GOMAXPROCS` the user sets has no marker: it wins and passes on unchanged.
+- Measured on a 64-core host, a fresh hub with one local node, 5 alternating rounds against main, paired differences (median [min..max]): tree anonymous memory -8,396 kB [-9,552..-7,620] (slot -3,628, manager -4,396, edge and node within noise), threads -33 [-36..-26] (slot 27 to 11, manager 28 to 11).
+- `/proc/<pid>/environ` is the environment a process started with, not what `os.Unsetenv` left: the slot and the manager still show the cap there. Check what a process hands on in its children's environ (the node's has neither variable).
+
 ## A wait for a person takes its deadline from the card, not from the bus default (2026-11-13, #5907)
 
 - `callBus` gives up after two minutes when its context has no deadline. That suits a call a program answers. A call
@@ -2139,3 +2234,15 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   `server/internal/hub/settings_card_wait_test.go`), so fifteen minutes pass at once. Give the hub's end a loopback
   address (the bus refuses plaintext from an address it cannot place), and let what the hub does after a hang-up
   (`devicesGone` waits half a second) pass in a cleanup: the bubble's clock stops when the test's goroutine is done.
+
+## "A run after I asked" is not "the run I asked for" (2026-11-14, #7116)
+
+- `subscription_run` took a clock reading, recorded its request, and returned the first run whose time was not
+  before the reading. A scheduled run that started between the reading and the request passed for the requested one:
+  the caller got another run's counts and items, and when the scheduled run found the items first, the requested run
+  found none. Tell a requested run by what marks it as requested (its trigger), not by when it happened.
+- A request flag is taken by the run that honours it, never by whichever run comes next: the scheduled run cleared
+  the flag it had read as unset a moment earlier, and a "run now" made in between was lost without a trace.
+- It showed up as a test that failed 21 times in 200 under load, and the first reading was "the test's ordering".
+  Before making such a test deterministic, make the losing order happen on purpose (a store that runs the other
+  side inside the read) and look at what the caller gets.

@@ -28,6 +28,7 @@ var InboxRoutes = []string{
 	"POST /api/v1/inbox/{id}/reply",
 	"POST /api/v1/inbox/{id}/suggestion",
 	"POST /api/v1/inbox/{id}/handoff",
+	"POST /api/v1/inbox/{id}/task-link/recheck",
 	"POST /api/v1/inbox/{id}/doc/status",
 	"PUT /api/v1/inbox/{id}/parent",
 	"PUT /api/v1/inbox/{id}/folder",
@@ -37,6 +38,10 @@ var InboxRoutes = []string{
 	"POST /api/v1/inbox/refresh",
 	"POST /api/v1/inbox/done",
 	"POST /api/v1/inbox/bulk",
+	"POST /api/v1/inbox/merge",
+	"POST /api/v1/inbox/merge/undo",
+	"POST /api/v1/inbox/todo",
+	"POST /api/v1/inbox/todo/undo",
 	"GET /api/v1/inbox/mutes",
 	"POST /api/v1/inbox/mutes",
 	"DELETE /api/v1/inbox/mutes/{id}",
@@ -67,6 +72,9 @@ const (
 	MethodInboxMutes = "inbox.mutes"
 	// MethodInboxUnmute: {id} → {}: the user unmuted one on those pages; what it filed stays done.
 	MethodInboxUnmute = "inbox.unmute"
+	// MethodInboxPost: {on?} → {on}: whether the assistant may put its conversations into the Inbox (#6430, the Inbox
+	// Sources page's "Assistant" switch); with on, it is set first.
+	MethodInboxPost = "inbox.post"
 	// MethodInboxTriagePreview: InboxTriagePreview → {verdicts: [InboxTriageVerdict]}: the triage model tries a
 	// subscription's dry-run items as the Inbox would be handed them, one verdict each, at the user's request on the
 	// pages. Nothing is kept: no item, no triage state.

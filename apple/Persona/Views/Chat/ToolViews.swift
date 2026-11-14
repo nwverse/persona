@@ -596,26 +596,13 @@ struct ToolCallRow: View {
                             .foregroundStyle(tint)
                     }
                 }
-                if typeSize.isAccessibilitySize {
-                    // At the accessibility sizes the subject and a background task's badge each get a line under the
-                    // verb (as `NameWithChips` stacks a row's chips): side by side, the badge, which keeps its width,
-                    // left the verb nothing and ran off the screen, and the subject was cut to a sliver of a letter.
-                    let subject = ToolPresentation.subject(call)
-                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        verbText.lineLimit(2)
-                        if !subject.isEmpty { subjectText(subject) }
-                        taskBadge
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
-                    verbText
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    subjectText(ToolPresentation.subject(call))
-                    Spacer(minLength: 4)
-                    taskBadge
-                }
+                // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
+                verbText
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                subjectText(ToolPresentation.subject(call))
+                Spacer(minLength: 4)
+                taskBadge
                 ToolOutcomeMark(call: call)
                 ThemedIcon(Theme.Icon.disclosure)
                     .font(Theme.Font.labelStrong)
@@ -647,17 +634,13 @@ struct ToolCallRow: View {
     /// with nothing to name (Enter Plan Mode, List Agents) draws no empty box beside its verb.
     private var chipHeader: some View {
         let subject = ToolPresentation.subject(call)
-        let stacked = typeSize.isAccessibilitySize
         return VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             ToolChipRow(chip(subject), isOpen: isOpen, isRunning: call.isRunning, chipStyle: subject.isEmpty ? .plain : .boxed,
                         action: tapped) {
-                if !stacked { taskBadge }
+                taskBadge
                 ToolOutcomeMark(call: call)
             }
             .accessibilityIdentifier(headerID)
-            // At the accessibility sizes the badge, which keeps its width, left the verb nothing beside it: it gets a
-            // line of its own under the verb, past the row's 16 pt icon and its 8 pt gap.
-            if stacked { taskBadge.padding(.leading, Theme.Space.xl) }
         }
         .padding(Self.chipInsets(grouped: grouped))
     }
@@ -669,15 +652,7 @@ struct ToolCallRow: View {
             let b = TaskNoteText.badge(tasks.notes[id] ?? [])
             let text = Text(b.text).font(Theme.Font.label).foregroundStyle(b.failed ? Theme.danger : Color.secondary)
             if AppStyle.current.usesBeautifulUI {
-                BUIPill(b.text, tone: b.failed ? .red : .neutral, truncates: typeSize.isAccessibilitySize)
-            } else if typeSize.isAccessibilitySize {
-                // On a line of its own it can still be wider than the screen: then it wraps, in a box rather than a pill.
-                ViewThatFits(in: .horizontal) {
-                    badgePill(text)
-                    text.fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xxs)
-                        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                }
+                BUIPill(b.text, tone: b.failed ? .red : .neutral, truncates: false)
             } else {
                 badgePill(text)
             }
@@ -1150,19 +1125,40 @@ struct ResultBlock: View {
     }
 }
 
-/// A tool's whole output, fetched when opened (pages carry its first 4 KB). Monospaced, scrolls both ways.
+/// A tool's whole output, fetched when opened (pages carry its first 4 KB). Monospaced, scrolls both ways. A pending
+/// card's long command opens in it too, the text in hand (`init(text:title:)`, #6605).
 struct FullOutputSheet: View {
     var itemID: String
     var load: ((String) async throws -> String)?
+    /// The bar's title: Tool Output, or what the text is (a card's command: its tool's name).
+    var title: String = String(localized: "Tool Output")
     @Environment(\.dismiss) private var dismiss
     @State private var text: String?
     @State private var error: String?
+
+    init(itemID: String, load: ((String) async throws -> String)?) {
+        self.itemID = itemID
+        self.load = load
+    }
+
+    /// Text already in hand: nothing to fetch.
+    init(text: String, title: String) {
+        itemID = ""
+        load = nil
+        self.title = title
+        _text = State(initialValue: text)
+    }
 
     var body: some View {
         NavigationStack {
             Group {
                 if let text {
+                    #if os(macOS)
                     MonoTextView(text: MonoText.plain(text, color: .label, size: 12))
+                    #else
+                    // Every line read whole: long ones wrap (#6605); cut at the edge they did not say they scrolled.
+                    MonoTextView(text: MonoText.plain(text, color: .label, size: 12), wraps: true)
+                    #endif
                 } else if let error {
                     ContentUnavailableView("Couldn't Load", systemImage: Theme.Icon.error, description: Text(error))
                 } else {
@@ -1170,7 +1166,7 @@ struct FullOutputSheet: View {
                 }
             }
             .background(Theme.codeBackground)
-            .navigationTitle("Tool Output")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
                 #if os(macOS)
@@ -1540,17 +1536,20 @@ struct Base64Image: View {
     var index = 0
     /// The viewer's title for a picture alone (a file's name); a gallery's pictures go untitled.
     var title: String? = nil
+    /// Fills the width it is given instead of a thumbnail's height (`Theme.Size.box280`): a picture that is the page (#1331).
+    var fillsWidth = false
     @State private var image: UIImage?
     @State private var showViewer = false
     /// The last load gave no picture (no hub, a failed download, bytes that do not decode).
     @State private var failed = false
     /// Bumped by a tap on the retry: loads again (the loader keeps no failures).
     @State private var attempt = 0
-    init(payload: ImagePayload, gallery: [ImagePayload] = [], index: Int = 0, title: String? = nil) {
+    init(payload: ImagePayload, gallery: [ImagePayload] = [], index: Int = 0, title: String? = nil, fillsWidth: Bool = false) {
         self.payload = payload
         self.gallery = gallery
         self.index = index
         self.title = title
+        self.fillsWidth = fillsWidth
         _image = State(initialValue: ChatImageLoader.cached(payload, side: 900)) // back on screen: no placeholder flash
     }
     @Namespace private var zoom
@@ -1564,7 +1563,7 @@ struct Base64Image: View {
                 Image(uiImage: image).resizable().scaledToFit()
                     .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
-                    .scaledFrame(maxHeight: Theme.Size.box280)
+                    .scaledFrame(maxHeight: fillsWidth ? nil : Theme.Size.box280)
                     .contentShape(.rect)
                     .onTapGesture { open() }
                     #if os(macOS)

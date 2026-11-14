@@ -106,6 +106,7 @@ Now `personad hub run` (Linux, macOS) is an **edge**:
 - The edge forwards every connection byte for byte, first writing a PROXY v2 header stating the origin. So the slot's `RemoteAddr` / `LocalAddr` are still the client's address and the address it connected to,
   and trust decisions by origin (loopback, LAN, VPN interface, the user's own PROXY protocol upstream) work as before.
 - TLS certificates, public-key pinning and the database belong to the slot; the edge only forwards TCP.
+- On a machine with more than 4 cores the edge, the slot and the built-in manager keep at most 4 Ps (GOMAXPROCS), as the node does: they are I/O-bound, and every P costs threads and memory (#3533, `server/internal/procs/procs.go`). The edge caps itself and starts the slot with `GOMAXPROCS=4` and a marker, `PERSONA_GOMAXPROCS_CAP=4`; the slot starts the manager the same way; each takes both out of its environment at its start, so the node, Agents and tools they start never inherit them. A machine or container with 4 CPUs or fewer keeps the runtime's own value. To run the hub with another value, set `GOMAXPROCS` in its environment (its systemd unit, launchd plist or compose file): it wins and passes on unchanged.
 
 One switch (self-update, `personad hub switch`, deploy.sh), in order:
 
@@ -141,6 +142,8 @@ SIGTERM no longer cancels the hub's ctx directly; it runs `beginStop` first:
 2. Send every client `{"type":"hub_restarting","back_in_ms":3000}`, waiting up to 300 ms for it to go out;
 3. Hand the `NodeInfo` and session lists of the machines online at this moment, as the managers reported them, to the next hub (its own settings, `hub_settings` `hub.devices_warm`), and write what each manager has (`hub.machine_entries`; a machine connected at this moment is last seen now);
 4. Then cancel the ctx and stop in the original order: close the listener → close WebSockets with 1001 (reason changed to "hub restarting") → drain HTTP → wait for node connections → **hand over the event log** → close the database.
+
+The two machine writes form one bounded shutdown step. A stalled Store call or a wait for `reportedSave` cannot hold `beginStop` past the step and total shutdown budgets; the stop caller advances while an already-started Store call finishes with its context. If the handover was waiting for `reportedSave` when its context expired, it returns after acquiring the lock without starting another write. An already-running background machine-entries write keeps its own timeout and is not joined after the handover deadline.
 
 During shutdown, node connections drop, machines go offline and their interactions end; all of this is caused by the shutdown itself, so it is **no longer broadcast** (`detach` / `markOffline` check `stopping`).
 Previously clients received a string of "machine offline" and "interaction ended" just before being disconnected, then saw it all come back after reconnecting.

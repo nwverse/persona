@@ -11,11 +11,13 @@ import PersonaKit
 /// voice fails or has not started within `Deps.realtimeWithin`, with the phone's on-device voice for the answer's
 /// language. Either way in the meeting recording's own audio session (so the recording goes on), with the voice call's
 /// route rule for where it plays (`VoiceRoute.output`): a connected headset, else the loudspeaker, never the earpiece;
-/// the recording keeps its microphone. Every stretch the phone speaks in is marked on the recording with the answer said
-/// in it (`RecordingAttendance.spoken`), from when its audio actually starts: a sentence that overlaps one and says the
-/// answer's words is Persona's echo (#5905, `RecordingSpan.echoes`), hidden in the transcript, kept out of the live log
-/// and uploaded marked; what anyone else says meanwhile stays the meeting's. The rules of `MeetingAsk` (still recording,
-/// the role still speaks) are checked again just before the first sound.
+/// the recording keeps its microphone. In a room meeting the realtime voice plays on the recorder's own engine
+/// (`RecordingCapture.answerPlayer`, #3862 phase 4), so the system's echo cancellation takes it out of the microphone and
+/// doesn't duck it. Every stretch the phone speaks in is marked on the recording with the answer said in it
+/// (`RecordingAttendance.spoken`), from when its audio actually starts, as the meeting call's voice is: a sentence that
+/// overlaps one and says the answer's words is Persona's echo (#5905, `RecordingSpan.echoes`), hidden in the transcript,
+/// kept out of the live log and uploaded marked; what anyone else says meanwhile stays the meeting's. The rules of
+/// `MeetingAsk` (still recording, the role still speaks) are checked again just before the first sound.
 @MainActor @Observable
 final class MeetingSpeaker {
     static let shared = MeetingSpeaker(deps: .live)
@@ -84,6 +86,13 @@ final class MeetingSpeaker {
         player?.stop()
         if voice == .onDevice { deps.onDevice.stop() }
         finished()
+    }
+
+    /// The recording paused (`MeetingCall`): an answer playing on the recorder's engine stopped with it, so it ends now
+    /// rather than going on mid-sentence after Continue. One on a player of its own goes on, as before.
+    func recordingPaused() {
+        guard speaking != nil, player?.onRecorder == true else { return }
+        stop()
     }
 
     #if DEBUG
@@ -160,7 +169,9 @@ final class MeetingSpeaker {
     /// Its audio began: the stretch Persona speaks in starts here.
     private func began(_ run: Int) {
         guard self.run == run, spanStart == nil else { return }
-        spanStart = deps.timeline()
+        let at = deps.timeline()
+        spanStart = at
+        if let recording { deps.speaking(recording, true, at, pending?.text) }
     }
 
     /// The answer ended (played out, or cut by an interruption).
@@ -174,7 +185,10 @@ final class MeetingSpeaker {
     /// dropped.
     private func finished() {
         run += 1
-        if let id = recording, let span = openSpan(for: id) { deps.spoken(id, span) }
+        if let id = recording, let span = openSpan(for: id) {
+            deps.spoken(id, span)
+            deps.speaking(id, false, span.end, nil)
+        }
         if overrodeOutput {
             deps.restoreOutput()
             overrodeOutput = false
@@ -246,6 +260,9 @@ extension MeetingSpeaker {
         var timeline: () -> Double
         /// Marks a stretch Persona spoke in on the recording.
         var spoken: (_ recording: UUID, _ span: RecordingSpan) -> Void
+        /// Persona began (`on`, saying `text`) or stopped saying an answer at `at`: the audio socket says so in hub mode
+        /// (#3862 phase 5, `MeetingTranscription.speaking`), so the hub holds back what may be its echo.
+        var speaking: (_ recording: UUID, _ on: Bool, _ at: Double, _ text: String?) -> Void = { _, _, _, _ in }
         /// Moves the voice to the loudspeaker when nothing else would play it (`VoiceRoute.output`); whether it did.
         var routeToSpeaker: () -> Bool
         var restoreOutput: () -> Void
@@ -265,6 +282,7 @@ extension MeetingSpeaker.Deps {
              maySpeak: { MeetingAsk.shared.deps.maySpeak($0) },
              timeline: { RecordingCapture.shared.timeline },
              spoken: { id, span in RecordingLibrary.shared.change(id) { entry in entry.attendance?.spoken.append(span) } },
+             speaking: { id, on, at, text in MeetingTranscription.shared.speaking(id, voice: .answer, on: on, at: at, text: text) },
              routeToSpeaker: {
                  let session = AVAudioSession.sharedInstance()
                  guard VoiceRoute.output(PhoneVoiceAudio.snapshot(session)).speaker else { return false }

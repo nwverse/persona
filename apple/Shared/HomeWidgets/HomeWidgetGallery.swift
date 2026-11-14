@@ -154,19 +154,95 @@ struct HomeGallerySheet<Content: View>: View {
         .background(HomeWidgetTokens.Gallery.sheet)
     }
 }
-/// `-showHomeWidgets YES`: every widget at every Home Screen size, light and dark, with the sample data, over the app
-/// (screenshots and design review; the real proof is the Home Screen itself).
-struct HomeGalleryOverlay: View {
-    @State private var shown = UserDefaults.standard.bool(forKey: "showHomeWidgets")
+/// One widget's Lock Screen families on the Lock Screen's wallpaper: the circle and the rectangle side by side, the
+/// inline line under them.
+struct HomeGalleryLockRow: View {
+    var kind: HomeKind
+    var entry: HomeEntry
 
     var body: some View {
-        if shown {
+        let families = kind.families.filter { [.accessoryCircular, .accessoryRectangular].contains($0) }
+        VStack(alignment: .leading, spacing: HomeWidgetTokens.gap) {
+            HStack(spacing: HomeGallery.pad) {
+                ForEach(families, id: \.self) { HomeGalleryCell(kind: kind, family: $0, look: .lock, entry: entry) }
+            }
+            if kind.families.contains(.accessoryInline) {
+                HomeGalleryCell(kind: kind, family: .accessoryInline, look: .lock, entry: entry)
+            }
+        }
+        .padding(HomeGallery.pad)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(HomeGalleryWallpaper(look: .lock))
+        .clipShape(RoundedRectangle(cornerRadius: HomeGallery.tileCorner, style: .continuous))
+    }
+}
+
+/// `-showHomeWidgets calendar:<page>`: the Calendar widget's views, a page a shot (an iPad's screen holds one):
+/// `medium` (today, week, month, a picked day), `large` (today, week), `large2` (month, a picked day), `more` (tinted
+/// and clear, no calendar access, the small one).
+struct HomeCalendarGallery: View {
+    var page: String
+    var entry: HomeEntry
+
+    var body: some View {
+        switch page {
+        case "large":
+            row("today · large", .systemLarge, view: .today)
+            row("week · large", .systemLarge, view: .week)
+        case "large2":
+            row("month · large", .systemLarge, view: .month)
+            row("month · large · a day picked", .systemLarge, view: .month, picked: 8)
+        case "more":
+            row("week · medium", .systemMedium, view: .week, looks: [.tinted, .clear])
+            row("month · medium", .systemMedium, view: .month, looks: [.tinted, .clear])
+            row("week · medium · no calendar access", .systemMedium, view: .week, noAccess: true)
+            row("small", .systemSmall, view: .week)
+        default:
+            row("today · medium", .systemMedium, view: .today)
+            row("week · medium", .systemMedium, view: .week)
+            row("month · medium", .systemMedium, view: .month)
+            row("week · medium · tomorrow picked", .systemMedium, view: .week, picked: 1)
+        }
+    }
+
+    private func row(_ title: String, _ family: WidgetFamily, view: HomeCalendarView, picked: Int? = nil,
+                     looks: [HomeGallery.Look] = [.light, .dark], noAccess: Bool = false) -> some View {
+        var e = entry
+        e.calendarKey = "gallery"
+        var slot = HomeCalendarState.Slot(view: view)
+        if let picked, let day = Calendar.current.date(byAdding: .day, value: picked, to: e.date) {
+            slot.day = HomeDays.key(day)
+            slot.pickedAt = e.date.timeIntervalSince1970
+        }
+        e.calendarSlot = slot
+        if noAccess { e.snapshot.today = .init(events: [], source: nil) }
+        return HomeGalleryRow(title: "calendar · \(title)", kind: .today, family: family, looks: looks, entry: e)
+    }
+}
+
+/// `-showHomeWidgets YES`: every widget at every Home Screen size, light and dark, with the sample data, over the app
+/// (screenshots and design review; the real proof is the Home Screen itself). `-showHomeWidgets lock`: the Lock
+/// Screen's families instead, and `lock:agents,today` only those kinds (one screenshot holds four).
+struct HomeGalleryOverlay: View {
+    @State private var shown = UserDefaults.standard.string(forKey: "showHomeWidgets").flatMap { ["", "NO"].contains($0) ? nil : $0 }
+
+    var body: some View {
+        if let shown {
             let entry = HomeEntry(date: .now, snapshot: HomeSamples.busy(zh: LanguageStore.shared.launched.hasPrefix("zh"), now: .now))
             ScrollView([.vertical, .horizontal]) {
                 HomeGallerySheet(title: "Persona", note: nil) {
-                    ForEach(HomeKind.allCases, id: \.self) { kind in
-                        ForEach(kind.families.filter { [.systemSmall, .systemMedium, .systemLarge].contains($0) }, id: \.self) { family in
-                            HomeGalleryRow(title: "\(kind.rawValue) · \(family)", kind: kind, family: family, looks: [.light, .dark], entry: entry)
+                    if shown.hasPrefix("calendar") {
+                        HomeCalendarGallery(page: shown.split(separator: ":").dropFirst().first.map(String.init) ?? "medium", entry: entry)
+                    } else if shown.hasPrefix("lock") {
+                        let only = shown.split(separator: ":").dropFirst().first.map { $0.split(separator: ",").map(String.init) }
+                        ForEach(HomeKind.allCases.filter { only?.contains($0.rawValue) ?? true }, id: \.self) { kind in
+                            HomeGalleryLockRow(kind: kind, entry: entry)
+                        }
+                    } else {
+                        ForEach(HomeKind.allCases, id: \.self) { kind in
+                            ForEach(kind.families.filter { [.systemSmall, .systemMedium, .systemLarge].contains($0) }, id: \.self) { family in
+                                HomeGalleryRow(title: "\(kind.rawValue) · \(family)", kind: kind, family: family, looks: [.light, .dark], entry: entry)
+                            }
                         }
                     }
                 }

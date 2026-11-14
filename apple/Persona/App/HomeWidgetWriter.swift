@@ -241,11 +241,11 @@ extension AppModel {
         s.inbox = HomeInbox.build(InboxStore.shared)
         let data = HomeWidgetData.shared
         let now = Date()
-        s.today = HomeToday.build(calendar: data.events, hub: HomeToday.hubMeetings(TasksStore.shared, now: now), now: now)
+        s.today = HomeToday.build(calendar: data.events, days: data.days, hub: HomeToday.hubMeetings(TasksStore.shared, now: now), now: now)
         s.todos = HomeTodos.build(TodoStore.shared.todos, ticks: HomeWidgetActions.ticks, now: now)
         let stats = mergedFleet().stats
         s.usage = HomeUsage.build(UsageWindows.live(UsageWindowsStore.shared.accounts, now: now), tokens: stats?.tokens ?? 0,
-                                  tpm: stats?.tpm ?? 0, hourly: data.hourly)
+                                  tpm: stats?.tpm ?? 0, hourly: data.hourly, spent: data.spentToday(now))
         s.health = data.health
         return s
     }
@@ -254,10 +254,23 @@ extension AppModel {
 /// Today's events: the phone's calendar when Persona may read it, else the hub's meetings on today's card (Feishu's),
 /// else none, which the widget tells how to change.
 enum HomeToday {
-    static func build(calendar: [HomeSnapshot.Event]?, hub: [HomeSnapshot.Event]?, now: Date) -> HomeSnapshot.Today? {
-        if let calendar { return .init(events: calendar, source: .calendar) }
+    /// `days`, the phone's calendar over the weeks around today, goes only with its own events: the hub's meetings are
+    /// today's alone.
+    static func build(calendar: [HomeSnapshot.Event]?, days: HomeSnapshot.Days? = nil, hub: [HomeSnapshot.Event]?, now: Date) -> HomeSnapshot.Today? {
+        if let calendar { return .init(events: calendar, source: .calendar, days: days) }
         if let hub { return .init(events: hub, source: .hub) }
         return .init(events: [], source: nil)
+    }
+
+    /// The rest of today: the events on today not yet over, all-day ones first, then by start, at most `Today.cap`.
+    nonisolated static func rest(_ events: [HomeSnapshot.Event], now: Date, calendar: Calendar = .current) -> [HomeSnapshot.Event] {
+        let start = calendar.startOfDay(for: now).timeIntervalSince1970
+        let end = HomeDays.nextMidnight(after: now, calendar: calendar).timeIntervalSince1970
+        let t = now.timeIntervalSince1970
+        return Array(events
+            .filter { $0.start < end && ($0.end > start || $0.start >= start) && ($0.allDay || $0.end > t) }
+            .sorted { ($0.allDay ? 0 : 1, $0.start) < ($1.allDay ? 0 : 1, $1.start) }
+            .prefix(HomeSnapshot.Today.cap))
     }
 
     /// The meetings on today's card in any conversation's feed (`TodayBody.meetings`); nil when no card is today's.
@@ -292,15 +305,43 @@ enum HomeTodos {
 /// The subscription windows as the Machines page lists them (live ones, the fullest first, stale ones marked), today's
 /// tokens and tokens a minute as the island's, and the hours.
 enum HomeUsage {
-    static let shown = 3
+    /// The widgets draw three at most; Edit Widget lists every account kept here (as the snapshot keeps eight computers).
+    static let kept = 8
 
-    static func build(_ accounts: [UsageAccount], tokens: Int, tpm: Int, hourly: [Int]) -> HomeSnapshot.Usage? {
+    static func build(_ accounts: [UsageAccount], tokens: Int, tpm: Int, hourly: [Int], spent: Double? = nil) -> HomeSnapshot.Usage? {
         guard !accounts.isEmpty || tokens > 0 else { return nil }
-        return .init(accounts: accounts.prefix(shown).map { a in
+        return .init(accounts: accounts.prefix(kept).map { a in
             .init(id: a.id, name: a.name, windows: a.windows.map {
                 .init(label: $0.label, minutes: $0.windowMinutes, percent: $0.usedPercent, resetsAt: $0.resetsAt?.timeIntervalSince1970)
             }, stale: a.stale)
-        }, tokensToday: tokens, tpm: tpm, hourly: hourly)
+        }, tokensToday: tokens, tpm: tpm, hourly: hourly, costToday: spent)
+    }
+
+    /// The launchers whose quota may carry money: those with a gateway (an address here, or on a computer for an rc
+    /// file's), but not the built-in claude, a direct API connection (it has no quota) or a hidden one.
+    static func gatewayLaunchers(_ all: [LauncherView]) -> [String] {
+        all.filter { l in
+            guard !l.builtin, l.kind != "api", l.hidden != true else { return false }
+            let here = l.baseURL.map { !$0.isEmpty } ?? false
+            return here || (l.details ?? [:]).values.contains { $0.baseURL.map { !$0.isEmpty } ?? false }
+        }
+        .map(\.name)
+    }
+
+    /// Today's money as the gateways report it (docs/apple/home-widgets.md「What each number counts」): the `cost_usd` of
+    /// the usage entries that say they are the day's, never an entry known only by its label or an estimate. A key two
+    /// launchers share counts once (the same gateway and key name); nil when no gateway says.
+    static func spentToday(_ answers: [LauncherQuotaAnswer]) -> Double? {
+        var seen = Set<String>()
+        var total: Double?
+        for (i, q) in answers.compactMap(\.quota).enumerated() {
+            let key = q.keyName.flatMap { $0.isEmpty ? nil : q.gateway + "\u{1}" + $0 } ?? "#\(i)"
+            guard seen.insert(key).inserted else { continue }
+            for u in q.usage ?? [] where u.period == LauncherQuota.Usage.day {
+                if let cost = u.costUSD { total = (total ?? 0) + cost }
+            }
+        }
+        return total
     }
 }
 
