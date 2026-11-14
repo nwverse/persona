@@ -550,6 +550,13 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   25% after each calm second until the first cut; the phone moves to another tier when the band no longer fits.
   `update.path` (with or without a band) starts the 10 s delay floor, the delivered rate and the calm stretch over
   (`RateController.pathChanged`): the new route's one-way delay is its own, not a queue.
+- **Idle refinement** (`Refinement`, `frame` flag 2; for a phone that sets a band): 300 ms after the screen stops
+  changing, the latest captured picture (even one skipped while a queue drained) is encoded again at four times the
+  target bitrate, then twice more 200 ms apart, so text sharpens at any tier. A pass goes only while the link is calm
+  (not skipping, the last frame's queueing under 150 ms) and the encoder holds nothing; one that comes back queued past
+  150 ms ends the passes until the next change. Its report changes nothing in `RateController` but a keyframe request,
+  and `timing` counts only its bytes. A still screen after a size change gets its keyframe through the first pass.
+  ScreenCaptureKit's queue depth is 4 for such a stream, since refinement holds one picture.
   `timing` adds `target_kbps` (the bitrate asked of the encoder; `kbps` is what went out), `skipped` (frames left out
   over the 500 ms queue), `blocked_ms` (time frames waited to be written to the stream) and `pending` (the most frames
   the encoder held at once). An app without tiers sends none of the new fields and gets the adaptation above unchanged;
