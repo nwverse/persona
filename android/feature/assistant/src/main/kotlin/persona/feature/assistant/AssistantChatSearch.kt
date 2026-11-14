@@ -16,6 +16,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.api.AssistantManagement
 import persona.core.contracts.api.AssistantSearchAnswer
 import persona.core.contracts.api.AssistantSearchHit
+import persona.core.contracts.api.AssistantSearchResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -33,23 +34,45 @@ internal const val SNIPPET_LEAD = 8
 internal data class FoundChat(val session: Session, val hit: AssistantSearchHit?)
 
 /**
- * The manager's results first (each known chat, with its newest hit; a title match opens as usual), then the local
- * matches it did not return, in the order they already had. A result the app does not know is left out. Null until
- * there is an answer: the drawer's own title and last-message filter is the whole list until then.
+ * A row for a result the app has not loaded (an archived chat whose list is still closed). Only when it can be opened:
+ * both ids are present. The row uses the result's own title, computer, archived mark and time.
  */
-internal fun mergeAssistantSearch(local: List<Session>, answer: AssistantSearchAnswer?, known: List<Session>): List<FoundChat>? {
-    answer ?: return null
+internal fun sessionFromSearch(result: AssistantSearchResult): Session? {
+    if (result.sessionId.isBlank() || result.machineId.isBlank()) return null
+    return Session(machineId = result.machineId, sessionId = result.sessionId, title = result.title,
+        archived = result.archived, updatedAt = result.updatedAt, origin = result.origin, assistant = true)
+}
+
+/**
+ * The manager's results first (a known chat, or one built from the result when the app has not loaded it, with its
+ * newest hit; a title match opens as usual), then the local matches it did not return, in the order they already had.
+ * No answer yet: the local matches alone, in that same list.
+ */
+internal fun mergeAssistantSearch(local: List<Session>, answer: AssistantSearchAnswer?, known: List<Session>): List<FoundChat> {
+    if (answer == null) return local.map { FoundChat(it, null) }
     val byId = LinkedHashMap<String, Session>()
     for (session in known) byId.putIfAbsent(session.sessionId, session)
     val out = ArrayList<FoundChat>()
     val seen = HashSet<String>()
     for (result in answer.results) {
-        val session = byId[result.sessionId] ?: continue
         if (!seen.add(result.sessionId)) continue
+        val session = byId[result.sessionId] ?: sessionFromSearch(result) ?: continue
         out.add(FoundChat(session, if (result.titleMatch) null else result.hits.firstOrNull()))
     }
     for (session in local) if (seen.add(session.sessionId)) out.add(FoundChat(session, null))
     return out
+}
+
+/**
+ * What the drawer lists for [query]. While it is non-blank and the hub lists assistant search, the results list stays:
+ * the local title and last-message matches at once, and [answer] (only when it is already for this query) merges in.
+ * Null keeps today's groups: no query, or a hub without the feature.
+ */
+internal fun shownSearchRows(
+    query: String, enabled: Boolean, local: List<Session>, known: List<Session>, answer: AssistantSearchAnswer?,
+): List<FoundChat>? {
+    if (!enabled || query.trim().isEmpty()) return null
+    return mergeAssistantSearch(local, answer, known)
 }
 
 /**
@@ -134,8 +157,8 @@ internal class AssistantChatSearch {
 }
 
 /**
- * The rows a search shows, and whether the manager is still reading older chats. Null rows: no server answer yet (or
- * the hub has no search), so the drawer keeps its own filter.
+ * The rows a search shows, and whether the manager is still reading older chats. While the query is non-blank and the
+ * hub lists the feature, the rows are the results list (local matches at once). Null rows: today's groups.
  */
 @Composable
 internal fun rememberFoundChats(
@@ -143,7 +166,7 @@ internal fun rememberFoundChats(
 ): Pair<List<FoundChat>?, Boolean> {
     val search = rememberAssistantSearch(query, enabled, api, hubKey)
     val answer = search.current(query)
-    val found = remember(local, answer, known) { mergeAssistantSearch(local, answer, known) }
+    val found = remember(query, enabled, local, answer, known) { shownSearchRows(query, enabled, local, known, answer) }
     return found to (answer?.partial == true)
 }
 

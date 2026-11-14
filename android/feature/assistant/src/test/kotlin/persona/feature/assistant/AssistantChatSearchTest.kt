@@ -5,23 +5,26 @@ import persona.core.contracts.api.AssistantSearchAnswer
 import persona.core.contracts.api.AssistantSearchHit
 import persona.core.contracts.api.AssistantSearchResult
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AssistantChatSearchTest {
     private fun session(id: String, archived: Boolean = false) =
         Session(machineId = "m", sessionId = id, title = id, archived = archived)
 
     private fun answer(vararg results: AssistantSearchResult) = AssistantSearchAnswer(results = results.toList())
 
-    @Test fun serverResultsComeFirstThenLocalMatchesAndUnknownChatsAreLeftOut() {
+    @Test fun serverResultsComeFirstThenLocalMatchesAndAChatThatCannotBeOpenedIsLeftOut() {
         val open = session("open")
         val localOnly = session("local")
         val archived = session("old", archived = true)
@@ -33,12 +36,54 @@ class AssistantChatSearchTest {
             AssistantSearchResult(sessionId = "old", hits = listOf(hit)),
             AssistantSearchResult(sessionId = "open", titleMatch = true, hits = listOf(hit)),
             AssistantSearchResult(sessionId = "open", hits = listOf(hit)),
-        ), known)!!
+        ), known)
         assertEquals(listOf("old", "open", "local"), merged.map { it.session.sessionId })
         assertEquals("i1", merged[0].hit?.itemId)
         assertNull(merged[1].hit)
         assertNull(merged[2].hit)
-        assertNull(mergeAssistantSearch(local, null, known))
+        assertEquals(local.map { it.sessionId }, mergeAssistantSearch(local, null, known).map { it.session.sessionId })
+    }
+
+    @Test fun anArchivedHitTheAppHasNotLoadedIsARowFromTheResult() {
+        val open = session("open")
+        val hit = AssistantSearchHit(itemId = "i1", snippet = "青石巷", ranges = listOf(listOf(0, 3)))
+        val merged = mergeAssistantSearch(listOf(open), answer(
+            AssistantSearchResult(sessionId = "old-trip", machineId = "box", title = "旧的旅行", archived = true,
+                updatedAt = "2026-11-01T00:00:00Z", origin = "user", hits = listOf(hit)),
+        ), known = listOf(open))
+        val built = merged[0].session
+        assertEquals(listOf("old-trip", "open"), merged.map { it.session.sessionId })
+        assertEquals("box", built.machineId)
+        assertEquals("旧的旅行", built.title)
+        assertTrue(built.archived)
+        assertEquals("2026-11-01T00:00:00Z", built.updatedAt)
+        assertEquals("user", built.origin)
+        assertEquals("i1", merged[0].hit?.itemId)
+        val known = session("old-trip", archived = true).copy(title = "已加载")
+        val kept = mergeAssistantSearch(emptyList(), answer(
+            AssistantSearchResult(sessionId = "old-trip", machineId = "box", title = "结果里的标题", archived = true, hits = listOf(hit)),
+        ), known = listOf(known))
+        assertEquals("已加载", kept.single().session.title)
+    }
+
+    @Test fun aNonBlankQueryKeepsTheResultsListUntilTheManagerAnswers() = runTest {
+        val local = listOf(session("trip"))
+        assertNull(shownSearchRows("青", enabled = false, local, local, null))
+        assertNull(shownSearchRows("  ", enabled = true, local, local, null))
+        val waiting = shownSearchRows("青", enabled = true, local, local, null)!!
+        assertEquals(listOf("trip"), waiting.map { it.session.sessionId })
+        assertNull(waiting.single().hit)
+        val search = AssistantChatSearch()
+        search.ask("one", on = true, key = "k") { AssistantSearchAnswer(partial = true) }
+        assertTrue(search.current("one")?.partial == true)
+        val next = launch { search.ask("青", on = true, key = "k") { AssistantSearchAnswer() } }
+        assertNull(search.current("青"))
+        val rows = shownSearchRows("青", enabled = true, local, local, search.current("青"))!!
+        assertEquals(listOf("trip"), rows.map { it.session.sessionId })
+        advanceTimeBy(SEARCH_SETTLE_MS)
+        next.join()
+        assertNotNull(search.current("青"))
+        assertFalse(search.current("青")?.partial == true)
     }
 
     @Test fun theSnippetStartsEightCodePointsBeforeTheMatchAndKeepsEmojiWhole() {

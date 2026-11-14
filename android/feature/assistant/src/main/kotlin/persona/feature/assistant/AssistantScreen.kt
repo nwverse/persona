@@ -1434,8 +1434,8 @@ internal fun AssistantDrawer(
     /** The sidebar's head with the assistant switcher (docs/assistant/managers.md "Clients"); none: the head as it was. */
     switcher: AssistantSwitcherSlot? = null,
     /**
-     * The manager's search merged with the local matches, when an answer has arrived. Null keeps today's groups
-     * (titles and last messages), including while a query is still being asked.
+     * The results list while a query is non-blank and the hub lists assistant search: local matches at once, the
+     * manager's results merged in when they arrive. Null keeps today's groups.
      */
     found: List<FoundChat>? = null,
     /** The manager is still reading older chats, so some matches may be missing. */

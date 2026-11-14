@@ -138,7 +138,6 @@ interface AssistantManagement {
         throw UnsupportedOperationException("Always-allowed permissions unavailable")
 }
 
-/** One remembered "Always allow": the tool it covers and when; only the key's hash is stored, not the exact scope. */
 /** One message a chat was found by (`docs/protocol/protocol.md` "Assistant chat search"). `ranges` are UTF-16 `[start, end)` in [snippet]. */
 @Serializable
 data class AssistantSearchHit(
