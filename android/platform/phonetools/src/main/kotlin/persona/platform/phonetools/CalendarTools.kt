@@ -372,7 +372,7 @@ internal fun queryAttendees(resolver: android.content.ContentResolver, eventId: 
         arrayOf(Calendar.Attendees.ATTENDEE_NAME, Calendar.Attendees.ATTENDEE_EMAIL, Calendar.Attendees.ATTENDEE_RELATIONSHIP,
             Calendar.Attendees.ATTENDEE_TYPE, Calendar.Attendees.ATTENDEE_STATUS, Calendar.Attendees.ATTENDEE_IDENTITY,
             Calendar.Attendees.ATTENDEE_ID_NAMESPACE),
-        "${Calendar.Attendees.EVENT_ID} = ?", arrayOf(eventId.toString()), "${Calendar.Attendees._ID} ASC")?.use { cursor ->
+        "${Calendar.Attendees.EVENT_ID} = ?", arrayOf(eventId.toString()), "Attendees.${Calendar.Attendees._ID} ASC")?.use { cursor ->
         while (cursor.moveToNext()) add(CalendarAttendee(cursor.getString(0), cursor.getString(1), cursor.getInt(2),
             cursor.getInt(3), cursor.getInt(4), cursor.getString(5), cursor.getString(6)))
     }
@@ -408,7 +408,7 @@ private class AndroidCalendarBackend(context: Context) : CalendarBackend {
 
     override fun reminders(eventId: Long): List<CalendarReminder> = buildList {
         resolver.query(Calendar.Reminders.CONTENT_URI, arrayOf(Calendar.Reminders.MINUTES, Calendar.Reminders.METHOD),
-            "${Calendar.Reminders.EVENT_ID} = ?", arrayOf(eventId.toString()), "${Calendar.Reminders._ID} ASC")?.use { cursor ->
+            "${Calendar.Reminders.EVENT_ID} = ?", arrayOf(eventId.toString()), "Reminders.${Calendar.Reminders._ID} ASC")?.use { cursor ->
             while (cursor.moveToNext()) add(CalendarReminder(cursor.getInt(0), cursor.getInt(1)))
         }
     }
@@ -431,6 +431,7 @@ private class AndroidCalendarBackend(context: Context) : CalendarBackend {
             organizer = string(19), availability = long(20)?.toInt(), accessLevel = long(21)?.toInt(),
             guestsCanInviteOthers = flag(22), guestsCanModify = flag(23), guestsCanSeeGuests = flag(24),
             calendarName = string(25), ownerAccount = string(26), calendarAccess = long(27)?.toInt(),
+            hasSyncId = !string(28).isNullOrEmpty(),
         )
     }
 
@@ -444,7 +445,7 @@ private class AndroidCalendarBackend(context: Context) : CalendarBackend {
             Calendar.Events.ORIGINAL_ALL_DAY, Calendar.Events.ORGANIZER, Calendar.Events.AVAILABILITY,
             Calendar.Events.ACCESS_LEVEL, Calendar.Events.GUESTS_CAN_INVITE_OTHERS, Calendar.Events.GUESTS_CAN_MODIFY,
             Calendar.Events.GUESTS_CAN_SEE_GUESTS, Calendar.Events.CALENDAR_DISPLAY_NAME, Calendar.Events.OWNER_ACCOUNT,
-            Calendar.Events.CALENDAR_ACCESS_LEVEL,
+            Calendar.Events.CALENDAR_ACCESS_LEVEL, Calendar.Events._SYNC_ID,
         )
     }
 }
