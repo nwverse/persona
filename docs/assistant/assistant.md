@@ -921,9 +921,13 @@ Tasks continuing original chats (`session_id`) also switch those chats to these 
 - If due again while the previous run is running or awaiting approval / answer, **skip**, recording "Previous run still running; skipped", not queuing in the same chat
   (would answer twice, the second seeing half-finished work). One-shot follow-ups still send (skip loses them); App "Run now" returns 409 with reason when busy.
   Only one simultaneous send per task (`schedule.sending`), preventing due / Run now overlap.
-- Chat-scheduled tasks (`session_id`) still send to their originating chat first; failures fall back to a task-owned chat, recorded and reused.
+- Chat-scheduled tasks (`session_id`) send to their originating chat first. Recurring tasks created in the main chat run in a task-owned chat. Failures to resume fall back to a task-owned chat, recorded and reused.
 - App Scheduled tasks "Chat" section says "Runs in the same chat", opening it in Persona in both layouts / shells. "Start a new chat next time"
   (`POST /api/v1/assistant/tasks/{id}/fresh`) clears the stored chat for large context / restart; old chat remains in Chats. Never-run tasks say "A new chat starts on the first run".
+
+In the Web Scheduled tasks editor, expand **Run continuity** to edit a recurring task's state note or select **Start a new chat for each run**.
+The hub includes the last saved note in each run. Keep cursors and a short record of what has already been reported, up to 4,096 UTF-8 bytes.
+A run can stage a replacement with `schedule_state_set`. The hub saves it after a successful turn. A user edit takes precedence over updates from a run that started before that edit.
 
 Deployment: update hub and node together (`resume_only` is new; old node ignores it and creates a new chat under a missing old id).
 
