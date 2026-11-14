@@ -26,9 +26,9 @@ import java.util.Locale
 @Serializable @SerialName("persona.feature.inbox.InboxEventRoute")
 data class InboxEventRoute(val itemId: String) : NavKey
 
-/** Opening [record] from the list: its event page when the hub sent event fields, else its own page as before. */
+/** Opening [record] from the list: its event page when the hub sent event fields; the assistant's own row goes straight to its conversation card. */
 fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey =
-    if (record.event.present) InboxEventRoute(record.item.id) else pages.open(record)
+    if (record.event.present && !record.isAssistantRow) InboxEventRoute(record.item.id) else pages.open(record)
 
 /** The words for a processing conversation that is on it (In progress): AI is reviewing, Agent is working, Waiting for reply. */
 @StringRes
