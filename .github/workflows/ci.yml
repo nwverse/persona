@@ -77,13 +77,6 @@ jobs:
     uses: ./.github/workflows/apple-test.yml
     with:
       lane: ios
-  apple_macos:
-    name: Mac (non-blocking)
-    needs: changes
-    if: needs.changes.outputs.apple == 'true'
-    uses: ./.github/workflows/apple-test.yml
-    with:
-      lane: macos
   core:
     needs: changes
     if: needs.changes.outputs.core == 'true'
@@ -97,7 +90,6 @@ jobs:
     if: needs.changes.outputs.scripts == 'true'
     uses: ./.github/workflows/scripts-tests.yml
   # An unselected manual lane is never represented as a passed platform test.
-  # Mac has a visible independent result but does not block CI required.
   required:
     name: CI required
     needs: [changes, server, web, android, apple, core, runtimes, scripts]

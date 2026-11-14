@@ -216,7 +216,7 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertIn('CI_FULL: ${{ inputs.full }}', selection)
         self.assertIn('if [ "$CI_FULL" = true ]; then', selection)
         self.assertIn('python3 scripts/ci/paths.py --all', selection)
-        for name in ('server', 'web', 'android', 'apple', 'apple_macos', 'core', 'runtimes', 'scripts'):
+        for name in ('server', 'web', 'android', 'apple', 'core', 'runtimes', 'scripts'):
             block = re.split(r'\n  [a-z_]+:\n', ci.split('\n  ' + name + ':\n', 1)[1], maxsplit=1)[0]
             self.assertIn('needs: changes', block)
             self.assertIn('needs.changes.outputs.', block)
@@ -275,16 +275,14 @@ class RequiredTests(unittest.TestCase):
         del needs["changes"]["outputs"]["apple"]
         self.assertTrue(required.failures(needs))
 
-    def test_mac_result_does_not_change_required_ios_policy(self):
-        for mac_result in ('failure', 'cancelled', 'skipped', None, 'success'):
-            needs = self.needs()
-            needs['changes']['outputs']['apple'] = 'true'
-            needs['apple']['result'] = 'success'
-            needs['apple_macos'] = {'result': mac_result}
-            self.assertEqual(required.failures(needs), [])
-            for ios_result in ('failure', 'cancelled', 'skipped', None):
-                needs['apple']['result'] = ios_result
-                self.assertTrue(required.failures(needs))
+    def test_mac_removal_keeps_ios_required(self):
+        needs = self.needs()
+        needs['changes']['outputs']['apple'] = 'true'
+        needs['apple']['result'] = 'success'
+        self.assertEqual(required.failures(needs), [])
+        for ios_result in ('failure', 'cancelled', 'skipped', None):
+            needs['apple']['result'] = ios_result
+            self.assertTrue(required.failures(needs))
 
     def test_guard_failure_never_passes(self):
         needs = self.needs()
@@ -293,25 +291,23 @@ class RequiredTests(unittest.TestCase):
 
 
 class AppleWorkflowTests(unittest.TestCase):
-    def test_mac_and_ios_are_independent_but_only_ios_blocks(self):
+    def test_native_mac_is_removed_and_ios_stays_required(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/ci.yml').read_text()
-        ios = workflow.split('\n  apple:\n', 1)[1].split('\n  apple_macos:\n', 1)[0]
-        mac = workflow.split('\n  apple_macos:\n', 1)[1].split('\n  core:\n', 1)[0]
-        for block, lane in ((ios, 'ios'), (mac, 'macos')):
-            self.assertIn('    needs: changes\n', block)
-            self.assertIn("    if: needs.changes.outputs.apple == 'true'", block)
-            self.assertIn('    uses: ./.github/workflows/apple-test.yml', block)
-            self.assertIn('      lane: ' + lane, block)
+        ios = workflow.split('\n  apple:\n', 1)[1].split('\n  core:\n', 1)[0]
+        self.assertIn('    needs: changes\n', ios)
+        self.assertIn("    if: needs.changes.outputs.apple == 'true'", ios)
+        self.assertIn('    uses: ./.github/workflows/apple-test.yml', ios)
+        self.assertIn('      lane: ios', ios)
+        self.assertNotIn('apple_macos', workflow)
         gate = workflow.split('\n  required:\n', 1)[1]
         self.assertIn('needs: [changes, server, web, android, apple, core, runtimes, scripts]', gate)
-        self.assertNotIn('apple_macos', gate)
         self.assertNotIn('continue-on-error:', workflow)
 
     def test_reusable_lane_uses_quoted_environment_not_script_interpolation(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, macos]', workflow)
+        self.assertIn('options: [ios]', workflow)
         self.assertIn('APPLE_CI_LANE: ${{ inputs.lane }}', workflow)
         self.assertIn('run: scripts/ci/apple.sh "$APPLE_CI_LANE"', workflow)
         self.assertNotIn('continue-on-error:', workflow)
