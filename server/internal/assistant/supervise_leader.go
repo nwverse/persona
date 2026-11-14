@@ -144,16 +144,19 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 	for _, g := range taken {
 		delete(b.sent, g.id())
 	}
-	for _, g := range replay {
-		if _, newer := b.pending[g.id()]; !newer {
-			b.pending[g.id()] = g
-		}
-	}
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {
 		for _, g := range replay {
-			if cur, ok := b.pending[g.id()]; ok {
-				pending[g.id()] = cur
+			cur, ok := b.pending[g.id()]
+			if !ok {
+				// First-load rehoming precedes the normal outbox restore. A newer durable stretch with the same id
+				// must win over this older queued replay rather than being overwritten before that restore reads it.
+				cur, ok = pending[g.id()]
 			}
+			if !ok {
+				cur = g
+			}
+			b.pending[g.id()] = cur
+			pending[g.id()] = cur
 		}
 	})
 	b.mu.Unlock()

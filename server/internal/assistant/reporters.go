@@ -305,7 +305,20 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 	kept := make([]relayMsg, 0, len(q))
 	var regather, taken []superviseSignal
 	for i, m := range q {
-		if m.Tool != superviseTool || i == 0 && r.draining[conversation] {
+		if m.Tool != superviseTool {
+			kept = append(kept, m)
+			continue
+		}
+		if i == 0 && r.draining[conversation] {
+			// The send owns this head until it finishes. Keep it in place, but let rehoming replay the selected
+			// structured signals; the other tasks in a mixed digest stay with this delivery only.
+			if m.Signals != nil {
+				for _, g := range *m.Signals {
+					if ids[g.Todo] {
+						taken = append(taken, g)
+					}
+				}
+			}
 			kept = append(kept, m)
 			continue
 		}
@@ -353,7 +366,7 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 	n := len(q) - len(kept)
 	if n == 0 {
 		r.mu.Unlock()
-		return 0, nil
+		return 0, taken
 	}
 	if len(kept) == 0 {
 		delete(r.st.Queue, conversation)

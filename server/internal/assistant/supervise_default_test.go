@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,6 +189,145 @@ func TestLegacySideQueuedReviewRehomesToMain(t *testing.T) {
 	}
 	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
 		t.Fatalf("main could not accept the rehomed review: %v", err)
+	}
+	if got := todoNow(s, todo.ID); got.DoneAt == nil {
+		t.Fatal("main's acceptance did not close the rehomed task")
+	}
+}
+
+// A newer durable stretch can share its id with an older signal still queued for the legacy side. Restart loading must
+// restore that outbox before replaying the queue, or the stale replay overwrites the only copy of the newer review.
+func TestRehomeRestoreKeepsNewerDurableReview(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor, v.State = "side1", reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "old-queued-review", Detail: "old-queued-marker-5732", At: time.Now()}
+	s.signal(old)
+	reserveUndelivered(t, s, old)
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued old review", At: old.At},
+		[]superviseSignal{old}, old.At, time.Time{}) {
+		t.Fatal("the legacy side did not accept its queued review")
+	}
+	newer := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "newer-durable-review", Detail: "newer-durable-marker-5732", At: old.At.Add(time.Second)}
+	s.signal(newer)
+	if got := storedSupervisePending(t, s)[newer.id()]; got.Key != newer.Key {
+		t.Fatalf("the newer stretch was not durable before restart: %+v", got)
+	}
+
+	simulateSupervisionRestart(t, s)
+	reloadTodos(t, s) // the real first-load path rehomes legacy supervision and restores the durable outbox
+	if got := storedSupervisePending(t, s)[newer.id()]; got.Key != newer.Key || got.Detail != newer.Detail {
+		t.Fatalf("the queued replay replaced the newer durable stretch: %+v", got)
+	}
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	s.sendDigest(ctx)
+	waitFor(t, "the newer durable review after rehome", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("conv1"), "\n"), newer.Detail)
+	})
+	if got := strings.Join(f.noticesTo("conv1"), "\n"); strings.Contains(got, old.Detail) {
+		t.Fatalf("main received the stale queued review instead of only the newer stretch:\n%s", got)
+	}
+}
+
+// blockedAssistantDrain holds the old side's real drain without fakeHub's global lock, so rehome and main can proceed.
+type blockedAssistantDrain struct {
+	Hub
+	started, release chan struct{}
+	once             sync.Once
+	mu               sync.Mutex
+	texts            map[string][]string
+}
+
+func (h *blockedAssistantDrain) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method != DeviceAssistantSend {
+		return h.Hub.DeviceCall(ctx, p)
+	}
+	var v struct {
+		SessionID string `json:"session_id"`
+		Text      string `json:"text"`
+	}
+	if err := json.Unmarshal(p.Params, &v); err != nil {
+		return nil, err
+	}
+	h.mu.Lock()
+	h.texts[v.SessionID] = append(h.texts[v.SessionID], v.Text)
+	h.mu.Unlock()
+	if v.SessionID == "side1" {
+		h.once.Do(func() { close(h.started) })
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return json.Marshal(map[string]any{"ok": true})
+}
+
+func (h *blockedAssistantDrain) text(session string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return strings.Join(h.texts[session], "\n")
+}
+
+// A restart drops supervise.queued while the persisted relay queue survives. Even when the old side has already started
+// draining its head, rehoming must replay that head's structured review for main rather than waiting for another restart.
+func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor, v.State = "side1", reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "legacy-draining-review", Detail: "legacy-draining-marker-5732", At: time.Now()}
+	s.signal(g)
+	reserveUndelivered(t, s, g)
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued legacy review", At: g.At},
+		[]superviseSignal{g}, g.At, time.Time{}) {
+		t.Fatal("the legacy side did not accept its queued review")
+	}
+	if got := storedSupervisePending(t, s); len(got) != 0 {
+		t.Fatalf("queue admission did not acknowledge the old side's outbox signal: %+v", got)
+	}
+	simulateSupervisionRestart(t, s)
+
+	h := &blockedAssistantDrain{Hub: f, started: make(chan struct{}), release: make(chan struct{}), texts: map[string][]string{}}
+	setHub(s, h)
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(h.release) }) }
+	defer unblock()
+	main := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	side := proto.Session{SessionID: "side1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	f.setSessions("server", main, side)
+	s.drainRelays("server", []proto.Session{side})
+	select {
+	case <-h.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the old side did not start draining its queued review")
+	}
+
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	s.rehomeSupervisedTodos(ctx)
+	s.sendDigest(ctx)
+	waitFor(t, "the draining side's review replayed to main", func() bool {
+		got := h.text("conv1")
+		return strings.Contains(got, todo.ID) && strings.Contains(got, "legacy-draining-marker-5732")
+	})
+	if got := strings.Count(h.text("conv1"), "legacy-draining-marker-5732"); got != 1 {
+		t.Fatalf("main received the replayed marker %d times, want exactly one", got)
+	}
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
+		t.Fatalf("main could not accept the review replayed during the old side's drain: %v", err)
 	}
 	if got := todoNow(s, todo.ID); got.DoneAt == nil {
 		t.Fatal("main's acceptance did not close the rehomed task")
