@@ -230,10 +230,13 @@ def open_link(device, base, path):
 
 
 def close_card(device, label):
+    """Tap close and return when the tap was sent: the release (and the fresh preload after it) starts then, while the
+    card is only seen gone a UI dump later, which would make a request that followed the tap look like one before the close."""
     device.tap_when_present("the close button", desc=label)
+    tapped = time.time()
     # The card is gone once its close control is. Ordinary history pages must also have left the semantics tree.
     device.wait(lambda nodes: page_state(nodes) is None and find(nodes, desc=label) is None, "the card to close")
-    return time.time()
+    return tapped
 
 
 def reopen(device, base, log, close_label, settle):
@@ -259,7 +262,7 @@ def reopen(device, base, log, close_label, settle):
     if produced is None:
         failures.append(f"load {second_load} is not a logged /a request")
     else:
-        if produced["t"] < timeline["closed"] - 1:
+        if produced["t"] < timeline["closed"] - 0.5:
             failures.append("the reopened page was requested before the card closed")
         # A device that prerenders also loads a prerendered page again when it is opened, so the time of this request
         # relative to the tap is reported, not judged.
@@ -316,7 +319,7 @@ def judge_cache(first_load, second_load, produced, asset_requests, closed):
         failures.append("the reopened cache page is the first response, not a new main-document response")
     if produced is None:
         failures.append(f"cache response {second_load} has no matching /cache request log")
-    elif produced["t"] < closed - 1:
+    elif produced["t"] < closed - 0.5:
         failures.append("the reopened cache page was requested before the card closed")
     if len(asset_requests) != 1:
         failures.append(f"the unique cacheable script reached the server {len(asset_requests)} times, expected only its first load")
