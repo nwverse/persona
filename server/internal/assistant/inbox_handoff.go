@@ -240,6 +240,50 @@ func handoffOp(it *InboxItem, op string) *InboxHandoff {
 	return nil
 }
 
+// The connector already checked the sender and exact bot identity. Keep the
+// ordinary saved item and handoff ledger, but never make its receipt Needs You.
+func (s *Service) handoffLarkMentions(ctx context.Context, only ...string) {
+	b := &s.inbox
+	if !b.botHandoff.TryLock() {
+		return
+	}
+	go func() {
+		defer b.botHandoff.Unlock()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 110*time.Second)
+		defer cancel()
+		s.forwardLarkMentions(ctx, only...)
+	}()
+}
+
+func (s *Service) forwardLarkMentions(ctx context.Context, only ...string) {
+	b := &s.inbox
+	type pending struct{ id, text, op string }
+	var todo []pending
+	b.mu.Lock()
+	for _, it := range b.items {
+		if len(only) > 0 && !slices.Contains(only, it.ID) {
+			continue
+		}
+		if it.Source != "larkcli" || it.Kind != "bot_handoff" || !it.open() || it.Context == "" {
+			continue
+		}
+		op := namedClientID("lark bot handoff\n" + it.ID + "\n" + it.Last)
+		if handoffOp(it, op) == nil {
+			todo = append(todo, pending{it.ID, prompts.RenderLarkBotHandoff(it.Context), op})
+		}
+	}
+	b.mu.Unlock()
+	slices.SortFunc(todo, func(a, b pending) int { return strings.Compare(a.id, b.id) })
+	for _, p := range todo {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, _, err := s.handOff(ctx, p.id, handoffReq{Text: p.text, ClientID: p.op}); err != nil {
+			s.logf("inbox: bot mention %s handoff failed; retained for the next round: %v", p.id, err)
+		}
+	}
+}
+
 // handoffTo is the item's latest hand-off to conversation sid; nil for none. Under b.mu.
 func handoffTo(it *InboxItem, sid string) *InboxHandoff {
 	for i := len(it.Handoffs) - 1; i >= 0 && sid != ""; i-- {

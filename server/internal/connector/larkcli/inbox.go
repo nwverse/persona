@@ -61,6 +61,9 @@ type inboxGroup struct {
 	threadID  string
 	chatName  string
 	mentioned bool
+	addressed bool
+	handoff   bool
+	pinned    bool
 	messages  []adapter.Message
 	latest    adapter.Message
 	replied   bool
@@ -126,7 +129,7 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 // pollChat performs the bounded chat Inbox round. Source selection is handled
 // by Poll so the document poller and chat poller share one primary-source rule.
 func (c *Connector) pollChat(ctx context.Context) (bool, error) {
-	auth, err := c.runner.AuthStatus(ctx)
+	auth, err := c.inboxAuth(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -233,10 +236,10 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	})
 
 	newMessages := c.dedupMessages(found)
-	groups := c.groupMessages(newMessages, auth.OpenID, topicsBefore)
+	groups := c.groupMessages(newMessages, auth, topicsBefore)
 	changed := false
 	for _, group := range groups {
-		thing := c.thingForGroup(ctx, group, auth.OpenID)
+		thing := c.thingForGroup(ctx, group, auth)
 		if thing.Thread == "" {
 			continue
 		}
@@ -418,8 +421,8 @@ func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 		return fmt.Errorf("%s cannot be replied to", r.Thread)
 	}
 	var err error
-	if strings.TrimSpace(r.Last) != "" && strings.Contains(r.Thread, ":thread:") {
-		_, err = c.runner.ReplyText(ctx, r.Last, r.Text, r.ClientID, strings.Contains(r.Thread, ":thread:"))
+	if strings.TrimSpace(r.Last) != "" && (strings.Contains(r.Thread, ":thread:") || strings.Contains(r.Thread, ":handoff:")) {
+		_, err = c.runner.ReplyText(ctx, r.Last, r.Text, r.ClientID, true)
 	} else {
 		_, err = c.runner.SendText(ctx, chatID, r.Text, r.ClientID)
 	}
@@ -609,7 +612,8 @@ func (c *Connector) markSeen(messageID string) {
 	}
 }
 
-func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTopics map[string]struct{}) []*inboxGroup {
+func (c *Connector) groupMessages(messages []adapter.Message, auth adapter.AuthStatus, knownTopics map[string]struct{}) []*inboxGroup {
+	me := auth.OpenID
 	if len(messages) == 0 {
 		return nil
 	}
@@ -627,11 +631,20 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 	var current *inboxGroup
 	byKey := map[string]*inboxGroup{}
 	for _, message := range messages {
+		if message.Deleted {
+			continue
+		}
 		key := messageKey(message)
 		if key == "" {
 			continue
 		}
 		if message.Sender.ID == me {
+			if mentionsBot(message, auth) {
+				out = append(out, &inboxGroup{key: key, chatID: message.ChatID, threadID: topicID(message),
+					chatName: message.ChatName, messages: []adapter.Message{message}, latest: message, handoff: true})
+				current = nil
+				continue
+			}
 			if prior := byKey[key]; prior != nil {
 				prior.replied = after(message, prior.latest)
 			}
@@ -641,7 +654,8 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 			continue
 		}
 		keep := false
-		mentioned := messageMentions(message, me)
+		addressed := mentionsBot(message, auth) || cardAddressesOwner(message, auth)
+		mentioned := messageMentions(message, me) || addressed
 		if mentioned {
 			if topic := topicID(message); topic != "" {
 				topics[topic] = struct{}{}
@@ -672,18 +686,25 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 		current.latest = message
 		current.replied = false
 		current.mentioned = current.mentioned || mentioned
+		current.addressed = current.addressed || addressed
 	}
 	return out
 }
 
-func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me string) connector.InboxThing {
+func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, auth adapter.AuthStatus) connector.InboxThing {
 	if group == nil || len(group.messages) == 0 {
 		return connector.InboxThing{}
 	}
+	me := auth.OpenID
 	latest := group.latest
 	contextMessages := append([]adapter.Message(nil), group.messages...)
+	if group.handoff && group.threadID != "" {
+		if root, err := c.runner.ThreadRoot(ctx, latest); err == nil && root.MessageID != "" {
+			contextMessages = mergeMessages([]adapter.Message{root}, contextMessages)
+		}
+	}
 	if page, err := c.runner.ListMessages(ctx, group.chatID, group.threadID, "", 40); err == nil && len(page.Messages) > 0 {
-		contextMessages = mergeMessages(page.Messages, group.messages)
+		contextMessages = mergeMessages(page.Messages, contextMessages)
 	}
 	// History can already contain a follow-up which search has not indexed. Only
 	// eligible incoming activity in this chat/topic can supersede the search hit.
@@ -691,6 +712,9 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	_, allChat := c.inboxAllChats[group.chatID]
 	c.inboxMu.Unlock()
 	for _, message := range contextMessages {
+		if group.handoff || group.pinned {
+			break // explicit handoffs and recoveries keep the selected source activity
+		}
 		if message.Deleted || messageKey(message) != group.key || message.Sender.ID == me || !after(message, latest) {
 			continue
 		}
@@ -706,7 +730,15 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		group.mentioned = group.mentioned || messageMentions(message, me)
 	}
 	for _, message := range contextMessages {
-		if !message.Deleted && messageKey(message) == group.key && message.Sender.ID == me && after(message, latest) {
+		if group.handoff {
+			break
+		}
+		// Asking the connected bot for help is a handoff, not an answer to the source request.
+		if !message.Deleted && messageKey(message) == group.key && message.Sender.ID == me &&
+			!mentionsBot(message, auth) && after(message, latest) {
+			if auth.AppID != "" && auth.BotOpenID == "" && len(message.Mentions) > 0 {
+				continue // unresolved bot identity must not silently file a possible handoff
+			}
 			group.replied = true
 		}
 	}
@@ -714,6 +746,9 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	thread := "larkcli:chat:" + group.chatID
 	if group.threadID != "" {
 		thread += ":thread:" + group.threadID
+	}
+	if group.handoff {
+		thread += ":handoff:" + latest.MessageID
 	}
 	kind := "group"
 	lang := i18n.From(ctx).Or(i18n.Default)
@@ -742,23 +777,41 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		name = p2pName(group, contextMessages, me)
 	}
 	tags := []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: title}}
-	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
+	tagMessages, excludedSender := contextMessages, me
+	if group.handoff || group.pinned {
+		// Context senders do not own an explicit handoff or a selected recovery.
+		tagMessages = []adapter.Message{latest}
+	}
+	if group.handoff {
+		excludedSender = "" // The owner is the sender of this explicit request.
+	}
+	if senderTag, ok := latestSenderTag(tagMessages, excludedSender); ok {
 		tags = append(tags, senderTag)
 	}
 	thing := connector.InboxThing{
-		Thread:   thread,
-		Kind:     kind,
-		Label:    label,
-		Title:    title,
-		Sender:   latest.Sender.Name,
-		Preview:  firstLine(text),
-		Context:  contextText(contextMessages),
-		At:       messageTime(latest),
-		Last:     latest.MessageID,
-		ReplyTo:  replyTo(lang, name, group.threadID != ""),
-		CanReply: latest.MessageID != "",
-		Rules:    c.rules(),
-		Tags:     tags,
+		Thread:        thread,
+		Kind:          kind,
+		Label:         label,
+		Title:         title,
+		Sender:        latest.Sender.Name,
+		Preview:       firstLine(text),
+		Context:       contextText(contextMessages),
+		At:            messageTime(latest),
+		Last:          latest.MessageID,
+		ReplyTo:       replyTo(lang, name, group.threadID != "" || group.handoff),
+		CanReply:      latest.MessageID != "",
+		Rules:         c.rules(),
+		Tags:          tags,
+		OwnerAssigned: cardAssignsOwner(latest, auth),
+	}
+	if group.addressed || thing.OwnerAssigned {
+		thing.Tier = connector.TierAction
+		thing.Why = i18n.T(lang, "hub-connectors.larkcli_addressed_rule")
+	}
+	if group.handoff {
+		thing.Kind = "bot_handoff"
+		thing.Tier = connector.TierFYI
+		thing.Why = i18n.T(lang, "hub-connectors.larkcli_handoff_rule")
 	}
 	// Keep the CLI's link opaque: it includes the message position and, for a
 	// topic, the source thread. Do not guess a link from a sender or a thread id.
@@ -784,7 +837,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 }
 
 // replyTo says where a reply to the item goes and who sees it (connectorwire.InboxThing.ReplyTo): Reply sends as the
-// user to the chat, or into the topic the message is in. name is the chat's name; without one (only an opaque id is
+// connected bot to the chat, or into the topic the message is in. name is the chat's name; without one (only an opaque id is
 // known), the sentence names no chat.
 func replyTo(lang i18n.Lang, name string, topic bool) string {
 	switch {
@@ -961,6 +1014,7 @@ func chatIDFromThread(thread string) (string, bool) {
 	if !ok || rest == "" {
 		return "", false
 	}
+	rest, _, _ = strings.Cut(rest, ":handoff:")
 	if i := strings.Index(rest, ":thread:"); i >= 0 {
 		rest = rest[:i]
 	}

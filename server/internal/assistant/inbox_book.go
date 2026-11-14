@@ -35,6 +35,7 @@ type inboxBook struct {
 	translating sync.Mutex     // one translation pass at a time (inbox_translate.go)
 	replies     sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
 	handingOff  sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
+	botHandoff  sync.Mutex     // one pass forwarding explicit owner bot mentions to the main conversation
 	telling     sync.Map       // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
 	snapshots   inboxSnapshots // the lists answered with a cursor, for GET /api/v1/inbox?since (inbox_delta.go)
 	mutes       []InboxMute

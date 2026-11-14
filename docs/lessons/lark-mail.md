@@ -29,6 +29,34 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 
 ## Messages and documents
 
+- Lark CLI message-search results can mention an application by its `cli_` app ID, while `--at-chatter-ids` accepts
+  only `ou_` user IDs. Compare the bound app ID in unfiltered results; neither its name nor group membership proves
+  it was addressed. Responsibility cards may contain only labeled names, even in a raw message read, so structured
+  `at`/`person` checks alone do not cover them.
+- An owner's bot handoff is not a reply to the incoming source request. Check both grouping and the later
+  history-based settlement pass; otherwise an on-call card followed by a bot handoff silently becomes done.
+  Exact-ID recovery must leave the live cursor and deduplication state alone, and must not promote unselected
+  context into activity. Test the card and handoff together, including source positions used by topic replies.
+- A thread list can omit its root and identify bot mentions by open ID while search uses app ID. Do not assume a
+  synthetic thread fixture containing the root proves real handoff context. Resolve the bot's open ID from its
+  binding and the root's ID from the source reply, then read that root explicitly as the user.
+- Explicit recovery must propagate failed Inbox writes, not return success after the save layer rolls them back.
+  Log paired request begin/end records without private selectors; zero retained rows and a client timeout are not
+  a request-level terminal receipt. Keep an uncertain attempt locked until execution and deduplication evidence
+  justify a separately reviewed retry.
+- A historical bot mention may have a later completion reply from the bot even when the owner never replied.
+  Inspect the full topic and the processing conclusion before calling its automatic completion a bug or treating
+  initial Needs You admission as proof that an unresolved request remains there.
+- Context is not source identity: an owner's explicit bot request must not inherit the alert sender's mute tag,
+  and exact-ID recovery must not inherit a newer, unselected context sender. Test source tags together with the
+  manager's existing mutes, not only the connector's tier. A muted card and an incorrectly muted owner request
+  need different diagnoses; do not clear mutes or reopen real handled rows to make acceptance pass.
+- A responsibility-card exception must be narrower than ordinary mentions. Carry the selected card's verified
+  assignment through the wire and retained connector block; bypass only sender mutes for that built-in source.
+  Test ordinary cards, unrelated card mentions, other assignees, context-only assignments and chat mutes as negatives.
+  Apply the same empty-label boundary to containers and sibling rows: a field already assigning somebody else
+  must not lend its role to an unrelated nested mention.
+
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 
 - Lark message rendering copies the Lark gateway's web client (`docs/apple/ios.md` ("Lark message rendering")): the hub forwards `parts` unchanged and only rewrites media URLs to `/api/v1/lark/media/`;

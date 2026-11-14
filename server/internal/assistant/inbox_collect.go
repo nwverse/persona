@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -71,6 +72,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.mu.Lock()
 	b.larkAccount = cfg.LarkAccount
 	b.batch = newInboxBatch()
+	if r.Replay {
+		b.batch.only = map[string]bool{}
+	}
 	b.mu.Unlock()
 	var changed []*InboxItem
 	// Mail (the hub's own), then the connectors in the order the hub has them.
@@ -86,12 +90,26 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		changed = append(changed, s.collectSource(ctx, src)...)
 	}
 	b.mu.Lock()
-	readsChanged := b.recordReads(r)
+	readsChanged := false
+	if !r.Replay {
+		readsChanged = b.recordReads(r)
+	}
 	batch := b.batch
 	batch.registered = r.Names
+	if r.Replay {
+		for _, src := range r.Sources {
+			for _, thing := range src.Things {
+				for _, it := range b.items {
+					if it.Source == src.ID && it.Connector != nil && it.Connector.Thread == thing.Thread && it.Last == thing.Last {
+						batch.only[it.ID] = true
+					}
+				}
+			}
+		}
+	}
 	// Done past inboxForget leaves memory; its row stays as history until purgeInboxHistory (below) deletes it.
 	for id, it := range b.items {
-		if it.DoneAt != nil && time.Since(*it.DoneAt) > inboxForget {
+		if !r.Replay && it.DoneAt != nil && time.Since(*it.DoneAt) > inboxForget {
 			b.drop(id)
 		}
 	}
@@ -101,15 +119,34 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	for _, it := range changed {
 		b.roundWrite(it)
 	}
-	changed = append(changed, b.roundMuted(b.applyMutes(now))...)
-	changed = b.followMerged(append(changed, b.releaseMembers()...), now)
+	changed = append(changed, b.roundMuted(b.applyMutes(now, batch.only))...)
+	if !r.Replay {
+		// Normal merge maintenance may change rows outside an explicit recovery's selection.
+		changed = b.followMerged(append(changed, b.releaseMembers()...), now)
+	}
 	changed, todo := b.sortBatch(batch, changed, now)
 	b.applyRuledPolicies(changed)
 	b.settleRound()
 	ws := b.roundSaved(changed)
+	var replayIDs []string
+	for id := range batch.only {
+		replayIDs = append(replayIDs, id)
+	}
 	b.batch = nil
 	b.mu.Unlock()
-	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	failed := s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	if r.Replay && len(failed) > 0 {
+		return fmt.Errorf("Inbox replay could not save %d item(s); inspect retained items before retrying", len(failed))
+	}
+	if r.Replay {
+		if len(replayIDs) > 0 {
+			s.handoffLarkMentions(ctx, replayIDs...)
+			s.handleRecoveredInbox(ctx, replayIDs)
+		}
+		// Recovery must not wake or maintain any unrelated Inbox item.
+		return nil
+	}
+	s.handoffLarkMentions(ctx)
 	if st := s.inboxDB(); st != nil {
 		s.purgeInboxHistory(ctx, st, now)
 	}
@@ -120,6 +157,33 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	s.translateInbox(ctx)
 	s.admitInbox(ctx, batch, todo)
 	return nil
+}
+
+// An explicit recovery may name an older request than the twin's normal age
+// limit. Queue only the selected items, retaining their actual source time and
+// the user's existing twin enablement, policy and concurrency limits.
+func (s *Service) handleRecoveredInbox(ctx context.Context, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	cfg := s.inboxConfig(ctx).Agent
+	if !cfg.Enabled {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inboxAgentStartWait)
+		defer cancel()
+		b := &s.inbox
+		s.saveWrites(ctx, b.escalate(time.Time{}, time.Now(), ids...), "the recovered items' escalation")
+		if !b.handing.TryLock() {
+			return // an ordinary pass, or the next round, can start the selected queued work
+		}
+		s.startInboxAgents(ctx, cfg, ids...)
+		b.handing.Unlock()
+		if b.handAgain.Load() {
+			s.handInbox(ctx) // a normal event arrived while the recovery held the start lock
+		}
+	}()
 }
 
 // recordReads keeps which of a round's sources could not be read, under b.mu: a source read now (or off) is cleared,

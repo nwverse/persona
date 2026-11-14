@@ -69,7 +69,7 @@ func TestInboxMutedThenFiledAgainByTheUser(t *testing.T) {
 	it := &InboxItem{ID: "example:1", Source: mute.Source, Last: "1", Title: "Example", Tier: TierAction, UpdatedAt: now,
 		Connector: &InboxConnector{Tags: []connector.Tag{{Key: mute.Tag, Value: mute.Value, Name: mute.Name}}}}
 	h.inbox.items[it.ID] = it
-	writes := h.inbox.applyMutes(now)
+	writes := h.inbox.applyMutes(now, nil)
 	h.inbox.mu.Unlock()
 	if len(writes) != 1 || it.DoneBy != "read" || newestDoneEntry(t, it).By != DoneByMuted {
 		t.Fatalf("muted filing: done_by=%q chain=%+v", it.DoneBy, it.Chain)

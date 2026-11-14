@@ -15,6 +15,16 @@ if [ "${1:-}" = "--profile" ]; then
 fi
 
 case "${1:-}" in
+  api)
+    if [ "${2:-}" = GET ] && [ "${3:-}" = /open-apis/bot/v3/info ]; then
+      printf '%s\n' '{"ok":true,"data":{"open_id":"ou_example_persona_bot"}}'
+      exit 0
+    fi
+    if [ "${2:-}" = GET ] && [ "${3:-}" = /open-apis/im/v1/messages/om_example_request ]; then
+      printf '%s\n' '{"ok":true,"data":{"items":[{"message_id":"om_example_request","chat_id":"oc_example_chat","root_id":"om_example_root"}]}}'
+      exit 0
+    fi
+    ;;
   --version)
     if [ "$scenario" = "old" ]; then
       printf '%s\n' 'lark-cli version 1.0.71'
@@ -96,6 +106,10 @@ JSON
     esac
     ;;
   im)
+    if [ "${2:-}" = +messages-mget ] && [ -n "${LARKCLI_FAKE_ROOT:-}" ]; then
+      cat "$LARKCLI_FAKE_ROOT"
+      exit 0
+    fi
     case "$scenario" in
       timeout) sleep 5; exit 0 ;;
       missing_scope) cat "$base/error_missing_scope.json"; exit 3 ;;

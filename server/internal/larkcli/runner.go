@@ -142,6 +142,68 @@ func (r *Runner) AuthStatus(ctx context.Context) (AuthStatus, error) {
 	return raw.result(r.now()), nil
 }
 
+// BotOpenID resolves the bound bot's stable identity. Search mentions use its
+// app ID, but thread-history and raw message reads can use this open ID instead.
+func (r *Runner) BotOpenID(ctx context.Context) (string, error) {
+	out, err := r.RunAs(ctx, "bot", "api", "GET", "/open-apis/bot/v3/info")
+	if err != nil {
+		return "", err
+	}
+	var info struct {
+		OpenID string `json:"open_id"`
+	}
+	if err := decodeData(out, &info); err != nil || !strings.HasPrefix(info.OpenID, "ou_") {
+		return "", cliError(KindOther, errors.New("invalid bot info JSON"))
+	}
+	return info.OpenID, nil
+}
+
+// ThreadRoot reads the root which the thread-list shortcut omits. The raw
+// message read supplies its ID; mget keeps the CLI's readable card projection.
+func (r *Runner) ThreadRoot(ctx context.Context, message Message) (Message, error) {
+	rootID := message.RootID
+	if rootID == "" {
+		out, err := r.Run(ctx, "api", "GET", "/open-apis/im/v1/messages/"+url.PathEscape(message.MessageID))
+		if err != nil {
+			return Message{}, err
+		}
+		var page struct {
+			Items []struct {
+				MessageID string `json:"message_id"`
+				ChatID    string `json:"chat_id"`
+				RootID    string `json:"root_id"`
+			} `json:"items"`
+		}
+		if err := decodeData(out, &page); err != nil {
+			return Message{}, cliError(KindOther, errors.New("invalid root message JSON"))
+		}
+		for _, item := range page.Items {
+			if item.MessageID == message.MessageID && item.ChatID == message.ChatID {
+				rootID = item.RootID
+				break
+			}
+		}
+	}
+	if rootID == "" || rootID == message.MessageID {
+		return Message{}, nil
+	}
+	out, err := r.Run(ctx, "im", "+messages-mget", "--message-ids", rootID, "--no-reactions")
+	if err != nil {
+		return Message{}, err
+	}
+	var page MessagePage
+	if err := decodeData(out, &page); err != nil {
+		return Message{}, cliError(KindOther, errors.New("invalid root message JSON"))
+	}
+	for _, root := range page.Messages {
+		if root.MessageID == rootID && root.ChatID == message.ChatID &&
+			(root.ThreadID == "" || root.ThreadID == message.ThreadID) && !root.Deleted {
+			return root, nil
+		}
+	}
+	return Message{}, nil
+}
+
 // ConfigInfo is the public, non-secret part of one lark-cli profile. The CLI
 // has emitted both JSON and key/value output across its releases, so callers
 // should use AppID and ignore the original presentation.

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -215,7 +216,28 @@ func (s *Service) inboxRoutes() {
 		if !s.inboxUp(w, r) {
 			return
 		}
-		if err := s.appCall(r.Context(), AppInbox, assistantwire.InboxCollect, map[string]any{"round": assistantwire.RoundFull}, nil); err != nil {
+		var body struct {
+			LarkReplay json.RawMessage `json:"lark_replay"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+			apierr.Write(w, http.StatusBadRequest, errors.New("expected one JSON object"))
+			return
+		}
+		in := assistantwire.InboxCollectRequest{Round: assistantwire.RoundFull}
+		if len(body.LarkReplay) > 0 {
+			if err := json.Unmarshal(body.LarkReplay, &in.LarkReplay); err != nil || in.LarkReplay == nil {
+				apierr.Write(w, http.StatusBadRequest, errors.New("lark_replay must be an object"))
+				return
+			}
+			in.Round = ""
+		}
+		if err := s.appCall(r.Context(), AppInbox, assistantwire.InboxCollect, in, nil); err != nil {
 			s.logf("inbox: refresh: %v", err)
 			l := i18n.OfWriter(w)
 			apierr.WriteBody(w, http.StatusBadGateway, map[string]any{"code": assistantwire.CodeInboxRefreshFailed,

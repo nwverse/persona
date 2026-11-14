@@ -161,6 +161,7 @@ func (c *Connector) Media(context.Context, string) (connector.Media, error) {
 }
 
 func conversationIDs(thread string) (chat, topic string, err error) {
+	thread, _, _ = strings.Cut(thread, ":handoff:")
 	rest, ok := strings.CutPrefix(thread, "larkcli:chat:")
 	if !ok {
 		return "", "", fmt.Errorf("invalid lark-cli conversation")
