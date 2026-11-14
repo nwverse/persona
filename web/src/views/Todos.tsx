@@ -1,5 +1,5 @@
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, sessionCan, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { foldedState } from "../lib/child-sessions";
@@ -1576,7 +1576,43 @@ function localParts(ms: number): { day: string; time: string } {
   return { day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
 }
 
-/** The detail's due date (a day, with a time when one is set), reminder, priority and project; each change is saved at once. */
+/**
+ * A date or time field of the detail's plan (audit item 2): it saves when the editing is done, not on each typed
+ * digit. A day typed segment by segment is a valid date after its first digit, so saving then stored a day the user
+ * was still typing and, with the field disabled while it saved, took the focus away before the next digit. Typed
+ * changes save when the field is left or on Enter; a change made without typing (a pick in the browser's picker) saves
+ * at once. What was typed shows until the save is through.
+ */
+function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (value: string) => Promise<void> } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
+  const [draft, setDraft] = useState<string>();
+  // the change comes from the keyboard: it waits to be committed
+  const typed = useRef(false);
+  // a part left half-typed (badInput: the browser says "" for it) goes back to what is saved, it does not clear it
+  const commit = async (el: HTMLInputElement, next = draft) => {
+    typed.current = false;
+    if (next === undefined || next === value || el.validity.badInput) return setDraft(undefined);
+    setDraft(next);
+    await onCommit(next);
+    setDraft((d) => (d === next ? undefined : d));
+  };
+  return (
+    <input
+      {...field}
+      value={draft ?? value}
+      onPointerDown={() => (typed.current = false)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") void commit(e.currentTarget);
+        else if (e.key !== "Tab") typed.current = true;
+      }}
+      onChange={(e) => (typed.current ? setDraft(e.target.value) : void commit(e.target, e.target.value))}
+      onBlur={(e) => void commit(e.currentTarget)}
+      className={PLAN_FIELD}
+    />
+  );
+}
+
+/** The detail's due date (a day, with a time when one is set), reminder, priority and project. A pick from a menu is
+ *  saved at once, a date or time once it is entered (PlanField); no field is disabled while it saves, so the focus stays. */
 function TodoPlanEditor({ todo }: { todo: Todo }) {
   const [busy, setBusy] = useState(false);
   const projects = projectChoices(useTodoProjects(), todo.project);
@@ -1597,30 +1633,23 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
   const remind = Number.isNaN(remindAt) ? "" : `${localParts(remindAt).day}T${localParts(remindAt).time}`;
   const moment = (day: string, time: string) => new Date(`${day}T${time}`).toISOString();
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2.5 text-[12.5px] text-ink-2" data-testid="todo-plan">
+    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2.5 text-[12.5px] text-ink-2" data-testid="todo-plan" aria-busy={busy}>
       <span className="inline-flex items-center gap-1.5">
         <Icon name="calendar" size={13} stroke={2} />
         <span className="whitespace-nowrap">{t("todos.due_label")}</span>
-        <input
+        <PlanField
           type="date"
           aria-label={t("todos.due_label")}
           value={due.day}
-          disabled={busy}
-          onChange={(e) => {
-            const day = e.target.value;
-            void save(!day ? { due_at: null } : due.time ? { due_at: moment(day, due.time) } : { due_date: day });
-          }}
-          className={PLAN_FIELD}
+          onCommit={(day) => save(!day ? { due_at: null } : due.time ? { due_at: moment(day, due.time) } : { due_date: day })}
           data-testid="todo-plan-due"
         />
         {due.day && (
-          <input
+          <PlanField
             type="time"
             aria-label={t("todos.due_time")}
             value={due.time}
-            disabled={busy}
-            onChange={(e) => void save(e.target.value ? { due_at: moment(due.day, e.target.value) } : { due_date: due.day })}
-            className={PLAN_FIELD}
+            onCommit={(time) => save(time ? { due_at: moment(due.day, time) } : { due_date: due.day })}
             data-testid="todo-plan-due-time"
           />
         )}
@@ -1628,13 +1657,11 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
       <span className="inline-flex items-center gap-1.5">
         <Icon name="bell" size={13} stroke={2} />
         <span className="whitespace-nowrap">{t("todos.remind_label")}</span>
-        <input
+        <PlanField
           type="datetime-local"
           aria-label={t("todos.remind_label")}
           value={remind}
-          disabled={busy}
-          onChange={(e) => void save({ remind_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
-          className={PLAN_FIELD}
+          onCommit={(v) => save({ remind_at: v ? new Date(v).toISOString() : null })}
           data-testid="todo-plan-remind"
         />
       </span>
@@ -1644,7 +1671,6 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
         <select
           aria-label={t("todos.priority_label")}
           value={todo.priority ?? ""}
-          disabled={busy}
           onChange={(e) => void save({ priority: e.target.value })}
           className={PLAN_FIELD}
           data-testid="todo-plan-priority"
@@ -1660,7 +1686,6 @@ function TodoPlanEditor({ todo }: { todo: Todo }) {
         <select
           aria-label={t("todos.project_label")}
           value={todo.project ?? ""}
-          disabled={busy}
           onChange={(e) => void save({ project: e.target.value })}
           className={cx(PLAN_FIELD, "max-w-56 truncate")}
           data-testid="todo-plan-project"
