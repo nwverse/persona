@@ -239,6 +239,25 @@ class AppNavigatorTest {
         assertEquals(listOf(AssistantRoute, InboxRoute, event), stacks.getValue(AppTab.Persona))
     }
 
+    @Test fun aRestoredInboxAgentReturnsToThePersonaDetailFromItsPersistedSource() {
+        val event = InboxEventRoute("item")
+        val handling = ChatRoute("machine", "handling", ConversationKind.Assistant, RouteSource.InboxItem("item"))
+        val agent = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, event, handling))
+        stacks.getValue(AppTab.Agents).add(agent)
+        selected = AppTab.Agents
+
+        // Navigation3 restores the route stacks, not the navigator's in-memory openedFrom map.
+        val restored = AppNavigator(stacks, { selected }, { selected = it })
+        restored.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf(AssistantRoute, InboxRoute, event, handling), stacks.getValue(AppTab.Persona))
+        assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+        restored.back()
+        assertEquals(event, stacks.getValue(AppTab.Persona).last())
+    }
+
     @Test fun anInboxAssistantChatOpenedFromTheOriginalPageReturnsThere() {
         val original = LarkChatRoute("chat")
         val chat = ChatRoute("machine", "assistant", source = RouteSource.InboxItem("item"))

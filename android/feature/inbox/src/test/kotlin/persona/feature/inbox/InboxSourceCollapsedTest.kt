@@ -13,6 +13,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onStart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -75,8 +76,12 @@ class InboxSourceCollapsedTest {
             ),
         )
         val visibleCalls = mutableListOf<List<String>>()
+        val conversationCalls = mutableListOf<Pair<String, Long?>>()
+        val conversationSubscriptions = mutableListOf<Pair<String, Long?>>()
 
-        override fun conversation(feedId: String, startPosition: Long?) = window
+        override fun conversation(feedId: String, startPosition: Long?) = window.onStart {
+            conversationSubscriptions += feedId to startPosition
+        }.also { conversationCalls += feedId to startPosition }
 
         override suspend fun markVisible(feedId: String, messages: List<LarkMessage>): Boolean {
             visibleCalls += messages.map { it.id }
@@ -140,6 +145,8 @@ class InboxSourceCollapsedTest {
     }
 
     private fun assertNoSourceReads(repository: RecordingRepository, transport: RecordingMailTransport) {
+        assertTrue("The collapsed detail opened a chat body: ${repository.conversationCalls}", repository.conversationCalls.isEmpty())
+        assertTrue("The collapsed detail subscribed to a chat body: ${repository.conversationSubscriptions}", repository.conversationSubscriptions.isEmpty())
         assertTrue("The collapsed detail acknowledged chat messages: ${repository.visibleCalls}", repository.visibleCalls.isEmpty())
         assertTrue("The collapsed detail loaded a mail item: ${transport.itemCalls}", transport.itemCalls.isEmpty())
         assertTrue("The collapsed detail loaded a mail body: ${transport.messageCalls}", transport.messageCalls.isEmpty())
@@ -147,7 +154,8 @@ class InboxSourceCollapsedTest {
     }
 
     private fun sourceCallCounts(repository: RecordingRepository, transport: RecordingMailTransport) = listOf(
-        repository.visibleCalls.size, transport.itemCalls.size, transport.messageCalls.size, transport.seenCalls.size,
+        repository.conversationCalls.size, repository.conversationSubscriptions.size, repository.visibleCalls.size,
+        transport.itemCalls.size, transport.messageCalls.size, transport.seenCalls.size,
     )
 
     private fun verifyCollapsedUntilViewOriginal(source: Source, hasEvent: Boolean) {
@@ -181,6 +189,9 @@ class InboxSourceCollapsedTest {
         assertEquals(pages.open(record), stack.last())
         when (source) {
             Source.Chat -> {
+                assertEquals("View original must open the chat body exactly once", 1, repository.conversationCalls.size)
+                assertEquals("View original must subscribe to the chat body exactly once", 1, repository.conversationSubscriptions.size)
+                assertEquals(FEED_ID, repository.conversationCalls.single().first)
                 assertTrue("View original did not expose the visible chat to its read gate", repository.visibleCalls.isNotEmpty())
                 assertEquals(listOf(CHAT_MESSAGE_ID), repository.visibleCalls.last())
                 assertTrue(transport.itemCalls.isEmpty())

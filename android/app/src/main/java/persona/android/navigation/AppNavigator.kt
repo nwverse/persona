@@ -124,7 +124,10 @@ internal class AppNavigator(
         val stack = stacks.getValue(selectedTab())
         if (stack.size <= 1) return
         val page = stack.removeAt(stack.lastIndex)
-        openedFrom.remove(page)?.let(onSelectTab)
+        val origin = openedFrom.remove(page)
+        if (origin != null) onSelectTab(origin)
+        // Restored stacks keep the route's inbox provenance but not the in-memory origin map.
+        else if (page.chat()?.source is RouteSource.InboxItem) onSelectTab(AppTab.Persona)
     }
 
     /** Remove every destination owned by the confirmed closed session, including hidden tabs. */

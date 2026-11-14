@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -33,6 +35,11 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.InboxEventFields
+import persona.core.contracts.api.ConnectionState
+import persona.core.contracts.api.MailInboxItem
+import persona.core.contracts.api.MailMessage
+import persona.core.contracts.api.MailReference
+import persona.core.contracts.api.MailTransport
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
@@ -55,6 +62,32 @@ class InboxSourceCollapsedShotsTest {
         override fun navigate(key: NavKey) = Unit
         override fun back() = Unit
         override fun selectTab(tab: AppTab) = Unit
+    }
+
+    private class SourceRepository(records: List<InboxRecord>, chatBody: String) : InboxRepository by FakeInboxRepository() {
+        override val snapshot = MutableStateFlow(InboxSnapshot(records = records))
+        override val connectionState = flowOf(ConnectionState.Online)
+        private val window = MutableStateFlow(
+            LarkConversation(
+                title = records.first { it.feedId != null }.item.title,
+                messages = listOf(
+                    LarkMessage("original-chat", "sender", "Sender", position = 42, parts = listOf(LarkPart.Text(chatBody))),
+                ),
+                verified = true,
+            ),
+        )
+
+        override fun conversation(feedId: String, startPosition: Long?) = window
+    }
+
+    private class SourceMailTransport(private val subject: String, private val body: String) : MailTransport {
+        override val scope = "shots"
+        override suspend fun item(itemId: String) = MailInboxItem(itemId, MailReference("personal", uids = listOf(88)))
+        override suspend fun message(ref: MailReference, uid: Long) = MailMessage(
+            accountId = ref.accountId, mailbox = ref.mailbox, uid = uid, subject = subject, text = body, seen = false,
+        )
+        override suspend fun setSeen(ref: MailReference, uid: Long, seen: Boolean) = Unit
+        override suspend fun refreshInbox() = Unit
     }
 
     private val chat = InboxRecord(
@@ -102,19 +135,26 @@ class InboxSourceCollapsedShotsTest {
         )
         assertFalse(chat.event.present)
         assertFalse(mail.event.present)
-        val repository = FakeInboxRepository()
-        repository.snapshot.value = InboxSnapshot(records = listOf(chat, mail))
+        val pages = InboxItemPages()
+        val repository = SourceRepository(fixtures.map { it.second }, chatBody)
+        val transport = SourceMailTransport(mail.item.title, mailBody)
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         var fontScale by mutableStateOf(1f)
         var shown by mutableStateOf(chat.item.id)
         var run by mutableIntStateOf(0)
         rule.setContent {
-            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale), LocalInboxItemPages provides pages) {
                 PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                     key(run) {
                         Box(Modifier.testTag("shot").width(400.dp).height(1200.dp).background(PersonaTheme.palette.background)) {
-                            InboxEventScreen(repository, InboxEventRoute(shown), navigator)
+                            val record = fixtures.first { it.second.item.id == shown }.second
+                            when (val route = inboxRowPage(record, pages)) {
+                                is InboxEventRoute -> InboxEventScreen(repository, route, navigator)
+                                is LarkRoute -> LarkScreen(repository, route, navigator)
+                                is MailRoute -> MailScreen(repository, transport, route, navigator)
+                                else -> error("Unexpected source route: $route")
+                            }
                         }
                     }
                 }
