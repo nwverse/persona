@@ -714,7 +714,7 @@ no more updates, snapshots or prompts; the app groups them under **Not projects*
 
 ## Deleting a project
 
-A project can be deleted from the web knowledge list (#4412). The delete is soft (`kb/project_trash.go`):
+A project can be deleted from the knowledge list on the web (#4412) and on the iPhone and iPad (#7077: a project row's swipe or context menu); both ask first and then offer Undo. The delete is soft (`kb/project_trash.go`):
 
 - The project's directory moves to `.trash/<id>/project` in the data dir, so it drops out of lists, search, prompts and the pipeline, which only read `projects/`. Its index rows go.
 - The chats, people and items that named it stop naming it. `.trash/<id>/trash.json` records which ones (`unlinked`, as `<kind>/<id>`), with the slug, the name and `deleted_at`.

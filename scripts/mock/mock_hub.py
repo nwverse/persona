@@ -2388,6 +2388,11 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
+                    # Start what the owner asked for right away (#2559), on by default; the workspace a dispatched task
+                    # prefers (#3659); fixing unhelpful session names (#4965): on, at most once, no regular updates.
+                    # Left out with MOCK_LEGACY_HUB (Agent Follow-Up, #7005).
+                    "start_requested_tasks": True, "task_workspace_preference": "prefer-existing",
+                    "agent_auto_naming": True, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
@@ -2417,7 +2422,10 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
+                   agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
+                   agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -2854,6 +2862,13 @@ if MOCK_LEADERS:
          "origin": MOCK_LEADERS[0], "created_at": ago(hours=3), "updated_at": ago(hours=3), "spaces": [], "agents": [],
          "supervision": _lead_supervision(MOCK_LEADERS[0])},
     ])
+# MOCK_TODO_PROJECTS=1: to-dos filed under the example knowledge-base projects (#2581, #7077): two under 天气 App, two
+# under 照片同步脚本, one under the blog; the rest in none.
+if os.environ.get("MOCK_TODO_PROJECTS") == "1":
+    for _t in TODOS_INIT:
+        _p = {"todo_weather": "weather-app", "todo_review": "weather-app", "todo_photos": "photo-sync", "todo_nas": "photo-sync",
+              "todo_blog": "blog"}.get(_t["id"])
+        if _p: _t["project"] = _p
 TODOS = copy.deepcopy(TODOS_INIT)
 
 _DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}
@@ -3391,6 +3406,7 @@ KB = {
 }
 KB_TAGS = {"projects": ["iOS", "前端", "个人"]}
 KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
+KB_TRASH = {}  # deleted projects by trash id (DELETE /api/v1/kb/projects/{id}, POST /api/v1/kb-trash/{id}/restore)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
 # tombstones (a later PUT gets 410). GET /mock/recordings reads both back. MOCK_RECORDINGS_DOWN=1: 503 (the hub away).
 RECORDINGS = {}
@@ -8964,6 +8980,14 @@ if os.environ.get("MOCK_ASK_LONG") in ("actions", "swipe", "review"):
         "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
         "questions": questions})
     INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
+# MOCK_QUESTION_CANCEL=1: the main ask_user card (with a MOCK_ASK_LONG question mode) and the network tests'
+# Agent question advertise question-only cancellation. Keep the Agent card for /mock/reset too.
+QUESTION_CANCEL_INTERACTIONS = []
+if os.environ.get("MOCK_QUESTION_CANCEL") == "1":
+    for ix in INTERACTIONS + ASK_LONG_INTERACTIONS:
+        if ix["id"] in ("ix_tests", "ix_ask_long"):
+            ix["can_cancel"] = True
+    QUESTION_CANCEL_INTERACTIONS = [copy.deepcopy(ix) for ix in INTERACTIONS if ix["id"] == "ix_tests"]
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -12277,10 +12301,6 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
-# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
-# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
-# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
-# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 # MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
 # (MOCK_INBOX_TODO=time: with a time, so All Day is off).
 if os.environ.get("MOCK_INBOX_TODO"):
@@ -12292,12 +12312,29 @@ if os.environ.get("MOCK_INBOX_TODO"):
         _td["status"] = "action"
 
 
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. Its sessions and their example computer join the ordinary session and machine lists with the
+# same row fields as the mock's other rows, so the timeline and Agents list can show the Agent's live state. This takes
+# precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                   "spec", "fixtures", "inbox", "showcase.json")
     with open(_showcase_path, encoding="utf-8") as _f:
-        INBOX[:] = json.load(_f)["items"]
+        _showcase = json.load(_f)
+    INBOX[:] = _showcase["items"]
+    MACHINES.append({"id": "m1", "name": "示例电脑", "kind": "ssh", "icon": "desktop", "ssh_host": "example-computer", "online": True,
+                     "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user",
+                     "herdr_version": "0.9.5", "claude_version": "2.1.320", "last_seen": ago()})
+    for _i, _row in enumerate(_showcase.get("sessions", [])):
+        _state = _row["state"]
+        _status = {"working": "working", "needs_you": "blocked", "unread": "done", "offline": "offline"}.get(_state, "idle")
+        _session = sess(_row["machine_id"], _row["session_id"], _row["title"], _row.get("cwd", ""),
+                        _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
+        _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
+        SESSIONS.append(_session)
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -23152,6 +23189,8 @@ def markets_route(handler, p, body):
 FILE_OPS = bool(os.environ.get("MOCK_FILE_OPS"))
 FILE_TRASH = {}  # trash id -> (tree key, {key: value} of everything moved)
 FILE_OPS_LOG = []  # what the browser asked (a test reads it from the module)
+FILE_OPERATIONS = {}  # operation id -> synthetic copy / zip progress for the transfer bars
+FILE_OPERATION_DELAY = float(os.environ.get("MOCK_FILE_OP_DELAY", "0"))
 _features_without_file_ops = features
 
 
@@ -23172,10 +23211,10 @@ def file_ops_key(mid, path, cwd):
     return home, rel, None
 
 
-def file_ops_free(dir_rel, name, conflict):
+def file_ops_free(dir_rel, name, conflict, reserved=()):
     """The name `name` takes in folder `dir_rel` (a tree key ending in / or ""): itself, or "name 2.extension" to keep both;
     None when it is taken and nothing was said."""
-    taken = lambda n: dir_rel + n in MOCK_TREE or dir_rel + n + "/" in MOCK_TREE
+    taken = lambda n: dir_rel + n in MOCK_TREE or dir_rel + n + "/" in MOCK_TREE or dir_rel + n in reserved or dir_rel + n + "/" in reserved
     if not taken(name) or conflict == "replace": return name
     if conflict != "keep": return None
     stem, dot, ext = name.rpartition(".")
@@ -23184,6 +23223,65 @@ def file_ops_free(dir_rel, name, conflict):
         n = "%s %d%s%s" % (stem, i, dot, ext)
         if not taken(n): return n
     return None
+
+
+def file_operation_start(req, kind):
+    """Register a synthetic remote operation; even a quick one can be read after its POST answers."""
+    oid = req.get("operation_id")
+    if not oid: return None
+    total = max(1, len(req.get("paths", [])))
+    op = {"id": oid, "kind": kind, "state": "running", "files_done": 0, "files_total": total,
+          "bytes_done": 0, "bytes_total": total * 100}
+    FILE_OPERATIONS[oid] = op
+    return op
+
+
+def file_operation_disconnected(h):
+    """The original POST's client went away, as a cancelled hub request disconnects the node."""
+    import select, socket
+    try:
+        if not select.select([h.connection], [], [], 0)[0]: return False
+        return h.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except (ValueError, TypeError, BlockingIOError):
+        return False  # an SSLSocket cannot peek with these flags
+    except OSError:
+        return True
+
+
+def file_operation_wait(h, op):
+    """Hold a synthetic operation open while its GET route reports progress; false after Cancel."""
+    if op is None: return True
+    if not FILE_OPERATION_DELAY:
+        op.update(state="done", files_done=op["files_total"], bytes_done=op["bytes_total"])
+        return True
+    started = time.monotonic()
+    while True:
+        if file_operation_disconnected(h):
+            op["state"] = "cancelled"
+            return False
+        elapsed = time.monotonic() - started
+        fraction = min(1.0, elapsed / FILE_OPERATION_DELAY)
+        op["files_done"] = min(op["files_total"], int(op["files_total"] * fraction))
+        op["bytes_done"] = min(op["bytes_total"], int(op["bytes_total"] * fraction))
+        if fraction >= 1:
+            op.update(state="done", files_done=op["files_total"], bytes_done=op["bytes_total"])
+            return True
+        time.sleep(0.05)
+
+
+def file_operation_route(h, p):
+    """GET a remote operation, or the synthetic states used by UI acceptance."""
+    if p == "/mock/file-operations" and FILE_OPS:
+        h.send_json({"operations": list(FILE_OPERATIONS.values())})
+        return True
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/operations/([^/]+)", p)
+    if not (FILE_OPS and m): return False
+    op = FILE_OPERATIONS.get(m.group(2))
+    if op is None:
+        h.send_json({"error": "file operation not found", "code": "not_found"}, 404)
+    else:
+        h.send_json(op)
+    return True
 
 
 def file_ops_dir(mid, d, cwd):
@@ -23339,14 +23437,21 @@ def file_make_route(h, p, body):
     if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
         home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
         if err: return h.send_json(*err) or True
-        copied = []
+        planned = []
+        reserved = set()
         for path in req.get("paths", []):
             _, rel, err = file_ops_key(mid, path, cwd)
             if err: return h.send_json(*err) or True
             if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
             name = rel.rpartition("/")[2]
-            final = file_ops_free(drel, name, req.get("conflict"))
+            final = file_ops_free(drel, name, req.get("conflict"), reserved)
             if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+            reserved.add(drel + final)
+            planned.append((path, rel, final))
+        operation = file_operation_start(req, op)
+        if not file_operation_wait(h, operation): return True  # Cancel disconnected the POST before anything was copied.
+        copied = []
+        for path, rel, final in planned:
             for k, v in list(MOCK_TREE.items()):
                 if k == rel or k == rel + "/" or k.startswith(rel + "/"): MOCK_TREE[drel + final + k[len(rel):]] = v
             copied.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
@@ -23368,10 +23473,14 @@ def file_make_route(h, p, body):
                     n += 1
     name = req.get("name") or "Archive.zip"
     if not name.lower().endswith(".zip"): name += ".zip"
+    home, drel, final = None, None, None
     if req.get("dir"):
         home, drel, err = file_ops_dir(mid, req["dir"], cwd)
         if err: return h.send_json(*err) or True
         final = file_ops_free(drel, name, "keep")
+    operation = file_operation_start(req, op)
+    if not file_operation_wait(h, operation): return True  # Cancel: no archive or temporary download is left behind.
+    if req.get("dir"):
         MOCK_TREE[drel + final] = ("application/zip", base64.b64encode(out.getvalue()).decode())
         fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
         return h.send_json({"path": home + "/" + drel + final, "name": final, "size": len(out.getvalue()), "files": n}) or True
@@ -23528,6 +23637,7 @@ VOICE_VOICES = {
 MOCK_HELP = [
     "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_TODO_PROJECTS=1  To-dos filed under the example knowledge-base projects (#7077: the detail's Project, Group By › Project)",
     "MOCK_KB_CORRECTIONS=1  Knowledge base: the lists links are held in, so links can be removed, and confirmed facts on one person (#6997)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
@@ -23956,6 +24066,7 @@ class H(BaseHTTPRequestHandler):
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
+        if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
@@ -24308,7 +24419,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -25639,6 +25750,26 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
             return self.send_json(out_machine(machine))
+        if self.command == "DELETE" and re.fullmatch(r"/api/v1/kb/projects/[^/]+", p):  # soft delete (#4412, kb/project_trash.go)
+            if MEETING_MODE["kb_read_only"]: return self.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
+            slug = unquote(p.rsplit("/", 1)[1])
+            e = next((e for e in KB["projects"] if e["id"] == slug), None)
+            if e is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            KB["projects"].remove(e)
+            tid = time.strftime("%Y%m%d%H%M%S") + "-%d" % (len(KB_TRASH) + 1)
+            KB_TRASH[tid] = {"entry": e, "detail": KB_DETAIL.pop(("projects", slug), None)}
+            return self.send_json({"id": tid, "kind": "projects", "slug": slug, "name": e["name"],
+                                   "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        if self.command == "POST" and re.fullmatch(r"/api/v1/kb-trash/[^/]+/restore", p):  # the project back, unless taken (409)
+            tid = unquote(p.split("/")[4])
+            t = KB_TRASH.get(tid)
+            if t is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            if any(e["id"] == t["entry"]["id"] for e in KB["projects"]):
+                return self.send_json({"error": "a project with this slug exists", "code": "conflict"}, 409)
+            KB_TRASH.pop(tid)
+            KB["projects"].append(t["entry"])
+            if t["detail"] is not None: KB_DETAIL[("projects", t["entry"]["id"])] = t["detail"]
+            return self.send_json({"id": tid, "kind": "projects", "slug": t["entry"]["id"], "name": t["entry"]["name"]})
         if self.command == "PUT" and p.startswith("/api/v1/kb/"):  # "Tagging": kept over the automatic tagging
             if os.environ.get("MOCK_KB_SAVE_FAIL") == "1": return self.send_json({"error": "知识库暂时写不进去"}, 502)
             kind, eid = p.split("/")[4:6]
@@ -26285,6 +26416,22 @@ class H(BaseHTTPRequestHandler):
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
                     return self.send_json({"error": "archive_closed_days must be 0–3650"}, 400)
                 ASSISTANT_CONFIG["archive_closed_days"] = days
+            # As the hub's profile_write.go: checked before anything changes; the session-name settings only from a
+            # request that names its manager (#4965).
+            naming = [k for k in ("agent_auto_naming", "agent_auto_naming_max", "agent_auto_naming_interval_hours") if k in body]
+            if naming and not self.headers.get("X-Persona-Manager"):
+                return self.send_json({"error": "Name the assistant this setting is for.", "code": "manager_required"}, 400)
+            for key, (low, high) in (("agent_auto_naming_max", (1, 1000)), ("agent_auto_naming_interval_hours", (0, 8760))):
+                if key in body and (type(body[key]) is not int or not low <= body[key] <= high):
+                    return self.send_json({"error": "%s must be %d–%d" % (key, low, high)}, 400)
+            if "task_workspace_preference" in body and body["task_workspace_preference"] not in ("prefer-existing", "prefer-new"):
+                return self.send_json({"error": "task_workspace_preference must be prefer-existing or prefer-new"}, 400)
+            for key in ("start_requested_tasks", "agent_auto_naming"):
+                if isinstance(body.get(key), bool):
+                    ASSISTANT_CONFIG[key] = body[key]
+            for key in ("agent_auto_naming_max", "agent_auto_naming_interval_hours", "task_workspace_preference"):
+                if key in body:
+                    ASSISTANT_CONFIG[key] = body[key]
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):
@@ -27259,6 +27406,7 @@ MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展�
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
+MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and, with a MOCK_ASK_LONG question mode, Persona's main ask_user card; /mock/reset restores both")
 MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
