@@ -15,7 +15,7 @@ registerHooks({
     if (url === 'native-environment:ability') return {format:'module',shortCircuit:true,source:'export const ConfigurationConstant={ColorMode:{COLOR_MODE_DARK:0,COLOR_MODE_LIGHT:1}};'};
     if (url === 'native-environment:display') return { format: 'module', shortCircuit: true, source: `
       const s = globalThis.__personaNativeEnvironment;
-      export const window = {AvoidAreaType:{TYPE_NAVIGATION_INDICATOR:3,TYPE_SYSTEM:0}};
+      export const window = {AvoidAreaType:{TYPE_NAVIGATION_INDICATOR:3,TYPE_SYSTEM:0,TYPE_KEYBOARD:5}};
       export const display = { isFoldable: () => s.foldable, getCurrentFoldCreaseRegion() {
         if (s.failure) throw new Error('display unavailable'); return s.region;
       } };
@@ -58,3 +58,14 @@ test('native color mode follows resolved configuration without resetting for unr
 });
 
 test('popup geometry uses native window width and the window-relative top avoidance',()=>{const e=new NativeEnvironment(),handlers=new Map();let rect={top:140,width:1260,height:2720};const win={getWindowProperties:()=>({windowRect:rect}),getWindowAvoidArea:type=>type===0?{topRect:{height:117}}:{bottomRect:{height:84}},on:(key,fn)=>handlers.set(key,fn),off:()=>{}};e.bindWindow(win);assert.equal(e.windowWidthPx,1260);assert.equal(e.safeTopPx,117);rect={top:240,width:2584,height:1828};handlers.get('windowRectChange')({rect});assert.equal(e.windowWidthPx,2584);assert.equal(e.safeTopPx,117);e.unbindWindow();});
+
+
+test('keyboard visibility follows its window and a retired listener cannot resize the replacement',()=>{
+ const env=new NativeEnvironment();
+ function fakeWindow(initial){const events=new Map();return {events,getWindowProperties:()=>({windowRect:{top:0,width:1260,height:2720}}),getWindowAvoidArea:type=>({bottomRect:{height:type===5?initial:0}}),on:(name,fn)=>events.set(name,fn),off:(name,fn)=>{assert.equal(events.get(name),fn);events.delete(name);}};}
+ const first=fakeWindow(0);env.bindWindow(first);const stale=first.events.get('keyboardHeightChange');
+ stale(900);assert.equal(env.keyboardHeightPx,900);stale(0);assert.equal(env.keyboardHeightPx,0);
+ const second=fakeWindow(700);env.bindWindow(second);assert.equal(first.events.size,0);assert.equal(env.keyboardHeightPx,700);
+ stale(1200);assert.equal(env.keyboardHeightPx,700);const retired=second.events.get('keyboardHeightChange');env.bindWindow(second);retired(1200);assert.equal(env.keyboardHeightPx,700);second.events.get('keyboardHeightChange')(-10);assert.equal(env.keyboardHeightPx,0);
+ const removed=second.events.get('keyboardHeightChange');env.unbindWindow();assert.equal(env.keyboardHeightPx,0);assert.equal(env.keyboardChanged,undefined);removed(900);assert.equal(env.keyboardHeightPx,0);assert.equal(second.events.size,0);
+});

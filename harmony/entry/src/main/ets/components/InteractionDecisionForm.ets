@@ -21,8 +21,8 @@ export struct InteractionDecisionForm {
   @Require @Param model: ClientModel;
   @Require @Param request: Decision;
   @Param readOnly: boolean = false;
-  @Param availableHeight: number = 0;
   @Param pinFooter: boolean = false;
+  @Param fillAvailable: boolean = false;
   @Param draft: QuestionDraft | undefined = undefined;
   @Param draftSession: string = '';
   @Event admission: () => boolean = (): boolean => true;
@@ -36,8 +36,6 @@ export struct InteractionDecisionForm {
   @Local openedUrl: string = '';
   @Local busy: boolean = false;
   @Local deferred: boolean = false;
-  @Local headerHeight: number = 0;
-  @Local footerHeight: number = 0;
   @Local textValues: Record<string, string> = Wire.payload([], []) as Record<string, string>;
   @Local questionOptions: Record<string, InteractionChoice[]> = {};
   @Local questionPicks: Record<string, string[]> = Wire.payload([], []) as Record<string, string[]>;
@@ -51,8 +49,6 @@ export struct InteractionDecisionForm {
     this.screenOptions = [];
     this.screenText = '';
     this.deferred = false;
-    this.headerHeight = 0;
-    this.footerHeight = 0;
   }
 
   private resetForm(): void {
@@ -63,8 +59,6 @@ export struct InteractionDecisionForm {
     this.openedUrl = '';
     this.busy = false;
     this.deferred = false;
-    this.headerHeight = 0;
-    this.footerHeight = 0;
     this.textValues = Wire.payload([], []) as Record<string, string>;
     this.questionPicks = Wire.payload([], []) as Record<string, string[]>;
     this.formValues = interactionElicitationDefaults(this.request);
@@ -80,25 +74,6 @@ export struct InteractionDecisionForm {
 
   private canDefer(): boolean {
     return interactionCanDefer(this.request, this.model.selected.kind, this.readOnly, this.busy);
-  }
-
-  private footerButtonCount(): number {
-    if (this.readOnly) return 0;
-    if (this.deferred) return 1;
-    if (this.request.kind === 'question') return 1 + (this.canDefer() ? 1 : 0) + (interactionScreenCanCancel(this.request) ? 1 : 0);
-    if (this.request.kind === 'elicitation') {
-      const mode = interactionElicitationMode(this.request);
-      if (mode === 'url') return 2 + (interactionElicitationUrl(this.request) ? 2 : 0);
-      return 2 + (interactionElicitationSupported(this.request) ? 1 : 0);
-    }
-    return 1;
-  }
-
-  private bodyMaximumHeight(): number {
-    if (this.availableHeight <= 0) return 0;
-    const estimatedFooter = this.footerButtonCount() * Tokens.touch + Math.max(0, this.footerButtonCount() - 1) * Tokens.gap;
-    return Math.max(0, this.availableHeight - this.headerHeight - Math.max(this.footerHeight, estimatedFooter) -
-      Tokens.page * 2 - Tokens.gap * 2);
   }
 
   private headerPrompt(): string {
@@ -501,13 +476,6 @@ export struct InteractionDecisionForm {
     this.openedUrl = address;
   }
 
-  @Builder scrollableBody() {
-    Scroll() {
-      Column({ space: Tokens.section }) { this.bodyContent() }
-        .width('100%').alignItems(HorizontalAlign.Start)
-    }.width('100%').constraintSize({ maxHeight: this.bodyMaximumHeight() }).scrollBar(BarState.Auto).align(Alignment.TopStart)
-  }
-
   @Builder headerContent() {
     Column({ space: Tokens.gap }) {
       if (this.request.status !== 'open' || this.readOnly || this.deferred) Row({ space: Tokens.gap }) {
@@ -516,10 +484,7 @@ export struct InteractionDecisionForm {
       }.width('100%')
       if (this.headerPrompt()) Text(this.headerPrompt()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start)
-      .onAreaChange((_old: Area, area: Area) => {
-        const measured = Number(area.height);
-        if (Number.isFinite(measured) && measured >= 0 && Math.abs(measured - this.headerHeight) > 1) this.headerHeight = measured;
-      })
+
   }
 
   @Builder responseFooter() {
@@ -527,10 +492,12 @@ export struct InteractionDecisionForm {
       if (this.deferred && !this.readOnly) Button(tr('interaction_question_reopen')).attributeModifier(ButtonStyles.secondary).width('100%')
         .onClick(() => this.deferred = false).id('interaction.reopen')
       else if (!this.readOnly && this.request.kind === 'question') {
-        if (this.pinFooter) Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-          Button(tr('interaction_question_later')).attributeModifier(ButtonStyles.quiet).flexGrow(1).flexShrink(0).enabled(this.canDefer())
+        if (this.pinFooter || this.fillAvailable) Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          if (this.pinFooter || this.canDefer()) Button(tr('interaction_question_later')).attributeModifier(ButtonStyles.quiet).flexGrow(1).flexShrink(0).enabled(this.canDefer())
             .onClick(() => { this.deferred = true; this.onLater(); }).id('interaction.later')
-          if (interactionScreenCanCancel(this.request)) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
+          if (interactionScreenCanCancel(this.request) && !this.pinFooter) Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).flexGrow(1).flexShrink(0)
+            .enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.cancel')
+          if (interactionScreenCanCancel(this.request) && this.pinFooter) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
             .attributeModifier(ButtonStyles.chrome).enabled(this.canRespond()).accessibilityText(tr('more'))
             .bindMenu([{ value: tr('interaction_question_cancel'), action: () => this.submit('cancel') }]).flexShrink(0).id('interaction.more')
           Button(tr('confirm')).attributeModifier(ButtonStyles.primary).flexGrow(1).flexShrink(0).enabled(this.canSubmit())
@@ -564,27 +531,28 @@ export struct InteractionDecisionForm {
       }
       if (this.model.error) Text(tr(this.model.error)).fontSize(Tokens.meta).fontColor(Colors.needs).width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: Tokens.gap })
-      .onAreaChange((_old: Area, area: Area) => {
-        const measured = Number(area.height);
-        if (Number.isFinite(measured) && measured >= 0 && Math.abs(measured - this.footerHeight) > 1) this.footerHeight = measured;
-      })
+
+  }
+
+  @Builder formBody() {
+    this.headerContent()
+    if (this.readOnly) {
+      if (this.historySummary()) Text(this.historySummary()).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
+    } else if (!this.deferred) this.bodyContent()
   }
 
   build() {
-    Column({ space: Tokens.gap }) {
-      if (this.pinFooter) Scroll() {
-        Column({ space: Tokens.gap }) { this.headerContent(); if (!this.readOnly && !this.deferred) this.bodyContent(); else if (this.readOnly && this.historySummary()) Text(this.historySummary()).fontSize(Tokens.body).fontColor(Colors.ink).width('100%') }.width('100%').alignItems(HorizontalAlign.Start)
+    if (this.fillAvailable && !this.pinFooter && this.request.kind !== 'question') Scroll() {
+      Column({ space: Tokens.gap }) { this.formBody(); this.responseFooter() }
+        .width('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.page }).alignItems(HorizontalAlign.Start)
+    }.width('100%').height('100%').scrollBar(BarState.Auto).align(Alignment.TopStart).id('interaction.body')
+    else Column({ space: Tokens.gap }) {
+      if (this.pinFooter || this.fillAvailable) Scroll() {
+        Column({ space: Tokens.gap }) { this.formBody() }.width('100%').alignItems(HorizontalAlign.Start)
       }.width('100%').layoutWeight(1).scrollBar(BarState.Auto).align(Alignment.TopStart).id('interaction.body')
-      else {
-      this.headerContent()
-      if (this.readOnly) {
-        if (this.historySummary()) Text(this.historySummary()).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
-      } else if (!this.deferred) {
-        if (this.availableHeight > 0 && this.bodyMaximumHeight() >= Tokens.touch * 2) this.scrollableBody()
-        else this.bodyContent()
-      }
-      }
+      else this.formBody()
       this.responseFooter()
-    }.width('100%').height(this.pinFooter ? '100%' : undefined).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.page, bottom: this.pinFooter ? 0 : Tokens.page }).alignItems(HorizontalAlign.Start)
+    }.width('100%').height(this.pinFooter || this.fillAvailable ? '100%' : undefined)
+      .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.page, bottom: this.pinFooter || this.fillAvailable ? 0 : Tokens.page }).alignItems(HorizontalAlign.Start)
   }
 }

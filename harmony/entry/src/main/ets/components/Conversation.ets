@@ -259,7 +259,7 @@ export struct Conversation {
   private primaryStop(): boolean { return !this.model.decision && this.model.canCompose() && this.model.canStop() && !this.model.draft.trim() && !this.attachments.attachments.length; }
   @Monitor('active', 'model.selected', 'model.sessions', 'model.connected', 'model.draft', 'model.decision', 'attachments.attachments', 'model.interruptPendingKey')
   primaryStopChanged(): void { this.onPrimaryStop(this.active && this.primaryStop()); }
-  private maxControlsHeight(): number { return this.model.decision ? this.availableHeight : this.availableHeight * 0.8; }
+  private maxControlsHeight(): number { return this.model.decision ? this.availableHeight * (this.environment.keyboardHeightPx > 0 ? 1 : Tokens.decisionFraction) : this.availableHeight * 0.8; }
   private measureAttachment(): void {
     if (!this.attachmentLayoutReady) return;
     const inset = nativeSheetInset(this.getUIContext(), this.attachmentNodeId, this.environment.safeBottomPx);
@@ -411,7 +411,7 @@ export struct Conversation {
 
   @Local foldContainerHeight: number = 0;
   private ordinarySplitRatio(): number {
-    const secondary = Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight()));
+    const secondary = this.model.decision ? this.maxControlsHeight() : Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight()));
     return Math.max(1, (this.foldContainerHeight || this.availableHeight) - secondary) / secondary;
   }
   @Monitor('model.messages', 'model.transcriptHistoryReady') messagesChanged(): void {
@@ -814,14 +814,24 @@ export struct Conversation {
     }.padding(Tokens.gap).backgroundColor(Colors.subtle).borderRadius(Tokens.capsule).width('100%').id('chat.composer')
   }
 
-  @Builder interactionContent() {
-    Scroll() {
+  @Builder blockingContent() {
+    Column() {
       Column() {
-        if (this.model.decision) {
-          ForEach([this.model.decision], (request: Decision) => {
-            InteractionDecisionForm({ model: this.model, request: request, availableHeight: this.maxControlsHeight(), onLink: (address: string) => this.onLink(address) })
-          }, (request: Decision) => request.id)
-        }
+        ForEach(this.model.decision ? [this.model.decision] : [], (request: Decision) => {
+          InteractionDecisionForm({ model: this.model, request: request, fillAvailable: true, onLink: (address: string) => this.onLink(address) })
+        }, (request: Decision) => request.id)
+      }.width('100%').layoutWeight(1)
+      if (this.showContextMenu) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
+        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
+        .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
+      if (this.hasNew && !this.atEnd) Button(tr('latest')).onClick(() => { this.scroller.scrollEdge(Edge.Bottom); this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; })
+    }.width('100%').constraintSize({ maxWidth: Tokens.readingMax }).height('100%')
+      .padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.footer, top: Tokens.gap })
+  }
+  @Builder interactionContent() {
+    if (this.model.decision) this.blockingContent()
+    else Scroll() {
+      Column() {
       if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
         .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
@@ -854,7 +864,7 @@ export struct Conversation {
       } else {
         Column() { this.readingContent() }.width('100%').layoutWeight(1).clip(true)
         Column() { this.interactionContent() }.width('100%')
-          .height(Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight())))
+          .height(this.model.decision ? this.maxControlsHeight() : Math.max(1, Math.min(this.controlsHeight, this.maxControlsHeight())))
       }
     }.width('100%').height('100%').backgroundColor(Colors.canvas).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       .bindSheet($$this.attachmentSheet, this.attachmentContent(), { title: { title: tr(this.contextKind === 'knowledge' ? 'knowledge' : this.contextKind === 'todo' ? 'todos' : this.contextKind === 'inbox' ? 'inbox' : 'attach') }, height: SheetSize.LARGE, preferType: this.availableWidth > Tokens.readingMax ? SheetType.CENTER : SheetType.BOTTOM, showClose: true, onAppear: () => { this.attachmentLayoutReady = true; this.measureAttachment(); }, onDisappear: () => this.attachmentLayoutReady = false })

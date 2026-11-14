@@ -1,5 +1,6 @@
 // Shared Persona dimensions; system controls own their internal metrics and material.
 export class Tokens {
+  static readonly decisionFraction: number = 0.5;
   static readonly composerMinColumns: number = 5;
   static readonly composerNarrowActions: number = 260;
   static readonly divider: number = 0.5;

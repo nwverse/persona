@@ -9,8 +9,10 @@ export class NativeEnvironment {
   @Trace fontScale: number = 1;
   @Trace safeBottomPx: number = 0;
   @Trace safeTopPx: number = 0;
+  @Trace keyboardHeightPx: number = 0;
   @Trace windowWidthPx: number = 0;
   private windowRef: window.Window | undefined;
+  private keyboardChanged: ((height: number) => void) | undefined;
   private sizeChanged: (size: window.Size) => void = (_size: window.Size): void => this.refreshWindow();
   private rectChanged: (event: window.RectChangeOptions) => void = (_event: window.RectChangeOptions): void => this.refreshWindow();
   private avoidChanged: (event: window.AvoidAreaOptions) => void = (_event: window.AvoidAreaOptions): void => this.refreshWindow();
@@ -20,12 +22,15 @@ export class NativeEnvironment {
     value.on('windowSizeChange', this.sizeChanged);
     value.on('windowRectChange', this.rectChanged);
     value.on('avoidAreaChange', this.avoidChanged);
+    const changed = (height: number): void => { if (this.windowRef === value && this.keyboardChanged === changed) this.keyboardHeightPx = Number.isFinite(height) ? Math.max(0, height) : 0; };
+    this.keyboardChanged = changed; value.on('keyboardHeightChange', changed);
     this.refreshWindow();
   }
   unbindWindow(): void {
-    const value = this.windowRef; this.windowRef = undefined;
+    const value = this.windowRef, keyboard = this.keyboardChanged; this.windowRef = undefined; this.keyboardChanged = undefined;
+    this.keyboardHeightPx = 0;
     if (!value) return;
-    try { value.off('windowSizeChange', this.sizeChanged); value.off('windowRectChange', this.rectChanged); value.off('avoidAreaChange', this.avoidChanged); } catch (_) {}
+    try { value.off('windowSizeChange', this.sizeChanged); value.off('windowRectChange', this.rectChanged); value.off('avoidAreaChange', this.avoidChanged); if (keyboard) value.off('keyboardHeightChange', keyboard); } catch (_) {}
   }
   private refreshWindow(): void {
     if (!this.windowRef) return;
@@ -33,6 +38,7 @@ export class NativeEnvironment {
       const rect = this.windowRef.getWindowProperties().windowRect;
       const bottom = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height;
       this.safeBottomPx = rect.top + rect.height - bottom;
+      this.keyboardHeightPx = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect?.height || 0;
       this.windowWidthPx = Number.isFinite(rect.width) ? rect.width : 0;
       this.safeTopPx = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect?.height || 0;
     } catch (_) {}
