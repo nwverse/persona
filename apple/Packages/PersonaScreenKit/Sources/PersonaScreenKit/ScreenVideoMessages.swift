@@ -6,11 +6,6 @@ import Foundation
 
 /// `hello` (helper → phone): the first message after the phone's `start`. `rect` is the display's rectangle in the
 /// RFB framebuffer's pixels when the node knows it, so the app lays the video onto the same place as RFB.
-///
-/// `features` names what this helper can do beyond version 1 (`CapturePlan.features`; "tiers": the phone may set a
-/// bitrate band and change the size in place, #6396), and `points` / `pixels` are the display's size in points and in
-/// pixels, so the phone can work out what each scale (pixels per point) comes to. All three are absent from a helper
-/// before them.
 public struct HelloMessage: Codable, Equatable, Sendable {
     public var version: Int
     public var codec: String // "hevc" | "h264"
@@ -18,7 +13,11 @@ public struct HelloMessage: Codable, Equatable, Sendable {
     public var width: Int
     public var height: Int
     public var rect: [Int]?
+    /// What this helper can do beyond the version's messages: `tiers` (#6396) makes the phone offer ⋯ › Quality. Absent
+    /// from a helper before it, which offers nothing more.
     public var features: [String]?
+    /// The display's size in points and in pixels, `[width, height]` (#6396), so the phone can work out what each scale
+    /// (pixels per point) comes to. Absent from a helper before quality tiers.
     public var points: [Int]?
     public var pixels: [Int]?
 
