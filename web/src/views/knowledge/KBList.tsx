@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
 import {
-  countLabel,
   groupEntries,
   groupResults,
   hitView,
@@ -192,19 +191,16 @@ export function ListPane({
               onOpen={onOpen}
               onRetry={() => setSearchRetry((x) => x + 1)}
             />
-          ) : !list && !error ? (
-            // Paint the chips with their count and rows, so the count cannot wrap an already visible chip row.
-            <div className="py-10">
-              <Loading />
-            </div>
           ) : (
             <>
               <div className="mt-3 flex items-start gap-2">
-                {/* Search covers every kind: the chips (one of them lit) would say otherwise, so they go while searching. */}
+                {/* Search covers every kind: the chips (one of them lit) would say otherwise, so they go while searching.
+                    The chips carry no count: a count on the selected one only changed its width, so picking another kind
+                    re-wrapped the row and moved every chip after it; each section under them says how many it holds. With
+                    nothing that changes their width they stay put, while a kind loads too. */}
                 <div role="tablist" aria-label={t("knowledge-kblist.kinds")} className="flex min-w-0 flex-1 flex-wrap gap-1">
                   {KB_KINDS.map((k) => {
                     const on = k === kind;
-                    const n = on ? list?.items?.length : undefined;
                     return (
                       <a
                         key={k}
@@ -218,7 +214,6 @@ export function ListPane({
                         )}
                       >
                         {KIND_TITLE[k]}
-                        {n !== undefined && <span className="tabular-nums opacity-70">{countLabel(n)}</span>}
                       </a>
                     );
                   })}
@@ -236,6 +231,11 @@ export function ListPane({
               )}
 
               <div className="mt-4 flex flex-col gap-5">
+                {!list && !error && (
+                  <div className="py-6">
+                    <Loading />
+                  </div>
+                )}
                 {error && !list && <ErrorBox text={error} onRetry={() => setRetry((x) => x + 1)} />}
                 {list && sections.length === 0 && <Empty kind={kind} tag={tag} />}
                 {sections.map((s) => {
