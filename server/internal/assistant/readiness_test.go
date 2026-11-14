@@ -177,6 +177,48 @@ func TestReadinessClaudeUnanswered(t *testing.T) {
 	}
 }
 
+// The node found Claude Code when it connected, and a later self-check finds none: Claude Code updating itself through
+// npm removes and relinks its package, and a check caught then must not block the main conversation. A start refused
+// because claude is missing still says so.
+func TestReadinessClaudeMissingWhileUpdating(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	f.doctor["server"] = "读不到 claude 的版本"
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepUnknown || cl.Code == proto.CodeClaudeMissing || r.Mode != ReadinessFull {
+		t.Fatalf("claude = %+v (%s)", cl, r.Mode)
+	}
+	data, _ := json.Marshal(map[string]string{"delivered": "none", "launcher": "claude"})
+	f.mu.Lock()
+	f.failAssistant = &rpc.Error{Code: proto.CodeClaudeMissing, Message: "zsh:1: command not found: claude", Data: data}
+	f.mu.Unlock()
+	if status, _ := serveJSON(t, s, "POST", "/api/v1/assistant/conversations", "", `{"prompt":"你好","main":true}`); status != 409 {
+		t.Fatalf("start: %d", status)
+	}
+	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("after a refused start: %+v", cl)
+	}
+}
+
+// A launcher health check caught in the same self-update records "command not found: claude" once: the node's
+// self-check decides, so Send stays on. A second miss in a row stands.
+func TestReadinessClaudeHealthMissWhileUpdating(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	record := LauncherHealth{Machine: "server", Launcher: "claude", State: healthFailing, Kind: classifyLauncherError("zsh:1: command not found: claude"),
+		Error: "zsh:1: command not found: claude", CheckedAt: time.Now(), Source: healthSourceCheck, Fails: 1}
+	s.health.loaded = true
+	s.health.recs = map[string]*LauncherHealth{healthKey("server", "claude"): &record}
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepOK || r.Mode != ReadinessFull {
+		t.Fatalf("one miss: claude = %+v (%s)", cl, r.Mode)
+	}
+	record.Fails = 2
+	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("two misses in a row: %+v", cl)
+	}
+}
+
 // A node with no self-check (an old one) leaves Claude Code unknown, which does not stop the main conversation.
 func TestReadinessOldNodeUnknown(t *testing.T) {
 	f, s, _ := readyMachine(t)

@@ -645,15 +645,20 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		}
 		s.clearStart(ctx, *st)
 	}
+	plain := launcher == "" || launcher == "claude"
 	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK && h.Kind != errKindNotInTerminal {
 		switch missingCode(h.Error) { // the launcher's health record: its start or check found no such command
 		case proto.CodeClaudeMissing:
+			// One miss, from a node that found Claude Code on this connection, can be a check caught in Claude Code's
+			// npm self-update (the case below): the node's self-check decides. A second miss in a row stands.
+			if plain && d.ClaudeVersion != "" && h.Fails < 2 {
+				break
+			}
 			return problem(proto.CodeClaudeMissing, "install_claude")
 		case proto.CodeLauncherMissing:
 			return problem(proto.CodeLauncherMissing, "connect_model")
 		}
 	}
-	plain := launcher == "" || launcher == "claude"
 	if !plain {
 		switch agent, found := s.readinessLauncher(ctx, d.ID, launcher); {
 		case found == launcherGone && !modelOK:
@@ -670,6 +675,12 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		return ReadinessStep{ID: StepClaude, State: StepChecking}
 	case seen.version != "":
 		return ReadinessStep{ID: StepClaude, State: StepOK, Version: seen.version}
+	case seen.known && plain && d.ClaudeVersion != "":
+		// The node found Claude Code on this connection, and its self-check now finds none. Claude Code updating
+		// itself through npm replaces its package and the claude link in place, so a check caught mid-update sees no
+		// claude for seconds to minutes: unknown, which does not stop the main conversation. A real removal still
+		// shows as soon as a start is refused (rec.Start above).
+		return ReadinessStep{ID: StepClaude, State: StepUnknown}
 	case seen.known && plain:
 		return problem(proto.CodeClaudeMissing, "install_claude")
 	}
