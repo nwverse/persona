@@ -91,7 +91,7 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
             result = run(command, cwd=base_worktree, timeout=timeout, environ=environ if environ is not None else verification_env())
             output = result.stdout + "\n" + result.stderr
             ids = failure_test_ids(output)
-            reproduced = (result.returncode != 0 and ids and ids == failure_test_ids(failure)
+            reproduced = (result.returncode != 0 and bool(failure_signature(output))
                           and failure_signature(output) == failure_signature(failure))
             return {"reproduced": reproduced, "command": command,
                     "output": bounded(output, 6000),

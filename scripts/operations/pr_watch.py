@@ -371,6 +371,8 @@ class Watcher:
                        outcome="repairing", repair_rounds=rounds + 1, failure=str(error))
         latest = pr_snapshot(repo, number)
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="head_moved", repair_rounds=rounds, failure=str(error))
             self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
             return False
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
