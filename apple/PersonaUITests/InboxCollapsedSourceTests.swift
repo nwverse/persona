@@ -204,23 +204,35 @@ final class InboxCollapsedSourceTests: XCTestCase {
         return inboxHub
     }
 
-    /// A hub's scheme, host and port: the same mock at `…:18983` and `…:18983/` is one hub, not two.
+    /// A hub's identity, not its spelling: scheme and host in either case, `localhost`, `127.0.0.1` and `::1` the same
+    /// machine, and the scheme's own port when the URL leaves it out. `…` and `…/` are one hub; `localhost` and
+    /// `127.0.0.1` on one port are one too.
     static func origin(_ raw: String) -> String {
-        guard let u = URL(string: raw) else { return raw }
-        return "\(u.scheme ?? "")://\(u.host ?? ""):\(u.port ?? -1)"
+        guard let u = URLComponents(string: raw) else { return raw.lowercased() }
+        let scheme = (u.scheme ?? "").lowercased()
+        var host = (u.host ?? "").lowercased()
+        if ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) { host = "loopback" }
+        let port = u.port ?? (scheme == "https" ? 443 : scheme == "http" ? 80 : -1)
+        return "\(scheme)://\(host):\(port)"
+    }
+
+    /// What the request answered, written on URLSession's thread and read after the expectation: a reference box, so no
+    /// captured `var` crosses threads.
+    private final class Answer: @unchecked Sendable {
+        var code = -1
     }
 
     /// A GET's answer, as the mock gives it, waited for off the test's thread.
     private func status(_ url: URL) -> Int {
         let answered = expectation(description: "GET " + url.path)
-        var code = -1
+        let answer = Answer()
         URLSession.shared.dataTask(with: url) { _, response, _ in
-            code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            answer.code = (response as? HTTPURLResponse)?.statusCode ?? -1
             answered.fulfill()
         }.resume()
         wait(for: [answered], timeout: 10)
-        XCTAssertGreaterThanOrEqual(code, 0, "no answer from \(url)")
-        return code
+        XCTAssertGreaterThanOrEqual(answer.code, 0, "no answer from \(url)")
+        return answer.code
     }
 
     @MainActor private func openDetail(_ item: String) {
