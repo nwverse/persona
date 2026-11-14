@@ -14,8 +14,10 @@ import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { onHubEvent, refreshAssistant, useStore } from "../../lib/store";
 import { isResumed } from "../../lib/reconnect";
 import type { AssistantInfo, Session } from "../../lib/types";
+import { GroupCount } from "../SidebarSection";
 import { leaderItem } from "../ConversationMenu";
 import { Button, Collapse, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { InfoTip } from "../../ui/InfoTip";
 import { Icon } from "../../ui/icons";
 import { arrange, conversationTitle, filterConversations, mergeConversations, splitTitle, type Conversation } from "./conversations";
 import { Empty, inputClass, SectionTitle } from "./parts";
@@ -154,10 +156,13 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("assistant-history.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
-        <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">
-          {t("assistant-history.title")}
-          {total > 0 && <span className="ml-2 text-[12px] font-normal text-ink-3 tabular-nums">{total}</span>}
-        </h1>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{t("sidebar.all_chats")}</h1>
+          {total > 0 && (
+            <GroupCount n={total} label={t("sidebar.unarchived_chat_count", { count: total })} className="shrink-0" />
+          )}
+          <InfoTip name={t("sidebar.all_chats")} text={t("assistant-history.scope_help")} className="[@media(pointer:coarse)]:size-11" />
+        </div>
         <IconButton icon="retry" label={t("assistant-history.refresh")} onClick={() => void after()} />
         <Button tone="primary" icon="plus" onClick={() => navigate({ name: "persona-new" })}>{t("assistant-history.new_chat")}</Button>
       </header>
@@ -239,7 +244,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
                 type="button"
                 aria-expanded={showArchived || searching}
                 onClick={() => setShowArchived((v) => !v)}
-                className="mb-1.5 flex items-center gap-1.5 whitespace-nowrap rounded-[6px] px-1 text-[12px] font-medium text-ink-3 transition-colors hover:text-ink-2"
+                className="touch-hit mb-1.5 flex items-center gap-1.5 whitespace-nowrap rounded-[6px] px-1 text-[12px] font-medium text-ink-3 transition-colors hover:text-ink-2"
               >
                 <Icon name="archive" size={13} />
                 {t("assistant-history.archived_count", { count: archived.length })}
