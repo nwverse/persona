@@ -26,7 +26,7 @@ function render(actions: ChatActions | null, item = receipt) {
 describe("a task's receipt card", () => {
   it("has 复制 and 引用 in its corner bar, the card as it was", () => {
     const html = render(chat);
-    expect(html).toContain('aria-label="拷贝回复"');
+    expect(html).toContain('aria-label="复制回复"');
     expect(html).toContain('aria-label="引用"');
     expect(html).toMatch(/absolute top-2 right-2/);
     expect(html).toContain("补齐网络层的单元测试 完成");
