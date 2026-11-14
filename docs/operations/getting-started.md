@@ -52,7 +52,7 @@ If you have an always-on computer, put the hub on it. A laptop works as the hub 
 | Apple Watch | Installs along with the iPhone version |
 | Web | Nothing to install: once the hub is set up, open the hub's address in a browser (explained below). On a computer you can also install it as an app ([web.md](../web/web.md), "On computers") |
 | Android | No public package yet; build it yourself ([android.md](../android/android.md)) |
-| Mac App | Frozen: it gets fixes, not new features ([mac.md](../apple/mac.md)). On a Mac, use the web app (it can be installed as an app); a Mac whose Agents Persona should reach also needs Persona Link ("Connect a computer" below) |
+| Desktop app | Electron around the hub-hosted web UI ([desktop.md](../desktop/desktop.md)); no local node is required just to chat or use Agents on another computer. A computer whose Agents Persona should reach also needs the separately installed Persona Link ("Connect a computer" below) |
 
 ## Install the hub: paste one command
 

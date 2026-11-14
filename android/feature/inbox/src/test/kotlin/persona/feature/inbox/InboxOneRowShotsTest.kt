@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -116,7 +117,7 @@ class InboxOneRowShotsTest {
         assertEquals(InboxEventRoute("second"), opened.last())
     }
 
-    @Test fun directAndGroupLabelsRemainVisible() {
+    @Test fun directHasATitleTagGroupHasNoKindTagAndCountAboveOneHasABadge() {
         val direct = item("direct", "Direct matter", "Avery", "A direct update.", read = false).let {
             it.copy(item = it.item.copy(kind = "dm"), isGroup = false, groupName = null)
         }
@@ -126,7 +127,8 @@ class InboxOneRowShotsTest {
         rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
 
         rule.onNodeWithText("Direct").assertExists()
-        rule.onNodeWithText("Group").assertExists()
+        rule.onNodeWithText("Group").assertDoesNotExist()
+        assertTrue(rule.onAllNodesWithText("2").fetchSemanticsNodes().isNotEmpty())
     }
 
     private fun capture(name: String) {

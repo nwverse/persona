@@ -57,7 +57,7 @@ Severity:
 
 Checked: touch targets, Dynamic Type, dark mode, contrast, VoiceOver labels and traits, Reduce Motion and Reduce Transparency, SF Symbols, system components, navigation, safe areas, feedback and haptics, notifications and permissions, plus the watch app, complications, widgets, Live Activity, Mac and visionOS code.
 
-Limitations: static review only. Hit areas, contrast ratios and heights were computed from code, not measured on a device. Increase Contrast rendering and real safe-area and keyboard behavior were not exercised on a device; the layout, safe-area and keyboard dimension was reviewed by reading the code and yielded three P2 findings (HIG-083 to HIG-085), with no safe-area or keyboard-overlap defect found beyond them. The Mac app is frozen (see `docs/apple/mac-design.md`), so Mac findings matter only for bug fixes. Findings that failed verification are listed in the appendix.
+Limitations: static review only. Hit areas, contrast ratios and heights were computed from code, not measured on a device. Increase Contrast rendering and real safe-area and keyboard behavior were not exercised on a device; the layout, safe-area and keyboard dimension was reviewed by reading the code and yielded three P2 findings (HIG-083 to HIG-085), with no safe-area or keyboard-overlap defect found beyond them. The native Mac app was frozen (see `docs/archive/apple/mac-design.md`), so Mac findings mattered only for bug fixes. Findings that failed verification are listed in the appendix.
 
 ## 3. Checklist
 
@@ -280,7 +280,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-024 Mac composer thumbnail Remove button is 18pt and hover-only
 - **Severity**: P2. **Platform**: macOS (frozen).
-- **Location**: `apple/Mac/Chat/MacComposerThumb.swift:21`, `apple/Mac/Chat/MacComposerThumb.swift:31`, `apple/Mac/Chat/MacComposerThumb.swift:39`.
+- **Location**: the retired native Mac composer thumbnail source (removed with the target).
 - **Violates**: [Accessibility][a11y]: macOS minimum 20x20 (default 28).
 - **Problem**: the badge is `Theme.Size.badge` (18) at zero opacity until hover or keyboard focus. It has a label and a focus path.
 - **Evidence**: `.scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge) ... .opacity(shown ? 1 : 0)`.
@@ -601,7 +601,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-064 iPad has no menu-bar commands and little pointer support
 - **Severity**: P2. **Platform**: iPadOS.
-- **Location**: `apple/Mac/App/PersonaMacApp.swift:27`, `apple/Mac/App/PersonaMacApp.swift:127`, `apple/Persona/DesignSystem/ShellComposerBar.swift:213`, `apple/Persona/DesignSystem/Styling.swift:45`, `apple/Persona/DesignSystem/MacHover.swift:33`, `apple/Persona/Views/Session/Terminal/TerminalInput.swift:262`.
+- **Location**: the retired native Mac app command set, `apple/Persona/DesignSystem/ShellComposerBar.swift:213`, `apple/Persona/DesignSystem/Styling.swift:45`, `apple/Persona/DesignSystem/MacHover.swift:33`, `apple/Persona/Views/Session/Terminal/TerminalInput.swift:262`.
 - **Violates**: [Design principles][dp] ("Consider a variety of input methods"); the keyboard and pointing pages were not in the digest, so this is a recommendation.
 - **Problem**: the Mac app has full commands; the iOS target has none, so the iPad shortcut overlay lacks New Chat, Search, Settings or tab switching. Hover effects are visionOS only; system buttons and glass `.interactive()` still respond, so the gap is custom tappable rows.
 - **Evidence**: `.hoverEffect(isEnabled: interactive)` inside a visionOS block only.
@@ -681,7 +681,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-074 Camera purpose string shows a CLI command
 - **Severity**: P2. **Platform**: iOS, macOS, visionOS.
-- **Location**: `apple/Persona/Resources/Info.plist:57`, `apple/Mac/Resources/Info.plist:56`, `apple/Vision/Resources/Info.plist:48`, `apple/project.yml:177`, `apple/project.yml:273`, `apple/project.yml:361`.
+- **Location**: `apple/Persona/Resources/Info.plist:57`, the retired native Mac Info.plist, `apple/Vision/Resources/Info.plist:48`, `apple/project.yml:177`, `apple/project.yml:273`, `apple/project.yml:361`.
 - **Violates**: [Privacy][priv]: clear purpose string; [Writing][writing]: avoid jargon.
 - **Problem**: the camera usage text includes a backticked shell command. The strings are declared in `project.yml` as well as the plists, so editing only one drifts. Whether Mac and Vision need their other usage strings was not checked.
 - **Evidence**: `Persona uses the camera to scan the pairing QR code printed by ...`.
@@ -737,7 +737,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-081 Mac Link panel header buttons rely on tooltips
 - **Severity**: P2. **Platform**: macOS.
-- **Location**: `apple/Mac/Link/MacLinkPanel.swift:183`, `apple/Mac/Link/MacLinkPanel.swift:202`, `apple/Mac/Link/MacLinkPanel.swift:220`.
+- **Location**: the retired native Mac link panel source (removed with the target).
 - **Violates**: [VoiceOver][vo]: labels for custom elements.
 - **Problem**: Back, Forward, Reload and More are bare images with only a tooltip (4 of 6 icon buttons; Add context and Close have labels).
 - **Evidence**: `Button { web?.goBack() } label: { Image(systemName: Theme.Icon.back) }.help("Back")`.
