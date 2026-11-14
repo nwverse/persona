@@ -503,6 +503,100 @@ class PhoneToolRegistryTest {
         assertEquals(listOf("card:fast"), cards)
     }
 
+    /** Three or more confirmed calls named by their id; the one called "first" keeps preparing until [release]. */
+    private fun queued(
+        events: MutableList<String>, cards: MutableList<String>, release: CompletableDeferred<Unit>,
+        confirmFails: (String) -> Boolean = { false },
+        executeFails: (String) -> Boolean = { false },
+    ): PhoneToolRegistry {
+        return PhoneToolRegistry({ PhoneSource.entries.toSet() }, { true }, { true }, { _, _ -> true },
+            { render ->
+                val card = render(res)
+                events += "confirm"; cards += card
+                if (confirmFails(card.removePrefix("card:"))) throw IllegalStateException("card could not be shown")
+                PhoneConfirmation.Allowed
+            },
+            { _, _ -> PhoneToolResult.text("plain") },
+            { _, args ->
+                val label = args.getValue("id").jsonPrimitive.content
+                if (label == "first") release.await()
+                PhonePreparedConfirmation({ "card:$label" }) {
+                    events += "execute:$label"
+                    if (executeFails(label)) throw IllegalStateException("provider died")
+                    PhoneToolResult.text(label)
+                }
+            })
+    }
+
+    private fun queuedCall(registry: PhoneToolRegistry, scope: kotlinx.coroutines.CoroutineScope, label: String) = scope.async {
+        registry.call(PhoneToolCall(label, "phone_calendar_delete_event", buildJsonObject { put("id", label) }))
+    }
+
+    @Test fun aCallCancelledWhileItsCardWaitsForItsTurnKeepsTheCallsBehindItInOrder() = runTest {
+        val events = mutableListOf<String>()
+        val cards = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        val registry = queued(events, cards, release)
+        val first = queuedCall(registry, this, "first"); runCurrent()
+        // The second and third are fully prepared and now wait for the first one's turn.
+        val second = queuedCall(registry, this, "second"); runCurrent()
+        val third = queuedCall(registry, this, "third"); runCurrent()
+        assertTrue(cards.toString(), cards.isEmpty())
+
+        second.cancel(); runCurrent()
+        // The cancelled call is gone, but it does not let the third pass the first.
+        assertTrue(second.isCancelled)
+        assertTrue(cards.toString(), cards.isEmpty())
+        assertFalse(third.isCompleted)
+
+        release.complete(Unit)
+        assertFalse(first.await().isError)
+        assertFalse(third.await().isError)
+        assertEquals(listOf("card:first", "card:third"), cards)
+        assertEquals(listOf("execute:first", "execute:third"), events.filter { it.startsWith("execute") })
+        // The turn moved on: a call that arrives afterwards queues its card at once and is not held up.
+        assertFalse(queuedCall(registry, this, "later").await().isError)
+        assertEquals(listOf("card:first", "card:third", "card:later"), cards)
+    }
+
+    @Test fun aCallCancelledWhileItsCardWaitsDoesNotMakeAnotherCallUncertainOrRepeatIt() = runTest {
+        val events = mutableListOf<String>()
+        val cards = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        val registry = queued(events, cards, release, executeFails = { it == "third" })
+        val first = queuedCall(registry, this, "first"); runCurrent()
+        val second = queuedCall(registry, this, "second"); runCurrent()
+        val third = queuedCall(registry, this, "third"); runCurrent()
+        second.cancel(); runCurrent()
+        release.complete(Unit)
+        assertFalse(first.await().isError)
+        // An approved write that fails inside its own execute is still uncertain, and a repeated delivery replays it.
+        val unclear = third.await()
+        assertEquals(text(PhoneToolText.uncertain()), text(unclear))
+        assertEquals(text(unclear), text(registry.call(PhoneToolCall("third", "phone_calendar_delete_event",
+            buildJsonObject { put("id", "third") }))))
+        assertEquals(1, events.count { it == "execute:third" })
+        // The cancelled call never reached its card or its execute.
+        assertEquals(0, events.count { it == "execute:second" })
+        assertEquals(listOf("card:first", "card:third"), cards)
+    }
+
+    @Test fun aCardThatFailsToQueueStillLetsTheNextCallThrough() = runTest {
+        val events = mutableListOf<String>()
+        val cards = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        val registry = queued(events, cards, release, confirmFails = { it == "first" })
+        val first = queuedCall(registry, this, "first"); runCurrent()
+        val second = queuedCall(registry, this, "second"); runCurrent()
+        assertTrue(cards.isEmpty())
+        release.complete(Unit)
+        // The failure is the first call's own and is answered as a failed call; nothing was executed for it.
+        assertTrue(first.await().isError)
+        assertFalse(second.await().isError)
+        assertEquals(listOf("card:first", "card:second"), cards)
+        assertEquals(listOf("execute:second"), events.filter { it.startsWith("execute") })
+    }
+
     @Test fun aRepeatedCallIdPreparesAndExecutesOnce() = runTest {
         val events = mutableListOf<String>()
         val release = CompletableDeferred<Unit>()
