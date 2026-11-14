@@ -33,6 +33,34 @@ Preloads expose fixed operations, not arbitrary IPC, WebSocket messages, paths, 
 
 Closing the main window hides it to the tray while the signed-in renderer stays alive. The tray opens the current main window, not a destroyed setup window; explicit Quit exits. Only the desktop app itself is controlled by launch at login, not the Link service. macOS may still require approval in System Settings, which the setting must report rather than claim success.
 
+## Island at the MacBook notch
+
+On a Mac the desktop app can show the Agents' state at the notch (#7669), as the iPhone shows it in the Dynamic Island
+(`docs/apple/live-activity.md`). It is off by default.
+
+- **Setting**: Settings › Notifications › "Show at the MacBook notch" (`web/src/views/settings/DesktopIslandSettings.tsx`),
+  shown only when the bridge has `getIsland` and answers `supported` (the desktop app on macOS). The desktop app keeps the
+  choice in its state file (`island`), as it keeps the hub's address, and draws the island again after a restart.
+- **What it shows**: closed, a black pill around the notch: the most urgent category with its symbol and count on the left
+  (Needs you, then Working, then Unread), the next one on the right, the iPhone's preset A (`IslandCell.sides`), in the
+  iPhone island's colors. With the pointer over it, it opens downward into the agents that need you, then the working
+  ones (at most five, newest first), each with its title, state and the line its Agents-list row shows. A click shows the
+  desktop window at that session through the notification-click path. With nothing to count, it is hidden.
+- **Data**: the web works it out where the Dock badge's count comes from (`web/src/lib/desktop-island.ts`, a leaf beside
+  `AttentionSignals`) and sends it with `setIslandState` when it changes, words already in the user's language. The shell
+  keeps the latest even while the island is off, so turning it on shows the current counts at once. No second
+  connection to the hub.
+- **Shell**: `desktop/src/island.ts` draws it from a local page (`island.html`, as the setup window), in a frameless,
+  transparent, always-on-top panel that takes no focus and stays on every Space and over full-screen apps. The page's
+  preload (`island-preload.cts`) has two fixed operations: the pointer over it or away, and a clicked row's route. A
+  route is checked as a notification's (`contract.cts`) and must be one of the rows shown. The renderer's state is
+  untrusted input: `island-model.ts` keeps only numbers, known states, the hub's own routes and bounded text.
+- **Where**: Electron does not say where a notch is. The built-in display whose menu bar is taller than a plain one
+  (32 pt or more instead of 24) is taken to have one, about 200 pt wide at the top center; the pill is the menu bar's
+  height, with 64 pt on each side for a symbol and a count. On another display it is the same pill without the middle,
+  at the top center over the menu bar. Moving or adding displays places it again.
+- **Not yet**: the iPhone's other presets (tokens per minute, today's tokens), buttons on the island, Windows.
+
 ## Packaging and verification
 
 `electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.

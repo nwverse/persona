@@ -2,7 +2,8 @@
 // about: "When something needs you" and "When an agent finishes" ("Don't notify" / "Long tasks only" / "Every time"). The two choices are kept by the hub per device
 // (GET / PUT /devices/{id}/prefs, lib/notify.ts), as the phone's are. The "Alert sound" switch sits here too, under the system
 // one (#4057): it is this browser's alone (lib/attention.ts), so it shows while the hub's prefs load, and it follows them.
-// Under them, "When Persona is closed": this browser's Web Push (#7459, WebPushSettings.tsx).
+// Under them, "When Persona is closed": this browser's Web Push (#7459, WebPushSettings.tsx), and in the desktop app on a Mac
+// "Show at the MacBook notch" (#7669, DesktopIslandSettings.tsx).
 import { useCallback, useEffect, useState } from "react";
 import { formatDate, t } from "../../i18n";
 import { errorText, isAbort } from "../../lib/api";
@@ -12,6 +13,7 @@ import { Button, cx, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Group, Pill, Row, Switch } from "./SettingsParts";
 import { WebPushSettings } from "./WebPushSettings";
+import { DesktopIslandSettings } from "./DesktopIslandSettings";
 
 const DONE: { v: DonePref; key: string }[] = [
   { v: "off", key: "settings-notifications.done_off" },
@@ -109,6 +111,8 @@ export function NotificationSettings() {
       </Group>
 
       <WebPushSettings />
+
+      <DesktopIslandSettings />
 
       <Group footer={t("settings-notifications.sound_footer")}>
         <Row icon="volume" anchor="notify-sound" label={t("settings-notifications.sound")} hint={t("settings-notifications.sound_hint")}>

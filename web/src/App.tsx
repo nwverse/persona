@@ -57,6 +57,7 @@ import { SidePanel } from "./views/SidePanel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
+import { DesktopIslandSignals } from "./lib/desktop-island";
 
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
 // (lib/lazy-page.ts); "Chat", Persona and "Overview" stay in the main bundle (the extensions' page too: the sidebar already has
@@ -584,6 +585,8 @@ function Shell() {
       {/* tab title with the "Needs you" count, favicon badge, optional sounds (#2332): a leaf, so a sessions push re-renders
           only it, not the whole shell */}
       <AttentionSignals label={title} pane={pane} />
+      {/* the counts for the desktop app's island at the MacBook notch (#7669), only in a desktop app that has it */}
+      {window.personaDesktop?.setIslandState && <DesktopIslandSignals />}
     </div>
   );
 }
