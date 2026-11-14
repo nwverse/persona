@@ -532,6 +532,45 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   binding); no password travels anywhere new. `computer.status` / `browser.status` gain `screen_video {version, codecs,
   permission}` (absent from an old node or one without the helper, so an old app keeps RFB).
 
+### Live screen routes (#6398)
+
+The live screen, picture and input together, takes the fastest route the phone can reach: the same local network,
+Tailscale, or the hub relay ([#6398](https://github.com/nwverse/persona/issues/6398) has the design). The node's end is
+`internal/screenlink`. What is in place: the screen session over the hub's relays; the direct routes come next.
+
+- **Screen session**: a phone that asks for one gets its RFB stream and its video stream as channels of one session at
+  the node, keyed by `pair`: channel 1 is the connection to Screen Sharing (still followed for the login, so video binds
+  to the pair as before), and each video stream is a channel of its own from 2 up (Persona Screen's socket). Each channel
+  is a resumable byte stream: bytes carry their offset, the receiver acknowledges them, and the sender keeps what isn't
+  acknowledged yet, so any of the session's transports can carry a channel on from where the other side is.
+  **A transport only carries a session the hub opened**: Screen Sharing is dialed and Persona Screen started through
+  `port.dial` / `screen.dial` exactly as before; a transport joining later sends the session's token first.
+- **Asking for it**: the phone offers the WebSocket subprotocol `persona-screen-link.1` (beside `binary`) on
+  `…/ports/5900/connect?pair=…` and `…/screen/video/connect?pair=…`. The hub then passes `link: true` in `port.dial` /
+  `screen.dial`, and selects the subprotocol only when the node answers `{link: 1}`. The web's noVNC (`binary`), apps
+  before it (no subprotocol), a hub before it (never passes `link`) and a node before it (answers `{}`) all keep the raw
+  stream, byte for byte.
+- **Wire**: the video wire's framing (u32 length, u8 type, body) with its own types: `data` (channel, offset, bytes),
+  `ack` (channel, received through), `paths` (the token; candidates and the certificate with the direct routes), `attach`
+  / `attached` (a transport joining with the token), `ping` / `pong` (the pong adds the node's TCP retransmitted and sent
+  packets on a direct route; 0 on a relay), `use` / `resumed` (carry these channels on this transport from these
+  offsets), `close` (a channel's end) and `reset` (the video channel goes on at a message boundary). A new video
+  channel's relay starts with `resumed` naming it.
+- **Limits** (`screenlink.Limits`): the node keeps at most 4 MB of RFB and 512 KB of video unacknowledged, and reads
+  Screen Sharing or Persona Screen only with room (Screen Sharing waits; the helper drops frames as it already does when
+  the stream is full), so memory never grows with how long a route is down. Bytes left unacknowledged for 10 s mean the
+  transport carrying them is stuck: it is closed and the channel goes on elsewhere. A channel with no transport for 10 s
+  closes (RFB's ends the session), and so does a session with no hub relay for 10 s, so revoking the device or turning
+  the screen off on the hub also ends it.
+- **Moving a channel**: RFB is always sent on exactly from the phone's offset; its protocol state can't lose a byte.
+  Video with a backlog older than 200 ms is not replayed: the node drops it, sends `reset` with where the stream goes
+  on, asks Persona Screen for a keyframe (between two of the phone's messages, never inside one) and drops frames until
+  it comes, so a late picture replaces a burst of old ones and the rate control isn't misled by their delay. When the
+  transport carrying a channel fails, the node moves it to the channel's own relay (or another transport) by itself.
+- **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
+  again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
+  or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
+
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 
 Reference: Computer Use settings in the Codex desktop app. The main session read only the UI strings in its package, took no code, and found:
