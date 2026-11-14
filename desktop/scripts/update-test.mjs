@@ -402,20 +402,29 @@ async function cleanup() {
 }
 
 let result;
-const limit = setTimeout(() => { console.log(`Desktop update test (${platform}): TIMEOUT`); for (const child of owned) stop(child); process.exit(1); }, 75 * 60 * 1000);
+let rejectTimeout;
+const timedOut = new Promise((_, reject) => { rejectTimeout = reject; });
+const limit = setTimeout(() => {
+  for (const child of owned) stop(child);
+  rejectTimeout(new Error("Desktop update test timed out after 75 minutes"));
+}, 75 * 60 * 1000);
 const verdict = await finishUpdateTest({
-  runMain: main,
+  runMain: () => Promise.race([main(), timedOut]),
   readEvents: () => work ? events(join(work, "profile")) : [],
   cleanup: async () => {
+    let timer;
     try {
-      const failures = await cleanup();
+      const failures = await Promise.race([
+        cleanup(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("cleanup timed out after 5 minutes")), 300_000); }),
+      ]);
       step("cleanup of this run's owned temporary files", failures.length === 0, failures.join("; ") || undefined);
       return failures.join("; ") || undefined;
     } catch (error) {
       const failure = error instanceof Error ? error.message : String(error);
       step("cleanup of this run's owned temporary files", false, failure);
       return failure;
-    }
+    } finally { clearTimeout(timer); }
   },
   message: error => error instanceof Error ? error.message : String(error),
   report: async ({ result: update, failure, cleanupFailure, profileEvents }) => {

@@ -260,6 +260,49 @@ test("cleanup errors remain a nonzero result after a valid final snapshot", asyn
   assert.equal(written.cleanupFailure, "owned removal failed");
 });
 
+test("a deadline rejection still runs cleanup and writes the timeout verdict", async () => {
+  const calls = [];
+  let written;
+  const verdict = await finishUpdateTest({
+    runMain: () => Promise.race([new Promise(() => {}), Promise.reject(new Error("deadline exceeded"))]),
+    async readEvents() { calls.push("snapshot"); return []; },
+    async cleanup() { calls.push("cleanup"); return undefined; },
+    message: error => error.message,
+    async report(value) { calls.push("report"); written = value; },
+  });
+  assert.deepEqual(calls, ["snapshot", "cleanup", "report"]);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.failure, "deadline exceeded");
+  assert.equal(written.failure, "deadline exceeded");
+});
+
+test("a result-report write failure returns a controlled nonzero verdict", async () => {
+  const calls = [];
+  const verdict = await finishUpdateTest({
+    async runMain() { return { install: "installed" }; },
+    async readEvents() { return []; },
+    async cleanup() { calls.push("cleanup"); return undefined; },
+    message: error => error.message,
+    async report() { calls.push("report"); throw new Error("result path is a directory"); },
+  });
+  assert.deepEqual(calls, ["cleanup", "report"]);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.failure, "could not write update-test result report: result path is a directory");
+});
+
+test("a cleanup rejection still reaches report and cannot become success", async () => {
+  let written;
+  const verdict = await finishUpdateTest({
+    async runMain() { return { install: "installed" }; },
+    async readEvents() { return []; },
+    async cleanup() { throw new Error("cleanup deadline exceeded"); },
+    message: error => error.message,
+    async report(value) { written = value; },
+  });
+  assert.equal(verdict.ok, false);
+  assert.equal(written.cleanupFailure, "cleanup failed: cleanup deadline exceeded");
+});
+
 test("unsupported platforms cannot silently fall back to the Linux layout", () => {
   assert.throws(() => packagedUpdateConfigPath("/new-fixture", "freebsd"), /unsupported update-test platform/);
 });

@@ -47,9 +47,15 @@ export async function finishUpdateTest({ runMain, readEvents, cleanup, report, m
   let profileEvents = [];
   let receiptFailure;
   try { profileEvents = await readEvents(); } catch (error) { receiptFailure = `could not read update-test event receipt: ${message(error)}`; }
-  const cleanupFailure = await cleanup();
+  let cleanupFailure;
+  try { cleanupFailure = await cleanup(); } catch (error) { cleanupFailure = `cleanup failed: ${message(error)}`; }
   const finalFailure = [failure, receiptFailure, cleanupFailure].filter(Boolean).join("; ");
-  await report({ result, failure: finalFailure || undefined, cleanupFailure: cleanupFailure || undefined, profileEvents });
+  try {
+    await report({ result, failure: finalFailure || undefined, cleanupFailure: cleanupFailure || undefined, profileEvents });
+  } catch (error) {
+    const reportFailure = `could not write update-test result report: ${message(error)}`;
+    return { ok: false, failure: [finalFailure, reportFailure].filter(Boolean).join("; ") };
+  }
   return { ok: !finalFailure, failure: finalFailure || undefined };
 }
 
