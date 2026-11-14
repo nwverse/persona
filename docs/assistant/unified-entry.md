@@ -127,7 +127,16 @@ each count is its rows:
   visible while the To-dos page no longer counts it open (a parked task past 48 h, a seen review): the chip badge reads
   the row's `data-counts-open` flag, so the counted to-dos across both entries equal the To-dos header's "Not done".
 - Finished tasks (done, cancelled, accepted) are in neither; the board (**All**) has them. An answered card moves its task
-  back to In progress. An empty Needs you is grey and opens "All caught up".
+  back to In progress. An entry with nothing counted (no number on it), Needs you or In progress, is grey and still opens:
+  to the rows it lists uncounted, or to its line ("All caught up", "Nothing in progress"); the web drew such an In
+  progress in its working blue and ink until 2026-11-14.
+- **One home for an Agent several tasks list** (web, 2026-11-14): an Agent that more than one of the conversation's tasks
+  lists asks under one of them, the task the hub ties its session to (`Session.todo`), else the first that lists it. Its
+  cards are that task's row alone and are counted once; the other tasks do not wait on the user for them and are In
+  progress, unless a decision of their own keeps them in Needs you (without the Agent's cards). Before, each task listing
+  the Agent showed and counted the same approval. Android (#7531) and the Apple clients (#7532) split the old way until
+  they adopt it, and the shared cases (`spec/fixtures/entries`) get one for it once every client does; the whole-client
+  Needs you rule is #5974's.
 
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
 `assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`
@@ -168,9 +177,7 @@ rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
-the existing task details. On iOS the dispatch answer is one hand-off card per task (`DispatchHandoffCard`, #5569: title, New / Already Active / Resumed, when its Agent last moved and its state, ↗); on Android a small line naming what it dispatched ("Dispatched: <title> · Open", or each
-title when there are several); each opens that task's details, as its tray row does, not the tray (#3700). The web draws a hand-off card
-for each Agent instead, which opens that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
+the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
@@ -313,7 +320,11 @@ lines, and in the user's own color and alignment they read as something the user
   hand-off stays a folded line under it (#1668).
 - **Any other message of Persona's** (a rework, a later instruction, one whose task has no card in this chat) is one folded
   line on the left, styled like the answered and review lines: a send icon (a stop when Persona cut the turn short first),
-  "Sent to ‘xx’" (tap to open the task) and the first line; tapping the line opens the whole text with Copy.
+  "Sent to ‘xx’" (tap to open the task) and the first line; tapping the line opens the whole text with Copy. Persona
+  writes these in Markdown: the web's folded line is the first line with words, without its marks (`**`, `` ` ``, list
+  and heading marks), and the opened text is drawn as Markdown (bold, code, lists), never with raw marks showing, and
+  line by line as Persona's replies are: a single line break stays one (web usability audit 2026-11-14, item 7); Copy
+  copies the text as written.
 - What the user sends to a task (its card's Message, or the composer's routing label) has no `from` and keeps the bubble.
 - Older entries: migration `0441_feed_routed_from.sql` marks those Persona wrote before the field existed (see "Chat activity").
   Older apps ignore `from` and keep drawing the bubble.
@@ -342,19 +353,19 @@ lines, and in the user's own color and alignment they read as something the user
   (dismiss the sheet, switch to Agents, and open this Agent with the normal tab bar).
 - If a task has multiple Agents, add ⌄ beside the title. Tapping the title lists the task's Agents for switching (plus "Session Info"; web does the same, #3333).
 - Without an Agent (starting or failed to start), there is no chat page; the sheet uses its own header: state, task name, ⋯, Close.
-- **What a dispatch opens (#3700, #3711, contract in #3718, card since #5569)**: each dispatched task is one hand-off card
-  (iOS `DispatchHandoffCard`, in a `DispatchHandoffCards` list; no "Dispatched N" heading). These cards name only that dispatch's tasks,
+- **What a dispatch opens (#3700, #3711, contract in #3718, card since #5569, one card per Agent #5110)**: each Agent a dispatch started or a task took over is one hand-off card
+  (iOS `DispatchHandoffCard`, in a `DispatchHandoffCards` list; no "Dispatched N" heading). These cards name only that dispatch's Agents,
   never the whole In Progress tray. The ids are already on the client: a standalone `task` feed item's `ref` is the
   to-do and its `wake` (`created`, `active`, `resumed`) is the badge; a started plan's `tasks[].todo_id` identify its tasks
   (a plan's tasks are New). Live to-do titles override plan titles. A plan task without a to-do keeps its title as a card
   with no link, red "Didn't start: <reason>" from the plan task's `error`, and its per-task feed items do not add
-  duplicate cards. The second line is the lead Agent's `activity_at` (else `updated_at`) as a relative time and the
-  task's state (`TaskState`); before there is an Agent it says "Starting the agent", a task closed without one "Closed
-  before an Agent started", a task the list no longer has "This task no longer exists". The web draws one card per Agent
-  (merged within 120 s); iOS one per task, which is its lead Agent.
-  Apple renders this with `DispatchHandoffCards` and `DispatchedTasks`: on iPhone a live lead Agent is pushed using
+  duplicate cards. Agents linked within 120 s of the first are each a card; a later Agent is not on this hand-off.
+  The title is the session's, then the Agent row's, then the task's. The second line is that Agent's `activity_at` (else `updated_at`) as a relative time and
+  its state; before there is an Agent it says "Starting the agent", a task closed without one "Closed
+  before an Agent started", a task the list no longer has "This task no longer exists".
+  Apple renders this with `DispatchHandoffCards` and `DispatchedTasks`: on iPhone that Agent is pushed using
   `TasksStore.expand`, and Back returns to the same Assistant conversation without switching to Agents. On Mac the
-  task's own detail hosts the Agent chat, carrying the resolved `SessionKey` into its initial selection (validated
+  task's own detail hosts the Agent chat, carrying that `SessionKey` into its initial selection (validated
   against that task's active sessions); while no Agent is available, the detail shows its starting/failure state.
   The card is one accessibility element and button (`dispatch.task.<todo id>`); the badge never wraps.
   Open plans keep Start / Edit / Don't Start. No new hub field or setting is needed. A dispatch has no full task
@@ -394,7 +405,7 @@ page one setting away (#5424):
   - `/s/…` and `/todos?id=…` links in a reply open in the side panel on a wide window while it is chosen, else as those
     pages (a phone-sized window has no room beside the chat).
 - **The way back** (Full page). The Agent's page shows cindy's "Came from <conversation> · click to return" strip above the chat; ✕ puts it away. Clicking it, or Back, returns to the conversation where its chat was left: the conversation's history entry keeps the first line in view and its offset (`web/src/lib/handoff.ts`), and the chat opens there once instead of at its end.
-- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/lib/agent-open.ts`, `web/src/views/assistant/TaskPanel.tsx`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `TaskPanel.test.tsx`, `AgentOpenSetting.test.tsx`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`; browser: `web/e2e/handoff-cards.py` (both settings). iOS and Android keep the dispatched line and task details for now (#5110).
+- Code: `web/src/views/assistant/Handoff.tsx`, `web/src/lib/handoff.ts`, `web/src/lib/agent-open.ts`, `web/src/views/assistant/TaskPanel.tsx`, `web/src/views/chat/HandoffBack.tsx`. Tests: `Handoff.test.tsx`, `lib/handoff.test.ts`, `TaskPanel.test.tsx`, `AgentOpenSetting.test.tsx`, `HandoffBack.test.tsx`, `AssistantActionBar.test.tsx`; browser: `web/e2e/handoff-cards.py` (both settings). iOS and Android draw the same cards in the chat (#5110).
 
 ### Task board
 
@@ -588,7 +599,7 @@ Off by default: with no leaders, everything above is unchanged and only the main
 - **What a leader gets**: its context starts with "这是 leader 对话" (prompts `assistant/context.md`). A task it hands out with `task_plan` is supervised with the leader as `supervisor` (tasks handed out before it became one are not). The supervision loop routes each signal to its task's supervisor when that is a current leader (`digestTo`, `server/internal/assistant/supervise_leader.go`): the leader gets its own "📋 督办" message (when its conversation is gone, the main chat gets them instead) (the leader variant of `prompts/assistant/supervise.md`), with the same gathering, queueing, deduplication and folding as the main chat's. It reviews its tasks with `task_review` (accepted, rework with the same 2-round limit, cancelled); another side conversation cannot.
 - **What still goes to the main chat**: a leader's `needs_user` (the user gets the decision card as always, and the main chat gets an `escalated` entry with the leader's reason and recommendation, so it neither asks again nor loses track); any signal of a task waiting for the user; failed and retried starts (the start remedies, `task_start_screen` / `task_start_keys` / `task_retry`, stay main-chat tools); and tasks waiting for the user's nod to ship stay in the snapshot's approvals list. The main chat may still review a leader's task (for example after the user answered there); the task stays the leader's.
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools, apart from a task leader's restricted `task_plan` ("Task leaders" below); the main chat and leaders are not limited.
-- **In the clients** (#4331): the sidebars call leaders **常驻** (en "Pinned"; the code, API and events keep leader / direction) and list them under Persona chats after the main chat, each with the direction tree's Working and Waiting on you counts ("The direction tree"), followed by Recent, the most recently active other chats whoever opened them, the ones Persona opened with their source's mark (#4873, #5195; `docs/protocol/protocol.md` "Sidebar (same on every client)"); a conversation's menu has **设为常驻** / **取消常驻** (`…/make` / `…/end`). The clients read the tree again on its `directions` message, so an open sidebar follows a leader made or ended anywhere at once (a sixth leader once stayed hidden until a reload: the clients had read the leaders only when they loaded).
+- **In the clients** (#4331): the sidebars call leaders **常驻** (en "Pinned"; the code, API and events keep leader / direction) and list them under Persona chats after the main chat, each by its direction's name (on the web the conversation's header says the same name, not the hub's `MMDD | kind | ` title, and so offers no in-place rename of it: ⋯ Rename renames the conversation's own title, as the row's menu does; `useDirectionName`, `web/src/lib/direction-names.ts`) with the direction tree's Working and Waiting on you counts ("The direction tree"), followed by Recent, the most recently active other chats whoever opened them, the ones Persona opened with their source's mark (#4873, #5195; `docs/protocol/protocol.md` "Sidebar (same on every client)"); a conversation's menu has **设为常驻** / **取消常驻** (`…/make` / `…/end`). The clients read the tree again on its `directions` message, so an open sidebar follows a leader made or ended anywhere at once (a sixth leader once stayed hidden until a reload: the clients had read the leaders only when they loaded).
 - **Quiet by default** (#6595): a leader's patrol (定时巡检), supervision (督办) and relayed (`conversation_send`) rounds, with the leader's answers to them, fold into one openable line exactly like the main chat's background rounds (`docs/assistant/assistant.md` "Background rounds"), under the same `assistant.main_background_folded` switch. The owner's own messages and the answers to them, `ask_user` / `notify_user` rounds and `task_review` verdict and decision cards stay expanded; nothing is hidden from the model or the transcript, only from the default view. The hub's interject note (`prompts/assistant/interject.md`, title `插话`) never renders as an owner-bubble quote.
 - **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
 
@@ -802,7 +813,13 @@ the owner turns on by making a leader. Code: `server/internal/assistant/ask_rout
   the main chat). The 5 minutes do not count while the conversation holding the card is on a
   turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends. A
   conversation still on a turn an hour (`askBusyMax`) after the card came is counted as stuck instead, and the card
-  climbs all the same, so no card waits on a conversation for ever.
+  climbs all the same, so no card waits on a conversation for ever. With the hub's push tiering on (the
+  low-distraction switch, `docs/server/server.md`) a card never reaches the user on a timeout: past the last rung it
+  goes back to the task's supervisor once (the entry says so; the owner gets a held P1 notice for the briefing), then
+  stays with the last rung until it is answered or escalated; with the switch turned off it climbs on as before.
+  `ask_escalate` takes `why_owner` and `p0`: with the switch on only `irreversible`, `visible_to_others`,
+  `only_owner_knows` or `p0` push, the rest go to the Needs you list and the briefing without a push, bot card or
+  channel message.
 - **Limits**: the route lives on the pending card, not in the store. After a manager restart the card is back on the
   apps without a push (as every card is); its route is made again from the task's supervisor, so the supervisor can
   still answer it or escalate it. Whether the user was told of the card before the restart is not kept either, so a

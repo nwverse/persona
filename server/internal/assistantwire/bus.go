@@ -17,6 +17,10 @@ const (
 	CapabilityAgentSessionArchives = "agent_session_archives"
 	// CapabilityAgentNaming: ordinary full-user renames record manual intent before node dispatch.
 	CapabilityAgentNaming = "agent_naming.v1"
+	// CapabilityAgentAutoname: the manager names one Agent session with the model when the user asks
+	// (POST /api/v1/sessions/{mid}/{sid}/autoname; docs/protocol/protocol.md "Naming an Agent on request"). The hub
+	// lists the agent_autoname feature only while every manager that carries Agents names it.
+	CapabilityAgentAutoname = "agent_autoname"
 	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
 	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
 	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
@@ -193,6 +197,7 @@ var Routes = []string{
 	"GET /api/v1/sessions/archived",
 	"POST /api/v1/sessions/{mid}/{sid}/archive",
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
+	"POST /api/v1/sessions/{mid}/{sid}/autoname",
 	"POST /api/v1/assistant/conversations/{id}/archive",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
@@ -205,6 +210,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"GET /api/v1/assistant/dispatch-policy",
+	"PUT /api/v1/assistant/dispatch-policy",
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
