@@ -61,6 +61,16 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // may not have been read yet, or its read failed: then nobody knows how many agents there are, and the page says so
   // instead of counting none. `whole`: it holds every agent, so each computer's can be counted.
   const { status: list, whole } = useScopedAgentListStatus();
+  const hubAgentCounts = useStore((s) => s.sessionCounts?.active_agents_by_machine);
+  const agentCounts = useMemo(() => {
+    if (list !== "loaded") return undefined;
+    if (!whole) return hubAgentCounts && new Map(Object.entries(hubAgentCounts));
+    const byMachine = new Map<string, number>();
+    for (const s of agentSessions) {
+      if (stateOf(s) !== "offline") byMachine.set(s.machine_id, (byMachine.get(s.machine_id) ?? 0) + 1);
+    }
+    return byMachine;
+  }, [list, whole, hubAgentCounts, agentSessions]);
   const now = useNow(5000, counts.working > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
@@ -235,10 +245,8 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
                 {machines.map((m) => {
-                  const mine = m.online ? sessions.filter((s) => s.machine_id === m.id && stateOf(s) !== "offline") : [];
-                  // its agents' count only from a list that holds them all: "0 agents" for a list that never came, or
-                  // a count of the first pages only, would be wrong (the Machines page counts the complete list)
-                  const line = m.online ? [whole && t("home.machine_agents", { count: mine.length }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
+                  const count = agentCounts && (agentCounts.get(m.id) ?? 0);
+                  const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
                   const hub = hubLabel(m, machines);
                   const detail = { name: "machine" as const, mid: m.id };
                   return (

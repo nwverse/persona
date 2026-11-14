@@ -3,7 +3,7 @@
 // list: no hook of theirs is stood in for. Such a hub pushes no sessions (docs/protocol/protocol.md "Bounded Agents
 // lists"): Overview's agents and counts come from the list's first pages, or with several assistants from the complete
 // list. Until the list they come from is read, or when its read failed, the page says so (with Retry) instead of "Nothing
-// needs you" and "0 agents" on every computer; a computer's count comes only from a list that holds all its agents.
+// needs you" and "0 agents" on every computer; a computer's count comes from complete rows or the Hub's aggregate.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,7 +41,7 @@ const row = (session_id: string, state: Session["state"], patch: Partial<Session
 });
 // one working agent and one finished, seen: "1 working", and the computer runs 2
 const rows: Session[] = [row("m1", "working"), row("m2", "idle")];
-const counts = { total: rows.length, machine: { mac: 2 }, project: {}, group: {}, state: { working: 1, idle: 1 } as Record<string, number>, revision: "r1" };
+const counts = { total: rows.length, machine: { mac: 2 }, project: {}, group: {}, state: { working: 1, idle: 1 } as Record<string, number>, revision: "r1", active_agents_by_machine: undefined as Record<string, number> | undefined };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const several: ManagerList = { default: "assistant", managers: [{ id: "assistant", name: "助手", online: true }, { id: "work", name: "工作", online: true }] } as ManagerList;
 
@@ -104,6 +104,7 @@ const machineLine = () => host.querySelector("[data-machine-line]")?.textContent
 
 beforeEach(() => {
   page = "ok";
+  counts.active_agents_by_machine = undefined;
   full = "ok";
   more = false;
   roster = null;
@@ -204,11 +205,13 @@ describe("Overview on a hub that pages its Agents list, with one assistant", () 
     expect(machineLine()).toBe("2 个 Agent · macOS 26.1");
   });
 
-  it("gives the computer no count while the list has more pages, which may hold more of its agents", async () => {
+  it("shows the complete Agent count without downloading more pages", async () => {
+    counts.active_agents_by_machine = { mac: 2 };
     more = true;
     await hello();
-    expect(machineLine()).toBe("macOS 26.1");
-    expect(host.textContent).not.toContain("1 个 Agent");
+    expect(machineLine()).toBe("2 个 Agent · macOS 26.1");
+    expect(reads.page).toBe(1);
+    expect(reads.full).toBe(0);
     // the summary is the hub's count of every agent, not of the page
     expect(summaryText()).toBe("1 个工作中。");
   });
