@@ -2,6 +2,35 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## What a switch between the shell's pages redraws, and what a UI test adds to it (#5438)
+
+Both pages stay built, so a switch should only move them. Measured with `-perfCounts YES`, one switch ran the composer
+bar's body about 30 times, the Agents list's 3–4 times and the chat page's 2–3 times. Four causes, each a general trap:
+
+- **A window frame in `@State`.** `frame(in: .global)` changes on every frame a page slides. Kept in `@State` (the
+  composer's 「+」, for the panel it opens), it redraws its view on each of them, menus and text field included. Keep a
+  frame only an action reads in an unobserved object, or go by sizes that a slide leaves alone (the row's width, the
+  page's). A named coordinate space set on a `List` is not seen from its rows: they fall back to the window's.
+- **`@Environment(\.dismiss)` on a page.** SwiftUI makes a new `DismissAction` when the presentation around the view
+  changes, and a page going behind or coming back counts. Declare it in a small view that stores it (`DismissReader`).
+- **Observed values read for a side effect.** The Agents list read the app's tab, the strip's `moving` and the chat on
+  screen in its body to decide whether it is out of sight. A clear view in its background reads them now.
+- **An `@State` initial value that reads observed state.** It is evaluated in the parent's body, so the parent follows
+  it: `ShellView`'s read of the app's tab made `RootView` run on every switch.
+
+`let _ = Self._printChanges()` in a local build, with the app's console from `xcrun simctl launch --console-pty`, names
+what changed for each run of a body. It is only sometimes exact about which observed key path it was; the counts are.
+
+A list row has a view graph of its own, which works its size out again on each frame the row moves on screen. A
+`ViewThatFits` in a row measures every candidate each time: wrap the candidates in `MeasuredOnce`.
+
+**XCTest costs the app main-thread time.** `element.tap()` and every `waitForExistence` take an accessibility snapshot
+of the app on its main thread: 55–70 ms each with the `assistant` perf suite's data. In
+`PerfAssistantTests/testTabSwitchAssistantAgents` they were about three quarters of the main thread's busy time
+(`sample` during the test), and several of the test's hitches came while nothing moved. Measure an animation with the
+app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
+the tapping test for the tap's own path.
+
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
 A Debug build installed on an iPhone crashed every time it opened on Agents: `EXC_BAD_ACCESS` in the main thread's stack
@@ -267,6 +296,12 @@ and value is clean. For generic IP/email checks, exclude only container referenc
 objects, bounds and references; malformed layouts keep raw scanning. Keep configured private-value matching on the
 original bytes, decode unreachable string objects too, and still scan data, padding and trailing bytes. Do not fix
 this by changing a locale, allowing an address or rearranging the generated plist.
+
+## Rust dependency panic paths in a Release archive (#7394)
+
+- Rust dependencies carry their source paths in panic metadata, so an Apple XCFramework can include the build Mac's home and Cargo registry address even when the app has no such string in its source. `check_bundle_privacy.py` correctly rejects that main executable.
+- Set `--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona` in `native/app-core/scripts/build-apple.sh` for every Apple target. This changes only debug/panic paths, not the runtime code or the privacy scanner's exemptions; verify the actual exported archive with `check_bundle_privacy.py`.
+- A successful archive does not prove the package can ship: the bundle privacy scan runs after it, before export and upload. Keep that gate.
 
 ## Device names in Siri intent descriptions (#3113)
 
@@ -1088,6 +1123,8 @@ Use an invalidation revision as the task key and handle the flag after completio
 - With class-valued dictionaries (`CGMutablePath`), `dict[k, default: X].method()` only reads and never inserts the default; modifications are lost (entire terminal border lines disappeared).
 - Trailing closures match the first closure parameter positionally. With two optional closures (`SpaceMenuItems.rename`, `open`),
   inserting a new one first silently reroutes existing `SpaceMenuItems(group:) { rename }` calls. Add optional closures last and label call sites.
+  For a public component with older single and multiple trailing-closure callers, keep its original initializer and add a separate,
+  explicitly labeled overload; `ApprovalCardTests.legacyTrailingClosuresStayOnSubmit` checks both forms.
 - In Chinese locale, SwiftUI `.dateTime.hour(.twoDigits(amPM: .omitted))` uses 12-hour time, showing 17:00 as 05:00; for 24-hour times use fixed `HH:mm` (`AssistantScheduleText.hm`).
 - Types in `apple/Shared` default to MainActor isolation; new pure-data enums used by `nonisolated` structs need `nonisolated`, otherwise isolated-conformance errors result.
   PersonaTests has no default isolation: mark test structs using app static methods, properties or key paths `@MainActor` (like `ChatStoreTests`),
@@ -2507,3 +2544,15 @@ that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder 
   simulator (iOS 27) and on some on an iPad one; a second tap a few seconds later always went through. Turning
   autocorrection off did not change it. `FilesActionsTests`, which takes a screenshot between typing and tapping, saw it
   once. Tap again while the alert stays up, then check what reached the mock; a single tap reads as an app bug.
+
+## A row opened at the oldest end jumped 100 pt: the pin let go too early (2026-11-14, #7237)
+
+- At the oldest end of the chat the list rests about 100 pt past the end its own arithmetic gives (`within`), and UIKit sets
+  it back to that end once the content size follows a pass after the row grew. A held row was clamped to `within`, so it went
+  up by the difference, and the hold ended on SwiftUI's first report of the row, which still said it had not moved (SwiftUI
+  reports the position its own layout gives, ahead of the scroll view). Your own long message and a work line both did it.
+- `ChatPin` now remembers how far past the end the list was when the hold began (`Held.slack`) and allows it, and a hold
+  does not end until the row has said its content grew and the list is where the hold wants it. Evidence: per-frame row top
+  (`UnfoldTrace`) constant on opening and folding at the oldest end; `UnfoldTests.testWorkLineAtTheOldestEnd` with
+  `MOCK_LONG_HISTORY=oldest` and `-showOldest`. A stale report is not proof the list is there: also read the offset
+  (`-scrollTrace`, the `why` column of the pin says how the last hold ended).

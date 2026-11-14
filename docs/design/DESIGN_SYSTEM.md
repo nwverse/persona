@@ -490,7 +490,9 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Dark at the top, and Share (the picture), Save, Copy and Share Text along the bottom; the card is 390 pt wide, wider for
   tables, code and very tall cards, at most 520 pt (`ShareCardWidth`). Android has no Forward: on Glass the message
   menu's Share opens the page (`MessageSharePage`, Light / Dark in the top bar, the picture drawn from the card's
-  `GraphicsLayer`); Brief and Board share the words.
+  `GraphicsLayer`); Brief and Board share the words. What you see is what you share: a reply's cards are drawn as the
+  chat draws them, with nothing to use, and a card that only draws live is its fallback, never its JSON (#7261,
+  `docs/assistant/assistant-views.md` "Sharing a reply as a picture").
 - A message sent from here and not in the transcript yet (iOS `PendingBubble`): drawn as a sent bubble at once, with a
   mark before it, level with its last line: a quiet clock while it sends; a clock while it waits for the network, whose
   small menu is Retry Now and Don't Send, with "Sends when connected" under the bubble; a red mark once it failed, with
@@ -1478,7 +1480,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   password card it is answered on the card only: no quick answer on a row, a notification, the Live Activity, the watch or
   Siri, and no key approves it (`docs/extensions/secret-providers.md` "In the apps").
 - **Task-review decisions (web, #4808)**: reuse the answerable decision row, its recommendation tag, the `Button` action group and the draft's Later / Don't handle labels. The two secondary actions stay on a separate footer so they never displace the recommended choice; the footer follows the tray's scrolling edge and uses the existing 44 px button minimum. Later defers only this browser session and this review round. Don't handle persists a dismissal of this exact review, offers receipt-scoped Undo, leaves the task open and takes no option; a dismissed review cannot take its timed default. A new review is visible again. The web hides the row and updates its count optimistically; a confirmed same-round dismissal stays hidden across reads and reloads, while a failed write restores the row with an error. An old Agent runtime error does not override dismissal or Later for that review; an actual Agent input request keeps its home visible. Old reviews without an acceptance ask show their original explanation and these same controls, never invented choices or an acceptance button with a made-up round. This is a requested correction to the existing row, not a new style or setting.
-- **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one.
+- **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request. On iOS, a long assistant `ask_user` or hook question form's choices (or its review) own one vertical scroll while Previous / Next / Submit stay outside it and visible in the actual pending-card area, in both interface styles. One such card never needs a second, outer scroll; that is reserved for moving between several cards. Dragging through choices only scrolls and never picks one. When the interaction advertises `can_cancel`, a visible **Skip** text action with at least a 44 pt target leads that action row, on the review too; it is not the card's fold mark. Skip sends only `{"cancel":true}`, is disabled while an answer or another Skip is in flight, and leaves the card and its picks in place with the error and Retry on failure. Success removes the card and gives the receipt **Question closed without an answer**. Persona's own main-conversation `ask_user` has no terminal handoff; an Agent's question keeps it. Cards without `can_cancel` have no Skip and keep their existing layout.
 - **A question the assistant answered** (iOS `DelegatedCard`, web `Delegated.tsx`, Android on Glass): no longer a pending request, so it is counted nowhere and has no Needs you row. The newest one for the Agent is a card over its chat's composer, after the Agent's own cards, until its × puts it away: "Answered by the assistant", each question with the answer as it is now, "Why: …", and Change Answer while the chat takes messages. Change Answer's sheet starts from the answers so far and sends only what changed, as a message to the Agent. Session Info lists every one with the same body and Change Answer.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 
@@ -1650,6 +1652,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 - Text Size (Small / Standard / Large) moves the system's size first and the cap comes after: the interface is `min(moved size, xxxLarge)`, reading content is the moved size. At the system's xxxLarge and above, Large has no effect on the interface (it is at the cap) and still adds a step to reading content; Small always takes a step off both.
 
 - Text uses `Theme.Font` levels only. Shapes use `scaledFrame`.
+- A heading's counts and an agent row's time sit beside the name, and go under it when the name would keep less than half the width (`BesideOrUnder`: `CountsHeading`, `TimeBesideOrUnder`); the choice is by measured width, not text size.
 - Rows with name plus chips stack at accessibility sizes (`NameWithChips`). Use `firstFittingText` when several candidate labels exist.
 - A date, or a date and a time, in a form row is a `FormDatePicker` (`apple/Persona/DesignSystem/FormDatePicker.swift`, #6108): the system's compact picker beside its label at the usual sizes; at the accessibility sizes, where the compact date and time are wider than the row and were cut off, the label on its own line and a wheel under it across the row (the wheel's words don't grow; that is the system's wheel). A sheet holding one sets its height with `formSheetDetents`, which opens it full height at those sizes. Used by New To-Do, the to-do's page (Due, Remind At) and "Change Due Date…"; new date rows use it too.
 - Caps are allowed for glyphs in fixed-size buttons and for top bars that must fit a small iPhone. They must be named, and the control must keep a 44 pt hit area.
@@ -2532,6 +2535,19 @@ as finished without verifying a star, and opens GitHub outside the app.
   and waits three days. It stays away while requests or sessions need the user, or a search is active.
 - **Onboarding toast**: once per device on Android's setup **Done** (proposed iOS **Get started**), unless Star was
   already tapped. It uses the platform's timed toast and action.
+
+## Knowledge map outline (#7251)
+
+The web's knowledge map is a two-sided mind map; on the iPhone it is turned upright into an outline (`KnowledgeMapView`,
+logic in `KBMap`), which the owner chose over a pinch-to-zoom map that, fitted to a phone, drew its words at 5–8 pt. Rows
+are list rows: a topic (a dot in its branch's tone: accent, green, orange in turn), its subtopics and its points (the kind
+as a `KBPill`, Pitfall and Open question in `Theme.caution`), each level indented by `Theme.Space.l` with a rail in the tone.
+Folding uses the app's fold chevron (`Theme.Icon.disclosure`, turned when open, a 44 pt target) rather than the web's
+round +/−, as every other fold on iOS. What starts open is the web's: the six biggest topics onto their subtopics, every
+subtopic closed, more than three loose points beside subtopics under one closed Other. Tapping a point opens its sheet,
+a topic or a project its page. From `Theme.Size.knowledgeMapTwoColumns` of width (any iPad in landscape, a 13-inch one upright beside its
+sidebar) the outline sits beside a detail column for the selected node, the web map's side panel.
+Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
 
 ## Repository link preview
 

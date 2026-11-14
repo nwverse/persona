@@ -199,6 +199,32 @@ struct ScreenVideoTests {
         link.want(nil)
     }
 
+    /// ⋯ › Quality only once the helper says it has quality tiers (#6396): the fixture's helper, from before them, says
+    /// nothing, so none is offered; a hello with `features: ["tiers"]` offers it.
+    @MainActor @Test func qualityWaitsForAHelperWithTiers() async throws {
+        let link = ScreenVideoLink()
+        let t = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        link.transport = { _ in t }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { link.showing }
+        #expect(!link.tiers)
+        guard case var .hello(h) = try Self.messages()[0] else { Issue.record("the fixture starts with hello"); return }
+        h.features = ["tiers"]
+        t.feed(Array(ScreenVideoMessage.hello(h).framed()))
+        try await Self.until { link.tiers }
+        link.want(nil)
+    }
+
+    /// ⋯ › Quality needs this app's side of the tiers too (#6396): a release can pair a helper with tiers and an app
+    /// without them, and then nothing is offered. The iPhone's tier policy turns `appSupported` on.
+    @Test func qualityAlsoWaitsForThisAppsTiers() {
+        #expect(!ScreenTiers.appSupported, "on with the iPhone's tier policy (#6396), not before")
+        #expect(!ScreenTiers.offered(helperHasTiers: true))
+        #expect(ScreenTiers.offered(helperHasTiers: true, appSupported: true))
+        #expect(!ScreenTiers.offered(helperHasTiers: false, appSupported: true))
+    }
+
     /// Retries that fail as the first drop did keep the same line: it never blinks off and on between them.
     @MainActor @Test func aRetryThatFailsKeepsTheLineSteady() async throws {
         let link = ScreenVideoLink(backoff: .init(first: .milliseconds(40), longest: .milliseconds(80)))
