@@ -582,7 +582,12 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   Mac hasn't allowed video yet (`permission` missing, so no stream is opened).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
-  and decode are all known (a helper before `timing` gives the phone's numbers only).
+  and decode are all known (a helper before `timing` gives the phone's numbers only). Over VNC it shows RFB's bitrate
+  and frame rate and, on a line of its own, **Round trip to the hub** (#6558): while the overlay is shown and the app is
+  in front, the page pings the app's own connection to that Mac's hub every 2 s (`LiveConnection.roundTrip`, the
+  heartbeat's kind of ping) and shows the median of the last 5 from the last 20 s (`HubRoundTrips`). It is the same leg
+  the web overlay times ("Connection stats on the web"), and like it never sits on the first line. Bitrates have two
+  decimals under 1 Mbps, one above, as on the web.
 - **Permission and login**: only input on that Mac answers macOS's Screen Recording question — someone at the Mac, or
   the user's own taps through Screen Sharing. Nothing in Persona answers it, and Agents' computer-use calls can't target
   System Settings' Privacy & Security or the system alert. Video needs the same login as Screen Sharing (the `pair`
@@ -657,8 +662,17 @@ iPhone's side comes next.
   candidate `RouteEligibility` allows on that interface (`NWParameters.requiredInterface`, TLS 1.3 with the ALPN, the
   certificate accepted only by its SHA-256 from `paths`) as `ProbePlan` says (at once, then 30 s doubling to 5 min after a
   failure, again at once when the phone's networks change), and hands what connects to the session, which pings and
-  measures every route and runs the policy once a second. In this stage the picture and input stay on the relay; the
-  choice is only logged (category `screen-link`, route kinds and reasons, never addresses).
+  measures every route (the one in use every second, the others every two) and runs the policy once a second.
+- **Moving** (still only with `-showScreenRoutes`): when the policy picks another route, every live channel moves
+  there (to its own relay for the relay): `use` with what the phone has of each, and nothing more goes out on it until
+  the node's `resumed` says what the node has; each side then sends on from there, so RFB loses and repeats nothing,
+  and a stale video backlog is dropped for a keyframe on the node's side. A direct route that fails, or stays silent for
+  1.5 s with a ping out, puts the channels back on their relays at once (the node does the same on its side). A relay
+  that drops while a direct route carries the session doesn't end it: the session asks the app to open the relay again
+  (`attach=1`), which attaches with the token and is the channel's relay again, so the hub keeps the last word. A new
+  video stream joins the route in use. Each move is a `PathChange` (the stream's first route is one too, `start`):
+  `ScreenVideoLink` sends `update.path` to Persona Screen, keeps it as `route` and calls `onPathChange`, the quality
+  tiers' hook (#6396). Logs (category `screen-link`) carry route kinds and reasons, never addresses.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
