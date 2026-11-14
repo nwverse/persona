@@ -993,7 +993,8 @@ export class ClientModel {
     if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
   }
-  async answer(option: string, values: Record<string, Object>, expected?: Decision): Promise<void> {
+  async answer(option: string, values: Record<string, Object>, expected?: Decision, admit?: () => boolean): Promise<void> {
+    if (admit && !admit()) return;
     if (!this.canApprove()) return;
     const row = this.selected, target = this.target();
     let decision = expected ? this.pendingDecisions.find((item: Decision): boolean => item.id === expected.id && item.raw === expected.raw) : this.decision;
@@ -1014,12 +1015,15 @@ export class ClientModel {
     const current = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo &&
       (this.pendingDecisionTarget === target ? this.pendingDecisions.some((item: Decision): boolean => item === decision) :
         !this.pendingDecisionTarget && this.pendingDecisions.length === 0 && this.decision === decision);
+    const ownedDecision = decision, previousState = this.operationState; let retiredBeforeSend = false;
+    const dispatch = (): boolean => { const allowed = current() && ownedDecision.status === 'pending' && ownedDecision.raw === request.raw && this.canApprove() && (!admit || admit()); if (!allowed) retiredBeforeSend = true; return allowed; };
     decision.status = 'pending';
     if (!personaQuestion) this.operationState = 'pending';
     try {
-      await repo.resolve(request, option, values, util.generateRandomUUID());
+      await repo.resolve(request, option, values, util.generateRandomUUID(), dispatch);
     } catch (error) {
       if (!current()) return;
+      if (retiredBeforeSend) { decision.status = 'open'; if (!personaQuestion) this.operationState = previousState; return; }
       decision.status = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'open';
       if (!personaQuestion) this.operationState = ['pending', 'unknown'].includes(decision.status) ? decision.status : 'failed';
       this.failure(error as Error);

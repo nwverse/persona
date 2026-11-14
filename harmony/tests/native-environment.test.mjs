@@ -7,10 +7,12 @@ const screen = { foldable: false, region: undefined, failure: false };
 globalThis.__personaNativeEnvironment = screen;
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === '@kit.AbilityKit') return { url: 'native-environment:ability', shortCircuit: true };
     if (specifier === '@kit.ArkUI') return { url: 'native-environment:display', shortCircuit: true };
     return next(specifier, context);
   },
   load(url, context, next) {
+    if (url === 'native-environment:ability') return {format:'module',shortCircuit:true,source:'export const ConfigurationConstant={ColorMode:{COLOR_MODE_DARK:0,COLOR_MODE_LIGHT:1}};'};
     if (url === 'native-environment:display') return { format: 'module', shortCircuit: true, source: `
       const s = globalThis.__personaNativeEnvironment;
       export const window = {AvoidAreaType:{TYPE_NAVIGATION_INDICATOR:3}};
@@ -48,4 +50,9 @@ test('window geometry and native navigation avoidance update together and listen
  bottom=80;handlers.get('avoidAreaChange')({type:3,area:{}});assert.equal(environment.safeBottomPx,1160);
  rect={top:140,height:1200};handlers.get('windowRectChange')({rect});assert.equal(environment.safeBottomPx,1260);
  environment.unbindWindow();assert.equal(handlers.size,0);
+});
+
+
+test('native color mode follows resolved configuration without resetting for unrelated updates',()=>{
+ const environment=new NativeEnvironment();environment.update({colorMode:0});assert.equal(environment.dark,true);environment.update({fontSizeScale:2});assert.equal(environment.dark,true);environment.update({colorMode:1});assert.equal(environment.dark,false);
 });

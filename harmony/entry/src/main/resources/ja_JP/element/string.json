@@ -4603,6 +4603,10 @@
     {
       "name": "assistant_detail_brief",
       "value": "概要"
+    },
+    {
+      "name": "interaction_question_cancel",
+      "value": "質問を取り消す"
     }
   ]
 }

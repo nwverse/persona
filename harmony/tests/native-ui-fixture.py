@@ -27,6 +27,7 @@ LEAD_SESSION = 'fixture-followup'
 SCENARIOS = ('normal', 'question', 'pending', 'failed')
 BASE_TIME = '2026-11-14T03:00:00.000Z'
 INBOX_ITEM_ID = 'fixture-inbox'
+TRANSCRIPT_HISTORY = 'fixture-transcript-v1'
 
 
 def load_transport_helpers():
@@ -60,20 +61,27 @@ def fixture_certificate(runtime: Path):
     return key_path, cert_path, pin
 
 
-def interaction():
+def interaction(long_form=False):
+    questions = [{
+        'question': 'Which synthetic view should open next?',
+        'header': 'Next view', 'multi_select': False,
+        'options': [{'label': 'Plan card', 'description': 'Open the editable synthetic plan'},
+                    {'label': 'Receipt card', 'description': 'Open a synthetic receipt'}],
+    }]
+    if long_form:
+        questions = [{
+            'question': question, 'multi_select': index == 0,
+            'options': [
+                {'label': 'Keep every existing conversation draft and return to the original source',
+                 'description': 'Use the native layout while preserving the selected request and its local answers.'},
+                {'label': 'Review a long alternative before explicitly confirming the current request',
+                 'description': 'This synthetic option checks wrapping and the native scroll area at large text sizes.'},
+            ],
+        } for index, question in enumerate(('First fixture question', 'Second fixture question', 'Last fixture question'))]
     return {
         'id': 'fixture-question', 'machine_id': MACHINE, 'session_id': MAIN,
         'manager': MANAGER, 'status': 'open', 'kind': 'question', 'tool_name': 'ask_user',
-        'revision': 'question-revision-1', 'resumable': True,
-        'prompt': 'Choose a fixture response',
-        'questions': [{
-            'question': 'Which synthetic view should open next?',
-            'header': 'Next view', 'multi_select': False,
-            'options': [
-                {'label': 'Plan card', 'description': 'Open the editable synthetic plan'},
-                {'label': 'Receipt card', 'description': 'Open a synthetic receipt'},
-            ],
-        }],
+        'resumable': True, 'can_cancel': True, 'questions': questions,
     }
 
 
@@ -172,7 +180,18 @@ def todos():
     }
 
 
-def session_rows(recovered_todos=()):
+def optional_bool(control, key):
+    value = control.get(key)
+    return value if type(value) is bool else None
+
+
+def _lead_working(recovered_todos=(), agent_working=None):
+    if type(agent_working) is bool:
+        return agent_working
+    return 'fixture-todo-interrupted' in recovered_todos
+
+
+def session_rows(recovered_todos=(), agent_working=None):
     capabilities = {
         'read': True, 'send': True, 'approve': True, 'interrupt': True,
         'terminal': True, 'attach': True, 'modes': True,
@@ -184,8 +203,9 @@ def session_rows(recovered_todos=()):
         'turn_error': 'Synthetic run stopped for UI recovery review',
         'turn_error_kind': 'execution_error', 'updated_at': BASE_TIME,
     }
+    working = _lead_working(recovered_todos, agent_working)
+    lead['state'] = 'working' if working else 'idle'
     if 'fixture-todo-interrupted' in recovered_todos:
-        lead['state'] = 'working'
         lead.pop('turn_error', None)
         lead.pop('turn_error_kind', None)
     return [
@@ -200,7 +220,7 @@ def session_rows(recovered_todos=()):
     ]
 
 
-def conversations(recovered_todos=()):
+def conversations(recovered_todos=(), agent_working=None):
     capabilities = {
         'read': True, 'send': True, 'approve': True, 'interrupt': True,
         'terminal': True, 'attach': True, 'modes': True,
@@ -213,28 +233,58 @@ def conversations(recovered_todos=()):
          'permission_modes': ['default', 'plan'], 'efforts': ['low', 'medium', 'high']},
         {'id': LEAD_SESSION, 'session_id': LEAD_SESSION, 'machine_id': MACHINE,
          'manager': MANAGER, 'title': 'Second synthetic conversation',
-         'state': 'working' if 'fixture-todo-interrupted' in recovered_todos else 'idle',
+         'state': 'working' if _lead_working(recovered_todos, agent_working) else 'idle',
          'source_kind': 'native', 'capabilities': capabilities},
     ]
 
 
-def transcript(after_seq=None):
-    items = [
-        {'id': 'fixture-user-1#0', 'seq': 1, 'role': 'user', 'kind': 'text',
-         'text': 'Show the synthetic UI fixture overview.'},
-        {'id': 'fixture-assistant-2#0', 'seq': 2, 'role': 'assistant', 'kind': 'text',
-         'text': 'This conversation contains synthetic plan and receipt examples.'},
-    ]
+def _reading_item(seq):
+    return {
+        'id': f'fixture-reading-{seq}#0', 'seq': seq,
+        'role': 'user' if seq % 2 == 0 else 'assistant', 'kind': 'text',
+        'text': f'Fixture reading segment {seq}: this synthetic paragraph stays fixed across every response. '
+                'It is intentionally long enough to wrap over several native transcript lines and contains no personal information.',
+    }
+
+
+def transcript(after_seq=None, control=None, before_seq=None):
+    control = control if isinstance(control, dict) else {}
+    reading_case = optional_bool(control, 'reading_case') is True
+    if reading_case:
+        all_items = [_reading_item(seq) for seq in range(40, 60)]
+        if optional_bool(control, 'reading_prepend') is True:
+            all_items = [_reading_item(seq) for seq in range(20, 40)] + all_items
+        if optional_bool(control, 'reading_append') is True:
+            all_items += [_reading_item(seq) for seq in range(60, 65)]
+    else:
+        all_items = [
+            {'id': 'fixture-user-1#0', 'seq': 1, 'role': 'user', 'kind': 'text',
+             'text': 'Show the synthetic UI fixture overview.'},
+            {'id': 'fixture-assistant-2#0', 'seq': 2, 'role': 'assistant', 'kind': 'text',
+             'text': 'This conversation contains synthetic plan and receipt examples.'},
+        ]
+
+    items = all_items
     if after_seq is not None:
         items = [item for item in items if item['seq'] > after_seq]
+    elif before_seq is not None:
+        items = [item for item in items if item['seq'] < before_seq]
+    items.sort(key=lambda item: item['seq'])
+    if after_seq is not None:
+        to_seq = max(after_seq, items[-1]['seq'] if items else after_seq)
+    else:
+        to_seq = items[-1]['seq'] if items else 0
     result = {
         'items': items,
-        'history': 'fixture-transcript-v1', 'to_seq': 2,
+        'history': TRANSCRIPT_HISTORY,
+        'to_seq': to_seq,
         'backlog': False, 'has_more': False, 'more_after': False,
     }
-    # A latest-items response has no lower boundary. Continuation responses
-    # describe only the rows actually returned, so gap recovery advances.
-    if after_seq is not None and items:
+    # Like the Hub span, an after cursor is the lower continuation boundary,
+    # even when the first returned row is the following sequence or is absent.
+    if after_seq is not None:
+        result['from_seq'] = after_seq
+    elif before_seq is not None and items:
         result['from_seq'] = items[0]['seq']
     return result
 
@@ -467,19 +517,23 @@ def main():
                     {'id': MANAGER, 'name': 'Assistant', 'default': True, 'role': 'assistant'},
                 ]})
             if path == '/api/v1/sessions':
-                return self.tracked_reply(method, path, 200, {'sessions': session_rows(snapshot['recovered_todos'])})
+                agent_working = optional_bool(state.control(), 'agent_working')
+                return self.tracked_reply(method, path, 200, {
+                    'sessions': session_rows(snapshot['recovered_todos'], agent_working),
+                })
             if path == '/api/v1/machines':
                 return self.tracked_reply(method, path, 200, {'machines': [
                     {'id': MACHINE, 'name': 'Test computer', 'title': 'Test computer',
                      'manager': MANAGER, 'os': 'mac', 'online': True, 'trust': 'trusted'},
                 ]})
             if path == '/api/v1/assistant':
+                agent_working = optional_bool(state.control(), 'agent_working')
                 return self.tracked_reply(method, path, 200, {
                     'main': MAIN, 'main_machine_id': MACHINE, 'machine_id': MACHINE,
-                    'conversations': conversations(snapshot['recovered_todos']),
+                    'conversations': conversations(snapshot['recovered_todos'], agent_working),
                 })
             if path == '/api/v1/interactions':
-                values = [] if snapshot.get('question_resolved') or scenario != 'question' else [interaction()]
+                values = [] if snapshot.get('question_resolved') or scenario != 'question' else [interaction(state.control().get('question_case') == 'long')]
                 return self.tracked_reply(method, path, 200, {'interactions': values})
             if path == '/api/v1/interactions/history':
                 return self.tracked_reply(method, path, 200, {'interactions': []})
@@ -513,13 +567,22 @@ def main():
             if path.startswith('/api/v1/sessions/') and path.endswith('/items'):
                 query = parse_qs(urlsplit(self.path).query)
                 after_values = query.get('after_seq', [])
+                before_values = query.get('before_seq', [])
                 after_seq = None
+                before_seq = None
                 if after_values:
                     try:
                         after_seq = max(0, int(after_values[0]))
                     except ValueError:
                         after_seq = None
-                return self.tracked_reply(method, path, 200, transcript(after_seq))
+                elif before_values:
+                    try:
+                        before_seq = max(0, int(before_values[0]))
+                    except ValueError:
+                        before_seq = None
+                return self.tracked_reply(method, path, 200, transcript(
+                    after_seq, state.control(), before_seq,
+                ))
             if path.startswith('/api/v1/ops/'):
                 op_id = path.rsplit('/', 1)[-1]
                 return self.tracked_reply(method, path, 200, state.operation(op_id))
@@ -552,7 +615,7 @@ def main():
 
         def post_request(self):
             path = self.parsed_path()
-            self.read_body()
+            payload = self.read_body()
             scenario = state.scenario()
             if path == '/api/v1/auth/tokens':
                 if self.headers.get('Authorization') != 'Bearer ' + PAIRING_TOKEN:
@@ -564,10 +627,25 @@ def main():
                 return self.tracked_reply('POST', path, 401, {'code': 'unauthorized'})
             if path == '/api/v1/interactions/fixture-question/resolve':
                 operation_id = self.operation_id()
+                try:
+                    body = json.loads(payload)
+                except (ValueError, UnicodeDecodeError):
+                    return self.tracked_reply('POST', path, 400, {'code': 'invalid_json'})
+                if not isinstance(body, dict):
+                    return self.tracked_reply('POST', path, 400, {'code': 'invalid_json'})
+                resolution_kind = 'cancel' if body.get('cancel') is True else 'answer'
+                if resolution_kind == 'answer':
+                    expected = [item['question'] for item in interaction(state.control().get('question_case') == 'long')['questions']]
+                    answers = body.get('answers')
+                    if not isinstance(answers, dict) or set(answers) != set(expected) or any(not isinstance(answers[key], str) or not answers[key].strip() for key in expected):
+                        return self.tracked_reply('POST', path, 400, {'code': 'required'}, self.operation_id())
                 response = {'interaction': {'id': 'fixture-question', 'status': 'resolved'}}
+                def resolve_question():
+                    state.data['question_resolved'] = True
+                    state.data.setdefault('question_resolution_kinds', []).append(resolution_kind)
                 status, response, _replay = state.begin_operation(
                     operation_id, path, response,
-                    apply=lambda: state.data.__setitem__('question_resolved', True),
+                    apply=resolve_question,
                     admit=lambda: scenario == 'question' and not state.data.get('question_resolved'),
                     denied_status=409, denied_response={'code': 'request_updated'},
                 )

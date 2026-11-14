@@ -1,9 +1,11 @@
+import { ConfigurationConstant } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 
 /** Native application configuration, shared by workspace and detached views. */
 @ObservedV2
 export class NativeEnvironment {
+  @Trace dark: boolean = false;
   @Trace fontScale: number = 1;
   @Trace safeBottomPx: number = 0;
   private windowRef: window.Window | undefined;
@@ -43,6 +45,8 @@ export class NativeEnvironment {
     } catch (_) { this.nativeHoverAvailable = false; }
   }
   update(configuration: Configuration): void {
+    if (configuration.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK) this.dark = true;
+    else if (configuration.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT) this.dark = false;
     this.refreshFoldCapability();
     const scale = configuration.fontSizeScale;
     if (typeof scale === 'number' && Number.isFinite(scale) && scale > 0) this.fontScale = scale;

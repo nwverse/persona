@@ -4603,6 +4603,10 @@
     {
       "name": "assistant_detail_brief",
       "value": "任务简述"
+    },
+    {
+      "name": "interaction_question_cancel",
+      "value": "取消问题"
     }
   ]
 }

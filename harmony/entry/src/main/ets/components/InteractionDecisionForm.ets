@@ -1,3 +1,6 @@
+import { LengthMetrics } from '@kit.ArkUI';
+import { QuestionDraft } from '../models/QuestionWorkspace';
+import { Symbols } from '../design/Symbols';
 import { ClientModel } from '../models/ClientModel';
 import { Decision, DecisionField, Wire } from '../models/Wire';
 import {
@@ -19,6 +22,12 @@ export struct InteractionDecisionForm {
   @Require @Param request: Decision;
   @Param readOnly: boolean = false;
   @Param availableHeight: number = 0;
+  @Param pinFooter: boolean = false;
+  @Param draft: QuestionDraft | undefined = undefined;
+  @Param draftSession: string = '';
+  @Event admission: () => boolean = (): boolean => true;
+  @Event onLater: () => void = (): void => {};
+  @Event onResolved: () => void = (): void => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Local selected: string = '';
   @Local selectedScreen: string = '';
@@ -30,11 +39,13 @@ export struct InteractionDecisionForm {
   @Local headerHeight: number = 0;
   @Local footerHeight: number = 0;
   @Local textValues: Record<string, string> = Wire.payload([], []) as Record<string, string>;
+  @Local questionOptions: Record<string, InteractionChoice[]> = {};
   @Local questionPicks: Record<string, string[]> = Wire.payload([], []) as Record<string, string[]>;
   @Local formValues: Record<string, Object> = Wire.payload([], []);
 
-  aboutToAppear(): void { this.resetForm(); }
-  @Monitor('request.id') requestChanged(): void { this.resetForm(); }
+  aboutToAppear(): void { this.resetForm(); if (this.draft && this.draft.id === this.request.id && this.draft.raw === this.request.raw && this.draft.owns(this.draftSession)) { const text: Record<string, string> = {}, picks: Record<string, string[]> = {}; Object.keys(this.draft.text).forEach((key: string) => text[key] = this.draft!.text[key]); Object.keys(this.draft.picks).forEach((key: string) => picks[key] = this.draft!.picks[key].slice()); this.textValues = text; this.questionPicks = picks; } }
+  aboutToDisappear(): void { if (this.draft && this.draft.id === this.request.id && this.draft.raw === this.request.raw) this.draft.save(this.textValues, this.questionPicks, this.draftSession); }
+  @Monitor('request.id', 'request.raw') requestChanged(): void { this.resetForm(); }
   @Monitor('request.revision') revisionChanged(): void {
     this.selectedScreen = '';
     this.screenOptions = [];
@@ -57,10 +68,14 @@ export struct InteractionDecisionForm {
     this.textValues = Wire.payload([], []) as Record<string, string>;
     this.questionPicks = Wire.payload([], []) as Record<string, string[]>;
     this.formValues = interactionElicitationDefaults(this.request);
+    const choices: Record<string, InteractionChoice[]> = {};
+    if (this.request.kind === 'question') this.request.fields.forEach((field: DecisionField) => choices[field.key] = interactionQuestionOptions(this.request, field.key));
+    this.questionOptions = choices;
   }
 
+  private persistQuestionDraft(): void { if (this.request.kind === 'question' && this.draft && this.admission()) this.draft.save(this.textValues, this.questionPicks, this.draftSession); }
   private canRespond(): boolean {
-    return !this.busy && this.model.canApprove() && interactionCanSubmit(this.request, this.readOnly);
+    return this.admission() && !this.busy && this.model.canApprove() && interactionCanSubmit(this.request, this.readOnly);
   }
 
   private canDefer(): boolean {
@@ -89,6 +104,7 @@ export struct InteractionDecisionForm {
   private headerPrompt(): string {
     if (this.request.kind === 'screen') return interactionScreenQuestion(this.request);
     if (this.request.kind === 'elicitation') return interactionElicitationMessage(this.request);
+    // Each question already labels its own body; only a distinct Hub prompt belongs above it.
     return this.request.prompt;
   }
 
@@ -112,10 +128,12 @@ export struct InteractionDecisionForm {
   }
 
   private setText(key: string, value: string): void {
+    if (!this.admission()) return;
     const next: Record<string, string> = Wire.payload([], []) as Record<string, string>;
     Object.keys(this.textValues).forEach((name: string) => next[name] = this.textValues[name]);
     next[key] = value;
     this.textValues = next;
+    this.persistQuestionDraft();
   }
 
   private setValue(key: string, value: Object | undefined): void {
@@ -134,9 +152,7 @@ export struct InteractionDecisionForm {
 
   private setScreenOptions(values: string[]): void { this.screenOptions = values; }
 
-  private questionChoices(field: DecisionField): InteractionChoice[] {
-    return interactionQuestionOptions(this.request, field.key);
-  }
+  private questionChoices(field: DecisionField): InteractionChoice[] { return this.questionOptions[field.key] || []; }
 
   private pickedQuestion(field: DecisionField, value: string): boolean {
     return (this.questionPicks[field.key] || []).includes(value);
@@ -153,6 +169,7 @@ export struct InteractionDecisionForm {
     if (picked) next.push(choice.label);
     const ordered = this.questionChoices(field).filter((item: InteractionChoice) => next.includes(item.label)).map((item: InteractionChoice) => item.label);
     this.setQuestionPicks(field.key, ordered);
+    this.persistQuestionDraft();
   }
 
   private toggleScreenOption(choice: InteractionChoice, checked: boolean | undefined = undefined): void {
@@ -269,7 +286,7 @@ export struct InteractionDecisionForm {
       Wire.payload([], []) : this.answerValues();
     this.busy = true;
     this.clearSecrets();
-    this.model.answer(option, values, this.request).then(() => this.busy = false);
+    this.model.answer(option, values, this.request, this.admission).then(() => { this.busy = false; if (this.request.status === 'resolved') this.onResolved(); });
   }
 
   private historySummary(): string {
@@ -510,12 +527,23 @@ export struct InteractionDecisionForm {
       if (this.deferred && !this.readOnly) Button(tr('interaction_question_reopen')).attributeModifier(ButtonStyles.secondary).width('100%')
         .onClick(() => this.deferred = false).id('interaction.reopen')
       else if (!this.readOnly && this.request.kind === 'question') {
-        if (this.canDefer()) Button(tr('interaction_question_later')).attributeModifier(ButtonStyles.quiet).width('100%')
-          .onClick(() => this.deferred = true).id('interaction.later')
-        if (interactionScreenCanCancel(this.request)) Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).width('100%')
-          .enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.cancel')
-        Button(tr('confirm')).attributeModifier(ButtonStyles.primary).width('100%').enabled(this.canSubmit())
-          .onClick(() => this.submit('answer')).id('interaction.submit')
+        if (this.pinFooter) Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Button(tr('interaction_question_later')).attributeModifier(ButtonStyles.quiet).flexGrow(1).flexShrink(0).enabled(this.canDefer())
+            .onClick(() => { this.deferred = true; this.onLater(); }).id('interaction.later')
+          if (interactionScreenCanCancel(this.request)) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
+            .attributeModifier(ButtonStyles.chrome).enabled(this.canRespond()).accessibilityText(tr('more'))
+            .bindMenu([{ value: tr('interaction_question_cancel'), action: () => this.submit('cancel') }]).flexShrink(0).alignSelf(ItemAlign.Center).id('interaction.more')
+          Button(tr('confirm')).attributeModifier(ButtonStyles.primary).flexGrow(1).flexShrink(0).enabled(this.canSubmit())
+            .onClick(() => this.submit('answer')).id('interaction.submit')
+        }.width('100%')
+        else {
+          if (this.canDefer()) Button(tr('interaction_question_later')).attributeModifier(ButtonStyles.quiet).width('100%')
+            .onClick(() => { this.deferred = true; this.onLater(); }).id('interaction.later')
+          if (interactionScreenCanCancel(this.request)) Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).width('100%')
+            .enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.cancel')
+          Button(tr('confirm')).attributeModifier(ButtonStyles.primary).width('100%').enabled(this.canSubmit())
+            .onClick(() => this.submit('answer')).id('interaction.submit')
+        }
       } else if (!this.readOnly && this.request.kind === 'elicitation') {
         if (interactionElicitationMode(this.request) === 'url' && interactionElicitationUrl(this.request)) {
           Button(tr('open')).attributeModifier(ButtonStyles.secondary).width('100%').enabled(this.canRespond())
@@ -544,6 +572,10 @@ export struct InteractionDecisionForm {
 
   build() {
     Column({ space: Tokens.gap }) {
+      if (this.pinFooter) Scroll() {
+        Column({ space: Tokens.gap }) { this.headerContent(); if (!this.readOnly && !this.deferred) this.bodyContent(); else if (this.readOnly && this.historySummary()) Text(this.historySummary()).fontSize(Tokens.body).fontColor(Colors.ink).width('100%') }.width('100%').alignItems(HorizontalAlign.Start)
+      }.width('100%').layoutWeight(1).scrollBar(BarState.Auto).align(Alignment.TopStart).id('interaction.body')
+      else {
       this.headerContent()
       if (this.readOnly) {
         if (this.historySummary()) Text(this.historySummary()).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
@@ -551,7 +583,8 @@ export struct InteractionDecisionForm {
         if (this.availableHeight > 0 && this.bodyMaximumHeight() >= Tokens.touch * 2) this.scrollableBody()
         else this.bodyContent()
       }
+      }
       this.responseFooter()
-    }.width('100%').padding(Tokens.page).alignItems(HorizontalAlign.Start)
+    }.width('100%').height(this.pinFooter ? '100%' : undefined).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.page, bottom: this.pinFooter ? 0 : Tokens.page }).alignItems(HorizontalAlign.Start)
   }
 }

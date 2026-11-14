@@ -15,6 +15,7 @@ import { conversationImageEntries, conversationImageKey } from '../core/MessageI
 import type { MessageImageGalleryEntry, LoadedMessageImage } from '../core/MessageImageGallery';
 import { MarkdownText } from './MarkdownText';
 import { AssistantCards } from './AssistantCards';
+import { QuestionWorkspace, QuestionSheet, questionPrompt } from '../models/QuestionWorkspace';
 import { InteractionDecisionForm } from './InteractionDecisionForm';
 import { AssistantFeedModel } from '../models/AssistantFeed';
 import { ChatAttachments, ChatAttachment } from '../models/ChatAttachments';
@@ -182,6 +183,11 @@ export struct Conversation {
   @Local controlsHeight: number = 80;
   @Local fieldFocused: boolean = false;
   @Local composerWidth: number = 360;
+  @Local questions: QuestionWorkspace = new QuestionWorkspace();
+  @Local questionInset: number = 0;
+  private questionNodeId: string = 'chat.question.' + util.generateRandomUUID();
+  private questionLayoutReady: boolean = false;
+  private presentedQuestion: QuestionSheet | undefined;
   @Local attachmentSheet: boolean = false;
   @Local contextKind: string = '';
   @Local attachmentInset: number = 0;
@@ -202,7 +208,7 @@ export struct Conversation {
     const inset = nativeSheetInset(this.getUIContext(), this.attachmentNodeId, this.environment.safeBottomPx);
     if (Math.abs(inset - this.attachmentInset) > 0.1) this.attachmentInset = inset;
   }
-  @Monitor('environment.safeBottomPx') safeBottomChanged(): void { this.measureAttachment(); }
+  @Monitor('environment.safeBottomPx') safeBottomChanged(): void { this.measureAttachment(); this.measureQuestion(); }
   private attachmentHeight(): number {
     const context = this.getUIContext();
     return context.px2vp(this.attachmentHeights.reduce((sum: number, value: number) => sum + Math.round(context.vp2px(value)), 0) + 4 * Math.round(context.vp2px(Tokens.divider)));
@@ -225,7 +231,7 @@ export struct Conversation {
     }.enabled(kind === 'photos' || kind === 'files' || this.model.connected).onClick(() => {
       if (kind === 'photos' || kind === 'files') { this.attachmentSheet = false; if (kind === 'photos') this.attachments.choosePhotos(); else this.attachments.chooseFiles(); }
       else this.contextKind = kind;
-    })
+    }).id('chat.attachment.choice.' + kind)
   }
   @Builder attachmentContent() {
     Column() {
@@ -255,6 +261,8 @@ export struct Conversation {
   @Monitor('feed.items', 'feed.hasLoaded') feedChanged(): void { this.syncTimeline(); if (this.readingRestoring) this.scheduleReading(); else if (this.atEnd) this.getUIContext().postFrameCallback(new ConversationFrame(() => { if (this.active && this.atEnd && !this.readingRestoring) this.scroller.scrollEdge(Edge.Bottom); })); else this.hasNew = true; }
   @Monitor('active', 'model.selected', 'model.connected') feedContextChanged(): void { if (!this.active) this.saveReading(); else this.syncReading(); this.syncFeed(); this.syncAttachments(); this.syncRevision(); }
   @Monitor('model.decision') decisionChanged(): void { this.refreshFeed(); }
+  @Monitor('active', 'model.selected', 'model.profile', 'model.connected', 'model.personaQuestions')
+  questionsContextChanged(): void { this.questions.sync(this.model, this.active); }
   @Monitor('model.personaQuestions') personaQuestionsChanged(): void {
     this.syncTimeline(); this.refreshFeed();
     if (this.readingRestoring) { this.scheduleReading(); }
@@ -445,12 +453,14 @@ export struct Conversation {
     this.lines = lines;
   }
   aboutToAppear(): void {
+    this.questions.sync(this.model, this.active);
     this.syncReading(); this.syncFeed(); this.syncAttachments(); this.syncTimeline(); this.syncRevision(); this.primaryStopChanged();
     const target = this.model.target(); this.model.loadView('work:' + target).then((value: string) => {
       if (target === this.model.target() && value) { try { this.expanded = Wire.strings(Wire.parse(value), 'expanded'); } catch (_) {} }
     });
   }
   aboutToDisappear(): void {
+    this.questions.retire();
     this.onPrimaryStop(false); this.saveReading(); this.readingEpoch++;
     if (this.feedTimer !== -1) clearTimeout(this.feedTimer); this.feedTimer = -1; this.feed.close(); this.feedKey = '';
     this.attachmentKey = ''; this.attachments.close(); this.invalidateRevisionMenuContext(); this.revisionContextKey = '';
@@ -502,7 +512,7 @@ export struct Conversation {
         sourceKey: this.imageKey(message, 'item', message.imageId), galleryEntries: this.imageGallery,
         galleryIndex: this.imageIndex(message, 'item', message.imageId), onEdit: (image: LoadedMessageImage) => this.editReceivedImage(image) })
       if (message.text) {
-        WithTheme({ theme: nativeMessageTheme(this.look, this.model.style, message.role === 'user') }) {
+        WithTheme({ colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT, theme: nativeMessageTheme(this.look, this.model.style, message.role === 'user', this.environment.dark) }) {
         MessageSurface({ own: message.role === 'user', maximum: message.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
           if (message.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: message, active: this.active, onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
           else MarkdownText({ text: message.text, fitContent: message.role === 'user', onLink: (address: string) => this.onLink(address) })
@@ -560,12 +570,41 @@ export struct Conversation {
             if (entry.item.message) this.message(entry.item.message)
             else if (entry.item.card) AssistantCards({ model: this.model, feed: this.feed, active: this.active && this.model.connected, onOpenResource: (row: ResourceRow) => this.onOpenResource(row), item: entry.item.card, onOpenCard: (itemId: string, kind: string) => this.onOpenCard(itemId, kind), onOpenSession: (row: ResourceRow) => this.onOpenResource(row),
               onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
-            else if (entry.item.decision) InteractionDecisionForm({ model: this.model, request: entry.item.decision, onLink: (address: string) => this.onLink(address) })
+            else if (entry.item.decision) this.questionCard(entry.item.decision)
           }.id('chat.line.' + entry.item.id)
         }).key((line: ConversationLine) => line.id)
-      }.layoutWeight(1).width('100%').maintainVisibleContentPosition(true).onScrollIndex((start: number) => { this.firstVisibleIndex = start; this.recordReading(start); }).onDidScroll(() => this.recordReading(this.firstVisibleIndex)).onReachEnd(() => { if (this.active && !this.readingRestoring) { this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; } })
+      }.layoutWeight(1).width('100%').id('chat.transcript')
+        .bindSheet(this.questions.shown, this.questionContent(), { title: { title: tr('interaction_question_reopen') }, height: SheetSize.LARGE, keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true, onWillAppear: () => this.presentedQuestion = this.questions.beginPresentation(), onAppear: () => { this.questionLayoutReady = true; this.measureQuestion(); }, onWillDismiss: (action: DismissSheetAction) => this.questions.dismiss(this.presentedQuestion, () => action.dismiss()), onDisappear: () => { this.questionLayoutReady = false; this.questions.endPresentation(this.presentedQuestion); this.presentedQuestion = undefined; } })
+        .maintainVisibleContentPosition(true).onScrollIndex((start: number) => { this.firstVisibleIndex = start; this.recordReading(start); }).onDidScroll(() => this.recordReading(this.firstVisibleIndex)).onReachEnd(() => { if (this.active && !this.readingRestoring) { this.atEnd = true; this.anchor.atEnd = true; this.hasNew = false; } })
         .onScrollFrameBegin((offset: number) => { if (offset < 0 && !this.readingRestoring) { this.atEnd = false; this.anchor.atEnd = false; } return { offsetRemain: offset }; })
     }.width('100%').constraintSize({ maxWidth: Tokens.readingMax }).height('100%')
+  }
+
+  private openQuestion(request: Decision): void {
+    if (!this.active) return;
+    this.attachmentSheet = false; this.contextKind = '';
+    this.questions.open(this.model, this.active, request);
+  }
+  private measureQuestion(): void { if (this.questionLayoutReady) this.questionInset = nativeSheetInset(this.getUIContext(), this.questionNodeId, this.environment.safeBottomPx); }
+  private questionLink(sheet: QuestionSheet): (address: string) => void {
+    const valid = this.questions.ticket(sheet); return (address: string): void => { if (valid()) this.onLink(address); };
+  }
+  @Builder questionCard(request: Decision) {
+    if (['open', 'pending', 'unknown'].includes(request.status)) Column({ space: Tokens.gap }) {
+      Text(questionPrompt(request) || tr('question')).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+      Button(tr(request.status === 'open' ? 'interaction_question_reopen' : request.status === 'unknown' ? 'result_unknown' : 'pending')).attributeModifier(ButtonStyles.secondary).width('100%')
+        .enabled(this.active && this.model.canApprove() && request.status === 'open').onClick(() => this.openQuestion(request)).id('interaction.open.' + request.id)
+    }.width('100%').padding(Tokens.page).alignItems(HorizontalAlign.Start).backgroundColor(Colors.question).borderRadius(Tokens.card)
+    else InteractionDecisionForm({ model: this.model, request: request, readOnly: true, onLink: (address: string) => this.onLink(address) })
+  }
+  @Builder questionContent() {
+    Column() {
+      if (this.questions.sheet) ForEach([this.questions.sheet], (sheet: QuestionSheet) => {
+        InteractionDecisionForm({ model: this.model, request: sheet.request, pinFooter: true, draft: sheet.draft, draftSession: sheet.id, admission: this.questions.ticket(sheet),
+          onLater: () => this.questions.close(sheet), onResolved: () => this.questions.close(sheet), onLink: this.questionLink(sheet) })
+      }, (sheet: QuestionSheet) => sheet.id)
+    }.width('100%').height('100%').padding({ bottom: this.questionInset + Tokens.footer }).id(this.questionNodeId)
+      .onAreaChange(() => this.measureQuestion())
   }
 
   @Builder composer() {

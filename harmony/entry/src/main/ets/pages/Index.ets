@@ -873,7 +873,7 @@ struct Index {
   }
   build() {
     Stack() {
-    WithTheme({ theme: nativeLookTheme(this.look, this.model.style) }) {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
     ThemeScope() {
     Column() {
       if (!this.model.profile.id) {

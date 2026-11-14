@@ -112,9 +112,9 @@ export class HubRepository {
   async decisions(): Promise<Record<string, Object>[]> {
     const result = await this.call('/api/v1/interactions'); return Wire.rows(result, 'interactions');
   }
-  async resolve(request: Decision, option: string, values: Record<string, Object>, op: string): Promise<Record<string, Object>> {
+  async resolve(request: Decision, option: string, values: Record<string, Object>, op: string, admit?: () => boolean): Promise<Record<string, Object>> {
     const body = interactionResolution(request, option, values);
-    return this.call('/api/v1/interactions/' + segment(request.id) + '/resolve', 'POST', body, op);
+    return this.call('/api/v1/interactions/' + segment(request.id) + '/resolve', 'POST', body, op, admit);
   }
   async saveKnowledge(row: ResourceRow, tags: string[], importance: string): Promise<void> {
     if (row.kind !== 'knowledge' || !row.id || !['projects','chats','people','docs','meetings','events','recordings'].includes(row.path)) throw new Error('unsupported');

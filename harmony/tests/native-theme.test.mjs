@@ -1,0 +1,8 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {registerHooks,stripTypeScriptTypes} from 'node:module';
+import {readFileSync} from 'node:fs';
+import {deviceLookPalette,contrastRatio} from '../entry/src/main/ets/core/DeviceLook.ts';
+registerHooks({resolve(s,c,n){if(c.parentURL?.endsWith('/LookTheme.ets')){if(s==='../models/DeviceLook')return {url:'native-theme:model',shortCircuit:true};if(s==='../core/DeviceLook')return {url:new URL('../core/DeviceLook.ts',c.parentURL).href,shortCircuit:true};}return n(s,c);},load(u,c,n){if(u==='native-theme:model')return{format:'module',shortCircuit:true,source:'export class DeviceLook {}'};if(u.endsWith('/LookTheme.ets'))return{format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(u),'utf8'))};return n(u,c);}});
+const {nativeLookTheme,nativeMessageTheme}=await import('../entry/src/main/ets/design/LookTheme.ets');
+for(const style of ['system','glass','brief','board'])for(const accent of ['style','blue','coral','lavender','teal','lark'])for(const dark of [false,true])test(`${style} ${accent} ${dark?'dark':'light'} scope supplies the actual application palette`,()=>{const palette=deviceLookPalette(accent,style,undefined),look={palette:()=>palette},current=dark?palette.dark:palette.light,theme=nativeLookTheme(look,style,dark).colors,bubble=nativeMessageTheme(look,style,true,dark).colors;assert.equal(theme.fontEmphasize,current.emphasize);assert.equal(theme.compBackgroundEmphasize,current.brand);assert.equal(bubble.compBackgroundPrimary,current.userBubble);assert.equal(bubble.fontPrimary,current.userBubbleText);assert.ok(contrastRatio(bubble.compBackgroundPrimary,bubble.fontPrimary)>=4.5);assert.deepEqual(nativeMessageTheme(look,style,false,dark),{});});

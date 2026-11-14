@@ -82,7 +82,7 @@ export struct MarkdownText {
         .decoration({ type: TextDecorationType.Underline, color: this.emphasize })
         .onClick(() => this.onLink(url))
     } else {
-      Span(value).fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
+      Span(value).fontColor(this.foreground).fontWeight(bold ? FontWeight.Bold : FontWeight.Normal).fontStyle(italic ? FontStyle.Italic : FontStyle.Normal)
     }
   }
 
