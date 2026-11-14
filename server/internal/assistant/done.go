@@ -446,7 +446,11 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		}
 	}
 	if !s.taskCompletionCurrent(ctx, t, work) {
-		s.logf("task %s: work changed while judged: left open", t.ID)
+		if cur, ok := s.todoNow(t.ID); !ok || cur.DoneAt != nil {
+			s.logf("task %s: closed while judged: judgment dropped", t.ID) // accepted, cancelled or closed by hand (#7539)
+		} else {
+			s.logf("task %s: work changed while judged: left open", t.ID)
+		}
 		return
 	}
 	s.applyTaskDone(ctx, t, work, worked, c, err)

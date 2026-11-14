@@ -127,7 +127,9 @@ func (s *Service) taskWaits(ctx context.Context, t Todo) bool {
 // taskWorking: one of the task's agents started a turn. The agent of a task the hub closed meanwhile (judged done,
 // accepted) works on it again — sent more by agent_send, which resumes a closed one, or by the user: the task is open
 // again first, as a change asked for on its "Please verify" card reopens it (#3457), so this turn is followed
-// (interrupted or done receipt, judgment) and the task shows in progress, not done (#5892).
+// (interrupted or done receipt, judgment) and the task shows in progress, not done (#5892). An accepted task opens
+// again only for what its conversation sent (closedTurnReopens); any other turn leaves it closed, and its end makes
+// nothing of it either (settleTurn follows open tasks only).
 func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 	s.tasks.completionMu.Lock()
 	defer s.tasks.completionMu.Unlock()
@@ -191,18 +193,17 @@ func (s *Service) noteAgentSend(self, mid, sid string) (undo func()) {
 	}
 }
 
-// closedTurnReopens: a new turn of agent mid/sid opens closed task t again (taskWorking). One the hub's judge closed,
-// yes: the judge may have been early, and more for it comes as a turn of its agent. So does one its supervisor
-// accepted whose agent its plan started (task_plan): that session exists for the task, and more for it (the owner's
-// follow-up, a start that failed and came up late) is the task's work. A task with no plan has an agent that was often
-// running before it became the task's (agent_supervise, agent_send with a task, an agent that became a task by itself,
-// a link by hand; agent_start's tasks have no plan either) and is kept on for other work: turns for its own timers,
-// other conversations, messages from other sessions and the owner's words in its own session reopened the finished
-// task each time and woke its supervision again (#6726). Such an accepted task reopens only when the task's
-// conversation (or its supervisor) sent the agent more after the acceptance: agent_send, or the owner's message on the
-// task's card. The owner can still reopen one by hand.
+// closedTurnReopens: a new turn of agent mid/sid opens closed task t again (taskWorking). One the hub's judge closed on
+// its own, yes: that close is provisional (nobody accepted it, the judge may have been early), and more for it comes as
+// a turn of its agent (#5892). One its supervisor accepted (done_by review) is closed for good, whoever started its
+// agent: a turn for the agent's own timers, other conversations, messages from other sessions or the owner's words in
+// its own session is no word that the task wants more. Such turns reopened the finished task each time and woke its
+// supervision again, "judged done, waiting for your review" (#6726 for adopted agents; #7539 for agents a task_plan
+// started, which once reopened on any turn). An accepted task reopens only when the task's conversation (or its
+// supervisor) sent the agent more after the acceptance: agent_send, or the owner's message on the task's card. The
+// owner can still reopen one by hand, and todo_reopen does too.
 func (s *Service) closedTurnReopens(t Todo, mid, sid string) bool {
-	if t.DoneBy != db.DoneByReview || t.PlanID != "" {
+	if t.DoneBy != db.DoneByReview {
 		return true
 	}
 	s.tasks.mu.Lock()
@@ -535,6 +536,13 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		} else {
 			s.turnReceipted(cctx, t.ID) // no name to find it by later: the ledger says it is out
 		}
+	}
+	if current, ok := s.todoNow(t.ID); !ok || current.DoneAt != nil {
+		// Closed while this end was read (accepted, cancelled, closed by hand): the receipt says how the turn ended, and
+		// that is all. No notice, stage, report, judgment or supervision signal for a task that is over (#7539).
+		s.logf("task %s: closed while its agent's turn end was read: receipt only, not judged", t.ID)
+		s.turnJudged(cctx, t.ID, taskDoneCheck{}, nil, "done") // nothing to judge: the sweep does not ask again
+		return settleTaken
 	}
 	if again {
 		s.turnAgain(cctx, t, turn, last, text, since, worked)
