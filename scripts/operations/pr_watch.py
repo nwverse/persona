@@ -343,7 +343,9 @@ class Watcher:
                              bounded(str(error), 6000))
             except WatchError as comment_error:
                 self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                               outcome="base_comment_pending", failure=str(comment_error))
+                               outcome="base_comment_pending", failure=str(comment_error),
+                               base_failures=comparison, verification="base_failure",
+                               checks=getattr(error, "checks", []))
                 return False
             return "base_failure"
         updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
@@ -415,7 +417,8 @@ class Watcher:
         if old.get("evidence_key") != evidence_key:
             previous = old
             old = {"repair_rounds": int(previous.get("repair_rounds", 0)),
-                   "repair_exhausted": bool(previous.get("repair_exhausted"))}
+                   "repair_exhausted": bool(previous.get("repair_exhausted")),
+                   "repair_attempts": int(previous.get("repair_attempts", 0))}
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
         if old.get("outcome") == "continuation":
@@ -424,7 +427,9 @@ class Watcher:
             if not self.dry_run:
                 self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
                              bounded(old.get("failure", ""), 6000))
-            old = dict(old, outcome="passed_with_base_failures", review_posted=True)
+            old = dict(old, outcome="passed_with_base_failures")
+            self.state.put(repo, number, head, evidence_key=evidence_key,
+                           outcome="passed_with_base_failures", review_posted=True)
         if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):

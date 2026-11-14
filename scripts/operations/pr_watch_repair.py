@@ -182,13 +182,17 @@ def push_updated_head(repo, pr, worktree, updated_head):
     checked(["git", "push", "origin", "HEAD:refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
 
 
+def repair_worker_home():
+    return Path(tempfile.mkdtemp(prefix="pr-watch-repair-home-"))
+
+
 def repair_worker_argv(argv, worktree, home=None):
     """Confine model-driven edits to one checkout; never expose maintainer HOME."""
     sandbox = shutil.which("bwrap")
     if not sandbox:
         raise WatchError("automatic repair requires the trusted bwrap sandbox")
     if home is None:
-        home = tempfile.mkdtemp(prefix="pr-watch-repair-home-")
+        home = repair_worker_home()
     env = {key: value for key, value in os.environ.items()
            if key in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
                       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
@@ -318,9 +322,8 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
             remote = checked(["git", "ls-remote", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).split()[0]
             if remote != head:
                 raise WatchError("continuation branch exists at a different head; choose a fresh repair branch")
-        else:
-            checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
-    else:
+        checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
+    if not pr.get("isCrossRepository"):
         checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
     if pr.get("isCrossRepository"):
         issues = linked_issue(pr.get("body", ""), repo)
