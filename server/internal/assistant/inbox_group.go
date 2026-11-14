@@ -30,8 +30,8 @@ import (
 // set up, held, failing, too slow, or an answer that does not hold up) the connector groups the batch by structure
 // itself (group.fallback). Its title, rule tier, "By rule" and triaged_by "rules" describe only events it opens. An
 // existing event takes the new messages but keeps its title, summary, urgency and triager. Its tier never falls: it may
-// rise to this batch's rule floor (the rewritten entries' aggregated floor for a direct-chat join), except out of noise
-// or while a processing conversation is handling the event. Only an actual rise replaces the reason with "By rule".
+// rise to this batch's rule floor (the aggregated assignment and rewritten-entry floors for a direct-chat join), except
+// out of noise or while a processing conversation is handling the event. Only an actual rise replaces the reason with "By rule".
 
 const (
 	groupCalls        = 4                  // call allowances per batch (tools and a possible correction)
@@ -149,6 +149,7 @@ type plannedEvent struct {
 	reopen       *bool // nil means true for a done event; ignored for open and new events
 	twinDisabled bool  // writeGroup snapshots the AI-twin switch before taking b.mu
 	dmJoined     bool  // at least one fallback-new entry was rewritten into this existing event
+	dmAssigned   bool  // an ordinary assignment to the same target also contributes the appended thing's rule floor
 	// The highest explicit rule tier among those rewritten entries. ruleFloorDefault records that at least one had no
 	// explicit tier and still needs putEvent's fallback-new default; dmJoined distinguishes them from an ordinary append.
 	ruleFloor        string
@@ -749,9 +750,18 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		}
 		floor := eventRuleTier(thing)
 		if e.dmJoined {
-			floor = e.ruleFloor
-			if e.ruleFloorDefault || floor == "" {
-				floor = higherTier(floor, b.fallbackEventTier(thing, it))
+			joinedFloor := e.ruleFloor
+			if e.ruleFloorDefault || joinedFloor == "" {
+				joinedFloor = higherTier(joinedFloor, b.fallbackEventTier(thing, it))
+			}
+			if e.dmAssigned {
+				// An ordinary assignment merged into the rewrite contributes the returned thing's floor too.
+				if floor == "" {
+					floor = b.fallbackEventTier(thing, it)
+				}
+				floor = higherTier(floor, joinedFloor)
+			} else {
+				floor = joinedFloor
 			}
 		} else if floor == "" {
 			floor = b.fallbackEventTier(thing, it)
@@ -772,9 +782,10 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		if !byModel && !it.handled() {
 			raiseFallbackFloor()
 		}
-	case prev.last != "" && it.handled() && !reopened:
+	case prev.last != "" && it.handled() && (!byModel || !reopened):
 		// Messages that join an event being handled follow it: its tier, words and urgency stay, even for a rewritten
-		// direct-chat join; its processing conversation decides (inbox_handle.go).
+		// direct-chat join or a fallback reopen; its processing conversation decides (inbox_handle.go). A model-driven
+		// reopen still takes the model's triage below.
 		it.Title, it.Summary, it.Tier, it.Reason = title, summary, tier, reason
 		it.TriagedBy = cmp.Or(it.TriagedBy, "model")
 		it.Urgent = urgent
@@ -808,7 +819,11 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		b.applyPolicyTier(it)
 	}
 	it.TriagedAt = it.Last
-	if tierBefore != it.Tier || prev.last == "" {
+	if tierBefore != it.Tier {
+		// An actual tier change is a new decision even when an earlier triage has the same localized text. Other callers
+		// keep noteTriaged's same-text dedup; the version check above still makes a repeated append a no-op.
+		b.chainAdd(it, triagedEntry(b.userLang(), it))
+	} else if prev.last == "" {
 		b.noteTriaged(it)
 	}
 	if e.continues != "" && e.continues != it.ID {
@@ -870,8 +885,8 @@ func (b *inboxBook) joinDMFallback(connectorID string, t connector.InboxThing, p
 		return
 	}
 
-	// Keep the first participating entry's place in the plan and append later messages in plan order. A direct
-	// assignment to the target joins the same append but contributes no rule floor of its own.
+	// Keep the first participating entry's place in the plan and append later messages in plan order. An ordinary
+	// assignment to the target joins the same append and contributes the returned thing's rule floor in putEvent.
 	out := plan.events[:0]
 	joined := -1
 	for _, e := range plan.events {
@@ -893,6 +908,8 @@ func (b *inboxBook) joinDMFallback(connectorID string, t connector.InboxThing, p
 			} else {
 				out[joined].ruleFloor = higherTier(out[joined].ruleFloor, e.tier)
 			}
+		} else {
+			out[joined].dmAssigned = true
 		}
 	}
 	joinedEvent := &out[joined]
