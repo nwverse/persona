@@ -631,13 +631,15 @@ func (h *Hub) fleetAppCall(ctx context.Context, from string, p assistantwire.App
 		Summary       string          `json:"summary"`
 		InteractionID string          `json:"interaction_id"`
 		Action        string          `json:"action"`
-		CallID        string          `json:"call_id"`
+		CallID        json.RawMessage `json:"call_id"`
 	}
 	if len(p.Params) > 0 {
 		if err := json.Unmarshal(p.Params, &a); err != nil {
 			return nil, true, err
 		}
 	}
+	var callID string
+	_ = json.Unmarshal(a.CallID, &callID)
 	var out any
 	switch p.AppID + " " + p.Method {
 	case assistantwire.AppPhone + " " + assistantwire.PhoneTools:
@@ -646,7 +648,7 @@ func (h *Hub) fleetAppCall(ctx context.Context, from string, p assistantwire.App
 		if a.Name == runtimeCLITool || !strings.HasPrefix(a.Name, "phone_") {
 			out = proto.TextResult("unknown tool "+a.Name, true)
 		} else {
-			out = h.callPhoneWithWait(ctx, a.Name, a.Args, h.mcpWaitReporter(from, a.MachineID, a.CallID))
+			out = h.callPhoneWithWait(ctx, a.Name, a.Args, h.mcpWaitReporter(from, a.MachineID, callID))
 		}
 	default:
 		return nil, false, nil

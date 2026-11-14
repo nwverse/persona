@@ -87,7 +87,7 @@ func (n *Node) lcuComputerCall(ctx context.Context, params json.RawMessage) (*pr
 		Tool         string          `json:"tool"`
 		Args         json.RawMessage `json:"args"`
 		KeepAwake    bool            `json:"keep_awake"`
-		CallID       string          `json:"call_id"`
+		CallID       json.RawMessage `json:"call_id"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
@@ -101,8 +101,10 @@ func (n *Node) lcuComputerCall(ctx context.Context, params json.RawMessage) (*pr
 	}
 	ctx, cancel := context.WithTimeout(ctx, lcuCallTimeout)
 	defer cancel()
-	if proto.ValidMCPWaitCallID(p.CallID) {
-		ctx = mcpwait.WithCall(ctx, p.CallID)
+	var callID string
+	_ = json.Unmarshal(p.CallID, &callID)
+	if proto.ValidMCPWaitCallID(callID) {
+		ctx = mcpwait.WithCall(ctx, callID)
 	}
 	return n.lcuSession().call(ctx, name, args, p.Session, p.Conversation)
 }

@@ -176,7 +176,7 @@ func TestMCPWaitNodeRequestRequiresOptIn(t *testing.T) {
 
 func TestMCPWaitNodeRequestRejectsInvalidAndDuplicateIDs(t *testing.T) {
 	ft, events := newMCPWaitTest(t)
-	for _, callID := range []string{"not-a-uuid", strings.Repeat("x", 1<<20)} {
+	for _, callID := range []any{"not-a-uuid", strings.Repeat("x", 1<<20), 17, map[string]any{"not": "a string"}} {
 		params, err := json.Marshal(map[string]any{"name": "unknown", "args": map[string]any{}, "wait_updates": true, "call_id": callID})
 		if err != nil {
 			t.Fatal(err)
@@ -214,11 +214,12 @@ func TestMCPWaitComputerElicitRequiresLiveCall(t *testing.T) {
 		}
 		return map[string]any{"action": "cancel"}, nil
 	}})
-	for name, callID := range map[string]string{
-		"missing":   "",
-		"unknown":   "11111111-1111-4111-8111-111111111111",
-		"malformed": "not-a-uuid",
-		"oversized": strings.Repeat("x", 1<<20),
+	for name, callID := range map[string]any{
+		"missing":    "",
+		"unknown":    "11111111-1111-4111-8111-111111111111",
+		"malformed":  "not-a-uuid",
+		"oversized":  strings.Repeat("x", 1<<20),
+		"non-string": 17,
 	} {
 		t.Run(name, func(t *testing.T) {
 			params, err := json.Marshal(map[string]any{"conversation": "session", "params": map[string]any{},
