@@ -99,7 +99,7 @@ func (b *inboxBook) addInboxCheckChain(it *InboxItem, key string, now time.Time)
 func (b *inboxBook) resumeInboxWaiting(it *InboxItem, now time.Time) {
 	ensureInboxFollowCheckAt(it, now)
 	if it.Agent != nil {
-		it.Agent.Wake, it.Agent.Back = false, ""
+		it.Agent.Wake = false
 	}
 	b.setHandling(it, HandlingWaiting, "", now)
 }

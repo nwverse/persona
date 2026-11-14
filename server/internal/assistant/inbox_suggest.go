@@ -225,7 +225,12 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 		it.Agent.Wake = false
 		if back == HandlingWaiting {
+			agentStopped := len(it.Chain) > 0 && it.Chain[len(it.Chain)-1].Kind == ChainAgentStopped
 			b.resumeInboxWaiting(it, now)
+			if agentStopped {
+				// The stop turn's recap consumed its restoration point; later turns must not restore it again.
+				it.Agent.Back = ""
+			}
 		} else {
 			b.setHandling(it, back, "", now)
 		}

@@ -75,6 +75,7 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 				it.Suggestion = nil // the owner's source reply supersedes a suggestion still waiting for confirmation
 				clearDraft(it)
 				wasAgent := it.Handling != nil && it.Handling.State == HandlingAgent
+				restoreWaiting := wasAgent && it.Agent != nil && it.Agent.Back == HandlingWaiting
 				interrupted := HandlingWaiting
 				if wasAgent {
 					interrupted = HandlingAgent
@@ -86,6 +87,9 @@ func (s *Service) applyGroupStates(ctx context.Context, src assistantwire.InboxS
 						at = now
 					}
 					b.tell(it, inboxNote{Name: prompts.NoteSelfReplied, Text: at.In(loc).Format("2006-01-02 15:04")}, true, now)
+					if restoreWaiting {
+						it.Agent.Back = HandlingWaiting
+					}
 					if !wasAgent {
 						b.setHandling(it, HandlingLooking, "", now)
 					}
