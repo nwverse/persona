@@ -673,8 +673,9 @@ export async function retryTask(todo: Todo) {
 export type AskAnswer = { option: string } | { response: string };
 
 /** The Accept button of a `brief` item's task to verify: "accepted", or "handled" when the hub says that round is over
- *  (asked again since, or already verified: 409 with no code of its own). Any other failure throws, a 409 the Agent's
- *  node refused with its own code too (dialog_open: a dialog has its terminal, #7343), since nothing was taken.
+ *  (asked again since, or already verified: 409 with no code of its own). Any other failure throws, since nothing was
+ *  taken: the Agent's node refusing it (dialog_open: a dialog has its terminal, #7343) is 423 with that code, or a 409
+ *  with it from a hub built between the two.
  *  `answer`: a decision's option or fixed response instead of its recommendation. */
 export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "handled"> {
   try {

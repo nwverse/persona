@@ -217,12 +217,12 @@ describe("a decision in the Needs you tray", () => {
     expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-brief.handled"));
   });
 
-  // A dialog in the Agent's terminal kept the answer from it (#7343): 409 dialog_open, which is not "handled". The row
-  // keeps its buttons and says so itself, with the dialog's first line and the way to that terminal; it used to read
-  // the 409 as an answered round and show nothing, so the press seemed to do nothing.
+  // A dialog in the Agent's terminal kept the answer from it (#7343): 423 dialog_open, which is not "handled". The row
+  // keeps its buttons and says so itself, with the dialog's first line and the way to that terminal; while the hub
+  // answered it 409, the row read it as an answered round and showed nothing, so the press seemed to do nothing.
   it("says a dialog in the Agent's terminal blocks the answer, and opens that terminal", async () => {
     setAgentOpenMode("page");
-    status = 409;
+    status = 423;
     refusal = { code: "dialog_open", delivered: "none", retryable: false, error: "a dialog is open", dialog: "Approaching rate limits", machine_id: "demo", session_id: "worker" };
     const toast = vi.spyOn(atoms, "toast");
     await mount();
@@ -247,6 +247,7 @@ describe("a decision in the Needs you tray", () => {
     toast.mockRestore();
   });
 
+  // A hub that answered the refusal 409 (#7350 before 423) is not taken for an answered round either: its code says why.
   it("says a dialog blocks it without its line or a terminal to open when the hub did not say them", async () => {
     status = 409;
     refusal = { code: "dialog_open", delivered: "none", error: "a dialog is open" };

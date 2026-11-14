@@ -11,10 +11,12 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// A recommendation the node refused with a code of its own (a dialog open in the agent's terminal) answers 409 with
-// that code, as every other node call does (apierr.Call), and says what to do in the request's language. It used to be
-// 502 "internal" with the reason folded into the sentence, which the web app showed as "the service could not complete
-// this request (HTTP 502)" however often it was pressed (#7343). Nothing is taken, and the button works again.
+// A recommendation the node refused with a code of its own (a dialog open in the agent's terminal) answers with that
+// code and says what to do in the request's language. It used to be 502 "internal" with the reason folded into the
+// sentence, which the web app showed as "the service could not complete this request (HTTP 502)" however often it was
+// pressed (#7343). Nothing is taken, and the button works again. The status is 423, not the 409 other node calls
+// answer: the iOS and Android apps already installed read any 409 on this route as "already handled" and lock the
+// button.
 func TestAcceptRouteSaysTheTerminalDialogBlocksIt(t *testing.T) {
 	for _, lang := range []i18n.Lang{i18n.ZhHans, i18n.En} {
 		s, f, todo, _, _ := conclusionService(t, false)
@@ -30,8 +32,8 @@ func TestAcceptRouteSaysTheTerminalDialogBlocksIt(t *testing.T) {
 		asked, _ := json.Marshal(a.AskedAt)
 		status, body := serveJSON(t, s, "POST", "/api/v1/todos/"+todo.ID+"/accept", string(lang), `{"asked_at":`+string(asked)+`}`)
 		want := i18n.T(lang, "rpc-errors.dialog_open")
-		if status != http.StatusConflict || body["code"] != "dialog_open" || body["error"] != want || body["delivered"] != "none" {
-			t.Fatalf("%s: %d %v, want 409 dialog_open %q", lang, status, body, want)
+		if status != http.StatusLocked || body["code"] != "dialog_open" || body["error"] != want || body["delivered"] != "none" {
+			t.Fatalf("%s: %d %v, want 423 dialog_open %q", lang, status, body, want)
 		}
 		// what the card says and where it sends the owner: the dialog's own first line, read off a Codex screen whose node
 		// did not say it, and the agent whose terminal it is

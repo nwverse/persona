@@ -231,9 +231,12 @@ func (s *Service) briefRoutes() {
 		}
 		if nodeRefusal(err) {
 			// The node refused with a code it words itself (a dialog open in the terminal, a draft in its input box):
-			// 409 with that code, as every other node call answers (apierr.Call), so the app can say what to do first
-			// instead of "try again later". Nothing was taken; the button works again (#7343).
-			apierr.Call(w, err)
+			// that code and the node's details, so the app can say what to do first instead of "try again later".
+			// Nothing was taken; the button works again (#7343). Not the 409 every other node call answers
+			// (apierr.Call): on this route the apps already installed (iOS, Android, older web pages) read any 409 as
+			// "this round is over" and lock the button, though nothing reached the agent. 423 Locked (the terminal is
+			// held by the dialog) is a failure to every one of them, which shows the hub's sentence and keeps the button.
+			apierr.CallStatus(w, http.StatusLocked, err)
 			return
 		}
 		if err != nil { // a decision's recommendation that did not reach the agent: nothing taken, the button works again
