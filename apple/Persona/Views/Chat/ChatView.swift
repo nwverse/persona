@@ -3750,7 +3750,7 @@ struct ChatView: View {
     /// The Agents header: back, title (with the state), the terminal and ⋯; under them, when there are any, the other
     /// agents of the space (a menu) and a /loop or background work. It folds into a slim bar as the list scrolls (not on the Mac: `ChatChrome.folds`).
     private var devChrome: some View {
-        ChromeHeader(chrome: chrome, touched: { scratch.lastActivity = .now }) {
+        let header = ChromeHeader(chrome: chrome, touched: { scratch.lastActivity = .now }) {
             VStack(spacing: 0) {
                 // One container for the row's glass (back, the terminal, ⋯): drawn together instead of as separate glasses.
                 GlassEffectContainer(spacing: 8) {
@@ -3833,8 +3833,10 @@ struct ChatView: View {
                 if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
             }
         }
-        // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944).
-        .modifier(SideSessionsPresentation(parent: key, on: host == nil, ui: sideUI))
+        // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
+        // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
+        // unoptimized build lays out by value (`MainPagesStackTests`).
+        return AnyView(header).modifier(SideSessionsPresentation(parent: key, on: host == nil, ui: sideUI))
     }
 
     /// Back: out of files / Git to the chat first, then off the page.
@@ -3913,7 +3915,7 @@ struct ChatView: View {
     /// (2026-11-04). The system's title over the content says which session it is then (it is removed while the
     /// header shows its own).
     private var sideHeader: some View {
-        VStack(spacing: Theme.Space.sm) {
+        let header = VStack(spacing: Theme.Space.sm) {
             if !composerTyping { sideHeaderRows }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -3940,8 +3942,10 @@ struct ChatView: View {
                 if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
             }
         }
-        // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944).
-        .modifier(SideSessionsPresentation(parent: key, on: host == nil, ui: sideUI))
+        // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
+        // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
+        // unoptimized build lays out by value (`MainPagesStackTests`).
+        return AnyView(header).modifier(SideSessionsPresentation(parent: key, on: host == nil, ui: sideUI))
     }
 
     @ViewBuilder private var sideHeaderRows: some View {
