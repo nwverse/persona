@@ -144,13 +144,13 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
             self.assertIn(f"`{name}`", text)
             self.assertIn(f"secrets.{name}", release)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_desktop_ci_never_receives_signing_credentials(self):
         # Signing and notarization are release-only; a manually dispatched branch cannot sign arbitrary code.
         text = (ROOT / ".github/workflows/desktop-test.yml").read_text()
         self.assertNotIn("inputs.signed", text)
         for name in sorted(set(MAC) | set(WIN)):
             self.assertNotIn(f"secrets.{name}", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
