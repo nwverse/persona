@@ -8,6 +8,7 @@ package nodeclient
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -90,9 +91,31 @@ func WithMCPWait(ctx context.Context, receive func(proto.MCPWaitKind)) context.C
 	return context.WithValue(ctx, mcpWaitContextKey{}, receive)
 }
 
-func mcpWaitReceiver(ctx context.Context) func(proto.MCPWaitKind) {
-	receive, _ := ctx.Value(mcpWaitContextKey{}).(func(proto.MCPWaitKind))
-	return receive
+func mcpWaitReceiver(ctx context.Context) (func(proto.MCPWaitKind), bool) {
+	receive, ok := ctx.Value(mcpWaitContextKey{}).(func(proto.MCPWaitKind))
+	return receive, ok
+}
+
+const (
+	mcpWaitInterimPrefix  = `{"wait_kind":`
+	mcpWaitInterimMaxSize = 64
+)
+
+// mcpWaitInterim recognizes only the node's exact one-field interim envelope. The size and prefix checks keep a large
+// final response from a second JSON decode; additional top-level fields make it a final response, not an interim line.
+func mcpWaitInterim(line []byte) (proto.MCPWaitKind, bool) {
+	if len(line) > mcpWaitInterimMaxSize || !bytes.HasPrefix(line, []byte(mcpWaitInterimPrefix)) {
+		return "", false
+	}
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(line, &envelope) != nil || len(envelope) != 1 {
+		return "", false
+	}
+	var kind proto.MCPWaitKind
+	if json.Unmarshal(envelope["wait_kind"], &kind) != nil {
+		kind = proto.MCPWaitUnknown
+	}
+	return proto.NormalizeMCPWaitKind(kind), true
 }
 
 // Dial sends one request to the local node and returns the raw response line. It fails with ErrNoNode when no node
@@ -130,26 +153,35 @@ func dial(ctx context.Context, path string, req any, hangUpOnCancel bool) ([]byt
 		return nil, err
 	}
 	reader := bufio.NewReader(c)
-	var line []byte
-	for {
-		line, err = reader.ReadBytes('\n')
+	readLine := func() ([]byte, error) {
+		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			return nil, fmt.Errorf("node closed connection: %w", err)
 		}
-		var envelope map[string]json.RawMessage
-		if json.Unmarshal(line, &envelope) == nil {
-			if raw, ok := envelope["wait_kind"]; ok {
-				var kind proto.MCPWaitKind
-				if json.Unmarshal(raw, &kind) != nil {
-					kind = proto.MCPWaitUnknown
-				}
-				if receive := mcpWaitReceiver(ctx); receive != nil {
-					receive(proto.NormalizeMCPWaitKind(kind))
-				}
-				continue
+		return line, nil
+	}
+	receive, optedIn := mcpWaitReceiver(ctx)
+	var line []byte
+	if !optedIn {
+		// The legacy protocol is exactly one response line, even if a final response has a wait_kind field of its own.
+		line, err = readLine()
+	} else {
+		for {
+			line, err = readLine()
+			if err != nil {
+				break
+			}
+			kind, interim := mcpWaitInterim(line)
+			if !interim {
+				break
+			}
+			if receive != nil {
+				receive(kind)
 			}
 		}
-		break
+	}
+	if err != nil {
+		return nil, err
 	}
 	var away struct {
 		Away bool `json:"away"`
