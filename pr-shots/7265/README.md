@@ -7,7 +7,7 @@ These are post-merge screenshot artifacts for follow-up visual review. They are 
 - Source main commit: `aa5e1ec43e49a46609ada1da4906d4cf41e04db6`.
 - The images are Robolectric native-graphics screenshots from the named existing Android screenshot tests; no emulator or physical device was used.
 - Test: `InboxSectionHeaderShotsTest`.
-- The shared showcase captures use `spec/fixtures/inbox/showcase.json`, its fixed clock `2026-01-01T12:00:00Z`, and UTC as supplied by the test.
+- This test uses its own English-qualified synthetic records (fixture timestamp `2026-11-13`); it does not read `showcase.json` or inject the showcase clock/UTC.
 - Reproduce from the repository root with `./android/gradlew -p android -PpersonaApplicationId=com.example.persona :feature:inbox:testDebugUnitTest --tests 'persona.feature.inbox.InboxSectionHeaderShotsTest'` (the other review classes use the same Gradle task).
 
 ## Matrix
