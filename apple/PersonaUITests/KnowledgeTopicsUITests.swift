@@ -40,15 +40,16 @@ final class KnowledgeTopicsUITests: XCTestCase {
         XCTAssertTrue(node.label.contains("iOS 小组件"), "the biggest topic is not first: \(node.label)") // i18n-ignore
         XCTAssertTrue(app.descendants(matching: .any)["kb.map.stats"].exists, "no counts")
         shot(app, "map-topics")
-        // The biggest topic starts open onto its subtopics; its fold closes it.
-        let rows = { app.descendants(matching: .any).matching(identifier: "kb.map.node").count }
-        let before = rows()
+        // The biggest topic starts open onto its subtopics; its fold closes it. (Counting rows proves nothing: a lazy list
+        // shows the rows below in their place.)
+        let sub = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "kb.map.node", "时间线刷新")).firstMatch // i18n-ignore
+        XCTAssertTrue(sub.waitForExistence(timeout: 10), "the biggest topic does not start open:\n\(app.debugDescription)")
         let fold = app.buttons.matching(identifier: "kb.map.fold").firstMatch
         XCTAssertTrue(fold.exists)
         fold.tap()
-        let deadline = Date.now.addingTimeInterval(5)
-        while rows() >= before, Date.now < deadline { Thread.sleep(forTimeInterval: 0.2) }
-        XCTAssertLessThan(rows(), before, "the fold did not close the topic")
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: sub)
+        waitForExpectations(timeout: 5)
 
         app.buttons["kb.map.view.projects"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "kb.map.node").firstMatch.waitForExistence(timeout: 30))
