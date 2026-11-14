@@ -4,7 +4,8 @@ import XCTest
 /// MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 (PERSONA_MOCK_HUB): on the chat's task card (the widget task, on Develop) and on
 /// the detail page of the to-do 「天气 App 发 1.3 版」 (on Develop), in zh-Hans, English and Japanese, light and dark. At the
 /// default size the bar is one element; at the largest it is that, or the six dots with a line under them when the
-/// names do not fit (by width), and it lies within the window. `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps the screenshots
+/// names do not fit (by width), and it lies within the window, clear of the to-do page's buttons. The page is scrolled by
+/// its margin (#6783). `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps the screenshots
 /// (`stagebar-<place>-<language>-<size>-<scheme>.png`); `TEST_RUNNER_PERSONA_PHASE=before` takes them on an older build,
 /// checking nothing.
 final class TodoStageBarUITests: XCTestCase {
@@ -56,13 +57,13 @@ final class TodoStageBarUITests: XCTestCase {
                         XCTAssertTrue(found, "\(name): no stage bar:\n\(app.debugDescription)")
                         sleep(2) // the page settles
                         // The bar into the middle of the screen, clear of the navigation bar and the buttons at the bottom.
-                        let middle = window.insetBy(dx: 0, dy: window.height * 0.15)
-                        for _ in 0..<4 where !middle.contains(bar.frame) {
-                            scroll(app, by: max(-window.height * 0.35, min(window.height * 0.35, bar.frame.midY - window.midY)))
+                        let clear = clearPart(app, window)
+                        for _ in 0..<4 where !clear.contains(bar.frame) {
+                            scroll(app, by: max(-window.height * 0.35, min(window.height * 0.35, bar.frame.midY - clear.midY)))
                             sleep(1)
                         }
                         if !before {
-                            check(app, bar, window: window, largest: size == "largest", language: language, name: name)
+                            check(app, bar, clear: clear, largest: size == "largest", language: language, name: name)
                         }
                         if let dir = env["PERSONA_SHOTS"] {
                             // The app icon follows the color scheme, and the system says so in an alert over the page: closed first.
@@ -82,20 +83,34 @@ final class TodoStageBarUITests: XCTestCase {
     }
 
     /// Scrolls the page by `dy` points (positive: the content moves up), dragged slowly and held at the end so it stops
-    /// there instead of flinging past.
+    /// there instead of flinging past. Dragged by the page's margin at the screen's leading edge, where no row has a
+    /// control: from the middle of the window it could land on one, and before #6813 it turned the to-do's Due date
+    /// wheel at the largest size, so the stage bar never came into view (#6783).
     @MainActor private func scroll(_ app: XCUIApplication, by dy: CGFloat) {
-        let center = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 0, dy: -dy)), withVelocity: .slow,
+        let margin = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
+        margin.press(forDuration: 0.05, thenDragTo: margin.withOffset(CGVector(dx: 0, dy: -dy)), withVelocity: .slow,
                      thenHoldForDuration: 0.3)
+    }
+
+    /// The part of the window clear of the navigation bar and the buttons at the bottom: the window less 15% at each end,
+    /// and above the to-do page's buttons where they reach higher (one above the other at the largest size, #6151, they
+    /// covered the bar in Japanese).
+    @MainActor private func clearPart(_ app: XCUIApplication, _ window: CGRect) -> CGRect {
+        let top = window.minY + window.height * 0.15
+        var bottom = window.maxY - window.height * 0.15
+        for id in ["todo.handToAgent", "todo.toggleDone"] where app.buttons[id].exists {
+            bottom = min(bottom, app.buttons[id].frame.minY)
+        }
+        return CGRect(x: window.minX, y: top, width: window.width, height: bottom - top)
     }
 
     /// At the default size: one element that says the stage, no dot of its own. At the largest, by the measured width:
     /// that same one element while the six names fit their sixths, else the six dots, each labeled with its name, place
-    /// and state (in zh-Hans word for word). Either way the bar is within the window.
-    @MainActor private func check(_ app: XCUIApplication, _ bar: XCUIElement, window: CGRect, largest: Bool, language: String, name: String) {
+    /// and state (in zh-Hans word for word). Either way the bar is wholly in the clear part of the window, so the
+    /// screenshot shows it.
+    @MainActor private func check(_ app: XCUIApplication, _ bar: XCUIElement, clear: CGRect, largest: Bool, language: String, name: String) {
         let dots = ["plan", "develop", "review", "merge", "deploy", "verify"].map { app.descendants(matching: .any)["todo.stage.\($0)"].firstMatch }
-        XCTAssertGreaterThanOrEqual(bar.frame.minX, window.minX - 0.5, "\(name): the bar starts left of the screen")
-        XCTAssertLessThanOrEqual(bar.frame.maxX, window.maxX + 0.5, "\(name): the bar ends right of the screen")
+        XCTAssertTrue(clear.contains(bar.frame.insetBy(dx: 0.5, dy: 0.5)), "\(name): the bar \(bar.frame) not wholly in \(clear)")
         guard dots[1].exists else {
             if language == "zh-Hans" { XCTAssertEqual(bar.label, "阶段：开发（第 2 步，共 6 步）", name) } // i18n-ignore: the app's words
             return
@@ -103,7 +118,7 @@ final class TodoStageBarUITests: XCTestCase {
         XCTAssertTrue(largest, "\(name): the names do not fit at the default size")
         for dot in dots {
             XCTAssertTrue(dot.exists, "\(name): a dot without its own element:\n\(app.debugDescription)")
-            XCTAssertTrue(window.contains(dot.frame.insetBy(dx: 0.5, dy: 0.5)), "\(name): \(dot.label) off the screen")
+            XCTAssertTrue(clear.contains(dot.frame.insetBy(dx: 0.5, dy: 0.5)), "\(name): \(dot.label) not wholly in \(clear)")
         }
         XCTAssertTrue(dots[1].label.contains("2"), "\(name): \(dots[1].label)")
         if language == "zh-Hans" { // i18n-ignore: the app's words
