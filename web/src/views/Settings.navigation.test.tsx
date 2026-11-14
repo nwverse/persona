@@ -31,8 +31,8 @@ vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import(".
 vi.mock("../lib/api", async (original) => ({ ...(await original<typeof import("../lib/api")>()), api: () => Promise.resolve({ accounts: [] }) }));
 vi.mock("./settings/AgentSettings", () => ({ AgentSettings: ({ agent }: { agent: string }) => <div data-page="agent" data-agent={agent} /> }));
 vi.mock("./settings/Extensions", () => ({
-  Extensions: ({ open, onOpen }: { open: string | null; onOpen: (id: string | null) => void }) => (
-    <div data-page="extensions" data-open={open}>
+  Extensions: ({ open, onOpen, headerBack }: { open: string | null; onOpen: (id: string | null) => void; headerBack?: boolean }) => (
+    <div data-page="extensions" data-open={open} data-header-back={headerBack ? "yes" : "no"}>
       <button type="button" data-item="open" onClick={() => onOpen("example")} />
       <button type="button" data-item="close" onClick={() => onOpen(null)} />
     </div>
@@ -332,6 +332,41 @@ describe("Settings category navigation", () => {
     expect(host.querySelector("nav")).not.toBeNull();
   });
 
+  // a Lark bot channel's settings link opens Connectors with the bot's dialog over the list: not an item's page, so the
+  // top bar's Back is the list's, not "Back to Connectors" (which took two presses to leave)
+  it("leaves the top bar going to the Settings list under the Lark bot's dialog on a phone", async () => {
+    viewport.phone = true;
+    history.pushState(null, "", "/");
+    await mount("/settings?tab=connectors&connector=feishu-bot");
+    expect(host.querySelector('[data-page="connector-list"]')).not.toBeNull();
+    const back = host.querySelector<HTMLButtonElement>("header button:first-child")!;
+    expect(back.getAttribute("aria-label")).toBe(t("settings.back"));
+    await act(async () => back.click());
+    expect(location.search).toBe("");
+    expect(host.querySelector("nav")).not.toBeNull();
+  });
+
+  // audit item 64: pages inside an extension's or the market's had the top bar's Back, to the extension list, over their
+  // own, to the catalog or the extension; the top bar's now goes where theirs did, and they draw none
+  it.each([
+    { from: "-market/example-market/example", to: "-market", label: () => t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) },
+    { from: "-markets", to: "-market", label: () => t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) },
+    { from: "-market/example-market/example@work", to: "example@work", label: () => t("settings-extensionview.back") },
+    { from: "example/ui/main", to: "example", label: () => t("settings-extensionview.back") },
+    { from: "-market", to: null, label: () => t("settings.back_to", { name: t("settings-nav.tab_extensions") }) },
+  ])("on a phone, the top bar's Back goes from extension page $from to its parent", async ({ from, to, label }) => {
+    viewport.phone = true;
+    history.pushState(null, "", "/");
+    await mount(`/settings?tab=extensions&extension=${encodeURIComponent(from)}`);
+    const page = () => [...host.querySelectorAll("[data-page=extensions]")].at(-1)!;
+    expect(page().getAttribute("data-header-back")).toBe("yes");
+    const back = host.querySelector<HTMLButtonElement>("header button:first-child")!;
+    expect(back.getAttribute("aria-label")).toBe(label());
+    await act(async () => back.click());
+    expect(page().getAttribute("data-open")).toBe(to);
+    expect(new URLSearchParams(location.search).get("extension")).toBe(to);
+  });
+
   it("keeps a connector page's own Back on a wide screen", async () => {
     await mount("/settings?tab=connectors&connector=github");
     expect(host.querySelector("[data-own-back]")).not.toBeNull();
@@ -426,10 +461,34 @@ describe("Settings category navigation", () => {
     await key("Escape");
     expect(box.value).toBe("");
     expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(t("settings-nav.tab_general"));
-    // Enter on a category's name opens the category
+    // the Enter that confirms an input method's text is not ours: Safari sends it with isComposing false and keyCode 229
     await type(t("settings-nav.tab_notifications"));
+    const confirming = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(confirming, "keyCode", { value: 229 });
+    await act(async () => { box.dispatchEvent(confirming); });
+    await act(async () => { box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })); });
+    expect(location.search).toBe("");
+    expect(box.value).toBe(t("settings-nav.tab_notifications"));
+    // Enter on a category's name opens the category
     await key("Enter");
     expect(location.search).toBe("?tab=notifications");
+  });
+
+  // a setting inside a named part of a page ("Claude Code › Thinking effort") opens that page at that part
+  it("finds an agent's own setting by its name, and its result opens that agent's section", async () => {
+    Element.prototype.scrollIntoView = function () {};
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    await mount("/settings?tab=general");
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, t("lib-agent-settings.setting_effortLevel"));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(nav().textContent).toContain(`${t("settings-nav.tab_agents")}›Claude Code › ${t("lib-agent-settings.setting_effortLevel")}`);
+    expect(nav().textContent).toContain(`${t("settings-nav.tab_models")}›${t("settings-nav.tab_model_config")} › ${t("settings-modelconfiguration.effort")}`);
+    await act(async () => [...nav().querySelectorAll("button")].find((b) => b.textContent?.includes("Claude Code"))!.click());
+    expect(location.search).toBe("?tab=agents");
+    expect(location.hash).toBe("#settings-claude");
   });
 
   it("returns to the phone list from a shared detail URL without navigating away", async () => {

@@ -267,7 +267,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack?: () => vo
 /** `manager`: whose copy it is for (an upgrade from another manager's extension page, docs/assistant/managers.md "Clients"): its
  *  catalog, preview, consent and operation are that manager's, named on each request, and the page says so; none: the
  *  default's. */
-export function MarketItem({ market, id, manager, onBack, onInstalled }: { market: string; id: string; manager?: string; onBack: () => void; onInstalled: (id: string) => void }) {
+export function MarketItem({ market, id, manager, onBack, onInstalled }: { market: string; id: string; manager?: string; onBack?: () => void; onInstalled: (id: string) => void }) {
   // what goes to the extension itself (its details, its upgrade, uninstalling it) names the manager while this is open
   const managerName = useRoster()?.managers.find((m) => m.id === manager)?.name ?? manager;
   const [it, setIt] = useState<CatalogItem | null>(null);
@@ -759,7 +759,7 @@ function RemovalNote({ count }: { count: number | null }) {
   );
 }
 
-export function Markets({ onBack }: { onBack: () => void }) {
+export function Markets({ onBack }: { onBack?: () => void }) {
   const [list, setList] = useState<Market[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);

@@ -103,7 +103,7 @@ export function NotificationSettings() {
           />
         </Row>
         {/* depends on the switch above (#2451): reads off and can't be changed until notifications go out at all */}
-        <Row icon="appWindow" label={t("settings-notifications.system_always")} hint={t(systemActive ? "settings-notifications.system_always_hint" : "settings-notifications.system_always_needs")}>
+        <Row icon="appWindow" anchor="notify-system-always" label={t("settings-notifications.system_always")} hint={t(systemActive ? "settings-notifications.system_always_hint" : "settings-notifications.system_always_needs")}>
           <Switch on={systemActive && system.always} onChange={setSystemNotifyAlways} disabled={!systemActive} label={t("settings-notifications.system_always")} />
         </Row>
       </Group>
@@ -134,7 +134,7 @@ export function NotificationSettings() {
       {ready && (
         <>
           <Group footer={t("settings-notifications.input_footer")}>
-            <Row icon="hand" label={t("settings-notifications.input")} hint={t("settings-notifications.input_hint")}>
+            <Row icon="hand" anchor="notify-input" label={t("settings-notifications.input")} hint={t("settings-notifications.input_hint")}>
               <Switch on={prefs.input} onChange={(input) => void save({ input })} label={t("settings-notifications.input")} />
             </Row>
           </Group>
@@ -171,6 +171,7 @@ export function NotificationSettings() {
           <Group footer={t("settings-notifications.quiet_footer")}>
             <Row
               icon="moon"
+              anchor="notify-quiet"
               label={t("settings-notifications.quiet")}
               hint={quiet.enabled ? t("settings-notifications.quiet_range", { start: clockText(quiet.start), end: clockText(quiet.end) }) : t("settings-notifications.quiet_hint")}
             >

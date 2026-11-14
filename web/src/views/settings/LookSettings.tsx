@@ -67,7 +67,8 @@ export function ThemeColorPicker() {
                   {selected && <Icon name="check" size={14} stroke={2.6} />}
                 </span>
               </span>
-              <span className={cx("max-w-full truncate text-[12px] whitespace-nowrap", selected ? "font-medium text-ink" : "text-ink-2")}>{t(`ui-look.${c}`)}</span>
+              {/* a color's name wraps in a phone's four columns rather than being cut ("システムブルー") */}
+              <span className={cx("max-w-full text-center text-[12px] break-words", selected ? "font-medium text-ink" : "text-ink-2")}>{t(`ui-look.${c}`)}</span>
               <span className="-mt-1 max-w-full truncate text-[11px] whitespace-nowrap text-ink-3">{sub(c)}</span>
             </button>
           );
@@ -88,11 +89,12 @@ export function TextSizeRow() {
   );
 }
 
-/** "Recent chats in the sidebar": how many Persona chats › Recent lists before Show more (lib/sidebar-recent.ts, #5146). */
+/** "Recent chats in the sidebar": how many Persona chats › Recent lists before Show more (lib/sidebar-recent.ts, #5146).
+ *  On a phone its four choices go under the sentence, so the name is not cut beside them (audit item 17). */
 export function RecentChatsRow() {
   const count = useRecentCount();
   return (
-    <Row label={t("ui-look.recent_chats")} hint={t("ui-look.recent_chats_hint")} wrapHint anchor="recent-chats">
+    <Row label={t("ui-look.recent_chats")} hint={t("ui-look.recent_chats_hint")} wrapHint stackOnNarrow anchor="recent-chats">
       <Segmented label={t("ui-look.recent_chats")} value={String(count)} options={RECENT_COUNTS.map((n) => ({ v: String(n), label: String(n) }))} onChange={(v) => setRecentCount(Number(v))} />
     </Row>
   );

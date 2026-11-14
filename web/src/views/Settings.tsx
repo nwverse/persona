@@ -11,6 +11,7 @@ import { splitDevices } from "../lib/devices";
 import { ago } from "../lib/format";
 import { install, useInstall, type InstallState } from "../lib/pwa";
 import { useStore } from "../lib/store";
+import { composing } from "../lib/send-history";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast, useMenu } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
@@ -247,9 +248,12 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     history.replaceState(null, "", href({ name: "settings" }));
     setAt({ tab: null, sub: null, section: null });
   };
-  // On a phone the top bar's Back steps out of an item's page (a connector, a channel, an extension) to its category's
-  // page, as the page's own Back did, so that page draws none (audit item 64); from a category it goes to the list.
-  const itemOpen = phone && !!sub && itemIsPage(tab);
+  // On a phone the top bar's Back steps out of an item's page (a connector, a channel, an extension) to where the page's
+  // own Back went, so that page draws none (audit item 64): its category's page, or, from a page inside an extension's
+  // or the market's, that page; from a category it goes to the list. The Lark bot's settings are a dialog over the
+  // Connectors list, not a page, so its address leaves the top bar going to the list.
+  const itemOpen = phone && !!sub && itemIsPage(tab) && !(tab === "connectors" && sub === "feishu-bot");
+  const up = itemOpen && sub ? itemParent(tab, sub) : null;
   // Settings search: filters the sidebar categories, and jumps to a group or a setting's row inside a page (scroll +
   // brief highlight).
   const [query, setQuery] = useState("");
@@ -311,7 +315,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       <header ref={header} className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         {phone && at.tab ? (
           <>
-            <IconButton icon="chevronLeft" label={itemOpen ? t("settings.back_to", { name: TAB_INFO[tab].label }) : t("settings.back")} onClick={itemOpen ? () => pick(tab) : toList} />
+            <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={up ? () => pick(tab, up.sub) : toList} />
             <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{TAB_INFO[tab].label}</h1>
           </>
         ) : (
@@ -401,6 +405,19 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   );
 }
 
+/** Where the phone's top bar's Back goes from an item's page `sub` of `tab`, and its label: what the page's own Back did.
+ *  An extension's own page (one it draws) goes back to the extension, and a market's extension or the list of markets to
+ *  the catalog, unless the market's extension was opened as another assistant's upgrade (MarketItem's Back); any other
+ *  item's page goes to its category's page. */
+function itemParent(tab: Tab, sub: string): { sub: string | null; label: string } {
+  if (tab === "extensions") {
+    const r = extensionsRoute(sub);
+    if (r.kind === "page" || (r.kind === "item" && r.manager)) return { sub: routeSub({ kind: "extension", id: r.id, manager: r.manager }), label: t("settings-extensionview.back") };
+    if (r.kind === "item" || r.kind === "markets") return { sub: routeSub({ kind: "catalog" }), label: t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) };
+  }
+  return { sub: null, label: t("settings.back_to", { name: TAB_INFO[tab].label }) };
+}
+
 const AGENT_LABEL: Record<AgentTab, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", omp: "omp" };
 
 function isAgentSection(section: SettingsSection | null): section is AgentTab {
@@ -482,13 +499,14 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
           <input
             value={query}
             onChange={(e) => onQuery(e.target.value)}
-            // Esc clears what was typed; Enter opens the first result (not while an input method is composing)
+            // Esc clears what was typed; Enter opens the first result (not while an input method is composing, nor the Enter
+            // that confirms its text, which Safari sends with isComposing already false)
             onKeyDown={(e) => {
               if (e.key === "Escape" && query) {
                 e.preventDefault();
                 e.stopPropagation();
                 onQuery("");
-              } else if (e.key === "Enter" && query && !e.nativeEvent.isComposing) {
+              } else if (e.key === "Enter" && query && !composing(e.nativeEvent)) {
                 e.preventDefault();
                 if (tabs.length) onPick(tabs[0]);
                 else if (groups.length) onGroup(groups[0]);
@@ -506,7 +524,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
           <>
             {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
             {groups.length > 0 && <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{t("settings.search_in_page")}</div>}
-            {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}`} g={g} onGroup={onGroup} />)}
+            {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}/${g.group}`} g={g} onGroup={onGroup} />)}
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
           </>
         ) : (
@@ -550,10 +568,11 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
   );
 }
 
+// a result wraps rather than cutting the setting's name ("Agents › Claude Code › Thinking effort" is longer than the sidebar)
 function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup) => void }) {
   return (
     <button type="button" onClick={() => onGroup(g)} className="flex w-full items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover hover:text-ink">
-      <span className="min-w-0 truncate">
+      <span className="min-w-0 break-words">
         <span className="font-medium text-ink">{TAB_INFO[g.tab].label}</span>
         <span className="mx-1 text-ink-3">›</span>
         <span>{g.group}</span>
@@ -708,7 +727,7 @@ function About() {
           ))}
         </Row>
       )}
-      <Row label={t("settings.computers")}>{t("settings.computers_online", { online: machines.filter((m) => m.online).length, total: machines.length })}</Row>
+      <Row label={t("settings.computers")} anchor="computers">{t("settings.computers_online", { online: machines.filter((m) => m.online).length, total: machines.length })}</Row>
       <InstallRow />
       <div className="flex justify-end px-4 py-2.5" data-settings-row="disconnect">
         <Button tone="quiet" icon="logout" onClick={disconnect.start} busy={disconnect.busy} className="text-red enabled:hover:text-red">

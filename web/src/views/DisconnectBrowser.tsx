@@ -6,8 +6,9 @@ import { Suspense, useState } from "react";
 import { handleUnauthorized } from "../lib/api";
 import { revokeThisBrowser, signOutHere } from "../lib/disconnect";
 import { lazyPage } from "../lib/lazy-page";
-import { Button, Dialog } from "../ui/atoms";
+import { Button, Dialog, toast } from "../ui/atoms";
 import { t } from "../i18n";
+import { OverlayBoundary } from "./LazyOverlay";
 
 type Problem = { error: string; id: string } | { nothing: true };
 
@@ -44,10 +45,14 @@ export function useDisconnect(): { start: () => void; busy: boolean; dialog: Rea
   };
   const dialog = (
     <>
+      {/* its chunk may not load (the hub was redeployed, or it is offline): the host stays, nothing is revoked, the toast
+          says why nothing opened, and the next Disconnect tries the chunk again */}
       {asked && (
-        <Suspense fallback={null}>
-          <DisconnectConfirm open={asking} busy={busy} onCancel={() => setAsking(false)} onConfirm={() => void revoke()} />
-        </Suspense>
+        <OverlayBoundary open={asking} onClose={() => { setAsking(false); toast(t("pageboundary.chunk_body"), "error"); }}>
+          <Suspense fallback={null}>
+            <DisconnectConfirm open={asking} busy={busy} onCancel={() => setAsking(false)} onConfirm={() => void revoke()} />
+          </Suspense>
+        </OverlayBoundary>
       )}
       <Dialog
         open={problem !== null}

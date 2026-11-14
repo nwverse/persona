@@ -5,6 +5,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// the current assistant (none picked: the default)
+const chosen = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("../../lib/manager-choice", async (original) => ({ ...(await original<typeof import("../../lib/manager-choice")>()), useChosenManager: () => chosen.value }));
 import { setToken } from "../../lib/api";
 import { extensionState, type HubExtension } from "../../lib/extensions";
 import { ChannelList } from "./Channels";
@@ -29,15 +33,21 @@ const CHANNELS = [
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
 let host: HTMLDivElement;
 let root: Root;
-beforeEach(() => {
-  setToken("fixture-token");
+/** The hub's lists, each item `manager`'s (none: the default's). */
+const hubWith = (manager?: string) => {
+  const own = <T,>(items: T[]) => (manager ? items.map((x) => ({ ...x, manager })) : items);
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const path = new URL(String(input), "http://hub.test").pathname.replace(/^\/api\/v1/, "");
-    if (path === "/extensions" || path === "/plugins") return Promise.resolve(json({ extensions: EXTENSIONS, plugins: EXTENSIONS, markets: false }));
-    if (path === "/connectors") return Promise.resolve(json({ connectors: CONNECTORS }));
+    if (path === "/extensions" || path === "/plugins") return Promise.resolve(json({ extensions: own(EXTENSIONS), plugins: own(EXTENSIONS), markets: false }));
+    if (path === "/connectors") return Promise.resolve(json({ connectors: own(CONNECTORS) }));
     if (path === "/channels") return Promise.resolve(json({ channels: CHANNELS }));
     return Promise.resolve(json({}));
   }));
+};
+beforeEach(() => {
+  setToken("fixture-token");
+  chosen.value = null;
+  hubWith();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -98,8 +108,30 @@ describe("a settings list beside the open item", () => {
     expect(open.getAttribute("aria-current")).toBe("true");
     expect(row("Example Team").hasAttribute("aria-current")).toBe(false);
     expect(stateUnderName(open, CHANNELS[0].name, "已连接")).toBe(true);
+    // in the size the other two lists use for a state under a name
+    const state = [...open.querySelectorAll<HTMLElement>("span")].find((s) => s.textContent === "已连接" && s.querySelector("span"))!;
+    expect(state.className).toContain("text-submeta");
+    expect(state.className).not.toContain("text-[12px]");
     await draw(<ChannelList onOpen={() => {}} onMarketItem={() => {}} />);
     expect(host.querySelectorAll("[aria-current]")).toHaveLength(0);
     expect(stateUnderName(row("WeChat with a long name"), CHANNELS[0].name, "已连接")).toBe(false);
+  });
+
+  // an address without @manager opens the current assistant's copy (the item's page says so), so that copy's row is the
+  // one marked, as with the default assistant
+  it("marks the current assistant's copy when the address names no assistant", async () => {
+    chosen.value = "work";
+    hubWith("work");
+    await draw(<Extensions open={null} openBeside="example-gateway" onOpen={() => {}} />);
+    expect(row("Example gateway panel").getAttribute("aria-current")).toBe("true");
+    await draw(<ConnectorList openBeside="github" onOpen={() => {}} />);
+    expect(host.querySelector('[data-connector-row="github"]')!.getAttribute("aria-current")).toBe("true");
+    await draw(<ChannelList openBeside="wechat" onOpen={() => {}} onMarketItem={() => {}} />);
+    expect(row("WeChat with a long name").getAttribute("aria-current")).toBe("true");
+    // the same id of another assistant, named in the address, is not this one's
+    await draw(<ConnectorList openBeside="github@home" onOpen={() => {}} />);
+    expect(host.querySelectorAll("[aria-current]")).toHaveLength(0);
+    await draw(<ChannelList openBeside="wechat@home" onOpen={() => {}} onMarketItem={() => {}} />);
+    expect(host.querySelectorAll("[aria-current]")).toHaveLength(0);
   });
 });

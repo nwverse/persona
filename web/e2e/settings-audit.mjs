@@ -32,6 +32,14 @@ const strings = async (lang) => ({
   libHubs: await locale(lang, "lib-hubs"),
   confirm: await locale(lang, "disconnect-confirm"),
   wizard: await locale(lang, "settings-providerwizard"),
+  sidebar: await locale(lang, "sidebar"),
+  boundary: await locale(lang, "pageboundary"),
+  market: await locale(lang, "settings-extensionmarket"),
+  assistant: await locale(lang, "settings-assistantsettings"),
+  agent: await locale(lang, "lib-agent-settings"),
+  notify: await locale(lang, "settings-notifications"),
+  triage: await locale(lang, "settings-triagesettings"),
+  extensions: await locale(lang, "settings-extensions"),
 });
 // the back chevron's path (ui/icons.tsx), to count the ways back a page draws
 const chevronLeft = /chevronLeft:\s*<path d="([^"]+)"/.exec(await readFile(new URL("../src/ui/icons.tsx", import.meta.url), "utf8"))?.[1];
@@ -99,6 +107,20 @@ const shoot = async (page, name) => {
   results.screenshots.push(file);
 };
 
+// audit item 17: nothing in General is cut off on a phone in any language (row names, a color's name, a sidebar page's)
+for (const lang of ["en", "zh-Hans", "ja"]) {
+  await scenario(`17 ${lang} phone`, async () => {
+    const { page } = await open(lang, "light", "/settings?tab=general", { phone: true });
+    await page.locator('[data-settings-group="this-browser"]').waitFor({ timeout: 15_000 });
+    await page.waitForTimeout(500);
+    const cut = await page.evaluate(() => [...document.querySelectorAll('[role="region"] *')]
+      .filter((el) => getComputedStyle(el).textOverflow === "ellipsis" && el.scrollWidth > el.clientWidth + 0.5)
+      .map((el) => el.textContent.trim().slice(0, 30)));
+    check(`17 ${lang}: nothing in General is cut off on a phone`, !cut.length, cut.join(" | "));
+    if (lang === "ja") await shoot(page, "17-general-phone-ja");
+  });
+}
+
 // audit item 66: the hub's category says "This hub" in each language, and Models and Knowledge have their own icons;
 // audit item 18: the search box finds a setting by its row's name, Enter opens the first result, Esc clears it.
 for (const lang of ["en", "zh-Hans", "ja"]) {
@@ -128,6 +150,27 @@ for (const lang of ["en", "zh-Hans", "ja"]) {
     await box.fill("xyz");
     await box.press("Escape");
     check(`18 ${lang}: Esc clears the search box`, (await box.inputValue()) === "" && new URL(page.url()).pathname === "/settings");
+    // the settings on the other pages, by their own labels (the audit's words: thinking effort, time zone, quiet hours…)
+    const labels = [s.agent.setting_effortLevel, s.assistant.timezone, s.assistant.default_permissions, s.notify.quiet, s.triage.auto_continue, s.extensions.secrets_title, s.settings.device_tokens, s.settings.revoke];
+    const words = lang === "zh-Hans" ? [...labels, "主题", "深色", "字号", "思考", "时区", "token", "API Key", "密钥", "撤销", "退出", "免打扰", "自动更新"] : lang === "en" ? [...labels, "timezone", "effort", "token", "API Key"] : labels;
+    const none = [];
+    for (const word of words) {
+      await box.fill(word);
+      await page.waitForTimeout(80);
+      if (await page.getByText(s.settings.search_no_results, { exact: true }).count()) none.push(word);
+    }
+    check(`18 ${lang}: every page's settings are found by their labels`, !none.length, none.join(", "));
+    await box.fill(s.settings.revoke);
+    await page.waitForTimeout(150);
+    const revoke = await page.locator("nav button").allTextContents();
+    check(`18 ${lang}: "${s.settings.revoke}" is listed as Revoke, not as Connect a new device`, revoke.some((r) => r.endsWith(`›${s.settings.revoke}`)), revoke.join(" | "));
+    await shoot(page, `18-search-revoke-${lang}`);
+    await box.fill(s.agent.setting_effortLevel);
+    await page.waitForTimeout(150);
+    await shoot(page, `18-search-effort-${lang}`);
+    await page.locator("nav button", { hasText: `Claude Code › ${s.agent.setting_effortLevel}` }).click();
+    const opened = await page.waitForURL((u) => u.searchParams.get("tab") === "agents" && u.hash === "#settings-claude", { timeout: 3000 }).then(() => true, () => false);
+    check(`18 ${lang}: an agent's setting opens that agent's section`, opened, page.url());
     check(`${lang}: no page errors`, !run.errors.length, run.errors.join(" | "));
   });
 }
@@ -221,6 +264,27 @@ for (const theme of ["light", "dark"]) {
     check(`20 ${theme}: Cancel closes it, revokes nothing and keeps this browser signed in`, gone && !run.refused.length && token === "mock", run.refused.join(", "));
   });
 
+  // audit item 20: the question is a chunk of its own; when it won't load (a redeploy), choosing Disconnect from the
+  // account menu leaves the app as it was, revokes nothing and says why
+  await scenario(`20 ${theme} chunk`, async () => {
+    const { page, run } = await open("zh-Hans", theme, "/settings?tab=general");
+    // from a fresh load, so the idle preload cannot have fetched it first
+    await page.context().route("**/DisconnectConfirm*", (route) => route.abort());
+    await page.reload();
+    await page.getByRole("button", { name: zh.settings.disconnect_browser, exact: true }).waitFor({ timeout: 15_000 });
+    // the account menu, at the head of the sidebar, by its words ("<name>, switch assistant")
+    const words = zh.sidebar.switcher_label.split("{name}").find((w) => w.trim());
+    await page.locator(`button[aria-haspopup="menu"][aria-label*="${words}"]`).first().click({ timeout: 5000 });
+    const item = page.getByRole("menuitem", { name: zh.sidebar.disconnect, exact: true });
+    await item.click({ timeout: 3000 });
+    const said = await page.getByText(zh.boundary.chunk_body, { exact: true }).waitFor({ timeout: 3000 }).then(() => true, () => false);
+    const drawn = await page.evaluate(() => document.getElementById("root")?.children.length ?? 0);
+    const token = await page.evaluate(() => localStorage.getItem("persona.token"));
+    check(`20 ${theme}: a question that won't load leaves the app drawn and says why`, drawn > 0 && said, `${drawn} children`);
+    check(`20 ${theme}: and revokes nothing`, !run.refused.length && token === "mock", run.refused.join(", "));
+    await shoot(page, `20-disconnect-chunk-${theme}`);
+  });
+
   // audit item 67: Add hub refuses what is not an address, under the field, and saves nothing
   await scenario(`67 ${theme}`, async () => {
     const { page } = await open("zh-Hans", theme, "/settings?tab=general");
@@ -276,6 +340,26 @@ for (const theme of ["light", "dark"]) {
     await page.waitForTimeout(1000);
     n = await backs();
     check(`64 ${theme}: an extension's page on a phone has one Back`, n === 1, `${n} found`);
+    // inside the market: its catalog, one of its extensions, the markets; the top bar's Back goes to the catalog
+    const toMarket = zh.settings.back_to.replace("{name}", zh.market.market_title);
+    for (const sub of ["-market", "-market/3f2a9c1d0b/example-calendar", "-markets"]) {
+      await page.goto(new URL(`/settings?tab=extensions&extension=${encodeURIComponent(sub)}`, base).href);
+      await page.waitForTimeout(1200);
+      n = await backs();
+      check(`64 ${theme}: ${sub} on a phone has one Back`, n === 1, `${n} found`);
+      if (sub === "-market") continue;
+      if (sub === "-markets") await shoot(page, `64-markets-phone-${theme}`);
+      await page.getByRole("button", { name: toMarket, exact: true }).click();
+      const up = await page.waitForURL((u) => u.searchParams.get("extension") === "-market", { timeout: 3000 }).then(() => true, () => false);
+      check(`64 ${theme}: its Back goes to the catalog`, up, page.url());
+    }
+    // the Lark bot's dialog over Connectors is not an item's page: once it closes the top bar goes to the Settings list
+    await page.goto(new URL("/settings?tab=connectors&connector=feishu-bot", base).href);
+    await page.waitForTimeout(1200);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    const label = await page.locator("header button").first().getAttribute("aria-label");
+    check(`64 ${theme}: under the Lark bot's address the top bar's Back goes to Settings`, label === zh.settings.back, label ?? "");
   });
   await scenario(`64 ${theme} wide`, async () => {
     const { page } = await open("zh-Hans", theme, "/settings?tab=connectors&connector=github");

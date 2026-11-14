@@ -42,6 +42,7 @@ import { tRich } from "../../i18n/rich";
 import { ago } from "../../lib/format";
 import { scoped, useScope } from "../../lib/current-assistant";
 import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
+import { isOpenBeside } from "./open-beside";
 
 /**
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
@@ -50,7 +51,8 @@ import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
 export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside }: {
   open: string | null;
   onOpen: (id: string | null) => void;
-  /** The page's top bar has the way back to the list (a phone): an extension's page draws no Back of its own. */
+  /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
+   *  market's catalog, one of its extensions and the list of markets draw no Back of their own. */
   headerBack?: boolean;
   /** The extension open beside the list (Settings' two columns), whose row the list marks. */
   openBeside?: string | null;
@@ -85,7 +87,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
     case "page":
       return (
         <OwnedExtension id={r.id} manager={r.manager}>
-          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={() => go({ kind: "extension", id: r.id, manager })} />}
+          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} />}
         </OwnedExtension>
       );
     case "catalog":
@@ -98,12 +100,12 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
           market={r.market}
           id={r.id}
           manager={r.manager ?? installTo}
-          onBack={() => go(r.manager ? { kind: "extension", id: r.id, manager: r.manager } : { kind: "catalog" })}
+          onBack={headerBack ? undefined : () => go(r.manager ? { kind: "extension", id: r.id, manager: r.manager } : { kind: "catalog" })}
           onInstalled={(id) => go({ kind: "extension", id, manager: r.manager })}
         />
       );
     case "markets":
-      return <Markets onBack={() => go({ kind: "catalog" })} />;
+      return <Markets onBack={headerBack ? undefined : () => go({ kind: "catalog" })} />;
     default:
       return <ExtensionList onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} openBeside={openBeside} />;
   }
@@ -119,8 +121,9 @@ function OwnedExtension({ id: _id, manager, children }: { id: string; manager?: 
   return <>{children(manager ?? otherManager(picked ?? undefined))}</>;
 }
 
-/** A page an extension draws (placement plugin_page), under the extension's name. */
-function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; manager?: string; onBack: () => void }) {
+/** A page an extension draws (placement plugin_page), under the extension's name. `onBack`: none where the page's top
+ *  bar has the way back (a phone). */
+function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; manager?: string; onBack?: () => void }) {
   usePinnedExtension(id, manager);
   const [d, setD] = useState<HubExtensionDetail | null>(null);
   const [n, setN] = useState(0);
@@ -131,9 +134,11 @@ function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; ma
   return (
     <>
       <div className="mb-3 flex items-center gap-2">
-        <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-          <span className="max-w-[240px] truncate">{d?.name ?? id}</span>
-        </Button>
+        {onBack && (
+          <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
+            <span className="max-w-[240px] truncate">{d?.name ?? id}</span>
+          </Button>
+        )}
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.redraw")} onClick={() => setN((x) => x + 1)} />
       </div>
@@ -163,6 +168,7 @@ function StateDot({ extension }: { extension?: HubExtension | null }) {
  *  puts its state under its name (with a warning, when it has one, in place of the description), so the narrow column
  *  shows the name whole. */
 function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null }) {
+  const picked = useChosenManager();
   const [extensions, setExtensions] = useState<HubExtension[] | null>(null);
   const [markets, setMarkets] = useState(false);
   const [error, setError] = useState("");
@@ -280,7 +286,8 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
           const compact = openBeside !== undefined;
           const note = warning || (compact ? "" : p.description);
           const sub = routeSub({ kind: "extension", id: p.id, manager: p.manager && p.manager !== defaultManager() ? p.manager : undefined }) ?? p.id;
-          const current = openBeside != null && openBeside === sub;
+          // a route without @manager opens the current assistant's copy (OwnedExtension)
+          const current = isOpenBeside(openBeside, p.id, p.manager, picked);
           const state = (
             <span className={cx("flex items-center gap-1.5 whitespace-nowrap text-ink-2", compact ? "mt-0.5 min-w-0 text-submeta" : "shrink-0 text-[12px]")}>
               <StateDot extension={p} />

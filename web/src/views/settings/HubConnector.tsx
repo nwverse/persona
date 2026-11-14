@@ -8,7 +8,8 @@
 import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { otherManager, ownedSub, pinManagerAt, sameManager } from "../../lib/manager-choice";
+import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { isOpenBeside } from "./open-beside";
 import {
   canSendStep, CI_MODES, deleteIMessageData, imessageAIFooter, imessageStatus, setIMessageAI, connectorBrand, connectorLogin, connectorLogout, connectorState, connectorSummary, connectorTone, deleteConnectorArchive,
   deleteConnectorData, deletedLine, feedsFooter, fieldInput, githubAuth, githubInboxFooter, githubMachineLine, githubMachineWarns, githubOptions, larkcliOptions,
@@ -58,6 +59,7 @@ export function ConnectorList({ onOpen, onLarkCli, openBeside }: { onOpen: (id: 
   const [all, setAll] = useState<HubConnector[] | null>(null);
   const [error, setError] = useState("");
   const lark = useLarkOn();
+  const picked = useChosenManager();
   useEffect(() => {
     listConnectors()
       .then((l) => {
@@ -88,7 +90,8 @@ export function ConnectorList({ onOpen, onLarkCli, openBeside }: { onOpen: (id: 
       {!list && !error && <div className="px-4 py-3"><Loading /></div>}
       {error && <p className="px-4 py-3 text-[12.5px] text-red">{t("settings-hubconnector.list_failed", { error })}</p>}
       {(list ?? []).map((c) => {
-        const current = openBeside != null && openBeside === ownedSub(c.id, c.manager);
+        // a route without @manager opens the current assistant's copy
+        const current = isOpenBeside(openBeside, c.id, c.manager, picked);
         const state = (
           <span className={cx("flex min-w-0 items-center gap-1.5 text-ink-2", openBeside !== undefined ? "mt-0.5 text-submeta" : "text-[12.5px]")}>
             <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT[connectorTone(c)])} />

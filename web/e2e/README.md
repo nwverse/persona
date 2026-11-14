@@ -170,19 +170,26 @@ are blocked, and a write that revokes a token or saves a provider is answered in
 reaches the mock. It checks, in light and dark:
 
 - General's setting sentences wrap instead of being cut at one line (1280 and a 390 phone), Translation's note keeps
-  its spacing above Agent preferences, and on a phone the language menu sits under its sentence (audit item 17).
+  its spacing above Agent preferences, and on a phone the language menu sits under its sentence; in English, Chinese
+  and Japanese nothing in General is cut off with an ellipsis on a 390 phone (audit item 17).
 - In English, Chinese and Japanese, typing a setting's name ("Language") in the settings search lists that setting
-  first, Enter scrolls to its row and lights it, and Esc clears the box (audit item 18); the hub's category reads
-  "This hub" and Models and Knowledge selection have different icons (audit item 66).
+  first, Enter scrolls to its row and lights it, and Esc clears the box; the settings of the other pages are found by
+  their labels (thinking effort, time zone, default permissions, quiet hours, continue after errors, secrets, device
+  tokens, revoke; in Chinese also the audit's own words, in English "timezone" and "effort"), Revoke is listed as
+  Revoke, and an agent's setting opens that agent's section (audit item 18); the hub's category reads "This hub" and
+  Models and Knowledge selection have different icons (audit item 66).
 - Next on an empty custom gateway focuses the first field with a problem, marks it invalid, and its note is inside
   the dialog's visible area at 1280 x 600; every field that needs something says so, the others with a red edge;
   nothing is saved (audit item 19).
-- Disconnect this browser asks first, saying pairing is needed again; Cancel revokes nothing and keeps the sign-in
-  (audit item 20).
+- Disconnect this browser asks first, saying pairing is needed again; Cancel revokes nothing and keeps the sign-in.
+  With the question's chunk refused (a redeploy), Disconnect from the account menu leaves the app drawn, says
+  reloading should fix it and revokes nothing (audit item 20).
 - Add hub refuses "not a url" and an escaped host under the field and keeps the list as it was, and still adds a real
   address (audit item 67).
 - On a 390 phone a connector's page, Sent and an extension's page each draw one Back, the top bar's, which goes to the
-  category; a wide screen keeps the page's own Back (audit item 64).
+  category; so do the market's catalog, one of its extensions and the list of markets, whose Back goes to the catalog;
+  under the Lark bot's address the top bar's Back goes to Settings; a wide screen keeps the page's own Back (audit
+  item 64).
 - With the list beside an open extension or connector, the open row is the only one marked `aria-current`, its name is
   whole and its state sits under it; a list on its own marks nothing (audit item 68).
 
