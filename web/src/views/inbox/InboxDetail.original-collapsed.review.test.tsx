@@ -27,13 +27,14 @@ vi.mock("../../lib/store", async (original) => {
   return { ...m, useStore: <T,>(sel: (s: ReturnType<typeof m.getState>) => T) => m.useStore((s) => sel({ ...s, loaded: true })) };
 });
 vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined }));
-vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined }));
+vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined, translatesMail: () => false }));
 vi.mock("./LarkThread", () => ({ LarkThread: () => <div data-chat-body />, chatOfItem: () => ({}) }));
 
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { resetInboxViewMemoryForTests, useInboxView } from "../../lib/inbox-view-memory";
 import { settleRosterDefault } from "../../lib/manager-choice";
 import { Inbox } from "./Inbox";
+import { InboxDetail } from "./InboxDetail";
 
 settleRosterDefault();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -128,6 +129,25 @@ describe("the original's expansion belongs to one item", () => {
     // a fresh navigation or a reload does (Inbox.view-memory.test.tsx).
     expect(headerToggle()!.getAttribute("aria-expanded")).toBe("true");
     expect(originalMounted()).toBe(true);
+  });
+
+  it("a mail chain entry opens its uid from the collapsed state, reading only that message", async () => {
+    const mail: InboxItem = {
+      id: "mail:a1:1", source: "mail", kind: "mail", account: "a1", account_name: "Mail", title: "A thread", preview: "p", count: 1,
+      updated_at: "2026-11-09T04:00:00Z", tier: "action", version: "v", mail: { account_id: "a1", mailbox: "INBOX", uids: [88, 89] },
+      chain: [{ id: "m88", kind: "received", text: "older mail", link: { type: "source", uid: 88 } }],
+    };
+    calls.items = [mail];
+    await act(async () => root.render(<InboxDetail item={mail} loaded />));
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).toBeNull();
+    expect(calls.list.filter((c) => c.path.startsWith("/mail/messages/"))).toEqual([]);
+
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-chain-entry="received"] button')!.click());
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
+    expect(calls.list.filter((c) => c.path === "/mail/messages/a1/88?mailbox=INBOX")).toHaveLength(1);
+    expect(calls.list.some((c) => c.path === "/mail/messages/a1/89?mailbox=INBOX")).toBe(false); // not the latest too
   });
 
   it("keeps two managers' items of the same id apart", async () => {
