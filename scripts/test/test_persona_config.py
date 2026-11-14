@@ -83,27 +83,53 @@ class PersonaConfigTests(unittest.TestCase):
         target.write_bytes((ROOT / 'apple' / config.APP_ENTITLEMENTS).read_bytes())
         return root
 
-    def test_carplay_entitlements_only_for_json_true(self):
-        for value in (None, False, 'false', 'False', 'true', 'no', 0, 1, [], {}):
-            with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
-                root = self._fake_root(directory)
-                cfg = {} if value is None else {'app': {'carplay_voice': value}}
-                with patch.object(config, 'ROOT', str(root)):
-                    self.assertEqual(config.app_entitlements(cfg), config.APP_ENTITLEMENTS)
-                self.assertFalse((root / 'apple' / config.CARPLAY_ENTITLEMENTS).exists())
+    def test_optional_entitlements_only_for_json_true(self):
+        for key in ('carplay_voice', 'homekit'):
+            for value in (None, False, 'false', 'False', 'true', 'no', 0, 1, [], {}):
+                with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as directory:
+                    root = self._fake_root(directory)
+                    cfg = {} if value is None else {'app': {key: value}}
+                    with patch.object(config, 'ROOT', str(root)):
+                        self.assertEqual(config.app_entitlements(cfg), config.APP_ENTITLEMENTS)
+                    self.assertFalse((root / 'apple' / config.OPTIONAL_ENTITLEMENTS).exists())
 
-    def test_carplay_entitlements_keep_the_app_keys(self):
+    def _generated(self, app):
         with tempfile.TemporaryDirectory() as directory:
             root = self._fake_root(directory)
             with patch.object(config, 'ROOT', str(root)):
-                self.assertEqual(config.app_entitlements({'app': {'carplay_voice': True}}), config.CARPLAY_ENTITLEMENTS)
+                self.assertEqual(config.app_entitlements({'app': app}), config.OPTIONAL_ENTITLEMENTS)
             with open(root / 'apple' / config.APP_ENTITLEMENTS, 'rb') as f:
                 original = plistlib.load(f)
-            with open(root / 'apple' / config.CARPLAY_ENTITLEMENTS, 'rb') as f:
+            with open(root / 'apple' / config.OPTIONAL_ENTITLEMENTS, 'rb') as f:
                 generated = plistlib.load(f)
-            self.assertTrue(original)
-            self.assertIs(generated.pop('com.apple.developer.carplay-voice-based-conversation'), True)
-            self.assertEqual(generated, original)
+        self.assertTrue(original)
+        return original, generated
+
+    def test_carplay_entitlements_keep_the_app_keys(self):
+        original, generated = self._generated({'carplay_voice': True})
+        self.assertIs(generated.pop('com.apple.developer.carplay-voice-based-conversation'), True)
+        self.assertEqual(generated, original)
+
+    def test_homekit_entitlement_keeps_the_app_keys(self):
+        original, generated = self._generated({'homekit': True})
+        self.assertIs(generated.pop('com.apple.developer.homekit'), True)
+        self.assertEqual(generated, original)
+
+    def test_carplay_and_homekit_together(self):
+        original, generated = self._generated({'carplay_voice': True, 'homekit': True})
+        self.assertIs(generated.pop('com.apple.developer.homekit'), True)
+        self.assertIs(generated.pop('com.apple.developer.carplay-voice-based-conversation'), True)
+        self.assertEqual(generated, original)
+
+    def test_xcconfig_turns_home_on_only_with_homekit(self):
+        for app, expected in (({}, 'PERSONA_HOMEKIT = \n'), ({'homekit': 'true'}, 'PERSONA_HOMEKIT = \n'),
+                              ({'homekit': True}, 'PERSONA_HOMEKIT = YES\n')):
+            with self.subTest(app=app), tempfile.TemporaryDirectory() as directory:
+                root = self._fake_root(directory)
+                with patch.object(config, 'ROOT', str(root)), patch.object(config, 'path', return_value='config.json'):
+                    config.xcconfig({'app': app})
+                text = (root / 'apple' / 'Config.xcconfig').read_text()
+                self.assertIn(expected, text)
 
 
 class SigningProfileConfigTests(unittest.TestCase):
