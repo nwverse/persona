@@ -58,11 +58,19 @@ export function MermaidViewer({ svg, onClose }: { svg: string; onClose: () => vo
     layer.style.height = `${height}px`;
 
     function setView({ x, y, zoom }: View) {
-      // Allow panning only where the drawing overflows. Keep a fit diagram centered on each axis.
-      const maxX = Math.max(0, (width * zoom - viewport.x) / 2);
-      const maxY = Math.max(0, (height * zoom - viewport.y) / 2);
-      view = { x: clamp(x, -maxX, maxX), y: clamp(y, -maxY, maxY), zoom };
+      view = { x, y, zoom };
       layer.style.transform = `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${zoom})`;
+    }
+
+    function panBy({ x, y }: Point) {
+      const maxX = Math.max(0, (width * view.zoom - viewport.x) / 2);
+      const maxY = Math.max(0, (height * view.zoom - viewport.y) / 2);
+      // Zoom can leave the drawing off-center. Let pan move it back without snapping or going farther out.
+      setView({
+        x: clamp(view.x + x, Math.min(view.x, -maxX), Math.max(view.x, maxX)),
+        y: clamp(view.y + y, Math.min(view.y, -maxY), Math.max(view.y, maxY)),
+        zoom: view.zoom,
+      });
     }
 
     function fit() {
@@ -81,7 +89,12 @@ export function MermaidViewer({ svg, onClose }: { svg: string; onClose: () => vo
 
     function zoomFrom(from: Point, to: Point, factor: number) {
       const zoom = clamp(view.zoom * factor, fitZoom / 4, fitZoom * 16);
+      if (zoom === view.zoom) {
+        if (from.x !== to.x || from.y !== to.y) panBy({ x: to.x - from.x, y: to.y - from.y });
+        return;
+      }
       const ratio = zoom / view.zoom;
+      // Keep the drawing point under the gesture even on an axis that still fits the viewport.
       setView({ x: to.x - (from.x - view.x) * ratio, y: to.y - (from.y - view.y) * ratio, zoom });
     }
 
@@ -91,6 +104,7 @@ export function MermaidViewer({ svg, onClose }: { svg: string; onClose: () => vo
     }
 
     function wheel(e: WheelEvent) {
+      if (e.ctrlKey || e.metaKey) return;
       e.preventDefault();
       const point = local(e);
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? viewport.y : 1;
@@ -121,7 +135,7 @@ export function MermaidViewer({ svg, onClose }: { svg: string; onClose: () => vo
       if (e.metaKey || e.ctrlKey || e.altKey || !Object.hasOwn(KEY_PAN, e.key)) return;
       const delta = KEY_PAN[e.key];
       e.preventDefault();
-      setView({ ...view, x: view.x + delta.x, y: view.y + delta.y });
+      panBy(delta);
     }
 
     const center = { x: 0, y: 0 };

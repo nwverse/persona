@@ -31,6 +31,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.restoreAllMocks();
 });
 
 const zoomButton = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-mermaid.zoom")}"]`)!;
@@ -43,6 +44,43 @@ function open() {
 }
 
 describe("Mermaid zoom", () => {
+  function openStage() {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(SVGElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 100));
+    open();
+    const stage = dialog()!.querySelector<HTMLElement>("[data-mermaid-stage]")!;
+    vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 800, 600));
+    return { stage, drawing: stage.firstElementChild as HTMLElement };
+  }
+
+  it.each(["ctrlKey", "metaKey"] as const)("leaves %s wheel events to the browser", (modifier) => {
+    const { stage, drawing } = openStage();
+    const before = drawing.style.transform;
+    const event = new WheelEvent("wheel", { [modifier]: true, deltaY: -100, bubbles: true, cancelable: true });
+    stage.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(drawing.style.transform).toBe(before);
+  });
+
+  it("keeps an off-center drawing point under the pointer while zooming", () => {
+    const { stage, drawing } = openStage();
+    const event = new WheelEvent("wheel", {
+      clientX: 700, clientY: 350, deltaY: -100, bubbles: true, cancelable: true,
+    });
+    const view = () => drawing.style.transform
+      .match(/translate\(([^,]+)px, ([^)]+)px\) scale\(([^)]+)\)$/)!
+      .slice(1)
+      .map(Number);
+    const [beforeX, beforeY, beforeZoom] = view();
+    stage.dispatchEvent(event);
+    const [x, y, zoom] = view();
+    expect(event.defaultPrevented).toBe(true);
+    expect(zoom).toBeGreaterThan(beforeZoom);
+    expect((300 - x) / zoom).toBeCloseTo((300 - beforeX) / beforeZoom);
+    expect((50 - y) / zoom).toBeCloseTo((50 - beforeY) / beforeZoom);
+  });
+
   it("opens as a modal dialog that has the focus", () => {
     open();
     const d = dialog()!;
