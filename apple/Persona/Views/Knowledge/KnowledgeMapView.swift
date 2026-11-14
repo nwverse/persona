@@ -95,10 +95,6 @@ struct KnowledgeMapView: View {
         let n = row.node
         let isOpen = open[shown]?.contains(n.id) == true
         return HStack(alignment: n.point == nil ? .center : .firstTextBaseline, spacing: Theme.Space.s) {
-            ForEach(0..<row.depth, id: \.self) { _ in
-                Rectangle().fill(color(n.tone).opacity(0.35)).frame(width: Theme.Size.rule)
-                    .frame(width: Theme.Space.l).frame(maxHeight: .infinity)
-            }
             if row.depth == 0 {
                 Circle().fill(color(n.tone)).scaledFrame(width: Theme.Size.dotL, height: Theme.Size.dotL)
             }
@@ -106,6 +102,7 @@ struct KnowledgeMapView: View {
             Text(n.title)
                 .font(row.depth == 0 ? Theme.Font.heading : n.point != nil ? Theme.Font.secondary : Theme.Font.body)
                 .lineLimit(n.point != nil ? 4 : 2)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let meta = n.meta, n.point == nil {
                 Text(meta).font(Theme.Font.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
@@ -122,10 +119,20 @@ struct KnowledgeMapView: View {
                 .accessibilityIdentifier("kb.map.fold")
             }
         }
+        .padding(.vertical, Theme.Space.xs)
+        .padding(.leading, Theme.Space.l * CGFloat(row.depth))
+        // The rails down the left, one per level in the branch's tone: drawn behind the row, as tall as it is.
+        .background(alignment: .leading) {
+            HStack(spacing: Theme.Space.flush) {
+                ForEach(0..<row.depth, id: \.self) { _ in
+                    Rectangle().fill(color(n.tone).opacity(0.35)).frame(width: Theme.Size.rule).frame(width: Theme.Space.l)
+                }
+            }
+        }
         .contentShape(.rect)
         .onTapGesture { tap(n, wide: wide) }
         .listRowBackground(wide && selected?.id == n.id ? color(n.tone).opacity(0.12) : nil)
-        .listRowInsets(EdgeInsets(top: Theme.Space.xxs, leading: Theme.Space.l, bottom: Theme.Space.xxs, trailing: Theme.Space.s))
+        .listRowInsets(EdgeInsets(top: Theme.Space.flush, leading: Theme.Space.l, bottom: Theme.Space.flush, trailing: Theme.Space.s))
         .listRowSeparator(row.depth == 0 ? .visible : .hidden)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
