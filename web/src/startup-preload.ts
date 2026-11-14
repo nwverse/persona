@@ -301,7 +301,8 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // (views/chat/ExportDialog.tsx, lib/chat-export.ts). That main measured 17 B over the 480,545 B budget in this
 // environment before the change; the budget moves to what this change measured, 480,639 B.
 // #7418: the budget stays where #7375 left it and the first screen gives back about 8.5 KB in each language, so the
-// next changes have room again (MEASURE_PLACEHOLDER). The startup catalog takes just the keys the first screen
+// next changes have room again (measured in one environment against main at 85cfde464d: ja 480,639 B to 471,693 B;
+// en 476,941 B to 468,489 B, zh-Hans 477,922 B to 469,339 B). The startup catalog takes just the keys the first screen
 // reads of a namespace it reads a few of (src/i18n/startup-keys.ts: settings, todos, settings-managers, machines and
 // five more), five namespaces no first-screen code names left it, and Tailwind no longer scans test files and e2e
 // scripts (styles.css). Every build prints the room left (firstScreenRoom); when it runs low, take bytes off the
