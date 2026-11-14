@@ -526,6 +526,9 @@ class AdaptiveRunner:
                 if resource_match or desc_match or text_match:
                     matches.append(node)
             last_count[0] = len(matches)
+            if "index" in step:
+                # Several rows may share a label (a source chip); the scene names which one by position on screen.
+                return matches[int(step["index"])] if len(matches) > int(step["index"]) else None
             return matches[0] if len(matches) == 1 else None
         try:
             node = poll("tap selector", unique_node, timeout=float(step.get("timeout", 30)))

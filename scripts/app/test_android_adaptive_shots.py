@@ -395,6 +395,18 @@ class AdaptiveShotsTest(unittest.TestCase):
             runner.tap({"resource-id": "field", "timeout": 0.1})
             self.assertEqual(2, runner.ui_tree.call_count)
 
+    def test_tap_index_picks_one_of_several_rows_with_the_same_label(self):
+        nodes = shots.parse_ui_nodes(
+            b'<hierarchy><node text="Direct" bounds="[0,0][10,10]" /><node text="Direct" bounds="[0,20][10,30]" /></hierarchy>')
+        with tempfile.TemporaryDirectory() as output:
+            adb = FakeAdb()
+            runner = make_runner(adb, output)
+            runner.ui_tree = mock.Mock(return_value=nodes)
+            runner.tap({"text": "Direct", "index": 1, "timeout": 0.1})
+            self.assertEqual({"type": "tap", "x": 5, "y": 25}, runner.action_log[-1])
+            with self.assertRaises(shots.AdaptiveFailure):
+                runner.tap({"text": "Direct", "timeout": 0.1})
+
     def test_route_override_does_not_require_a_shell_checkpoint(self):
         with tempfile.TemporaryDirectory() as output:
             runner = make_runner(FakeAdb(), output)
