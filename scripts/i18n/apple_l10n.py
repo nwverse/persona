@@ -41,13 +41,12 @@ LANGS = ["en", "zh-Hans", "ja"]
 SOURCE = "en"
 # The app targets' sources and PersonaKit's, whose text is looked up in the app's main bundle (#5575, #5758); not the
 # tests, the test apps or the other SwiftPM packages (BeautifulUI's keys: `beautifului_problems`).
-SOURCE_DIRS = ["Persona", "Shared", "Mac", "Vision", "PersonaWatch", "PersonaWidgets", "LiveActivity", "PersonaNotify", "PersonaShare",
+SOURCE_DIRS = ["Persona", "Shared", "Vision", "PersonaWatch", "PersonaWidgets", "LiveActivity", "PersonaNotify", "PersonaShare",
                "Packages/PersonaKit/Sources"]
 CATALOGS = [
     "Shared/Localization/Localizable.xcstrings",
     "Persona/Intents/AppShortcuts.xcstrings",
     "Persona/Resources/InfoPlist.xcstrings",
-    "Mac/Resources/InfoPlist.xcstrings",
     "Vision/Resources/InfoPlist.xcstrings",
     "PersonaWatch/InfoPlist.xcstrings",
 ]
@@ -60,7 +59,7 @@ LINK_SOURCES = "PersonaLink/Sources/PersonaLink"
 LINK_CATALOG = LINK_SOURCES + "/Resources/Localizable.xcstrings"
 LINK_CJK = {}
 # The targets whose extracted strings go into the catalogs (sync / strict).
-TARGETS = ["Persona", "PersonaMac", "PersonaVision", "PersonaWatch", "PersonaWidgets", "PersonaNotify", "PersonaShare"]
+TARGETS = ["Persona", "PersonaVision", "PersonaWatch", "PersonaWidgets", "PersonaNotify", "PersonaShare"]
 
 SPEC = re.compile(r"%(?:(\d+)\$)?(#@\w+@|[-+ 0#]*\d*(?:\.\d+)?(?:ll|hh|l|h|z|t|j|q|L)?[@dDiuUxXoOfeEgGcCsSpaA])")
 CJK = swift_literals.CJK

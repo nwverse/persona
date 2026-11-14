@@ -147,14 +147,6 @@
       "path_tokens": [],
       "external_refs": []
     },
-    "apple/Mac/Resources/Info.plist": {
-      "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
-      "tokens": [
-        "jarvis"
-      ],
-      "path_tokens": [],
-      "external_refs": []
-    },
     "apple/Persona/Resources/Info.plist": {
       "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
       "tokens": [
