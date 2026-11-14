@@ -9,9 +9,10 @@ import (
 // Generate writes from integrations/. Measured 424,588 B on 2026-11-10 (the same files raw were 1,627,267 B); the
 // budget was that +3%. Raised by 4,500 B on 2026-11-13 for the Paseo bridge's workspaces (#6295, #6297: 5,693 B over
 // main's 434,235 B), and by 4,000 B more for the bridge reading the lines of forked Claude sessions (#6709). Raise it
-// only for code a runtime needs, never to embed the packages raw again.
+// only for code a runtime needs, never to embed the packages raw again. The whole-input clip pass is required in the
+// runtime SDK too (#2907): its size-indexed implementation adds 1,729 compressed bytes, within the 448,000-byte budget.
 func TestDistBudget(t *testing.T) {
-	const budget = 445_800
+	const budget = 448_000
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

@@ -5,31 +5,19 @@ const inputClipMarker = 'zz_persona_clipped'
 const jsonLen = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8')
 
 class InputClipNode {
-  constructor(value, parent) {
+  constructor(value) {
     this.value = value
-    this.parent = parent
     this.kind = ''
     this.key = ''
     this.keySize = 0
     this.kids = []
-    this.fixed = 0
-    this.size = 0
+    this.size = 0 // scalar size; container sizes are summed only when their subtree is detached
     this.order = 0
     this.active = true
     this.index = -1
   }
 
-  remaining() { return this.kids.length - this.fixed }
-
-  resize(delta) {
-    for (let node = this; node !== null; node = node.parent) node.size += delta
-  }
-
-  decodedValue() {
-    if (this.kind === '[') return this.kids.map((child) => child.decodedValue())
-    if (this.kind === '{') return Object.fromEntries(this.kids.map((child) => [child.key, child.decodedValue()]))
-    return this.value
-  }
+  remaining() { return this.kids.length }
 }
 
 class InputClipTree {
@@ -37,32 +25,24 @@ class InputClipTree {
     this.arrays = []
     this.objects = []
     this.order = 0
-    this.root = this.build(value, null)
+    this.root = this.build(value)
   }
 
-  build(value, parent) {
-    const node = new InputClipNode(value, parent)
+  build(value) {
+    const node = new InputClipNode(value)
     if (Array.isArray(value)) {
       node.kind = '['
       node.order = this.order++
       this.arrays.push(node)
-      node.size = 2 + Math.max(0, value.length - 1)
-      for (const entry of value) {
-        const child = this.build(entry, node)
-        node.size += child.size
-        node.kids.push(child)
-      }
+      for (const entry of value) node.kids.push(this.build(entry))
     } else if (value !== null && typeof value === 'object') {
       node.kind = '{'
       node.order = this.order++
       this.objects.push(node)
-      const keys = Object.keys(value) // JSON.parse preserves the candidate's encoded key order
-      node.size = 2 + Math.max(0, keys.length - 1)
-      for (const key of keys) {
-        const child = this.build(value[key], node)
+      for (const key of Object.keys(value)) { // JSON.parse preserves the candidate's encoded key order
+        const child = this.build(value[key])
         child.key = key
         child.keySize = jsonLen(key)
-        node.size += child.keySize + 1 + child.size
         node.kids.push(child)
       }
     } else {
@@ -72,16 +52,19 @@ class InputClipTree {
   }
 }
 
-function heapLess(a, b) {
-  return a.remaining() === b.remaining() ? a.order < b.order : a.remaining() > b.remaining()
+// A detached subtree is walked once, here; attached ancestors need no size updates after each nested removal.
+function inputClipSize(node) {
+  if (node.kind === '') return node.size
+  let size = 2 + Math.max(0, node.kids.length - 1)
+  for (const child of node.kids) {
+    size += inputClipSize(child)
+    if (node.kind === '{') size += child.keySize + 1
+  }
+  return size
 }
 
-function heapSwap(heap, i, j) {
-  const node = heap[i]
-  heap[i] = heap[j]
-  heap[j] = node
-  heap[i].index = i
-  heap[j].index = j
+function heapLess(a, b) {
+  return a.remaining() === b.remaining() ? a.order < b.order : a.remaining() > b.remaining()
 }
 
 function heapDown(heap, start) {
@@ -93,13 +76,13 @@ function heapDown(heap, start) {
     if (left < heap.length && heapLess(heap[left], heap[best])) best = left
     if (right < heap.length && heapLess(heap[right], heap[best])) best = right
     if (best === i) return
-    heapSwap(heap, i, best)
+    const node = heap[i]
+    heap[i] = heap[best]
+    heap[best] = node
+    heap[i].index = i
+    node.index = best
     i = best
   }
-}
-
-function heapFix(heap, index) {
-  heapDown(heap, index) // removals and adding the fixed marker only lower a container's priority
 }
 
 function heapInit(heap) {
@@ -136,16 +119,19 @@ function deactivateInputClipNode(node) {
   for (const child of node.kids) deactivateInputClipNode(child)
 }
 
-function dropInputClipTail(heap, node) {
-  const last = node.kids.length - 1 - node.fixed // fixed suffix children (the root marker) are never removed
-  const child = node.kids[last]
-  let saved = child.size
-  if (node.kind === '{') saved += child.keySize + 1
-  if (node.kids.length > 1) saved++
-  node.kids.splice(last, 1)
-  node.resize(-saved)
+function dropInputClipTail(heap, node, root) {
+  const child = node.kids.pop()
+  let saved = inputClipSize(child)
+  if (node.kind === '{') {
+    saved += child.keySize + 1
+    delete node.value[child.key]
+  } else {
+    node.value.pop()
+  }
+  if (node === root || node.kids.length > 0) saved++ // the root's appended marker supplies its last comma
   deactivateInputClipNode(child)
-  heapFix(heap, node.index)
+  heapDown(heap, node.index) // removing a child only lowers this container's priority
+  return saved
 }
 
 function inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat) {
@@ -154,47 +140,39 @@ function inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat) {
 
 /** Bound an over-budget object from the string passes, returning a new object whose JSON is at most maxInput bytes. */
 export function boundInput(candidate, originalSize, maxInput, clipNoteFormat) {
-  // Normalize once so sizes and surviving values have exactly the shapes JSON.stringify emits (including undefined in
-  // arrays and special object keys). The source object and the two string-pass candidates are never mutated.
+  // Normalize once so sizes and surviving values have exactly the shapes JSON.stringify emits. Only this private copy
+  // is changed; the source object and the two string-pass candidates are never mutated.
   const value = JSON.parse(JSON.stringify(candidate))
   const tree = new InputClipTree(value)
   const root = tree.root
-  const arrays = tree.arrays
-  const objects = tree.objects
-  heapInit(arrays)
-  heapInit(objects)
+  heapInit(tree.arrays)
+  heapInit(tree.objects)
 
   let markerKey = inputClipMarker
   for (let suffix = 2; Object.hasOwn(value, markerKey); suffix++) markerKey = `${inputClipMarker}_${suffix}`
-  const marker = new InputClipNode(inputClipNote(originalSize, 0, 0, clipNoteFormat), root)
-  marker.key = markerKey
-  marker.keySize = jsonLen(markerKey)
-  marker.size = jsonLen(marker.value)
-  let added = marker.keySize + 1 + marker.size
-  if (root.kids.length > 0) added++
-  root.kids.push(marker)
-  root.fixed = 1
-  root.resize(added)
-  heapFix(objects, root.index)
-
   let arrayItems = 0
   let objectFields = 0
-  while (root.size > maxInput) {
-    const array = nextInputClipNode(arrays)
+  let note = inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat)
+  let noteSize = jsonLen(note)
+  let size = inputClipSize(root) + jsonLen(markerKey) + 1 + noteSize
+  if (root.kids.length > 0) size++
+
+  while (size > maxInput) {
+    const array = nextInputClipNode(tree.arrays)
     if (array !== null) {
-      dropInputClipTail(arrays, array)
+      size -= dropInputClipTail(tree.arrays, array, root)
       arrayItems++
     } else {
-      const object = nextInputClipNode(objects)
+      const object = nextInputClipNode(tree.objects)
       if (object === null) break // only the small root marker remains, which always fits
-      dropInputClipTail(objects, object)
+      size -= dropInputClipTail(tree.objects, object, root)
       objectFields++
     }
-    const note = inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat)
-    const delta = jsonLen(note) - marker.size
-    marker.value = note
-    marker.size += delta
-    marker.parent.resize(delta)
+    note = inputClipNote(originalSize, arrayItems, objectFields, clipNoteFormat)
+    const nextSize = jsonLen(note)
+    size += nextSize - noteSize
+    noteSize = nextSize
   }
-  return root.decodedValue()
+  value[markerKey] = note
+  return value
 }
