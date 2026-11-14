@@ -406,3 +406,69 @@ func TestProgressToken(t *testing.T) {
 		t.Errorf("tools/list: token %q, want none", got)
 	}
 }
+
+// progressHeldContext holds a beat after it has decided to send and before it writes its notification.
+type progressHeldContext struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *progressHeldContext) Value(key any) any {
+	if _, ok := key.(mcpWaitContextKey); ok {
+		select {
+		case c.entered <- struct{}{}:
+		default:
+		}
+		<-c.release
+	}
+	return c.Context.Value(key)
+}
+
+func TestKeepAliveStopWaitsForBeatBeingSent(t *testing.T) {
+	tick := newManualProgressTicker()
+	old := newProgressTicker
+	newProgressTicker = func(time.Duration) progressTicker { return tick }
+	t.Cleanup(func() { newProgressTicker = old })
+
+	ctx := &progressHeldContext{Context: context.Background(), entered: make(chan struct{}, 1), release: make(chan struct{})}
+	stopped := make(chan struct{})
+	sent := make(chan bool, 1)
+	stop := keepAlive(ctx, json.RawMessage(`"tok"`), func(notification) {
+		select {
+		case <-stopped:
+			sent <- true
+		default:
+			sent <- false
+		}
+	})
+	tick.beat()
+	select {
+	case <-ctx.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the beat was not taken")
+	}
+	go func() {
+		stop()
+		close(stopped)
+	}()
+	// A correct stop cannot return before the held beat is released; a broken one can close stopped here.
+	select {
+	case <-stopped:
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(ctx.release)
+	select {
+	case afterStop := <-sent:
+		if afterStop {
+			t.Fatal("a progress notification was written after stop returned: it would follow the final result")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the held beat was never sent")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop did not return")
+	}
+}
