@@ -259,6 +259,14 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	if l.BaseURL != "" && providerShaped(l) {
 		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 		env["API_TIMEOUT_MS"] = strconv.Itoa(cmp.Or(l.TimeoutMS, gatewayTimeoutMS))
+		// Claude Code moves a refused reply to a fallback model of its own choosing, an ID no setting changes, and a
+		// gateway that does not serve it answers 404 after two requests that cannot succeed (#7319). Off for every
+		// gateway but Anthropic's own API, whatever its model list says: the fallback IDs change with each Claude Code
+		// version. The turn then ends on its refusal, which the assistant's recovery reads (assistant_recovery.go). A
+		// gateway that serves them sets the variable empty in the launcher's own environment, applied below.
+		if !proto.AnthropicAPI(l.BaseURL) {
+			env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] = "1"
+		}
 	} else if l.TimeoutMS > 0 {
 		env["API_TIMEOUT_MS"] = strconv.Itoa(l.TimeoutMS)
 	}

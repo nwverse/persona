@@ -293,6 +293,18 @@ setting sources, carries the login keys (`env`, `apiKeyHelper`, the AWS and `for
 model `<synthetic>`, error `authentication_failed` only in the transcript); read the session row's `turn_error` before
 taking the turn's last words as an answer.
 
+## A setting in `~/.claude/settings.json` does not reach a private profile: put it in the launcher's environment (2026-11-14, #7319)
+
+`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` in the user's `~/.claude/settings.json` `env` kept Claude Code from switching
+refused replies to a fallback model the gateway does not serve, but only in the default profile: on one install over 7
+days, 71 such stops there ended without a switch, while all 4 switches in Persona conversations ended in 404. Those run
+in a private config directory (`<PERSONA_HOME>/profiles/<launcher>`, #4310), and Claude Code reads the user settings of
+the config directory it runs in, never `~/.claude`'s. Something that must hold wherever Persona runs claude goes into the
+managed launcher's environment (`providerEnv`, `node/launcherenv.go`): that reaches `personad launch`, the generated
+`--settings` env and the Agent SDK bridge, whatever profile the process uses. A rule Persona applies to every provider
+of a kind is code there (as #7319 is for gateways); a user's own choice is the provider's `env` field, where an empty
+value overrides a Persona default. Check such a setting in the profile the process really uses, not in `~/.claude`.
+
 ## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
 
 A guest conversation's `--tools ""` and `--strict-mcp-config` take away tools, not context: an extension's guest on the

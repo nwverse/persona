@@ -314,6 +314,16 @@ func (l ManagedLauncher) LaunchBaseURL() string {
 	return l.BaseURL
 }
 
+// AnthropicAPIHost is the host of Anthropic's own API: where Claude Code goes with no Base URL.
+const AnthropicAPIHost = "api.anthropic.com"
+
+// AnthropicAPI: base (a Base URL) is Anthropic's own API, not a relay, a gateway or another vendor. The probe's
+// error reading (the manager's models_probe.go) and the node's provider environment (launcherenv.go) both ask.
+func AnthropicAPI(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	return err == nil && strings.EqualFold(u.Hostname(), AnthropicAPIHost)
+}
+
 // MessagesBaseURL is a gateway address as ANTHROPIC_BASE_URL takes it. Claude Code and the Anthropic SDKs add
 // /v1/messages themselves, so the /v1 many gateways put at the end of their documented address would make
 // /v1/v1/messages: the /v1 ending the path goes with any trailing slashes, a deployment prefix before it stays

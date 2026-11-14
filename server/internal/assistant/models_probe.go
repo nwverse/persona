@@ -394,8 +394,7 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 
 // atAnthropic: the target is Anthropic's own API (not a relay or another vendor).
 func (t probeTarget) atAnthropic() bool {
-	u, err := url.Parse(strings.TrimSpace(t.base))
-	return err == nil && strings.EqualFold(u.Hostname(), "api.anthropic.com")
+	return proto.AnthropicAPI(t.base)
 }
 
 // regionBlocked: a 403 body is Anthropic's region block, {"type":"error","error":{"type":"forbidden","message":
