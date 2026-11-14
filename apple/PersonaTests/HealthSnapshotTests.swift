@@ -164,12 +164,17 @@ struct HealthSnapshotTests {
         #expect(loaded.asOf == snapshot.asOf)
         #expect(loaded.rows == snapshot.rows)
 
+        // The simulator does not implement data protection: attributesOfItem never reports
+        // .protectionKey there, so the level can only be verified on a physical device. The
+        // round-trip above still proves the file is written and read back on every platform.
+        #if !targetEnvironment(simulator)
         let files = FileManager.default
         let file = directory.appending(path: "summary.json")
         let fileProtection = try files.attributesOfItem(atPath: file.path)[.protectionKey] as? FileProtectionType
         let dirProtection = try files.attributesOfItem(atPath: directory.path)[.protectionKey] as? FileProtectionType
         #expect(fileProtection == .completeUntilFirstUserAuthentication)
         #expect(dirProtection == .completeUntilFirstUserAuthentication)
+        #endif
     }
 
     @Test func freshSnapshotSkipsARefreshAndAgedOneDoesNot() async throws {
