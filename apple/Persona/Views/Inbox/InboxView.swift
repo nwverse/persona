@@ -1509,6 +1509,9 @@ struct InboxDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The chat owns its title only while expanded; the collapsed detail must keep naming the item.
+        .navigationTitle(current.title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     /// The one entry stays above the source in both states; its preview follows the inbox row's metadata and sender line.
