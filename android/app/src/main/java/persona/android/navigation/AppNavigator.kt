@@ -12,6 +12,7 @@ internal class AppNavigator(
     private val chatTab: (ChatRoute) -> AppTab? = { null },
     /** Returns true when the Persona home shows this conversation itself; the flag says whether to switch to it. */
     private val openAssistant: (ChatRoute, Boolean) -> Boolean = { _, _ -> false },
+    inboxReturns: List<ChatRoute> = emptyList(),
 ) : Navigator {
     /**
      * Pages [navigate] pushed onto another tab's stack, and the tab each was opened from: back from such a page returns
@@ -19,8 +20,18 @@ internal class AppNavigator(
      * the Agents list). The user picking a tab themselves drops these.
      */
     private val openedFrom = mutableMapOf<NavKey, AppTab>()
+    private val inboxSources = mutableMapOf<SessionKey, RouteSource.InboxItem>().apply {
+        inboxReturns.forEach { route ->
+            (route.source as? RouteSource.InboxItem)?.let { this[SessionKey(route.machineId, route.sessionId)] = it }
+        }
+    }
 
     init { stacks.values.forEach(::restoreSecondaryParents) }
+
+    /** Serializable provenance for ShellPosition; the visible Agent key and its saved UI state stay unchanged. */
+    fun inboxReturns(): List<ChatRoute> = inboxSources.map { (session, source) ->
+        ChatRoute(session.machineId, session.sessionId, source = source)
+    }.sortedWith(compareBy(ChatRoute::machineId, ChatRoute::sessionId))
 
     override fun selectTab(tab: AppTab) {
         openedFrom.clear()
@@ -51,6 +62,9 @@ internal class AppNavigator(
         val route = inheritVisibleInboxSource(key)
         if (route == ConnectionSettingsRoute) return open(SettingsPageRoute(SettingsPage.Diagnostics))
         val chat = when (route) { is ChatRoute -> route; is InteractionRoute -> route.chat; else -> null }
+        (chat?.source as? RouteSource.InboxItem)?.let { source ->
+            inboxSources[SessionKey(chat.machineId, chat.sessionId)] = source
+        }
         if (chat != null && openAssistant(chat, true)) return route
         // A sourced assistant conversation belongs above the item that opened it, even when its kind is already known.
         // Router.restore would instead pop to an earlier copy and retain that copy's provenance. Agents keep that path.
@@ -126,8 +140,21 @@ internal class AppNavigator(
         val page = stack.removeAt(stack.lastIndex)
         val origin = openedFrom.remove(page)
         if (origin != null) onSelectTab(origin)
-        // Restored stacks keep the route's inbox provenance but not the in-memory origin map.
-        else if (page.chat()?.source is RouteSource.InboxItem) onSelectTab(AppTab.Persona)
+        else if (selectedTab() == AppTab.Agents) {
+            val source = inboxSource(page) ?: return
+            val persona = stacks.getValue(AppTab.Persona)
+            // A cold restore may have only the Agent left. Reuse item-link resolution to rebuild its detail, not a blank home.
+            if (persona.size <= 1) {
+                persona.add(InboxItemRoute(source.itemId))
+                restoreSecondaryParents(persona)
+            }
+            onSelectTab(AppTab.Persona)
+        }
+    }
+
+    private fun inboxSource(page: NavKey): RouteSource.InboxItem? {
+        val chat = page.chat() ?: return null
+        return chat.source as? RouteSource.InboxItem ?: inboxSources[SessionKey(chat.machineId, chat.sessionId)]
     }
 
     /** Remove every destination owned by the confirmed closed session, including hidden tabs. */
@@ -142,6 +169,7 @@ internal class AppNavigator(
                 }
             }
         }
+        inboxSources.remove(session)
         openedFrom.keys.retainAll { page -> stacks.values.any { page in it } }
     }
 
@@ -150,6 +178,8 @@ internal class AppNavigator(
      * else they go. Visited tabs stay composed, so this can come from a hidden tab: the tab on screen stays as it is.
      */
     fun groupGone(chat: ChatRoute, moved: ChatRoute?) {
+        val source = inboxSources.remove(SessionKey(chat.machineId, chat.sessionId))
+        if (moved != null && source != null) inboxSources[SessionKey(moved.machineId, moved.sessionId)] = source
         fun shows(key: NavKey) = key.chat()?.let { sameConversation(it, chat) } == true
         // Callers rebuilding the replacement may only know its new ids and kind; provenance belongs to the existing page.
         val destination = moved?.let { if (it.source == null) it.copy(source = chat.source) else it }

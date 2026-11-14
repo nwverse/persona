@@ -9,6 +9,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
+import persona.core.navigation.ConversationKind
+import persona.core.navigation.RouteSource
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
@@ -34,7 +36,8 @@ class ShellPositionTest {
         file.parentFile!!.mkdirs()
         val store = ShellPositionStore(context, scope)
         for (tab in AppTab.entries) {
-            val position = ShellPosition(tab, "example", mapOf(tab to ChatRoute("example", "session")))
+            val position = ShellPosition(tab, "example", mapOf(tab to ChatRoute("example", "session")),
+                inboxReturns = listOf(ChatRoute("example", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))))
             store.save(position)
             assertEquals(position, store.load())
         }

@@ -380,8 +380,48 @@ class AppNavigatorTest {
         assertEquals(handling, stacks.getValue(AppTab.Persona).last())
     }
 
+    @Test fun reopeningAnUnsourcedAgentKeepsItsReturnAcrossRestorationWithoutReplacingItsPage() {
+        val existing = ChatRoute("machine", "agent", ConversationKind.Agent)
+        val event = InboxEventRoute("second")
+        val handling = ChatRoute("machine", "handling", ConversationKind.Assistant, RouteSource.InboxItem("second"))
+        val kind: (SessionKey) -> ConversationKind = {
+            if (it.sessionId == "agent") ConversationKind.Agent else ConversationKind.Assistant
+        }
+        val router = embeddedAssistantNavigator(kind)
+        stacks.getValue(AppTab.Agents).add(existing)
+        selected = AppTab.Persona
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, event, handling))
+
+        router.navigate(existing)
+        // Router.restore retains the existing key and its UI state; provenance is persisted separately.
+        assertEquals(existing, stacks.getValue(AppTab.Agents).last())
+        val persisted = router.inboxReturns()
+        assertEquals("agent", persisted.single().sessionId)
+        assertEquals(handling.source, persisted.single().source)
+
+        val restored = assistantNavigator(kind, persisted)
+        restored.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(handling, stacks.getValue(AppTab.Persona).last())
+    }
+
+    @Test fun aColdRestoredInboxAgentRebuildsTheItemLinkBeforeReturning() {
+        val agent = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
+        stacks.getValue(AppTab.Agents).add(agent)
+        selected = AppTab.Agents
+        val restored = assistantNavigator({ ConversationKind.Agent }, listOf(agent))
+
+        restored.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf(AssistantRoute, InboxRoute, InboxItemRoute("item")), stacks.getValue(AppTab.Persona))
+        restored.back()
+        assertEquals(InboxRoute, stacks.getValue(AppTab.Persona).last())
+    }
+
     /** Uses Root's production decision; only its selection side effect is reproduced here. */
-    private fun embeddedAssistantNavigator(kind: (SessionKey) -> ConversationKind?) = AppNavigator(
+    private fun embeddedAssistantNavigator(kind: (SessionKey) -> ConversationKind?) = assistantNavigator(kind)
+
+    private fun assistantNavigator(kind: (SessionKey) -> ConversationKind?, inboxReturns: List<ChatRoute> = emptyList()) = AppNavigator(
         stacks, { selected }, { selected = it },
         chatTab = { route ->
             kind(SessionKey(route.machineId, route.sessionId))?.let {
@@ -398,6 +438,7 @@ class AppNavigatorTest {
                 true
             } ?: false
         },
+        inboxReturns = inboxReturns,
     )
 
     private fun agentsOwnAgentChats() = AppNavigator(stacks, { selected }, { selected = it }, chatTab = { AppTab.Agents })

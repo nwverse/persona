@@ -326,7 +326,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
-    }, openAssistant = { chat, select -> openAssistant(chat, select) }) }
+    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
     val router = remember { Router { m, s -> currentKind(SessionKey(m, s)) } }
     val agentsWiring by session.agentsWiring.state.collectAsStateWithLifecycle()
     val navigationWiring = remember { MutableStateFlow(agentsWiring) }
@@ -365,7 +365,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         snapshotFlow { ShellPosition(selected, machine, stacks.mapNotNull { (tab, stack) ->
             stack.mapNotNull { when (it) { is ChatRoute -> it; is InteractionRoute -> it.chat; else -> null } }
                 .lastOrNull()?.let { tab to it }
-        }.toMap()) }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
+        }.toMap(), navigator.inboxReturns()) }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
     }
     val visible = stacks.getValue(selected).lastOrNull()
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
