@@ -96,5 +96,6 @@
   "unsupported_body": "This hub's version is too old, or board storage isn't enabled.",
   "open_hub_settings": "Open hub settings",
   "setting_failed": "Couldn't read the workflow board switch: {error}",
-  "setting_unsupported": "This hub's version doesn't have this switch yet. Update the hub to turn the board on or off here."
+  "setting_unsupported": "This hub's version doesn't have this switch yet. Update the hub to turn the board on or off here.",
+  "activity": "Activity"
 }

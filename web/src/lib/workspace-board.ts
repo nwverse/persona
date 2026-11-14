@@ -11,7 +11,7 @@ export interface BoardCard {
 /** Compatible board name for the shared discovery wire type. */
 export type { HostWorkspace as Workspace } from "./workspace-catalog";
 import type { HostWorkspace as Workspace } from "./workspace-catalog";
-export interface BoardState { revision: number; columns: BoardColumn[]; cards: BoardCard[]; can_write?: boolean }
+export interface BoardState { revision: number; columns: BoardColumn[]; cards: BoardCard[]; can_write?: boolean; activity?: boolean }
 export interface WorkspaceList { workspaces: Workspace[]; errors?: { machine_id: string; error: string }[] }
 export interface BoardMutation {
   action: "add_card" | "update_card" | "move_card" | "add_column" | "update_column" | "move_column" | "delete_column";
