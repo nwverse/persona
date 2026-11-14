@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { parseAPIError } from "../../lib/api-errors";
+import { turnErrorFix } from "../../lib/readiness";
 import type { ChatLine } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import { ChatLineView, ErrorBanner, errorKey } from "./Lines";
@@ -27,6 +28,42 @@ describe("a model error's fix", () => {
     expect(banner("Invalid API key · Fix external API key", true)).toContain("去修");
     // a record in the chat keeps the fix its own text names
     expect(inline("Invalid API key · Fix external API key", true)).toContain("去修");
+  });
+
+  it("names the affected launcher and opens its provider settings", () => {
+    history.replaceState(null, "", "/");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const fix = turnErrorFix("auth_failed", "team-relay");
+    act(() => root.render(<ErrorBanner line={line("Invalid API key · Fix external API key")} onDismiss={() => {}} assistant fix={fix} />));
+    expect(host.textContent).toContain("team-relay");
+    const repair = [...host.querySelectorAll("button")].find((b) => b.textContent === "去修")!;
+    act(() => repair.click());
+    expect(location.pathname + location.search).toBe("/settings?tab=models&launcher=team-relay");
+    act(() => root.unmount());
+    host.remove();
+    history.replaceState(null, "", "/");
+  });
+
+  it("keeps the launcher on text-derived fallback fixes", () => {
+    for (const kind of ["line", "banner"] as const) {
+      history.replaceState(null, "", "/");
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      const props = { line: line("Invalid API key · Fix external API key"), assistant: true, launcher: "team-relay" };
+      act(() => root.render(kind === "line"
+        ? <ChatLineView {...props} mid="m" sid="s" expandFold={async () => {}} />
+        : <ErrorBanner {...props} onDismiss={() => {}} />));
+      expect(host.textContent).toContain("team-relay ·");
+      const repair = [...host.querySelectorAll("button")].find((b) => b.textContent === "去修")!;
+      act(() => repair.click());
+      expect(location.pathname + location.search).toBe("/settings?tab=models&launcher=team-relay");
+      act(() => root.unmount());
+      host.remove();
+    }
+    history.replaceState(null, "", "/");
   });
 
   it("does not point an agent session at Persona's settings", () => {

@@ -707,8 +707,15 @@ func (s *Service) readinessStep(lang i18n.Lang, id, state, code, machine, launch
 	if machine == "" {
 		args["machine"] = i18n.T(lang, "assistant-readiness.this_computer")
 	}
+	titleCode := code
+	if id == StepModel && launcher != "" {
+		switch code {
+		case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute:
+			titleCode += "_launcher"
+		}
+	}
 	st := ReadinessStep{ID: id, State: state, Code: code, Launcher: launcher,
-		Title: i18n.T(lang, "assistant-readiness."+code+"_title", args), Detail: i18n.T(lang, "assistant-readiness."+code+"_detail", args)}
+		Title: i18n.T(lang, "assistant-readiness."+titleCode+"_title", args), Detail: i18n.T(lang, "assistant-readiness."+code+"_detail", args)}
 	if id == StepComputer || id == StepFirstMessage {
 		st.Launcher = ""
 	}

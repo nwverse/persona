@@ -1182,6 +1182,7 @@ private fun ChatPage(
                                             ::toggle, ::expand, folding, foldErrors,
                                             lastUserId = lastUserId,
                                             turnFix = turnFix.takeIf { line.contentKey == lines.firstOrNull()?.contentKey },
+                                            turnLauncher = session?.launcher,
                                             onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = { item ->
                                             scope.launch {
                                                 try { fullText = repository.fullText(key, item.id) }

@@ -87404,6 +87404,75 @@
       },
       "extractionState" : "manual"
     },
+    "Model not connected: %@ isn't signed in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model not connected: %1$@ isn't signed in"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@にログインしてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型没接好：%1$@ 没登录"
+          }
+        }
+      }
+    },
+    "Model not connected: the key for %@ is wrong" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model not connected: the key for %1$@ is wrong"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@のキーが無効です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型没接好：%1$@ 的 Key 不对"
+          }
+        }
+      }
+    },
+    "Model not connected: this model isn't available on %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model not connected: this model isn't available on %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@でモデルを使えません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型没接好：%1$@ 用不了这个模型"
+          }
+        }
+      }
+    },
     "Model not connected: Claude Code isn't signed in" : {
       "localizations" : {
         "en" : {

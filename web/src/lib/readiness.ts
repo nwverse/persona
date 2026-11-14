@@ -213,14 +213,16 @@ export function passesBySelf(e: unknown): boolean {
 // ── turn errors (turn_error_code) ───────────────────────
 
 /** A turn that ended on a model error the user must fix: the card's title and its button (4.4 "Model error"). */
-export function turnErrorFix(code: string | undefined): { title: string; detail: string; action: string } | null {
+export function turnErrorFix(code: string | undefined, launcher?: string): { title: string; detail: string; action: string; launcher?: string } | null {
+  const name = launcher?.trim() || undefined;
+  const title = (key: string) => name ? `${name} · ${t(key)}` : t(key);
   switch (code) {
     case "not_logged_in":
-      return { title: t("lib-readiness.turn_not_logged_in"), detail: t("lib-readiness.turn_not_logged_in_detail"), action: "connect_model" };
+      return { title: title("lib-readiness.turn_not_logged_in"), detail: t("lib-readiness.turn_not_logged_in_detail"), action: "connect_model", launcher: name };
     case "auth_failed":
-      return { title: t("lib-readiness.turn_auth_failed"), detail: t("lib-readiness.turn_auth_failed_detail"), action: "edit_provider" };
+      return { title: title("lib-readiness.turn_auth_failed"), detail: t("lib-readiness.turn_auth_failed_detail"), action: "edit_provider", launcher: name };
     case "model_route":
-      return { title: t("lib-readiness.turn_model_route"), detail: t("lib-readiness.turn_model_route_detail"), action: "connect_model" };
+      return { title: title("lib-readiness.turn_model_route"), detail: t("lib-readiness.turn_model_route_detail"), action: "connect_model", launcher: name };
   }
   return null;
 }

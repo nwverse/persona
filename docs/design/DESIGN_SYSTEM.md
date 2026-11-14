@@ -970,6 +970,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
   recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
   launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Provider identity on model rows (#7360): every row in New Agent and in the All, Recent and Favorites model lists names
+  its owning launcher at the start of the second line, on web, Android and Apple. The rest of that line keeps the model
+  ID, resolved model, description or typed-model explanation; a launcher's own filtered view may keep its description
+  alone. A sign-in, key or model-availability error that offers a repair names the affected launcher in its title, and
+  the repair opens that launcher's provider settings. This is a content rule, not a new badge, token or visual style.
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
   the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
