@@ -147,6 +147,10 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  # A phone's main thread has a 1 MB stack, the simulator's 8 MB: view functions with big fixed frames in this Debug
+  # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
+  ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
+    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
 
   IOS_COMMON=("${XCODE[@]}" -scheme Persona -derivedDataPath "$OUTPUT/ios-tests" \
     -parallel-testing-enabled NO -disableAutomaticPackageResolution "${TEST_SIGNING[@]}")

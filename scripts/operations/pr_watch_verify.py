@@ -5,7 +5,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from pr_watch_common import WatchError, bounded, checked, run, verification_env
+from pr_watch_common import VerificationError, WatchError, bounded, checked, run, test_or_fix, verification_env
 
 
 def command_with_prefix(command, arguments):
@@ -42,7 +42,9 @@ def result_summary(result):
 def run_check(name, argv, worktree, timeout, environ=None):
     result = run(argv, cwd=worktree, timeout=timeout, environ=environ)
     return {"name": name, "command": argv, "ok": result.returncode == 0,
-            "summary": "" if result.returncode == 0 else result_summary(result)}
+            "summary": "" if result.returncode == 0 else result_summary(result),
+            "stdout": result.stdout if result.returncode else "",
+            "stderr": result.stderr if result.returncode else ""}
 
 
 def load_paths(worktree):
@@ -93,11 +95,32 @@ APPLE_VISUAL_MARKERS = re.compile(
     r"foregroundColor|opacity|offset|position|lineLimit|minimumScaleFactor)\s*\(")
 
 
+APPLE_NON_UI_SHARED = (
+    "schema/",
+    "spec/",
+    "scripts/ci/",
+    "scripts/app/",
+    "docs/",
+)
+APPLE_PORTABLE_CORE = (
+    "native/app-core/crates/persona-core-runtime/",
+    "native/app-core/crates/persona-core-ohos/",
+)
+APPLE_ANDROID_SHARED = (
+    "android/core/rustcore/",
+)
+
+
 def non_ui_apple_change(worktree, base, head, names):
-    """Apple-only changes without a production visual change need no screenshots."""
-    if not names or not all(name.startswith(APPLE_NON_UI_PATHS) for name in names):
+    """Shared backend/schema changes can use the Linux non-visual policy too."""
+    if not names or not all(name.startswith(APPLE_NON_UI_PATHS + APPLE_NON_UI_SHARED +
+                                          APPLE_PORTABLE_CORE + APPLE_ANDROID_SHARED) for name in names):
         return False
     for path in names:
+        if path == "native/app-core/crates/persona-core-runtime/src/wire.rs":
+            return False
+        if not path.startswith("apple/"):
+            continue
         parts = path.split("/")
         test_path = (len(parts) >= 2 and parts[1] in ("PersonaTests", "PersonaUITests")) or (
             len(parts) >= 5 and parts[1] == "Packages" and parts[3] == "Tests") or (
@@ -134,7 +157,7 @@ def persona_checks(worktree, pr, timeout, config):
     names = checked(["git", "diff", "--name-only", "--no-renames", base + "..." + head], cwd=worktree).splitlines()
     selected = load_paths(Path(__file__).resolve().parents[2]).select(names)
     commands = []
-    for lane in ("server", "web", "android", "runtimes", "scripts"):
+    for lane in ("server", "web", "android", "runtimes", "scripts", "core", "desktop"):
         if selected.get(lane):
             commands.append(("CI " + lane, ["bash", "scripts/ci/" + lane + ".sh"]))
     if selected.get("apple"):
@@ -149,7 +172,7 @@ def persona_checks(worktree, pr, timeout, config):
             commands.append(external_check(config["apple_command"], pr, worktree, "trusted Apple verification"))
     else:
         non_ui = False
-    if ui_change(names) and not non_ui:
+    if ui_change(names) and not non_ui and not test_or_fix(pr, names):
         if not config.get("ui_evidence_command"):
             raise WatchError("UI changes need the configured visual-evidence verifier (dark/light screenshots and manual inspection); tests alone are insufficient")
         commands.append(external_check(config["ui_evidence_command"], pr, worktree, "visual evidence"))
@@ -239,9 +262,17 @@ def verify(repo, pr, worktree, config, environ=None):
     else:
         raise WatchError("unknown verification profile")
     results = []
+    failures = []
     for name, argv in commands:
         result = run_check(name, argv, worktree, timeout, environ)
         results.append(result)
         if not result["ok"]:
-            raise WatchError("%s failed:\n%s" % (name, result["summary"]))
+            failures.append(VerificationError("%s failed:\n%s" % (name, result["summary"]), command=argv,
+                                              output=result["stdout"] + "\n" + result["stderr"]))
+    if failures:
+        raise VerificationError("\n\n".join(str(failure) for failure in failures),
+                                output="\n\n".join(failure.output for failure in failures),
+                                command=failures[0].command,
+                                failures=[{"command": failure.command, "output": failure.output} for failure in failures],
+                                checks=results)
     return results
