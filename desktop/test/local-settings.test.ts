@@ -8,7 +8,7 @@ const source = (name: string) => readFile(join(import.meta.dirname, "..", "..", 
 test("an explicit hub change closes the old window before making its own session and IPC", async () => {
   const main = await source("main.ts");
   const change = main.slice(main.indexOf("async function replaceMainWindow"), main.indexOf("async function showMain"));
-  assert.match(change, /if \(inHub\(next, previous\.webContents\.getURL\(\)\)\) return;/);
+  assert.match(change, /parseHubAddress\(previous\.webContents\.getURL\(\)\)\.url\.href === next\.url\.href/);
   assert.match(change, /const closed = new Promise<void>\(done => previous\.once\("closed", done\)\);/);
   assert.ok(change.indexOf("await closed;") < change.indexOf("mainWindow = undefined;"));
   assert.match(main, /await replaceMainWindow\(next, window => window\.destroy\(\)\);\s+hub = next;\s+setup\.close\(\);\s+await showMain\(\);/);

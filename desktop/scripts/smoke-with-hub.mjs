@@ -96,13 +96,13 @@ async function scenario(name, { prefix, token, starting }) {
     if (started.error) throw started.error;
     hub = started.hub;
     gateway = await startGateway({ dist, mockPort: hub.port, prefix });
-    if (name === "hub-change") {
-      // A second origin, rather than another path on the first hub, proves that Continue replaces both the live hub
-      // window and its partition. Its own temporary code exercises the new window's normal sign-in afterwards.
+    if (name === "hub-change" || name === "hub-prefix-parent") {
+      // A second hub proves that Continue replaces both the live window and its partition. The prefix-parent case
+      // deliberately shares the origin: /old/ is inside /, but it is not the same hub session.
       const token = `jp_${randomBytes(18).toString("hex")}`;
       other = await startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "30", MOCK_DESKTOPS: "1" });
       other.token = token;
-      otherGateway = await startGateway({ dist, mockPort: other.port });
+      otherGateway = await startGateway({ dist, mockPort: other.port, prefix: "" });
     }
     const direct = `http://127.0.0.1:${hub.port}/api/v1`;
     if ((await fetch(`${direct}/sessions`, { signal: AbortSignal.timeout(3000) })).status !== 401) throw new Error("The synthetic hub answers without a credential");
@@ -168,7 +168,7 @@ try {
   // The third scenario owns another hub origin for its explicit signed-in Continue action.
   // Both hubs start now, each with a temporary pairing code as `personad hub pair` makes (the page trades it for its
   // own device credential): on a hosted macOS runner a hub started after the first Electron run took over 30 s.
-  plans = [["root", "", { MOCK_DESKTOPS: "1" }], ["subpath", PREFIX, {}], ["hub-change", "", { MOCK_DESKTOPS: "1" }]].map(([name, prefix, hubEnv]) => {
+  plans = [["root", "", { MOCK_DESKTOPS: "1" }], ["subpath", PREFIX, {}], ["hub-change", "", { MOCK_DESKTOPS: "1" }], ["hub-prefix-parent", PREFIX, { MOCK_DESKTOPS: "1" }]].map(([name, prefix, hubEnv]) => {
     const token = `jp_${randomBytes(18).toString("hex")}`;
     const starting = startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "2", ...hubEnv }).then(hub => ({ hub }), error => ({ error }));
     return { name, prefix, token, starting };

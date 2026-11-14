@@ -32,7 +32,7 @@ try { card = JSON.parse(process.env.PERSONA_DESKTOP_E2E_CARD ?? "null"); } catch
 const local = value => /^http:\/\/127\.0\.0\.1:\d+\//.test(value);
 const otherHub = otherHubURL ? new URL(otherHubURL) : undefined;
 const headless = process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
-if (app.isPackaged || !output || !process.argv.includes("--desktop-e2e") || !["root", "subpath", "hub-change"].includes(scenario) || !local(hubURL) || !local(`${mock}/`) || !token || (scenario === "hub-change" && (!otherHub || !otherToken || !local(`${otherMock}/`)))) {
+if (app.isPackaged || !output || !process.argv.includes("--desktop-e2e") || !["root", "subpath", "hub-change", "hub-prefix-parent"].includes(scenario) || !local(hubURL) || !local(`${mock}/`) || !token || ((scenario === "hub-change" || scenario === "hub-prefix-parent") && (!otherHub || !otherToken || !local(`${otherMock}/`)))) {
   console.error("desktop e2e: refused (development-only; needs --desktop-e2e, an output directory and a local synthetic hub)");
   process.exit(2);
 }
@@ -308,12 +308,16 @@ async function hubChangeScenario() {
     await page("document.querySelector('[data-settings-group=\"desktop-options\"] button').click(); true");
     const options = await until("local options for hub change", () => localSettings.at(-1));
     await until("local hub form", async () => !options.isDestroyed() && options.webContents.executeJavaScript("document.querySelector('#hub').value.length > 0 && !!document.querySelector('#connect button')"));
+    const previousSession = win.webContents.session.storagePath;
     const saved = options.webContents.executeJavaScript(`(() => { const form = document.querySelector('#connect'); document.querySelector('#hub').value = ${JSON.stringify(otherHub.href)}; form.requestSubmit(); return true; })()`);
     if (!await saved) throw new Error("the local Continue form did not submit");
     const replacement = await until("a new hub window", () => BrowserWindow.getAllWindows().find(candidate => candidate !== win && candidate !== options && !candidate.isDestroyed() && candidate.webContents.getURL().startsWith(otherHub.href)), 45_000);
     if (!win.isDestroyed()) throw new Error("the old hub window is still alive after the hub changed");
     win = replacement;
     activeMock = otherMock;
+    const targetURL = win.webContents.getURL();
+    const targetSession = win.webContents.session.storagePath;
+    if (targetURL !== otherHub.href || targetSession === previousSession) throw new Error(`wrong replacement window or session: ${JSON.stringify({ targetURL, expected: otherHub.href, previousSession, targetSession })}`);
     if (!win.webContents.getURL().startsWith(otherHub.href)) throw new Error("the replacement still shows the previous hub");
     await until("second hub sign-in page", () => page("!!document.querySelector('input[type=password]') || document.body.innerText.includes('Let this browser in from a device')"));
     const permission = await page("window.personaDesktop.notificationPermission()");
@@ -336,7 +340,7 @@ async function hubChangeScenario() {
     const accepted = await page(`window.personaDesktop.notify({title: 'Second hub notification', body: 'Bridge after the hub change', tag: 'second-hub-smoke', route: ${JSON.stringify(route)}})`);
     if (!accepted) throw new Error("the replacement hub's production notify IPC was refused");
     await until("second hub native notification", () => shown.find(n => n.title === "Second hub notification"));
-    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, hubPath: await path(), previousHubWithdrawn: original.registered.length === 0 };
+    return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, previousHubWithdrawn: original.registered.length === 0 };
   });
 }
 

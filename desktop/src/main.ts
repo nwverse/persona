@@ -78,7 +78,8 @@ function secureHubWindow(window: BrowserWindow): void {
 async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow) => void): Promise<void> {
   const previous = mainWindow;
   if (!previous || previous.isDestroyed()) return;
-  if (inHub(next, previous.webContents.getURL())) return;
+  // Sub-path containment is not equality: /old/ is inside a new / hub, but still needs its own origin-isolated session.
+  if (inHub(next, previous.webContents.getURL()) && (() => { try { return parseHubAddress(previous.webContents.getURL()).url.href === next.url.href; } catch { return false; } })()) return;
   // Setting hub first lets closeToTray destroy this window without putting the old hub back on screen.
   hub = next;
   const closed = new Promise<void>(done => previous.once("closed", done));
