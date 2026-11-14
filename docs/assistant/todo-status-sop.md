@@ -230,10 +230,10 @@ start definitely failed. That agent's other turns leave the task closed, whether
 wakeup it set itself, other conversations' work, the owner typing in its session (#6726, #7539). Their ends raise no
 review signal either.
 
-Two gaps remain. A send whose text is only taken up after it stopped counting (queued behind a turn that ran longer
-than that) leaves the task closed: more has to be sent, or the task reopened by hand. And after a restart, a turn of
-other work that was already running when the send was taken ends as the reopened task's: the conversation gets one
-extra receipt for it, with no judgment and no review signal.
+Two gaps remain. A send whose answer never came, or was lost with a restart, and whose text the agent takes up only
+after the send stopped counting (queued behind a longer turn) leaves the task closed: more has to be sent, or the task
+reopened by hand. And after a restart, a turn of other work that was already running when the send was taken ends as
+the reopened task's: the conversation gets one extra receipt for it, with no judgment and no review signal.
 
 Earlier the page treated every reopened task as not reviewed: it showed "Follow up", its badge "Supervising", and
 criteria added with the extra work (`agent_supervise` / `agent_send` replace `done_when`, so the list grew from 5 to
