@@ -569,7 +569,7 @@ struct VNCPage: View {
         .alert("Turn On Video for This Mac", isPresented: $fallbackHelp) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(ScreenVideoFallback.howToAllow)
+            Text(ScreenVideoFallback.howToAllow(permission: model.screenVideo(ref)?.permission, asked: model.screenVideo(ref)?.asked ?? false))
         }
     }
 

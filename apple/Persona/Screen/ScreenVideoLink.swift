@@ -75,8 +75,13 @@ nonisolated enum ScreenVideoFallback: Equatable, Sendable {
     }
 
     /// The one thing the user can do about `notAllowed` themselves, in one sentence (the page's "How to turn it on").
-    static var howToAllow: String {
-        String(localized: "On that Mac, turn on Persona Screen in System Settings › Privacy & Security › Screen & System Audio Recording.")
+    /// Before the node has asked macOS (`permission` missing, not `asked`), macOS's alert is about to show on the Mac;
+    /// once asked, Persona Screen is in System Settings' list (an alert macOS shows only once).
+    static func howToAllow(permission: String?, asked: Bool) -> String {
+        if permission == "missing", !asked {
+            return String(localized: "That Mac will show a window: choose Open System Settings, then turn on Persona Screen.")
+        }
+        return String(localized: "On that Mac, turn on Persona Screen in System Settings › Privacy & Security › Screen & System Audio Recording.")
     }
 }
 
