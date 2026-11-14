@@ -48,7 +48,7 @@ export function EventMark({ it }: { it: InboxItem }) {
     const working = key === "queued" || key === "looking" || key === "agent_working";
     const icon = key === "waiting" ? "clock" : working ? "spinner" : needsYou ? "needs-you" : key.startsWith("done_") ? "check" : "none";
     return (
-      <p className={cx("flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
+      <p className={cx("flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap", key === "failed" ? "text-red" : isDone(it) ? "text-ink-3" : "text-ink-2")} data-event-mark="now" data-event-icon={icon}>
         {icon === "clock" && <Icon name="clock" size={12} className="shrink-0 text-ink-3" />}
         {icon === "spinner" && <Spinner size={11} />}
         {/* failed keeps the Needs-you shape, but both its mark and its words use the danger color */}
@@ -66,7 +66,7 @@ export function EventMark({ it }: { it: InboxItem }) {
     // An older hub keeps the manager-done line alone.
     if (it.done_by !== "manager") return null;
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-3" data-event-mark="manager-done">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-ink-3" data-event-mark="manager-done">
         <Icon name="check" size={12} stroke={2.4} className="shrink-0" />
         <span className="truncate">{t("inbox-inboxevent.manager_done")}</span>
       </p>
@@ -75,7 +75,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   const s = it.suggestion;
   if (s) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap" data-event-mark="suggestion">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="suggestion">
         <span className="shrink-0 font-medium text-accent-ink"><Spark />{suggestionTitle(s)}</span>
         <span className="min-w-0 truncate text-ink-2">{firstLine(s.text)}</span>
       </p>
@@ -83,7 +83,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   }
   if (preparing(it)) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap" data-event-mark="preparing">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="preparing">
         <Spinner size={11} />
         <Shimmer className="truncate">{t("inbox-inboxevent.preparing")}</Shimmer>
       </p>
@@ -91,7 +91,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   }
   if (handlingFailed(it)) {
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-red" data-event-mark="failed">
+      <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-red" data-event-mark="failed">
         <Icon name="warning" size={12} className="shrink-0" />
         <span className="truncate">{t("inbox-inboxevent.failed_short")}</span>
       </p>
@@ -101,7 +101,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   if (!oldWord) return null;
   const waiting = it.handling?.state === "waiting";
   return (
-    <p className="flex min-w-0 items-center gap-1.5 text-[11.5px] whitespace-nowrap text-ink-2" data-event-mark="working">
+    <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap text-ink-2" data-event-mark="working">
       {waiting ? <Icon name="clock" size={12} className="shrink-0 text-ink-3" /> : <Spinner size={11} />}
       <span className="truncate">{oldWord}</span>
     </p>
@@ -142,7 +142,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
             )}
             {item.recap && (
               <div>
-                <p className="text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
+                <p className="text-submeta font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
                 <p className="mt-0.5 text-meta leading-relaxed whitespace-pre-wrap text-ink-2" data-event-recap>{item.recap}</p>
               </div>
             )}
@@ -291,7 +291,7 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const field = "h-8 rounded-control bg-field px-2.5 text-meta text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion="todo">
-      <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
+      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink"><span><Spark />{suggestionTitle(s)}</span></p>
       <input value={title} onChange={(e) => setTitle(e.target.value)} aria-label={t("inbox-inboxevent.todo_title")} className={cx(field, "mt-2 w-full")} data-todo-title />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input type="date" value={day} onChange={(e) => setDay(e.target.value)} aria-label={t("inbox-inboxevent.todo_day")} className={field} data-todo-day />
@@ -347,7 +347,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const edited = text.trim() && text !== s.text ? text : undefined;
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-handback={s.handback ? "" : undefined}>
-      <p className="flex items-center gap-1.5 text-[11.5px] font-medium whitespace-nowrap text-accent-ink">
+      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink">
         <span><Spark />{suggestionTitle(s)}</span>
         {s.handback && <span className="text-ink-3">· {t("inbox-inboxevent.handback")}</span>}
       </p>
@@ -389,7 +389,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         <>
           <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
           {(s.changes ?? []).map((c) => (
-            <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-[11.5px] text-ink-2">
+            <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-submeta text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />
               <span className="truncate">{docChangeLine(c, item.doc)}</span>
             </p>
@@ -514,9 +514,9 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
   return (
     <section data-event-chain>
       <div className="flex items-center gap-2 pb-1">
-        <p className="min-w-0 flex-1 text-[11.5px] font-medium whitespace-nowrap text-ink-3">{t("inbox-inboxevent.chain")}</p>
+        <p className="min-w-0 flex-1 text-submeta font-medium whitespace-nowrap text-ink-3">{t("inbox-inboxevent.chain")}</p>
         {all.length > 3 && (
-          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="h-6 shrink-0 rounded-[6px] px-1.5 text-[11.5px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink" data-chain-toggle>
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="h-6 shrink-0 rounded-[6px] px-1.5 text-submeta font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink" data-chain-toggle>
             {open ? t("inbox-inboxevent.chain_collapse") : t("inbox-inboxevent.chain_expand", { count: all.length })}
           </button>
         )}
@@ -545,11 +545,11 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
           aria-expanded={!goes && expandable ? open : undefined}
           className={cx("flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[12.5px]", goes || expandable ? cx("hover:bg-field", reported ? "text-ink-2" : "text-ink") : cx("cursor-default", reported ? "text-ink-2" : "text-ink"))}
         >
-          <span className="min-w-[34px] shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
+          <span className="min-w-[34px] shrink-0 text-submeta whitespace-nowrap text-ink-3 tabular-nums">{chainTime(e.at)}</span>
           <ChainIcon item={item} e={e} />
           {reported && <Tag>{t("inbox-inboxdetail.assistant_says")}</Tag>}
           <span className="min-w-0 flex-1 truncate">{text}</span>
-          {agentState && <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
+          {agentState && <span className="shrink-0 text-submeta whitespace-nowrap text-ink-3" data-chain-agent-state>{agentState}</span>}
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}
           {!goes && expandable && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />}
         </button>
@@ -582,7 +582,7 @@ function Related({ item }: { item: InboxItem }) {
   if (!list.length) return null;
   return (
     <section data-event-related>
-      <p className="pb-1 text-[11.5px] font-medium text-ink-3">{t("inbox-inboxevent.related")}</p>
+      <p className="pb-1 text-submeta font-medium text-ink-3">{t("inbox-inboxevent.related")}</p>
       <ul className="flex flex-col gap-0.5">
         {list.map((r) => (
           <li key={r.id}>
