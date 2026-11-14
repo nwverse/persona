@@ -2494,3 +2494,14 @@ that opens the package (`scripts/test/isolation-lint`) leaves a `.build` folder 
   simulator (iOS 27) and on some on an iPad one; a second tap a few seconds later always went through. Turning
   autocorrection off did not change it. `FilesActionsTests`, which takes a screenshot between typing and tapping, saw it
   once. Tap again while the alert stays up, then check what reached the mock; a single tap reads as an app bug.
+
+## A full reconnect must not rely on the subscription's backlog alone (2026-11-14, #4315)
+
+A message sent from the web (another device) while the phone's socket was down never showed on the phone: after a
+hello that did not resume, `AppModel.didConnect` only sent `subscribe` with `since_seq` and waited for the hub's
+backlog. Nothing else read the gap: `AgentSync` leaves chats on screen to their subscription, and its stall check only
+fires when the session's `updated_at` is newer than the chat's newest line. When the backlog did not come (in the real
+hub `sendBacklog` answers with an `error` frame if the node is not back yet after a hub restart), the chat stayed
+short until the next push. The web reads `/items?after_seq=` itself after such a hello, which is why the shared case
+`sent_with_picture_on_other_device_reopened` passed there and failed on iOS. Now a full reconnect also runs `fill`
+for every open chat that has a `covered`; the backlog and the read merge by id and seq.
