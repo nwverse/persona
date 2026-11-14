@@ -69,6 +69,8 @@ export interface DesktopBridge {
   onPresenceChange(callback: (presence: DesktopPresence) => void): () => void;
   setLaunchAtLogin(enabled: boolean): Promise<DesktopLaunchAtLogin>;
   getLaunchAtLogin(): Promise<DesktopLaunchAtLogin>;
+  /** Opens the shell-owned local options window. Older shells omit this additive capability. */
+  openLocalSettings?(): void;
   /** The notch island (#7669); absent in shells before it. */
   getIsland?(): Promise<DesktopIsland>;
   setIslandEnabled?(enabled: boolean): Promise<DesktopIsland>;

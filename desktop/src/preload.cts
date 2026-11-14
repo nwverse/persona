@@ -27,6 +27,7 @@ const api = Object.freeze({
   },
   setLaunchAtLogin(enabled: boolean) { return ipcRenderer.invoke("desktop:login-set", enabled); },
   getLaunchAtLogin() { return ipcRenderer.invoke("desktop:login-get"); },
+  openLocalSettings() { ipcRenderer.send("desktop:open-local-settings"); },
   getIsland() { return ipcRenderer.invoke("desktop:island-get"); },
   setIslandEnabled(enabled: boolean) { return ipcRenderer.invoke("desktop:island-set", enabled); },
   setIslandState(state: DesktopIslandState) { ipcRenderer.send("desktop:island-state", state); },
