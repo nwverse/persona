@@ -59,14 +59,19 @@ final class ExtensionManagementUITests: XCTestCase {
         }
     }
 
-    @MainActor private func togglePack(_ element: XCUIElement) {
-        dismissIconNote()
-        let control = element.switches.firstMatch
-        let target = control.exists ? control : element
-        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true AND hittable == true"), object: target)
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed,
-                       "the switch must finish loading before it is tapped")
-        target.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+    @MainActor private func togglePack(_ element: XCUIElement, app: XCUIApplication) {
+        // Stock can drop a synthesized coordinate tap while its system UI settles. Retry only when no question appeared;
+        // the caller still requires the question, the unchanged switch and zero writes.
+        for _ in 0..<3 {
+            dismissIconNote()
+            let control = element.switches.firstMatch
+            let target = control.exists ? control : element
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true AND hittable == true"), object: target)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed,
+                           "the switch must finish loading before it is tapped")
+            target.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            if app.buttons["extension-pack-disable-confirm"].waitForExistence(timeout: 2) { return }
+        }
     }
 
     @MainActor private func value(_ expected: String, of element: XCUIElement) {
@@ -136,7 +141,7 @@ final class ExtensionManagementUITests: XCTestCase {
         let enabled = app.switches["plugin-enabled"]
         show(enabled, app: app, up: false)
         value("1", of: enabled)
-        togglePack(enabled)
+        togglePack(enabled, app: app)
         let pack = app.buttons["extension-pack-disable-confirm"].firstMatch
         XCTAssertTrue(pack.waitForExistence(timeout: 5), app.debugDescription)
         value("1", of: enabled)
@@ -147,7 +152,7 @@ final class ExtensionManagementUITests: XCTestCase {
         let cancelledWrites = try await recordedWrites()
         XCTAssertTrue(cancelledWrites.isEmpty, "cancelling the pack question must not write")
 
-        togglePack(enabled)
+        togglePack(enabled, app: app)
         XCTAssertTrue(pack.waitForExistence(timeout: 5), app.debugDescription)
         pack.tap()
 

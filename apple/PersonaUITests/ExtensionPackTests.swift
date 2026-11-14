@@ -153,14 +153,23 @@ final class ExtensionPackTests: XCTestCase {
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
     }
 
-    @MainActor private func toggle(_ element: XCUIElement) {
-        dismissIconNote()
-        let control = element.switches.firstMatch
-        let target = control.exists ? control : element
-        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true AND hittable == true"), object: target)
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed,
-                       "the switch must finish loading before it is tapped")
-        target.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+    @MainActor private func toggle(_ element: XCUIElement, in app: XCUIApplication,
+                                   changingTo expected: String? = nil, presenting dialogID: String? = nil) {
+        // Retry only a synthesized tap with no observable outcome. The caller's state, wording and write assertions stay exact.
+        for _ in 0..<3 {
+            dismissIconNote()
+            let control = element.switches.firstMatch
+            let target = control.exists ? control : element
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true AND hittable == true"), object: target)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed,
+                           "the switch must finish loading before it is tapped")
+            target.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            if let dialogID, app.buttons[dialogID].waitForExistence(timeout: 2) { return }
+            if let expected {
+                let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: element)
+                if XCTWaiter.wait(for: [changed], timeout: 2) == .completed { return }
+            }
+        }
     }
 
     @MainActor private func value(_ expected: String, of element: XCUIElement) {
@@ -197,7 +206,7 @@ final class ExtensionPackTests: XCTestCase {
                 XCTAssertTrue(reason.waitForExistence(timeout: 10) && reason.label.contains(onText), app.debugDescription)
                 shot(app, "switch-on-\(language)", look.name)
 
-                toggle(enabled)
+                toggle(enabled, in: app, presenting: "extension-pack-disable-confirm")
                 let confirm = app.buttons["extension-pack-disable-confirm"].firstMatch
                 let cancel = app.buttons["extension-pack-disable-cancel"].firstMatch
                 XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
@@ -224,7 +233,7 @@ final class ExtensionPackTests: XCTestCase {
                     else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.25)).tap() }
                     XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
                     value("1", of: enabled)
-                    toggle(enabled)
+                    toggle(enabled, in: app, presenting: "extension-pack-disable-confirm")
                     XCTAssertTrue(confirm.waitForExistence(timeout: 5))
                 }
                 let confirmAgain = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: confirm)
@@ -239,7 +248,7 @@ final class ExtensionPackTests: XCTestCase {
                 }
                 shot(app, "switch-off-\(language)", look.name)
 
-                toggle(enabled)
+                toggle(enabled, in: app, changingTo: "1")
                 value("1", of: enabled)
                 XCTAssertFalse(confirm.exists, "switching a pack on must not ask")
             }
@@ -267,7 +276,7 @@ final class ExtensionPackTests: XCTestCase {
                 XCTAssertTrue(reason.waitForExistence(timeout: 10) && reason.label.contains(footnote), app.debugDescription)
                 shot(app, "switch-legacy-\(language)", look.name)
 
-                toggle(enabled)
+                toggle(enabled, in: app, changingTo: "0")
                 value("0", of: enabled)
                 XCTAssertFalse(app.buttons["extension-pack-disable-confirm"].exists,
                                "an older hub must not show the pack-member confirmation")
