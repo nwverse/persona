@@ -1736,6 +1736,17 @@ private actor SlowPut {
         #expect(focus.scroll == .line(2) && focus.lit == [.line(2), .line(3)], "the minute's hub lines lit")
     }
 
+    /// Build the fixture in steps: the one-line map times out in Xcode 26.6.
+    private func makeFiveMeetingGaps() -> [MeetingGap] {
+        var gaps: [MeetingGap] = []
+        for index in 0..<5 {
+            let start: Double = Double(index * 100)
+            let end: Double = Double(index * 100 + 10)
+            gaps.append(MeetingGap(from: start, to: end))
+        }
+        return gaps
+    }
+
     @Test func theRecordingPageSaysTheModeTheStateAndTheGaps() throws {
         #expect(Words.facts(nil, asked: .hub, gapUpload: .idle) == nil, "no mode decided: nothing")
         #expect(Words.facts(.init(mode: .device), asked: nil, gapUpload: .idle) == nil, "a meeting on the phone as always")
@@ -1749,21 +1760,15 @@ private actor SlowPut {
         let final = try #require(Words.facts(.init(mode: .hub, state: "final", gaps: [.init(from: 600, to: 642.5)]), asked: .hub,
                                              gapUpload: .uploading))
         #expect(!final.busy && final.state != finishing.state && final.upload == nil, "final: no more uploads said")
-        let showsFinalGapStart: Bool = final.gaps?.contains("10:00") == true
-        let showsFinalGapEnd: Bool = final.gaps?.contains("10:42") == true
-        #expect(showsFinalGapStart && showsFinalGapEnd)
+        #expect(final.gaps?.contains("10:00") == true && final.gaps?.contains("10:42") == true)
         let failed = try #require(Words.facts(.init(mode: .hub, state: "failed"), asked: .hub, gapUpload: .idle))
         #expect(!failed.busy && Set([failed.state, final.state, finishing.state]).count == 3)
         let unknown = try #require(Words.facts(.init(mode: .hub, state: "someday"), asked: .hub, gapUpload: .idle))
         #expect(unknown.busy, "a state the app doesn't know reads as still being finished")
 
-        let many = (0..<5).map { MeetingGap(from: Double($0 * 100), to: Double($0 * 100 + 10)) }
+        let many: [MeetingGap] = makeFiveMeetingGaps()
         let spans = Words.spans(many)
-        let showsFirstSpan: Bool = spans.contains("0:00")
-        let showsThirdSpanEnd: Bool = spans.contains("3:30")
-        let omitsFourthSpan: Bool = !spans.contains("6:40")
-        let showsRemainingCount: Bool = spans.contains("2")
-        #expect(showsFirstSpan && showsThirdSpanEnd && omitsFourthSpan && showsRemainingCount,
+        #expect(spans.contains("0:00") && spans.contains("3:30") && !spans.contains("6:40") && spans.contains("2"),
                 "the first three, then how many more")
         #expect(Words.spans(Array(many.prefix(1))) == "0:00–0:10")
     }
