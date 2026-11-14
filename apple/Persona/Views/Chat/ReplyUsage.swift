@@ -29,17 +29,20 @@ struct ReplyUsageFooter: View {
                 Button {
                     open = true
                 } label: {
-                    Text(view.label)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                    Text(view.label).buttonLabelLine()
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint(view.actionLabel)
             }
             .font(Theme.Font.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.Reply.secondaryInk)
             .padding(.top, Theme.Space.xs)
             .accessibilityIdentifier("chat.reply-usage")
+            .onAppear {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-showReplyUsage") { open = true }
+                #endif
+            }
             .sheet(isPresented: $open) {
                 ReplyUsageDetails(lines: view.lines)
             }
@@ -71,7 +74,6 @@ private struct ReplyUsageDetails: View {
 /// Asks the catalog once per model id and publishes the labels. The book is created once. Each task and each line
 /// change stores the latest lines and the current group's client on `box` (a `View` body cannot assign them).
 struct ReplyUsageLoader: ViewModifier {
-    var version: Int
     var items: [Item]
     var lines: [ChatLine]
     var persona: Bool
@@ -80,18 +82,29 @@ struct ReplyUsageLoader: ViewModifier {
     var catalog: @MainActor ([String]) async throws -> [String: ModelPrice?]
     @State private var map: [String: ReplyUsageView] = [:]
     @State private var box = ReplyUsageBox()
+    /// The model ids the catalog task asks for. Empty until the transcript's cheap signature changes.
+    @State private var idsKey = ""
+
+    /// Item count and the last seq. Streaming an existing item does not sum the transcript again.
+    private var itemKey: String { "\(items.count)#\(items.last?.seq ?? 0)#\(canAsk)" }
 
     func body(content: Content) -> some View {
-        let stamp = ReplyUsageText.stamp(lines, persona: persona, hide: hideAnswerID, language: ReplyUsageText.language)
         content
             .environment(\.replyUsage, map)
-            .task(id: "\(version)#\(canAsk)") {
+            .task(id: itemKey) {
                 guard canAsk else { return }
                 prepare()
                 let exchanges = chatUsage(items)
                 box.exchanges = exchanges
+                let key = ReplyUsageText.catalogIDs(exchanges).joined(separator: "\n")
+                if key != idsKey { idsKey = key }
+                map = ReplyUsageText.views(box)
+            }
+            .task(id: canAsk ? idsKey : "") {
+                guard canAsk, !idsKey.isEmpty else { return }
+                prepare()
                 box.book.onUpdate = { map = ReplyUsageText.views(box) }
-                box.book.request(ReplyUsageText.catalogIDs(exchanges))
+                box.book.request(idsKey.split(separator: "\n").map(String.init))
                 do {
                     try await box.book.drain()
                 } catch {
@@ -99,10 +112,8 @@ struct ReplyUsageLoader: ViewModifier {
                 }
                 map = ReplyUsageText.views(box)
             }
-            .onChange(of: stamp) { _, _ in
-                prepare()
-                map = ReplyUsageText.views(box)
-            }
+            .onChange(of: hideAnswerID) { _, _ in publish() }
+            .onChange(of: persona) { _, _ in publish() }
     }
 
     /// The latest inputs, read when a price is asked and when the lines change. Not called from `body`.
@@ -111,7 +122,12 @@ struct ReplyUsageLoader: ViewModifier {
         box.timings = ReplyUsageText.timings(lines)
         box.persona = persona
         box.hide = hideAnswerID
-        box.language = ReplyUsageText.language
+        box.durationText = ReplyUsageText.durationText
+    }
+
+    private func publish() {
+        prepare()
+        map = ReplyUsageText.views(box)
     }
 }
 
@@ -121,7 +137,7 @@ private final class ReplyUsageBox {
     var timings: [ReplyTiming] = []
     var persona = false
     var hide: String?
-    var language: UsageLanguage = .en
+    var durationText = UsageDurationText.english
     var exchanges: [ExchangeUsage] = []
     lazy var book: PriceBook = PriceBook(ask: { [weak self] ids in
         guard let self else { throw CancellationError() }
@@ -131,12 +147,12 @@ private final class ReplyUsageBox {
 
 /// The label and the card, from the same strings the web uses.
 enum ReplyUsageText {
-    static var language: UsageLanguage {
-        switch Locale.current.language.languageCode?.identifier {
-        case "zh": .zh
-        case "ja": .ja
-        default: .en
-        }
+    /// Hour-and-above words from the catalog. Under an hour the digits are the same in every language.
+    static var durationText: UsageDurationText {
+        UsageDurationText(
+            hoursMinutes: { hours, minutes in String(localized: "\(hours)h \(minutes)m") },
+            daysHoursMinutes: { days, hours, minutes in String(localized: "\(days)d \(hours)h \(minutes)m") }
+        )
     }
 
     static func timings(_ lines: [ChatLine]) -> [ReplyTiming] {
@@ -149,32 +165,6 @@ enum ReplyUsageText {
             default: ReplyTiming()
             }
         }
-    }
-
-    /// What a line change is, so the labels are drawn again without asking the catalog again.
-    static func stamp(_ lines: [ChatLine], persona: Bool, hide: String?, language: UsageLanguage) -> Int {
-        var hasher = Hasher()
-        hasher.combine(persona)
-        hasher.combine(hide)
-        hasher.combine(language == .zh ? 1 : language == .ja ? 2 : 0)
-        for line in lines {
-            switch line.content {
-            case .row(let row):
-                hasher.combine(row.id)
-            case .answerPart(let item, _, let index, let count):
-                hasher.combine(item.id)
-                hasher.combine(index)
-                hasher.combine(count)
-            case .work(let id, _, let live, let start, let end):
-                hasher.combine(id)
-                hasher.combine(live)
-                hasher.combine(start?.timeIntervalSince1970)
-                hasher.combine(end?.timeIntervalSince1970)
-            default:
-                break
-            }
-        }
-        return hasher.finalize()
     }
 
     static func catalogIDs(_ exchanges: [ExchangeUsage]) -> [String] {
@@ -196,7 +186,7 @@ enum ReplyUsageText {
             let cost = ids.isEmpty ? nil : turnCost(summary.models) { box.book.priceOf($0) }
             guard let label = replyLabel(persona: box.persona, usage: summary, cost: cost) else { continue }
             let priced = cost.flatMap { $0.total > 0 ? $0 : nil }
-            let lines = box.persona && priced != nil ? personaLines(priced!) : agentLines(usageCard(summary, cost: cost, ms: durations[answer], language: box.language))
+            let lines = box.persona && priced != nil ? personaLines(priced!) : agentLines(usageCard(summary, cost: cost, ms: durations[answer], text: box.durationText))
             let action = box.persona
                 ? String(localized: "Estimated cost of this reply")
                 : String(localized: "Request details")

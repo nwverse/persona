@@ -15,12 +15,15 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,7 +36,6 @@ import persona.core.designsystem.Tokens
 import persona.core.domain.lines.ModelTokens
 import persona.core.domain.lines.Subagents
 import persona.core.domain.lines.TurnCost
-import persona.core.domain.lines.UsageLanguage
 import persona.core.domain.lines.UsageSummary
 import persona.core.domain.lines.ModelShare
 import persona.core.domain.lines.formatCost
@@ -42,9 +44,9 @@ import persona.core.domain.lines.usageTotals
 import java.io.File
 
 /**
- * A finished reply's cost or tokens under its time, and the lines a tap opens (#5470), in Glass, Brief and Board,
- * light and dark. The sheet itself is not what Robolectric captures, so the lines are drawn under the replies.
- * PNGs in `build/reply-usage-shots/` (or `-Dpersona.shots=<dir>`).
+ * A finished reply's cost or tokens under its time (#5470), in Glass, Brief and Board, light and dark.
+ * [theUsageSheetOpens] taps the label and captures the sheet itself. PNGs in `build/reply-usage-shots/`
+ * (or `-Dpersona.shots=<dir>`).
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -71,13 +73,13 @@ class ReplyUsageShotsTest {
         lateinit var details: List<String>
         rule.setContent {
             val res = LocalResources.current
-            val card = usageCard(priced, pricedCost, 65_000, UsageLanguage.Zh)
+            val card = usageCard(priced, pricedCost, 65_000)
             worth = res.getString(R.string.chat_reply_worth, formatCost(pricedCost.total))
             tokens = res.getString(R.string.chat_reply_tokens, Subagents.tokens(usageTotals(unpriced.models).total))
             approx = res.getString(R.string.chat_reply_approx, formatCost(personaCost.total))
             details = replyUsageLines(res, card)
             val pricedView = ReplyUsageView(worth, details, res.getString(R.string.chat_reply_details))
-            val tokenView = ReplyUsageView(tokens, replyUsageLines(res, usageCard(unpriced, null, language = UsageLanguage.Zh)),
+            val tokenView = ReplyUsageView(tokens, replyUsageLines(res, usageCard(unpriced, null)),
                 res.getString(R.string.chat_reply_details))
             val personaView = ReplyUsageView(approx, personaUsageLines(res, personaCost), res.getString(R.string.chat_reply_persona_title))
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
@@ -112,6 +114,49 @@ class ReplyUsageShotsTest {
             rule.waitForIdle()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             File(out(), "reply-usage-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream()
+                .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
+
+    /** Tap the worth label. The sheet is a dialog root, so the capture is that root, not the page under it. */
+    @Test fun theUsageSheetOpens() {
+        val priced = UsageSummary(listOf(
+            ModelTokens("claude-opus-5-5", input = 2, output = 3400, cacheRead = 1_200_000, cacheWrite = 9000),
+        ))
+        val pricedCost = TurnCost(0.12, listOf(ModelShare("claude-opus-5-5", 0.12)))
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            val res = LocalResources.current
+            val view = ReplyUsageView(
+                res.getString(R.string.chat_reply_worth, formatCost(pricedCost.total)),
+                replyUsageLines(res, usageCard(priced, pricedCost, 65_000)),
+                res.getString(R.string.chat_reply_details),
+            )
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                Column(Modifier.width(400.dp).background(PersonaTheme.palette.background).padding(Tokens.Space.l)) {
+                    ReplyUsageFooter(Item("a1", ts = "2026-11-12T01:59:01Z"), view)
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("价值 $0.12").performClick()
+        rule.mainClock.advanceTimeBy(1_000)
+        rule.waitForIdle()
+        rule.onNode(isDialog()).assertExists()
+        rule.onNodeWithText("本轮明细").assertIsDisplayed()
+        rule.onNodeWithText("本轮 token 价值：$0.12").assertIsDisplayed()
+        for (d in listOf(false, true)) {
+            dark = d
+            rule.mainClock.advanceTimeBy(500)
+            rule.waitForIdle()
+            val bitmap = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+            val background = bitmap.getPixel(1, 1)
+            var other = 0
+            for (y in 0 until bitmap.height step 7) for (x in 0 until bitmap.width step 7) {
+                if (bitmap.getPixel(x, y) != background) other++
+            }
+            assertTrue("glass/${if (d) "dark" else "light"} sheet drew nothing", other > 20)
+            File(out(), "reply-usage-sheet-glass-${if (d) "dark" else "light"}.png").outputStream()
                 .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }

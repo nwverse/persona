@@ -208,8 +208,17 @@ class TurnUsageTest {
 
     @Test fun moneyAndPercentsReadAsTheWebWritesThem() {
         assertEquals(listOf("$0.12", "<$0.01", "$0.00", "$12.50"), listOf(formatCost(0.123), formatCost(0.004), formatCost(0.0), formatCost(12.5)))
+        // The exact binary value, the web's toFixed: 1.005 is "$1.00", 0.285 is "$0.28".
+        assertEquals(listOf("$1.00", "$0.28", "$0.35"), listOf(formatCost(1.005), formatCost(0.285), formatCost(0.35)))
         assertEquals(listOf("60%", "12.3%", "100%", null), listOf(formatPercent(0.6), formatPercent(0.1234), formatPercent(0.9999), formatPercent(null)))
         assertEquals("1m 5s", usageDuration(65_000))
+        assertEquals("2h 0m", usageDuration(7_200_000))
+        assertEquals("H", usageDuration(7_200_000, UsageDurationText(hoursMinutes = { _, _ -> "H" })))
+    }
+
+    @Test fun whitespaceOnlyIsNotTheAnswer() {
+        val exchanges = chatUsage(listOf(user(1, "hi"), answer(2, "done", listOf(opus(output = 2))), answer(3, "  \n\t")))
+        assertEquals("a2#0", exchanges.single().answerId)
     }
 
     @Test fun aModelIsPricedPerMillionAndOnlyWhenEveryKindHasAPrice() {

@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -22,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import persona.core.contracts.Item
 import persona.core.contracts.api.ChatActions
 import persona.core.designsystem.JSheet
@@ -34,7 +35,7 @@ import persona.core.domain.lines.PriceBook
 import persona.core.domain.lines.ReplyLabelKind
 import persona.core.domain.lines.TurnCost
 import persona.core.domain.lines.UsageCard
-import persona.core.domain.lines.UsageLanguage
+import persona.core.domain.lines.UsageDurationText
 import persona.core.domain.lines.catalogIds
 import persona.core.domain.lines.chatUsage
 import persona.core.domain.lines.formatCost
@@ -43,13 +44,34 @@ import persona.core.domain.lines.replyUsageMillis
 import persona.core.domain.lines.summarize
 import persona.core.domain.lines.turnCost
 import persona.core.domain.lines.usageCard
-import java.util.Locale
 
 /** What one finished reply says under itself, and the lines a tap opens (#5470). */
 internal data class ReplyUsageView(val label: String, val lines: List<String>, val actionLabel: String)
 
 /** Empty unless the page has priced the transcript. Call sites other than the page draw no label. */
 internal val LocalReplyUsage = staticCompositionLocalOf<Map<String, ReplyUsageView>> { emptyMap() }
+
+/**
+ * One price book for the process, the web's single map. A chat screen used to keep its own, so opening a chat or
+ * rotating it asked the catalog again and the label arrived late. [catalog] is read when a batch is sent, so a later
+ * load does not keep the client the first screen captured. Request and drain share [gate]: the book's map is not safe
+ * for two screens to fill at once.
+ */
+internal object ReplyPrices {
+    private val gate = Mutex()
+    private var catalog: ChatActions? = null
+    val book: PriceBook = PriceBook(ask = { ids ->
+        catalog?.catalogPrices(ids) ?: error("Catalog unavailable")
+    })
+
+    suspend fun load(actions: ChatActions, ids: List<String>) {
+        gate.withLock {
+            catalog = actions
+            book.request(ids)
+            book.drain()
+        }
+    }
+}
 
 /**
  * The label under each finished reply, keyed by that reply's item id. Nothing for an exchange until the catalog has
@@ -68,22 +90,16 @@ internal fun rememberReplyUsage(
     val ids = remember(exchanges) {
         exchanges.flatMap { ex -> summarize(ex.usage)?.let(::catalogIds).orEmpty() }.distinct()
     }
-    val current = rememberUpdatedState(catalog)
-    val book = remember {
-        // The trailing lambda would bind to the clock, which is the last parameter.
-        PriceBook(ask = { asked -> current.value?.catalogPrices(asked) ?: error("Catalog unavailable") })
-    }
     var tick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(ids) {
-        book.request(ids)
-        book.drain()
+    LaunchedEffect(ids, catalog) {
+        val actions = catalog ?: return@LaunchedEffect
+        ReplyPrices.load(actions, ids)
         tick++
     }
-    val language = usageLanguage(currentLocale)
     val durations = remember(lines) { replyUsageMillis(lines) }
     val res = LocalResources.current
-    return remember(exchanges, durations, persona, hideAnswerId, language, tick) {
-        replyUsageViews(res, exchanges, durations, persona, hideAnswerId, language, book)
+    return remember(exchanges, durations, persona, hideAnswerId, tick, res) {
+        replyUsageViews(res, exchanges, durations, persona, hideAnswerId, durationText(res), ReplyPrices.book)
     }
 }
 
@@ -112,11 +128,12 @@ internal fun ReplyUsageDetails(lines: List<String>) {
     }
 }
 
-private fun usageLanguage(locale: Locale): UsageLanguage = when (locale.language) {
-    "zh" -> UsageLanguage.Zh
-    "ja" -> UsageLanguage.Ja
-    else -> UsageLanguage.En
-}
+private fun durationText(res: Resources) = UsageDurationText(
+    hoursMinutes = { hours, minutes -> res.getString(R.string.chat_reply_dur_hours, hours.toInt(), minutes.toInt()) },
+    daysHoursMinutes = { days, hours, minutes ->
+        res.getString(R.string.chat_reply_dur_days, days.toInt(), hours.toInt(), minutes.toInt())
+    },
+)
 
 private fun replyUsageViews(
     res: Resources,
@@ -124,7 +141,7 @@ private fun replyUsageViews(
     durations: Map<String, Long>,
     persona: Boolean,
     hideAnswerId: String?,
-    language: UsageLanguage,
+    text: UsageDurationText,
     book: PriceBook,
 ): Map<String, ReplyUsageView> {
     val out = LinkedHashMap<String, ReplyUsageView>()
@@ -138,15 +155,15 @@ private fun replyUsageViews(
         val cost = if (modelIds.isEmpty()) null else turnCost(summary.models) { book.priceOf(it) }
         val label = replyLabel(persona, summary, cost) ?: continue
         val priced = cost?.takeIf { it.total > 0 }
-        val text = if (persona && priced != null) personaUsageLines(res, priced)
-            else replyUsageLines(res, usageCard(summary, cost, durations[answer], language))
+        val lines = if (persona && priced != null) personaUsageLines(res, priced)
+            else replyUsageLines(res, usageCard(summary, cost, durations[answer], text))
         val action = res.getString(if (persona) R.string.chat_reply_persona_title else R.string.chat_reply_details)
         val words = when (label.kind) {
             ReplyLabelKind.Worth -> res.getString(R.string.chat_reply_worth, label.amount)
             ReplyLabelKind.Tokens -> res.getString(R.string.chat_reply_tokens, label.amount)
             ReplyLabelKind.Approx -> res.getString(R.string.chat_reply_approx, label.amount)
         }
-        out[answer] = ReplyUsageView(words, text, action)
+        out[answer] = ReplyUsageView(words, lines, action)
     }
     return out
 }

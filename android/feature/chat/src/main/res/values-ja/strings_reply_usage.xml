@@ -21,4 +21,6 @@
     <string name="chat_reply_no_cost">このターンの料金は現在取得できないため、使用量のみ表示しています</string>
     <string name="chat_reply_persona_cost">この返信は約 %1$s（公開価格での概算）</string>
     <string name="chat_reply_persona_title">この返信の概算費用</string>
+    <string name="chat_reply_dur_hours">%1$d時間%2$d分</string>
+    <string name="chat_reply_dur_days">%1$d日%2$d時間%3$d分</string>
 </resources>

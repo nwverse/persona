@@ -2,7 +2,8 @@ package persona.core.domain.lines
 
 import persona.core.contracts.ModelPrice
 import persona.core.contracts.TokenUsage
-import java.util.Locale
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlin.math.abs
 import kotlin.math.round
 
@@ -147,19 +148,20 @@ fun turnCost(models: List<ModelTokens>, price: (String) -> ModelPrice?): TurnCos
     return TurnCost(out.sumOf { it.cost }, out.filter { it.cost > 0 })
 }
 
-/** Two decimals, "<$0.01" under a cent, "$0.00" for zero. */
+/** Two decimals, "<$0.01" under a cent, "$0.00" for zero. Rounds the exact binary value, as the web's `toFixed` does. */
 fun formatCost(usd: Double): String {
     if (usd == 0.0) return "$0.00"
-    return if (usd >= 0.01) "$" + String.format(Locale.US, "%.2f", usd) else "<$0.01"
+    if (usd < 0.01) return "<$0.01"
+    return "$" + BigDecimal(usd).setScale(2, RoundingMode.HALF_UP).toPlainString()
 }
 
-/** A whole percent when it is close to whole, else one decimal. */
+/** A whole percent when it is close to whole, else one decimal. The decimal rounds the exact binary value. */
 fun formatPercent(v: Double?): String? {
     if (v == null || !v.isFinite()) return null
     val pct = (v * 100).coerceIn(0.0, 100.0)
     val whole = round(pct)
     if (abs(pct - whole) < 0.05) return "${whole.toLong()}%"
-    return String.format(Locale.US, "%.1f", pct).removeSuffix(".0") + "%"
+    return BigDecimal(pct).setScale(1, RoundingMode.HALF_UP).toPlainString().removeSuffix(".0") + "%"
 }
 
 private const val lowCacheMinInput = 50_000L
@@ -172,25 +174,28 @@ fun lowCache(usage: UsageSummary): Boolean {
     return s.input + s.cacheRead + s.cacheWrite >= lowCacheMinInput && s.hit != null && s.hit < lowCacheMaxHit
 }
 
-/** How a duration reads on the card, the web's `workDuration`: under an hour the same in every language. */
-enum class UsageLanguage { En, Zh, Ja }
+/**
+ * Hour-and-above duration words. Under an hour every language uses "6s", "1m 5s" or "2m".
+ * The translated forms come from the app's strings; English is the default the tests use.
+ */
+class UsageDurationText(
+    val hoursMinutes: (Long, Long) -> String = { hours, minutes -> "${hours}h ${minutes}m" },
+    val daysHoursMinutes: (Long, Long, Long) -> String = { days, hours, minutes -> "${days}d ${hours}h ${minutes}m" },
+) {
+    companion object {
+        val English = UsageDurationText()
+    }
+}
 
-fun usageDuration(ms: Long, language: UsageLanguage = UsageLanguage.En): String {
+/** How a duration reads on the card, the web's `workDuration`: under an hour the same in every language. */
+fun usageDuration(ms: Long, text: UsageDurationText = UsageDurationText.English): String {
     val total = maxOf(1L, round((if (ms.isFinite()) ms else 0L).toDouble() / 1000.0).toLong())
     if (total < 60) return "${total}s"
     if (total >= 3600) {
         val days = total / 86_400
         val hours = (total % 86_400) / 3600
         val minutes = (total % 3600) / 60
-        return if (days > 0) when (language) {
-            UsageLanguage.En -> "${days}d ${hours}h ${minutes}m"
-            UsageLanguage.Zh -> "$days 天 $hours 小时 $minutes 分"
-            UsageLanguage.Ja -> "${days}日${hours}時間${minutes}分"
-        } else when (language) {
-            UsageLanguage.En -> "${hours}h ${minutes}m"
-            UsageLanguage.Zh -> "$hours 小时 $minutes 分"
-            UsageLanguage.Ja -> "${hours}時間${minutes}分"
-        }
+        return if (days > 0) text.daysHoursMinutes(days, hours, minutes) else text.hoursMinutes(hours, minutes)
     }
     val minutes = total / 60
     val seconds = total % 60
@@ -225,7 +230,7 @@ data class UsageCard(
     val lowCache: Boolean,
 )
 
-fun usageCard(usage: UsageSummary, cost: TurnCost?, ms: Long? = null, language: UsageLanguage = UsageLanguage.En): UsageCard {
+fun usageCard(usage: UsageSummary, cost: TurnCost?, ms: Long? = null, text: UsageDurationText = UsageDurationText.English): UsageCard {
     val totals = usageTotals(usage.models)
     val priced = cost?.takeIf { it.total > 0 }
     val breakdown = priced != null && priced.models.size >= 2
@@ -239,7 +244,7 @@ fun usageCard(usage: UsageSummary, cost: TurnCost?, ms: Long? = null, language: 
         cacheRead = Subagents.tokens(totals.cacheRead),
         cacheWrite = Subagents.tokens(totals.cacheWrite),
         rate = formatPercent(totals.hit),
-        duration = if (ms != null && ms > 0) usageDuration(ms, language) else null,
+        duration = if (ms != null && ms > 0) usageDuration(ms, text) else null,
         singleModel = if (!breakdown && names.size == 1) names[0] else null,
         modelCount = if (!breakdown) names.size else 0,
         lowCache = lowCache(usage),
@@ -248,7 +253,7 @@ fun usageCard(usage: UsageSummary, cost: TurnCost?, ms: Long? = null, language: 
 
 /** The card's lines in English, in the web's order. The apps draw the same lines from their own strings. */
 fun usageLinesEn(usage: UsageSummary, cost: TurnCost?, ms: Long? = null): List<String> {
-    val card = usageCard(usage, cost, ms, UsageLanguage.En)
+    val card = usageCard(usage, cost, ms)
     return buildList {
         if (card.cost != null) {
             add("Request details")

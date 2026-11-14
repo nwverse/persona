@@ -22,4 +22,6 @@
     <string name="chat_reply_no_cost">Cost unavailable for this turn; showing usage only</string>
     <string name="chat_reply_persona_cost">About %1$s for this reply, estimated at list prices</string>
     <string name="chat_reply_persona_title">Estimated cost of this reply</string>
+    <string name="chat_reply_dur_hours">%1$dh %2$dm</string>
+    <string name="chat_reply_dur_days">%1$dd %2$dh %3$dm</string>
 </resources>

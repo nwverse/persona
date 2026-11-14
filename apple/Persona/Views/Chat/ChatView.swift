@@ -2209,7 +2209,6 @@ struct ChatView: View {
         }
         .environment(\.chatLayout, layout)
         .modifier(ReplyUsageLoader(
-            version: store.version,
             items: store.items,
             lines: currentLines(),
             persona: style == .assistant,

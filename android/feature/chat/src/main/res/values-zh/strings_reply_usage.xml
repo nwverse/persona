@@ -21,4 +21,6 @@
     <string name="chat_reply_no_cost">本轮费用暂不可用，仅显示用量</string>
     <string name="chat_reply_persona_cost">这条回复约 %1$s，按公开价格估算</string>
     <string name="chat_reply_persona_title">这条回复的估算费用</string>
+    <string name="chat_reply_dur_hours">%1$d 小时 %2$d 分</string>
+    <string name="chat_reply_dur_days">%1$d 天 %2$d 小时 %3$d 分</string>
 </resources>

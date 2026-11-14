@@ -12058,6 +12058,29 @@
       },
       "extractionState" : "manual"
     },
+    "%lldd %lldh %lldm" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 天 %2$lld 小时 %3$lld 分"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldd %2$lldh %3$lldm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld日%2$lld時間%3$lld分"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lldd ago" : {
       "localizations" : {
         "en" : {
@@ -12076,6 +12099,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld 天前"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "%lldh %lldm" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 小时 %2$lld 分"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldh %2$lldm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld時間%2$lld分"
           }
         }
       },

@@ -206,7 +206,8 @@ private fun isUserMessage(it: Item) =
 private fun isWake(it: Item) = it.kind == "notice" && it.wake == true
 
 /** The transcript's "Interrupted" notice. Its tokens belong to the exchange it stopped; the notice stays its own line. */
-private fun isInterrupt(it: Item) = it.kind == "notice" && it.task == null && (it.text ?: "").contains("中断")
+private fun isInterrupt(it: Item) =
+    it.kind == "notice" && it.task == null && (it.text ?: "").contains("中断") // i18n-ignore: the transcript's interrupt notice
 
 private val viewErrors = Regex("""<persona-view-errors\b[^>]*>[\s\S]*?</persona-view-errors>\s*""")
 

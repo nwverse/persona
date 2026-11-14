@@ -237,8 +237,17 @@ struct TurnUsageTests {
 
     @Test func moneyAndPercentsReadAsTheWebWritesThem() {
         #expect([formatCost(0.123), formatCost(0.004), formatCost(0), formatCost(12.5)] == ["$0.12", "<$0.01", "$0.00", "$12.50"])
+        // The exact binary value, the web's toFixed: 1.005 is "$1.00", 0.285 is "$0.28".
+        #expect([formatCost(1.005), formatCost(0.285), formatCost(0.35)] == ["$1.00", "$0.28", "$0.35"])
         #expect([formatPercent(0.6), formatPercent(0.1234), formatPercent(0.9999), formatPercent(nil)] == ["60%", "12.3%", "100%", nil])
         #expect(usageDuration(65_000) == "1m 5s")
+        #expect(usageDuration(7_200_000) == "2h 0m")
+        #expect(usageDuration(7_200_000, text: UsageDurationText(hoursMinutes: { _, _ in "H" }, daysHoursMinutes: { _, _, _ in "D" })) == "H")
+    }
+
+    @Test func whitespaceOnlyIsNotTheAnswer() {
+        let exchanges = chatUsage([user(1, "hi"), answer(2, "done", usage: [opus(output: 2)]), answer(3, "  \n\t")])
+        #expect(exchanges.first?.answerID == "a2#0")
     }
 
     @Test func aModelIsPricedPerMillionAndOnlyWhenEveryKindHasAPrice() {
@@ -360,6 +369,51 @@ struct TurnUsageTests {
         #expect(book.answered(opusID))
     }
 
+    /// A second request while the first ask is still out must not post the same id again.
+    @Test func anInFlightModelIsNotAskedTwice() async throws {
+        let gate = Gate()
+        let asked = Asked()
+        let book = PriceBook(ask: { ids in
+            await asked.add(ids)
+            if ids == [self.opusID] { await gate.wait() }
+            var out: [String: ModelPrice?] = [:]
+            for id in ids { out[id] = ModelPrice(input: 4, output: 20) }
+            return out
+        })
+        book.request([opusID])
+        async let first: Void = book.drain()
+        while await asked.calls.isEmpty { await Task.yield() }
+        book.request([opusID, sonnetID])
+        await gate.open()
+        try await first
+        let calls = await asked.calls
+        #expect(calls == [[opusID], [sonnetID]])
+        #expect(book.priceOf(opusID)?.input == 4)
+        #expect(book.priceOf(sonnetID)?.input == 4)
+    }
+
+    /// URLSession reports a replaced task as URLError.cancelled. That is not a failure, so a retry inside a minute asks again.
+    @Test func aCancelledURLSessionAskIsAskedAgain() async throws {
+        let calls = Failed()
+        let book = PriceBook(ask: { _ in
+            let n = await calls.bump()
+            if n == 1 { throw URLError(.cancelled) }
+            return [self.opusID: ModelPrice(input: 4, output: 20)]
+        }, clock: { 1_000 })
+        book.request([opusID])
+        do {
+            try await book.drain()
+            Issue.record("the cancelled ask returned")
+        } catch {
+            #expect(error.isCancellation)
+        }
+        #expect(!book.answered(opusID))
+        book.request([opusID], now: 1_000)
+        try await book.drain()
+        #expect(await calls.count == 2)
+        #expect(book.priceOf(opusID)?.input == 4)
+    }
+
     @Test func oneFinishedWorkLineIsTheReplysTime() {
         let start = Date(timeIntervalSince1970: 1_763_078_400)
         let work = ReplyTiming(workStart: start, workEnd: start.addingTimeInterval(65))
@@ -383,4 +437,19 @@ private actor Asked {
 private actor Failed {
     var count = 0
     func bump() -> Int { count += 1; return count }
+}
+
+private actor Gate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func open() {
+        opened = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
 }

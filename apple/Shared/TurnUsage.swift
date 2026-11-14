@@ -204,28 +204,28 @@ func lowCache(_ usage: UsageSummary) -> Bool {
     return s.input + s.cacheRead + s.cacheWrite >= lowCacheMinInput && s.hit != nil && (s.hit ?? 1) < lowCacheMaxHit
 }
 
-enum UsageLanguage: Equatable { case en, zh, ja }
+/// Hour-and-above duration words. Under an hour every language uses "6s", "1m 5s" or "2m".
+/// The translated forms come from the catalog; English is the default the tests use.
+struct UsageDurationText {
+    var hoursMinutes: (Int64, Int64) -> String
+    var daysHoursMinutes: (Int64, Int64, Int64) -> String
+
+    static let english = UsageDurationText(
+        hoursMinutes: { hours, minutes in "\(hours)h \(minutes)m" },
+        daysHoursMinutes: { days, hours, minutes in "\(days)d \(hours)h \(minutes)m" }
+    )
+}
 
 /// How a duration reads on the card. Under an hour it is the same in every language ("1m 5s").
-func usageDuration(_ ms: Int64, language: UsageLanguage = .en) -> String {
+func usageDuration(_ ms: Int64, text: UsageDurationText = .english) -> String {
     let seconds = max(1, Int64((Double(ms) / 1000).rounded()))
     if seconds < 60 { return "\(seconds)s" }
     if seconds >= 3600 {
         let days = seconds / 86_400
         let hours = (seconds % 86_400) / 3600
         let minutes = (seconds % 3600) / 60
-        if days > 0 {
-            switch language {
-            case .en: return "\(days)d \(hours)h \(minutes)m"
-            case .zh: return "\(days) 天 \(hours) 小时 \(minutes) 分"
-            case .ja: return "\(days)日\(hours)時間\(minutes)分"
-            }
-        }
-        switch language {
-        case .en: return "\(hours)h \(minutes)m"
-        case .zh: return "\(hours) 小时 \(minutes) 分"
-        case .ja: return "\(hours)時間\(minutes)分"
-        }
+        if days > 0 { return text.daysHoursMinutes(days, hours, minutes) }
+        return text.hoursMinutes(hours, minutes)
     }
     let minutes = seconds / 60
     let rest = seconds % 60
@@ -266,7 +266,7 @@ nonisolated struct ReplyUsageCard: Equatable, Sendable {
     }
 }
 
-func usageCard(_ usage: UsageSummary, cost: TurnCost?, ms: Int64? = nil, language: UsageLanguage = .en) -> ReplyUsageCard {
+func usageCard(_ usage: UsageSummary, cost: TurnCost?, ms: Int64? = nil, text: UsageDurationText = .english) -> ReplyUsageCard {
     let totals = usageTotals(usage.models)
     let priced = cost.flatMap { $0.total > 0 ? $0 : nil }
     let breakdown = priced != nil && (priced?.models.count ?? 0) >= 2
@@ -277,7 +277,7 @@ func usageCard(_ usage: UsageSummary, cost: TurnCost?, ms: Int64? = nil, languag
         total: compactTokens(totals.total), input: compactTokens(totals.input), output: compactTokens(totals.output),
         cacheRead: compactTokens(totals.cacheRead), cacheWrite: compactTokens(totals.cacheWrite),
         rate: formatPercent(totals.hit),
-        duration: (ms != nil && (ms ?? 0) > 0) ? usageDuration(ms ?? 0, language: language) : nil,
+        duration: (ms != nil && (ms ?? 0) > 0) ? usageDuration(ms ?? 0, text: text) : nil,
         singleModel: !breakdown && names.count == 1 ? names[0] : nil,
         modelCount: breakdown ? 0 : names.count,
         lowCache: lowCache(usage))
@@ -285,7 +285,7 @@ func usageCard(_ usage: UsageSummary, cost: TurnCost?, ms: Int64? = nil, languag
 
 /// The card's lines in English, in the web's order. The apps draw the same lines from their own strings.
 func usageLinesEn(_ usage: UsageSummary, _ cost: TurnCost?, ms: Int64? = nil) -> [String] {
-    let card = usageCard(usage, cost: cost, ms: ms, language: .en)
+    let card = usageCard(usage, cost: cost, ms: ms)
     var lines: [String] = []
     if let cost = card.cost {
         lines.append("Request details")
@@ -412,7 +412,9 @@ private func split(_ items: [Item]) -> [Seg] {
         out[k].items.append(it)
         let own = itemUsage(it, reports: false)
         if !own.isEmpty { out[k].entries.append(contentsOf: own) }
-        if it.role == "assistant", it.kind == .text, let text = it.text, !text.isEmpty { out[k].answerID = it.id }
+        // A whitespace-only reply is not the answer (the web's `text?.trim()`).
+        if it.role == "assistant", it.kind == .text, let text = it.text,
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out[k].answerID = it.id }
     }
     for i in out.indices {
         let at = out[i].items.filter { !isInterrupt($0) }.map(\.seq).max() ?? Int.min
@@ -464,7 +466,7 @@ private func placeReports(_ segs: inout [Seg], _ items: [Item]) {
         for it in seg.items {
             if isInterrupt(it) || it.kind == .turnDuration || it.kind == .toolResult { continue }
             if leadingWake, it.id == seg.items.first?.id { continue }
-            if it.kind == .text, (it.text ?? "").isEmpty { continue }
+            if it.kind == .text, (it.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
             own(it.id, k)
             if it.kind == .toolUse, let call = it.toolUseID, !call.isEmpty {
                 own("call:" + call, k)
@@ -525,7 +527,7 @@ private func isWake(_ it: Item) -> Bool { it.kind == .notice && it.wake == true 
 
 /// The transcript's "Interrupted" notice. Its tokens belong to the exchange it stopped.
 private func isInterrupt(_ it: Item) -> Bool {
-    it.kind == .notice && it.task == nil && (it.text ?? "").contains("中断")
+    it.kind == .notice && it.task == nil && (it.text ?? "").contains("中断") // i18n-ignore: the transcript's interrupt notice
 }
 
 private func viewFeedbackOnly(_ it: Item) -> Bool {
@@ -682,9 +684,9 @@ final class PriceBook: @unchecked Sendable {
         for id in ids {
             if id.isEmpty || prices.keys.contains(id) { continue }
             if let at = failed[id], now - at < retryMS { continue }
-            // An id already queued is not asked twice. One that is in flight stays queued when this request
-            // arrives during that fetch, so the fetch's caller being cancelled does not drop it.
-            if waiting.contains(id) { continue }
+            // Already queued: keep it queued. Already in flight: do not queue a second POST.
+            if waiting.contains(id) { asking.insert(id); continue }
+            if asking.contains(id) { continue }
             asking.insert(id)
             waiting.append(id)
         }
@@ -730,22 +732,27 @@ final class PriceBook: @unchecked Sendable {
                         prices.updateValue(found[id] ?? nil, forKey: id)
                         failed.removeValue(forKey: id)
                     }
-                } catch is PriceCancelled {
-                    throw PriceCancelled()
-                } catch is CancellationError {
-                    throw CancellationError()
                 } catch {
+                    if isPriceCancellation(error) { throw error }
                     let now = clock()
                     for id in chunk { failed[id] = now }
                 }
             }
-        } catch is PriceCancelled {
-            for id in all { asking.remove(id) }
-            throw PriceCancelled()
-        } catch is CancellationError {
-            for id in all { asking.remove(id) }
-            throw CancellationError()
+        } catch {
+            // A cancelled request, including URLError.cancelled, is not a failure. The unanswered ids go back on
+            // the queue for the drain that is waiting, and they are not remembered as failed for a minute.
+            if isPriceCancellation(error) {
+                for id in all {
+                    asking.remove(id)
+                    if !prices.keys.contains(id), !waiting.contains(id) { waiting.append(id) }
+                }
+                throw error
+            }
         }
+    }
+
+    private func isPriceCancellation(_ error: Error) -> Bool {
+        error is PriceCancelled || error.isCancellation
     }
 
     func priceOf(_ id: String) -> ModelPrice? { prices[id] ?? nil }
