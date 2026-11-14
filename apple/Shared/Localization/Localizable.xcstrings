@@ -40589,6 +40589,29 @@
         }
       }
     },
+    "Completed [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
+          }
+        }
+      }
+    },
     "Compress" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -63063,6 +63086,29 @@
       },
       "extractionState" : "manual"
     },
+    "Failed [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失敗"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败"
+          }
+        }
+      }
+    },
     "Failed [Subagent Card]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -73123,6 +73169,29 @@
       },
       "extractionState" : "manual"
     },
+    "In the window that just opened on this Mac, choose Open System Settings, then turn on Persona Input (Privacy & Security › Accessibility). Until then, scrolling still works." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In the window that just opened on this Mac, choose Open System Settings, then turn on Persona Input (Privacy & Security › Accessibility). Until then, scrolling still works."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このMacに表示されたウインドウで「システム設定を開く」を選び、Persona Inputをオンにします（プライバシーとセキュリティ › アクセシビリティ）。それまでも、スクロールはこれまでどおり使えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这台 Mac 上刚弹出的窗口里选「打开系统设置」，再打开 Persona Input（隐私与安全性 › 辅助功能）。在那之前，照样可以滚动。"
+          }
+        }
+      }
+    },
     "In “%@” and its folders · %lld found" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -79360,6 +79429,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "上次"
+          }
+        }
+      }
+    },
+    "Last tool: %@ [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last tool: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直近のツール: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近工具：%1$@"
           }
         }
       }
@@ -128701,6 +128793,29 @@
       },
       "extractionState" : "manual"
     },
+    "Running [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中"
+          }
+        }
+      }
+    },
     "Running [Extensions Model 1f1cd2]" : {
       "localizations" : {
         "en" : {
@@ -128815,6 +128930,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Running for %@ [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running for %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行時間 %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已运行 %1$@"
+          }
+        }
+      }
     },
     "Running in the background" : {
       "extractionState" : "manual",
@@ -137868,6 +138006,29 @@
         }
       }
     },
+    "Show full result [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show full result"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全文を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看全文"
+          }
+        }
+      }
+    },
     "Show in Files Page" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -144496,6 +144657,29 @@
         }
       }
     },
+    "Stopped [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止"
+          }
+        }
+      }
+    },
     "Stopped [Port Chips f00645]" : {
       "localizations" : {
         "en" : {
@@ -145198,6 +145382,29 @@
       },
       "extractionState" : "manual"
     },
+    "Subagent task [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent task"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェントのタスク"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子 Agent 任务"
+          }
+        }
+      }
+    },
     "Subagent · %@" : {
       "localizations" : {
         "en" : {
@@ -145290,6 +145497,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Subagents running: %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagents running: %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント %lld 件が実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子 Agent %lld 个在跑"
+          }
+        }
+      }
     },
     "Subject" : {
       "localizations" : {
@@ -166009,6 +166239,29 @@
       },
       "extractionState" : "manual"
     },
+    "To scroll more smoothly, allow Persona Input on this Mac." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To scroll more smoothly, allow Persona Input on this Mac."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スクロールを滑らかにするには、このMacでPersona Inputを許可してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想滚动更顺滑，请在这台 Mac 上允许 Persona Input。"
+          }
+        }
+      }
+    },
     "To send it anyway, change the instructions or open Hand to AI again." : {
       "localizations" : {
         "en" : {
@@ -169110,6 +169363,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Turn On Smooth Scrolling" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn On Smooth Scrolling"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滑らかなスクロールをオンにする"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开顺滑滚动"
+          }
+        }
+      }
     },
     "Turn On Video for This Mac" : {
       "extractionState" : "manual",
