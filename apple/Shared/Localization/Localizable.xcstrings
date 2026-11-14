@@ -24952,6 +24952,29 @@
         }
       }
     },
+    "Ask for the Status Afterwards" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ask for the Status Afterwards"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あとから状況を聞く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "事后问一次进展"
+          }
+        }
+      }
+    },
     "Ask privately. Answers stay on this screen and in the main chat." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25227,6 +25250,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "问刚才说的内容"
+          }
+        }
+      }
+    },
+    "Asks an unsupervised agent once for status when work stops without a closeout or clear finish; costs one model turn" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Asks an unsupervised agent once for status when work stops without a closeout or clear finish; costs one model turn"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "誰も監督していないエージェントが作業後にクローズアウトも完了の確証もなく止まったとき、状況を一度だけ尋ねます。モデルで1ターンを使います"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没人督办的 Agent 干了活，没交收尾记录、也看不出做完没有就停下时，问一次进展；会花它自己模型的一轮"
           }
         }
       }
@@ -40589,6 +40635,29 @@
         }
       }
     },
+    "Completed [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成"
+          }
+        }
+      }
+    },
     "Compress" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -55327,6 +55396,29 @@
         }
       }
     },
+    "Direct · LAN · UDP" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direct · LAN · UDP"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接接続 · LAN · UDP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直连 · 局域网 · UDP"
+          }
+        }
+      }
+    },
     "Direct · Tailscale" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -55346,6 +55438,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "直连 · Tailscale"
+          }
+        }
+      }
+    },
+    "Direct · Tailscale · UDP" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direct · Tailscale · UDP"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接接続 · Tailscale · UDP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直连 · Tailscale · UDP"
           }
         }
       }
@@ -63062,6 +63177,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Failed [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失敗"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败"
+          }
+        }
+      }
     },
     "Failed [Subagent Card]" : {
       "extractionState" : "manual",
@@ -79383,6 +79521,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "上次"
+          }
+        }
+      }
+    },
+    "Last tool: %@ [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last tool: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直近のツール: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近工具：%1$@"
           }
         }
       }
@@ -111861,6 +112022,29 @@
         }
       }
     },
+    "Persona asks once for status" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona asks once for status"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaが状況を一度だけ尋ねます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 问一次进展"
+          }
+        }
+      }
+    },
     "Persona asks you before it merges, pushes, deploys, sends messages, deletes data or spends money. When you tell it in a chat to always go ahead somewhere, that go-ahead is listed here." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -128724,6 +128908,29 @@
       },
       "extractionState" : "manual"
     },
+    "Running [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中"
+          }
+        }
+      }
+    },
     "Running [Extensions Model 1f1cd2]" : {
       "localizations" : {
         "en" : {
@@ -128838,6 +129045,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Running for %@ [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running for %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行時間 %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已运行 %1$@"
+          }
+        }
+      }
     },
     "Running in the background" : {
       "extractionState" : "manual",
@@ -137891,6 +138121,29 @@
         }
       }
     },
+    "Show full result [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show full result"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全文を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看全文"
+          }
+        }
+      }
+    },
     "Show in Files Page" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -144519,6 +144772,29 @@
         }
       }
     },
+    "Stopped [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止"
+          }
+        }
+      }
+    },
     "Stopped [Port Chips f00645]" : {
       "localizations" : {
         "en" : {
@@ -144561,6 +144837,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已停止"
+          }
+        }
+      }
+    },
+    "Stopped after work, no closeout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped after work, no closeout"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作業後、クローズアウトなく停止"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "干了活，没交收尾记录就停下"
           }
         }
       }
@@ -145221,6 +145520,29 @@
       },
       "extractionState" : "manual"
     },
+    "Subagent task [Child Session]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent task"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェントのタスク"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子 Agent 任务"
+          }
+        }
+      }
+    },
     "Subagent · %@" : {
       "localizations" : {
         "en" : {
@@ -145313,6 +145635,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Subagents running: %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagents running: %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サブエージェント %lld 件が実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子 Agent %lld 个在跑"
+          }
+        }
+      }
     },
     "Subject" : {
       "localizations" : {
@@ -150998,6 +151343,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The agent reports back" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The agent reports back"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントが状況を報告します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 回报进展"
+          }
+        }
+      }
     },
     "The agent stopped and is waiting for you." : {
       "localizations" : {
