@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
 // The assistant's own settings (settings `assistant`, docs/assistant/assistant.md "Boundary with hub"): the machine its
@@ -43,8 +44,10 @@ const settingsFresh = 5 * time.Second
 
 // Settings are the assistant's settings, as saved.
 type Settings struct {
-	MachineID string `json:"machine_id"`
-	Launcher  string `json:"launcher"`
+	// WorkspaceRules are used only by explicit backend preparation.
+	WorkspaceRules workspacenaming.Rules `json:"workspace_rules,omitempty"`
+	MachineID      string                `json:"machine_id"`
+	Launcher       string                `json:"launcher"`
 	// DefaultPermissionMode applies only to new non-guest conversations without an explicit mode.
 	// Empty keeps the runtime's existing default; it never changes an existing conversation.
 	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
@@ -472,6 +475,8 @@ func stateDirOn(home, dataDir, name string) string {
 }
 
 type assistantView struct {
+	WorkspaceNamingVersion  string                `json:"workspace_naming_version"`
+	EffectiveWorkspaceRules workspacenaming.Rules `json:"effective_workspace_rules"`
 	Settings
 	Manager            string             `json:"manager"`
 	PermissionDefaults permissionDefaults `json:"permission_defaults"`
@@ -533,7 +538,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		v.MainMachineID = s.confirmedMainMachine(ctx, v)
 	}
 	v.Launcher = s.launcherNow(ctx)
-	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
+	effectiveRules, _ := workspacenaming.Effective(v.WorkspaceRules, workspacenaming.Rules{})
+	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),

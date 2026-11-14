@@ -27,6 +27,7 @@ import { lazyPage } from "../../lib/lazy-page";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 import { TaskTrust } from "./TaskTrust";
+import { WorkspaceNaming } from "../../ui/WorkspaceNaming";
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
@@ -456,6 +457,8 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           <Repositories manager={manager} owner={owner} />
         </Suspense>
       </PageBoundary>
+
+      <WorkspaceNaming manager={manager} owner={owner} />
 
       <SkillsGroup manager={manager} />
 
