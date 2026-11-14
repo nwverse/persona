@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// Whether all of a changed file is staged (its tick box is ticked), part of it, or none: as the web's `stageState`
 /// (`web/src/lib/git-write.ts`). A new file Git doesn't track yet has nothing staged.
@@ -73,6 +74,12 @@ nonisolated struct GitRefusal: Identifiable, Equatable, Sendable {
         case "git_stash_conflicted": String(localized: "Applied with conflicts in these files: resolve them, then commit. The stash is kept.")
         default: nil
         }
+    }
+
+    /// git's words as the alert shows them: none when the files say it all (uncommitted files in a switch's way, #7015),
+    /// git's words otherwise (a hook's output, a remote's refusal). They always go to the log.
+    var shownDetail: String? {
+        code == "git_conflict" && !files.isEmpty ? nil : detail
     }
 
     static func == (a: Self, b: Self) -> Bool { a.title == b.title && a.detail == b.detail && a.files == b.files && a.code == b.code }
@@ -178,6 +185,8 @@ final class GitWriteModel {
         case stage(String), stageAll, commit, push, switchTo(String), stash(GitStashOp)
     }
 
+    private static let log = Logger(subsystem: "persona", category: "git-write")
+
     private(set) var busy: Work?
     /// The last refusal, until the user reads it.
     var refusal: GitRefusal?
@@ -224,7 +233,11 @@ final class GitWriteModel {
             return try await call()
         } catch {
             // A cancelled write (the page went away) says nothing; the status is read again when it comes back.
-            if !error.isCancellation { refusal = GitRefusal(error) }
+            if !error.isCancellation {
+                let r = GitRefusal(error)
+                Self.log.notice("git write refused: \(r.code ?? "-", privacy: .public) \(r.detail)")
+                refusal = r
+            }
             return nil
         }
     }
