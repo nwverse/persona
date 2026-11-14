@@ -113,7 +113,6 @@ struct TodosView: View {
             quickAdd = nil
             openedGroups = []
         }
-        .navigationDestination(item: $pushed) { r in TodoDetailView(todoID: r.id) }
         // read when the page opens, and for the assistant made current (a project made meanwhile shows up)
         .task(id: model.assistantSwitches) { await projects.load(model.api?.currentAssistantSettings()) }
     }
