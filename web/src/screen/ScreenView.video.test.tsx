@@ -1,16 +1,30 @@
 // @vitest-environment jsdom
-// The live screen's picture switcher (#3954): the bar offers Video / VNC and, for video, a quality bias — but only when
-// this Mac's node advertises the hardware video channel, so no Mac shows a control it can't use. The choice is kept per
-// Mac in this browser. A page an app embeds has no bar to choose in.
+// The live screen's picture switcher (#3954, #6558): the bar offers Video / VNC — but only when this Mac's node
+// advertises the hardware video channel and this browser decodes it, so no Mac shows a control it can't use — and, for
+// video, a quality bias once the helper and this page both have quality tiers. The choice is kept per Mac in this
+// browser. A page an app embeds has no bar to choose in.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
-import { webVideo } from "./video";
+import { webTiers, webVideo } from "./video";
 
 type FakeRFB = EventTarget & { canvas: HTMLCanvasElement };
 const rfbs = vi.hoisted(() => [] as FakeRFB[]);
 const status = vi.hoisted(() => ({ video: null as unknown }));
+// The video chunk (#6558): what the browser decodes, and whether the helper said it has tiers.
+const chunk = vi.hoisted(() => ({ probe: { codecs: ["hevc", "h264"] } as { codecs: string[]; why?: string }, tiers: false }));
+vi.mock("./VideoPicture", async () => {
+  const { useEffect } = await import("react");
+  return {
+    probeHere: async () => chunk.probe,
+    VideoChannel: ({ onState }: { onState: (s: unknown) => void }) => {
+      useEffect(() => onState({ showing: false, fallback: null, reading: {}, codec: null, size: null, tiers: chunk.tiers, decoderFailed: false }), [onState]);
+      return null;
+    },
+    FallbackLine: () => null,
+  };
+});
 vi.mock("@novnc/novnc", () => ({
   default: class extends EventTarget {
     viewOnly = true;
@@ -70,6 +84,8 @@ beforeEach(() => {
   rfbs.length = 0;
   status.video = { version: 1, codecs: ["hevc", "h264"] };
   webVideo.plays = true; // the switcher as it will be once the browser plays video (not yet: see the last test)
+  chunk.probe = { codecs: ["hevc", "h264"] };
+  chunk.tiers = false;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -77,6 +93,7 @@ beforeEach(() => {
 
 afterEach(() => {
   webVideo.plays = false;
+  webTiers.supported = false;
   act(() => root.unmount());
   host.remove();
   localStorage.clear();
@@ -84,24 +101,43 @@ afterEach(() => {
 });
 
 describe("the picture switcher when the Mac advertises video", () => {
-  it("offers Video / VNC, adds Quality for video, and keeps the choice per Mac", async () => {
+  it("offers Video / VNC and keeps the choice per Mac; no Quality until both sides have tiers", async () => {
     await open();
     await connect();
     await menuAppears();
+    // Video by default where it plays, as on the iPhone, until a choice is kept.
+    expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_video") }));
+
+    act(() => button()!.click());
+    expect(rows().map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
+      [t("screen-video.picture_video"), "true"],
+      [t("screen-video.picture_vnc"), "false"],
+    ]);
+
+    act(() => rows()[1].click()); // choose VNC
+    await flush();
+    expect(localStorage.getItem("persona.screen.picture.macbook")).toBe("vnc");
     expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_vnc") }));
 
     act(() => button()!.click());
-    // VNC is the default until the video path lands, so VNC is checked and there is no Quality group yet.
-    expect(rows().map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([
-      [t("screen-video.picture_video"), "false"],
-      [t("screen-video.picture_vnc"), "true"],
-    ]);
-
-    act(() => rows()[0].click()); // choose Video
+    act(() => rows()[0].click()); // and Video again
     await flush();
     expect(localStorage.getItem("persona.screen.picture.macbook")).toBe("video");
-    expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_video") }));
 
+    act(() => button()!.click());
+    expect(rows().map((r) => r.getAttribute("aria-checked")), "Video checked, and no Quality: a choice that would do nothing").toEqual([
+      "true", // Video
+      "false", // VNC
+    ]);
+  });
+
+  it("adds Quality for video once the helper and this page both have tiers", async () => {
+    webTiers.supported = true;
+    chunk.tiers = true;
+    localStorage.setItem("persona.screen.picture.macbook", "video");
+    await open();
+    await connect();
+    await menuAppears();
     act(() => button()!.click());
     expect(rows().map((r) => r.getAttribute("aria-checked")), "Video checked, the quality bias defaults to Auto").toEqual([
       "true", // Video
@@ -122,11 +158,19 @@ describe("the picture switcher when the Mac advertises video", () => {
     await menuAppears();
     expect(button()?.getAttribute("aria-label")).toBe(t("screen-video.picture_current", { current: t("screen-video.picture_video") }));
     act(() => button()!.click());
-    expect(rows(), "Video, VNC, and the three quality biases").toHaveLength(5);
+    expect(rows(), "Video and VNC").toHaveLength(2);
   });
 });
 
 describe("the picture switcher otherwise", () => {
+  it("is not offered when this browser decodes neither codec (a page over plain http, say)", async () => {
+    chunk.probe = { codecs: [], why: "insecure" };
+    await open();
+    await connect();
+    await flush();
+    expect(button()).toBeNull();
+  });
+
   it("is not offered when the Mac does not advertise the video channel", async () => {
     status.video = null; // an older node, or no helper
     await open();
