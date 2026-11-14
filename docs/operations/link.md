@@ -12,15 +12,13 @@ the computer can connect to the hub or accept a connection from it. The recommen
 
 ## On computers: the web app and Persona Link
 
-On a computer, Persona has two parts. The native Mac app is frozen and no other desktop client takes its place ([mac.md](../apple/mac.md)).
+On a computer, Persona has an Electron desktop app and an independently installable Persona Link ([desktop.md](../desktop/desktop.md)).
 
-- **The web app** is the interface, in the browser or installed as an app ([web.md](../web/web.md), "On computers").
-- **Persona Link** runs on a computer whose Agents the hub should reach, and does only what a browser cannot. Today that is the connection to the hub and the resident node service.
-  A computer you only use the web app from does not need it.
-  Its menu bar App (Mac) and tray (Windows) show the link's state and handle pairing, reconnecting, renaming, the background service and starting at sign-in.
-  Neither tells you about Agents: the menu bar App posts no notifications, and the Windows tray posts only about its own link ([windows.md](windows.md), "Tray").
+- **The desktop app** wraps the hub-hosted web UI and adds native notifications, presence and desktop integration. A computer you only chat from, or use another computer's Agents from, does not need a local node or Link.
+- **Persona Link** runs on a computer whose Agents the hub should reach, and does what a browser cannot: it connects the hub to the resident node service and owns the Persona Screen helper. Its CLI/service works without the desktop app, including on Linux and headless computers.
+- The local setup window offers fixed status/pairing/reconnect/node-service operations for a separately installed Link. It does not silently install a service. The old Mac menu bar App and Windows tray remain until their pairing, status, service and Persona Screen packaging have a verified replacement.
 
-A desktop need goes into the web app first, and into Persona Link only when the browser cannot meet it (for example notifications while no Persona page is open, presence, local integrations).
+A desktop need goes into the shared web UI first, and into Persona Link only when the browser cannot meet it (for example local node connectivity, pairing or a recording helper). The desktop app and Link are not a bundled installation.
 
 ### Menu bar App or command-line Link
 
@@ -529,7 +527,7 @@ persona-link only relays the summary into its status: it shows nothing itself, a
 ## Presence
 
 While you are at a computer whose menu bar App can notify you, the hub counts that computer as a desktop: a phone with "Phone Muted" on leaves to it the "Needs you" cards whose notifications the App handed to Notification Center (#2214).
-This takes over what the native Mac App's `register_desktop` did (`docs/apple/mac.md`), for Persona Link. Active mode only: a computer in passive mode is no desktop yet, and its phone gets every card (see "Not yet").
+This takes over the retired native Mac App's `register_desktop` behavior for Persona Link ([desktop.md](../desktop/desktop.md)). Active mode only: a computer in passive mode is no desktop yet, and its phone gets every card (see "Not yet").
 
 **Who decides**
 - The menu bar App, by what it sees on this Mac; the conditions and the lines it writes are under "Menu bar App" › "Presence".
