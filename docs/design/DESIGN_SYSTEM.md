@@ -1295,7 +1295,10 @@ Tool execution is one summary line, never opens by itself, shows the latest text
 `createCompletedWorkGroup`). A summary that holds intermediate narration opens to cindy's timeline: the narration in
 order, and each run of work between two pieces of it an inner summary of its own, "Worked for 12s" from the words
 before it to the words after it, the live one "Working…" with its clock. Without intermediate narration it holds its
-rows directly. Inner summaries open together with the outer one and then keep their own open / closed state, so
+rows directly. If tools follow the latest progress message, the expanded Web timeline also shows that message at its
+original position; the collapsed view still shows it in the latest-text slot. The work headers explain their clocks:
+the outer clock covers the whole exchange; inner clocks start at the preceding message or start of work and end at
+the next message, the last activity in a finished run, or now in a live run. Inner summaries open together with the outer one and then keep their own open / closed state, so
 opening a summary shows every tool call. On the web a long finished summary fills in as it opens: the first 60 steps
 (its inner summaries' included) come with the tap and the rest follow in batches of 60 while the page is idle, so the
 tap is answered at once and every call is still drawn a moment later, none left out or behind a "Show more"; rows
