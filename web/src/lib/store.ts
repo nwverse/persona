@@ -638,7 +638,7 @@ export function connect() {
     if (stopped) return;
     // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
     // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
-    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge();
+    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential);
     const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
     // the drop starts while online; a restart announced on a later attempt stretches its grace
@@ -661,6 +661,12 @@ export function connect() {
     retryTimer = window.setTimeout(connect, wait);
   };
 }
+
+// The hub answered while it refused the socket: a browser can't read why a WebSocket handshake failed, so one ordinary
+// read asks. A credential it no longer takes (removed in Settings › Devices, or the hub forgot it) answers 401, which
+// api() hands to the sign-in page with "signed out" (App.tsx handleUnauthorized) instead of retrying as if the hub were
+// out of reach. The read's own failures change nothing: the socket keeps retrying.
+const probeCredential = () => api("/machines", { timeout: 15_000 }).catch(() => {});
 
 // The grace is over and the socket is still not back: show it as before.
 function showDrop() {

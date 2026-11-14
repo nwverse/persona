@@ -125,6 +125,13 @@ func computerMac(t *testing.T, h *Manager, id string) (*Machine, func() (statuse
 			case "run_script":
 				return proto.ComputerResult{Output: json.RawMessage(`{"ok": true, "value": {"pid": 63, "window_id": 2318}}`)}, nil
 			case "get_window_state", "get_desktop_state":
+				if since, _ := c.Args["since"].(string); since != "" { // tracing an element token (#7560)
+					status := "other_window"
+					if since == "s00000070" { // a snapshot of System Settings' window
+						status = "no_change"
+					}
+					return proto.ComputerResult{Output: json.RawMessage(`{"since_status": "` + status + `"}`)}, nil
+				}
 				return proto.ComputerResult{Output: json.RawMessage(`{"snapshot_id": "s1", "tree_markdown": "- [5] AXButton (7)"}`),
 					Image: &proto.Image{Mime: "image/jpeg", Data: "AAAA", Width: 230, Height: 408}}, nil
 			}
