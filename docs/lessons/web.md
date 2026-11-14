@@ -1004,7 +1004,7 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 ## Wrap horizontal rows when they do not fit; do not rely on horizontal scrolling (#3594)
 
 Scrollbars are globally hidden, and mouse wheels scroll vertically only. Overflowing horizontal rows (Settings categories) hide later items from mouse users, who cannot scroll to them. Wrap the row (button text stays single-line) or use a menu.
-If the header grows, elements below it (App.tsx connection-status pill) cannot assume 56px; Settings writes actual header height to `<main>` `--page-header`.
+Nothing may float under a page's header assuming its height: the connection-status pill once sat at `--page-header` (Settings wrote its taller header's height there) and still covered fields and titles, so it is now a strip above the page that pushes it down (`App.tsx`, web usability audit item 87).
 
 ## Do not fade answers in again after remounting (2026-11-06, #4107)
 
