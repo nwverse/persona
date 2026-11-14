@@ -184,7 +184,7 @@ def repair_worker_argv(argv, worktree, home=None):
                       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                       "http_proxy", "https_proxy", "all_proxy", "no_proxy") or key.startswith("ANTHROPIC_")}
     env.update({"HOME": str(home), "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "CI": "1",
-                "PATH": "/tools"})
+                "PATH": "/tools:/usr/local/bin:/usr/bin:/bin"})
     executable = shutil.which(argv[0])
     result = [sandbox, "--unshare-all", "--share-net", "--die-with-parent", "--new-session",
               "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin", "--ro-bind", "/lib", "/lib",
@@ -298,9 +298,13 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
         raise WatchError("base moved before the repair push; nothing was pushed")
     if pr.get("isCrossRepository"):
-        if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode == 0:
-            raise WatchError("continuation branch already exists; choose a fresh head instead of overwriting it")
-    checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
+        existing = gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number"]) or []
+        if existing:
+            return existing[0]["number"]
+        if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode != 0:
+            checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
+    else:
+        checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
     if pr.get("isCrossRepository"):
         issues = linked_issue(pr.get("body", ""), repo)
         if not issues:

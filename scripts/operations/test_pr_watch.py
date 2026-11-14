@@ -363,7 +363,7 @@ class WatcherTests(unittest.TestCase):
             with patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
                     patch.object(pr_watch_repair, "verify", return_value=[]), \
                     patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
-                    patch.object(pr_watch_repair, "gh_json", return_value={"number": 9}) as created:
+                    patch.object(pr_watch_repair, "gh_json", side_effect=[[], {"number": 9}]) as created:
                 pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]})
         self.assertIn("Refs #6", created.call_args.args[0][-1])
 
