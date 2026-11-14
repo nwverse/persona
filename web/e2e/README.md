@@ -155,3 +155,13 @@ checked and sends nothing, that Auto is posted and shown at once, and that Full 
 asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
+
+## Keyboard around the overlays
+
+```sh
+MOCK_RECENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/keyboard-overlays.mjs <loopback-web-origin> [--shots <dir>] [--executable <chromium>]
+```
+
+Run against an exclusively owned mock-backed web server, in Chinese, light and dark, a fresh browser context each. It checks that the session ⋯ menu shows every row at 1280 × 820, and at 1280 × 560 opens beside its button (not over it) with a fade at the edge where rows are cut; that Escape anywhere in the ⌘K palette closes it and gives the focus back to the composer it was opened from; that ⌘/ and ⌘K replace one another instead of stacking two dialogs; that Tab in the shortcut help reaches "Change in Settings" after the scrolling list and wraps to Close; that Escape out of a menu's Rename leaves the focus on the row; that Escape clears the To-dos search; and that a theme or language picked in one tab reaches the other. Every hub write except the sign-in is answered in the browser. It prints one line per check and a verdict, and exits nonzero on a failure or its three-minute timeout.

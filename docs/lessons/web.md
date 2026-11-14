@@ -1202,3 +1202,20 @@ px, while `offsetHeight` and the computed height say 44. Reduced motion only sho
 frame is still drawn. Wait for the panel's animations before measuring:
 `await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)))`
 (`web/e2e/standing-authorizations.mjs`).
+
+## A focus trap that lists only controls misses Chrome's focusable scrollers
+
+Chrome lets the keyboard focus a scrolling element with no focusable child of its own (the shortcut help's list). A
+modal's Tab trap that only knows the controls from `focusables()` sees the focus "outside" its list there and jumps back
+to the first control, so the controls after the scroller are never reached by Tab. Decide from where the focus is in
+the document instead: inside the modal but on no listed control, let the browser's order go on and wrap only past either
+end (`trapTabIn` in `web/src/ui/overlay.ts`). Check a trap with Tab in a real browser, not only in jsdom, which has no such
+focus stops.
+
+## Uppercase label styles rewrite names
+
+A heading styled as a label (`uppercase tracking-[0.06em]`) also capitalizes whatever is put in it. A menu header or a
+palette section that holds a space, project or computer name then shows "weather" as "WEATHER", a name the user never
+typed. Give those headings their text as written (`Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`) and
+keep the label style for label words.
+

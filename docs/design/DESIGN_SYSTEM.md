@@ -1543,6 +1543,14 @@ Claude Code's AskUserQuestion, the assistant's ask_user and Codex's questions.
   review as not answered, and its main button opens the card at that question with every answer kept.
 - **The plan pill folds** while a card asks something, so it never sits over the card's buttons.
 
+### 4.12 Keyboard and overlays (web)
+
+- Esc undoes one thing at a time, the innermost first: a search field with text clears it (`SearchField`; an empty one lets Esc go on), a menu's rename goes back to the menu with the focus on its Rename row, a menu closes onto its button, and then the topmost overlay closes (`useEscapeClose`). A modal closes on Esc from anywhere inside it, not only from its first field, and gives the focus back to what opened it.
+- One modal from the keyboard at a time: the ⌘K palette and the ⌘/ shortcut help replace each other.
+- Tab stays inside a modal and reaches every control in it, including the ones after a scrolling body the browser lets the keyboard focus (`trapTabIn` in `web/src/ui/overlay.ts`).
+- A menu is as tall as the window allows; when rows are cut, a fade at that edge says there is more (`Menu`, `data-menu-more`), as the team panel's list does.
+- A choice kept in the browser (appearance, language) reaches every open tab: the others follow through the `storage` event, reloading for a language as the tab that chose it does.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
@@ -1556,6 +1564,7 @@ Calm, direct, second person, like a capable teammate. Contractions in English ("
 - One ellipsis character. Use it for actions that open another step and for in-progress states.
 - Complete sentences end in a period; labels and titles do not. Settings paths use the single angle quote.
 - Apostrophes and quotes: pick one style (Apple en is 94% straight apostrophes with curly quotes; DS-28).
+- A heading that holds a name (a space, a computer, a project, a pane) is drawn as written. The web's small-capital label style (`uppercase`) is for label headings only; on a name it rewrites what the user typed ("weather" as "WEATHER"). Web: `Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`.
 
 ### 5.3 Error-message structure
 

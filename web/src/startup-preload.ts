@@ -299,7 +299,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // import of its dialog. Reading the conversation, the Markdown and the dialog's words are a chunk of their own
 // (views/chat/ExportDialog.tsx, lib/chat-export.ts). That main measured 17 B over the 480,545 B budget in this
 // environment before the change; the budget moves to what this change measured, 480,639 B.
-export const FIRST_SCREEN_BUDGET = 480_639;
+// The keyboard around the overlays (audit items 11, 21, 22, 37, 43, 59, 72 and 78 of the web usability audit) adds
+// 636 B to ja, measured in one environment against main at 85cfde464 (ja 480,639 B to 481,275 B; en 476,941 B to
+// 477,579 B, zh-Hans 477,922 B to 478,561 B): the menu's height from the window, its fades at cut edges and its rename's
+// Esc giving the focus back (ui/atoms.tsx), the focus trap that lets Tab past a scrolling body and a menu opening beside
+// its button (ui/overlay.ts), Esc anywhere in the palette and its assistant rows' last line, the palette and the help
+// replacing each other, Esc clearing a search field, other tabs following the theme and the language, the palette's node
+// sections in each language, and an answered card's options without "(Recommended)". All of it is code and words the
+// first screen's menus, palette, search fields and cards run; the idle tier, 43,156 B against 43,089 B, stays under its
+// ceiling. The budget moves by these 636 B.
+export const FIRST_SCREEN_BUDGET = 481_275;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
