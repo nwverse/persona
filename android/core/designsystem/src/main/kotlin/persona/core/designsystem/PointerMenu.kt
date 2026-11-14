@@ -85,17 +85,15 @@ fun JPointerMenu(
     }
 }
 
-/** Safe physical window bounds; Compose resolves the horizontal insets in [layoutDirection]. */
+/** Safe physical window bounds; getLeft/getRight stay physical in either layout direction. */
 internal fun pointerMenuSafeBounds(
     windowSize: IntSize,
     insets: WindowInsets,
     density: Density,
     layoutDirection: LayoutDirection,
 ): IntRect {
-    val startInset = insets.getLeft(density, layoutDirection)
-    val endInset = insets.getRight(density, layoutDirection)
-    val left = if (layoutDirection == LayoutDirection.Rtl) endInset else startInset
-    val rightInset = if (layoutDirection == LayoutDirection.Rtl) startInset else endInset
+    val left = insets.getLeft(density, layoutDirection)
+    val rightInset = insets.getRight(density, layoutDirection)
     val top = insets.getTop(density)
     return IntRect(left, top,
         (windowSize.width - rightInset).coerceAtLeast(left),
