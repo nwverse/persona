@@ -179,6 +179,17 @@ export function currentLanguage(): Lang {
   return lang;
 }
 
+/** Another tab saved a language choice (`key` is the storage event's): whether this page should reload into it, as the
+ *  tab that chose it did, so every tab of the browser ends up in the same language. */
+export function reloadsForLanguage(key: string | null): boolean {
+  return key === PREF_KEY && preferredLanguage() !== lang;
+}
+
+if (typeof window !== "undefined")
+  window.addEventListener("storage", (e) => {
+    if (reloadsForLanguage(e.key)) location.reload();
+  });
+
 // formatLocale()'s last inputs and answer.
 let localeKey: string | undefined;
 let locale = SOURCE_LANG;
