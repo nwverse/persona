@@ -67,7 +67,7 @@ public final class PersonaCoreClient: @unchecked Sendable {
         }, release: { context in
             guard let context else { return }
             _ = Unmanaged<CallbackBox>.fromOpaque(context).takeRetainedValue()
-        }, changedChat: { context, chat, length, version in
+        }, changed_chat: { context, chat, length, version in
             guard let context else { return }
             let box = Unmanaged<CallbackBox>.fromOpaque(context).takeUnretainedValue()
             guard let callback = box.callbacks.changedChat else { return }
