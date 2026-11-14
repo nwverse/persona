@@ -710,6 +710,10 @@ nonisolated enum Theme {
         static let standard = state
         /// Task-draft dismissal uses the same six-second Undo window as the web.
         static let draftUndo: Duration = .seconds(6)
+        /// How long an alert that follows another waits before asking: UIKit drops a presentation made while another is
+        /// still going away, and SwiftUI took up to about 0.8 s to close one answered elsewhere (queued "already exists"
+        /// questions, #6113).
+        static let alertHandoff: Duration = .seconds(1)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)
