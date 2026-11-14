@@ -25,7 +25,7 @@ func hierarchyHub(t *testing.T) (*Hub, *Machine) {
 	at := func(n int) time.Time { return time.Unix(int64(1000+n), 0) }
 	row := func(id, state string, n int, under string, kids *proto.SessionChildren) proto.Session {
 		s := proto.Session{MachineID: "demo", SessionID: id, Title: id, State: state, Cwd: "/demo/app", UpdatedAt: at(n)}
-		s.SetFold(under, "", kids)
+		s.SetFold(under, "", "", kids)
 		return s
 	}
 	m.sessions = []proto.Session{
@@ -119,7 +119,7 @@ func TestRuntimeListTabTeam(t *testing.T) {
 	row := func(id, state string, n int, under, as string, kids *proto.SessionChildren) proto.Session {
 		s := proto.Session{MachineID: "demo", SessionID: id, Title: id, State: state, Cwd: "/demo/app", UpdatedAt: time.Unix(int64(1000+n), 0),
 			SpaceKind: "herdr", SpaceID: "w1", SlotID: "t1"}
-		s.SetFold(under, as, kids)
+		s.SetFold(under, as, "", kids)
 		return s
 	}
 	m.sessions = []proto.Session{
@@ -237,8 +237,8 @@ func TestRuntimeListHierarchyValidationAndBinding(t *testing.T) {
 	under := runtimePage(t, h, "summary=1&machine_id=demo&parent_session_id=lead")
 	m.mu.Lock()
 	m.sessions = slices.Clone(m.sessions)
-	m.sessions[1].SetFold("", "", nil)
-	m.sessions[0].SetFold("", "", &proto.SessionChildren{Total: 2, NeedsYou: 1})
+	m.sessions[1].SetFold("", "", "", nil)
+	m.sessions[0].SetFold("", "", "", &proto.SessionChildren{Total: 2, NeedsYou: 1})
 	m.mu.Unlock()
 	h.sessionsChanged(m)
 	delta := runtimePage(t, h, "summary=1&roots=1&since="+neturl.QueryEscape(first.Revision))
