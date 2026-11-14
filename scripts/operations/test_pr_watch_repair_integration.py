@@ -65,8 +65,8 @@ class RepairIntegrationTests(unittest.TestCase):
 
     def test_fork_never_pushes_original_branch(self):
         pr = dict(self.pr, isCrossRepository=True)
-        self.assertFalse(pr_watch_repair.update_branch_with_main("example/one", pr, str(self.repo), self.main))
-        self.assertNotEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.main)
+        self.assertTrue(pr_watch_repair.update_branch_with_main("example/one", pr, str(self.repo), self.main))
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
 
     def test_head_change_before_repair_push_is_refused(self):
         (self.repo / "repair.txt").write_text("repair\n")

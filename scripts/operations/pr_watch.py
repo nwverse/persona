@@ -337,10 +337,18 @@ class Watcher:
         if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
-            self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
+            if pr.get("isCrossRepository"):
+                new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error))
+                self.comment(repo, number, "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
+            else:
+                self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
             return False
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                        repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
+        latest = pr_snapshot(repo, number)
+        if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
+            self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
+            return False
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
         new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error))
         self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")

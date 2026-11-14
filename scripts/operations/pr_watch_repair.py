@@ -39,15 +39,23 @@ def failed_go_packages(worktree, text):
 
 
 def failure_signature(text):
-    """Compare the causal diagnostic, not machine-specific paths or line counts."""
+    """Compare a failed check identity and its specific diagnostic."""
     signatures = []
     for line in (text or "").splitlines():
         if re.search(r"(?:--- FAIL:|AssertionError|FileNotFoundError|ModuleNotFoundError|"
                      r"No such file or directory|panic:|^FAIL\s+\S|baseline|not found)", line):
             normalized = re.sub(r"/\S+", "<path>", line)
             normalized = re.sub(r"0x[0-9a-fA-F]+", "<address>", normalized)
+            normalized = normalized.replace("'plutil'", "plutil").replace('"plutil"', "plutil")
             signatures.append(normalized.strip())
     return set(signatures)
+
+
+def failure_test_ids(text):
+    """Unittest/Go test identifiers, not generic words shared by other failures."""
+    ids = set(re.findall(r"(?m)^--- FAIL: ([A-Za-z0-9_./-]+)", text or ""))
+    ids.update(re.findall(r"(?m)^(?:FAIL|ERROR): ([A-Za-z0-9_./-]+)", text or ""))
+    return ids
 
 
 def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None):
@@ -58,13 +66,15 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
             checked(["git", "worktree", "add", "--detach", str(base_worktree), pr["baseRefOid"]], cwd=git_root or worktree, timeout=180)
             result = run(command, cwd=base_worktree, timeout=timeout, environ=verification_env())
             output = result.stdout + "\n" + result.stderr
-            reproduced = result.returncode != 0 and bool(failure_signature(output) & failure_signature(failure))
+            reproduced = (result.returncode != 0 and failure_test_ids(output) == failure_test_ids(failure)
+                          and bool(failure_signature(output) & failure_signature(failure)))
             return {"reproduced": reproduced, "command": command,
                     "output": bounded(output, 6000),
                     "reason": "The same failure signature reproduces on clean main." if reproduced else
                               "The clean-main comparison did not reproduce this failure."}
         finally:
             run(["git", "worktree", "remove", "--force", str(base_worktree)], cwd=git_root or worktree, timeout=90)
+    base_worktree = Path(str(worktree) + "-base-check")
     names = failed_test_names(failure)
     packages = failed_go_packages(worktree, failure)
     if not names or not packages:
@@ -88,12 +98,8 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
         run(["git", "worktree", "remove", "--force", str(base_worktree)], cwd=git_root or worktree, timeout=90)
 
 
-def update_branch_with_main(repo, pr, worktree, base):
-    """Merge current main only on a same-repository branch, with a clean diff."""
-    if pr.get("isCrossRepository"):
-        return False
-    if not pr.get("headRefName") or pr["headRefName"].startswith("-"):
-        raise WatchError("PR branch name is unsafe for an authorized update")
+def merge_base_in_isolation(pr, worktree, base):
+    """Merge main locally for either branch type without touching a fork."""
     if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
         raise WatchError("repair worktree is not at the reviewed PR head")
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
@@ -107,6 +113,27 @@ def update_branch_with_main(repo, pr, worktree, base):
     result = run(["git"] + identity + ["merge", "--no-ff", "--no-edit", base], cwd=worktree, timeout=180)
     if result.returncode:
         raise WatchError("cannot merge current main automatically: " + bounded(result.stderr or result.stdout, 2000))
+    return True
+
+
+def update_branch_with_main(repo, pr, worktree, base):
+    """Merge current main only on a same-repository branch, with a clean diff."""
+    if pr.get("isCrossRepository"):
+        return merge_base_in_isolation(pr, worktree, base)
+    if not pr.get("headRefName") or pr["headRefName"].startswith("-"):
+        raise WatchError("PR branch name is unsafe for an authorized update")
+    if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
+        raise WatchError("repair worktree is not at the reviewed PR head")
+    if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
+        raise WatchError("repair worktree is not clean before the base merge")
+    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
+    if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
+        raise WatchError("main moved while preparing the repair")
+    if not merge_base_in_isolation(pr, worktree, base):
+        return False
+    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
+    if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
+        raise WatchError("PR head moved before merging main; nothing was pushed")
     checked(["git", "push", "origin", "HEAD:refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
     return True
 
@@ -136,12 +163,13 @@ def commit_and_push_repair(repo, pr, worktree, base, failure):
     checked(["git", "add", "-A"], cwd=worktree)
     checked(["python3", "-I", str(scanner), "--staged"], cwd=worktree, timeout=180)
     identity = ["-c", "user.name=chyroc", "-c", "user.email=chyroc@users.noreply.github.com"]
-    message = "fix: repair automated verification failure\n\n"
-    issues = linked_issue(pr.get("body", ""), repo)
-    if issues:
-        message += "Refs #%d\n\n" % issues[0]
-    message += "Co-Authored-By: Kimi Code <noreply@anthropic.com>"
-    checked(["git"] + identity + ["commit", "-m", message], cwd=worktree)
+    if checked(["git", "diff", "--cached", "--stat"], cwd=worktree).strip():
+        message = "fix: repair automated verification failure\n\n"
+        issues = linked_issue(pr.get("body", ""), repo)
+        if issues:
+            message += "Refs #%d\n\n" % issues[0]
+        message += "Co-Authored-By: Kimi Code <noreply@anthropic.com>"
+        checked(["git"] + identity + ["commit", "-m", message], cwd=worktree)
     repaired_pr = dict(pr, headRefOid=checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip())
     results = verify(repo, repaired_pr, worktree, {"profile": "persona" if repo == "nwverse/persona" else "extensions",
                                                   "timeout_seconds": 7200}, verification_env())

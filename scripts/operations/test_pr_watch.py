@@ -320,6 +320,8 @@ class WatcherTests(unittest.TestCase):
                 calls.append(argv)
                 if argv[:2] == ["git", "rev-parse"]:
                     return SHA_B + "\n"
+                if argv[:3] == ["git", "diff", "--cached"]:
+                    return "repair.py | 1 +\n"
                 return ""
             def fake_verify(repo, repaired_pr, *args):
                 calls.append(repaired_pr["headRefOid"])
