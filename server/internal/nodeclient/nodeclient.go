@@ -98,7 +98,7 @@ func mcpWaitReceiver(ctx context.Context) (func(proto.MCPWaitKind), bool) {
 
 const (
 	mcpWaitInterimPrefix  = `{"wait_kind":`
-	mcpWaitInterimMaxSize = 64
+	mcpWaitInterimMaxSize = 256
 )
 
 // mcpWaitInterim recognizes only the node's exact one-field interim envelope. The size and prefix checks keep a large
