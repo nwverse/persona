@@ -65,6 +65,7 @@ func (h *Hub) startDevices(ctx context.Context) {
 	h.fleet.mu.Unlock()
 	d.mu.Lock()
 	d.warmUntil = until
+	d.fleetReady = true
 	d.mu.Unlock()
 	if n > 0 {
 		h.logf("warm start: %d machines shown as before while the manager reconnects them", n)
@@ -107,13 +108,10 @@ func (h *Hub) retryMachineAssignments(ctx context.Context) bool {
 			if err := h.loadMachinesKept(ctx); err != nil {
 				return false
 			}
+			keptRead = true
 		}
-		// The first entries read filtered out machines whose kept record was unread. Read them again before listing them.
-		h.loadMachineEntries(ctx)
-		h.reconcileKeptMachines()
-		h.devicesConfigChanged()
 	}
-	return ownersRead
+	return ownersRead && keptRead
 }
 
 // reconcileKeptMachines lists the machines whose kept records were unread at start. It runs only when those records

@@ -155,3 +155,36 @@ func TestMachineListOmitsUnavailableOwner(t *testing.T) {
 		t.Fatalf("manager = %q while ownership is unavailable, want empty", m.Manager)
 	}
 }
+
+func TestLateKeptListReadReconcilesMachineList(t *testing.T) {
+	ctx := context.Background()
+	h := newTestHub(t)
+	st := &startupOwnershipStore{
+		ownersStore: &ownersStore{kept: map[string]json.RawMessage{
+			machinesKeptKey: json.RawMessage(`{"kept":"m-0b0b0b"}`),
+		}},
+		failures: map[string]int{machinesKeptKey: 1},
+		reads:    map[string][]time.Time{},
+	}
+	h.bus.idents = st
+	h.store = newMeshStore()
+	if err := h.store.PutSetting(ctx, machineEntriesKey, reportedMachines{
+		"m-0b0b0b": {
+			"kept": {Cfg: json.RawMessage(`{"id":"kept","name":"Kept computer","kind":"ssh"}`)},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.startDevices(ctx)
+	if h.localMachine("kept") != nil {
+		t.Fatal("a machine whose kept-list read failed is already listed")
+	}
+	keeps, known := h.keepsAnyKnown(ctx, "m-0b0b0b")
+	if !known || !keeps {
+		t.Fatalf("the late kept-list read returned known %v and keeps %v", known, keeps)
+	}
+	m, ok := listed(h, "kept")
+	if !ok || m.Manager != "m-0b0b0b" || m.Name != "Kept computer" {
+		t.Fatalf("the late-read kept machine = %+v, present %v", m, ok)
+	}
+}
