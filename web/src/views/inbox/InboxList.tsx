@@ -32,6 +32,7 @@ import { Icon } from "../../ui/icons";
 import { openPolicyDialog, RulesDialog } from "./PolicyDialog";
 import { isNoHover } from "../../ui/media-query";
 import { scrollBehavior } from "../../ui/stream/motion";
+import { whenIdle } from "../../ui/stream/idle";
 import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
@@ -460,6 +461,8 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           const row = (it: InboxItem, off = false) => (
             <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} folder={foldersShown ? folder : undefined} onEdit={setEditing} pick={picking && !off ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} off={off && picking} />
           );
+          const openRow = (it: InboxItem) => row(it);
+          const doneRow = (it: InboxItem) => row(it, true);
           const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean; count?: number } = {}) => {
             const id = `${group}|${section}|${g.key}`;
             const n = picking && opts.pickable ? g.items.filter((it) => picked.has(itemKey(it))).length : 0;
@@ -482,12 +485,12 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                     {titled ? (
                       <>
                         {waiting.length > 0 && groupOf(tier.key, { key: "agents", title: t("lib-inbox.group_agents"), items: [] }, agentRows, { count: waiting.length })}
-                        {groups.map((g) => groupOf(tier.key, g, g.items.map((it) => row(it)), { pickable: true }))}
+                        {groups.map((g) => groupOf(tier.key, g, <Rows items={g.items} row={openRow} keep={isSelected} all={view.restored} />, { pickable: true }))}
                       </>
                     ) : (
                       <>
                         {agentRows}
-                        {list.map((it) => row(it))}
+                        <Rows items={list} row={openRow} keep={isSelected} all={view.restored} />
                       </>
                     )}
                   </Section>
@@ -504,11 +507,11 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                     const id = `${group}|${g.key}`;
                     return groupOf("done", g, (
                       <>
-                        {g.items.map((it) => row(it, true))}
+                        <Rows items={g.items} row={doneRow} keep={isSelected} all={view.restored} />
                         {exact && g.more && !filtered && <OlderButton busy={groupLoading.includes(id)} error={moreError} run={() => void loadDoneGroup(manager?.id, g.key, g.range)} />}
                       </>
                     ), { more: g.plus, count: g.count });
-                  }) : done.map((it) => row(it, true))}
+                  }) : <Rows items={done} row={doneRow} keep={isSelected} all={view.restored} />}
                   {!exact && more && history.length > 0 && <OlderButton busy={historyLoading} error={moreError} run={() => void loadOlderDone(historyManagers)} />}
                   {nextGroup && <OlderButton busy={groupLoading.includes(`${group}|${nextGroup.key}`)} error={moreError} run={() => void loadDoneGroup(manager?.id, nextGroup.key, nextGroup.range)} />}
                 </Section>
@@ -549,6 +552,27 @@ export function sectionCount(items: number, agents: number): { text: string; lab
     text: items > 0 && agents > 0 ? `${t("inbox-inboxlist.count_items_short", { count: items })} · ${t("inbox-inboxlist.count_agents", { count: agents })}` : agents > 0 ? t("inbox-inboxlist.count_agents", { count: agents }) : String(items),
     label: parts.join(t("inbox-inboxlist.count_separator")),
   };
+}
+
+/** How many rows of one run mount at once, and how many more each time the page is idle. */
+const ROWS_FIRST = 20;
+const ROWS_STEP = 20;
+
+/**
+ * A run of rows (a group's, or a section's without groups) that mounts in steps: the first ROWS_FIRST at once, then
+ * ROWS_STEP more whenever the page is idle, until all are there. 300 FYI mails built every row, some 7,000 elements,
+ * before the Inbox showed anything (a 170 ms task on a phone, audit item 34); the first screen now comes first and the rest
+ * follow in short tasks. `keep`: the opened item, there from the start so the list can show it; `all`: every row at once,
+ * for a returned view putting its scroll position back.
+ */
+function Rows({ items, row, keep, all }: { items: InboxItem[]; row: (it: InboxItem) => React.ReactNode; keep: (it: InboxItem) => boolean; all: boolean }) {
+  const [mounted, setMounted] = useState(() => (all ? items.length : ROWS_FIRST));
+  const n = Math.max(mounted, items.findIndex(keep) + 1);
+  useEffect(() => {
+    if (n >= items.length) return;
+    return whenIdle(() => setMounted(n + ROWS_STEP), 500);
+  }, [n, items.length]);
+  return <>{(n >= items.length ? items : items.slice(0, n)).map(row)}</>;
 }
 
 /** A section of the list; without `onToggle` it is always open (In progress: what the AI is on never hides). */

@@ -292,7 +292,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
 // own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
 // 192 B on top of #7339's.
-export const FIRST_SCREEN_BUDGET = 480_494;
+// The web usability audit's Inbox fixes (items 34 and 71) add 125 B to each language, measured in one environment
+// against main at 378e50a67 (ja 480,414 B to 480,539 B; en 476,723 B to 476,848 B, zh-Hans 477,703 B to 477,828 B):
+// ui/use-clamped.ts measures a clamped text when it mounts and when its box or its words change (a MutationObserver)
+// instead of after every render, and Button takes a ref, so the Inbox can hand the focus back to Select. The Inbox's
+// own changes are in its page chunk. The budget moves by these 125 B; main's 80 B of room stay.
+export const FIRST_SCREEN_BUDGET = 480_619;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
