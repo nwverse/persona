@@ -20,8 +20,11 @@ func TestInboxReplayScopesMaintenanceToSelectedItem(t *testing.T) {
 	selected := replayScopeItem("selected", "example", "thread:selected", "last:selected", "Old connector name", now)
 	muted := replayScopeItem("muted", "example", "thread:muted", "last:muted", "Old connector name", now)
 	muted.Connector.Tags = []connector.Tag{{Key: connector.TagRepo, Value: "org/private", Name: "org/private"}}
+	orphan := replayScopeItem("merged", "example", "thread:merged", "last:merged", "Old connector name", now)
+	orphan.MergedInto = "forgotten-survivor"
 	h.inbox.mu.Lock()
 	h.inbox.items[selected.ID], h.inbox.items[muted.ID] = selected, muted
+	h.inbox.items[orphan.ID] = orphan
 	h.inbox.readErrs = map[string]string{"unrelated": assistantwire.ReadTimeout}
 	h.inbox.mailReadErrs = map[string]assistantwire.InboxMailFailed{"acc-work": {ID: "acc-work", Email: "work@example.com", ReadError: assistantwire.ReadFailed}}
 	h.inbox.held = map[string]inboxHeld{"extension": {Name: "Extension", Waiting: 3, State: triagePaused, Reason: "busy"}}
@@ -50,6 +53,9 @@ func TestInboxReplayScopesMaintenanceToSelectedItem(t *testing.T) {
 	}
 	if !muted.open() || muted.AccountName != "Old connector name" {
 		t.Fatalf("unrelated muted item changed: %+v", muted)
+	}
+	if orphan.MergedInto != "forgotten-survivor" {
+		t.Fatalf("replay released an unrelated merged item: %+v", orphan)
 	}
 }
 
