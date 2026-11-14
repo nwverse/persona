@@ -261,7 +261,7 @@ python3 scripts/release/check_bundle_skills.py "$OUT/bin/persona-manager-linux-a
 host_bin="$OUT/bin/personad-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 [ "$("$host_bin" version)" = "$VERSION" ] || { echo "the built personad does not report $VERSION" >&2; exit 1; }
 host_link="$OUT/bin/persona-link-${host_bin##*/personad-}"
-[ "$("$host_link" version)" = "$VERSION" ] || { echo "the built persona-link does not report $VERSION" >&2; exit 1; }
+[ "$("$host_link" version -v)" = "$("$host_bin" version -v)" ] || { echo "persona-link is not the same build as personad" >&2; exit 1; }
 host_node="$OUT/bin/persona-node-${host_bin##*/personad-}"
 [ "$("$host_node" version -v)" = "$("$host_bin" version -v)" ] || { echo "persona-node is not the same build as personad" >&2; exit 1; }
 "$host_bin" version -v | grep -qx "channel release, build $BUILD" || { echo "the built personad is not release build $BUILD" >&2; exit 1; }
