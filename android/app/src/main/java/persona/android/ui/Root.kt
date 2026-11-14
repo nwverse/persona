@@ -99,8 +99,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val AssistantEntryMetadata = "persona.android.ui.assistant-entry"
-
 @Composable
 fun PersonaRoot(
     hub: Hub?,
@@ -543,7 +541,6 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         }
         val rootKeys: Set<Any> = remember { listOf<NavKey>(AssistantRoute, AgentsRoute).map { NavEntry(it) {}.contentKey }.toSet() }
         val assistantRootKey: Any = remember { NavEntry<NavKey>(AssistantRoute) {}.contentKey }
-        val assistantTopKey: Any? = assistantStack.lastOrNull()?.let { NavEntry<NavKey>(it) {}.contentKey }
         // The one shared sidebar, as the drawer or as the column beside the Assistant page. The two never share a key:
         // on Agents in a regular window the drawer opens while the Assistant page (kept composed) still holds its column.
         val sharedSidebar: @Composable (String) -> Unit = { stateKey ->
@@ -592,18 +589,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             }
         }
         // What the decorator below reads: it is remembered across compositions, these change with the window.
-        val currentSidebar = rememberUpdatedState(sharedSidebar)
         val currentRegular = rememberUpdatedState(regular)
-        val currentAssistantPolicy = rememberUpdatedState(panePolicies.getValue(AppTab.Persona))
-        val currentAssistantTopKey = rememberUpdatedState(assistantTopKey)
         val currentOthersWaiting = rememberUpdatedState(othersWaiting)
-        val currentHinges = rememberUpdatedState(paneHinges)
         val currentConnection = rememberUpdatedState(connection)
-        // Every Assistant entry keeps this frame across window policies; only its sidebar argument changes.
-        val besideAssistant: @Composable (Boolean, @Composable () -> Unit) -> Unit = { showSidebar, page ->
-            AssistantPaneFrame(currentRegular.value, showSidebar, sidebarColumnShown.value,
-                sidebar = { currentSidebar.value("shared-sidebar-column") }, hinges = currentHinges.value, content = page)
-        }
         // Only primary roots carry the shared top switcher. Secondary pages keep their own Back control.
         val chrome = remember(style, items, selected) {
             NavEntryDecorator<NavKey> { entry ->
@@ -641,9 +629,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         } else entry.Content()
                     }
                 }
-                val assistantEntry = entry.metadata[AssistantEntryMetadata] == true
-                val assistantTop = entry.contentKey == currentAssistantTopKey.value
-                if (assistantEntry) besideAssistant(assistantTop && currentAssistantPolicy.value.keepSharedSidebar, page) else page()
+                page()
             }
         }
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
@@ -721,10 +707,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             session.voice?.let { voiceEntries(navigator, it, session.identity, onModelConfiguration = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }) } ?: run { entry<VoiceRoute> { UnavailablePage(stringResource(R.string.app_demo_no_voice), navigator) } }
             tools?.run { register(navigator) }
         }
-        val panes: (NavKey, Boolean, Boolean) -> NavEntry<NavKey> = { key, assistantEntry, singleRightStack ->
+        val panes: (NavKey, Boolean) -> NavEntry<NavKey> = { key, singleRightStack ->
             val entry = provider(key)
-            val ownership = if (assistantEntry) mapOf(AssistantEntryMetadata to true) else emptyMap()
-            NavEntry(key, entry.contentKey, entry.metadata + paneMetadata(key, singleRightStack) + ownership) { entry.Content() }
+            NavEntry(key, entry.contentKey, entry.metadata + paneMetadata(key, singleRightStack)) { entry.Content() }
         }
         // Tabs stay composed once visited: switching back shows the page as it was instead of rebuilding it (which
         // flashed empty and loading states). A hidden tab is measured but never placed or drawn, and cannot take back.
@@ -770,19 +755,28 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
                                 persona.feature.settings.LocalExtensionPageVisible provides shown) {
-                                NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
-                                    onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
-                                    sceneStrategies = listOf(listDetail),
-                                    // A pushed page slides in over the page it came from, which stays drawn underneath; going
-                                    // back, it slides away over the page below. Pages stay opaque the whole way (fading them
-                                    // showed both pages' text on top of each other) and nothing in between shows the background.
-                                    transitionSpec = { ContentTransform(slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> width },
-                                        slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> -width / 4 }) },
-                                    popTransitionSpec = { ContentTransform(slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> -width / 4 },
-                                        slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width }, targetContentZIndex = -1f) },
-                                    predictivePopTransitionSpec = { _ -> ContentTransform(slideInHorizontally(tween(260)) { width -> -width / 4 },
-                                        slideOutHorizontally(tween(260)) { width -> width }, targetContentZIndex = -1f) },
-                                    entryProvider = { key -> panes(key, tab == AppTab.Persona, policy.singleRightStack) })
+                                val display: @Composable () -> Unit = {
+                                    NavDisplay(backStack = stacks.getValue(tab),
+                                        modifier = Modifier.fillMaxSize().then(if (shown || tab == AppTab.Persona) Modifier else Modifier.unplaced()),
+                                        onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
+                                        sceneStrategies = listOf(listDetail),
+                                        // A pushed page slides in over the page it came from, which stays drawn underneath; going
+                                        // back, it slides away over the page below. Pages stay opaque the whole way (fading them
+                                        // showed both pages' text on top of each other) and nothing in between shows the background.
+                                        transitionSpec = { ContentTransform(slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> width },
+                                            slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { width -> -width / 4 }) },
+                                        popTransitionSpec = { ContentTransform(slideInHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> -width / 4 },
+                                            slideOutHorizontally(tween(260, easing = FastOutSlowInEasing)) { width -> width }, targetContentZIndex = -1f) },
+                                        predictivePopTransitionSpec = { _ -> ContentTransform(slideInHorizontally(tween(260)) { width -> -width / 4 },
+                                            slideOutHorizontally(tween(260)) { width -> width }, targetContentZIndex = -1f) },
+                                        entryProvider = { key -> panes(key, policy.singleRightStack) })
+                                }
+                                if (tab == AppTab.Persona) {
+                                    // One sidebar owner outside the entry stack survives root → Inbox → detail → Back.
+                                    AssistantPaneFrame(regular, policy.keepSharedSidebar, sidebarColumnShown.value,
+                                        modifier = if (shown) Modifier else Modifier.unplaced(),
+                                        sidebar = { sharedSidebar("shared-sidebar-column") }, hinges = paneHinges, content = display)
+                                } else display()
                             }
                         }
                     }

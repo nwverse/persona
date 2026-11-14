@@ -9,17 +9,18 @@ import persona.android.navigation.PaneHinge
 import persona.android.navigation.sidebarSplit
 import persona.core.designsystem.JSidebarColumn
 
-/** Keeps every Assistant entry in the same composition slot; only the sidebar parameter changes with the window. */
+/** One owner outside the Assistant entry stack keeps the shared sidebar alive while right-hand pages change. */
 @Composable
 internal fun AssistantPaneFrame(
     regular: Boolean,
     showSidebar: Boolean,
     shown: Boolean,
+    modifier: Modifier = Modifier,
     sidebar: (@Composable () -> Unit)?,
     hinges: List<PaneHinge>,
     content: @Composable () -> Unit,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier.fillMaxSize()) {
         val split = sidebarSplit(maxWidth.value, hinges)
         JSidebarColumn(if (regular && showSidebar) sidebar else null,
             width = split.sidebar.dp, pageStart = split.page.dp, shown = shown, content = content)

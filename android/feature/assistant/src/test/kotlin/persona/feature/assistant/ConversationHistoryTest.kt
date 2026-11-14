@@ -24,6 +24,9 @@ import persona.core.designsystem.LocalHomeDrawer
 import persona.core.designsystem.PersonaTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -47,7 +50,9 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -250,6 +255,34 @@ class ConversationHistoryTest {
         assertEquals(listOf(old.key), hub.unarchived)
         rule.onNodeWithText("没有归档的对话").assertExists()
         rule.onNodeWithText("在对话列表里左滑一个对话就能归档，它会收在这里。").assertExists()
+    }
+
+    @Test fun rightStackNavigationKeepsConversationHistoryIdentityAndTemporaryTitles() {
+        val hub = HistoryHub(main, first)
+        val routes = mutableStateListOf("root")
+        var history: ConversationHistory? = null
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                val remembered = rememberConversationHistory(hub, hub)
+                SideEffect { history = remembered }
+                key(routes.last()) { Text(routes.last()) }
+            }
+        }
+        val original = requireNotNull(history)
+        rule.runOnIdle { runBlocking { original.rename(first.key, "Temporary title") } }
+        rule.waitForIdle()
+        assertEquals("Temporary title", original.titled(listOf(first)).single().title)
+        routes += "inbox"
+        rule.waitForIdle()
+        assertSame(original, history)
+        routes += "mail"
+        rule.waitForIdle()
+        assertSame(original, history)
+        routes.removeLast()
+        routes.removeLast()
+        rule.waitForIdle()
+        assertSame(original, history)
+        assertEquals("Temporary title", history!!.titled(listOf(first)).single().title)
     }
 }
 

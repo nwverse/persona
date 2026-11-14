@@ -1,13 +1,20 @@
 package persona.android.ui
 
 import android.app.Application
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -17,7 +24,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import kotlinx.coroutines.awaitCancellation
 import persona.core.designsystem.LocalLargeWindowInput
+import persona.core.designsystem.Tokens
 
 @RunWith(AndroidJUnit4::class)
 @Config(application = Application::class, sdk = [35])
@@ -76,5 +85,52 @@ class AssistantPaneFrameTest {
             assertTrue(seenWindowValues.contains(true))
             assertEquals(emptyMap<String, Int>(), disposals)
         }
+    }
+
+    @Test
+    fun rightStackNavigationKeepsSidebarIdentityEffectAndAnchor() {
+        val routes = mutableStateListOf("root")
+        var sidebarMarker: Any? = null
+        var sidebarList: LazyListState? = null
+        var effectStarts = 0
+        var disposals = 0
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides true) {
+                AssistantPaneFrame(regular = true, showSidebar = true, shown = true, sidebar = {
+                    val marker = remember { Any() }
+                    val scroll = rememberLazyListState()
+                    SideEffect { sidebarMarker = marker; sidebarList = scroll }
+                    DisposableEffect(Unit) { onDispose { disposals++ } }
+                    LaunchedEffect(Unit) { effectStarts++; awaitCancellation() }
+                    LazyColumn(Modifier.height(Tokens.Size.box280), state = scroll) {
+                        items(20) { index -> Text("Row $index") }
+                    }
+                }, hinges = emptyList()) {
+                    routes.forEach { route -> key(route) { Text(route) } }
+                }
+            }
+        }
+        rule.runOnIdle { sidebarList!!.requestScrollToItem(4, 13) }
+        rule.waitForIdle()
+        val originalMarker = sidebarMarker
+        val originalList = sidebarList
+        val first = sidebarList!!.firstVisibleItemIndex
+        val offset = sidebarList!!.firstVisibleItemScrollOffset
+        routes += "inbox"
+        rule.waitForIdle()
+        assertSame(originalMarker, sidebarMarker)
+        routes += "mail"
+        rule.waitForIdle()
+        assertSame(originalMarker, sidebarMarker)
+        routes.removeLast()
+        rule.waitForIdle()
+        routes.removeLast()
+        rule.waitForIdle()
+        assertSame(originalMarker, sidebarMarker)
+        assertSame(originalList, sidebarList)
+        assertEquals(first, sidebarList!!.firstVisibleItemIndex)
+        assertEquals(offset, sidebarList!!.firstVisibleItemScrollOffset)
+        assertEquals(1, effectStarts)
+        assertEquals(0, disposals)
     }
 }
