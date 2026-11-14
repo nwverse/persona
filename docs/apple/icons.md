@@ -43,6 +43,17 @@ The All-Day Recording complication can't read `Theme.Icon` (the widget extension
 repeats `allDaySymbol`, `allDayPausedSymbol` and `allDayAlertSymbol` (`Theme.Icon.error`'s triangle, for stopped and a
 face gone stale) with an `// icon:` note naming the entry each mirrors; change both together.
 
+## Minutes' summary card
+
+The summary card of a meeting's minutes (#6563, `docs/design/DESIGN_SYSTEM.md` "Minutes cards (#5026)") names its marks
+apart from the four cards' (`keyPoint`, `decision`, `openQuestion`, `todo`):
+
+| Entry | Symbol | Meaning |
+| --- | --- | --- |
+| `Theme.Icon.conclusions` | `lightbulb.max` | the Core Conclusions box: where the meeting landed, in the AI's words (not `pluginLight`, an extension's light) |
+| `Theme.Icon.decided` | `checkmark.seal.fill` | a decision's mark before its words in a topic card, where a point has a dot (`decision`, the signature, heads the four cards' Decisions) |
+| `Theme.Icon.topicProgress` … `topicGeneral` | `chart.bar.xaxis.ascending`, `calendar.badge.checkmark`, `shippingbox`, `speedometer`, `chart.dots.scatter`, `screwdriver`, `ladybug`, `paintbrush.pointed`, alias of `people` (`person.3`), `person.bubble`, `banknote`, `flame`, `circle.grid.2x2` | a topic card's icon by the hub's `icon` (`progress`, `schedule`, `release`, `performance`, `metrics`, `tooling`, `quality`, `design`, `people`, `customer`, `budget`, `risk`, `general`), through `RecordingMinutesCards.symbol`; any other value is `general`, so the model never names a symbol |
+
 ## Each style has an icon language
 
 A style's `ComponentSpec.icons` (`IconSpec`) says how its SF Symbols look: a weight, whether filled symbols are drawn as
