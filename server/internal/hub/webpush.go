@@ -380,8 +380,8 @@ func (w *webPusher) push(ctx context.Context, s webSub, plaintext []byte, m webp
 		status, err = w.postOnce(ctx, s, keys, plaintext, m)
 	}
 	if webpush.Gone(status) {
+		w.forgetIfCurrent(s) // before noted: what it tells (tests) finds the subscription gone
 		w.noted(s, status, err)
-		w.forgetIfCurrent(s)
 		return status, err
 	}
 	w.noted(s, status, err)

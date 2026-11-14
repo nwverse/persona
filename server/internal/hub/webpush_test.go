@@ -342,15 +342,8 @@ func TestWebPushRetriesAndDropsAGoneSubscription(t *testing.T) {
 	if s := <-results; s != http.StatusGone {
 		t.Fatalf("gone: %d", s)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if _, ok := h.push.web.get("web-gone"); !ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("a gone subscription was kept")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if _, ok := h.push.web.get("web-gone"); ok {
+		t.Fatal("a gone subscription was kept")
 	}
 	done()
 	f.none(t)
