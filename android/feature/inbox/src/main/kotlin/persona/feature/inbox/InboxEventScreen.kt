@@ -138,15 +138,13 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             }
         }
         val suggestion = record.event.suggestion
-        if (suggestion == null || record.item.isDone) {
-            if (nowText != null) item("event-state") {
-                EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
-                    key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), stateActions)
-            } else if (oldMark != null) item("event-state") {
-                EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), stateActions)
-            } else item("event-state") {
-                EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), stateActions)
-            }
+        if (nowText != null) item("event-state") {
+            EventStateLine(EventMark.Now(nowText, inboxNowStatus(record.event.now), problem = record.event.now == "failed",
+                key = record.event.now), Modifier.padding(bottom = Tokens.Space.s), stateActions)
+        } else if (oldMark != null) item("event-state") {
+            EventStateLine(oldMark, Modifier.padding(bottom = Tokens.Space.s), stateActions)
+        } else item("event-state") {
+            EventFallbackState(record, Modifier.padding(bottom = Tokens.Space.s), stateActions)
         }
         record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
             item("event-summary") {
@@ -224,7 +222,8 @@ internal fun EventStateLine(mark: EventMark, modifier: Modifier = Modifier, acti
         EventMark.Preparing -> JInlineStatus(stringResource(R.string.inbox_handling_preparing), modifier, tone = InlineTone.Busy, action = action)
         is EventMark.Failed -> JInlineStatus(mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
             ?: stringResource(R.string.inbox_handling_failed), modifier, tone = InlineTone.Failed, action = action)
-        is EventMark.Suggests -> Unit
+        // The suggestion card says the state; an older hub can still supply its processing conversation.
+        is EventMark.Suggests -> if (action != null) Row(modifier) { action() }
         is EventMark.Now -> {
             val icon = inboxNowIcon(mark.key)
             JInlineStatus(mark.text, modifier, tone = icon.tone, icon = icon.icon, action = action)

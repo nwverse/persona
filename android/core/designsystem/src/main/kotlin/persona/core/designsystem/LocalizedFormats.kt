@@ -25,6 +25,8 @@ object LocalizedFormats {
     const val MONTH_DAY_WEEKDAY = "MMMMdEEEE"
     /** A month, day and time: Nov 5, 2:30 PM. */
     const val MONTH_DAY_TIME = "MMMdjmm"
+    /** A month, day and explicit 24-hour time: Nov 5, 14:30. */
+    const val MONTH_DAY_TIME_24 = "MMMdHmm"
     /** A full date: Nov 5, 2026. */
     const val DATE = "yMMMd"
     /** A full date and time. */
@@ -33,6 +35,8 @@ object LocalizedFormats {
     const val DATE_TIME_SECONDS = "yMMMdjmmss"
     /** A time in the phone's 12 / 24 hour habit for the language: 14:30 · 2:30 PM. */
     const val TIME = "jmm"
+    /** An explicit 24-hour time, independent of the phone's 12 / 24 hour setting: 14:30. */
+    const val TIME_24 = "Hmm"
     /** A time with seconds. */
     const val TIME_SECONDS = "jmmss"
     /** A month, day and time with seconds: Nov 5, 2:30:05 PM. */
