@@ -1082,10 +1082,9 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Under Xcode 26.0 (Swift 6.2), `xcrun swift test` copies `Localizable.xcstrings` into `Bundle.module` as-is
   (`Copying Localizable.xcstrings`) without generating `.lproj` directories, whereas newer toolchains and `xcodebuild`
   (`scripts/app/mac-link.sh`) compile it at build time.
-- SwiftPM tests that point a bundle override at `<language>.lproj`
-  (`apple/PersonaLink/Tests/PersonaLinkTests/LinkTextTests.swift`) fall back to compiling `Localizable.xcstrings` on
-  demand with `/usr/bin/xcrun xcstringstool compile`, and cover that path with a synthetic uncompiled `.bundle` test so
-  newer local Xcode versions still exercise it.
+- SwiftPM tests that point a bundle override at `<language>.lproj` may need to compile `Localizable.xcstrings` on
+  demand with `/usr/bin/xcrun xcstringstool compile`. The retired menu bar's `LinkTextTests.swift` demonstrated this
+  fallback and its synthetic uncompiled-bundle case; its source is preserved in the history of the removed target.
 
 ## A throw-away HOME also hides the login keychain from codesign (2026-11-13, #6368)
 
