@@ -1,8 +1,6 @@
 package hub
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -21,15 +19,11 @@ func (h *Hub) nodeDoctor(method string, timeout time.Duration) http.HandlerFunc 
 			writeErr(w, http.StatusForbidden, errors.New("a computer's self-check needs a full device"))
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
-		var out json.RawMessage
-		if err := m.call(ctx, method, map[string]any{}, &out); err != nil {
-			callErr(w, err)
+		out, ok := h.callNode(w, r, m, method, map[string]any{}, timeout, "", nil)
+		if !ok {
 			return
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = w.Write(out)
+		writeRawJSON(w, out)
 	})
 }
 

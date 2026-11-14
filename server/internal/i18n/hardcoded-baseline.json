@@ -126,7 +126,6 @@
   "internal/hub/peer_node.go": 1,
   "internal/hub/peer_pair.go": 1,
   "internal/hub/proxy_protocol.go": 1,
-  "internal/hub/rewind.go": 1,
   "internal/hub/self_settings.go": 1,
   "internal/mail/account.go": 2,
   "internal/mail/auth.go": 9,
