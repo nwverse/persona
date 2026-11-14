@@ -74,7 +74,7 @@ export function useFoldSearch(mid: string, sid: string, history: string | undefi
       },
     }).then((r) => {
       if (r.stopped) return;
-      own.partial = own.partial || r.failed > 0 || r.capped;
+      own.partial = r.failed > 0 || r.capped;
       setLoading(false);
       setVersion((v) => v + 1);
     });

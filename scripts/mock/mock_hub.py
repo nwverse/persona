@@ -9062,14 +9062,19 @@ if os.environ.get("MOCK_ASK_LONG") in ("actions", "swipe", "review"):
         "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
         "questions": questions})
     INTERACTIONS.extend(copy.deepcopy(ASK_LONG_INTERACTIONS))
-# MOCK_QUESTION_CANCEL=1: the main ask_user card (with a MOCK_ASK_LONG question mode) and the network tests'
-# Agent question advertise question-only cancellation. Keep the Agent card for /mock/reset too.
+# MOCK_QUESTION_CANCEL=1: the network tests' Agent question and the main ask_user card for
+# MOCK_ASK_LONG=1|actions|swipe|review advertise question-only cancellation; /mock/reset restores both unanswered exactly
+# once and clears their resolved and interaction history entries.
 QUESTION_CANCEL_INTERACTIONS = []
 if os.environ.get("MOCK_QUESTION_CANCEL") == "1":
     for ix in INTERACTIONS + ASK_LONG_INTERACTIONS:
         if ix["id"] in ("ix_tests", "ix_ask_long"):
             ix["can_cancel"] = True
-    QUESTION_CANCEL_INTERACTIONS = [copy.deepcopy(ix) for ix in INTERACTIONS if ix["id"] == "ix_tests"]
+    ask_long_ids = {saved["id"] for saved in ASK_LONG_INTERACTIONS}
+    QUESTION_CANCEL_INTERACTIONS = [
+        copy.deepcopy(ix) for ix in INTERACTIONS
+        if ix["id"] in ("ix_tests", "ix_ask_long") and ix["id"] not in ask_long_ids
+    ]
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -16552,15 +16557,16 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
         it("assistant", "text", 60 * 27 - 1, text="看起来是一家小馆子，周五晚上要提前订位。"),
     ]
 
-# MOCK_LONG_HISTORY=1: the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
+# MOCK_LONG_HISTORY=1 (or "oldest": the work line first): the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
 # the middle of a long chat and the list can scroll both ways around them (opening and closing them in place).
-if os.environ.get("MOCK_LONG_HISTORY") == "1":
+if os.environ.get("MOCK_LONG_HISTORY") in ("1", "oldest"):
     _hist = []
     for _k in range(15):
         _hist.append(it("user", "text", 600 - _k * 30, text="第 %d 个问题：顺便看一下这一块的写法有没有问题？" % (_k + 1)))
         _hist.append(it("assistant", "text", 599 - _k * 30, text="看过了，第 %d 块没有问题。命名可以再统一一点，"
                                                             "测试也覆盖到了主要的分支，我顺手把两处重复的判断合并了。" % (_k + 1)))
-    _all = _hist + ITEMS[WIDGET]
+    # "oldest": the work line comes first and the exchanges after it, so a tool row sits at the oldest end (#7237)
+    _all = ITEMS[WIDGET] + _hist if os.environ.get("MOCK_LONG_HISTORY") == "oldest" else _hist + ITEMS[WIDGET]
     for _i, _d in enumerate(_all):  # transcript order: the history first
         _d["seq"] = _i + 1
     ITEMS[WIDGET] = _all
@@ -19536,7 +19542,8 @@ def git_branches():
     return {"branches": [{"name": n, "remote": r, "current": n == GIT_W["branch"], "hash": "a1b2c3d",
                           "subject": MOCK_COMMITS[i % len(MOCK_COMMITS)]["subject"], "date": ago(hours=3 * i + 1)}
                          for i, (n, r) in enumerate(GIT_W["branches"])
-                         if not (r and (n.split("/", 1)[1], False) in GIT_W["branches"])]}  # as the node: a remote one with a local one of its name is left out
+                         if not (r and (n.split("/", 1)[1], False) in GIT_W["branches"])],  # as the node: a remote one with a local one of its name is left out
+            "default": "main"}  # origin/HEAD (#7014)
 
 
 def git_write(h, p, body):
@@ -27494,7 +27501,7 @@ MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展�
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
-MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and, with a MOCK_ASK_LONG question mode, Persona's main ask_user card; /mock/reset restores both")
+MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and Persona's main ask_user card for MOCK_ASK_LONG=1|actions|swipe|review; /mock/reset restores both unanswered exactly once and clears their resolved and interaction history entries")
 MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
