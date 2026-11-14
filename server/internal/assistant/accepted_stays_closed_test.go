@@ -225,56 +225,112 @@ func TestLateJudgmentOfAnAcceptedTaskIsDropped(t *testing.T) {
 	}
 }
 
-// What the task's conversation sends its agent after the acceptance opens a plan-started task again, as it does one
-// with no plan (#6726): a turn nobody sent and another conversation's agent_send leave it closed, its own agent_send
-// opens it.
-func TestAcceptedPlanTaskReopensWhenItsConversationSendsMore(t *testing.T) {
-	s, f := newQuietService(t)
-	ctx := context.Background()
-	const sid = "s1abcdef"
-	turn := func(state string) {
-		status := proto.StatusIdle
-		if state == proto.StateWorking {
-			status = proto.StatusWorking
+// A late judgment that reaches applyTaskDone (the judge answering after task_review began) writes nothing on the task
+// either: not the check its card shows, not where its delivery is held, not its stage. Both while task_review has
+// written its ledger and not closed the to-do yet, and once it is closed.
+func TestLateJudgmentLeavesAnAcceptedTaskAsItWas(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		name := "ledger accepted"
+		if closed {
+			name = "closed"
 		}
-		f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status,
-			State: state, UpdatedAt: time.Now()})
-		if state == proto.StateWorking {
-			s.taskWorking(ctx, "box", sid)
-		}
+		t.Run(name, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			ctx := context.Background()
+			agentTurn(s, f, proto.StatusWorking, "", 0)
+			s.tasks.mu.Lock()
+			work := s.tasks.working[todo.ID] // the stretch the judge was asked about
+			s.tasks.mu.Unlock()
+			judgedCopy := todoNow(s, todo.ID)
+			time.Sleep(5 * time.Millisecond)
+			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { // task_review, before it closes the to-do
+				v.State = reviewAccepted
+				v.Reviews = append(v.Reviews, TaskReview{At: time.Now().UTC(), Verdict: reviewAccepted})
+				return true
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if closed {
+				if ok, err := s.reviewDoneTodo(ctx, todo.ID, "Checked", true); err != nil || !ok {
+					t.Fatalf("close: %v %v", ok, err)
+				}
+			}
+			was := todoNow(s, todo.ID)
+			if was.Check != nil || was.Delivery != nil {
+				t.Fatalf("the task has a check or delivery before the late judgment: %+v %+v", was.Check, was.Delivery)
+			}
+			for _, c := range []taskDoneCheck{{Verdict: verdictNotDone, Reason: "one case left"},
+				{Verdict: verdictDone, Reason: "live", Delivery: &TodoDelivery{State: deliveryLive, At: time.Now()}}} {
+				s.applyTaskDone(ctx, judgedCopy, work, true, c, nil)
+				got := todoNow(s, todo.ID)
+				if got.Check != nil || got.Delivery != nil || got.Stage != was.Stage || got.Supervision.State != reviewAccepted ||
+					len(pendingKinds(s, todo.ID)) != 0 {
+					t.Fatalf("judged %s late: check %+v, delivery %+v, stage %q (was %q), ledger %s, waiting %v", c.Verdict,
+						got.Check, got.Delivery, got.Stage, was.Stage, got.Supervision.State, pendingKinds(s, todo.ID))
+				}
+			}
+		})
 	}
-	done := time.Now()
-	putTodo(s, Todo{ID: "todo_a", Title: "Write the plan", Origin: "conv1", PlanID: "plan_1", CreatedAt: done.Add(-time.Hour),
-		DoneAt: &done, DoneBy: db.DoneByReview, Supervision: &Supervision{Supervisor: "conv1", State: reviewAccepted},
-		Agents: []TodoAgent{{MachineID: "box", SessionID: sid}}})
-	s.todos.mu.Lock()
-	delete(s.todos.activeBySession, [2]string{"box", sid}) // closed: as setTodoRow does
-	s.todos.mu.Unlock()
-	turn(proto.StateIdle)
-	time.Sleep(5 * time.Millisecond)
-	open := func() bool { return todoNow(s, "todo_a").DoneAt == nil }
-	send := func(from, text string) {
-		t.Helper()
-		if _, err := runJSON(t, s, from, "agent_send", map[string]any{"machine": "box", "session_id": sid, "text": text}); err != nil {
-			t.Fatalf("agent_send from %s: %v", from, err)
-		}
-	}
+}
 
-	turn(proto.StateWorking) // its own wakeup, or the owner typing in its session
-	if open() {
-		t.Fatal("a turn nobody sent for the task reopened it")
-	}
-	turn(proto.StateIdle)
-	send("conv7", "Also look at the other dashboard")
-	turn(proto.StateWorking)
-	if open() {
-		t.Fatal("another conversation's agent_send reopened it")
-	}
-	turn(proto.StateIdle)
-	send("conv1", "Add a table to section three")
-	turn(proto.StateWorking)
-	if got := todoNow(s, "todo_a"); got.DoneAt != nil || got.ReopenedAt == nil {
-		t.Fatalf("its own conversation's agent_send did not reopen it: %+v", got)
+// What the task's conversation sends its agent after the acceptance opens a plan-started task again, as it does one
+// with no plan (#6726): a turn nobody sent and another conversation's send leave it closed, its own send opens it,
+// whether it queues the text (agent_send) or cuts in with it (agent_interrupt with then).
+func TestAcceptedPlanTaskReopensWhenItsConversationSendsMore(t *testing.T) {
+	for _, tool := range []string{"agent_send", "agent_interrupt"} {
+		t.Run(tool, func(t *testing.T) {
+			s, f := newQuietService(t)
+			ctx := context.Background()
+			const sid = "s1abcdef"
+			turn := func(state string) {
+				status := proto.StatusIdle
+				if state == proto.StateWorking {
+					status = proto.StatusWorking
+				}
+				f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status,
+					State: state, UpdatedAt: time.Now()})
+				if state == proto.StateWorking {
+					s.taskWorking(ctx, "box", sid)
+				}
+			}
+			done := time.Now()
+			putTodo(s, Todo{ID: "todo_a", Title: "Write the plan", Origin: "conv1", PlanID: "plan_1", CreatedAt: done.Add(-time.Hour),
+				DoneAt: &done, DoneBy: db.DoneByReview, Supervision: &Supervision{Supervisor: "conv1", State: reviewAccepted},
+				Agents: []TodoAgent{{MachineID: "box", SessionID: sid}}})
+			s.todos.mu.Lock()
+			delete(s.todos.activeBySession, [2]string{"box", sid}) // closed: as setTodoRow does
+			s.todos.mu.Unlock()
+			turn(proto.StateIdle)
+			time.Sleep(5 * time.Millisecond)
+			open := func() bool { return todoNow(s, "todo_a").DoneAt == nil }
+			send := func(from, text string) {
+				t.Helper()
+				args := map[string]any{"machine": "box", "session_id": sid, "text": text}
+				if tool == "agent_interrupt" {
+					args = map[string]any{"machine": "box", "session_id": sid, "then": text}
+				}
+				if _, err := runJSON(t, s, from, tool, args); err != nil {
+					t.Fatalf("%s from %s: %v", tool, from, err)
+				}
+			}
+
+			turn(proto.StateWorking) // its own wakeup, or the owner typing in its session
+			if open() {
+				t.Fatal("a turn nobody sent for the task reopened it")
+			}
+			turn(proto.StateIdle)
+			send("conv7", "Also look at the other dashboard")
+			turn(proto.StateWorking)
+			if open() {
+				t.Fatalf("another conversation's %s reopened it", tool)
+			}
+			turn(proto.StateIdle)
+			send("conv1", "Add a table to section three")
+			turn(proto.StateWorking)
+			if got := todoNow(s, "todo_a"); got.DoneAt != nil || got.ReopenedAt == nil {
+				t.Fatalf("its own conversation's %s did not reopen it: %+v", tool, got)
+			}
+		})
 	}
 }
 
@@ -293,6 +349,85 @@ func TestAcceptedPlanTaskReopensForTheOwnersCardMessage(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged", 0)
 	waitFor(t, "the review again", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	waitFor(t, "the second review message", func() bool { return supervisionOf(s, f, todo.ID).notices == 2 })
+}
+
+// The owner's message on the card of an accepted task whose agents have all stopped (the hub retires a done task's
+// agents a few minutes after it closes) starts a new agent for it (tasks_successor.go). The task is open again before
+// that agent starts, so its work is the task's: followed, judged, and waiting for review again.
+func TestAcceptedPlanTaskReopensForACardMessageAfterItsAgentStopped(t *testing.T) {
+	s, f, todo := doneAndReviewed(t)
+	ctx := context.Background()
+	reviewAndWait(t, s, todo.ID, reviewAccepted)
+	stopped := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		LastText: "Fixed it: PR https://github.com/o/r/pull/77 is merged", Status: proto.StatusOffline, State: proto.StateOffline,
+		UpdatedAt: time.Now(), Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}, ReadOnlyReason: "stopped"}
+	f.setSessions("box", stopped)
+	item, err := s.routeToTask(ctx, "conv1", todo.ID, "Please cover the landscape case too")
+	if err != nil {
+		t.Fatalf("the owner's message on the card: %v", err)
+	}
+	var body struct {
+		NewAgent string `json:"new_agent"`
+	}
+	_ = json.Unmarshal(item.Body, &body)
+	if body.NewAgent == "" {
+		t.Fatalf("no new agent started: %s", item.Body)
+	}
+	successor := func(status, text string) {
+		state := proto.StateUnread
+		if status == proto.StatusWorking {
+			state = proto.StateWorking
+		}
+		f.setSessions("box", stopped, proto.Session{SessionID: body.NewAgent, MachineID: "box", Cwd: "/code/app", Agent: "claude",
+			Status: status, State: state, LastText: text, UpdatedAt: time.Now()})
+		if status == proto.StatusWorking {
+			s.taskWorking(ctx, "box", body.NewAgent)
+		} else {
+			s.taskTurnEnded(ctx, "box", body.NewAgent)
+		}
+	}
+	successor(proto.StatusWorking, "")
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+		t.Fatalf("the owner's card message to a stopped task did not reopen it: %+v", got)
+	}
+	successor(proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+	waitFor(t, "the review again", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	waitFor(t, "the second review message", func() bool { return supervisionOf(s, f, todo.ID).notices == 2 })
+}
+
+// Accepted while the end of a turn the model service cut off is read: the interrupted receipt says how it ended, and
+// that is all, as for a done end: no notice, no interrupted signal, no report line.
+func TestAcceptedWhileACutOffTurnEndIsRead(t *testing.T) {
+	s, f, todo := doneAndReviewed(t)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	var accepted Todo
+	var before supervisionSeen
+	var receipted int
+	f.hookReads(receiptHooks{before: func(read int) {
+		if read == 1 && accepted.ID == "" {
+			accepted = reviewAndWait(t, s, todo.ID, reviewAccepted)
+			before, receipted = supervisionOf(s, f, todo.ID), receiptCount(t, s)
+		}
+	}})
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle,
+		State: proto.StateUnread, TurnError: "API Error: 529 overloaded_error", TurnErrorKind: proto.TurnErrorTransient,
+		UpdatedAt: time.Now()})
+	s.taskTurnEnded(context.Background(), "box", "s1")
+	f.hookReads(receiptHooks{})
+	if accepted.ID == "" {
+		t.Fatal("the turn's end was never read")
+	}
+	closedUnchanged(t, s, accepted)
+	if n := receiptCount(t, s); n != receipted+1 {
+		t.Fatalf("%d receipts, %d before: the cut-off turn has none", n, receipted)
+	}
+	s.reports.mu.Lock()
+	cuts := s.reports.cuts[todo.ID]
+	s.reports.mu.Unlock()
+	if cuts != 0 {
+		t.Fatalf("an interrupted report line was queued for a closed task (%d cuts)", cuts)
+	}
+	nothingToldAfter(t, s, f, todo.ID, before)
 }
 
 // A cancelled task stays cancelled when its agent ends one more turn "done" after it (#1851), with nothing told.

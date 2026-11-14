@@ -200,8 +200,10 @@ func (s *Service) noteAgentSend(self, mid, sid string) (undo func()) {
 // its own session is no word that the task wants more. Such turns reopened the finished task each time and woke its
 // supervision again, "judged done, waiting for your review" (#6726 for adopted agents; #7539 for agents a task_plan
 // started, which once reopened on any turn). An accepted task reopens only when the task's conversation (or its
-// supervisor) sent the agent more after the acceptance: agent_send, or the owner's message on the task's card. The
-// owner can still reopen one by hand, and todo_reopen does too.
+// supervisor) sent the agent more after the acceptance: agent_send, agent_interrupt with then, or the owner's message
+// on the task's card (which, when its agents have all stopped, reopens the task before it starts a new one,
+// routeToTaskAs). The owner can still reopen one by hand, and todo_reopen does too. That covers an acceptance by the
+// judge's own spot check (supervise_sample.go), which is a review too.
 func (s *Service) closedTurnReopens(t Todo, mid, sid string) bool {
 	if t.DoneBy != db.DoneByReview {
 		return true
@@ -317,6 +319,11 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	if !ok {
 		// An agent Persona started that is on no todo becomes a task once a turn of it did work (#3617, agent_tasks.go).
 		if t, ok = s.agentTaskAtTurnEnd(ctx, machine, sid); !ok {
+			if closed, found := s.closedTaskOf(ctx, machine, sid); found {
+				// Its closed task's agent still: a turn nobody sent for the task, or one running when it was accepted
+				// (#7539). Nothing is made of its end; this line says it was seen.
+				s.logf("task %s: closed; its agent %s/%s ended a turn: dropped", closed.ID, machine, short(sid))
+			}
 			return settleRefused
 		}
 	}
@@ -436,6 +443,9 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(s.lang(cctx), "assistant-tasks.interrupted"), Machine: name,
 			Error: clip(strings.TrimSpace(cut.TurnError), 300)}
 		s.appendInterrupted(cctx, t, body, false)
+		if s.closedWhileRead(t.ID) {
+			return settleTaken
+		}
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
 		return settleTaken
@@ -472,6 +482,9 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(l, "assistant-tasks.interrupted"), Machine: name,
 			Error: silentTurnErrorIn(l)}
 		s.appendInterrupted(cctx, t, body, true)
+		if s.closedWhileRead(t.ID) {
+			return settleTaken
+		}
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
 		return settleTaken
@@ -537,10 +550,7 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 			s.turnReceipted(cctx, t.ID) // no name to find it by later: the ledger says it is out
 		}
 	}
-	if current, ok := s.todoNow(t.ID); !ok || current.DoneAt != nil {
-		// Closed while this end was read (accepted, cancelled, closed by hand): the receipt says how the turn ended, and
-		// that is all. No notice, stage, report, judgment or supervision signal for a task that is over (#7539).
-		s.logf("task %s: closed while its agent's turn end was read: receipt only, not judged", t.ID)
+	if s.closedWhileRead(t.ID) {
 		s.turnJudged(cctx, t.ID, taskDoneCheck{}, nil, "done") // nothing to judge: the sweep does not ask again
 		return settleTaken
 	}
@@ -555,6 +565,17 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
 	return settleTaken
+}
+
+// closedWhileRead: task id was closed (accepted, cancelled, closed by hand) while its agent's turn end was read. The
+// receipt written for that end says how the turn ended, and that is all: no notice, stage, report, judgment or
+// supervision signal for a task that is over (#7539).
+func (s *Service) closedWhileRead(id string) bool {
+	if t, ok := s.todoNow(id); ok && t.DoneAt == nil {
+		return false
+	}
+	s.logf("task %s: closed while its agent's turn end was read: receipt only", id)
+	return true
 }
 
 // releaseReceipt gives back the receipt taskTurnSettled reserved for task id at reserved, when its second look at
@@ -648,6 +669,17 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 		}
 		if relay != "" {
 			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_stopped")
+		}
+		if hubClosedTask(&t) {
+			// The owner asks the closed task for more: it is open again before its new agent starts, so that agent's
+			// turns are the task's (a new agent has no send on record for closedTurnReopens, and its first turn may start
+			// before the start returns). It stays open when the start fails: the owner still wants the work (#7539).
+			if err := s.reopenTodo(ctx, t.ID); err != nil {
+				s.logf("task %s: reopen for the owner's message: %v", t.ID, err)
+			} else if cur, ok := s.todoNow(t.ID); ok {
+				t = cur
+				s.logf("task %s: reopened: the owner's message starts a new agent for it", t.ID)
+			}
 		}
 		started, err := s.startTaskSuccessor(ctx, t, last, text)
 		if err != nil {
