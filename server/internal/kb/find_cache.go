@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,6 +60,9 @@ type findCache struct {
 	walked  bool
 	walk    *dirWalk
 	scratch [2][]*dirEnt // the files and days a walk gathers, reused by the next one
+
+	// reads counts the files text read from disk (tests tell by it what a search did not have to read).
+	reads atomic.Int64
 }
 
 // dirWalk is what one walk of the data dir found (files). Shared and read-only, but for search, which the first
@@ -185,6 +189,7 @@ func (c *findCache) text(p string, gen uint64) (*findText, fileStat, bool) {
 		return t, st, true
 	}
 	c.mu.Unlock()
+	c.reads.Add(1)
 	// The text is read through one handle between two stats of it, so it is kept only under the stat of the file
 	// it came from: a stat by path and a read by path could be two files.
 	raw, read, kept, err := readStable(p)
@@ -244,6 +249,36 @@ func readStable(p string) ([]byte, fileStat, bool, error) {
 	}
 	after, err := stat()
 	return b.Bytes(), st, err == nil && after == st && int64(b.Len()) == st.size, nil
+}
+
+// textAt is text for a file whose stat was just read (st): the cached text when it is of that stat; otherwise the
+// file is read as it is now.
+func (c *findCache) textAt(p string, gen uint64, st fileStat) (*findText, bool) {
+	c.mu.Lock()
+	if t := c.texts[p]; t != nil && t.stat == st {
+		t.gen = gen
+		c.mu.Unlock()
+		return t, true
+	}
+	c.mu.Unlock()
+	t, _, ok := c.text(p, gen)
+	return t, ok
+}
+
+// seen marks the cached texts of files the search gen did not read but found unchanged (their stats now are files'):
+// prune keeps them.
+func (c *findCache) seen(gen uint64, files func(yield func(fileStat) bool)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.texts) == 0 {
+		return
+	}
+	files(func(st fileStat) bool {
+		if t := c.texts[st.path]; t != nil && t.stat == st {
+			t.gen = gen
+		}
+		return true
+	})
 }
 
 // cost is the bytes a cached text holds (folding returns the same string when nothing changes; a decomposed or

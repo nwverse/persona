@@ -50,14 +50,45 @@ public struct StartMessage: Codable, Equatable, Sendable {
 }
 
 /// `update` (phone → helper): any of `start`'s fields again, plus `paused` for the app leaving the foreground
-/// without Picture in Picture.
+/// without Picture in Picture, and `path` after the stream moved to another route (#6398).
 public struct UpdateMessage: Codable, Equatable, Sendable {
+    /// The route the stream now takes (`LinkStats`), so the helper starts its delay baseline again: the one-way delay
+    /// changed with the route, and a slower route must not read as a queue. Strings, not `LinkStats`' enums, so a
+    /// helper never fails an `update` over a route kind it doesn't know; helpers before it skip the field.
+    public struct Path: Codable, Equatable, Sendable {
+        public var kind: String
+        public var via: String
+        public var minRttMs: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case via
+            case minRttMs = "min_rtt_ms"
+        }
+
+        public init(kind: String, via: String, minRttMs: Double? = nil) {
+            self.kind = kind
+            self.via = via
+            self.minRttMs = minRttMs
+        }
+
+        /// The route `link` measures, as `update` carries it.
+        public init(_ link: LinkStats) {
+            self.init(kind: link.kind.rawValue, via: link.via.rawValue, minRttMs: link.minRttMs)
+        }
+
+        /// The kind as `LinkStats` names it; nil for one this side doesn't know.
+        public var linkKind: LinkStats.Kind? { LinkStats.Kind(rawValue: kind) }
+        public var linkVia: LinkStats.Via? { LinkStats.Via(rawValue: via) }
+    }
+
     public var display: Int?
     public var maxSize: Int?
     public var fps: Int?
     public var maxKbps: Int?
     public var codecs: [String]?
     public var paused: Bool?
+    public var path: Path?
 
     enum CodingKeys: String, CodingKey {
         case display
@@ -66,16 +97,18 @@ public struct UpdateMessage: Codable, Equatable, Sendable {
         case maxKbps = "max_kbps"
         case codecs
         case paused
+        case path
     }
 
     public init(display: Int? = nil, maxSize: Int? = nil, fps: Int? = nil, maxKbps: Int? = nil,
-                codecs: [String]? = nil, paused: Bool? = nil) {
+                codecs: [String]? = nil, paused: Bool? = nil, path: Path? = nil) {
         self.display = display
         self.maxSize = maxSize
         self.fps = fps
         self.maxKbps = maxKbps
         self.codecs = codecs
         self.paused = paused
+        self.path = path
     }
 }
 
@@ -96,6 +129,35 @@ public struct HeartbeatMessage: Codable, Equatable, Sendable {
 
     public init(last: Int) {
         self.last = last
+    }
+}
+
+/// `timing` (helper → phone, #3954): once a second while frames go out, the helper's side of the latency the phone's
+/// connection-stats overlay breaks down, as medians over that second in milliseconds, and what went out. `captureMs`
+/// is ScreenCaptureKit's display time to its callback (about 0: frames come before their display time), `encodeMs`
+/// VideoToolbox in to out, `networkMs` half the round trip from a frame going out to the phone's report on it (no
+/// clocks to agree). A segment with nothing to measure in that second is nil. Apps before it skip the type by length.
+public struct TimingMessage: Codable, Equatable, Sendable {
+    public var captureMs: Double?
+    public var encodeMs: Double?
+    public var networkMs: Double?
+    public var kbps: Int
+    public var fps: Int
+
+    enum CodingKeys: String, CodingKey {
+        case captureMs = "capture_ms"
+        case encodeMs = "encode_ms"
+        case networkMs = "network_ms"
+        case kbps
+        case fps
+    }
+
+    public init(captureMs: Double?, encodeMs: Double?, networkMs: Double?, kbps: Int, fps: Int) {
+        self.captureMs = captureMs
+        self.encodeMs = encodeMs
+        self.networkMs = networkMs
+        self.kbps = kbps
+        self.fps = fps
     }
 }
 
@@ -163,6 +225,7 @@ public enum ScreenVideoMessage: Equatable, Sendable {
     case heartbeat(HeartbeatMessage)
     case paused(PausedMessage)
     case resumed
+    case timing(TimingMessage)
     case start(StartMessage)
     case report(ReceiverReport)
     case keyframe
@@ -178,6 +241,7 @@ public enum ScreenVideoMessage: Equatable, Sendable {
         case let .heartbeat(m): return ScreenVideoWire.frame(ScreenVideoWire.Kind.heartbeat.rawValue, body: Self.encodeJSON(m))
         case let .paused(m): return ScreenVideoWire.frame(ScreenVideoWire.Kind.paused.rawValue, body: Self.encodeJSON(m))
         case .resumed: return ScreenVideoWire.frame(ScreenVideoWire.Kind.resumed.rawValue, body: Data("{}".utf8))
+        case let .timing(m): return ScreenVideoWire.frame(ScreenVideoWire.Kind.timing.rawValue, body: Self.encodeJSON(m))
         case let .start(m): return ScreenVideoWire.frame(ScreenVideoWire.Kind.start.rawValue, body: Self.encodeJSON(m))
         case let .report(m): return ScreenVideoWire.frame(ScreenVideoWire.Kind.report.rawValue, body: Self.encodeReport(m))
         case .keyframe: return ScreenVideoWire.frame(ScreenVideoWire.Kind.keyframe.rawValue)
@@ -198,6 +262,7 @@ public enum ScreenVideoMessage: Equatable, Sendable {
         case .heartbeat: return .heartbeat(try decodeJSON(body))
         case .paused: return .paused(try decodeJSON(body))
         case .resumed: return .resumed
+        case .timing: return .timing(try decodeJSON(body))
         case .start: return .start(try decodeJSON(body))
         case .report: return .report(try decodeReport(body))
         case .keyframe: return .keyframe
