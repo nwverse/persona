@@ -320,7 +320,7 @@ import Testing
             let json = #"{"overview": {"groups": [{"title": "", "topics": [{"title": "T", "icon": "\#(icon.rawValue)", "bullets": [{"text": "b"}]}]}]}}"#
             #expect(try decode(json).overview?.groups.first?.topics.first?.icon == icon)
         }
-        for icon in [#""Progress""#, #""rocket""#, "3", "null", #""""#] {
+        for icon in [#""Progress""#, #""rocket""#, "3", "null", "\"\""] {
             let json = #"{"overview": {"groups": [{"title": "", "topics": [{"title": "T", "icon": "# + icon + #", "bullets": [{"text": "b"}]}]}]}}"#
             #expect(try decode(json).overview?.groups.first?.topics.first?.icon == .general, "\(icon)")
         }
