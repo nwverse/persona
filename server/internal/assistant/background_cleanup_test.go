@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
@@ -164,6 +165,32 @@ func TestFleetDatabaseFixtureDrainsBackgroundWork(t *testing.T) {
 		}
 		if len(events) != 1 {
 			t.Fatalf("accepted send events after stop = %d, want 1", len(events))
+		}
+	})
+
+	t.Run("synchronous_send_after_stop", func(t *testing.T) {
+		ctx := context.Background()
+		st := &workMemStore{}
+		session := t.Name()
+		if err := st.PutSetting(ctx, settingsKey, Settings{Leaders: []string{session}}); err != nil {
+			t.Fatal(err)
+		}
+		ft := newFleetTestOn(t, st)
+		ft.s.northStarOn.Store(true)
+		ft.cancel()
+		if ft.s.runCtx().Err() == nil {
+			t.Fatal("the service context is not canceled")
+		}
+		// The hub's synchronous delivery report is already on its caller's stack, not a new background operation.
+		ft.s.ConversationSent(ctx, ConversationSent{MachineID: "mac", SessionID: session, Outcome: assistantwire.ConversationDelivered})
+		// A new asynchronous manager send remains stopped.
+		ft.s.recordSendAsync("mac", session, "resume", originManager, false, outcomeOK, "", "")
+		waitFleetBackground(t, "post-stop async send", &ft.s.work.eventWrites)
+		st.wmu.Lock()
+		got := len(st.events)
+		st.wmu.Unlock()
+		if got != 1 {
+			t.Fatalf("synchronous send events after stop = %d, want 1", got)
 		}
 	})
 }

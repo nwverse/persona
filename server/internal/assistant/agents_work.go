@@ -587,8 +587,8 @@ func (s *Service) workEvent(machine, session, kind string, detail map[string]any
 	s.startWorkEventWrite(func() { s.writeWorkEvent(st, e) })
 }
 
-// workEventNow finishes the final write of an operation already counted by startWorkEventWrite. It must not be used to
-// bypass that helper's scheduling gate for a new operation.
+// workEventNow writes on the caller's stack: a synchronous hub report is already bounded by its caller, while an
+// asynchronous operation must first be accepted by startWorkEventWrite and keep its final write in that counted unit.
 func (s *Service) workEventNow(machine, session, kind string, detail map[string]any) {
 	e := db.WorkEvent{At: time.Now().UTC(), MachineID: machine, SessionID: session, Kind: kind, Detail: detail}
 	st := s.workDB()
