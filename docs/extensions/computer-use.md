@@ -474,9 +474,10 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
 
 A hardware video channel next to RFB, so the phone shows a Mac's screen at a fraction of today's bitrate for the same
 picture (from #3067's frames: 0.27–0.31 Mbit/s as HEVC at SSIM ≥ 0.98, against 2.1–2.6 as ZRLE). RFB stays open for
-input, the clipboard and as the fallback; only the picture moves to video. The phone and the web offer it only for a
-Mac whose node advertises `screen_video`, which a node does once it has the helper (the picture switcher in ⋯ stays
-hidden otherwise); until then every client shows RFB. The web, the Mac app and Android don't decode video yet.
+input, the clipboard and as the fallback; only the picture moves to video. The iPhone offers it for a Mac whose node
+advertises `screen_video`, which a node does once it has the helper (the picture switcher in ⋯ stays hidden
+otherwise). The web, the Mac app and Android don't decode video yet: they keep RFB and show no switcher (the web's is
+behind `webVideo.plays` in `web/src/screen/video.ts`).
 
 - **Persona Screen** (`apple/PersonaLink/Sources/PersonaScreen`, `apple/Packages/PersonaScreenKit`): a Swift helper app inside
   Persona Link.app (`Contents/Helpers/Persona Screen.app`, bundle id `<link id>.screen`) that captures one display
@@ -517,9 +518,14 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
     is connected; the token is 16 random bytes, compared in constant time, and the line is read unbuffered so no
     stream bytes go with it. The helper has 10 s to connect and say it.
   - **Permission**: the helper's `--preflight`, run through LaunchServices (so it is about the helper's grant), at most
-    once a minute. `screen_video {version, codecs, permission}` carries it; the node leaves `screen_video` out of the
-    statuses (`advertiseScreenVideo`) until the iPhone's decoder is in the official TestFlight build, since apps
-    before it would show a picture switcher they can't use. `screen.dial` works either way.
+    once a minute. `screen_video {version, codecs, permission, asked}` carries it (`advertiseScreenVideo`, on since the
+    official TestFlight build decodes the video; apps before it show no picture switcher). `screen.dial` works either
+    way.
+  - **Asking once**: macOS lists Persona Screen under Screen & System Audio Recording only after the helper has asked.
+    The first time an app that plays the video (its 5900 stream carries a `pair`) signs in while the helper has no
+    grant, the node starts the helper with `--request-permission`, once per helper version (its stamp, kept in
+    `~/.persona/bin/Persona Screen.asked`). macOS shows its alert on the Mac's own screen, which that app is showing over
+    VNC at that moment; `asked` then tells the app that Persona Screen is in the list.
 - **Hub** (`GET …/screen/video/connect?pair=…`): a binary WebSocket with the same checks as `…/ports/5900/connect`
   (full device, `cua` or `ego` on), counted against the same 64 streams per machine. It calls `screen.dial` and relays
   the bytes without parsing them. The iOS app's screen-sharing stream carries the pair it will bind to
@@ -550,17 +556,63 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   25% after each calm second until the first cut; the phone moves to another tier when the band no longer fits.
   `update.path` (with or without a band) starts the 10 s delay floor, the delivered rate and the calm stretch over
   (`RateController.pathChanged`): the new route's one-way delay is its own, not a queue.
+  `timing` adds `target_kbps` (the bitrate asked of the encoder; `kbps` is what went out), `skipped` (frames left out
+  over the 500 ms queue), `blocked_ms` (time frames waited to be written to the stream) and `pending` (the most frames
+  the encoder held at once). An app without tiers sends none of the new fields and gets the adaptation above unchanged;
+  apps and helpers before it skip `encoding` by length and ignore the new JSON keys.
 - **Idle refinement** (`Refinement`, `frame` flag 2; for a phone that sets a band): 300 ms after the screen stops
   changing, the latest captured picture (even one skipped while a queue drained) is encoded again at four times the
   target bitrate, then twice more 200 ms apart, so text sharpens at any tier. A pass goes only while the link is calm
   (not skipping, the last frame's queueing under 150 ms) and the encoder holds nothing; one that comes back queued past
   150 ms ends the passes until the next change. Its report changes nothing in `RateController` but a keyframe request,
   and `timing` counts only its bytes. A still screen after a size change gets its keyframe through the first pass.
-  ScreenCaptureKit's queue depth is 4 for such a stream, since refinement holds one picture.
-  `timing` adds `target_kbps` (the bitrate asked of the encoder; `kbps` is what went out), `skipped` (frames left out
-  over the 500 ms queue), `blocked_ms` (time frames waited to be written to the stream) and `pending` (the most frames
-  the encoder held at once). An app without tiers sends none of the new fields and gets the adaptation above unchanged;
-  apps and helpers before it skip `encoding` by length and ignore the new JSON keys.
+  ScreenCaptureKit's queue depth is 4 for such a stream, since refinement holds one picture. Over budget, VideoToolbox's
+  low-latency rate control drops whole frames, for seconds after a keyframe at the lowest tier (`screenbench`), so a
+  dropped pass doesn't count and is tried again 200 ms later, up to `Refinement.attempts` (12) tries per still moment:
+  the screen's final picture still goes out once the budget allows.
+- **Quality tiers (#6396, the phone's side)** (`PersonaScreenKit`: `TierLadder`, `ReceiverSignals`, `TierPolicy`):
+  - **Ladder**: a tier is a scale (pixels per point) and a frame rate, best first. Auto steps 2×60, 1.5×60, 1.5×30, 1×30,
+    1×15; Sharper gives up frame rate first (2×60, 2×30, 2×15, 1.5×15, 1×15), Smoother pixels (2×60, 1.5×60, 1×60, 1×30,
+    1×15). Every tier keeps at least a pixel per point, so text stays readable. Each band is 0.02–0.08 bits per pixel per
+    frame, the ceiling at the phone's cap; a tier whose floor is above the cap is left out, and ones that come out the
+    same on a display merge. On `screenbench` the floor keeps scrolling text at SSIM ≥ 0.98 against what was encoded.
+    The band is per codec (`TierLadder.bitsFactor`): H.264's factor is 1, the same as HEVC's, until the bench measures
+    it (#6558: a browser without HEVC gets H.264).
+  - **Shared with the browser** (#6558): `spec/fixtures/screen-tiers` holds the ladder's and the signals' scenarios
+    (input and expected output, one per file), which `TierFixtureTests` writes from these Swift types
+    (`PERSONA_WRITE_TIER_FIXTURES=1`) and otherwise checks unchanged. The browser's port (`web/src/screen/tiers/`)
+    replays them, so a change on either side fails both until they agree; so do the policy's timelines (route starts, every way down and up, a route change, a new bias, Data Saver and a warm device).
+  - **Signals** (the phone's, from the frames): queueing above the 10 s floor of the one-way delay (p50 / p95 over
+    0.5 s, rising or falling over 1 s), the rate the link carried while busy (frames queued behind one another: their
+    bytes over their arrival gaps, so quiet stretches don't read as a slow link), bursts of large frames, late frames,
+    decode time and pictures replaced before they showed. The route's round trip, jitter and loss are `LinkStats`'.
+  - **Policy**, every 250 ms. A tier fits the link when its floor is at most 80% of what the link carries. Down, fast:
+    a long queue (over 400 ms for a quarter second, or skipped frames) or one the bitrate can't fix (the helper's
+    bitrate within 15% of the band's floor and over 150 ms), with a tier that no longer fits, goes straight to the best
+    tier that does; another step down waits 1 s and a queue that isn't draining, unless the queue runs away. A phone that
+    can't decode or show as fast for 2 s gets a lower frame rate. Up, slow: one tier after a calm window (8 s; 3 s in the
+    first 10 s or after a route change) with proof the link carried 1.25× the next floor, or three large frames at 1.5×
+    it; a step up undone within 15 s doubles that tier's window, to 60 s. The start comes from the route: the same
+    network the best tier, Tailscale (direct IPv6 too) under 30 ms the best else the second, the relay the second over
+    Wi-Fi, the third over cellular. A slower route steps down at once; a new bias or cap takes the tier the rate fits.
+  - **Simulated links** (`TierPolicySimulationTests`, the real types over a shaped link): a steady link never moves in
+    10 minutes; the relay settles on 2×60 in 5 s; 25 → 3 Mbit/s steps down in 1 s to 1.5×30 and holds (queueing p50 32
+    / p95 179 ms, against 543 / 1,033 with 2×60 fixed); a link jittering 5–9 Mbit/s for 10 minutes never moves.
+  - **The app** (`ScreenVideoTiers`, `ScreenVideoStream`, `ScreenVideoLink`): when the helper's `hello` lists `tiers`
+    with the display's points and pixels and this app has them (`ScreenTiers.appSupported`), the stream starts a policy
+    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`). The stream feeds it
+    every frame from its own task (arrival, the time a frame spread over several reads began, decode time, pictures
+    replaced before they showed) and ticks it every 250 ms; a new tier goes out as an `update` and to the link (the
+    overlay's tier and reason). ⋯ › Quality changes the bias on the running stream; a route change (#6398) restarts the
+    phone's delay floor and lets the policy look again; the tier each computer settles on, by kind of route, is where its
+    next stream starts in this app run. ⋯ › Quality shows only with tiers on both sides.
+  - **Mobile data** (`ScreenMobileData`, the user's choice, for every computer, Settings › Live Screen › Quality on Mobile
+    Data): on an expensive network (cellular or a personal hotspot, `NWPath.isExpensive`) with tiers, Clearer keeps the
+    4 Mbit/s cap (about 0.6 GB an hour of typical use on `screenbench`), Data Saver 1.5 Mbit/s at one pixel per point
+    (about 0.2–0.3 GB an hour, `TierPolicy`'s `maxScale`); Low Data Mode is always Data Saver. Until the user chooses, the
+    picture starts on Data Saver and the page asks once (`ScreenMobileDataCard`, titled for cellular or a hotspot by
+    whether the path uses the cellular interface); unanswered, it asks once more next time, then no more. Without tiers
+    the caps are as before.
 - **Switching**: RFB signs in first and shows until the first video frame decodes; the phone then stops asking RFB for
   updates (Screen Sharing encodes nothing meanwhile). It returns to RFB within about a second on any of: the stream
   closes, no frame or heartbeat for 3 s, a decoding error, or the Mac locks (`paused`), then retries video after 30 s
@@ -582,12 +634,30 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   Mac hasn't allowed video yet (`permission` missing, so no stream is opened).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
-  and decode are all known (a helper before `timing` gives the phone's numbers only).
+  and decode are all known (a helper before `timing` gives the phone's numbers only). With quality tiers (#6396) a Tier
+  line shows the Quality choice, the scale and frame rate ("Auto · 1.5× · 60 fps", `ScreenTierText`) and why it last
+  changed in plain words with how long ago (picked for this connection, the connection slowed down or is steady, the
+  network changed, the iPhone is warm or saving power or couldn't keep up, you changed Quality); the resolution is the
+  encoder's after an in-place change (`encoding`), not `hello`'s. Over VNC it shows RFB's bitrate
+  and frame rate and, on a line of its own, **Round trip to the hub** (#6558): while the overlay is shown and the app is
+  in front, the page pings the app's own connection to that Mac's hub every 2 s (`LiveConnection.roundTrip`, the
+  heartbeat's kind of ping) and shows the median of the last 5 from the last 20 s (`HubRoundTrips`). It is the same leg
+  the web overlay times ("Connection stats on the web"), and like it never sits on the first line. Bitrates have two
+  decimals under 1 Mbps, one above, as on the web.
+- **Browser** (#6558, in progress; nothing on the page uses it yet): `web/src/screen/video-wire.ts` frames the wire as
+  `PersonaScreenKit` does, both replaying `spec/fixtures/screen-video` (written from Swift's own messages by
+  `ScreenVideoFixtureTests`), and `video-bitstream.ts` turns `format` into what WebCodecs' `VideoDecoder` takes: the
+  codec string (`hvc1.1.6.L93.B0`, `avc1.64001F`) and the HEVC or AVC decoder configuration record, for the 4-byte NAL
+  lengths every `frame` carries. `node web/e2e/screen-video-decode.mjs <web URL>` decodes the mock's HEVC and H.264
+  fixtures, every frame, in a real browser. The mock plays `fixture.bin` (HEVC) or `fixture-h264.bin` as the helper picks
+  its codec: the first of `start.codecs` it has, else H.264, which is what a browser without HEVC gets.
 - **Permission and login**: only input on that Mac answers macOS's Screen Recording question — someone at the Mac, or
   the user's own taps through Screen Sharing. Nothing in Persona answers it, and Agents' computer-use calls can't target
   System Settings' Privacy & Security or the system alert. Video needs the same login as Screen Sharing (the `pair`
   binding); no password travels anywhere new. `computer.status` / `browser.status` gain `screen_video {version, codecs,
-  permission}` (absent from an old node or one without the helper, so an old app keeps RFB).
+  permission, asked}` (absent from an old node or one without the helper, so an old app keeps RFB). The phone's "How to
+  turn it on" follows `asked`: before it, the Mac is about to show a window (choose Open System Settings, then turn on
+  Persona Screen); after it, where in System Settings to turn it on.
 
 ### Live screen routes (#6398)
 
@@ -607,7 +677,7 @@ iPhone's side comes next.
   `…/ports/5900/connect?pair=…` and `…/screen/video/connect?pair=…`. The hub then passes `link: true` in `port.dial` /
   `screen.dial`, and selects the subprotocol only when the node answers `{link: 1}`. The web's noVNC (`binary`), apps
   before it (no subprotocol), a hub before it (never passes `link`) and a node before it (answers `{}`) all keep the raw
-  stream, byte for byte.
+  stream, byte for byte. hub.json's `screen_link_off` turns sessions off for everyone: the hub then never passes `link` on.
 - **Wire**: the video wire's framing (u32 length, u8 type, body) with its own types: `data` (channel, offset, bytes),
   `ack` (channel, received through), `paths` (the token; candidates and the certificate with the direct routes), `attach`
   / `attached` (a transport joining with the token), `ping` / `pong` (the pong adds the node's TCP retransmitted and sent
@@ -648,8 +718,16 @@ iPhone's side comes next.
   another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
   relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
   route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
-- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`, for now only in a DEBUG build launched with
-  `-showScreenRoutes`): the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
+- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`): off in release builds until the real-device
+  acceptance has passed (`ScreenRoutes.releaseEnabled`, one line to turn on); a DEBUG build launched with
+  `-showScreenRoutes` has it meanwhile. While offered, **Settings › This Device › Live Screen**
+  (`LiveScreenSettingsView`) has one switch, "Choose the Fastest Route Automatically", on by default; turned off, the
+  phone asks for no session (everything through the hub, as before) and live sessions move back to their relays at
+  once. The quality tiers (#6396) add their own section to the same page. The stats overlay's Route row shows the route's
+  round trip and packet loss and why it last changed ("Faster route", "Previous route dropped", "Network changed", …, or
+  that the computer's firewall blocks direct connections). The first try of a same-network route shows iOS's local
+  network question with `NSLocalNetworkUsageDescription`; refused, those routes fail quietly and the relay stays.
+  How it works: the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
   `ScreenLinkVideoStream` (`PersonaScreenKit`) read the first message, and when the hub selected the subprotocol the
   stream is the session's channel (`ScreenLinkSession`, an actor holding the channels, the transports, the pings and
   `PathPolicy`), else the same raw stream as before, so the RFB client and the video stream don't change. A session
@@ -854,6 +932,8 @@ Follow the order above, one PR per area. Item 6 can go with b, or a separate sma
   - `ComputerSectionTests.testTheLiveScreenAsksForTheMacsSignIn` taps VNC through to login required (ARD).
   - `ScreenDrawerTests` (mock with `MOCK_COMPUTER_OPERATING=1 MOCK_SCREEN=fake`; without `MOCK_SCREEN=fake`, it uses this Mac's real Screen Sharing, showing "hub doesn't allow this machine's screen" and failing if off; assistant and Agent chats each have a running operation): open the full page from the operating bar and ··· menu in assistant and Agent chats, close with ×.
   - `ScreenPasswordTests`: remember, automatic login next time (PiP on real device, full page in simulator), reenter changed password, forget; one-tap unlock.
+  - `VNCTests.testNotAskedYetSaysAWindowWillShow` (#3954, a second mock with `MOCK_SCREEN_VIDEO=missing` at
+    `TEST_RUNNER_PERSONA_SCREEN_VIDEO_MISSING`): before macOS asked, "How to turn it on" says a window will show.
   - `VNCTests.testVideoTakesThePictureAndFallsBack` (#3954, mock `MOCK_SCREEN_VIDEO=1`, runner
     `TEST_RUNNER_PERSONA_SCREEN_VIDEO=1`): video takes the picture after the sign-in, with Wi-Fi's cap in `start` and
     reports coming back; the Mac locking and the stream dropping each put VNC back with their line, unlocking brings
