@@ -696,11 +696,10 @@ class Watcher:
 
     def worker(self):
         while True:
-            key = self.tasks.get()
-            if key is None:
+            priority, _, key = self.tasks.get()
+            if priority == 2:
                 self.tasks.task_done()
                 return
-            _, _, key = key
             repo, number = key
             try:
                 self.process(repo, number)
@@ -763,7 +762,7 @@ class Watcher:
         finally:
             self.stopping.set()
             for _ in self.workers:
-                self.tasks.put(None)
+                self.tasks.put((2, -1, ("", 0)))
             for worker in self.workers:
                 worker.join(timeout=30)
             if self.events:
