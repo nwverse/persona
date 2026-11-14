@@ -3,8 +3,10 @@ package hub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 const (
 	lnModeSettingKey       = "hub.ln_mode"
 	lnInterceptsSettingKey = "hub.ln_intercepts"
+	lnSentSettingKey       = "hub.push_sent"
 
 	// lnDedupWindow: how long the same related key stays quiet after it pushed once.
 	lnDedupWindow = 12 * time.Hour
@@ -30,6 +33,11 @@ const (
 	// lnInterceptAge: held pushes older than this are not worth showing any more.
 	lnInterceptAge      = 14 * 24 * time.Hour
 	lnInterceptLimitMax = 200
+	// lnSentMax bounds how many delivered pushes the daily counts remember; the oldest go first. Counts read this
+	// full record, so they stay exact on a busy day where the 200-entry intercepts view would truncate.
+	lnSentMax = 2000
+	// lnStatsDaysMax: how far back the read-only daily stats may go, matching the records' age.
+	lnStatsDaysMax = 14
 )
 
 // Why a push was held back.
@@ -51,6 +59,16 @@ type pushIntercept struct {
 	// Also holds the titles of P1 conclusion pushes that merged into this one: several conclusion cards arriving in
 	// the same minute become one intercepted entry instead of a stack.
 	Also []string `json:"also,omitempty"`
+}
+
+// pushSent is one alert push the filter let through to the devices: one entry per logical push, however many devices
+// actually received it (the same rule a held push is one intercept by). It backs the read-only daily delivery counts
+// and is kept with the switch off as well as on, so the counts describe every push that reached the phone.
+type pushSent struct {
+	At         time.Time `json:"at"`
+	Level      string    `json:"level"`
+	RelatedKey string    `json:"related_key,omitempty"`
+	Manager    string    `json:"manager"`
 }
 
 // pushPolicy says how urgent one alert push is and what it belongs to. The zero value is P1 with no related key.
@@ -157,14 +175,16 @@ func (p *Pusher) setLnMode(ctx context.Context, enabled bool) error {
 // received it. The 12-hour check and the note of a P0 that goes out happen under one hold of lnMu, so two pushes with
 // the same key at the same moment cannot both pass.
 func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
-	if !p.lnModeOn() {
-		return true, ""
-	}
 	level := policy.level
 	if level == "" {
 		level = assistantwire.LevelP1
 	}
 	now := p.now()
+	if !p.lnModeOn() {
+		// The switch is off: every push goes out as before, and the delivery counts still remember it.
+		p.recordSent(policy, level, now)
+		return true, ""
+	}
 	key := strings.TrimSpace(policy.relatedKey)
 	in := pushIntercept{At: now.UTC(), Level: level, Title: policy.title, Body: policy.body, RelatedKey: key, Manager: policy.manager}
 	p.lnMu.Lock()
@@ -182,6 +202,7 @@ func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 		if key != "" {
 			p.noteKeyPushedLocked(key, now)
 		}
+		p.addSentLocked(pushSent{At: now.UTC(), Level: level, RelatedKey: key, Manager: policy.manager})
 		p.lnMu.Unlock()
 		return true, ""
 	case assistantwire.LevelP2:
@@ -255,6 +276,41 @@ func (p *Pusher) recordIntercept(in pushIntercept) {
 	p.lnMu.Unlock()
 }
 
+// addSentLocked remembers one delivered push for the daily counts, dropping entries past the age and count limits.
+// lnMu is held.
+func (p *Pusher) addSentLocked(in pushSent) {
+	cutoff := p.now().Add(-lnInterceptAge)
+	kept := p.sent[:0]
+	for _, e := range p.sent {
+		if e.At.After(cutoff) {
+			kept = append(kept, e)
+		}
+	}
+	p.sent = append(kept, in)
+	if len(p.sent) > lnSentMax {
+		p.sent = slices.Clone(p.sent[len(p.sent)-lnSentMax:])
+	}
+	if p.store == nil { // a pusher without a settings store keeps the counts in memory only
+		return
+	}
+	p.sentDirty = true
+	if !p.lnWriting {
+		p.lnWriting = true
+		go p.saveIntercepts()
+	}
+}
+
+// recordSent remembers one delivered push for the daily counts. It is the entry for paths where applyLn does not run
+// (the switch is off in sendFromPolicy); applyLn's own paths call addSentLocked under its lock.
+func (p *Pusher) recordSent(policy pushPolicy, level string, now time.Time) {
+	if p == nil {
+		return
+	}
+	p.lnMu.Lock()
+	defer p.lnMu.Unlock()
+	p.addSentLocked(pushSent{At: now.UTC(), Level: level, RelatedKey: strings.TrimSpace(policy.relatedKey), Manager: policy.manager})
+}
+
 // scheduleSaveLocked marks the list changed and starts the one writer if it is not running. The writer saves the
 // latest list, then again while it changed meanwhile, so saves never land out of order and a burst of held pushes is
 // one or two writes, off the push path. lnMu is held.
@@ -272,17 +328,28 @@ func (p *Pusher) scheduleSaveLocked() {
 func (p *Pusher) saveIntercepts() {
 	for {
 		p.lnMu.Lock()
-		if !p.lnDirty {
+		if !p.lnDirty && !p.sentDirty {
 			p.lnWriting = false
 			p.lnMu.Unlock()
 			return
 		}
+		saveIntercepts := p.lnDirty
 		p.lnDirty = false
+		saveSent := p.sentDirty
+		p.sentDirty = false
 		list := cloneIntercepts(p.intercepts)
+		sent := slices.Clone(p.sent)
 		p.lnMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
-		if err := p.store.PutSetting(ctx, lnInterceptsSettingKey, list); err != nil {
-			p.logf("ln mode: save held pushes: %v", err)
+		if saveIntercepts {
+			if err := p.store.PutSetting(ctx, lnInterceptsSettingKey, list); err != nil {
+				p.logf("ln mode: save held pushes: %v", err)
+			}
+		}
+		if saveSent {
+			if err := p.store.PutSetting(ctx, lnSentSettingKey, sent); err != nil {
+				p.logf("ln mode: save delivered pushes: %v", err)
+			}
 		}
 		cancel()
 	}
@@ -293,7 +360,7 @@ func (p *Pusher) waitInterceptsSaved(d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for {
 		p.lnMu.Lock()
-		idle := !p.lnWriting && !p.lnDirty
+		idle := !p.lnWriting && !p.lnDirty && !p.sentDirty
 		p.lnMu.Unlock()
 		if idle {
 			return true
@@ -327,22 +394,36 @@ func (p *Pusher) loadLnState() {
 	ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
 	defer cancel()
 	var stored []pushIntercept
-	if ok, err := p.store.Setting(ctx, lnInterceptsSettingKey, &stored); err != nil || !ok {
-		return
-	}
-	cutoff := p.now().Add(-lnInterceptAge)
-	p.lnMu.Lock()
-	p.intercepts = p.intercepts[:0]
-	for _, e := range stored {
-		if e.At.After(cutoff) {
-			p.intercepts = append(p.intercepts, e)
+	if ok, err := p.store.Setting(ctx, lnInterceptsSettingKey, &stored); err == nil && ok {
+		cutoff := p.now().Add(-lnInterceptAge)
+		p.lnMu.Lock()
+		p.intercepts = p.intercepts[:0]
+		for _, e := range stored {
+			if e.At.After(cutoff) {
+				p.intercepts = append(p.intercepts, e)
+			}
 		}
+		p.lnMu.Unlock()
 	}
-	p.lnMu.Unlock()
+
+	var delivered []pushSent
+	if ok, err := p.store.Setting(ctx, lnSentSettingKey, &delivered); err == nil && ok {
+		cutoff := p.now().Add(-lnInterceptAge)
+		p.lnMu.Lock()
+		p.sent = p.sent[:0]
+		for _, e := range delivered {
+			if e.At.After(cutoff) {
+				p.sent = append(p.sent, e)
+			}
+		}
+		p.lnMu.Unlock()
+	}
 }
 
-// lnInterceptsView returns the held pushes newest first, at most limit (clamped to lnInterceptLimitMax).
-func (p *Pusher) lnInterceptsView(limit int) []pushIntercept {
+// lnInterceptsView returns the held pushes newest first, at most limit (clamped to lnInterceptLimitMax). When manager
+// is not empty, only that manager's entries count toward the limit: the filter runs before the truncation, so another
+// manager's burst can never push an extension's own entries out of its 200.
+func (p *Pusher) lnInterceptsView(manager string, limit int) []pushIntercept {
 	if limit <= 0 || limit > lnInterceptLimitMax {
 		limit = lnInterceptLimitMax
 	}
@@ -351,14 +432,88 @@ func (p *Pusher) lnInterceptsView(limit int) []pushIntercept {
 	out := make([]pushIntercept, 0, min(limit, len(p.intercepts)))
 	for i := len(p.intercepts) - 1; i >= 0 && len(out) < limit; i-- {
 		e := p.intercepts[i]
+		if manager != "" && e.Manager != manager {
+			continue
+		}
 		e.Also = slices.Clone(e.Also)
 		out = append(out, e)
 	}
 	return out
 }
 
-// lnRoutes serves the switch and the read-only list of held pushes. The routes sit behind the standard API gate; an
-// extension token may read the intercepts (the same content its pushes carry) but not change the switch.
+// lnDayStats is one UTC calendar day's delivery counts for one manager, counted from the full in-memory records
+// (up to 500 held / 2000 delivered entries) rather than the 200-entry view, so the numbers stay exact past 200.
+type lnDayStats struct {
+	Date        string         `json:"date"`
+	Manager     string         `json:"manager"`
+	Sent        int            `json:"sent"`
+	Intercepted int            `json:"intercepted"`
+	ByReason    map[string]int `json:"by_reason,omitempty"`
+}
+
+// lnDailyStats counts delivered and held pushes at or after since, per UTC day and manager. When manager is not empty
+// only that manager's pushes are counted (an extension's view). Days with no pushes are omitted; days sort ascending.
+func (p *Pusher) lnDailyStats(since time.Time, manager string) []lnDayStats {
+	type agg struct {
+		sent, intercepted int
+		byReason          map[string]int
+	}
+	p.lnMu.Lock()
+	days := map[string]map[string]*agg{}
+	add := func(at time.Time, mgr string, reason string, delivered bool) {
+		if at.Before(since) {
+			return
+		}
+		if manager != "" && mgr != manager {
+			return
+		}
+		day := at.UTC().Format("2006-01-02")
+		if days[day] == nil {
+			days[day] = map[string]*agg{}
+		}
+		a := days[day][mgr]
+		if a == nil {
+			a = &agg{byReason: map[string]int{}}
+			days[day][mgr] = a
+		}
+		if delivered {
+			a.sent++
+			return
+		}
+		a.intercepted++
+		a.byReason[reason]++
+	}
+	for _, e := range p.sent {
+		add(e.At, e.Manager, "", true)
+	}
+	for _, e := range p.intercepts {
+		add(e.At, e.Manager, e.Reason, false)
+	}
+	p.lnMu.Unlock()
+
+	dates := make([]string, 0, len(days))
+	for d := range days {
+		dates = append(dates, d)
+	}
+	slices.Sort(dates)
+	out := make([]lnDayStats, 0, len(dates))
+	for _, d := range dates {
+		managers := make([]string, 0, len(days[d]))
+		for m := range days[d] {
+			managers = append(managers, m)
+		}
+		slices.Sort(managers)
+		for _, m := range managers {
+			a := days[d][m]
+			out = append(out, lnDayStats{Date: d, Manager: m, Sent: a.sent, Intercepted: a.intercepted, ByReason: a.byReason})
+		}
+	}
+	return out
+}
+
+// lnRoutes serves the switch, the read-only list of held pushes and the read-only daily delivery counts. The routes
+// sit behind the standard API gate; an extension token with the notify scope may read the switch, its own manager's
+// held pushes and counts, but not change the switch.
 func (h *Hub) lnRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/push/ln-mode", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"enabled": h.push.lnModeOn()})
@@ -382,11 +537,37 @@ func (h *Hub) lnRoutes(api *http.ServeMux) {
 		writeJSON(w, map[string]any{"enabled": body.Enabled})
 	})
 	api.HandleFunc("GET /api/v1/push/intercepts", func(w http.ResponseWriter, r *http.Request) {
-		view := h.push.lnInterceptsView(0)
-		// An extension token reads only its own manager's held pushes; a full credential reads every manager's.
-		if em := extensionManager(r); em != "" {
-			view = slices.DeleteFunc(slices.Clone(view), func(e pushIntercept) bool { return e.Manager != em })
-		}
+		// The manager filter runs before the 200-entry limit: an extension token reads only its own manager's held
+		// pushes; a full credential reads every manager's.
+		view := h.push.lnInterceptsView(extensionManager(r), 0)
 		writeJSON(w, map[string]any{"intercepts": view})
+	})
+	api.HandleFunc("GET /api/v1/push/stats/daily", func(w http.ResponseWriter, r *http.Request) {
+		now := h.push.now()
+		since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		q := r.URL.Query()
+		if raw := q.Get("since"); raw != "" {
+			parsed, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, errors.New("since must be an RFC3339 timestamp"))
+				return
+			}
+			since = parsed
+		} else if raw := q.Get("days"); raw != "" {
+			days, err := strconv.Atoi(raw)
+			if err != nil || days < 1 || days > lnStatsDaysMax {
+				writeErr(w, http.StatusBadRequest, fmt.Errorf("days must be a number from 1 to %d", lnStatsDaysMax))
+				return
+			}
+			since = since.AddDate(0, 0, -(days - 1))
+		}
+		if oldest := now.Add(-lnInterceptAge); since.Before(oldest) {
+			since = oldest
+		}
+		// An extension token counts only its own manager's pushes; a full credential counts every manager's.
+		writeJSON(w, map[string]any{
+			"since": since.UTC().Format(time.RFC3339),
+			"days":  h.push.lnDailyStats(since, extensionManager(r)),
+		})
 	})
 }

@@ -69,6 +69,14 @@ func (p *Pusher) sendFromPolicy(manager string, policy pushPolicy, build localiz
 			// notifyWSFrom themselves), so the app's lists and briefings keep updating.
 			return 0, 0
 		}
+	} else {
+		// The switch is off, so applyLn never runs; the daily delivery counts still record one logical push.
+		policy.manager = manager
+		level := policy.level
+		if level == "" {
+			level = assistantwire.LevelP1
+		}
+		p.recordSent(policy, level, p.now())
 	}
 	return p.sendFromTo(manager, build, collapseID, wants, rule, only, sent)
 }
