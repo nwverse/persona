@@ -113,6 +113,13 @@ class InboxShowcaseMockTests(unittest.TestCase):
                     self.assertIn(field, actual)
         self.assertEqual(next(row for row in listed if row["session_id"] == "s-agent")["state"], "unread")
 
+    def test_showcase_machine_is_online_with_complete_fields(self):
+        hub = self.serve(MOCK_INBOX_SHOWCASE="1")
+        machine = next(row for row in hub.request("/api/v1/machines")["machines"] if row["id"] == "m1")
+        for field, value in {"name": "示例电脑", "kind": "local", "icon": "desktop", "online": True,
+                             "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user"}.items():
+            self.assertEqual(machine[field], value, field)
+
     def test_showcase_takes_precedence_over_inbox_events(self):
         hub = self.serve(MOCK_INBOX_SHOWCASE="1", MOCK_INBOX_EVENTS="legacy")
         self.assertEqual(hub.request("/api/v1/inbox")["items"], self.items)
@@ -134,6 +141,8 @@ class InboxShowcaseMockTests(unittest.TestCase):
         self.assertTrue(all(not item_id.startswith("sc-") for item_id in ids))
         session_keys = {(row["machine_id"], row["session_id"]) for row in hub.request("/api/v1/sessions")["sessions"]}
         self.assertTrue(all((row["machine_id"], row["session_id"]) not in session_keys for row in self.sessions))
+        machine_ids = {row["id"] for row in hub.request("/api/v1/machines")["machines"]}
+        self.assertNotIn("m1", machine_ids)
 
 
 if __name__ == "__main__":
