@@ -13670,8 +13670,10 @@ def supervise_model_purpose():
 
 
 def meeting_room_provider(provider):
-    """The room runs a Claude Code CLI, including one started on a Messages API connection. A launcher with no agent
-    is Claude Code, as the hub reads it (claudeCodeProvider)."""
+    """The room runs a Claude Code CLI launcher, including one backed by a Messages API connection. A hub.json
+    connection is not a launcher (models_room.go). A launcher with no agent is Claude Code (claudeCodeProvider)."""
+    if not provider.get("id", "").startswith("launcher."):
+        return False
     if provider.get("kind") == "api":
         return provider.get("api") == "messages"
     return provider.get("kind") == "launcher" and provider.get("agent", "") in ("", "claude")
@@ -13689,7 +13691,7 @@ def meeting_model_purpose(pid, lang="zh-Hans", catalog=None):
         stored = MODEL_BINDINGS.get(pid, {"revision": 0, "override": {}})
         binding = dict(stored["override"])
     effective = {k: v for k, v in parent["effective"].items() if k != "runtime"}
-    if binding.get("provider"):
+    if binding.get("provider") and binding["provider"] != parent["effective"].get("provider"):
         provider = next((x for x in catalog["providers"] if x["id"] == binding["provider"]), {})
         effective = {"provider": binding["provider"], "model": provider.get("model", "")}
     effective.update(binding)
