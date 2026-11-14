@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -281,12 +282,18 @@ func (b *postgresBackend) Dump(ctx context.Context, target Target, destination s
 }
 
 func (b *postgresBackend) Restore(ctx context.Context, target Target, database, dumpPath string) error {
+	// pg_restore connects only with -d (otherwise it prints a script). libpq
+	// expands a dbname with "=" or a URI prefix as a connection string, so
+	// only a plain name is passed; the rest stays in the environment.
+	if database == "" || strings.Contains(database, "=") || strings.Contains(database, "://") {
+		return errors.New("refusing to restore into a database name libpq would read as a connection string")
+	}
 	in, err := os.Open(dumpPath)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	return b.runClient(ctx, target, database, in, io.Discard, "pg_restore", "--format=custom", "--exit-on-error", "--no-owner", "--no-acl")
+	return b.runClient(ctx, target, database, in, io.Discard, "pg_restore", "--format=custom", "--exit-on-error", "--no-owner", "--no-acl", "--dbname="+database)
 }
 
 var postgresURLPattern = lazyre.New(`postgres(?:ql)?://[^[:space:]"']+`)
@@ -341,34 +348,69 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// libpqQueryEnvironment maps connection-URL query parameters to the libpq
+// environment variables the command-line clients read. Host, port, user,
+// database and password are taken from pgx's parsed configuration instead.
+var libpqQueryEnvironment = map[string]string{
+	"sslmode":                  "PGSSLMODE",
+	"sslrootcert":              "PGSSLROOTCERT",
+	"sslcert":                  "PGSSLCERT",
+	"sslkey":                   "PGSSLKEY",
+	"sslcrl":                   "PGSSLCRL",
+	"sslcrldir":                "PGSSLCRLDIR",
+	"sslsni":                   "PGSSLSNI",
+	"sslnegotiation":           "PGSSLNEGOTIATION",
+	"sslcertmode":              "PGSSLCERTMODE",
+	"ssl_min_protocol_version": "PGSSLMINPROTOCOLVERSION",
+	"ssl_max_protocol_version": "PGSSLMAXPROTOCOLVERSION",
+	"requirepeer":              "PGREQUIREPEER",
+	"gssencmode":               "PGGSSENCMODE",
+	"channel_binding":          "PGCHANNELBINDING",
+	"connect_timeout":          "PGCONNECT_TIMEOUT",
+	"target_session_attrs":     "PGTARGETSESSIONATTRS",
+	"passfile":                 "PGPASSFILE",
+}
+
+// clientEnvironment is the libpq environment for pg_dump/pg_restore. libpq
+// expands a URI only as an explicit dbname argument, never in PGDATABASE, so
+// every part is passed as its own variable; the password only in PGPASSWORD.
+// Inside a Docker container the server is the container's own loopback.
 func clientEnvironment(target Target, database string, docker bool) []string {
-	u, _ := url.Parse(target.URL)
-	password := ""
-	username := ""
-	if u.User != nil {
-		username = u.User.Username()
+	values := map[string]string{"PGDATABASE": database}
+	u, err := url.Parse(target.URL)
+	if err != nil {
+		return []string{"PGDATABASE=" + database, "PGPASSWORD="}
 	}
-	// The password pgx authenticates with, whether it came from the user
-	// info, a password= query parameter, or the libpq environment/passfile.
-	if cfg, err := pgx.ParseConfig(target.URL); err == nil {
-		password = cfg.Password
+	// pgx loads TLS files while parsing; host, port, user and password must
+	// not depend on whether those files are readable here.
+	addressing := *u
+	query := u.Query()
+	for _, key := range []string{"sslrootcert", "sslcert", "sslkey", "sslpassword", "sslcrl", "sslcrldir", "sslmode", "sslsni", "sslnegotiation"} {
+		query.Del(key)
+	}
+	query.Set("sslmode", "disable")
+	addressing.RawQuery = query.Encode()
+	if cfg, err := pgx.ParseConfig(addressing.String()); err == nil {
+		values["PGHOST"], values["PGPORT"] = cfg.Host, strconv.Itoa(int(cfg.Port))
+		values["PGUSER"], values["PGPASSWORD"] = cfg.User, cfg.Password
 	}
 	if docker {
-		u.Host = "127.0.0.1:5432"
-		u.RawQuery = "sslmode=disable"
+		values["PGHOST"], values["PGPORT"], values["PGSSLMODE"] = "127.0.0.1", "5432", "disable"
 	} else {
-		query := u.Query()
-		query.Del("password")
-		query.Del("sslpassword")
-		u.RawQuery = query.Encode()
+		for key, list := range u.Query() {
+			if name, ok := libpqQueryEnvironment[key]; ok && len(list) > 0 {
+				values[name] = list[len(list)-1]
+			}
+		}
 	}
-	if username != "" {
-		u.User = url.User(username)
-	} else {
-		u.User = nil
+	environment := make([]string, 0, len(values))
+	for name, value := range values {
+		if value != "" || name == "PGPASSWORD" {
+			environment = append(environment, name+"="+value)
+		}
 	}
-	u.Path, u.RawPath = "/"+database, ""
-	return []string{"PGDATABASE=" + u.String(), "PGPASSWORD=" + password}
+	sort.Strings(environment)
+	return environment
 }
 
 func (b *postgresBackend) runClient(ctx context.Context, target Target, database string, stdin io.Reader, stdout io.Writer, program string, args ...string) error {
@@ -378,14 +420,20 @@ func (b *postgresBackend) runClient(ctx context.Context, target Target, database
 			container = target.DefaultContainer
 		}
 	}
+	environment := clientEnvironment(target, database, container != "")
 	var cmd *exec.Cmd
 	if container != "" {
-		dockerArgs := []string{"exec", "--interactive", "--env", "PGDATABASE", "--env", "PGPASSWORD", container, program}
+		dockerArgs := []string{"exec", "--interactive"}
+		for _, variable := range environment {
+			name, _, _ := strings.Cut(variable, "=")
+			dockerArgs = append(dockerArgs, "--env", name)
+		}
+		dockerArgs = append(dockerArgs, container, program)
 		cmd = exec.CommandContext(ctx, "docker", append(dockerArgs, args...)...)
 	} else {
 		cmd = exec.CommandContext(ctx, program, args...)
 	}
-	cmd.Env = append(os.Environ(), clientEnvironment(target, database, container != "")...)
+	cmd.Env = append(os.Environ(), environment...)
 	cmd.Stdin, cmd.Stdout = stdin, stdout
 	stderr := &limitedBuffer{remaining: 32 << 10}
 	cmd.Stderr = stderr

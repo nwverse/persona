@@ -11,13 +11,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
 
-// TestPostgresWholeInstallRoundTrip runs only against an explicitly provided
-// disposable server. It never uses the default runtime directory or a database
-// named by the real hub configuration.
-func TestPostgresWholeInstallRoundTrip(t *testing.T) {
+type postgresIntegration struct {
+	hub, manager       Target
+	hubURL, managerURL string
+	backend            *postgresBackend
+	ctx                context.Context
+	previousNames      map[Target][]string
+}
+
+// newPostgresIntegration runs only against an explicitly provided disposable
+// server. It never uses the default runtime directory or a database named by
+// the real hub configuration; the databases it makes are dropped afterwards.
+func newPostgresIntegration(t *testing.T) *postgresIntegration {
+	t.Helper()
 	base := os.Getenv("PERSONA_TEST_DATABASE_URL")
 	container := os.Getenv("PERSONA_TEST_POSTGRES_CONTAINER")
 	if base == "" {
@@ -49,28 +59,60 @@ func TestPostgresWholeInstallRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := Target{Part: "hub", URL: hubURL, Database: hubName, Container: container, DefaultContainer: container}
-	manager := Target{Part: "manager", URL: managerURL, Database: managerName, Container: container, DefaultContainer: container}
-	backend := newPostgresBackend()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	previousNames := make(map[Target][]string)
-	for _, target := range []Target{hub, manager} {
-		if err := backend.Create(ctx, target, target.Database); err != nil {
+	t.Cleanup(cancel)
+	it := &postgresIntegration{
+		hub:     Target{Part: "hub", URL: hubURL, Database: hubName, Container: container, DefaultContainer: container},
+		manager: Target{Part: "manager", URL: managerURL, Database: managerName, Container: container, DefaultContainer: container},
+		hubURL:  hubURL, managerURL: managerURL, backend: newPostgresBackend(), ctx: ctx, previousNames: map[Target][]string{},
+	}
+	for _, target := range []Target{it.hub, it.manager} {
+		if err := it.backend.Create(ctx, target, target.Database); err != nil {
 			t.Fatal(err)
 		}
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
-		for _, target := range []Target{hub, manager} {
-			_ = backend.Drop(cleanupCtx, target, target.Database)
-			for _, name := range previousNames[target] {
-				_ = backend.Drop(cleanupCtx, target, name)
+		for _, target := range []Target{it.hub, it.manager} {
+			_ = it.backend.Drop(cleanupCtx, target, target.Database)
+			for _, name := range it.previousNames[target] {
+				_ = it.backend.Drop(cleanupCtx, target, name)
 			}
 		}
 	})
+	return it
+}
 
+func (it *postgresIntegration) exec(t *testing.T, target Target, statement string, args ...any) {
+	t.Helper()
+	conn, err := it.backend.connect(it.ctx, target, target.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeConn(it.ctx, conn)
+	if _, err := conn.Exec(it.ctx, statement, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// home writes a runtime directory naming the disposable databases.
+func (it *postgresIntegration) home(t *testing.T, managerKey []byte) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "runtime")
+	writeFixtureFile(t, filepath.Join(home, "hub.json"), []byte(`{"database_url":"`+it.hubURL+`","token":"disposable-token"}`))
+	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"`+it.manager.Database+`"}`))
+	writeFixtureFile(t, filepath.Join(home, "secret.key"), []byte(strings.Repeat("h", secretkey.Size)))
+	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "secret.key"), managerKey)
+	writeFixtureFile(t, filepath.Join(home, "data", "fact.md"), []byte("disposable knowledge"))
+	return home, filepath.Join(root, "out", "install.backup")
+}
+
+func TestPostgresWholeInstallRoundTrip(t *testing.T) {
+	it := newPostgresIntegration(t)
+	ctx, backend, hub, manager, hubURL, container := it.ctx, it.backend, it.hub, it.manager, it.hubURL, it.hub.Container
+	previousNames := it.previousNames
 	managerKey := []byte(strings.Repeat("k", secretkey.Size))
 	for _, item := range []struct {
 		target  Target
@@ -103,14 +145,7 @@ func TestPostgresWholeInstallRoundTrip(t *testing.T) {
 		closeConn(ctx, conn)
 	}
 
-	root := t.TempDir()
-	home := filepath.Join(root, "runtime")
-	output := filepath.Join(root, "out", "install.backup")
-	writeFixtureFile(t, filepath.Join(home, "hub.json"), []byte(`{"database_url":"`+hubURL+`","token":"disposable-token"}`))
-	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"`+managerName+`"}`))
-	writeFixtureFile(t, filepath.Join(home, "secret.key"), []byte(strings.Repeat("h", secretkey.Size)))
-	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "secret.key"), managerKey)
-	writeFixtureFile(t, filepath.Join(home, "data", "fact.md"), []byte("disposable knowledge"))
+	home, output := it.home(t, managerKey)
 	operator := &Operator{backend: backend, now: time.Now, random: rand.Reader}
 	if _, err := operator.Create(ctx, Options{Home: home, Output: output, WritesQuiesced: true}); err != nil {
 		t.Fatal(err)
@@ -154,5 +189,70 @@ func TestPostgresWholeInstallRoundTrip(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(home, "data", "fact.md"))
 	if err != nil || string(raw) != "disposable knowledge" {
 		t.Errorf("restored knowledge = %q, %v", raw, err)
+	}
+}
+
+// TestPostgresUnrecordedManagerKey runs the sealed-value proof against a real
+// server and the real migrations: a manager database before its first key
+// rotation (sealing_key empty) with sealed values in a table and in list and
+// object settings.
+func TestPostgresUnrecordedManagerKey(t *testing.T) {
+	it := newPostgresIntegration(t)
+	managerKey := []byte(strings.Repeat("k", secretkey.Size))
+	seal := func(plain string) string {
+		sealed, err := secretkey.SealWith(managerKey, plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sealed
+	}
+	// The real migrations, so the sealed-value query meets the real schema.
+	for _, item := range []struct {
+		target Target
+		sets   db.Sets
+	}{{it.hub, db.HubSet}, {it.manager, db.ManagerSet}} {
+		migrated, err := db.Open(it.ctx, item.target.URL, item.sets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		migrated.Close()
+	}
+	it.exec(t, it.manager, `INSERT INTO connector_secrets (connector, sealed) VALUES ('example', $1)`, seal("connector token"))
+	it.exec(t, it.manager, `INSERT INTO settings (key, value) VALUES ('launchers.managed', jsonb_build_array(jsonb_build_object('key_sealed', $1::text), 'not an object'))
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, seal("launcher key"))
+	it.exec(t, it.manager, `INSERT INTO settings (key, value) VALUES ('bots.feishu', jsonb_build_object('secret_enc', $1::text))
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, seal("bot secret"))
+
+	identity, err := it.backend.Identity(it.ctx, it.manager, "manager", it.manager.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.SealingKey != "" || len(identity.SealedValues) != 3 {
+		t.Fatalf("unrecorded identity: key %q, %d sealed values, want 3", identity.SealingKey, len(identity.SealedValues))
+	}
+
+	home, output := it.home(t, managerKey)
+	operator := &Operator{backend: it.backend, now: time.Now, random: rand.Reader}
+	if _, err := operator.Create(it.ctx, Options{Home: home, Output: output, WritesQuiesced: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operator.Verify(it.ctx, Options{Home: home, Bundle: output}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := operator.Restore(it.ctx, Options{Home: home, Bundle: output, WritesQuiesced: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.previousNames[it.hub] = append(it.previousNames[it.hub], result.PreviousHubDB)
+	it.previousNames[it.manager] = append(it.previousNames[it.manager], result.PreviousManagerDB)
+
+	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "secret.key"), []byte(strings.Repeat("w", secretkey.Size)))
+	wrong := filepath.Join(filepath.Dir(output), "wrong-key.backup")
+	_, err = operator.Create(it.ctx, Options{Home: home, Output: wrong, WritesQuiesced: true})
+	if err == nil || !strings.Contains(err.Error(), "none of its 3 sealed secret(s)") {
+		t.Fatalf("create with a key that opens no sealed value = %v", err)
+	}
+	if _, statErr := os.Stat(wrong); statErr == nil {
+		t.Fatal("an unverifiable bundle was published")
 	}
 }

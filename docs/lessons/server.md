@@ -376,6 +376,12 @@ read as "anything goes": a `password=` query parameter dropped before `pg_dump` 
 (prove the bundled key opens its sealed values). A relative path from a manifest is checked against its root
 (`../victim` is clean but outside).
 
+libpq expands a connection URI only when it is the explicit `dbname` argument, never from `PGDATABASE`: the backup's
+`PGDATABASE=postgres://…` made `pg_dump` ignore host, port and user and try the default socket, and PostgreSQL 18's
+`pg_restore` without `-d` refuses to run at all. Fake clients in unit tests accepted both, so only a real server
+showed it. Pass `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE=<name>` and the ssl* variables, the password in `PGPASSWORD`,
+and `--dbname=<plain name>` to `pg_restore`.
+
 ## A failed swap must not look like a new install
 
 `update.SwapProgram` recorded `Prev: ""` when copying the old program to `.prev` or putting the new build in place failed, and `Prev: ""` is how a swap says the program was new, so going back deleted a program the failed swap had never touched.

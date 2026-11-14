@@ -19,16 +19,18 @@ import (
 // command-line clients must receive the same password, still only through the
 // environment.
 func TestClientEnvironmentUsesQueryStringPassword(t *testing.T) {
-	t.Setenv("PGPASSWORD", "")
-	t.Setenv("PGPASSFILE", filepath.Join(t.TempDir(), "none"))
+	isolateLibpqEnvironment(t)
 	target := Target{URL: "postgres://persona@db.example:5432/persona?password=query-secret&sslmode=disable"}
 	for _, docker := range []bool{false, true} {
 		environment := clientEnvironment(target, "persona", docker)
-		if len(environment) != 2 || environment[1] != "PGPASSWORD=query-secret" {
+		values := environmentMap(t, environment)
+		if values["PGPASSWORD"] != "query-secret" {
 			t.Fatalf("docker=%v client environment = %#v", docker, environment)
 		}
-		if strings.Contains(environment[0], "query-secret") {
-			t.Fatalf("database argument contains password: %q", environment[0])
+		for _, variable := range environment {
+			if strings.Contains(variable, "query-secret") && !strings.HasPrefix(variable, "PGPASSWORD=") {
+				t.Fatalf("password outside PGPASSWORD: %q", variable)
+			}
 		}
 	}
 }
