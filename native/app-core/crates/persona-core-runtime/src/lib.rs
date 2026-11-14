@@ -7,8 +7,15 @@
 
 pub mod wire;
 
+#[cfg(target_os = "android")]
+mod diagnostics;
+#[cfg(target_os = "android")]
+use diagnostics::{Diagnostics, scheduler_switches};
+
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+#[cfg(target_os = "android")]
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -37,6 +44,11 @@ struct Shared {
     /// Actions queued and not yet applied, for `flush`.
     pending: Mutex<u64>,
     idle: Condvar,
+    /// Once-lock means ordinary dispatch/drain only read a null pointer; all instrumentation is opt-in.
+    #[cfg(target_os = "android")]
+    diagnostics: std::sync::OnceLock<Arc<Diagnostics>>,
+    #[cfg(target_os = "android")]
+    worker_thread: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Default)]
@@ -75,8 +87,26 @@ impl Runtime {
 
     /// Queues an encoded `wire::Action`. Never blocks on the worker.
     pub fn dispatch(&self, action: &[u8]) -> bool {
-        *lock(&self.shared.pending) += 1;
-        if self.sender.send(Message::Action(action.to_vec())).is_ok() {
+        #[cfg(target_os = "android")]
+        let sent = if self.shared.diagnostics.get().is_some() {
+            let mut sent = Ok(());
+            diagnostics::measure_queue(&self.shared, || {
+                *diagnostics::timed_lock(&self.shared, &self.shared.pending, false) += 1;
+                diagnostics::measure_send(&self.shared, || {
+                    sent = self.sender.send(Message::Action(action.to_vec()));
+                });
+            });
+            sent
+        } else {
+            *lock(&self.shared.pending) += 1;
+            self.sender.send(Message::Action(action.to_vec()))
+        };
+        #[cfg(not(target_os = "android"))]
+        let sent = {
+            *lock(&self.shared.pending) += 1;
+            self.sender.send(Message::Action(action.to_vec()))
+        };
+        if sent.is_ok() {
             return true;
         }
         self.done(1);
@@ -86,14 +116,40 @@ impl Runtime {
     /// The chat's encoded `wire::ChatPatch` since the last successful drain. Encoding and removal are committed in
     /// that order: a failed encode leaves the pending operations and wake available for the next drain.
     pub fn drain(&self, chat: &str) -> Vec<u8> {
+        #[cfg(target_os = "android")]
+        let mut patches = diagnostics::timed_lock(&self.shared, &self.shared.patches, true);
+        #[cfg(not(target_os = "android"))]
         let mut patches = lock(&self.shared.patches);
-        let patch = patches.chats.get(chat).cloned().unwrap_or_default();
-        let encoded = wire::encode(&patch);
-        if let Some(patch) = patches.chats.get_mut(chat) {
-            patch.ops.clear();
+        #[cfg(target_os = "android")]
+        {
+            diagnostics::measure_patch_held(&self.shared, || {
+                let started = Instant::now();
+                let patch = patches.chats.get(chat).cloned().unwrap_or_default();
+                if let Some(diagnostics) = self.shared.diagnostics.get() {
+                    diagnostics::add(&diagnostics.counters.patch_clone, started);
+                }
+                let started = Instant::now();
+                let encoded = wire::encode(&patch);
+                if let Some(diagnostics) = self.shared.diagnostics.get() {
+                    diagnostics::add(&diagnostics.counters.patch_encode, started);
+                }
+                if let Some(patch) = patches.chats.get_mut(chat) {
+                    patch.ops.clear();
+                }
+                patches.woken.remove(chat);
+                encoded
+            })
         }
-        patches.woken.remove(chat);
-        encoded
+        #[cfg(not(target_os = "android"))]
+        {
+            let patch = patches.chats.get(chat).cloned().unwrap_or_default();
+            let encoded = wire::encode(&patch);
+            if let Some(patch) = patches.chats.get_mut(chat) {
+                patch.ops.clear();
+            }
+            patches.woken.remove(chat);
+            encoded
+        }
     }
 
     /// Waits until every queued action is applied, up to `timeout`. For tests and shutdown; never on a main thread.
@@ -113,6 +169,57 @@ impl Runtime {
                 .0;
         }
         true
+    }
+
+    /// Same wait as [flush], with opt-in caller timing outside the original benchmark spans.
+    #[cfg(target_os = "android")]
+    pub fn flush_diagnostic(&self, timeout: Duration) -> bool {
+        self.flush(timeout)
+    }
+    /// Cumulative opt-in timings, off the ordinary dispatch/drain path. Nanosecond values are inclusive spans, so
+    /// nested queue and lock diagnostics overlap. Scheduler counters are zero when /proc cannot be read.
+    #[cfg(target_os = "android")]
+    pub fn diagnostics(&self) -> Vec<i64> {
+        let counters = self
+            .shared
+            .diagnostics
+            .get_or_init(|| Arc::new(Diagnostics::default()))
+            .counters
+            .clone();
+        let worker = self.shared.worker_thread.load(Ordering::Relaxed);
+        let (worker_voluntary, worker_involuntary) = scheduler_switches(worker);
+        let (caller_voluntary, caller_involuntary) = scheduler_switches(0);
+        vec![
+            counters.pending_lock.load(Ordering::Relaxed) as i64,
+            counters.pending_switches.load(Ordering::Relaxed) as i64,
+            counters.pending_lock_calls.load(Ordering::Relaxed) as i64,
+            counters.pending_contended.load(Ordering::Relaxed) as i64,
+            counters.queue.load(Ordering::Relaxed) as i64,
+            counters.queue_send.load(Ordering::Relaxed) as i64,
+            counters.patch_lock.load(Ordering::Relaxed) as i64,
+            counters.patch_switches.load(Ordering::Relaxed) as i64,
+            counters.patch_lock_calls.load(Ordering::Relaxed) as i64,
+            counters.patch_contended.load(Ordering::Relaxed) as i64,
+            counters.patch_lock_without_proc.load(Ordering::Relaxed) as i64,
+            counters.patch_held_work.load(Ordering::Relaxed) as i64,
+            counters.patch_clone.load(Ordering::Relaxed) as i64,
+            counters.patch_encode.load(Ordering::Relaxed) as i64,
+            counters.worker_decode_apply.load(Ordering::Relaxed) as i64,
+            counters.worker_effect_encode.load(Ordering::Relaxed) as i64,
+            counters.worker_host_run.load(Ordering::Relaxed) as i64,
+            counters.worker_host_changed.load(Ordering::Relaxed) as i64,
+            counters.worker_actions.load(Ordering::Relaxed) as i64,
+            worker as i64,
+            worker_voluntary as i64,
+            worker_involuntary as i64,
+            caller_voluntary as i64,
+            caller_involuntary as i64,
+        ]
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn enable_diagnostics(&self) {
+        self.shared.diagnostics.get_or_init(|| Arc::new(Diagnostics::default()));
     }
 
     fn done(&self, count: u64) {
@@ -158,6 +265,10 @@ impl Worker {
     }
 
     fn run(mut self, receiver: Receiver<Message>) {
+        #[cfg(target_os = "android")]
+        self.shared
+            .worker_thread
+            .store(diagnostics::thread_id(), Ordering::Relaxed);
         loop {
             match receiver.recv() {
                 Ok(Message::Stop) | Err(_) => return,
@@ -181,10 +292,26 @@ impl Worker {
     }
 
     fn reject(&self, reason: String) {
+        #[cfg(target_os = "android")]
+        if let Some(diagnostics) = self.shared.diagnostics.get() {
+            let started = Instant::now();
+            let encoded = wire::encode(&Effect::Rejected { reason });
+            diagnostics::add(&diagnostics.counters.worker_effect_encode, started);
+            let started = Instant::now();
+            self.host.run(&encoded);
+            diagnostics::add(&diagnostics.counters.worker_host_run, started);
+            return;
+        }
         self.host.run(&wire::encode(&Effect::Rejected { reason }));
     }
 
     fn action(&mut self, bytes: &[u8]) {
+        #[cfg(target_os = "android")]
+        let started = Instant::now();
+        #[cfg(target_os = "android")]
+        if let Some(diagnostics) = self.shared.diagnostics.get() {
+            diagnostics::increment(&diagnostics.counters.worker_actions);
+        }
         let action: Action = match wire::decode(bytes) {
             Ok(action) => action,
             Err(error) => return self.reject(format!("undecodable action: {error}")),
@@ -237,10 +364,27 @@ impl Worker {
                 self.after_step(&chat, step);
             }
         }
+        #[cfg(target_os = "android")]
+        if let Some(diagnostics) = self.shared.diagnostics.get() {
+            diagnostics::add(&diagnostics.counters.worker_decode_apply, started);
+        }
     }
 
     fn after_step(&mut self, chat: &str, step: Step) {
         for request in step.requests {
+            #[cfg(target_os = "android")]
+            if let Some(diagnostics) = self.shared.diagnostics.get() {
+                let started = Instant::now();
+                let encoded = wire::encode(&Effect::Fetch {
+                    chat: chat.to_owned(),
+                    request,
+                });
+                diagnostics::add(&diagnostics.counters.worker_effect_encode, started);
+                let started = Instant::now();
+                self.host.run(&encoded);
+                diagnostics::add(&diagnostics.counters.worker_host_run, started);
+                continue;
+            }
             self.host.run(&wire::encode(&Effect::Fetch {
                 chat: chat.to_owned(),
                 request,
@@ -283,6 +427,13 @@ impl Worker {
             }
         };
         if let Some(version) = wake {
+            #[cfg(target_os = "android")]
+            if let Some(diagnostics) = self.shared.diagnostics.get() {
+                let started = Instant::now();
+                self.host.changed(version);
+                diagnostics::add(&diagnostics.counters.worker_host_changed, started);
+                return;
+            }
             self.host.changed(version);
         }
     }
