@@ -137,16 +137,22 @@ func TestRoundAnchor(t *testing.T) {
 	}
 }
 
+// roundRefusal is what Claude Code 2.1.322 prints on stdout for a --resume-session-at it cannot find, before it says so
+// on stderr and exits 1: a result with no turn, and no init before it.
+const roundRefusal = `{"type":"result","subtype":"error_during_execution","duration_ms":0,"is_error":true,"num_turns":0,` +
+	`"stop_reason":null,"session_id":"` + roundConversation + `","errors":["No message found with message.uuid of: x"]}`
+
 // roundTestNode is a node with the conversation's transcript lines on disk and a fake claude that logs each start's
 // arguments (one per line, "----" after each) to argv and each message it reads to input. failRound: it refuses a
-// --resume-session-at as Claude Code does an anchor it cannot find.
+// --resume-session-at as Claude Code does an anchor it cannot find (roundRefusal).
 func roundTestNode(t *testing.T, lines *roundLines, failRound bool) (n *Node, argv, input string) {
 	t.Helper()
 	dir := t.TempDir()
 	argv, input = filepath.Join(dir, "argv"), filepath.Join(dir, "input")
 	refuse := ""
 	if failRound {
-		refuse = "case \" $* \" in *' --resume-session-at '*) echo 'No message found with message.uuid of: x' >&2; exit 1;; esac\n"
+		refuse = "case \" $* \" in *' --resume-session-at '*) echo '" + roundRefusal + "'; " +
+			"echo 'No message found with message.uuid of: x' >&2; exit 1;; esac\n"
 	}
 	fakeClaudeHome(t, "printf '%s\\n' \"$@\" >> "+argv+"\necho ---- >> "+argv+"\n"+refuse+
 		"first=1\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" >> "+input+"\n"+
@@ -355,13 +361,15 @@ func TestAssistantSendSuperviseRoundWithoutAnchorResumesAsBefore(t *testing.T) {
 }
 
 // A round's process that does not start (Claude Code refusing the anchor: the flag changed, or the anchor went
-// meanwhile) is started once more as before, and the message goes in there.
+// meanwhile) is started once more as before, and the message goes in there. The refusal's result line on stdout is no
+// start.
 func TestAssistantSendSuperviseRoundStartFailureRetriesPlain(t *testing.T) {
 	n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), true)
 	out := sendRound(t, n, "once-1")
 	if out["context"] != roundKept || out["why"] != roundWhyStartFailed {
 		t.Fatalf("answer %v", out)
 	}
+
 	all := roundStarts(t, argv)
 	if len(all) != 2 || argAfter(all[0], "--resume-session-at") != "a0" || hasArg(all[1], "--resume-session-at") || argAfter(all[1], "--tools") != assistantBuiltinTools {
 		t.Fatalf("starts %q", all)

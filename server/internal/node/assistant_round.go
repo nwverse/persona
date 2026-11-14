@@ -26,7 +26,8 @@ import (
 // Code on the CLI (not Codex, the Agent SDK runtime, another runtime or a guest), roundMinClaude or later, an idle
 // process with no background tasks, and an anchor found on the transcript's latest chain (roundAnchor). Anything else
 // sends as before and says why in the answer (context "kept"); a round whose process does not start is sent once more
-// as before.
+// as before. A round's process has started when it prints its init (readAssistant): one that refuses the anchor prints
+// only a result with no turn and exits 1.
 
 // The answer's context: the round started from the first turn (fresh), or went in as before (kept), and why.
 const (

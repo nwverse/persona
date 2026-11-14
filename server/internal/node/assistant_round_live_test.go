@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -160,6 +161,7 @@ type roundLive struct {
 	config  string
 	env     []string
 	model   *mockModel
+	stdout  string // the last run's standard output alone
 }
 
 func roundLiveSetup(t *testing.T) *roundLive {
@@ -212,13 +214,15 @@ func (l *roundLive) run(text string, args ...string) (string, time.Duration, err
 	cmd.Dir, cmd.Env = l.cwd, l.env
 	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": text}}}})
 	cmd.Stdin = bytes.NewReader(append(line, '\n'))
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	var out, stdout bytes.Buffer
+	both := &lockedWriter{w: &out} // two pipes now: their copies must not write to out at once
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(both, &stdout), both
 	l.model.mu.Lock()
 	before := len(l.model.asks)
 	l.model.mu.Unlock()
 	start := time.Now()
 	err := cmd.Run()
+	l.stdout = stdout.String()
 	var took time.Duration
 	l.model.mu.Lock()
 	if len(l.model.asks) > before {
@@ -226,6 +230,18 @@ func (l *roundLive) run(text string, args ...string) (string, time.Duration, err
 	}
 	l.model.mu.Unlock()
 	return out.String(), took, err
+}
+
+// lockedWriter is w for writers on several goroutines.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // transcriptOf is the conversation's file: the one transcript in the project directory, which must be the session's.
@@ -322,9 +338,21 @@ func TestAssistantRoundLive(t *testing.T) {
 	if strings.Join(said, "|") != "round 1 task|round 2 task|owner question" {
 		t.Fatalf("the reader shows %q", said)
 	}
-	// An anchor that is not on the chain is refused, and the conversation is as it was.
+	// An anchor that is not on the chain is refused, and the conversation is as it was. Its standard output is only a
+	// result with no turn, no init before it: what the node takes for a round's process that did not start (readAssistant).
 	if out, _, err := l.run(round(3), roundArgs(newUUID())...); err == nil || !strings.Contains(out, "No message found with message.uuid of") {
 		t.Fatalf("a made-up anchor: %v\n%s", err, out)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(l.stdout), "\n") {
+		var ev struct {
+			Type     string `json:"type"`
+			Subtype  string `json:"subtype"`
+			IsError  bool   `json:"is_error"`
+			NumTurns int    `json:"num_turns"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "result" || !ev.IsError || ev.NumTurns != 0 {
+			t.Fatalf("a made-up anchor printed %q", l.stdout)
+		}
 	}
 	if tr, err := roundAnchor(path); err != nil || tr.anchor != anchor {
 		t.Fatalf("after a made-up anchor the anchor is %+v (%v)", tr, err)

@@ -145,7 +145,7 @@ type assistantProc struct {
 
 	// round: it runs a round of the background supervisor, resumed at the end of the conversation's first turn
 	// (assistant_round.go). It is never compacted when idle: that would cut the first turn off the chain the next
-	// round resumes on.
+	// round resumes on. It has started once it prints its init, not any line: a refused anchor prints a result first.
 	round bool
 }
 
@@ -156,10 +156,23 @@ func (p *assistantProc) write(line []byte) error {
 	return err
 }
 
-// started marks the process as having started: its first JSON line came out.
+// started marks the process as having started: its first JSON line came out (a round's: its init, readAssistant).
 func (p *assistantProc) started() {
 	if p.ready != nil {
 		p.readyOnce.Do(func() { close(p.ready) })
+	}
+}
+
+// hasStarted says started was called (or there is nothing to wait for).
+func (p *assistantProc) hasStarted() bool {
+	if p.ready == nil {
+		return true
+	}
+	select {
+	case <-p.ready:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -743,7 +756,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		if bytes.Contains(line, []byte(`"persona_bridge"`)) && n.sdkBridgeEvent(p, line) {
 			continue
 		}
-		p.started()
+		if !p.round { // a round's process starts with its init (below)
+			p.started()
+		}
 		var ev struct {
 			Type     string                   `json:"type"`
 			Subtype  string                   `json:"subtype"`
@@ -780,9 +795,17 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			p.invalidateUpdateTasks()
 			continue
 		}
+		if p.round && ev.Type == "result" && !p.hasStarted() {
+			// A round's process that refuses its --resume-session-at (assistant_round.go) prints only a result
+			// (error_during_execution, no turn) and exits 1, saying why on stderr too (measured on Claude Code 2.1.322).
+			// That is no start, so the send starts the conversation again as before (awaitStart), and no turn of the
+			// conversation's: it neither fails the conversation's turn nor starts a recovery.
+			continue
+		}
 		switch ev.Type {
 		case "system":
 			if ev.Subtype == "init" {
+				p.started() // a round's process's start; any other's started with its first line
 				if ev.Version != "" {
 					p.mu.Lock()
 					p.claudeVersion = ev.Version
