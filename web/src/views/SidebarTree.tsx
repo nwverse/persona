@@ -344,7 +344,7 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu, selected, ...
 
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
  *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
-function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
+function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactElement; activeKey: string; go: GoFn; selected?: string } & WorkspaceTreeActions) {
   const [folded, toggle] = useFolded(w.key, !w.workspace && w.sessions.length === 0, { holds: holdsRow(w.navigationTree ?? w.tree, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
   const descendants = w.navigationTree ? w.children.flatMap((c) => c.navigationTree ?? c.tree) : w.tree.slice(w.sessions.length);
   const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) || w.children.some((child) => holdsWorkspace(child, selected)) });
@@ -563,7 +563,7 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
       }>
       <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
-          {m.spaces.map((sp) => <WorkspaceBlock key={sp.key} sp={sp} {...p} />)}
+          <WindowedRows items={m.spaces} holds={(sp) => holdsRow(sp.tree, p.activeKey)} render={(sp) => <WorkspaceBlock key={sp.key} sp={sp} {...p} />} />
           {shells && shells.length > 0 && <ShellTree mid={m.machine.id} online={online} spaces={shells} {...p} />}
           {m.other.length > 0 && (
             // "Other": the machine's agents outside any workspace (Codex threads, runtimes without spaces)
@@ -625,8 +625,12 @@ function WorkspaceBlock({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
         </>
       )}
     >
-      {sp.tabs.map((t) => <TabRow key={t.key} t={t} {...p} />)}
-      {sp.loose.map((s) => <TreeSessionRow key={s.session_id} s={s} {...p} />)}
+      {/* a workspace with hundreds of tabs is drawn a part at a time, as the other groupings' long groups are */}
+      <WindowedRows<HerdrTab | Session>
+        items={sp.tabs.length && sp.loose.length ? [...sp.tabs, ...sp.loose] : sp.tabs.length ? sp.tabs : sp.loose}
+        holds={(x) => ("lead" in x ? holdsRow(x.sessions, p.activeKey) : rowKey(x) === p.activeKey)}
+        render={(x) => ("lead" in x ? <TabRow key={x.key} t={x} {...p} /> : <TreeSessionRow key={x.session_id} s={x} {...p} />)}
+      />
       {sp.children.length > 0 && <ChildSpaces sp={sp} {...p} />}
     </TreeBlock>
   );
@@ -705,8 +709,8 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
   const [folded, toggle] = useFolded(tab.foldKey, false);
   const shut = single || folded;
   const open = tab.sessions.find((x) => rowKey(x) === activeKey);
-  // opened up, the open agent's own row is the one lit; folded, the tab's row is, and the hidden pane rows (still
-  // mounted in the collapse) register under no key, so the highlight and the scroll to the open row find the tab's
+  // opened up, the open agent's own row is the one lit; folded, the tab's row is, and the pane rows (still mounted
+  // while the fold closes) register under no key, so the highlight and the scroll to the open row find the tab's
   const keys = tabRowKeys(`t:${tab.key}`, tab.sessions.map(rowKey), activeKey, shut);
   const k = keys.row;
   const to: Route = { name: "tab", mid: tab.lead.machine_id, space: tab.spaceId, slot: tab.slotId };

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // The complete Agents list with hundreds of Agents (the sidebar and the phone's Agents page): a folded group mounts no
-// rows, an open long group draws a bounded number of them (its first rows, the parts near the view and the part
-// holding the open row), and a group heading's height comes from a ResizeObserver, never from a layout read on mount.
+// rows, an open long group draws a bounded number of them (its first rows, its last, the parts near the view and the
+// part holding the open row) under every grouping, By machine's workspaces too, a row keeps its element as the list
+// changes around it, and a group heading's height comes from a ResizeObserver, never from a layout read on mount.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,12 +23,13 @@ const { intersections, sizes } = vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
   return { intersections, sizes };
 });
+import { buildMachineTree } from "../lib/herdr-tree";
 import { buildTodoTree } from "../lib/todo-tree";
 import type { Machine, Session } from "../lib/types";
 import { SESSION_LIST_METRICS } from "../ui/list-metrics";
 import { Section, SidebarGroup } from "./SidebarSection";
-import { TodoTreeView } from "./SidebarTree";
-import { WindowedRows } from "./WindowedRows";
+import { MachineSection, TodoTreeView } from "./SidebarTree";
+import { partCount, WindowedRows } from "./WindowedRows";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -45,16 +47,27 @@ const settle = async () => {
 };
 const agentLinks = () => [...host.querySelectorAll<HTMLAnchorElement>('a[href^="/s/"]')];
 const parts = () => [...host.querySelectorAll<HTMLElement>("[data-rows-part]")];
-/** The list observer reports part `i` near the view (or not), as the browser would on a scroll. */
-const near = (i: number, isIntersecting: boolean) => {
-  const o = intersections.find((x) => [...x.targets].some((el) => (el as HTMLElement).dataset.rowsPart === String(i)))!;
-  const target = [...o.targets].find((el) => (el as HTMLElement).dataset.rowsPart === String(i))!;
-  act(() => o.callback([{ target, isIntersecting }]));
+const gaps = () => [...host.querySelectorAll<HTMLElement>("[data-rows-gap]")];
+const gap = (i: number) => host.querySelector<HTMLElement>(`[data-rows-gap][data-rows-part="${i}"]`)!;
+/** A drawn part's rows: the elements after its mark, up to the next part's mark or box or the list's end. */
+const partRowEls = (i: number) => {
+  const out: Element[] = [];
+  for (let el = host.querySelector(`[data-rows-part="${i}"]:not([data-rows-gap])`)?.nextElementSibling; el && !el.matches("[data-rows-part], [data-rows-end]"); el = el.nextElementSibling) out.push(el);
+  return out;
 };
-/** The size observer watching `el` reports its height. */
-const resized = (el: Element, blockSize: number) => {
+/** The list observer reports `el` within a screen of the view (0), above it (-1) or below it (1), as on a scroll. */
+const seen = (el: Element, side: -1 | 0 | 1) => {
+  const o = intersections.find((x) => x.targets.has(el))!;
+  const box = side < 0 ? { top: -400, bottom: -300 } : { top: 3000, bottom: 3100 };
+  act(() => o.callback([{ target: el, isIntersecting: side === 0, boundingClientRect: box, rootBounds: { top: 0, bottom: 2000 } }]));
+};
+/** Lays `el` out at `top`…`bottom` (jsdom has no layout) and has the size observer watching it report a change. */
+const laidOut = (el: Element, top: number, bottom: number) => {
+  Object.defineProperty(el, "getBoundingClientRect", { configurable: true, value: () => ({ top, bottom, left: 0, right: 300, width: 300, height: bottom - top, x: 0, y: top }) });
+};
+const resized = (el: Element) => {
   const o = sizes.find((x) => x.targets.has(el))!;
-  act(() => o.callback([{ target: el, borderBoxSize: [{ blockSize, inlineSize: 300 }] }]));
+  act(() => o.callback([{ target: el }]));
 };
 
 beforeEach(() => {
@@ -89,11 +102,14 @@ describe("a long list of Agents", () => {
     const tree = buildTodoTree(many, machines, [], { spaces: [], sessions: [] }, Date.now());
     act(() => root.render(<TodoTreeView tree={tree} machines={machines} activeKey="" {...stable} />));
     await settle();
-    // the first rows, a part each for the rest: before, all 400 rows were drawn at once
-    expect(agentLinks()).toHaveLength(HEAD);
+    // the first rows and the last, a box for each part between: before, all 400 rows were drawn at once
+    expect(agentLinks()).toHaveLength(HEAD + 1);
     expect(agentLinks()[0]!.textContent).toContain("Session 0");
-    expect(parts()).toHaveLength(1 + Math.ceil((400 - HEAD) / PART));
-    expect(parts().slice(1).every((p) => p.childElementCount === 0 && Number.parseFloat(p.style.height) > 0)).toBe(true);
+    expect(parts()).toHaveLength(partCount(400));
+    expect(gaps()).toHaveLength(partCount(400) - 2);
+    // the last row comes after the boxes
+    expect(gaps().at(-1)!.compareDocumentPosition(agentLinks()[HEAD]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(gaps().every((p) => p.childElementCount === 0 && Number.parseFloat(p.style.height) > 0)).toBe(true);
   });
 
   it("draws the open Agent's row and the parts beside it wherever it is", async () => {
@@ -103,7 +119,7 @@ describe("a long list of Agents", () => {
     await settle();
     const shown = agentLinks().map((a) => a.getAttribute("href"));
     expect(shown).toContain("/s/m1/s300");
-    expect(shown.length).toBeLessThanOrEqual(HEAD + 3 * PART);
+    expect(shown.length).toBeLessThanOrEqual(HEAD + 3 * PART + 1);
     // a herdr Agent's page moves on to its tab's address, which no row here holds: its row stays for the second
     // scroll to it
     act(() => root.render(<TodoTreeView tree={tree} machines={machines} activeKey="t:m1/w1/t1" {...stable} />));
@@ -119,15 +135,37 @@ describe("a long list of Agents", () => {
     // Tab reaches the last of the first rows: the next part is there for the next Tab
     const last = agentLinks()[HEAD - 1]!;
     act(() => last.focus());
-    expect(agentLinks()).toHaveLength(HEAD + PART);
+    expect(agentLinks()).toHaveLength(HEAD + PART + 1);
     expect(document.activeElement).toBe(last);
+  });
+
+  it("draws a By machine workspace with hundreds of tabs a part at a time", async () => {
+    // the audit's hub: every Agent a tab of one herdr workspace
+    const tabs: Session[] = many.map((s, i) => ({ ...s, space_kind: "herdr", space_id: "w1", space_name: "fixture", space_index: 0, slot_id: `w1:t${i}`, slot_index: i, slot_name: String(i), tab_id: `w1:t${i}`, pane_id: `w1:p${i}` }));
+    const [m] = buildMachineTree(machines, tabs);
+    expect(m!.spaces[0]!.tabs).toHaveLength(400);
+    // a workspace of quiet Agents starts folded: this one is open
+    localStorage.setItem(`fold:${m!.spaces[0]!.foldKey}`, "0");
+    const tabLinks = () => [...host.querySelectorAll<HTMLAnchorElement>('a[href^="/t/"]')];
+    const draw = (activeKey: string) => act(() => root.render(<MachineSection m={m!} machines={machines} activeKey={activeKey} mutes={{ spaces: [], sessions: [], allowed: [] }} onSpaceMenu={() => {}} onNodeMenu={() => {}} {...stable} />));
+    draw("");
+    await settle();
+    // before, its 400 tabs were drawn at once whatever the grouping's windowing did elsewhere
+    expect(tabLinks()).toHaveLength(HEAD + 1);
+    expect(gaps()).toHaveLength(partCount(400) - 2);
+    // the open Agent deep in it is drawn, with the parts beside it
+    draw("s:m1/s300");
+    await settle();
+    expect(tabLinks().some((a) => a.textContent?.includes("Session 300"))).toBe(true);
+    expect(tabLinks().length).toBeLessThanOrEqual(HEAD + 3 * PART + 1);
   });
 });
 
 describe("WindowedRows", () => {
   const rows = (n: number) => Array.from({ length: n }, (_, i) => i);
-  const render = (i: number) => <p key={i} data-row={i}>row {i}</p>;
+  const render = (i: number) => <a key={i} href={`#${i}`} data-row={i}>row {i}</a>;
   const drawn = () => [...host.querySelectorAll<HTMLElement>("[data-row]")].map((el) => Number(el.dataset.row));
+  const row = (i: number) => host.querySelector<HTMLAnchorElement>(`[data-row="${i}"]`);
 
   it("draws a short list as it always was", () => {
     act(() => root.render(<WindowedRows items={rows(HEAD + PART)} render={render} />));
@@ -135,30 +173,85 @@ describe("WindowedRows", () => {
     expect(parts()).toHaveLength(0);
   });
 
-  it("draws the first rows and an empty box for the rest while its chunk is on its way", () => {
+  it("draws a long list's parts in its first render, with no code to load first", () => {
+    // its own chunk once: a failed download (a redeploy under the page, offline) left the whole app blank
     act(() => root.render(<WindowedRows items={rows(400)} render={render} />));
-    expect(drawn()).toEqual(rows(HEAD));
-    expect(host.lastElementChild?.getAttribute("aria-hidden")).toBe("true");
+    expect(drawn()).toEqual([...rows(HEAD), 399]);
+    expect(parts()).toHaveLength(partCount(400));
   });
 
   it("draws a part while it is near the view, and keeps its height once it is not", async () => {
     act(() => root.render(<WindowedRows items={rows(400)} render={render} />));
     await settle();
-    expect(drawn()).toEqual(rows(HEAD));
-    near(3, true);
-    const third = parts()[3]!;
-    expect(drawn()).toEqual([...rows(HEAD), ...rows(PART).map((i) => HEAD + 2 * PART + i)]);
-    resized(third, 517);
-    near(3, false);
-    expect(drawn()).toEqual(rows(HEAD));
-    expect(parts()[3]!.style.height).toBe("517px");
+    seen(gap(3), 0);
+    const third = rows(PART).map((i) => HEAD + 2 * PART + i);
+    expect(drawn()).toEqual([...rows(HEAD), ...third, 399]);
+    const els = partRowEls(3);
+    expect(els).toHaveLength(PART);
+    laidOut(els[0]!, 1000, 1020);
+    laidOut(els[PART - 1]!, 1497, 1517);
+    resized(els[4]!);
+    seen(els[0]!, 1);
+    seen(els[PART - 1]!, 1);
+    expect(drawn()).toEqual([...rows(HEAD), 399]);
+    expect(gap(3).style.height).toBe("517px");
+  });
+
+  it("keeps a part drawn while the view runs through it", async () => {
+    act(() => root.render(<WindowedRows items={rows(400)} render={render} />));
+    await settle();
+    seen(gap(3), 0);
+    const els = partRowEls(3);
+    // its first row above the view, its last below: the rows in view are this part's
+    seen(els[0]!, -1);
+    seen(els[PART - 1]!, 1);
+    expect(drawn()).toContain(HEAD + 2 * PART);
   });
 
   it("gives a part never drawn the first rows' average height", async () => {
     act(() => root.render(<WindowedRows items={rows(400)} render={render} />));
     await settle();
-    resized(parts()[0]!, HEAD * 31);
-    expect(parts()[5]!.style.height).toBe(`${PART * 31}px`);
+    const head = partRowEls(0);
+    laidOut(head[0]!, 0, 30);
+    laidOut(head[HEAD - 1]!, 900, 930);
+    resized(head[0]!);
+    expect(gap(5).style.height).toBe(`${PART * 31}px`);
+  });
+
+  it("always draws the list's last row, so the previous-row shortcut wraps round to it", () => {
+    act(() => root.render(<WindowedRows items={rows(400)} render={render} />));
+    expect(row(399)).not.toBeNull();
+    expect(row(398)).toBeNull();
+  });
+
+  it("keeps a focused row's element and focus when an Agent arrives above it", async () => {
+    const list = (extra: number[] = []) => [...extra, ...rows(80)];
+    act(() => root.render(<WindowedRows items={list()} render={render} />));
+    await settle();
+    // the last of the first rows: one Agent more above moves it into the next part
+    const focused = row(HEAD - 1)!;
+    act(() => focused.focus());
+    act(() => root.render(<WindowedRows items={list([-1])} render={render} />));
+    await settle();
+    expect(row(HEAD - 1)).toBe(focused);
+    expect(document.activeElement).toBe(focused);
+    // and back out of it when that Agent leaves
+    act(() => root.render(<WindowedRows items={list()} render={render} />));
+    await settle();
+    expect(row(HEAD - 1)).toBe(focused);
+    expect(document.activeElement).toBe(focused);
+  });
+
+  it("keeps a focused row's element and focus when the list grows past the bound", async () => {
+    act(() => root.render(<WindowedRows items={rows(HEAD + PART)} render={render} />));
+    await settle();
+    const focused = row(10)!;
+    act(() => focused.focus());
+    act(() => root.render(<WindowedRows items={rows(HEAD + PART + 1)} render={render} />));
+    await settle();
+    expect(parts().length).toBeGreaterThan(0);
+    expect(row(10)).toBe(focused);
+    expect(document.activeElement).toBe(focused);
   });
 });
 
@@ -174,7 +267,8 @@ describe("a group heading", () => {
     const [outer, inner] = [...host.querySelectorAll<HTMLElement>("[data-sidebar-group-heading]")];
     expect(inner!.style.top).toBe("calc(var(--sidebar-sticky-top, 0px) + 0px)");
     // the browser's layout reports the outer heading's height: the nested heading sticks under it
-    resized(outer!, 36);
+    const o = sizes.find((x) => x.targets.has(outer!))!;
+    act(() => o.callback([{ target: outer, borderBoxSize: [{ blockSize: 36, inlineSize: 300 }] }]));
     expect(inner!.style.top).toBe("calc(var(--sidebar-sticky-top, 0px) + 36px)");
     read.mockRestore();
   });

@@ -1,6 +1,7 @@
 // The complete Agents list with hundreds of Agents, in a real browser: folded groups hold no rows, an open long group
 // draws a bounded number of them yet every row is there when scrolled or tabbed to, its heading still sticks, and the
-// open Agent's row is drawn and brought into view wherever it is. Prints the main thread's long tasks at 4x CPU.
+// open Agent's row is drawn and brought into view wherever it is; By machine, a workspace of 400 tabs too. Prints the
+// main thread's long tasks at 4x CPU.
 // Usage (README "The complete Agents list with hundreds of Agents"):
 //   node web/e2e/sidebar-many-agents.mjs <loopback-web-origin> <artifact-directory>
 import assert from "node:assert/strict";
@@ -27,20 +28,21 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` (${detail})` : ""}`);
 }
 
-async function open({ width, height, theme = "dark", unfold = false }) {
+async function open({ width, height, theme = "dark", unfold = false, grouping = "todo", folds = {} }) {
   const touch = width < 700;
   const context = await browser.newContext({ viewport: { width, height }, hasTouch: touch, colorScheme: theme, locale: "zh-CN" });
-  await context.addInitScript(({ theme, unfold }) => {
+  await context.addInitScript(({ theme, unfold, grouping, folds }) => {
     localStorage.setItem("persona.token", "mock");
     localStorage.setItem("persona.language", "zh-Hans");
     localStorage.setItem("persona.theme", theme);
-    localStorage.setItem("persona.agentGrouping", "todo");
+    localStorage.setItem("persona.agentGrouping", grouping);
     localStorage.setItem("fold:todo:none", unfold ? "0" : "1");
+    for (const [k, v] of Object.entries(folds)) localStorage.setItem(`fold:${k}`, v);
     window.__longtasks = [];
     try {
       new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__longtasks.push(Math.round(e.duration)); }).observe({ type: "longtask", buffered: true });
     } catch { /* no long tasks in this browser */ }
-  }, { theme, unfold });
+  }, { theme, unfold, grouping, folds });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
@@ -86,7 +88,8 @@ try {
       const heading = headingEl.getBoundingClientRect();
       const stickyTop = Number.parseFloat(getComputedStyle(headingEl).top);
       const probes = [0.35, 0.5, 0.65, 0.8].map((f) => document.elementFromPoint(box.left + box.width / 2, box.top + box.height * f));
-      return { stuck: Math.abs(heading.top - (box.top + stickyTop)) < 2, at: `${Math.round(heading.top - box.top)} px from the top, sticky top ${stickyTop} px`, onRows: probes.every((el) => el?.closest('a[href^="/s/"], [data-rows-drawn]')) };
+      // a point between two rows is the list's own box: only a part's empty box is not rows
+      return { stuck: Math.abs(heading.top - (box.top + stickyTop)) < 2, at: `${Math.round(heading.top - box.top)} px from the top, sticky top ${stickyTop} px`, onRows: probes.every((el) => el?.closest('[data-tree-branch="todo:none"]') && !el.closest("[data-rows-gap]")) };
     });
     check("scrolled into the middle, the group's heading sticks under the controls", middle.stuck, middle.at);
     check("scrolled into the middle, the view shows rows, not empty boxes", middle.onRows);
@@ -95,8 +98,9 @@ try {
       const scroller = document.querySelector("main [data-row-scroller]");
       scroller.scrollTop = scroller.scrollHeight;
       await new Promise((r) => setTimeout(r, 1200));
+      // the list's last row is always drawn: the part before it is the one at the end of the view
       const parts = document.querySelectorAll('main [data-tree-branch="todo:none"] [data-rows-part]');
-      return { lastDrawn: parts[parts.length - 1]?.hasAttribute("data-rows-drawn") ?? false, rows: document.querySelectorAll('main [data-tree-branch="todo:none"] a[href^="/s/"]').length };
+      return { lastDrawn: parts.length > 1 && !parts[parts.length - 2].hasAttribute("data-rows-gap"), rows: document.querySelectorAll('main [data-tree-branch="todo:none"] a[href^="/s/"]').length };
     });
     check("at the end, the last rows are drawn and the count stays bounded", end.lastDrawn && end.rows <= BOUND + PART, `${end.rows} rows`);
     console.log(`long tasks (ms) at 4x CPU, cold /overview: [${overviewTasks.join(", ")}], then /agents: [${agentsTasks.slice(overviewTasks.length).join(", ")}]`);
@@ -112,7 +116,7 @@ try {
     const shown = await page.evaluate(() => document.querySelectorAll('aside [data-tree-branch="todo:none"] a[href^="/s/"]').length);
     check("the sidebar's open long group draws a bounded number of rows", shown <= BOUND, `${shown} rows`);
     // Tab from the last of the first rows on: every row comes in turn, none skipped where a part begins
-    await page.locator('aside [data-tree-branch="todo:none"] [data-rows-part="0"] a[href^="/s/"]').last().focus();
+    await page.locator('aside [data-tree-branch="todo:none"] a[href^="/s/"]').nth(HEAD - 1).focus();
     const walked = [];
     for (let i = 0; i < 2 * (PART * 2 + 4); i++) {
       await page.keyboard.press("Tab");
@@ -160,6 +164,30 @@ try {
     }, target);
     check("an Agent opened deep in a folded group: the group opens and its row is in view", reveal.drawn && reveal.inView && reveal.rows <= BOUND + 2 * PART, `${reveal.rows} rows drawn`);
     await page.screenshot({ path: join(output, "sidebar-folded-open-agent-wide.png") });
+    await context.close();
+  }
+
+  // ── By machine: the mock's 400 Agents are tabs of one workspace (fixture), open, on the phone ──
+  {
+    const tabs = (scope) => `${scope} a[href^="/t/server/"]`;
+    const { context, page } = await open({ width: 390, height: 844, grouping: "machine", folds: { "tree:server": "0", "tree:server/fixture": "0" } });
+    await page.goto(`${web}/overview`);
+    await page.waitForSelector(tabs("aside"), { state: "attached", timeout: 60_000 });
+    await settle(page);
+    const aside = await page.evaluate((sel) => ({ nodes: document.querySelectorAll("aside *").length, tabs: document.querySelectorAll(sel).length, gaps: document.querySelectorAll("aside [data-rows-gap]").length }), tabs("aside"));
+    check("By machine, a workspace of 400 tabs draws a bounded number of them (phone sidebar)", aside.tabs <= BOUND + PART && aside.gaps > 0, `${aside.tabs} tab rows, ${aside.gaps} empty boxes, ${aside.nodes} elements`);
+    check("By machine, the phone sidebar stays small with the workspace open", aside.nodes < 3000, `${aside.nodes} elements`);
+    const before = await page.evaluate(() => window.__longtasks.length);
+    await page.evaluate(() => { history.pushState(null, "", "/agents"); dispatchEvent(new PopStateEvent("popstate")); });
+    await page.waitForSelector(tabs("main"), { timeout: 60_000 });
+    await settle(page);
+    const main = await page.evaluate((sel) => ({ nodes: document.querySelectorAll("main *").length, tabs: document.querySelectorAll(sel).length }), tabs("main"));
+    check("By machine, the Agents page draws a bounded number of the workspace's tabs", main.tabs <= BOUND + PART, `${main.tabs} tab rows, ${main.nodes} elements`);
+    await page.screenshot({ path: join(output, "agents-machine-phone.png") });
+    await page.evaluate(() => { history.pushState(null, "", "/overview"); dispatchEvent(new PopStateEvent("popstate")); });
+    await settle(page);
+    const switched = await page.evaluate((n) => window.__longtasks.slice(n), before);
+    console.log(`long tasks (ms) at 4x CPU, By machine with the workspace open, /overview → /agents → /overview: [${switched.join(", ")}]`);
     await context.close();
   }
 } catch (error) {

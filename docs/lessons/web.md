@@ -12,6 +12,14 @@ scroller, which restyles everything under it before the next heading's read. Tak
 state from it in that frame. Measure with a production build (`vite preview`), CDP CPU throttling and a `longtask`
 observer, against the same mock with fewer sessions (`web/e2e/sidebar-many-agents.mjs`).
 
+Dropping what is not drawn has three costs to pay for. A broadcast to mounted listeners (Collapse all / Expand all)
+misses the groups that are gone, so note each broadcast and have a group take the one it missed when it mounts again
+(`src/lib/fold-all.ts`). Rows split into one wrapper per part remount when they cross a part boundary (React keys are
+per parent), losing focus to `body`: keep every row a keyed sibling under one parent and mark where parts start. And a
+lazily loaded chunk rendered by something always on screen (the sidebar) takes the whole app down when its download
+fails, since no error boundary sits above it: keep such code in the always-loaded bundle, or put a boundary with a
+plain fallback around it.
+
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
 The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.

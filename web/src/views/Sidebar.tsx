@@ -68,7 +68,7 @@ import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu,
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
-import { preloadWindowed, WindowedRows } from "./WindowedRows";
+import { WindowedRows } from "./WindowedRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
@@ -747,8 +747,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [ownIds, sidebarMachines]);
   const { sessions: every, loaded } = useFullAgentSessions();
   const all = useScoped(every);
-  // with this many Agents a group may be long: its parts' code comes now, before a group opens on one deep in it
-  useEffect(() => preloadWindowed(all.length), [all.length]);
   const mutes = useStore((s) => s.mutes);
   const pins = useStore((s) => s.pins);
   const interactions = useStore((s) => s.interactions);
@@ -1010,7 +1008,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {chatList ? (
         <div className="mt-1 flex flex-col gap-1" data-testid="agent-chatlist-section">
-          <WindowedRows items={chatListUnpinned} holds={(s) => rowKey(s) === activeKey} className="flex flex-col gap-1" render={(s) => {
+          <WindowedRows items={chatListUnpinned} holds={(s) => rowKey(s) === activeKey} render={(s) => {
             const key = `s:${s.machine_id}/${s.session_id}`;
             return <AgentChatListRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} pinned={false} mutes={mutes} filters={dimFilters} ctx={evalCtx} onMenu={onRowMenu} />;
           }} />
