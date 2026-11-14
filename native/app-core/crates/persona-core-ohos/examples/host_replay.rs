@@ -1,8 +1,9 @@
 //! A host stand-in for the HarmonyOS NAPI entry points, so the generated ArkTS codec can meet the real core's bytes
 //! without an SDK, a HAP or a device (#7450). It drives the runtime through `persona_core_ohos::registry` exactly as
 //! `core_config`, `core_create`, `core_dispatch`, `core_flush`, `core_drain` and `core_close` do, with a `Host` that
-//! records every callback. `harmony/tests/core-host/replay.test.mjs` is its client. It proves nothing about the NAPI
-//! glue itself (argument conversion, thread-safe functions), which only a device build links.
+//! records every callback. `harmony/tests/core-host/replay.test.mjs` and `transport.test.mjs` are its clients. The
+//! transport command also decodes raw payloads directly with `persona_core::transport`. It proves nothing about the
+//! NAPI glue itself (argument conversion, thread-safe functions), which only a device build links.
 //!
 //! # Framing
 //!
@@ -22,10 +23,18 @@
 //! | 6 | close | handle `i64` | none |
 //! | 7 | reencode | wire type `u8`, bytes | Rust's encoding of the value it decoded |
 //! | 8 | samples | none | none, after one `sample` record per value |
+//! | 9 | transport | payload kind `u8`, UTF-8 JSON body | decoded result as UTF-8 JSON, including an `error` object on refusal |
 //!
 //! Wire types for `reencode`: 1 `Action`, 2 `ChatEvent`, 3 `ChatPatch`, 4 `ChatSnapshot`, 5 `Config`, 6 `Effect`,
-//! 7 `ListOp`, 8 `Request`, 9 `WireBatch`. It uses the decoder the worker uses for actions, which refuses trailing
-//! bytes.
+//! 7 `ListOp`, 8 `Request`, 9 `WireBatch`, 10 `Payload`. It uses the decoder the worker uses for actions, which
+//! refuses trailing bytes.
+//!
+//! Transport kinds are 1 `Latest`, 2 `Newer`, 3 `Reloaded`, 4 `Older`, 5 `Range`, 6 `Frame`. `Latest`, `Reloaded`
+//! and `Older` all use `decode_latest`. The JSON result has `accepted`; a refused payload has `error` with only
+//! `code` and `detail`, never payload content. A page has `history`, `from_seq`, `to_seq`, `has_more`, `more_after`,
+//! `backlog` and `item_count`, each `null` or a boolean when the page or its batch does not carry the field. Every
+//! item has `id`, `seq` and its kept raw `json`. A frame has `frame` (`"other"` or `"items"`); an items frame also
+//! has `machine_id`, `session_id` and the batch fields above. Range exposes its `more` flag as `more_after`.
 //!
 //! Records, written to stdout:
 //!
@@ -60,13 +69,15 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use persona_core_ohos::registry;
 use persona_core_runtime::Host;
+use persona_core_runtime::transport::{self, Frame, LatestPage, NewerPage, RangePage};
 use persona_core_runtime::wire::{
-    self, Action, ChatEvent, ChatPatch, ChatSnapshot, Config, Effect, ListOp, Request, WireBatch,
+    self, Action, ChatEvent, ChatPatch, ChatSnapshot, Config, Effect, Item, ListOp, Payload, Request, WireBatch,
 };
 
 const MAX_FRAME: usize = 16 * 1024 * 1024;
@@ -81,6 +92,7 @@ const DRAIN: u8 = 5;
 const CLOSE: u8 = 6;
 const REENCODE: u8 = 7;
 const SAMPLES: u8 = 8;
+const TRANSPORT: u8 = 9;
 
 const OK: u8 = 1;
 const ERROR: u8 = 2;
@@ -232,8 +244,111 @@ fn reencode(kind: u8, bytes: &[u8]) -> Result<Result<Vec<u8>, String>, String> {
         7 => wire::decode::<ListOp>(bytes).map(|value| wire::encode(&value)),
         8 => wire::decode::<Request>(bytes).map(|value| wire::encode(&value)),
         9 => wire::decode::<WireBatch>(bytes).map(|value| wire::encode(&value)),
+        10 => wire::decode::<Payload>(bytes).map(|value| wire::encode(&value)),
         other => return Err(format!("reencode: unknown wire type {other}")),
     })
+}
+
+fn items_json(items: &[Item]) -> Vec<serde_json::Value> {
+    items
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "id": item.id,
+                "seq": item.seq,
+                "json": item.json(),
+            })
+        })
+        .collect()
+}
+
+fn page_json(
+    items: &[Item],
+    history: Option<String>,
+    from_seq: Option<i64>,
+    to_seq: Option<i64>,
+    backlog: Option<bool>,
+    has_more: Option<bool>,
+    more_after: Option<bool>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "accepted": true,
+        "history": history,
+        "from_seq": from_seq,
+        "to_seq": to_seq,
+        "backlog": backlog,
+        "has_more": has_more,
+        "more_after": more_after,
+        "item_count": items.len(),
+        "items": items_json(items),
+    })
+}
+
+fn latest_json(page: LatestPage, backlog: Option<bool>) -> serde_json::Value {
+    let LatestPage {
+        items,
+        has_more,
+        history,
+        to_seq,
+    } = page;
+    page_json(&items, history, None, to_seq, backlog, Some(has_more), None)
+}
+
+fn newer_json(page: NewerPage) -> serde_json::Value {
+    let NewerPage {
+        items,
+        more_after,
+        history,
+        from_seq,
+        to_seq,
+    } = page;
+    page_json(&items, history, from_seq, to_seq, Some(false), None, more_after)
+}
+
+fn range_json(page: RangePage) -> serde_json::Value {
+    let RangePage { items, more } = page;
+    page_json(&items, None, None, None, None, None, more)
+}
+
+/// A transport decoder's result, without any payload content in a refusal.
+fn decode_transport(kind: u8, body: &[u8]) -> Result<serde_json::Value, String> {
+    let decoded = match kind {
+        1 | 3 | 4 => transport::decode_latest(body).map(|page| latest_json(page, (kind == 1).then_some(true))),
+        2 => transport::decode_newer(body).map(newer_json),
+        5 => transport::decode_range(body).map(range_json),
+        6 => transport::decode_frame(body).map(|frame| match frame {
+            Frame::Other => serde_json::json!({"accepted": true, "frame": "other"}),
+            Frame::Items(frame) => serde_json::json!({
+                "accepted": true,
+                "frame": "items",
+                "machine_id": frame.machine_id,
+                "session_id": frame.session_id,
+                "history": frame.history,
+                "from_seq": frame.from_seq,
+                "to_seq": frame.to_seq,
+                "backlog": frame.backlog,
+                "has_more": frame.has_more,
+                "more_after": frame.more_after,
+                "item_count": frame.items.len(),
+                "items": items_json(&frame.items),
+            }),
+        }),
+        other => return Err(format!("transport: unknown payload kind {other}")),
+    };
+    decoded.map_err(|error| serde_json::json!({"error": {"code": error.code(), "detail": error.detail()}}).to_string())
+}
+
+fn transport_json(kind: u8, body: &[u8]) -> Vec<u8> {
+    let result = catch_unwind(AssertUnwindSafe(|| decode_transport(kind, body))).unwrap_or_else(|_| {
+        Err(serde_json::json!({"error": {"code": "helper_error", "detail": "decode did not complete"}}).to_string())
+    });
+    match result {
+        Ok(value) => value.to_string().into_bytes(),
+        Err(message) => {
+            debug_assert!(serde_json::from_str::<serde_json::Value>(&message).is_ok());
+            message.into_bytes()
+        }
+    }
 }
 
 /// Values built here, never decoded from a client: the bytes the ArkTS codec must produce for, and read back as, the
@@ -276,6 +391,7 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
         json: r#"{"id":"7#2","text":"new"}"#.into(),
     };
     let range = Request::FetchRange {
+        fold_id: Some("fold:3#0".into()),
         from_seq: 2,
         through_seq: 8_589_934_600,
     };
@@ -308,6 +424,28 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
             "Action.continue_fill",
             wire::encode(&Action::ContinueFill {
                 chat: "chat/fill".into(),
+            }),
+        ),
+        (
+            "Action.hub_changed",
+            wire::encode(&Action::HubChanged {
+                chat: "chat/hub".into(),
+            }),
+        ),
+        (
+            "Action.ack",
+            wire::encode(&Action::Ack {
+                chat: "chat/ack".into(),
+                seq: 4_294_967_301,
+            }),
+        ),
+        (
+            "Action.wire_payload",
+            wire::encode(&Action::WirePayload {
+                chat: "chat/payload".into(),
+                payload: Payload::Newer {
+                    body: r#"{"items":[],"more_after":true}"#.into(),
+                },
             }),
         ),
         ("ChatEvent.latest", event(ChatEvent::Latest { batch: batch.clone() })),
@@ -346,6 +484,7 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
         (
             "ChatEvent.range",
             event(ChatEvent::Range {
+                fold_id: None,
                 items_json: r#"[{"id":"g#0"}]"#.into(),
                 more: false,
             }),
@@ -360,7 +499,10 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
         ),
         ("ChatEvent.fill_failed", event(ChatEvent::FillFailed)),
         ("ChatEvent.older_failed", event(ChatEvent::OlderFailed)),
-        ("ChatEvent.range_failed", event(ChatEvent::RangeFailed)),
+        (
+            "ChatEvent.range_failed",
+            event(ChatEvent::RangeFailed { fold_id: None }),
+        ),
         (
             "ChatPatch.full",
             wire::encode(&ChatPatch {
@@ -369,6 +511,8 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
                 history: Some("patch-history".into()),
                 has_more: Some(true),
                 loaded_once: false,
+                verified: true,
+                acked: Some(11),
                 ops: vec![ListOp::Remove { index: 3 }, insert.clone(), update.clone()],
             }),
         ),
@@ -380,6 +524,8 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
                 history: None,
                 has_more: None,
                 loaded_once: true,
+                verified: false,
+                acked: None,
                 ops: Vec::new(),
             }),
         ),
@@ -411,6 +557,38 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
         ("ListOp.remove", wire::encode(&ListOp::Remove { index: u32::MAX })),
         ("ListOp.insert", wire::encode(&insert)),
         ("ListOp.update", wire::encode(&update)),
+        ("Payload.latest", wire::encode(&Payload::Latest { body: "{}".into() })),
+        (
+            "Payload.newer",
+            wire::encode(&Payload::Newer {
+                body: r#"{"items":[],"more_after":true}"#.into(),
+            }),
+        ),
+        (
+            "Payload.reloaded",
+            wire::encode(&Payload::Reloaded {
+                body: r#"{"items":[],"has_more":false}"#.into(),
+            }),
+        ),
+        (
+            "Payload.older",
+            wire::encode(&Payload::Older {
+                body: r#"{"items":[],"has_more":true}"#.into(),
+            }),
+        ),
+        (
+            "Payload.range",
+            wire::encode(&Payload::Range {
+                fold_id: None,
+                body: r#"{"items":[],"more":true}"#.into(),
+            }),
+        ),
+        (
+            "Payload.frame",
+            wire::encode(&Payload::Frame {
+                body: r#"{"type":"items","machine_id":"m1","session_id":"s1"}"#.into(),
+            }),
+        ),
         (
             "Request.fetch_after",
             request(Request::FetchAfter {
@@ -517,6 +695,15 @@ fn run(input: &mut impl Read, output: &mut impl Write) -> Result<(), String> {
                     write_record(output, SAMPLE, &[&[length], name.as_bytes(), &bytes])?;
                 }
                 write_record(output, OK, &[])?;
+            }
+            TRANSPORT => {
+                let mut fields = fields("transport");
+                let [kind] = fields.fixed()?;
+                write_result(
+                    output,
+                    serde_json::from_slice::<serde_json::Value>(&transport_json(kind, fields.rest()))
+                        .map(|value| value.to_string().into_bytes()),
+                )?;
             }
             other => return Err(format!("unknown command {other}")),
         }
