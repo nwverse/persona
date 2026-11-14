@@ -109,6 +109,9 @@ import UIKit
     private(set) var reading = ScreenVideoReading()
     private(set) var codec: String?
     private(set) var size: CGSize?
+    /// The helper said it has quality tiers (#6396, `hello.features`): only then does ⋯ › Quality do anything, so only
+    /// then is it offered. Kept once heard, for this session.
+    private(set) var tiers = false
     /// When video is tried again after it stopped (tests).
     @ObservationIgnored private(set) var retryAt: Date?
 
@@ -119,6 +122,10 @@ import UIKit
     /// Each change of `fallback`, and each wait before a retry (tests).
     @ObservationIgnored var onFallback: @MainActor (ScreenVideoFallback?) -> Void = { _ in }
     @ObservationIgnored var onRetry: @MainActor (Duration) -> Void = { _ in }
+    /// The live screen moved to another network route (#6398): the quality tiers (#6396) look again here.
+    @ObservationIgnored var onPathChange: @MainActor (PathChange) -> Void = { _ in }
+    /// The route the live screen takes and why it last changed (#6398); nil without a screen session.
+    private(set) var route: PathChange?
 
     @ObservationIgnored private var want: Want?
     @ObservationIgnored private var ready: Ready?
@@ -153,6 +160,14 @@ import UIKit
     // MARK: Inputs
 
     /// What the page wants shown as video; nil: VNC (chosen, or several displays shown at once).
+    /// The live screen's route changed (#6398): the helper starts its delay baseline again (`update.path`), since the
+    /// one-way delay changed with the route.
+    func routeChanged(_ change: PathChange) {
+        route = change
+        if change.reason != .start { stream?.send(UpdateMessage(path: .init(change.to))) }
+        onPathChange(change)
+    }
+
     func want(_ w: Want?) {
         guard w != want else { return }
         want = w
@@ -241,6 +256,7 @@ import UIKit
     private func hello(_ h: HelloMessage) {
         codec = h.codec == "h264" ? "H.264" : "HEVC"
         size = CGSize(width: h.width, height: h.height)
+        if h.features?.contains("tiers") == true { tiers = true }
         if let r = h.rect, r.count == 4 { rect = CGRect(x: r[0], y: r[1], width: r[2], height: r[3]) }
     }
 
@@ -351,7 +367,13 @@ import UIKit
     /// The hub's relay of the video channel (`…/screen/video/connect?pair=…`), the way RFB's goes.
     static func hubTransport(_ r: Ready) -> RFBTransport? {
         guard let api = AppModel.shared.api(r.group) else { return nil }
-        return RFBWebSocket(api: api, path: "/api/v1/machines/\(r.machine)/screen/video/connect", pair: r.pair)
+        let path = "/api/v1/machines/\(r.machine)/screen/video/connect"
+        // The live screen's session (#6398): the video joins it as a channel when the RFB stream opened one.
+        if ScreenRoutes.enabled, let session = ScreenLinkRegistry.shared.session(for: r.pair) {
+            let ws = RFBWebSocket(api: api, path: path, pair: r.pair, protocols: [ScreenLinkWire.subprotocol, "binary"])
+            return ScreenLinkRFBTransport(ScreenLinkVideoStream(socket: ScreenLinkRelaySocket(ws), session: session))
+        }
+        return RFBWebSocket(api: api, path: path, pair: r.pair)
     }
 }
 
