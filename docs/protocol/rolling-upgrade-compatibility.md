@@ -96,10 +96,11 @@ A new node never sends an interim line to a client that did not opt in.
 
 Live updates use the existing `devices.notify` event `mcp.wait {call_id, kind}` and local interim lines
 `{"wait_kind":kind}`. Managers that accept hub-mediated approval relays declare `mcp_wait_v1` in `manager.hello`; the hub
-checks the current connection before each such relay. The optional `call_id` on `computer.call` and `computer.elicit`
-correlates a nested LCU interaction without another connection; when the tool operates another computer, `wait_machine`
-routes the update back to the originating node. These fields stay on the computer requests, never in `mcp.wait`; old peers
-omit or ignore them and publish no nested update.
+checks the current connection before each such relay. The optional UUID `call_id` on `computer.call` and `computer.elicit`
+correlates a nested LCU interaction without another connection. The manager's in-memory registry binds that id to the
+originating machine and live wait state, so a nested card joins the same reporter without any machine-routing field.
+Unknown, malformed, oversized or completed ids get no reporter and never fail the underlying tool call. Old peers omit
+or ignore the id and publish no nested update.
 No peer is required to understand a new event: absent updates
 mean `unknown`, and every receiver normalizes an unrecognized enum to `unknown`. The four terminal messages are a
 presentation mapping only; `unknown | approval | answer | computer` is the entire wire state. Nothing is persisted,

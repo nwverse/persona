@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +48,17 @@ func TestMCPWaitLocalLinesStopAtFinalResponse(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("local socket line did not arrive")
 			return ""
+		}
+	}
+	for _, invalidID := range []string{"not-a-uuid", strings.Repeat("x", 1<<20)} {
+		params, _ := json.Marshal(proto.MCPWaitEvent{CallID: invalidID, Kind: proto.MCPWaitApproval})
+		if !n.onMCPWait(proto.EventMCPWait, params) {
+			t.Fatal("mcp.wait was not handled")
+		}
+		select {
+		case line := <-lines:
+			t.Fatalf("an invalid peer call id produced a local line: %s", line)
+		default:
 		}
 	}
 	writeUpdate := func(kind proto.MCPWaitKind) {
@@ -336,26 +348,26 @@ func TestLCUElicitForwardsOnlyAnOptedInCallID(t *testing.T) {
 	go func() { _ = n.peer.Serve(ctx, h2nR) }()
 	defer func() { _ = n2hW.Close(); _ = h2nW.Close() }()
 
-	for _, tc := range []struct{ callID, origin string }{{callID: "call-lcu"}, {callID: "call-remote", origin: "origin"}, {}} {
-		ctx := mcpwait.WithMachine(mcpwait.WithCall(ctx, tc.callID), tc.origin)
-		if _, err := n.elicitLCU(ctx, "conversation", json.RawMessage(`{"message":"private question"}`)); err != nil {
+	for _, callID := range []string{"66666666-6666-4666-8666-666666666666", "", "not-a-uuid"} {
+		callCtx := mcpwait.WithCall(ctx, callID)
+		if _, err := n.elicitLCU(callCtx, "conversation", json.RawMessage(`{"message":"private question"}`)); err != nil {
 			t.Fatal(err)
+		}
+		wantID := callID
+		if !proto.ValidMCPWaitCallID(callID) {
+			wantID = ""
 		}
 		select {
 		case params := <-called:
 			got, _ := params["call_id"].(string)
-			if got != tc.callID {
-				t.Fatalf("computer.elicit call ID = %q, want %q: %v", got, tc.callID, params)
+			if got != wantID {
+				t.Fatalf("computer.elicit call ID = %q, want %q: %v", got, wantID, params)
 			}
-			origin, _ := params["wait_machine"].(string)
-			if origin != tc.origin {
-				t.Fatalf("computer.elicit origin = %q, want %q: %v", origin, tc.origin, params)
+			if _, present := params["wait_machine"]; present {
+				t.Fatalf("computer.elicit exposed an origin machine: %v", params)
 			}
 			wantFields := 2
-			if tc.callID != "" {
-				wantFields++
-			}
-			if tc.origin != "" {
+			if wantID != "" {
 				wantFields++
 			}
 			if len(params) != wantFields || params["conversation"] != "conversation" || params["params"] == nil {

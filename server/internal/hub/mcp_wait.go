@@ -13,7 +13,7 @@ import (
 // checks the current connection on every send and stops if that manager is replaced or no longer owns the machine.
 // No state is kept after the call.
 func (h *Hub) mcpWaitReporter(from, machine, callID string) func(proto.MCPWaitKind) {
-	if from == "" || machine == "" || callID == "" || !h.managerCan(from, assistantwire.CapabilityMCPWait) ||
+	if from == "" || machine == "" || !proto.ValidMCPWaitCallID(callID) || !h.managerCan(from, assistantwire.CapabilityMCPWait) ||
 		h.machineOwner(machine) != from {
 		return nil
 	}

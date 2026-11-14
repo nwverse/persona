@@ -96,7 +96,7 @@ func (n *Node) onMCPWait(event string, params json.RawMessage) bool {
 		return false
 	}
 	var update proto.MCPWaitEvent
-	if json.Unmarshal(params, &update) != nil || update.CallID == "" {
+	if json.Unmarshal(params, &update) != nil || !proto.ValidMCPWaitCallID(update.CallID) {
 		return true
 	}
 	n.mcpWaitMu.Lock()

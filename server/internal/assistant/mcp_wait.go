@@ -27,19 +27,58 @@ type mcpWaitNotifier interface {
 	Notify(devicewire.NodeEvent)
 }
 
-// mcpWaitContext opts in only a request that carries both fields from a node whose hub advertised the feature. A
-// devices implementation without Notify simply keeps the unknown fallback.
+// mcpWaitContext opts in only a request that carries a valid UUID from a node whose hub advertised the feature. The
+// manager records the origin itself: a later computer.elicit can only join this live call, never choose its machine.
+// A duplicate live id or a devices implementation without Notify keeps the unknown fallback.
 func (s *Service) mcpWaitContext(ctx context.Context, machine, callID string, enabled bool) context.Context {
 	notifier, ok := s.devs.(mcpWaitNotifier)
-	if !enabled || callID == "" || !ok {
+	if !enabled || !proto.ValidMCPWaitCallID(callID) || !ok {
 		return ctx
 	}
 	r := &mcpWaitReporter{machine: machine, callID: callID, notify: notifier.Notify}
 	r.mu.Lock()
+	s.mcpWaitMu.Lock()
+	if s.mcpWaits[callID] != nil {
+		s.mcpWaitMu.Unlock()
+		r.mu.Unlock()
+		return ctx
+	}
+	if s.mcpWaits == nil {
+		s.mcpWaits = map[string]*mcpWaitReporter{}
+	}
+	s.mcpWaits[callID] = r
+	s.mcpWaitMu.Unlock()
 	r.publishLocked(proto.MCPWaitComputer)
 	r.mu.Unlock()
-	ctx = mcpwait.WithMachine(mcpwait.WithCall(ctx, callID), machine)
-	return context.WithValue(ctx, mcpWaitContextKey{}, r)
+	return context.WithValue(mcpwait.WithCall(ctx, callID), mcpWaitContextKey{}, r)
+}
+
+// mcpWaitElicitContext joins a nested elicitation to the reporter the manager issued for this call. It deliberately
+// does not publish a new base state or register another call; the outer mcp.call owns the reporter's lifetime.
+func (s *Service) mcpWaitElicitContext(ctx context.Context, callID string) context.Context {
+	if !proto.ValidMCPWaitCallID(callID) {
+		return ctx
+	}
+	s.mcpWaitMu.Lock()
+	r := s.mcpWaits[callID]
+	s.mcpWaitMu.Unlock()
+	if r == nil {
+		return ctx
+	}
+	return context.WithValue(mcpwait.WithCall(ctx, callID), mcpWaitContextKey{}, r)
+}
+
+// endMCPWait removes only the registration owned by this request. A duplicate id could not replace the live entry.
+func (s *Service) endMCPWait(ctx context.Context) {
+	r := mcpWaitFrom(ctx)
+	if r == nil {
+		return
+	}
+	s.mcpWaitMu.Lock()
+	if s.mcpWaits[r.callID] == r {
+		delete(s.mcpWaits, r.callID)
+	}
+	s.mcpWaitMu.Unlock()
 }
 
 func mcpWaitFrom(ctx context.Context) *mcpWaitReporter {

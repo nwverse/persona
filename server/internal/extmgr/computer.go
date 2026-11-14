@@ -589,11 +589,8 @@ func (h *Manager) computerCall(ctx context.Context, m *Machine, session, convers
 		"session": session, "conversation": conversation, "tool": tool, "args": args,
 		"backend": backend, "keep_awake": s.awake(), "click_sound": s.ClickSound,
 	}
-	if callID := mcpwait.CallFrom(ctx); callID != "" {
+	if callID := mcpwait.CallFrom(ctx); proto.ValidMCPWaitCallID(callID) {
 		params["call_id"] = callID
-		if origin := mcpwait.MachineFrom(ctx); origin != "" && origin != m.cfg.ID {
-			params["wait_machine"] = origin
-		}
 	}
 	if err := m.callBuiltin(ctx, "computer.call", params, &res); err != nil {
 		if backend == "lcu" && strings.Contains(err.Error(), "is not a tool") {

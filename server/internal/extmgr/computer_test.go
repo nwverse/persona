@@ -282,15 +282,16 @@ func TestComputerToolsCallTheNode(t *testing.T) {
 	if _, calls = seen(); calls[len(calls)-1].KeepAwake {
 		t.Fatal("turned off: the node keeps nothing awake")
 	}
-	res = h.callComputerTool(mcpwait.WithCall(ctx, "call-computer"), "conv1234-5678", "computer_run",
+	const callID = "44444444-4444-4444-8444-444444444444"
+	res = h.callComputerTool(mcpwait.WithCall(ctx, callID), "conv1234-5678", "computer_run",
 		json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
-	if _, calls = seen(); res.IsError || calls[len(calls)-1].CallID != "call-computer" {
-		t.Fatalf("an opted-in computer call lost its MCP correlator: %+v, %+v", calls[len(calls)-1], res)
+	if _, calls = seen(); res.IsError || calls[len(calls)-1].CallID != callID || calls[len(calls)-1].WaitMachine != "" {
+		t.Fatalf("an opted-in computer call carried the wrong correlation fields: %+v, %+v", calls[len(calls)-1], res)
 	}
-	remoteCtx := mcpwait.WithMachine(mcpwait.WithCall(ctx, "call-remote"), "origin")
-	res = h.callComputerTool(remoteCtx, "conv1234-5678", "computer_run", json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
-	if _, calls = seen(); res.IsError || calls[len(calls)-1].CallID != "call-remote" || calls[len(calls)-1].WaitMachine != "origin" {
-		t.Fatalf("a cross-computer call lost its originating route: %+v, %+v", calls[len(calls)-1], res)
+	res = h.callComputerTool(mcpwait.WithCall(ctx, "not-a-uuid"), "conv1234-5678", "computer_run",
+		json.RawMessage(`{"machine": "mac", "steps": `+steps+`}`))
+	if _, calls = seen(); res.IsError || calls[len(calls)-1].CallID != "" {
+		t.Fatalf("an invalid id must disable reporting without failing the tool: %+v, %+v", calls[len(calls)-1], res)
 	}
 	if got := stepActions(json.RawMessage(steps)); strings.Join(got, " ") != "click press_key" {
 		t.Fatalf("the log names the actions only: %v", got)

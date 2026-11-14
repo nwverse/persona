@@ -19,7 +19,7 @@ func TestMCPWaitReporterUsesCurrentManagerCapability(t *testing.T) {
 	h.bus.current = map[string]*busConn{assistantwire.AssistantID: {
 		peer: rpc.New("manager", &notices), presence: busPresence{Capabilities: []string{assistantwire.CapabilityMCPWait}},
 	}}
-	report := h.mcpWaitReporter(assistantwire.AssistantID, "computer", "call-1")
+	report := h.mcpWaitReporter(assistantwire.AssistantID, "computer", "77777777-7777-4777-8777-777777777777")
 	if report == nil {
 		t.Fatal("a capable owning manager did not get a reporter")
 	}
@@ -39,8 +39,14 @@ func TestMCPWaitReporterUsesCurrentManagerCapability(t *testing.T) {
 		t.Fatalf("wait params must contain exactly call_id and kind: %s (%v)", wire.Params.Params, err)
 	}
 	var update proto.MCPWaitEvent
-	if err := json.Unmarshal(wire.Params.Params, &update); err != nil || update.CallID != "call-1" || update.Kind != proto.MCPWaitApproval {
+	if err := json.Unmarshal(wire.Params.Params, &update); err != nil || update.CallID != "77777777-7777-4777-8777-777777777777" || update.Kind != proto.MCPWaitApproval {
 		t.Fatalf("wait update = %+v (%v)", update, err)
+	}
+
+	for _, callID := range []string{"not-a-uuid", string(bytes.Repeat([]byte{'x'}, 1<<20))} {
+		if report := h.mcpWaitReporter(assistantwire.AssistantID, "computer", callID); report != nil {
+			t.Fatal("an invalid call id reached the hub's wait relay")
+		}
 	}
 
 	// A manager can be replaced while the phone call is pending. Its older replacement receives no unknown event.
@@ -50,7 +56,7 @@ func TestMCPWaitReporterUsesCurrentManagerCapability(t *testing.T) {
 	if err := json.NewDecoder(&notices).Decode(&extra); err == nil {
 		t.Fatalf("an older manager received %s", extra)
 	}
-	if old := h.mcpWaitReporter(assistantwire.AssistantID, "computer", "call-old"); old != nil {
+	if old := h.mcpWaitReporter(assistantwire.AssistantID, "computer", "77777777-7777-4777-8777-777777777778"); old != nil {
 		t.Fatal("an older manager must not enable phone wait updates")
 	}
 }

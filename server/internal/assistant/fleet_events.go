@@ -96,15 +96,10 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return map[string]any{"action": "cancel"}, true, nil
 		}
 		var p struct {
-			CallID      string `json:"call_id"`
-			WaitMachine string `json:"wait_machine"`
+			CallID string `json:"call_id"`
 		}
 		_ = json.Unmarshal(params, &p)
-		origin := p.WaitMachine
-		if origin == "" {
-			origin = machine
-		}
-		ctx = s.mcpWaitContext(ctx, origin, p.CallID, p.CallID != "")
+		ctx = s.mcpWaitElicitContext(ctx, p.CallID)
 		out, err := s.ext.AnswerComputerElicit(ctx, machine, params)
 		return out, true, err
 	case "interaction.create":
@@ -172,6 +167,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, err
 		}
 		ctx = s.mcpWaitContext(ctx, machine, p.CallID, p.WaitUpdates)
+		defer s.endMCPWait(ctx)
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
 		}

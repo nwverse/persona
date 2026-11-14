@@ -20,11 +20,8 @@ func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
 		if conv != "conv-1" {
 			t.Errorf("conversation %q", conv)
 		}
-		if callID := mcpwait.CallFrom(ctx); callID != "call-lcu" {
+		if callID := mcpwait.CallFrom(ctx); callID != "55555555-5555-4555-8555-555555555555" {
 			t.Errorf("MCP call ID %q", callID)
-		}
-		if origin := mcpwait.MachineFrom(ctx); origin != "origin" {
-			t.Errorf("MCP origin %q", origin)
 		}
 		if string(raw) == "" {
 			t.Error("empty elicitation")
@@ -40,7 +37,7 @@ func TestLCUElicitationIsAnsweredOnTheCardAndNeverImplied(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ctx = mcpwait.WithMachine(mcpwait.WithCall(ctx, "call-lcu"), "origin")
+	ctx = mcpwait.WithCall(ctx, "55555555-5555-4555-8555-555555555555")
 	res, err := sess.call(ctx, "js", map[string]any{"code": "return 1"}, "persona-abcd", "conv-1")
 	if err != nil {
 		t.Fatal(err)
