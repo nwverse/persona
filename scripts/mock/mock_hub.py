@@ -663,6 +663,7 @@ ASK1 = "b2e4d6f8-0000-4000-8000-000000000001"
 ASK2 = "b2e4d6f8-0000-4000-8000-000000000002"
 ASK3 = "b2e4d6f8-0000-4000-8000-000000000003"
 ASK4 = "b2e4d6f8-0000-4000-8000-000000000004"  # a long one (the top bar must not move as it scrolls)
+ASK5 = "b2e4d6f8-0000-4000-8000-000000000005"  # a completed turn with narration folded out of the newest page
 
 # MOCK_WORKFLOWS=1 (#2935, docs/protocol/protocol.md "workflows"): the widget agent's turn ended to wait for a workflow it runs in
 # the background (one earlier run was stopped). Each agent's transcript reads like a subagent's ("<session>@<agent>").
@@ -17239,17 +17240,22 @@ def fold_work(items):
     # a subagent's call stays on the page: the chat draws it as a card that never folds (#5602)
     agents = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use" and x.get("tool_name") in ("Task", "Agent")}
 
-    def inside(x):
+    latest_narration = next((i for i in range(len(items) - 1, -1, -1) if items[i]["role"] == "assistant" and items[i]["kind"] == "text"), -1)
+
+    def inside(i):
+        x = items[i]
         if x["kind"] == "thinking":
             return True
+        if x["kind"] == "text":
+            return bool(x.get("narration")) and i != latest_narration
         t = x.get("tool_use_id")
         return x["kind"] in ("tool_use", "tool_result", "image") and t and t in uses and t in results and t not in agents
     out, i = [], 0
     while i < len(items):
-        if not inside(items[i]):
+        if not inside(i):
             out.append(items[i]); i += 1; continue
         j = i
-        while j < len(items) and inside(items[j]):
+        while j < len(items) and inside(j):
             j += 1
         run = items[i:j]
         if len(run) < 3 and sum(len(x.get("text") or "") + len(json.dumps(x.get("tool_input") or "")) for x in run) < 4096:
@@ -17583,10 +17589,16 @@ def paged_sessions(query):
         return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}, "todo": {}, "pane_source": {}}
+        if roots:
+            counts["active_agents_by_machine"] = {}
         waits = sum(1 for s in rows if s.get("background_waiting") and state_of(s) == "working")
         if waits:
             counts["background_waiting"] = waits
         for s in rows:
+            if roots and not s.get("assistant") and state_of(s) != "offline":
+                active = counts["active_agents_by_machine"]
+                mid = s["machine_id"]
+                active[mid] = active.get(mid, 0) + 1
             values = {"machine": s["machine_id"], "project": s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", ""),
                       "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s), "todo": (s.get("todo") or {}).get("id", ""),
                       "pane_source": pane_origin(s)}
@@ -18915,6 +18927,16 @@ def mock_chat_search():
     ITEMS[ASK4] = rows
     session = next(s for s in ASSISTANT if s["session_id"] == ASK4)
     session.update(title="琥珀灯塔 AmberTitle 周末出行", last_text=last, updated_at=ago(minutes=1), seen_at=ago(minutes=0), rev=3000, total_items=len(rows))
+    narration = it("assistant", "text", 0.8, text="FoldedNeedle 这段说明必须展开后才能看到。", narration=True)
+    narration["id"] = "narration-target"
+    folded = [it("user", "text", 1, text="把这段过程整理成最终回复"), narration]
+    folded += tool("Read", {"file_path": "/home/me/notes/folded.md"}, "步骤已完成。", 0.7)
+    folded += [it("assistant", "text", 0.2, text="FinalAnswer 最终回答。")]
+    for seq, row in enumerate(folded, 1):
+        row["seq"] = seq
+    ITEMS[ASK5] = folded
+    FULL[narration["id"]] = narration
+    ASSISTANT.append(assistant_sess(ASK5, "折叠回复示例", 1, "FinalAnswer 最终回答。"))
     PAGING["on"] = True
 
 
@@ -20406,7 +20428,7 @@ def png(w, h, rgb):
 # …&slow=S: it answers S seconds late (the small window's "Connecting…"); …&down=1: it hangs up on everyone, now and on
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
-               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False, "wheel_in": [],
+               "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False, "wheel_in": [], "input": [],
                "events": []}  # clipboard writes (node / rfb) and keys, in the order they came (#3075: ⌘V after the write)
 # MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
 # numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
@@ -20563,6 +20585,12 @@ def zrle_rect(px, W, x, y, w, h, z):
 # to the phone's report on it. MOCK_SCREEN_VIDEO_TIERS=1: the hello says the helper has quality tiers (`features`,
 # #6396) on a 14-inch MacBook Pro's display (`points`, `pixels`; the fixture plays at its own size whatever the tier);
 # GET /mock/screen-video also lists the `update`s the client sent (#6558: a new data budget, the tier it picked).
+# MOCK_SCREEN_INPUT=granted|missing|asked (#7775): MacBook's node reads the live screen's pixel scroll records
+# (`screen_input`; =missing: Persona Input may not post events and macOS hasn't asked; =asked: not allowed, asked once).
+# As the node does, the 5900 relay takes each record (RFB client message type 200, 16 bytes) out of the stream, so the
+# fake Screen Sharing never sees it, and keeps it: GET /mock/screen-password lists them as `input` (kind, phase,
+# momentum, dy, when it came); ?clear=1 empties it.
+SCREEN_INPUT = {"mode": os.environ.get("MOCK_SCREEN_INPUT", "")}
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
                 "updates": [], "refuse": False, "tiers": os.environ.get("MOCK_SCREEN_VIDEO_TIERS") == "1"}
 _SCREEN_VIDEO_FIXTURE = {}
@@ -21788,6 +21816,9 @@ def computer_of(machine_id, enabled):
         c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
                              "permission": "missing" if SCREEN_VIDEO["mode"] in ("missing", "denied") else "granted"}
         if SCREEN_VIDEO["mode"] == "denied": c["screen_video"]["asked"] = True
+    if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_INPUT["mode"]:  # MOCK_SCREEN_INPUT (#7775)
+        c["screen_input"] = {"version": 1, "permission": "granted" if SCREEN_INPUT["mode"] == "granted" else "missing"}
+        if SCREEN_INPUT["mode"] == "asked": c["screen_input"]["asked"] = True
     return c
 
 
@@ -24293,7 +24324,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(GIT_PULL_STATE)
         if p == "/mock/screen-password":  # MOCK_SCREEN=fake: the Mac's password changed; who signed in how; what was typed
             if "p" in q: FAKE_SCREEN["password"] = q["p"][0]
-            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[], wheel_in=[])
+            if "clear" in q: FAKE_SCREEN.update(typed="", clicks=[], clipboard="", events=[], wheel_in=[], input=[])
             if "clip" in q: fake_screen_clip(q["clip"][0])  # the Mac copied this
             if "bg" in q and q["bg"][0] in FAKE_BG_COLORS and FAKE_BG["kind"]:  # another background (MOCK_SCREEN_BG)
                 FAKE_BG["kind"] = q["bg"][0]
@@ -24309,7 +24340,8 @@ class H(BaseHTTPRequestHandler):
                     except OSError: pass
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
                                    "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
-                                   "events": FAKE_SCREEN["events"][-200:], "wheel_in": FAKE_SCREEN["wheel_in"]})
+                                   "events": FAKE_SCREEN["events"][-200:], "wheel_in": FAKE_SCREEN["wheel_in"],
+                                   "input": FAKE_SCREEN["input"]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -27044,6 +27076,12 @@ class H(BaseHTTPRequestHandler):
                     # Screen Sharing reads it between its frames: when the app sent it (#7775).
                     if port == 5900 and len(payload) == 6 and payload[0] == 5 and payload[1] & 24:
                         FAKE_SCREEN["wheel_in"].append(time.time())
+                    if port == 5900 and len(payload) == 16 and payload[0] == 200:  # a pixel scroll record (#7775)
+                        kind, phase, momentum = payload[2], payload[3], payload[4]
+                        dy, dx = struct.unpack(">ff", payload[8:16])
+                        FAKE_SCREEN["input"].append({"kind": kind, "phase": phase, "momentum": momentum, "dy": dy, "dx": dx,
+                                                     "t": time.time()})
+                        continue
                     tcp.sendall(payload)
         except OSError:
             pass
