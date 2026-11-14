@@ -12,7 +12,7 @@ internal class AppNavigator(
     private val chatTab: (ChatRoute) -> AppTab? = { null },
     /** Returns true when the Persona home shows this conversation itself; the flag says whether to switch to it. */
     private val openAssistant: (ChatRoute, Boolean) -> Boolean = { _, _ -> false },
-    inboxReturns: List<ChatRoute> = emptyList(),
+    inboxReturns: List<ChatRoute>? = null,
 ) : Navigator {
     /**
      * Pages [navigate] pushed onto another tab's stack, and the tab each was opened from: back from such a page returns
@@ -20,8 +20,10 @@ internal class AppNavigator(
      * the Agents list). The user picking a tab themselves drops these.
      */
     private val openedFrom = mutableMapOf<NavKey, AppTab>()
+    /** Null is legacy construction; an explicit empty restore must not revive a retained NavKey's source. */
+    private val hasExplicitInboxReturns = inboxReturns != null
     private val inboxSources = mutableMapOf<SessionKey, RouteSource.InboxItem>().apply {
-        inboxReturns.forEach { route ->
+        inboxReturns.orEmpty().forEach { route ->
             (route.source as? RouteSource.InboxItem)?.let { this[SessionKey(route.machineId, route.sessionId)] = it }
         }
     }
@@ -53,12 +55,31 @@ internal class AppNavigator(
         // The route's type only, never its arguments (machine, session, item ids).
         ErrorBreadcrumbs.shared.navigation(key::class.simpleName ?: "route")
         val shown = stacks.mapValues { it.value.lastOrNull() }
+        // Reopening the unchanged visible route is idempotent, not a new direct open that invalidates its origin.
+        val visibleOrigin = shown[from]?.takeIf { it == key }?.let(openedFrom::get)
         val opened = open(key)
         val to = selectedTab()
         val page = stacks.getValue(to).lastOrNull() ?: return
+        if (to == from && page == key && visibleOrigin != null) openedFrom[page] = visibleOrigin
         // Not recorded: the tab's root, and a page that already topped the target tab's stack but is not the one asked
         // for (this call did not open it).
         if (to != from && page != tabRoot(to) && (page != shown[to] || page == opened)) openedFrom[page] = from
+    }
+
+    /** Record a direct ResolvedRoute open without changing its route, card, focus, or saved UI state. */
+    fun noteOpened(key: NavKey) {
+        val chat = key.chat() ?: return
+        val session = SessionKey(chat.machineId, chat.sessionId)
+        // Reopening a conversation invalidates its previous cross-tab origin, even when this open stays on the same tab.
+        openedFrom.keys.removeAll { page -> page.chat()?.let { sameConversation(it, chat) } == true }
+        val source = chat.source as? RouteSource.InboxItem
+        if (source != null) {
+            inboxSources[session] = source
+            inboxSourceSuppressions.remove(session)
+        } else {
+            inboxSources.remove(session)
+            inboxSourceSuppressions.add(session)
+        }
     }
 
     /** Returns the actual key opened, which may have inherited the visible inbox conversation's source. */
@@ -66,28 +87,23 @@ internal class AppNavigator(
         val route = inheritVisibleInboxSource(key)
         if (route == ConnectionSettingsRoute) return open(SettingsPageRoute(SettingsPage.Diagnostics))
         val chat = when (route) { is ChatRoute -> route; is InteractionRoute -> route.chat; else -> null }
-        if (chat != null) {
-            val session = SessionKey(chat.machineId, chat.sessionId)
-            val source = chat.source as? RouteSource.InboxItem
-            if (source != null) {
-                inboxSources[session] = source
-                inboxSourceSuppressions.remove(session)
-            } else {
-                inboxSources.remove(session)
-                inboxSourceSuppressions.add(session)
-            }
-        }
+        noteOpened(route)
         if (chat != null && openAssistant(chat, true)) return route
         // A sourced assistant conversation belongs above the item that opened it, even when its kind is already known.
         // Router.restore would instead pop to an earlier copy and retain that copy's provenance. Agents keep that path.
         val fromInbox = chat != null && chat.source is RouteSource.InboxItem &&
             (chat.kind == ConversationKind.Assistant || chatTab(chat) == AppTab.Persona)
-        if (chat != null && chat.kind != null && !fromInbox) {
-            Router().parse(RouteInput.Internal(route))?.let { resolved ->
-                val tab = resolved.restore(stacks)
-                onSelectTab(tab)
-                return stacks.getValue(tab).lastOrNull() ?: route
-            }
+        val resolved = when {
+            chat == null || fromInbox -> null
+            chat.kind != null -> Router().parse(RouteInput.Internal(route))
+            // Keep the kindless key itself: normalizing it would replace the existing page and lose its saved UI state.
+            chatTab(chat) == AppTab.Agents -> ResolvedRoute(AppTab.Agents, route)
+            else -> null
+        }
+        if (resolved != null) {
+            val tab = resolved.restore(stacks)
+            onSelectTab(tab)
+            return stacks.getValue(tab).lastOrNull() ?: route
         }
         val rootTab = when (route) {
             AssistantRoute -> AppTab.Persona
@@ -168,7 +184,7 @@ internal class AppNavigator(
         val chat = page.chat() ?: return null
         val session = SessionKey(chat.machineId, chat.sessionId)
         inboxSources[session]?.let { return it }
-        if (session in inboxSourceSuppressions) return null
+        if (session in inboxSourceSuppressions || hasExplicitInboxReturns) return null
         return chat.source as? RouteSource.InboxItem
     }
 

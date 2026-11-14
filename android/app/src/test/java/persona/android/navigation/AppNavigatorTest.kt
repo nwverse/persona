@@ -496,10 +496,100 @@ class AppNavigatorTest {
         assertEquals(listOf(AssistantRoute), stacks.getValue(AppTab.Persona))
     }
 
+    @Test fun kindlessAgentReopensKeepOneNavKeyAndUseTheLatestInboxSource() {
+        val existing = ChatRoute("machine", "agent", source = RouteSource.InboxItem("first"))
+        val second = RouteSource.InboxItem("second")
+        val detail = InboxEventRoute("second")
+        val router = agentsOwnAgentChats()
+        stacks.getValue(AppTab.Agents).add(existing)
+        stacks.getValue(AppTab.Persona).addAll(listOf(InboxRoute, detail))
+        selected = AppTab.Persona
+
+        router.navigate(existing.copy(source = second))
+
+        assertEquals(listOf(AgentsRoute, existing), stacks.getValue(AppTab.Agents))
+        assertEquals(second, router.inboxReturns().single().source)
+        router.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(detail, stacks.getValue(AppTab.Persona).last())
+
+        // An ordinary Agents-list reopen is kindless too, and must not stack over the retained inbox page.
+        stacks.getValue(AppTab.Agents).add(existing)
+        selected = AppTab.Agents
+        router.navigate(existing.copy(source = null))
+        assertEquals(listOf(AgentsRoute, existing), stacks.getValue(AppTab.Agents))
+        assertEquals(emptyList<ChatRoute>(), router.inboxReturns())
+        router.back()
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(detail, stacks.getValue(AppTab.Persona).last())
+    }
+
+    @Test fun aSameTabUnsourcedReopenClearsItsOldCrossTabOrigin() {
+        val existing = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
+        val router = agentsOwnAgentChats()
+        stacks.getValue(AppTab.Agents).add(existing)
+        selected = AppTab.Persona
+        router.navigate(existing)
+        assertEquals(AppTab.Agents, selected)
+
+        // This reopen records no new cross-tab origin; the origin from the first open must not survive either.
+        router.navigate(existing.copy(source = null))
+
+        assertEquals(listOf(AgentsRoute, existing), stacks.getValue(AppTab.Agents))
+        assertEquals(emptyList<ChatRoute>(), router.inboxReturns())
+        router.back()
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(listOf(AssistantRoute), stacks.getValue(AppTab.Persona))
+    }
+
+    @Test fun notingADirectOpenClearsItsOldCrossTabOriginAndInboxSource() {
+        val existing = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
+        val direct = existing.copy(source = null)
+        val router = agentsOwnAgentChats()
+        stacks.getValue(AppTab.Agents).add(existing)
+        selected = AppTab.Persona
+        router.navigate(existing)
+        assertEquals(AppTab.Agents, selected)
+
+        // Root's ResolvedRoute.open path records the open without replacing the visible key or its saved UI state.
+        router.noteOpened(direct)
+        assertEquals(AppTab.Agents, ResolvedRoute(AppTab.Agents, direct).open(stacks))
+
+        assertEquals(listOf(AgentsRoute, existing), stacks.getValue(AppTab.Agents))
+        assertEquals(emptyList<ChatRoute>(), router.inboxReturns())
+        router.back()
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(listOf(AssistantRoute), stacks.getValue(AppTab.Persona))
+    }
+
+    @Test fun legacyConstructionFallsBackToARetainedSourceButExplicitEmptyRestoreDoesNot() {
+        val existing = ChatRoute("machine", "agent", ConversationKind.Agent, RouteSource.InboxItem("item"))
+        stacks.getValue(AppTab.Agents).add(existing)
+        selected = AppTab.Agents
+
+        val legacy = assistantNavigator({ ConversationKind.Agent })
+        legacy.back()
+        assertEquals(AppTab.Persona, selected)
+        assertEquals(listOf(AssistantRoute, InboxRoute, InboxItemRoute("item")), stacks.getValue(AppTab.Persona))
+
+        stacks.getValue(AppTab.Persona).apply { clear(); add(AssistantRoute) }
+        stacks.getValue(AppTab.Agents).apply { clear(); add(AgentsRoute); add(existing) }
+        selected = AppTab.Agents
+        val restored = assistantNavigator({ ConversationKind.Agent }, emptyList())
+        restored.back()
+
+        assertEquals(AppTab.Agents, selected)
+        assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+        assertEquals(listOf(AssistantRoute), stacks.getValue(AppTab.Persona))
+    }
+
     /** Uses Root's production decision; only its selection side effect is reproduced here. */
     private fun embeddedAssistantNavigator(kind: (SessionKey) -> ConversationKind?) = assistantNavigator(kind)
 
-    private fun assistantNavigator(kind: (SessionKey) -> ConversationKind?, inboxReturns: List<ChatRoute> = emptyList()) = AppNavigator(
+    private fun assistantNavigator(kind: (SessionKey) -> ConversationKind?, inboxReturns: List<ChatRoute>? = null) = AppNavigator(
         stacks, { selected }, { selected = it },
         chatTab = { route ->
             kind(SessionKey(route.machineId, route.sessionId))?.let {

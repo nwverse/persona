@@ -301,8 +301,13 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         assistantPending = conversation
         return true
     }
-    fun openResolved(route: ResolvedRoute): AppTab =
-        if (openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+    val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
+        currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
+    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
+    fun openResolved(route: ResolvedRoute): AppTab {
+        navigator.noteOpened(route.key)
+        return if (openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+    }
     /** Opens [route]; a card outside any session (#4808) also has Agents open its sheet, as its notification does. */
     fun openWithCard(route: ResolvedRoute) {
         selected = openResolved(route)
@@ -310,6 +315,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     remember {
         initialRoute?.let { route ->
+            navigator.noteOpened(route.key)
             // The first frame already shows the requested conversation, not the home's default one.
             assistantTarget(route.key)?.let { assistantRequest = it } ?: route.open(stacks)
             route.pairingLink?.let { MainActivity.pendingPairLink.value = it }
@@ -324,9 +330,6 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         assistantRequest = conversation
         assistantPending = null
     }
-    val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
-        currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
-    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
     val router = remember { Router { m, s -> currentKind(SessionKey(m, s)) } }
     val agentsWiring by session.agentsWiring.state.collectAsStateWithLifecycle()
     val navigationWiring = remember { MutableStateFlow(agentsWiring) }
