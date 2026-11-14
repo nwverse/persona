@@ -1,0 +1,297 @@
+// A packaged first-install acceptance test, not a development-window smoke.
+//
+//   node desktop/scripts/first-run-test.mjs [output directory]
+//
+// Builds the ordinary unsigned production app for the current host, launches its unchanged entry point with an empty
+// profile and no hub environment, and drives its existing windows through a temporary CDP socket on loopback. This is
+// not a physical-device or signed-release test. Windows uses a temporary per-user install; macOS uses its packaged
+// ZIP/app directory; Linux's unpacked directory is supplementary evidence, not a shipping target.
+import { spawn } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { homedir, tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { getCurrentFuseWire, FuseState, FuseV1Options } from "@electron/fuses";
+import { DesktopCDP } from "./first-run-cdp.mjs";
+import { startGateway } from "./smoke-gateway.mjs";
+
+const require = createRequire(import.meta.url);
+const asar = require("@electron/asar");
+const root = fileURLToPath(new URL("../..", import.meta.url));
+const desktop = join(root, "desktop");
+const requestedOutput = resolve(process.argv[2] ?? join(desktop, "release", "first-run"));
+const output = join(requestedOutput, randomUUID());
+await mkdir(output, { recursive: true });
+const platform = process.platform;
+const npm = platform === "win32" ? "npm.cmd" : "npm";
+const owned = new Set();
+const steps = [];
+let work, hub, gateway, log = "", failure;
+const clients = [];
+const sleep = ms => new Promise(done => setTimeout(done, ms));
+const step = (name, ok, detail) => {
+  steps.push({ name, ok, ...(detail === undefined ? {} : { detail }) });
+  console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail === undefined ? "" : ` ${JSON.stringify(detail)}`}`);
+};
+function need(name, ok, detail) { step(name, ok, detail); if (!ok) throw new Error(name); }
+async function until(label, probe, timeout = 30000) {
+  const deadline = Date.now() + timeout;
+  let last;
+  for (;;) {
+    try { last = await probe(); if (last) return last; } catch (error) { last = String(error); }
+    if (Date.now() > deadline) throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+    await sleep(100);
+  }
+}
+function run(command, args, { seconds = 300, env = process.env, quiet = false } = {}) {
+  return new Promise((done, fail) => {
+    const child = spawn(command, args, { cwd: root, env, shell: platform === "win32" && command.endsWith(".cmd"), stdio: ["ignore", "pipe", "pipe"] });
+    owned.add(child);
+    let text = "";
+    const keep = data => { text += data; if (!quiet) process.stdout.write(data); };
+    child.stdout.on("data", keep);
+    child.stderr.on("data", keep);
+    const timer = setTimeout(() => { stop(child); fail(new Error(`${basename(command)} timed out after ${seconds}s`)); }, seconds * 1000);
+    child.once("error", error => { clearTimeout(timer); owned.delete(child); fail(error); });
+    child.once("close", code => { clearTimeout(timer); owned.delete(child); done({ code, text }); });
+  });
+}
+function stop(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    if (platform === "win32") spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
+    else process.kill(-child.pid, "SIGKILL");
+  } catch { /* already exited */ }
+}
+async function freePort() {
+  const probe = createServer();
+  await new Promise(done => probe.listen(0, "127.0.0.1", done));
+  const { port } = probe.address();
+  await new Promise(done => probe.close(done));
+  return port;
+}
+async function startHub() {
+  const port = await freePort();
+  const token = `jp_${randomBytes(18).toString("hex")}`;
+  const child = spawn(platform === "win32" ? "python" : "python3", ["-I", join("scripts", "mock", "mock_hub.py")], {
+    cwd: root,
+    env: { ...process.env, PORT: String(port), MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "2", MOCK_DESKTOPS: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+    stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32",
+  });
+  owned.add(child);
+  let text = "";
+  child.stdout.on("data", data => { text = (text + data).slice(-16000); });
+  child.stderr.on("data", data => { text = (text + data).slice(-16000); });
+  await until("synthetic hub health", async () => (await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(1000) })).ok, 90000);
+  return { port, token, text: () => text };
+}
+async function build() {
+  need("compile the production app", (await run(npm, ["--prefix", "desktop", "run", "build"], { quiet: true })).code === 0);
+  if (!existsSync(join(root, "web", "dist", "index.html"))) {
+    need("install the web client for the local hub", (await run(npm, ["--prefix", "web", "ci"], { seconds: 900, quiet: true })).code === 0);
+    need("build the web client for the local hub", (await run(npm, ["--prefix", "web", "run", "build"], { seconds: 1200, quiet: true })).code === 0);
+  }
+  const target = platform === "win32" ? ["--win", "nsis", "--x64"] : platform === "darwin" ? ["--mac", "--universal"] : ["--linux", "dir", "--x64"];
+  const result = await run(process.execPath, [join(desktop, "node_modules", "electron-builder", "cli.js"), "--projectDir", desktop, "--config", process.env.PERSONA_DESKTOP_TEST_BUILD_CONFIG ?? "electron-builder.unsigned.yml", ...target, "--publish", "never"], {
+    cwd: root, seconds: 1500,
+    env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.desktop", CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+  });
+  need("build the ordinary unsigned production package", result.code === 0, result.code);
+}
+async function executable() {
+  if (platform === "win32") {
+    const installer = (await readdir(join(desktop, "release"))).find(name => /^Persona-.*-win-x64\.exe$/.test(name));
+    if (!installer) throw new Error("no Windows NSIS installer");
+    const installed = join(work, "installed");
+    const install = await run(join(desktop, "release", installer), ["/S", `/D=${installed}`], { seconds: 600 });
+    const file = join(installed, "Persona.exe");
+    need("temporary per-user NSIS install", install.code === 0 && existsSync(file), install.code);
+    return { file, installed };
+  }
+  if (platform === "darwin") {
+    const archive = (await readdir(join(desktop, "release"))).find(name => /^Persona-.*-mac-universal\.zip$/.test(name));
+    if (!archive) throw new Error("no macOS ZIP package");
+    const installed = join(work, "installed");
+    await mkdir(installed);
+    need("unpack the macOS ZIP", (await run("ditto", ["-x", "-k", join(desktop, "release", archive), installed])).code === 0);
+    const file = join(installed, "Persona.app", "Contents", "MacOS", "Persona");
+    need("ad-hoc signature only, no certificate", (await run("codesign", ["--force", "--deep", "--sign", "-", join(installed, "Persona.app")])).code === 0);
+    return { file, installed };
+  }
+  return { file: join(desktop, "release", "linux-unpacked", "persona-desktop"), installed: undefined };
+}
+async function fuseCheck(file) {
+  const fuses = await getCurrentFuseWire(file);
+  const expected = {
+    RunAsNode: false, EnableCookieEncryption: true, EnableNodeOptionsEnvironmentVariable: false,
+    EnableNodeCliInspectArguments: false, EnableEmbeddedAsarIntegrityValidation: true,
+    OnlyLoadAppFromAsar: true, GrantFileProtocolExtraPrivileges: false,
+  };
+  const actual = Object.fromEntries(Object.entries(expected).map(([key, value]) => [key, fuses[FuseV1Options[key]] === (value ? FuseState.ENABLE : FuseState.DISABLE)]));
+  need("the packaged fuses retain the security boundary", Object.values(actual).every(Boolean), actual);
+}
+async function packageCheck(file) {
+  const archive = platform === "darwin" ? join(file, "..", "Resources", "app.asar") : platform === "win32" ? join(file, "..", "resources", "app.asar") : join(desktop, "release", "linux-unpacked", "resources", "app.asar");
+  const files = asar.listPackage(archive);
+  need("only the three public resources enter the setup directory", ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].every(name => files.includes(name)) && !files.some(name => name.startsWith("/dist/setup/") && !["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].includes(name)));
+  need("no test driver or privileged preload enters the public resource directory", !files.some(name => name.includes("first-run")) && !files.includes("/dist/setup/setup-preload.cjs") && files.includes("/dist/setup-preload.cjs"));
+}
+async function launch(file, profile, home, linkStub) {
+  const debugPort = await freePort();
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1" };
+  if (platform === "win32" && linkStub) {
+    // NODE_OPTIONS belongs only to this synthetic CLI process; the packaged app's fuse ignores it.
+    env.NODE_OPTIONS = `--require ${JSON.stringify(linkStub)}`;
+  }
+  for (const name of Object.keys(env)) if (name === "PERSONA_HUB_URL" || name.startsWith("PERSONA_DESKTOP_E2E") || name === "PERSONA_DESKTOP_SMOKE" || (name === "ELECTRON_RUN_AS_NODE" && !linkStub)) delete env[name];
+  const args = [`--user-data-dir=${profile}`, `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`];
+  if (platform === "linux") args.unshift("--no-sandbox", "--disable-gpu");
+  const child = spawn(file, args, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32" });
+  owned.add(child);
+  const keep = data => { log += data; };
+  child.stdout.on("data", keep);
+  child.stderr.on("data", keep);
+  child.once("close", () => owned.delete(child));
+  await until("the app's own temporary CDP socket", () => existsSync(join(profile, "DevToolsActivePort")), 30000);
+  await sleep(200); // Let the just-announced target finish attaching before querying it.
+  const client = new DesktopCDP(profile, output);
+  await client.connect();
+  clients.push(client);
+  return { child, client };
+}
+async function screenshot(page, name) {
+  await page.capture(`${name}.png`);
+  await until(`${name} is painted`, () => page.evaluate("document.fonts.status === 'loaded' && document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity)"), 15000);
+  await page.capture(`${name}.png`);
+}
+async function absentScenario(file) {
+  const home = join(work, "home-absent");
+  const profile = join(work, "profile-absent");
+  await mkdir(home, { recursive: true });
+  need("the first profile is empty and no hub is supplied", !existsSync(profile) && !process.env.PERSONA_HUB_URL);
+  const { child, client } = await launch(file, profile, home);
+  clients.push(client);
+  const setup = await client.pageFor("the first-run setup page", target => target.url === "persona-setup://app/setup.html");
+  need("the packaged setup document loads from the trusted local scheme", setup.url() === "persona-setup://app/setup.html");
+  await until("setup localization and Link status", () => setup.evaluate("document.querySelector('h1')?.textContent === 'Welcome to Persona' && document.querySelector('#link-state')?.textContent.includes('not installed')"));
+  await setup.evaluate("document.querySelector('details').open = true; document.querySelector('#pair').scrollIntoView({block:'center'}); true");
+  await screenshot(setup, "01-setup-no-link");
+  await until("the absent Link guidance is laid out", async () => {
+    const state = await setup.evaluate("({open:document.querySelector('details').open, height:document.querySelector('#link-install').getBoundingClientRect().height, disabled:document.querySelector('#link-install').disabled})");
+    return state?.open === true && state.height > 0 && state.disabled === true;
+  });
+  need("the production preload initialized the setup page", await setup.evaluate("typeof window.desktopSetup === 'object' && typeof window.require === 'undefined' && typeof window.process === 'undefined' && document.querySelector('#hub').value === ''"));
+  need("Link is optional and absent, not silently installed", await setup.evaluate("document.querySelector('#link-reconnect').disabled && document.querySelector('#pair-link').disabled && document.querySelector('#pair button').disabled && document.querySelector('#node-install').hidden && !document.querySelector('#link-install').hidden && document.querySelector('#link-install').disabled"));
+  need("an unknown local-resource path cannot read another packaged file", !(await setup.evaluate("fetch('persona-setup://app/setup-preload.cjs').then(r => r.ok).catch(() => false)")) && !(await setup.evaluate("fetch('persona-setup://app/../main.js').then(r => r.ok).catch(() => false)")));
+  need("the setup window refuses navigation away from its trusted origin", await setup.evaluate("location.href = 'https://example.com/'; true").then(() => sleep(500)).then(() => setup.url() === "persona-setup://app/setup.html"));
+  await setup.evaluate("document.querySelector('#hub').value = 'persona-setup://app/setup.html'; document.querySelector('#connect').requestSubmit(); true");
+  await until("invalid hub address stays recoverable", () => setup.evaluate("!document.querySelector('#error').hidden && !!document.querySelector('#error').textContent"));
+  need("an invalid hub does not get saved or open a window", setup.url() === "persona-setup://app/setup.html" && !existsSync(join(profile, "desktop-state.json")));
+  stop(child);
+}
+async function pairedScenario(file) {
+  const home = join(work, "home-link");
+  const profile = join(work, "profile-link");
+  const bin = join(home, ".persona", "bin");
+  await mkdir(bin, { recursive: true });
+  const record = join(work, "link-commands.jsonl");
+  const fake = `const fs = require("node:fs");
+process.exitCode = 0; // A preloaded CLI must not inherit Electron's implicit missing-main failure.
+if (process.env.PERSONA_DESKTOP_TEST_LINK) {
+  // An explicit main stub gives this fixture ordinary Node argv semantics on Windows; no shell or PATH substitution.
+  process.exit();
+}
+const argumentsForLink = process.argv.slice(2);
+let input = "";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({ argv: argumentsForLink, stdin: input }) + "\\n");
+  if (argumentsForLink[0] === "status") {
+    console.log(JSON.stringify({ running: true, machine: "Example computer", link: { state: "connected" }, token: "must-not-reach-the-renderer", config: "/must-not-appear" }));
+  } else if (argumentsForLink[0] === "pair" && argumentsForLink[1] === "-") {
+    console.log("Paired the example computer");
+  } else { process.exitCode = 2; }
+});
+`;
+  // Without -e, Electron's Node stub runs its built-in bootstrap, which honors this test-only entry variable.
+  const fakeFile = join(work, "fake-link.cjs");
+  await writeFile(fakeFile, fake, { mode: 0o700 });
+  if (platform !== "win32") {
+    await writeFile(join(bin, "persona-link"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeFile)} "$@"\n`, { mode: 0o700 });
+    await chmod(join(bin, "persona-link"), 0o700);
+  } else {
+    await copyFile(process.execPath, join(bin, "persona-link.exe"));
+  }
+  const { child, client } = await launch(file, profile, home, platform === "win32" ? fakeFile : undefined);
+  clients.push(client);
+  const setup = await client.pageFor("setup with the separately installed test Link", target => target.url === "persona-setup://app/setup.html");
+  await until("redacted Link state", () => setup.evaluate("document.querySelector('#link-state')?.textContent.includes('connected') && !document.querySelector('#pair-link').disabled"));
+  await setup.evaluate("document.querySelector('details').open = true; true");
+  await until("the paired Link form is laid out", () => setup.evaluate("document.querySelector('#pair-link').getBoundingClientRect().height > 0 && !document.querySelector('#pair-link').disabled"));
+  await setup.evaluate("document.querySelector('#pair').scrollIntoView({block:'center'}); true");
+  await screenshot(setup, "02-setup-with-link");
+  const linkURL = "persona://link?join=synthetic-example&code=synthetic-code";
+  await setup.evaluate(`document.querySelector('#pair-link').value = ${JSON.stringify(linkURL)}; document.querySelector('#pair').requestSubmit(); true`);
+  await until("the fixed Link pairing command", async () => (await readFile(record, "utf8").catch(() => "")).includes('"pair"'));
+  const commands = (await readFile(record, "utf8")).split("\n").filter(Boolean).map(line => JSON.parse(line));
+  need("Link pairing uses fixed argv and stdin, with no service installation", commands.some(command => command.argv.join(" ") === "pair -" && command.stdin === linkURL) && commands.every(command => command.argv[0] === "status" || command.argv.join(" ") === "pair -"), commands);
+  need("status and command output stay redacted", !(await setup.evaluate("document.body.innerText")).includes("must-not-reach-the-renderer") && !(await setup.evaluate("document.body.innerText")).includes("must-not-appear"));
+  await setup.evaluate(`document.querySelector('#hub').value = ${JSON.stringify(gateway.url)}; document.querySelector('#connect').requestSubmit(); true`);
+  const main = await client.pageFor("the hub's own login page", target => target.url.startsWith(gateway.url));
+  await until("hub login form", () => main.evaluate("!!document.querySelector('form input[type=text]')"));
+  need("setup saved the exact hub and opened the hub origin", JSON.parse(await readFile(join(profile, "desktop-state.json"), "utf8")).hub === gateway.url && main.url() === gateway.url);
+  await screenshot(main, "03-hub-sign-in");
+  need("the hub renderer keeps Node unavailable and receives the existing bridge", await main.evaluate("typeof require === 'undefined' && typeof process === 'undefined' && window.personaDesktop.version === 1"));
+  await main.evaluate(`(() => { const input = document.querySelector('form input[type=text]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, ${JSON.stringify(`persona://pair?url=${gateway.url}&token=${hub.token}`)}); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); input.closest('form').requestSubmit(); return true; })()`);
+  await until("signed-in hub UI through its own pairing flow", () => main.evaluate("!!window.personaDesktop && !location.search.includes('token') && !document.querySelector('input[type=password]') && !!document.querySelector('nav a[href], aside a[href]')"), 60000);
+  await until("the synthetic hub received the pairing exchange", () => gateway.requests().some(entry => entry.path === "/api/v1/auth/tokens" && entry.status === 200));
+  await main.evaluate("history.pushState({}, '', '/'); window.dispatchEvent(new PopStateEvent('popstate')); true");
+  await until("the hub's main chat content", () => main.evaluate("!!document.querySelector('main [data-chat-content]')"));
+  await screenshot(main, "04-entered-hub");
+  need("the packaged first-run path reaches the existing web app", main.url().startsWith(gateway.url));
+  stop(child);
+}
+
+async function main() {
+  if (platform === "linux") need("a display is available", !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY), "run under Xvfb; Linux is supplementary evidence");
+  work = await mkdtemp(join(tmpdir(), "persona-first-run-test-"));
+  await mkdir(output, { recursive: true });
+  await build();
+  const { file, installed } = await executable();
+  await fuseCheck(file);
+  await packageCheck(file);
+  hub = await startHub();
+  gateway = await startGateway({ dist: join(root, "web", "dist"), mockPort: hub.port });
+  await absentScenario(file);
+  await pairedScenario(file);
+  return { installed: installed ? "temporary test directory" : "unpacked directory", evidence: `${platform}/${process.arch}` };
+}
+
+async function cleanup() {
+  for (const child of owned) stop(child);
+  await sleep(owned.size ? 2000 : 0);
+  await gateway?.close().catch(() => {});
+  for (const client of clients) client.close();
+  if (platform === "win32" && work) {
+    const uninstaller = join(work, "installed", "Uninstall Persona.exe");
+    if (existsSync(uninstaller)) await run(uninstaller, ["/S", `_?=${join(work, "installed")}`], { seconds: 300, quiet: true }).catch(() => undefined);
+  }
+  if (work) await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
+}
+const timeout = setTimeout(() => { failure = "overall test timeout"; for (const child of owned) stop(child); }, 20 * 60 * 1000);
+let result;
+try { result = await main(); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+await cleanup().catch(error => { failure ??= String(error); });
+clearTimeout(timeout);
+await mkdir(output, { recursive: true });
+const report = JSON.stringify({ ok: !failure, platform, arch: process.arch, shippingTarget: platform !== "linux", ...(failure ? { failure } : {}), ...result, steps, scenarios: clients.map(client => client.diagnostics()) }, null, 2);
+const clean = value => value.replaceAll(work ?? "<temporary directory>", "<temporary directory>").replaceAll(homedir(), "<home>").replaceAll(hub?.token ?? "<no token>", "<run token>");
+await writeFile(join(output, "result.json"), `${clean(report)}\n`, "utf8");
+await writeFile(join(output, "electron.log"), clean(log), "utf8");
+await writeFile(join(output, "hub.log"), clean(hub?.text() ?? ""), "utf8");
+console.log(`Desktop packaged first-run (${platform}/${process.arch}): ${failure ? `FAIL (${failure})` : "PASS"}; evidence ${output}`);
+process.exitCode = failure ? 1 : 0;

@@ -8,7 +8,7 @@ The desktop experience for macOS and Windows is an Electron shell around the hub
 
 **Persona Link** is only for a computer whose Agents the hub should reach. Its CLI and service are independently installable and useful without the desktop app, including on Linux and headless computers. The connector owns the hub connection, node-service management and the Persona Screen recording helper. Do not delete these capabilities when removing an old desktop UI.
 
-When an installed Link is present, the desktop's local setup page can show its redacted status and offer fixed operations for pairing, reconnect and node-service installation. Link remains a separate install; the desktop app never silently installs a background service or bundles one as a prerequisite. When it is absent, those controls are disabled and the page offers the separate installation guide.
+When an installed Link is present, the desktop's local setup page can show its redacted status and offer fixed operations for pairing, reconnect and node-service installation. Link remains a separate install; the desktop app never silently installs a background service or bundles one as a prerequisite. When it is absent, those controls are disabled and the page offers the separate installation guide. Until a hub address is supplied, the external installation-guide button is disabled because there is no hub-specific Machines page to open.
 
 ## Existing web behavior
 
@@ -21,7 +21,7 @@ When an installed Link is present, the desktop's local setup page can show its r
 
 `desktop/` uses TypeScript and Electron. The hub renderer has `contextIsolation: true`, `nodeIntegration: false`, sandboxing, web security, no webviews, no Node workers/subframes and no production DevTools. The privileged local setup window has a different preload from the hub window.
 
-Preloads expose fixed operations, not arbitrary IPC, WebSocket messages, paths, tokens or process execution. Desktop IPC checks the owning window, current main frame and expected origin. Link commands use only `~/.persona/bin/persona-link` (`.exe` on Windows), fixed argv, no shell and pairing input on stdin. Status returns only the state and names needed by the UI, not `link.json`, internal addresses, PIDs, logs or node errors. Per-window handlers are removed when that window closes.
+Preloads expose fixed operations, not arbitrary IPC, WebSocket messages, paths, tokens or process execution. Desktop IPC checks the owning window, current main frame and expected origin. The setup document uses the trusted local origin `persona-setup://app/setup.html`, not a `file:` URL inside the asar. Its protocol serves only `setup.html`, `setup.css` and `setup.cjs` from a dedicated resource directory; it does not expose the preload, IPC implementation, locales or other packaged files. The scheme is standard and secure, without service workers, fetch/stream privileges or a CSP bypass. Every privileged setup IPC also requires the owning window, main frame and exact setup URL; the hub window keeps its separate hub-origin rules. Link commands use only `~/.persona/bin/persona-link` (`.exe` on Windows), fixed argv, no shell and pairing input on stdin. Status returns only the state and names needed by the UI, not `link.json`, internal addresses, PIDs, logs or node errors. Per-window handlers are removed when that window closes.
 
 ### One bridge type, additive compatibility
 
@@ -59,6 +59,16 @@ The driver, `desktop/scripts/e2e-main.mjs`, is Electron's entry point for the ru
 On a Linux machine without a display server the smoke uses Chromium's headless platform and leaves out the tray's menu, which GTK cannot build there; Linux is not a shipping platform. The smoke runs the development build, not an installed package: it does not prove installation, signing, notarization, the tray's own interactions, launch at login or an update from a published release. Generated output is cleaned before compilation so deleted tests cannot linger, and a scenario's directory is emptied before it runs. Linux/macOS development evidence does not substitute for Windows acceptance or a published-release update test.
 
 `npm --prefix desktop run smoke` remains the quick check of the first window against a hub already running at `PERSONA_HUB_URL`.
+
+### Packaged first-run acceptance
+
+`node desktop/scripts/first-run-test.mjs [output directory]` builds the ordinary unsigned production package for the host and starts its unchanged entry point with an empty profile and no `PERSONA_HUB_URL`. It does not preload a hub address. The external driver attaches to the app's existing windows through a temporary loopback CDP socket; the production package contains neither that driver nor a test entry point. `PERSONA_DESKTOP_TEST_BUILD_CONFIG` may name a checked build configuration for an offline verified-cache build; it does not change runtime privileges.
+
+The gate reads the packaged fuses back and checks that only the three public setup resources enter the setup directory. It exercises an absent-Link first run, an invalid hub address, and a separately supplied synthetic Link executable with fixed argv, pairing input on stdin and redacted status. It then enters the hub address through the real setup form, uses the existing web pairing flow with a temporary synthetic-hub credential and reaches the existing chat page. No background service is installed. The synthetic Link fixture is a test executable in an isolated home, not a real connector or a real paired computer.
+
+Desktop CI runs this gate after the Linux headless smoke, the macOS universal package and the Windows NSIS package. Windows uses a temporary per-user NSIS install; macOS runs the packaged universal `.app`, with an ad-hoc signature if the host needs one. Linux uses the unpacked package and is supplementary evidence, not a shipping target. Every run writes a new evidence directory with screenshots, result JSON and sanitized process logs. Inspect those screenshots: the existing setup window can require scrolling to see all Link controls at 720×640; the gate scrolls the advanced section into view for that capture.
+
+This does not prove Developer ID or Authenticode signing, notarization, a physical Windows installation, real Link pairing/service installation, Screen Recording permission, a production release update, or the operating system's notification and taskbar integration. Those remain separate acceptance gates.
 
 ## Updates
 

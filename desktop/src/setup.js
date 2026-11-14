@@ -4,6 +4,7 @@ const error = document.querySelector("#error");
 const state = document.querySelector("#link-state");
 const result = document.querySelector("#link-result");
 let words = {};
+let linkAbsent = false;
 
 function t(key, variables = {}) {
   return (words[key] || key).replace(/\{(\w+)\}/g, (_, name) => variables[name] ?? "");
@@ -16,7 +17,8 @@ function message(value) {
 
 async function refreshLink() {
   const status = await window.desktopSetup.linkStatus();
-  if (!status.available) {
+  linkAbsent = !status.available;
+  if (linkAbsent) {
     state.textContent = t("link_absent");
     document.querySelector("#link-reconnect").disabled = true;
     document.querySelector("#pair-link").disabled = true;
@@ -24,6 +26,8 @@ async function refreshLink() {
     document.querySelector("#node-install").hidden = true;
     document.querySelector("#link-install-guide").hidden = false;
     document.querySelector("#link-install").hidden = false;
+    // Before a hub is chosen there is no correct per-hub Machines page to open. Do not leave a silent no-op button.
+    document.querySelector("#link-install").disabled = !field.value.trim();
     return;
   }
   const link = status.link || {};
@@ -43,6 +47,11 @@ async function command(value) {
   result.textContent = response.ok ? (response.stdout || t("done")) : (response.stderr || response.stdout || t("generic_error"));
   await refreshLink();
 }
+
+form.addEventListener("input", () => {
+  if (!linkAbsent) return;
+  document.querySelector("#link-install").disabled = !field.value.trim();
+});
 
 form.addEventListener("submit", async event => {
   event.preventDefault();

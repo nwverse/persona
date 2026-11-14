@@ -16,6 +16,8 @@ import { hubPartition } from "./sessions.js";
 import { installSmokeCapture } from "./smoke.js";
 import { installAutoUpdate } from "./updater.js";
 import { desktopPresence } from "./presence.js";
+import { installSetupProtocol } from "./setup-protocol.js";
+import { SETUP_URL } from "./setup-resources.js";
 
 installSmokeCapture();
 
@@ -159,7 +161,10 @@ async function showSetup(): Promise<void> {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      allowRunningInsecureContent: false,
       devTools: !app.isPackaged,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
       webviewTag: false,
     },
   });
@@ -181,7 +186,7 @@ async function showSetup(): Promise<void> {
       } catch { return { ok: false, error: "Enter a valid HTTP or HTTPS hub address." }; }
     },
   });
-  await setup.loadFile(join(import.meta.dirname, "setup.html"));
+  await setup.loadURL(SETUP_URL);
 }
 
 const locked = app.requestSingleInstanceLock();
@@ -199,6 +204,7 @@ else {
     else pendingDeepLink = raw;
   });
   app.whenReady().then(async () => {
+    installSetupProtocol();
     const publishPresence = () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       const presence = desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported());
