@@ -527,12 +527,12 @@ export struct InteractionDecisionForm {
       if (this.deferred && !this.readOnly) Button(tr('interaction_question_reopen')).attributeModifier(ButtonStyles.secondary).width('100%')
         .onClick(() => this.deferred = false).id('interaction.reopen')
       else if (!this.readOnly && this.request.kind === 'question') {
-        if (this.pinFooter) Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+        if (this.pinFooter) Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
           Button(tr('interaction_question_later')).attributeModifier(ButtonStyles.quiet).flexGrow(1).flexShrink(0).enabled(this.canDefer())
             .onClick(() => { this.deferred = true; this.onLater(); }).id('interaction.later')
           if (interactionScreenCanCancel(this.request)) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
             .attributeModifier(ButtonStyles.chrome).enabled(this.canRespond()).accessibilityText(tr('more'))
-            .bindMenu([{ value: tr('interaction_question_cancel'), action: () => this.submit('cancel') }]).flexShrink(0).alignSelf(ItemAlign.Center).id('interaction.more')
+            .bindMenu([{ value: tr('interaction_question_cancel'), action: () => this.submit('cancel') }]).flexShrink(0).id('interaction.more')
           Button(tr('confirm')).attributeModifier(ButtonStyles.primary).flexGrow(1).flexShrink(0).enabled(this.canSubmit())
             .onClick(() => this.submit('answer')).id('interaction.submit')
         }.width('100%')
