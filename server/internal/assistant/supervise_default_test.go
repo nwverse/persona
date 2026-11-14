@@ -370,6 +370,22 @@ func TestRehomeQueueAndReplayShareOneDurableWrite(t *testing.T) {
 	}
 }
 
+// A detached head suppresses another rehome replay, but selective /stop still needs its text's todo id once the head
+// is no longer draining. Empty structured metadata must not make the old message impossible to remove.
+func TestDetachedQueueHeadStillStopsByTodoID(t *testing.T) {
+	s, _, todo := newSupervisedService(t)
+	empty := []superviseSignal{}
+	s.queueRelay("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "detached review for " + todo.ID,
+		Signals: &empty, At: time.Now()})
+	n, taken := s.dropQueuedSupervisionTasks("side1", map[string]bool{todo.ID: true}, []Todo{todo})
+	if n != 1 || len(taken) != 1 || taken[0].Todo != todo.ID || taken[0].Kind != sigUnjudged {
+		t.Fatalf("detached /stop drop = %d, %+v", n, taken)
+	}
+	if got := s.queuedFor("side1"); got != 0 {
+		t.Fatalf("the stopped task's detached text stayed queued: %d", got)
+	}
+}
+
 // blockedAssistantDrain holds the old side's real drain without fakeHub's global lock, so rehome and main can proceed.
 type blockedAssistantDrain struct {
 	Hub

@@ -321,7 +321,8 @@ func (s *Service) dropQueuedSupervisionTasksAtomic(conversation string, ids map[
 		}
 		target := false
 		var remaining []superviseSignal
-		structured := m.Signals != nil
+		// An empty detached list has no signals to replay; its text still identifies tasks for a selective /stop.
+		structured := m.Signals != nil && len(*m.Signals) > 0
 		if structured {
 			for _, g := range *m.Signals {
 				if ids[g.Todo] {
