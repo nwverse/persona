@@ -194,7 +194,7 @@ struct SettingsView: View {
                 settingsLink(.language, "Language & Dictation", Theme.Icon.language, id: "settings-language", value: AppLanguage.settingsSummary)
                 settingsLink(.notifications, "Notifications", Theme.Icon.notifications, id: "settings-notifications")
                 #if os(iOS)
-                settingsLink(.liveScreen, "Live Screen", Theme.Icon.screen, id: "settings-live-screen")
+                LiveScreenSettingsRow()
                 #endif
                 settingsLink(.translation, "Translation", Theme.Icon.translate, id: "settings-translation", value: translationSummary)
                 settingsLink(.storage, "Storage", Theme.Icon.storage, id: "settings-storage", value: storage?.storageText ?? "")
