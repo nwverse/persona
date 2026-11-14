@@ -70,7 +70,10 @@ public final class PersonaCoreClient: @unchecked Sendable {
         }, changed_chat: { context, chat, length, version in
             guard let context else { return }
             let box = Unmanaged<CallbackBox>.fromOpaque(context).takeUnretainedValue()
-            guard let callback = box.callbacks.changedChat else { return }
+            guard let callback = box.callbacks.changedChat else {
+                box.callbacks.changed(version)
+                return
+            }
             let data = chat.map { Data(bytes: $0, count: length) } ?? Data()
             if let chat = String(data: data, encoding: .utf8) {
                 callback(chat, version)
