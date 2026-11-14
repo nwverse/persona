@@ -4,4 +4,4 @@ package osproc
 
 import "testing"
 
-func instantResolverWarmup(testing.T) {}
+func instantResolverWarmup(*testing.T) {}
