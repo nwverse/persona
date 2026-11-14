@@ -65,7 +65,12 @@ type MachineConfig struct {
 // connection to its resident node, a stream on the Persona Link it keeps to the hub (kind link, link.go), a
 // connector's stream (kind service), or a stream through a member hub (a derived machine).
 type Machine struct {
-	cfg MachineConfig
+	callCount atomic.Uint64 // calls that worked, for sampling their log lines (calllog.go)
+	// callLogMu guards offlineLogged (when an offline call was last logged) and offlineSkipped (how many since were not).
+	callLogMu      sync.Mutex
+	offlineLogged  time.Time
+	offlineSkipped int
+	cfg            MachineConfig
 	// named is what the computer is called now: cfg.Name until the hub renames it, which changes nothing else of the
 	// running machine (startMachines); read through name().
 	named atomic.Pointer[string]
