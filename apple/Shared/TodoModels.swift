@@ -54,10 +54,27 @@ nonisolated extension TodoItem {
     /// The state's label for this todo: "Auto-completed" for one the hub closed (docs/assistant/todos.md), "Accepted" /
     /// "Canceled" for one its supervisor closed after a review (#3124), "Accepted" too for one accepted and at rest again.
     func statusLabel(_ state: TaskState) -> String {
+        if isCancelled { return String(localized: "Canceled") }
         if acceptedAtRest(state) { return String(localized: "Accepted") }
-        guard state == .done else { return state.todoLabel }
-        if reviewDone { return supervision?.state == "cancelled" ? String(localized: "Canceled") : String(localized: "Accepted") }
-        return autoDone ? String(localized: "Auto-completed") : state.todoLabel
+        if state == .done {
+            if reviewDone { return supervision?.state == "cancelled" ? String(localized: "Canceled") : String(localized: "Accepted") }
+            return autoDone ? String(localized: "Auto-completed") : state.todoLabel
+        }
+        if waitsForOwner { return String(localized: "Waiting for You [To-do Sections]") }
+        if deliveredAwaitingReview(state) { return String(localized: "Delivered · Awaiting Review [To-do Sections]") }
+        return state.todoLabel
+    }
+
+    /// An open task whose next move belongs to the owner, with the same wording on the row and detail as in triage (#5732).
+    var waitsForOwner: Bool {
+        doneAt == nil && (reviewState == .needsUser || openAsk?.outcome == "decide" || openAsk?.outcome == "cannot")
+    }
+
+    /// Delivered work at rest still awaits acceptance; `live` alone never means done (#5732).
+    func deliveredAwaitingReview(_ state: TaskState) -> Bool {
+        guard doneAt == nil, !waitsForOwner else { return false }
+        let atRest = state == .followup || state == .unread || state == .notStarted
+        return atRest && (reviewState == .pendingReview || openAsk != nil || delivery?.state == "live")
     }
 
     /// An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it
@@ -66,8 +83,13 @@ nonisolated extension TodoItem {
         doneAt == nil && acceptanceStands && (state == .followup || state == .unread || state == .notStarted)
     }
 
-    /// The state a row draws its tone and mark from: Done for an accepted task at rest, else its own.
-    func shownState(_ state: TaskState) -> TaskState { acceptedAtRest(state) ? .done : state }
+    /// The state a row draws its tone and mark from: accepted, owner wait and delivered work match their labels (#5732).
+    func shownState(_ state: TaskState) -> TaskState {
+        if acceptedAtRest(state) { return .done }
+        if waitsForOwner { return .needsYou }
+        if deliveredAwaitingReview(state) { return .unread }
+        return state
+    }
 
     /// Why the hub closed it, when it did.
     var autoDoneReason: String? {

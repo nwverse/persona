@@ -139,6 +139,23 @@ data class TodoAgent(
     val isCurrent: Boolean get() = releasedAt == null
 }
 
+/** One to-do in a task's takeover history; links point to the previous and next cards (#5732). */
+@KeepGeneratedSerializer
+@Serializable(with = TodoLineageStepSerializer::class)
+data class TodoLineageStep(
+    @SerialName("todo_id") val todoId: String,
+    val title: String = "",
+    val agent: String? = null,
+    val machine: String? = null,
+    @SerialName("session_id") val sessionId: String? = null,
+    @WireTime val started: String? = null,
+    @WireTime val ended: String? = null,
+    val why: String? = null,
+    val continues: String? = null,
+    @SerialName("superseded_by") val supersededBy: String? = null,
+    val current: Boolean = false,
+)
+
 /** A todo (docs/assistant/todos.md); a task is one whose [origin] is an assistant conversation. */
 @KeepGeneratedSerializer
 @Serializable(with = TodoSerializer::class)
@@ -184,6 +201,9 @@ data class Todo(
     val ask: TodoAsk? = null,
     @SerialName("pr_url") val prUrl: String? = null,
     @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
+    @SerialName("cancelled_reason") val cancelledReason: String? = null,
+    /** Takeover history, oldest first; null from an older hub or for a task with no lineage. */
+    val lineage: List<TodoLineageStep>? = null,
     /** The manager it belongs to, as the merged list stamps it (docs/assistant/managers.md "Ownership"); null: the default manager's. */
     val manager: String? = null,
     /** Nobody is working on it (#3618): every agent of this open to-do is gone and nothing brings one back; null otherwise
@@ -191,6 +211,9 @@ data class Todo(
     val orphaned: TodoOrphaned? = null,
 ) {
     val isDone: Boolean get() = doneAt != null
+    /** Closed by cancellation, including the legacy supervision-only representation; never counted as completed (#5732). */
+    val isCancelled: Boolean get() = cancelledAt != null || doneBy == "cancelled" || doneAt != null && supervision?.state == "cancelled"
+    val cancellationReason: String? get() = if (isCancelled) cancelledReason ?: doneReason else null
     val activeAgents get() = agents.filter { it.releasedAt == null }
     val currentAgents: List<TodoAgent> get() = activeAgents
     val releasedAgents: List<TodoAgent> get() = agents.filter { it.releasedAt != null }
@@ -508,6 +531,7 @@ object TaskPlanSerializer : WireSerializer<TaskPlan>(TaskPlan.generatedSerialize
 object FeedItemSerializer : WireSerializer<FeedItem>(FeedItem.generatedSerializer())
 object TodoSpaceSerializer : WireSerializer<TodoSpace>(TodoSpace.generatedSerializer())
 object TodoAgentSerializer : WireSerializer<TodoAgent>(TodoAgent.generatedSerializer())
+object TodoLineageStepSerializer : WireSerializer<TodoLineageStep>(TodoLineageStep.generatedSerializer())
 object TodoSerializer : WireSerializer<Todo>(Todo.generatedSerializer())
 object ReviewCheckSerializer : WireSerializer<ReviewCheck>(ReviewCheck.generatedSerializer())
 object TaskReviewSerializer : WireSerializer<TaskReview>(TaskReview.generatedSerializer())

@@ -98,7 +98,7 @@ func TestQuietTaskTellsTheMainConversation(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "修好了，提了 https://github.com/o/r/pull/901", 0)
 	waitFor(t, "the notice", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
-	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "）：hub 判断做完了，等你验收（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
+	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "）：已交付·待看：hub 判断做完了，等你验收（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notice lacks %q:\n%s", want, n)
 		}
@@ -196,9 +196,8 @@ func TestQuietNoticeWaitsForTheTurn(t *testing.T) {
 	}
 }
 
-// Tasks from another conversation are not quiet: the hub pushes as always, and the planning conversation supervises
-// them itself (a supervision message, not a quiet notice). With the setting off a task from the main conversation is
-// not quiet (the hub pushes) but is still supervised.
+// Tasks from another conversation are not quiet: the hub pushes as always and main supervises them (#5732). With the
+// setting off a task from the main conversation is not quiet (the hub pushes) but is still supervised.
 func TestNotQuietTasksAreNotTold(t *testing.T) {
 	for _, c := range []struct {
 		name       string
@@ -206,24 +205,29 @@ func TestNotQuietTasksAreNotTold(t *testing.T) {
 		supervisor string
 		told       bool
 	}{
-		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, "conv1", true},
+		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, "conv-main", true},
 		{"setting off", func(v *Settings) { v.MainTasksQuiet = new(false) }, "conv1", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f := newQuietService(t)
 			f.judge = `{"verdict":"done","reason":"好了"}`
 			setSettings(t, s, c.set)
+			if c.supervisor != "conv1" {
+				f.known[c.supervisor] = true
+				f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+					proto.Session{SessionID: c.supervisor, MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+			}
 			if todo := startedTask(t, s, f); todo.Quiet || todo.Supervision == nil || todo.Supervision.Supervisor != c.supervisor {
 				t.Fatalf("todo = %+v (supervision %+v)", todo, todo.Supervision)
 			}
 			agentTurn(s, f, proto.StatusWorking, "", 0)
 			agentTurn(s, f, proto.StatusDone, "好了", 0)
-			time.Sleep(4 * quietNoticeDelay)
-			if told := len(f.notices()) > 0; told != c.told {
-				t.Fatalf("told = %v: %q", told, f.notices())
+			waitFor(t, "the supervision message", func() bool { return len(f.noticesTo(c.supervisor)) > 0 })
+			if told := len(f.noticesTo(c.supervisor)) > 0; told != c.told {
+				t.Fatalf("told = %v: %q", told, f.noticesTo(c.supervisor))
 			}
 			if c.name == "side conversation" {
-				for _, n := range f.notices() {
+				for _, n := range f.noticesTo(c.supervisor) {
 					if !strings.Contains(n, "📋 督办") {
 						t.Fatalf("a side conversation's message is not its supervision message:\n%s", n)
 					}
@@ -249,8 +253,8 @@ func TestQuietTaskFailedStart(t *testing.T) {
 
 var errLauncherGone = errors.New("session.start: no such launcher")
 
-// agent_start from the main conversation is a quiet task (card, link); from another conversation or with the setting
-// off it stays an agent of its own.
+// agent_start always creates a task: the main conversation's is quiet by default; another conversation's, or one with
+// the quiet setting off, is not. All are main-supervised (#5732).
 func TestAgentStartFromTheMainConversation(t *testing.T) {
 	args := json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI 为什么挂了"}`)
 	s, _ := newQuietService(t)
@@ -282,8 +286,13 @@ func TestAgentStartFromTheMainConversation(t *testing.T) {
 		if _, err := s.runTool(context.Background(), "server", c.conv, "agent_start", args); err != nil {
 			t.Fatal(err)
 		}
-		if todoCount(s) != 0 || feedKinds(s, c.conv) != "" {
-			t.Fatalf("%s (off %v): todos %d, feed %q", c.conv, c.off, todoCount(s), feedKinds(s, c.conv))
+		todo := onlyTodo(s)
+		if todoCount(s) != 1 || todo.Origin != c.conv || todo.Quiet || todo.Supervision == nil || todo.Supervision.Supervisor != "conv1" ||
+			feedKinds(s, c.conv) != "task" {
+			t.Fatalf("%s (off %v): todo %+v, feed %q", c.conv, c.off, todo, feedKinds(s, c.conv))
+		}
+		if c.conv != "conv1" && feedKinds(s, "conv1") != "task" {
+			t.Fatalf("%s: main feed %q", c.conv, feedKinds(s, "conv1"))
 		}
 	}
 }
@@ -302,9 +311,8 @@ func TestGoldenTaskNotice(t *testing.T) {
 	}
 }
 
-// A conversation started with report_tasks (a plugin's /agent, #3192) is told about the tasks it opens, as the main
-// conversation is about its quiet ones: the task is quiet, its notice goes into that conversation (not the main one)
-// and says to hand the result on as that conversation was told to; agent_start from it is a task too.
+// A reporting conversation keeps its task notices, while the main conversation supervises the same task (#5732).
+// agent_start from it is a task too.
 func TestReportingConversationIsToldItsTasks(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
@@ -316,7 +324,7 @@ func TestReportingConversationIsToldItsTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
-	if todo := onlyTodo(s); !todo.Quiet || todo.Origin != "lark1" {
+	if todo := onlyTodo(s); !todo.Quiet || todo.Origin != "lark1" || todo.Supervision == nil || todo.Supervision.Supervisor != "conv1" {
 		t.Fatalf("todo = %+v", todo)
 	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -343,8 +351,9 @@ func TestReportingConversationIsToldItsTasks(t *testing.T) {
 	if strings.Contains(n, "主对话") {
 		t.Errorf("the notice talks of the main conversation:\n%s", n)
 	}
-	if got := f.notices(); len(got) != 0 {
-		t.Fatalf("the main conversation was told too: %q", got)
+	waitFor(t, "the main supervision", func() bool { return len(f.notices()) == 1 })
+	if got := f.notices(); len(got) != 1 || !strings.Contains(got[0], "📋 督办") {
+		t.Fatalf("the main supervision: %q", got)
 	}
 
 	s2, _ := newQuietService(t)
@@ -614,9 +623,8 @@ func TestTaskNeedsRecheckReachability(t *testing.T) {
 	})
 }
 
-// An agent a reporting conversation opens with agent_start is its task as one from task_plan is (#4101): not
-// supervised by the main conversation, so when it is done the reporting conversation gets the notice and the main
-// conversation hears nothing of it.
+// An agent a reporting conversation opens with agent_start keeps its own notice and gains main supervision (#4101,
+// #5732): both conversations hear the outcome, each through its own route.
 func TestReportingConversationAgentStartIsToldThere(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
@@ -630,7 +638,7 @@ func TestReportingConversationAgentStartIsToldThere(t *testing.T) {
 		t.Fatal(err)
 	}
 	todo := onlyTodo(s)
-	if !todo.Quiet || todo.Origin != "lark1" || todo.Supervision != nil {
+	if !todo.Quiet || todo.Origin != "lark1" || todo.Supervision == nil || todo.Supervision.Supervisor != "conv1" {
 		t.Fatalf("todo = %+v, supervision %+v", todo, todo.Supervision)
 	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -651,15 +659,15 @@ func TestReportingConversationAgentStartIsToldThere(t *testing.T) {
 	if n := sentTo("lark1")[0]; !strings.Contains(n, "做完了（box）") || !strings.Contains(n, "https://example.com/mr/8") {
 		t.Fatalf("notice:\n%s", n)
 	}
-	time.Sleep(4 * shortSuperviseTimings.every)
-	if got := f.notices(); len(got) != 0 {
-		t.Fatalf("the main conversation was told: %q", got)
+	waitFor(t, "the main supervision", func() bool { return len(f.notices()) == 1 })
+	if got := f.notices(); len(got) != 1 || !strings.Contains(got[0], "📋 督办") {
+		t.Fatalf("the main supervision: %q", got)
 	}
 }
 
-// A reporting conversation's task_review on its own unsupervised task closes it without making a ledger, so the task
-// never joins the main conversation's supervision messages; rework and needs_user are refused (#4262).
-func TestReportingConversationTaskReviewMakesNoLedger(t *testing.T) {
+// A reporting conversation cannot accept its own main-supervised task. Main reviews it; the reporting origin keeps its
+// notices without gaining review permission (#5732).
+func TestReportingConversationTaskReviewStaysWithMain(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
 	f.known["lark1"] = true
@@ -680,16 +688,17 @@ func TestReportingConversationTaskReviewMakesNoLedger(t *testing.T) {
 		_, err := s.runTool(ctx, "server", "lark1", "task_review", raw)
 		return err
 	}
-	for _, v := range []string{"rework", "needs_user"} {
-		if err := review(v); err == nil || !strings.Contains(err.Error(), "not supervised") {
-			t.Fatalf("%s: %v", v, err)
+	for _, v := range []string{"rework", "needs_user", "cancelled"} {
+		if err := review(v); err == nil || !strings.Contains(err.Error(), "not handed out") {
+			t.Fatalf("%s from the reporting origin: %v", v, err)
 		}
 	}
-	if err := review("cancelled"); err != nil {
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "cancelled", "note": "重复了"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
 		t.Fatal(err)
 	}
 	now := todoNow(s, todo.ID)
-	if now.DoneAt == nil || now.DoneBy != db.DoneByCancelled || now.Supervision != nil {
+	if now.DoneAt == nil || now.DoneBy != db.DoneByCancelled || now.Supervision == nil || now.Supervision.Supervisor != "conv1" {
 		t.Fatalf("after cancelled: %+v, supervision %+v", now, now.Supervision)
 	}
 }

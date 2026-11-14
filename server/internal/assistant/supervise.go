@@ -118,11 +118,14 @@ type TaskReview struct {
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
-// when it was judged and the judge's reason.
+// when it was judged and the judge's reason. PushPending marks a new, still-undelivered push; NotifiedAt records its
+// success. Legacy waits have neither and are not replayed on upgrade.
 type OwnerWait struct {
-	Work   time.Time `json:"work"`
-	At     time.Time `json:"at"`
-	Reason string    `json:"reason,omitempty"`
+	Work        time.Time  `json:"work"`
+	At          time.Time  `json:"at"`
+	Reason      string     `json:"reason,omitempty"`
+	PushPending bool       `json:"push_pending,omitempty"`
+	NotifiedAt  *time.Time `json:"notified_at,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -314,9 +317,9 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	}
 	switch v.state(t) {
 	case reviewNeedsUser:
-		return "等你决定", 0
+		return "等你处理", 0
 	case reviewPending:
-		return "待验收", 1
+		return "已交付·待看", 1
 	case reviewAccepted:
 		return "已验收", 8
 	case reviewCancelled:
@@ -334,6 +337,9 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	}
 	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
 		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
+	}
+	if deliveryAwaitsReview(t, agents) {
+		return "已交付·待看", 1 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	for _, c := range agents {
 		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {

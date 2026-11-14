@@ -274,8 +274,7 @@ func silentTurnErrorIn(l i18n.Lang) string { return i18n.T(l, "assistant-tasks.s
 var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://[^/\s<>"()]+/(?:[^/\s<>"()]+/)+merge_requests/\d+\b`)
 
 // taskTurnEnded: one of the task's agents (sid on machine) ended a turn. Once none of them works or waits for the
-// user any more, the conversation gets a receipt (once per stretch of work), and the todo is closed if the judge
-// finds the work finished.
+// user any more, the conversation gets a receipt (once per stretch of work), and the judge records delivery for review.
 func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	time.Sleep(s.settleDelay(ctx)) // a turn that ends to ask, or goes on at once, is not the end
 	s.taskTurnSettled(ctx, machine, sid)
@@ -314,10 +313,8 @@ func (s *Service) settleTurn(ctx context.Context, machine, sid, unheard string) 
 	}
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
-		// An agent Persona started that is on no todo becomes a task once a turn of it did work (#3617, agent_tasks.go).
-		if t, ok = s.agentTaskAtTurnEnd(ctx, machine, sid); !ok {
-			return settleRefused
-		}
+		// A session opened manually on the Agents page is not adopted just because its turn did work (#5732).
+		return settleRefused
 	}
 	if unheard != "" && t.ID != unheard {
 		return settleRefused // the session is another task's agent now: its turns are not this todo's

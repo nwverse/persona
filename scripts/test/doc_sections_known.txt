@@ -41,7 +41,6 @@ docs/protocol/protocol.md	docs/operations/runtime-cli.md	Connecting to a real de
 docs/protocol/protocol.md	docs/server/machines.md	Self-check
 docs/protocol/protocol.md	engines.md	When herdr isn't running
 docs/protocol/protocol.md	launcher-health.md	Endpoints for the board
-docs/protocol/protocol.md	todos.md	Auto-complete
 docs/web/web.md	docs/assistant/inbox.md	Mute
 docs/web/web.md	docs/protocol/protocol.md	Messages Persona injects
 server/internal/assistant/inbox_connectors.go	docs/plans/plan-connectors.md	1 · 5. Inbox

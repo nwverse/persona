@@ -32,7 +32,7 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 // which plans workers beneath that task only and starts them at once (task_leader.go).
 func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, args json.RawMessage, scope *leaderScope) (string, error) {
 	var a struct{ Tasks []PlanTask }
-	lead := "" // the leader conversation the main conversation hands the plan to (task_plan's supervisor, #3608)
+	lead := "" // legacy supervisor input, kept in the saved plan; new work is supervised by main (#5732)
 	if scope != nil {
 		tasks, err := scope.workerTasks(args)
 		if err != nil {
@@ -262,46 +262,27 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 	}
 	b.WriteString("This is not confirmation that any agent started. Startup can still fail; the task cards and context snapshot show the outcome.")
-	background := s.backgroundOn(s.settings(ctx)) // who follows up a task no leader supervises (supervise_background.go)
-	switch {
-	case lead != "":
-		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", lead)
-	case background && s.isBackground(ctx, sessionID):
-		b.WriteString(" You follow them up as the background supervisor: a supervision message comes when one needs you (review it with task_review).")
-	case background && s.isMain(ctx, sessionID):
-		b.WriteString(" The background supervisor follows them up: their supervision messages go to it and it reviews them with " +
-			"task_review, so none comes to you for them. You still hear of a start that failed and of what it hands to the user, " +
-			"and may review any of them yourself (task_review).")
-	case s.supervises(ctx, sessionID):
+	if sup, ok := s.defaultPlanSupervisor(ctx, sessionID, ""); ok && sup != sessionID {
+		b.WriteString(" The main conversation supervises them (its supervision messages and task_review); this conversation " +
+			"gets a one-line notice with the task's link when each one ends.")
+	} else if ok {
 		b.WriteString(" You supervise them: a supervision message comes when one needs you (review it with task_review).")
-	default:
-		// A live side conversation supervises what it hands out; one that cannot be told anything leaves its task to
-		// the main conversation's follow-up (defaultPlanSupervisor), which is the background supervisor's while it is on.
-		if sup, ok := s.defaultPlanSupervisor(ctx, sessionID, ""); ok && sup == sessionID {
-			b.WriteString(" You supervise them: a supervision message comes when one needs you (review it with task_review).")
-		} else if ok && background {
-			b.WriteString(" The background supervisor follows them up (their supervision messages and task_review); this conversation " +
-				"gets a one-line notice with the task's link when each one ends.")
-		} else if ok {
-			b.WriteString(" The main conversation supervises them (its supervision messages and task_review); this conversation " +
-				"gets a one-line notice with the task's link when each one ends.")
-		}
 	}
 	b.WriteString(dups)
 	return b.String(), nil
 }
 
-// planSupervisor is task_plan's supervisor from conversation self: "" (self supervises, as before) or a current leader,
-// which only the main conversation may hand work to.
+// planSupervisor validates task_plan's legacy supervisor input: "" or a current leader, which only the main
+// conversation may name. The value is saved for old-plan recognition; every new task is supervised by main (#5732).
 func (s *Service) planSupervisor(ctx context.Context, self, lead string) (string, error) {
 	lead = strings.TrimSpace(lead)
 	switch {
 	case lead == "" || lead == self:
 		return "", nil
 	case !s.isMain(ctx, self):
-		return "", errors.New("supervisor: only the main conversation hands work to a leader conversation; leave it out to supervise the tasks yourself")
+		return "", errors.New("supervisor: only the main conversation may name a leader here; leave it out: new tasks are supervised by the main conversation")
 	case !s.isLeader(ctx, lead):
-		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); leave it out to supervise the tasks yourself", lead)
+		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); leave it out: the main conversation supervises the tasks", lead)
 	}
 	return lead, nil
 }

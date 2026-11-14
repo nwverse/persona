@@ -110,16 +110,15 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if !ok {
 		return "", fmt.Errorf("no task %q", a.TodoID)
 	}
-	// The main conversation may review any supervised task: after the main conversation changes, the old tasks'
-	// supervision messages come to the new one, which has to be able to close them (#4262).
-	// The background supervisor reviews the tasks no leader supervises, whose ledgers name the main conversation
-	// (supervise_background.go); the main conversation may still review them, as it may a leader's.
+	// Main supervises every conversation-dispatched task (#5732). Origin alone never lets a side conversation accept
+	// and close it. The only delegated reviewers are main, an explicitly assigned manual leader, a task leader for its
+	// own worker, or the legacy background with durable evidence for that old task.
 	isMain := s.isMain(ctx, self)
 	background := s.backgroundSupervises(ctx, self, t)
-	if t.Origin == "" || t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self && !isMain) {
-		if !background && !s.mayReviewForLeader(ctx, self, t) {
-			return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
-		}
+	manualLeader := t.Supervision != nil && t.Supervision.Supervisor == self && s.isLeader(ctx, self)
+	allowed := isMain || background || manualLeader || s.mayReviewForLeader(ctx, self, t)
+	if t.Origin == "" || !allowed {
+		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 	}
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser || a.Verdict == reviewParked) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new task for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
@@ -146,10 +145,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "", err
 		}
 	}
-	// A conversation supervises what it handed out (task_plan, quietAgentTask): a task without a ledger
-	// gets none here either, or its signals would go into the main conversation's supervision messages (#4262). It can still
-	// be closed; rework, needs_user and parked are what supervision is for.
-	ledger := t.Supervision != nil || isMain
+	// A legacy task without a ledger stays unsupervised when main accepts or cancels it; closing it must not invent a
+	// new supervision topology. Rework, needs_user and parked require an existing supervised task.
+	ledger := t.Supervision != nil
 	if !ledger && (verdict == reviewRework || verdict == reviewNeedsUser || verdict == reviewParked) {
 		return "", fmt.Errorf("task %s is not supervised: send what is missing to its agent with agent_send, or ask the user in your answer", t.ID)
 	}
@@ -245,9 +243,13 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
+	var keys []string
 	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigOrphaned, sigOverdue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
-		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
+		key := t.ID + "|" + k
+		delete(b.pending, key) // reviewed: what waited is answered
+		keys = append(keys, key)
 	}
+	s.forgetSupervisePending(keys...)
 	b.mu.Unlock()
 	// How it ended against what was asked (task_brief_result.go): each criterion of the brief, as scope changes left them.
 	var result *BriefResult

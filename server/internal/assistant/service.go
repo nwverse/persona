@@ -157,7 +157,6 @@ type Service struct {
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional  bool
-	background      backgroundBook  // supervise_background.go
 	autoRuns        autoReviewBook  // supervise_autoreview.go
 	reports         reportBook      // reports.go
 	upReports       reportRate      // agent_control.go: report_to_supervisor

@@ -199,7 +199,8 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             tasks = tasksStore,
             onBack = { navigator.back() },
             onOpenSession = { key -> navigator.navigate(ChatRoute(key.machineId, key.sessionId)) },
-            onHandOff = { todo -> handOffTodo = todo }
+            onHandOff = { todo -> handOffTodo = todo },
+            onOpenTodo = { todoId -> navigator.navigate(TodoDetailRoute(todoId)) },
         )
         // Kept while the to-do is open, so an unconfirmed start is checked again rather than posted a second time.
         var handOffPending by remember(route.todoId) { mutableStateOf<TodoHandOffOperation?>(null) }

@@ -2,11 +2,18 @@
 // it under Done at once instead of after 24 hours. The hub keeps the mark (`seen_at`), so every device agrees; Undo takes
 // it off. A hub without `todo_seen` has no mark: the page offers neither.
 import { api, enc } from "./api";
+import { reviewState } from "./supervision";
 import { getState, hubHas, putTodo } from "./store";
 import type { Todo } from "./todos";
 
 /** The hub keeps seen marks (hello `features`): `PUT` / `DELETE /todos/{id}/seen` and `seen_at` on a to-do. */
 export const TODO_SEEN_FEATURE = "todo_seen";
+
+/** Whether Got it can file a finished turn under Done. Seen is not acceptance: a supervised task, a pending review and
+ *  an unaccepted live delivery stay open, so their rows must not offer an action that says "Moved to Done" (#5732). */
+export function seenCanFile(todo: Todo): boolean {
+  return todo.delivery?.state !== "live" && reviewState(todo) !== "pending_review" && !todo.supervision?.supervisor;
+}
 
 /** Whether the page offers Got it and counts opening a to-do as seeing it: only when the hub says it keeps the mark. */
 export function todoSeenOn(features: string[]): boolean {

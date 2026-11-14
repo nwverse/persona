@@ -14,7 +14,6 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -69,6 +68,129 @@ func doneSignals(replies []prompts.TaskDoneReply) taskDoneSignals {
 		}
 	}
 	return s
+}
+
+// ownerNoAction reports a complete no-action predicate after an owner marker. The sentence or clause must end there:
+// "do nothing else but approve" is still an action, while an independent requirement after a period is handled by the
+// next marker occurrence rather than being swallowed with this one.
+func ownerNoAction(rest string) bool {
+	rest = strings.TrimSpace(rest)
+	for _, phrase := range []string{"do nothing else", "do nothing"} {
+		if !strings.HasPrefix(rest, phrase) {
+			continue
+		}
+		tail := strings.TrimSpace(rest[len(phrase):])
+		if tail == "" || strings.ContainsRune(".!?;", rune(tail[0])) {
+			return true
+		}
+	}
+	return false
+}
+
+// directOwnerMarker reports whether any occurrence of marker starts a direct requirement at the line or a
+// sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
+// skipping one such occurrence must not suppress a later direct one. A comma inside that same if-sentence does not end
+// its conditional scope; a new sentence or an independent "otherwise" clause does (#5732).
+func directOwnerMarker(lower, marker string) bool {
+	for from := 0; from < len(lower); {
+		i := strings.Index(lower[from:], marker)
+		if i < 0 {
+			return false
+		}
+		i += from
+		before := strings.TrimSpace(lower[:i])
+		direct := before == ""
+		for _, end := range []string{".", "!", "?", ":", ";"} {
+			direct = direct || strings.HasSuffix(before, end)
+		}
+		if strings.HasSuffix(before, ",") {
+			clause := before
+			end := strings.LastIndexAny(clause, ".!?;")
+			// A colon starts a clause after whitespace; a time such as 10:30 does not end the conditional scope.
+			if i := strings.LastIndex(clause, ": "); i > end {
+				end = i
+			}
+			if i := strings.LastIndex(clause, ":\t"); i > end {
+				end = i
+			}
+			if end >= 0 {
+				clause = strings.TrimSpace(clause[end+1:])
+			}
+			direct = !strings.HasPrefix(clause, "if ") || strings.HasSuffix(clause, "otherwise,")
+		}
+		if direct && !ownerNoAction(lower[i+len(marker):]) {
+			return true
+		}
+		from = i + len(marker)
+	}
+	return false
+}
+
+// ownerActionLine is a final reply's explicit request for the owner to act. The judge still decides the task as a
+// whole; these unambiguous offers and hand-offs are a safety net against calling the work done (#5732). Negated forms
+// are informational, not a request.
+func ownerActionLine(text string) string {
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		compact := strings.Join(strings.Fields(line), "")
+		for _, p := range []struct {
+			marker    string
+			negations []string
+		}{
+			{"需要你本人操作", []string{"不需要你本人操作", "无需你本人操作", "不用你本人操作", "不必你本人操作"}}, // i18n-ignore: parser markers, not display copy
+			{"由你发起", []string{"不需要由你发起", "无需由你发起", "不用由你发起", "不必由你发起"}},        // i18n-ignore: parser markers, not display copy
+			{"要不要", []string{"不需要你决定要不要", "无需你决定要不要", "不用你决定要不要", "不是要不要"}},    // i18n-ignore: parser markers, not display copy
+		} {
+			if !strings.Contains(compact, p.marker) {
+				continue
+			}
+			if p.marker == "要不要" && !strings.ContainsAny(line, "？?") { // i18n-ignore: parser markers, not display copy
+				continue // evaluating whether to do something is narrative, not asking the owner to choose (#5732)
+			}
+			candidate := compact
+			for _, n := range p.negations {
+				candidate = strings.ReplaceAll(candidate, n, strings.Repeat(" ", len(n)))
+			}
+			// Negation is occurrence-local here too: masking its own phrase cannot hide a later direct requirement.
+			if strings.Contains(candidate, p.marker) {
+				return line
+			}
+		}
+		lower := strings.ToLower(line)
+		for _, p := range []struct {
+			marker    string
+			negations []string
+		}{
+			{"you need to", nil},
+			{"you'll need to", nil},
+			{"would you like me to", nil},
+			{"do you want me to", nil},
+			{"should i proceed", nil},
+			{"shall i proceed", nil},
+		} {
+			if !strings.Contains(lower, p.marker) {
+				continue
+			}
+			if p.marker == "you need to" || p.marker == "you'll need to" {
+				// Negation is occurrence-local: its own prefix is not direct, and it never hides a later direct requirement.
+				if directOwnerMarker(lower, p.marker) {
+					return line
+				}
+				continue
+			}
+			negated := false
+			for _, n := range p.negations {
+				negated = negated || strings.Contains(lower, n)
+			}
+			if !negated {
+				return line
+			}
+		}
+	}
+	return ""
 }
 
 // taskDoneCheck is one judgment, as POST /api/v1/todos/{id}/done-check answers it.
@@ -305,7 +427,7 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 		if len(in.Criteria) == 0 {
 			in.Criteria = t.Supervision.DoneWhen
 		}
-		// Spot-checking on: the judge checks each criterion too, so a task that passes can close without task_review.
+		// Spot-checking on: the judge records each criterion as delivery evidence; it never accepts or closes the task.
 		in.Checks = len(in.Criteria) > 0 && s.reviewSamplePercent(ctx) < 100
 	}
 	return judgeTaskDoneWith(ctx, s.purposeModel("inbox.judge"), in)
@@ -379,7 +501,19 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 		Unblock  string          `json:"unblock"`
 		Checks   []autoCheckItem `json:"checks"`
 	}
+	// This deterministic safety net does not depend on the judge being available. Keep it with the model error so the
+	// supervision path can still mark and push an explicit owner action (#5732).
+	ownerAction := ""
+	for _, r := range in.Replies {
+		if action := ownerActionLine(r.Text); action != "" {
+			ownerAction = action
+			break
+		}
+	}
 	if err := m.JSON(ctx, system, input, &out); err != nil {
+		if ownerAction != "" {
+			c.Verdict, c.Reason = verdictNeedsUser, clip(oneLine(ownerAction), 40)
+		}
 		return c, err
 	}
 	switch v := strings.ToLower(strings.TrimSpace(out.Verdict)); v {
@@ -389,7 +523,11 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 		c.Verdict = verdictUnsure // a verdict it made up is no verdict
 	}
 	c.Reason = clip(oneLine(out.Reason), 40)
-	c.WouldClose = c.Verdict == verdictDone
+	if c.Verdict != verdictNeedsUser && ownerAction != "" {
+		c.Verdict, c.Reason = verdictNeedsUser, clip(oneLine(ownerAction), 40)
+	}
+	// Kept for wire compatibility. A judge may deliver a task for review, never close it (#5732).
+	c.WouldClose = false
 	if in.Checks {
 		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
 		if !strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryLive) {
@@ -415,7 +553,7 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 }
 
 // autoFinishTask: t's receipt went out (its agents all stopped). work is when one of them last started a turn. The
-// todo is marked done when the judge finds the work finished; otherwise it stays as it is.
+// judge records delivery and waiting state when it finds the work finished; it never closes the todo.
 func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), taskDoneTimeout)
 	defer cancel()
@@ -454,11 +592,12 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 
 // applyTaskDone writes judgment c (err: the judge could not say) of task t, whose agents last started a turn at work
 // (worked false: not known): the verdict on the todo, where its delivery is held, and then what follows a finished
-// stretch of work. A supervised task waits for its supervisor's review (never closed here); another is closed when
-// the judge found it done. autoFinishTask and Re-check with apply (doneCheckRoute) end here.
+// stretch of work. Every task waits for the main conversation's review or explicit user completion; none is closed
+// here. autoFinishTask and Re-check with apply (doneCheckRoute) end here.
 func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, worked bool, c taskDoneCheck, err error) {
-	if ai.IsNotConfigured(err) {
+	if ai.IsNotConfigured(err) && c.Verdict != verdictNeedsUser {
 		// A missing provider is not a transient judge failure: keep the same localized explanation the settings row shows.
+		// A deterministic owner-only action remains actionable without a judge and must reach the visible wait (#5732).
 		c = taskDoneCheck{Verdict: verdictWaiting, Reason: mc(s.lang(ctx), s.noAPIStatus(ctx))}
 	}
 	if err == nil || ai.IsNotConfigured(err) {
@@ -466,6 +605,15 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 	}
 	if err == nil && c.Delivery != nil && c.Verdict != verdictNotDone {
 		s.setTaskDelivery(ctx, t.ID, *c.Delivery) // where it is held, on its card (delivery.go)
+	}
+	if t.Supervision == nil {
+		// Tasks created before universal supervision still join the main conversation instead of being closed (#5732).
+		if main := s.settings(ctx).Main; main != "" {
+			s.superviseTodo(ctx, t.ID, main, nil, 0)
+			if current, ok := s.todoNow(t.ID); ok {
+				t = current
+			}
+		}
 	}
 	if t.Supervision != nil {
 		s.tasks.completionMu.Lock()
@@ -487,27 +635,9 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 		}
 		return
 	}
-	if !c.WouldClose {
-		s.logf("task %s: not closed: %s (%s)", t.ID, c.Verdict, c.Reason)
-		return
-	}
-	reason := c.Reason
-	if reason == "" {
-		reason = i18n.T(s.lang(ctx), doneReasonFallback)
-	}
-	if !worked {
-		work = t.CreatedAt
-	}
-	ok, err := s.finishCurrentTask(ctx, t.ID, reason, work)
-	switch {
-	case err != nil:
-		s.logf("task %s: auto done: %v", t.ID, err)
-	case ok:
-		s.logf("task %s: done (auto): %s", t.ID, reason)
-		s.taskClosedReport(t, reason)
-	default:
-		s.logf("task %s: changed while judged: left as it is", t.ID)
-	}
+	// Without a main conversation there is nobody to review delivery either. Keep the task open with its check; never
+	// fall back to the old automatic close (#5732).
+	s.logf("task %s: judge %s: left open for delivery review (%s)", t.ID, c.Verdict, c.Reason)
 }
 
 // doneCheckRoute: POST /api/v1/todos/{id}/done-check runs the judgment on a todo as it is and answers it. Without

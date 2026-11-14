@@ -72,12 +72,12 @@ func TestJudgeTaskDoneWithVerdicts(t *testing.T) {
 		gate     string
 		unblock  string
 	}{
-		{"done, any case and spacing", false, `{"verdict":" DONE ","reason":"finished"}`, verdictDone, true, "", "", ""},
+		{"done, any case and spacing", false, `{"verdict":" DONE ","reason":"finished"}`, verdictDone, false, "", "", ""},
 		{"a made-up verdict is unsure", false, `{"verdict":"finished","reason":"looks finished"}`, verdictUnsure, false, "", "", ""},
 		{"waiting stays open", false, `{"verdict":"waiting","reason":"waiting for CI"}`, verdictWaiting, false, "", "", ""},
-		{"delivery off ignores the delivery fields", false, `{"verdict":"done","delivery":"pr","gate":"merge","unblock":"user"}`, verdictDone, true, "", "", ""},
+		{"delivery off ignores the delivery fields", false, `{"verdict":"done","delivery":"pr","gate":"merge","unblock":"user"}`, verdictDone, false, "", "", ""},
 		{"done but held at a PR is undelivered", true, `{"verdict":"done","delivery":"pr","gate":"merge approval","unblock":"user"}`, verdictUndelivered, false, deliveryPR, "merge approval", unblockUser},
-		{"done and live closes", true, `{"verdict":"done","delivery":"live","gate":"none","unblock":"user"}`, verdictDone, true, deliveryLive, "", ""},
+		{"done and live stays open", true, `{"verdict":"done","delivery":"live","gate":"none","unblock":"user"}`, verdictDone, false, deliveryLive, "", ""},
 		{"not done keeps its verdict while delivery is judged", true, `{"verdict":"not_done","delivery":"pr"}`, verdictNotDone, false, deliveryPR, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,6 +105,61 @@ func TestJudgeTaskDoneWithVerdicts(t *testing.T) {
 	}
 }
 
+func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply, verdict, reason string
+	}{
+		{"manual operation", "Spec 写好了。需要你本人操作部署。", verdictNeedsUser, "需要你本人操作"},
+		{"owner starts the next step", "Spec 已完成，后续由你发起实现。", verdictNeedsUser, "由你发起"},
+		{"offer to continue", "方案已经完成。要不要开始实现？", verdictNeedsUser, "要不要开始实现"},
+		{"English offer", "The spec is ready. Would you like me to start the implementation?", verdictNeedsUser, "Would you like me to"},
+		{"English proceed offer", "The spec is ready. Should I proceed with the implementation?", verdictNeedsUser, "Should I proceed"},
+		{"English shall offer", "The spec is ready. Shall I proceed with the implementation?", verdictNeedsUser, "Shall I proceed"},
+		{"English direct owner operation", "The spec is ready. You need to deploy it yourself.", verdictNeedsUser, "You need to"},
+		{"English direct owner operation after a semicolon", "The spec is ready; you need to deploy it yourself.", verdictNeedsUser, "you need to"},
+		{"English direct requirement after a conditional", "If you need to roll back, use the backup. Otherwise, you need to approve the release yourself.", verdictNeedsUser, "you need to"},
+		{"English direct contraction after a conditional", "If you'll need to roll back, use the backup. Otherwise, you'll need to approve the release yourself.", verdictNeedsUser, "you'll need to"},
+		{"repeated English marker within one conditional", "If you need to deploy, you need to notify the owner first.", verdictDone, ""},
+		{"repeated English contraction within one conditional", "If you'll need to deploy, you'll need to notify the owner first.", verdictDone, ""},
+		{"conditional scope survives a semicolon introduction", "The spec is ready; if you need to deploy, you need to notify the owner first.", verdictDone, ""},
+		{"conditional scope survives a colon introduction", "The spec is ready: if you'll need to deploy, you'll need to notify the owner first.", verdictDone, ""},
+		{"English direct contraction after a colon", "Next: you'll need to restart the service.", verdictNeedsUser, "you'll need to"},
+		{"English direct owner operation after an introduction", "Next, you'll need to restart the service.", verdictNeedsUser, "you'll need to"},
+		{"negated manual operation", "不用你本人操作，已经全部完成。", verdictDone, ""},
+		{"negated owner start", "无需由你发起，已自动开始。", verdictDone, ""},
+		{"negated offer", "不需要你决定要不要继续，已按原方案完成。", verdictDone, ""},
+		{"negated Chinese operation does not hide a later direct one", "不用你本人操作回滚。需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作"},
+		{"another negated Chinese operation does not hide a later direct one", "无需你本人操作回滚，需要你本人操作部署。", verdictNeedsUser, "需要你本人操作"},
+		{"negated Chinese start does not hide a later direct one", "无需由你发起回滚；后续由你发起发布。", verdictNeedsUser, "由你发起"},
+		{"negated Chinese choice does not hide a later direct question", "不需要你决定要不要回滚；要不要继续发布？", verdictNeedsUser, "要不要继续发布"},
+		{"conditional English guidance", "If you need to roll back, run make rollback.", verdictDone, ""},
+		{"conditional English guidance with a time", "If you need to deploy at 10:30, you need to notify the owner first.", verdictDone, ""},
+		{"negated English owner requirement", "You don't need to approve the release; it is already live.", verdictDone, ""},
+		{"negated English requirement does not hide a later direct one", "You don't need to roll back. You need to approve the release yourself.", verdictNeedsUser, "You need to"},
+		{"negated English contraction does not hide a later direct one", "You won't need to roll back. You'll need to approve the release yourself.", verdictNeedsUser, "You'll need"},
+		{"explicit no action", "You need to do nothing.", verdictDone, ""},
+		{"explicit no further action after delivery", "The work is live. You need to do nothing else.", verdictDone, ""},
+		{"explicit no action does not hide an independent requirement", "You need to do nothing else. Otherwise, you need to approve the release yourself.", verdictNeedsUser, "Otherwise"},
+		{"explicit no action with contraction", "You'll need to do nothing else.", verdictDone, ""},
+		{"English narrative about a choice", "The report evaluates whether you need to split the module and concludes no.", verdictDone, ""},
+		{"Chinese narrative about a choice", "评估了要不要拆分模块，结论是不拆。", verdictDone, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &cannedJSON{answer: `{"verdict":"done","reason":"finished"}`}
+			c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []prompts.TaskDoneReply{doneReply(tc.reply)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Verdict != tc.verdict || c.WouldClose {
+				t.Fatalf("reply %q: verdict %q close %v, want %q false", tc.reply, c.Verdict, c.WouldClose, tc.verdict)
+			}
+			if tc.reason != "" && !strings.Contains(c.Reason, tc.reason) {
+				t.Fatalf("reason %q does not carry %q from %q", c.Reason, tc.reason, tc.reply)
+			}
+		})
+	}
+}
+
 func TestJudgeTaskDoneWithReasonIsOneShortLine(t *testing.T) {
 	long := "The retry works now.\n\n" + strings.Repeat("Checked again on the staging hub. ", 4)
 	m := &cannedJSON{answer: `{"verdict":"done","reason":` + judgeJSONText(t, long) + `}`}
@@ -126,6 +181,18 @@ func TestJudgeTaskDoneWithModelError(t *testing.T) {
 	}
 	if c.Verdict != "" || c.WouldClose || c.Replies != 1 || !c.Signals.MergedPR {
 		t.Fatalf("check = %+v, want no verdict with the replies counted and the hints found", c)
+	}
+}
+
+func TestJudgeTaskDoneModelErrorKeepsExplicitOwnerAction(t *testing.T) {
+	m := &cannedJSON{err: errors.New("no model")}
+	reply := "The spec is ready. Should I proceed with the implementation?"
+	c, err := judgeTaskDoneWith(context.Background(), m, taskDoneInput{Title: "Write the spec", Replies: []prompts.TaskDoneReply{doneReply(reply)}})
+	if err == nil {
+		t.Fatal("the model error is still reported")
+	}
+	if c.Verdict != verdictNeedsUser || !strings.Contains(c.Reason, "Should I proceed") || c.WouldClose {
+		t.Fatalf("the explicit owner action was lost with the model failure: %+v", c)
 	}
 }
 

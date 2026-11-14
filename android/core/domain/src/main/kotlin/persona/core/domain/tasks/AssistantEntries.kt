@@ -77,8 +77,10 @@ private fun Todo.entryRank(status: TriageStatus): Int {
     return when (status) {
         TriageStatus.NeedsYou -> 0
         TriageStatus.Interrupted -> 10
+        TriageStatus.UsageLimit -> 15
         TriageStatus.Failed -> 30
         TriageStatus.Working -> 40
+        TriageStatus.Waiting -> 45
         TriageStatus.NotStarted -> 50
         TriageStatus.Unread -> 60
         TriageStatus.FollowUp -> 70
@@ -106,7 +108,7 @@ fun assistantEntries(
     val superseded = supersededFailedStarts(todos)
     // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched
     for (todo in todos.filter { isMain || it.origin == conversation }) {
-        val status = todo.triageStatus(lookup)
+        val status = todo.triageStatus(lookup, now)
         val active = if (todo.isDone) emptyList() else todo.activeAgents
         val asks = active.flatMap { asksOf[GroupKeys.rawKey(it.key)].orEmpty() }
         val bucket = todo.bucket(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)

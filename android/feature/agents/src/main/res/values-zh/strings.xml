@@ -431,6 +431,12 @@
     <string name="agents_todo_decision_keep_editing">继续填写</string>
     <string name="agents_todo_notes_empty">点击编辑添加任务说明与要求…</string>
     <string name="agents_todo_auto_reason">自动完成理由：%1$s</string>
+    <string name="agents_todo_cancelled">已取消</string>
+    <string name="agents_todo_cancelled_reason">取消原因：%1$s</string>
+    <string name="agents_todo_lineage">任务接手记录</string>
+    <string name="agents_todo_lineage_current">当前任务</string>
+    <string name="agents_todo_lineage_continues">接手自 %1$s</string>
+    <string name="agents_todo_lineage_superseded">由新卡 %1$s 接手</string>
     <string name="agents_todo_hold_pr">停在 PR</string>
     <string name="agents_todo_due">截止 %1$s</string>
     <string name="agents_todo_was_due">已过截止 %1$s</string>
@@ -520,9 +526,9 @@
     <string name="agents_page_more">加载更多</string>
     <string name="agents_page_previous">加载之前的会话</string>
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
-    <string name="agents_todos_section_waiting">需要你</string>
+    <string name="agents_todos_section_waiting">等你处理</string>
     <string name="agents_todos_section_working">工作中</string>
-    <string name="agents_todos_section_just_done">刚做完</string>
+    <string name="agents_todos_section_just_done">已交付·待看</string>
     <string name="agents_todos_section_pr">PR 待合并</string>
     <string name="agents_todos_section_other">其他未完成</string>
     <string name="agents_todos_section_shelved">已搁置</string>

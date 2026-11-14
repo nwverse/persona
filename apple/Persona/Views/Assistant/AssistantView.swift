@@ -314,7 +314,7 @@ struct AssistantView: View {
             #endif
         }
         .navigationDestination(isPresented: $showRoutines) { AssistantRoutinesView() }
-        .navigationDestination(isPresented: $showTodos) { TodosView() }
+        .navigationDestination(isPresented: $showTodos) { TodosView(openDetail: { navPath.wrappedValue.append($0) }) }
         .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
         .navigationDestination(isPresented: $showHealth) {
             HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, mode: $starterMode, effort: $starterEffort) { text, images in
@@ -322,7 +322,7 @@ struct AssistantView: View {
             }
         }
         .modifier(ShellDestinations(path: $path, enabled: placesByValue && !embedded, inboxChat: inboxChatPush))
-        .modifier(ClassicDestinations(enabled: shell == nil && !padPlaces && !embedded))
+        .modifier(ClassicDestinations(path: $path, enabled: shell == nil && !padPlaces && !embedded))
         #if os(iOS)
         .modifier(SidebarRouteDestinations(enabled: embedded, page: sidebarPage))
         #endif
@@ -1830,12 +1830,13 @@ private struct RootBarHidden: UIViewRepresentable {
 /// pushed from the todo list (TodosView) would open nothing. Nor the agent page Full Screen pushes (`SessionKey`). The
 /// shell registers both itself (ShellHome.swift).
 private struct ClassicDestinations: ViewModifier {
+    @Binding var path: NavigationPath
     var enabled: Bool
 
     func body(content: Content) -> some View {
         if enabled {
             content
-                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id) }
+                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id, openDetail: { path.append($0) }) }
                 .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
         } else {
             content

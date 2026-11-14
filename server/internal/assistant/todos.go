@@ -246,6 +246,9 @@ func (s *Service) ensureTodosLoaded(ctx context.Context) error {
 	loaded := b.loaded
 	b.mu.Unlock()
 	if loaded {
+		s.rehomeSupervisedTodos(ctx)
+		s.restoreSupervisePending(ctx)
+		s.retryOwnerWaits(ctx) // crash recovery resumes only explicitly undelivered owner pushes
 		// The links as read are the ones the marks go by from now on: one that goes away later syncs its machine
 		// again (syncLinkedTodoTokens), even before any of the links changed.
 		s.syncLinkedTodoTokens()
@@ -558,9 +561,25 @@ func copyTodoLocked(t *Todo) Todo {
 // that worked for it (latest released first).
 func formatTodo(t Todo) Todo {
 	out := t
-	// Existing clients use review for cancellation labels and reasons. Keep that wire value;
-	// the stored marker distinguishes cancellation even for tasks without a supervision ledger.
-	if out.DoneBy == db.DoneByCancelled {
+	// Existing clients use review for cancellation labels and reasons. Keep that wire value; Cancelled covers both the
+	// stored marker and legacy review rows whose supervision verdict records the cancellation (#5732).
+	if out.Cancelled() {
+		// Cancellation is stored as a closed row. Derive its independent outcome at the API boundary so every client,
+		// including one without a supervision ledger, can keep it out of Completed (#5732).
+		if out.CancelledAt == nil {
+			out.CancelledAt = out.DoneAt
+		}
+		if out.CancelledReason == "" {
+			out.CancelledReason = out.DoneReason
+			if out.Supervision != nil {
+				for i := len(out.Supervision.Reviews) - 1; i >= 0; i-- {
+					if r := out.Supervision.Reviews[i]; r.Verdict == reviewCancelled && r.Note != "" {
+						out.CancelledReason = r.Note
+						break
+					}
+				}
+			}
+		}
 		out.DoneBy = db.DoneByReview
 	}
 	if out.Spaces == nil {

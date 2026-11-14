@@ -5,6 +5,7 @@ import json
 import unittest
 from urllib.parse import urlencode
 import uuid
+from zoneinfo import ZoneInfo
 
 from test_meeting_attendance_mock import Hub, start
 
@@ -270,8 +271,13 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.assertEqual(self.state()["revision"], 10)
 
     def test_recap_shape_and_reconciliation(self):
-        self.put(tz="Asia/Shanghai", segments=[segment(3700, "I will write the test"), segment(1, "A meeting about exports"),
-                                               segment(7500, "A walk outside")],
+        zone = "Asia/Shanghai"
+        # All segments are in the past, but the recording zone's next 06:00 cutoff is still ahead at every wall-clock
+        # time. A fixed 08:00 UTC start instead became final when this suite ran after 22:00 UTC.
+        self.now = datetime.now(timezone.utc) - timedelta(hours=3)
+        day = self.now.astimezone(ZoneInfo(zone)).date().isoformat()
+        self.put(day=day, tz=zone, segments=[segment(3700, "I will write the test"), segment(1, "A meeting about exports"),
+                                             segment(7500, "A walk outside")],
                  coverage={"to": 8000, "gaps": [{"from": 3000, "to": 3200, "reason": "interrupted"}]})
         detail = self.detail()
         recap = detail["recap"]
@@ -283,12 +289,13 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.assertEqual(recap["actions"], [{"id": "a1", "what": "I will write the test", "at": 3700, "todo_id": ""}])
         self.assertNotIn("who", recap["timeline"][0]["points"][0])
         self.assertEqual(detail["summary"], recap["summary"])
-        self.assertIn("16:00", recap["markdown"])
+        clock = (self.now + timedelta(seconds=1)).astimezone(ZoneInfo(zone)).strftime("%H:%M")
+        self.assertIn(clock, recap["markdown"])
         self.assertIn("## Meetings", recap["markdown"])
         self.assertIn("## Outside meetings", recap["markdown"])
         listed = self.state()
         self.assertEqual({k: listed[k] for k in ("kind", "day", "part", "base", "next", "recap_state")},
-                         {"kind": "day", "day": self.now.date().isoformat(), "part": 1, "base": 10, "next": 3, "recap_state": "ready"})
+                         {"kind": "day", "day": day, "part": 1, "base": 10, "next": 3, "recap_state": "ready"})
         self.assertNotIn("recap_final", listed)
         matches = self.call("GET", "/api/v1/kb/recordings/" + self.rid + "?q=walk")[1]["matches"]
         self.assertTrue(matches)

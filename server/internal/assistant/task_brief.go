@@ -518,6 +518,32 @@ func (s *Service) putTaskBrief(ctx context.Context, rec briefRecord, todoID stri
 	return v, nil
 }
 
+// continueBriefFor puts a newly adopted agent's card on its previous card's brief. Older tasks without one get a
+// reconstructed brief first, so the source and take-over remain traceable in both directions (#5732).
+func (s *Service) continueBriefFor(ctx context.Context, self string, previous, todo Todo, reason string, doneWhen []string, expect int) error {
+	if _, ok := s.briefOfTodo(previous.ID); !ok {
+		var criteria []string
+		minutes := 0
+		if previous.Supervision != nil {
+			criteria, minutes = previous.Supervision.DoneWhen, previous.Supervision.ExpectMinutes
+		}
+		s.briefFor(ctx, s.callerOrigin(ctx, previous.Origin), previous, criteria, minutes)
+	}
+	brief, ok := s.briefOfTodo(previous.ID)
+	if !ok {
+		return fmt.Errorf("previous task %s has no brief", previous.ID)
+	}
+	if err := s.linkTaskBrief(ctx, brief.ID, todo.ID, previous.ID, reason); err != nil {
+		return err
+	}
+	if len(doneWhen) > 0 || expect > 0 {
+		if _, err := s.rescope(ctx, todo, self, self, "agent_takeover", doneWhen, expect); err != nil {
+			s.logf("task %s: takeover scope: %v", todo.ID, err)
+		}
+	}
+	return nil
+}
+
 // linkTaskBrief puts to-do todoID on brief id, continuing to-do continues for reason (a take-over); a to-do already on
 // a brief stays on it.
 func (s *Service) linkTaskBrief(ctx context.Context, id, todoID, continues, reason string) error {

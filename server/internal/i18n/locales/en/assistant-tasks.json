@@ -41,6 +41,8 @@
   "adopt_failed": "Could not take it under supervision: {reason}",
   "interrupt_summary": "Stop {agent} · {machine}",
   "start_remedy_notice": "Didn’t start: “{title}”. {reason}",
+  "task_needs_user_title": "“{name}” needs you",
+  "task_needs_user_title_health": "A task needs you",
   "admission_no_metrics": "This computer has not reported resource metrics.",
   "admission_stale": "This computer's resource metrics are stale.",
   "admission_no_cores": "This computer's core count is not reported.",

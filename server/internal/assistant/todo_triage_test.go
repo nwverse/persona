@@ -27,14 +27,15 @@ type triageFixtureCase struct {
 		IncludeQuiet bool            `json:"include_quiet"`
 	} `json:"input"`
 	Expected struct {
-		Section  string                `json:"section"`
-		Rule     string                `json:"rule"`
-		Last     time.Time             `json:"last"`
-		Sections map[string][][]string `json:"sections"`
-		Open     int                   `json:"open"`
-		Shelved  int                   `json:"shelved"`
-		Finished int                   `json:"finished"`
-		Keys     []string              `json:"keys"`
+		Section   string                `json:"section"`
+		Rule      string                `json:"rule"`
+		Last      time.Time             `json:"last"`
+		Sections  map[string][][]string `json:"sections"`
+		Open      int                   `json:"open"`
+		Shelved   int                   `json:"shelved"`
+		Finished  int                   `json:"finished"`
+		Cancelled int                   `json:"cancelled"`
+		Keys      []string              `json:"keys"`
 	} `json:"expected"`
 }
 
@@ -104,8 +105,9 @@ func TestTriageTodosFollowsTheSharedCases(t *testing.T) {
 					t.Fatalf("section %s: got %v, want %v", s, got, want)
 				}
 			}
-			if r.Open != c.Expected.Open || r.Shelved != c.Expected.Shelved || r.Finished != c.Expected.Finished {
-				t.Fatalf("counts %d/%d/%d, want %d/%d/%d", r.Open, r.Shelved, r.Finished, c.Expected.Open, c.Expected.Shelved, c.Expected.Finished)
+			if r.Open != c.Expected.Open || r.Shelved != c.Expected.Shelved || r.Finished != c.Expected.Finished || r.Cancelled != c.Expected.Cancelled {
+				t.Fatalf("counts open/shelved/finished/cancelled %d/%d/%d/%d, want %d/%d/%d/%d", r.Open, r.Shelved, r.Finished, r.Cancelled,
+					c.Expected.Open, c.Expected.Shelved, c.Expected.Finished, c.Expected.Cancelled)
 			}
 		})
 	}

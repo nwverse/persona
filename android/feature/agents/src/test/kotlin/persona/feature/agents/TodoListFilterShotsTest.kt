@@ -125,7 +125,7 @@ class TodoListFilterShotsTest {
                 open(style = style, dark = dark)
                 // no summary line; the counts are the sections'
                 assertFalse("summary line", has("个未完成"))
-                assertTrue(has("需要你") && has("工作中"))
+                assertTrue(has("等你处理") && has("工作中"))
                 rule.onNodeWithTag("todos-filter").assertExists()
                 save("after", style, dark)
             }

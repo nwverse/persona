@@ -3,28 +3,24 @@
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
 import { acceptanceStands, latestReview, reviewState } from "./supervision";
-import { openAsk, todoDueBy, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { isCancelled, openAsk, todoDueBy, todoStatus, waitsForOwner, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { todoStageIndex } from "./todo-stage";
 
-/** Where a to-do shows. */
-export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "pr" | "other" | "shelved" | "done";
+/** Where a to-do shows, in the page's order (#5707): explicit parked work stays open (#5929), cancelled apart from Done (#5732). */
+export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "pr" | "other" | "shelved" | "done" | "cancelled";
 
-/** The page's order (#5707): what the owner has to act on, the unfinished work, what just finished, then the folded
- *  ones, Done last. A merged row is led by its member in the first of these. */
-export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "pr", "parked", "other", "just_done", "shelved", "done"];
+export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "pr", "parked", "other", "just_done", "shelved", "done", "cancelled"];
 
-/** Sections that start folded: the rest start open, unfinished to-dos included. */
-export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(["shelved", "done"]);
+/** Sections that start folded: unfinished to-dos stay open (#5707); cancelled folds apart from Done (#5732). */
+export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(TRIAGE_SECTIONS.slice(-3));
 
 /** No activity for this long, nothing of it running: shelved (SOP rule 11). */
 export const SHELVE_AFTER_MS = 48 * 3600_000;
-/** Finished this recently, and not seen since: "Just finished"; earlier, "Done". Seeing it (Got it, or opening it,
- *  #5707) files it at once; the time is the fallback. */
-export const JUST_DONE_MS = 24 * 3600_000;
 
 /** Which SOP rule placed a to-do (for tests and the SOP's wording); the section follows from it. */
 export type TriageRule =
   | "failed_start"
+  | "cancelled"
   | "superseded"
   | "agent_asks"
   | "owner_decides"
@@ -32,7 +28,6 @@ export type TriageRule =
   | "parked"
   | "closed"
   | "accepted"
-  | "deployed"
   | "finished_unseen"
   | "seen"
   | "pr_open"
@@ -96,50 +91,55 @@ function shelvable(todo: Todo, now: number): boolean {
  * A to-do's section by the SOP's table (docs/assistant/todo-status-sop.md, "Decision table"), first match wins:
  *
  *  1. failed_start    the task's agent never started                    → Waiting on you (retry or remove), Done after 48 h;
- *     superseded      … and a related to-do (its row) really finished   → Just finished (24 h), then Done (#3713)
+ *     superseded      … and a related to-do (its row) really finished   → Done immediately (#3713)
  *  2. agent_asks      an agent asks (question, approval) or was cut off → Waiting on you
  *  3. owner_decides   review says needs_user, or a decision / "cannot" ask → Waiting on you
  *  4. agent_running   an agent is working or starting                   → Working
- *  5. closed          done_at set                                       → Just finished (24 h), then Done
- *  6. accepted        the latest review accepted it (even reopened)     → Just finished (24 h), then Done
- *  7. deployed        its delivery is live                              → Just finished (24 h), then Done
- *  8. finished_unseen an agent finished unseen, awaits review, or a done ask → Just finished
+ *  5. closed          done_at set                                       → Done immediately
+ *  5a. parked         an explicit unexpired wait                         → Parked; expired → Other open
+ *  6. accepted        the latest review accepted it (even reopened)     → Done immediately
+ *  7. finished_unseen its delivery is live, not accepted                → Delivered · awaiting review, with no timeout
+ *  8. finished_unseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
  *  9. pr_open         its PR is open, nothing running                   → PR to merge (however old)
- *  9a. seen           rule 8, seen since it last moved, no PR open      → Done
+ *  9a. seen           rule 8 without supervision, seen since it last moved, no PR open → Done
  *
- * Seen (#5707): the owner looked at it (`seen_at`: Got it, or opening it) at or after the moment that put it in Just
- * finished — its close, its accepting review, its deploy, its last move for rule 8 — so it goes to Done at once.
+ * Seen (#5707) files only an unsupervised finished turn. A supervised task or an unaccepted live delivery remains
+ * awaiting review even after the owner opens it (#5732).
  * 10. stale           a task with no activity for 48 h                  → Shelved
  * 11. rest            anything else                                     → Other open
  */
 export function triage(todo: Todo, lookup: SessionLookup | undefined, now: number, restoredAt = 0, superseded = false): Triage {
   const last = lastActivity(todo, lookup, restoredAt);
   const status: TodoStatus = todoStatus(todo, lookup);
-  // seen: the owner looked at it at or after `at`; fresh: it got to Just finished at `at`, under a day ago, unseen since
+  const review = reviewState(todo);
+  // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
+  // Explicit closure and acceptance are already Done; Seen does not move them through awaiting review.
   const seenAt = ms(todo.seen_at);
   const seen = (at: number) => seenAt > 0 && seenAt >= at;
-  const fresh = (at: number) => now - at < JUST_DONE_MS && !seen(at);
   const ask = openAsk(todo);
   const at = (section: TriageSection, rule: TriageRule): Triage => ({ section, rule, last });
 
+  if (isCancelled(todo)) return at("cancelled", "cancelled");
   if (status === "failed") {
     // the same piece of work finished in a related to-do (`supersededFailedStarts`): history, nothing left to retry
-    if (superseded) return at(fresh(ms(todo.done_at) || last) ? "just_done" : "done", "superseded");
+    if (superseded) return at("done", "superseded");
     return at(now - last < SHELVE_AFTER_MS ? "waiting" : "done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
-  if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
+  if (waitsForOwner(todo)) return at("waiting", "owner_decides");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
-  if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
+  if (todo.done_at) return at("done", "closed");
   // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
-  if (reviewState(todo) === "parked") {
+  if (review === "parked") {
     const until = ms(todo.supervision?.parked?.until);
     return at(until && until <= now ? "other" : "parked", "parked");
   }
-  if (acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
-  if (todo.delivery?.state === "live") return at(fresh(ms(todo.delivery.at) || last) ? "just_done" : "done", "deployed");
-  const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
-  if (finished && !seen(last)) return at("just_done", "finished_unseen");
+  if (acceptanceStands(todo)) return at("done", "accepted");
+  // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old or seen (#5732).
+  if (todo.delivery?.state === "live") return at("just_done", "finished_unseen");
+  const finished = status === "unread" || review === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
+  // Live returned above. Every other supervised or review-pending task still needs acceptance after Seen.
+  if (finished && (!seen(last) || review === "pending_review" || todo.supervision?.supervisor)) return at("just_done", "finished_unseen");
   if (openPR(todo)) return at("pr", "pr_open");
   // seen since it last moved, and no PR waits on the owner
   if (finished) return at("done", "seen");
@@ -147,19 +147,18 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   return at("other", "rest");
 }
 
-/** Whether a to-do counts toward the header's open count: not closed, not accepted or deployed, not shelved. A finished
- *  turn nobody looked at yet (Just finished, still open) counts: only a review or the user closes a to-do. One the owner
- *  has seen since (rule 9a, in Done) does not. */
+/** Whether a to-do counts toward the header's open count: not closed, accepted or shelved. An unaccepted delivery
+ *  still counts after being seen; only an unsupervised finished turn can be filed by Seen (#5707, #5732). */
 export function countsAsOpen(todo: Todo, t: Triage): boolean {
   // a failed start has done_at too (the hub ends it), yet while it waits on the owner it is theirs to retry: open
   if (t.rule === "failed_start") return t.section === "waiting";
-  if (todo.done_at || t.section === "shelved" || t.section === "done") return false;
-  return t.rule !== "accepted" && t.rule !== "deployed";
+  if (todo.done_at || t.section === "cancelled" || t.section === "shelved" || t.section === "done") return false;
+  return t.rule !== "accepted";
 }
 
 /** Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the conversation's
  *  Progress entry read this one rule, so the two numbers agree. `open` counts, `shelved` folds (no activity for 48 h,
- *  nothing running), `closed` is finished (done, accepted, deployed, an old failed start). */
+ *  nothing running), `closed` is finished (done, accepted, an old failed start). */
 export type TodoBucket = "open" | "shelved" | "closed";
 
 export function todoBucket(todo: Todo, lookup: SessionLookup | undefined, now: number, restoredAt = 0, superseded = false): TodoBucket {
@@ -207,7 +206,7 @@ function relatedRoots(list: Todo[]): (id: string) => string {
   };
   const owner = new Map<string, string>();
   for (const td of list) {
-    const side = td.done_at ? "c" : "o";
+    const side = isCancelled(td) ? "x" : td.done_at ? "c" : "o";
     for (const k of relatedKeys(td)) {
       const key = side + "|" + k;
       const other = owner.get(key);
@@ -225,7 +224,7 @@ function relatedRoots(list: Todo[]): (id: string) => string {
  */
 export function supersededFailedStarts(todos: Todo[]): Set<string> {
   const root = relatedRoots(todos);
-  const finishedRows = new Set(todos.filter((td) => td.done_at && !td.start_error).map((td) => root(td.id)));
+  const finishedRows = new Set(todos.filter((td) => td.done_at && !td.start_error && !isCancelled(td)).map((td) => root(td.id)));
   return new Set(todos.filter((td) => td.start_error && finishedRows.has(root(td.id))).map((td) => td.id));
 }
 
@@ -246,10 +245,12 @@ export interface TriageResult {
   sections: Record<TriageSection, TriageGroup[]>;
   /** To-dos (not rows) per section. */
   todoCounts: Record<TriageSection, number>;
-  /** To-dos the header calls open (countsAsOpen), shelved, and finished (closed, accepted or deployed). */
+  /** To-dos the header calls open (countsAsOpen), shelved, and finished (closed or accepted). */
   open: number;
   shelved: number;
   finished: number;
+  /** Cancelled to-dos, counted separately from finished / completed ones (#5732). */
+  cancelled: number;
 }
 
 const ORDER = new Map(TRIAGE_SECTIONS.map((s, i) => [s, i]));
@@ -289,7 +290,8 @@ export function triageTodos(
     if (countsAsOpen(td, tr)) open++;
   }
   const shelved = todoCounts.shelved;
-  const finished = list.length - open - shelved;
+  const cancelled = todoCounts.cancelled;
+  const finished = list.length - open - shelved - cancelled;
   for (const members of byRoot.values()) {
     members.sort((a, b) => {
       const ta = placed.get(a.id)!;
@@ -304,5 +306,5 @@ export function triageTodos(
     sections[lt.section].push({ key: lead.id, section: lt.section, lead, members, triage: triageOf, last: Math.max(...members.map((m) => placed.get(m.id)!.last)) });
   }
   for (const s of TRIAGE_SECTIONS) sections[s].sort((a, b) => b.last - a.last || a.key.localeCompare(b.key));
-  return { sections, todoCounts, open, shelved, finished };
+  return { sections, todoCounts, open, shelved, finished, cancelled };
 }

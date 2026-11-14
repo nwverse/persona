@@ -29,9 +29,28 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 	}
 	var all []ranked
 	now := time.Now()
+	asks := s.todoAsks(ctx)
 	for _, t := range list {
 		agents := s.taskAgents(ctx, t)
 		st := taskState(t, agents)
+		if t.DoneAt == nil {
+			review := ""
+			if t.Supervision != nil {
+				review = t.Supervision.state(t)
+			}
+			var ask *todoAsk
+			if a, ok := asks[t.ID]; ok {
+				ask = triageOpenAsk(&a)
+			}
+			atRest := st == "followup" || st == "unread" || st == "not_started"
+			switch {
+			case review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot):
+				st = "owner_wait"
+			case atRest && (st == "unread" || review == reviewPending || deliveryAwaitsReview(t, agents) ||
+				ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone)):
+				st = "awaiting_review"
+			}
+		}
 		if st == "followup" && time.Since(t.UpdatedAt) > 24*time.Hour {
 			continue
 		}
@@ -43,6 +62,24 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 			task.Last = clip(oneLine(t.StartError), 80) // why it did not start, for the morning brief (#4124)
 		}
 		task.Link = todoLink(web, t.ID)
+		if t.Cancelled() {
+			task.CancelledReason = clip(oneLine(t.DoneReason), 80)
+			if v := t.Supervision; v != nil {
+				for i := len(v.Reviews) - 1; i >= 0; i-- {
+					if r := v.Reviews[i]; r.Verdict == reviewCancelled && r.Note != "" {
+						task.CancelledReason = clip(oneLine(r.Note), 80)
+						break
+					}
+				}
+			}
+		}
+		for _, step := range s.taskLineage(t.ID) {
+			if !step.Current {
+				continue
+			}
+			task.Continues, task.ContinuesLink = step.Continues, todoLink(web, step.Continues)
+			task.SupersededBy, task.SupersededByLink = step.SupersededBy, todoLink(web, step.SupersededBy)
+		}
 		task.Delivery = clip(oneLine(deliverySummary(t)), 80)
 		var rank int
 		task.Health, rank = taskHealth(t, agents, now) // supervised tasks: what needs the assistant first (supervise.go)
@@ -211,6 +248,19 @@ func taskState(t Todo, agents []proto.Session) string {
 	return "not_started"
 }
 
+// deliveryAwaitsReview is the snapshot's unaccepted live state at rest. A new working stretch is still work in
+// progress, not a second delivery; taskHealth uses the same predicate so State and Health cannot disagree (#5732).
+func deliveryAwaitsReview(t Todo, agents []proto.Session) bool {
+	if t.DoneAt != nil || t.Delivery == nil || t.Delivery.State != deliveryLive {
+		return false
+	}
+	switch taskState(t, agents) {
+	case "followup", "unread", "not_started":
+		return true
+	}
+	return false
+}
+
 // agentWaits: c's turn ended and the hub or its own background work brings it back, so its task waits rather than
 // stopped (#3274): only background commands, subagents, Monitors or workflows still run and will report back
 // (BackgroundWorking), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure for it
@@ -226,7 +276,8 @@ func agentWaits(c proto.Session) bool {
 
 func taskStateLabel(st string) string {
 	return map[string]string{"done": "已完成", "auto_done": "已完成（hub 判断做完了，自动关的）", "failed": "没开起来", "needs_you": "等用户",
-		"interrupted": "模型服务出错，中断了（没做完，等用户让它继续）", "unread": "做完了（用户还没看）", "working": "在做",
+		"owner_wait": "等你处理", "awaiting_review": "已交付·待看", // i18n-ignore: the model reads these snapshot labels
+		"interrupted": "模型服务出错，中断了（没做完，等用户让它继续）", "unread": "已交付·待看", "working": "在做",
 		"followup": "停着", "not_started": "还没开始",
 		// "cancelled" shares the ignored final line: every label here is model-read prompt text, and this keeps the
 		// hardcoded-Chinese baseline count unchanged instead of raising it.

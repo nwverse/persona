@@ -242,9 +242,9 @@ func TestUnsupervisedTaskStillAsksTheOwner(t *testing.T) {
 	}
 }
 
-// judgeClosed has conclusionService's task pass the done judge's spot check (nothing sampled, every criterion met, live)
-// until the judge closes it and what it tells the owner is kept.
-func judgeClosed(t *testing.T, s *Service, f *fakeHub, todo string) {
+// acceptedAfterJudgeDelivery has the judge deliver a checked live result, proves it did not close the task, then has
+// main accept it. user_check keeps the owner's own verification requirement where asked (#5732).
+func acceptedAfterJudgeDelivery(t *testing.T, s *Service, f *fakeHub, todo string, userCheck bool) {
 	t.Helper()
 	sampleAt(t, s, 0)
 	// The judge says it is live; the reply itself does not, so no deployed "Please verify" stands in for the conclusion.
@@ -253,15 +253,19 @@ func judgeClosed(t *testing.T, s *Service, f *fakeHub, todo string) {
 	f.mu.Unlock()
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了，两条都核对过，结论见上面的报告", 0)
-	waitFor(t, "closed by the judge", func() bool { return todoNow(s, todo).DoneAt != nil })
+	waitFor(t, "delivered for review", func() bool { return todoNow(s, todo).Supervision.State == reviewPending })
+	if todoNow(s, todo).DoneAt != nil {
+		t.Fatal("the judge closed the task")
+	}
+	reviewTask(t, s, todo, map[string]any{"verdict": "accepted", "note": "验收通过", "user_check": userCheck})
+	waitFor(t, "closed by main", func() bool { return todoNow(s, todo).DoneAt != nil })
 	waitFor(t, "its ask", func() bool { a := askOf(s, todo); return a != nil && !a.AskedAt.IsZero() })
 }
 
-// A task the done judge closed after its spot check is checked: its conclusion card tells the owner, already marked
-// checked, with nothing to press, and nothing waits for them (#3356).
-func TestJudgeClosedTaskWaitsForNobody(t *testing.T) {
+// Main's acceptance after a judge delivery passes the owner's conclusion: nothing waits for them (#5732).
+func TestAcceptedAfterJudgeDeliveryWaitsForNobody(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
-	judgeClosed(t, s, f, todo.ID)
+	acceptedAfterJudgeDelivery(t, s, f, todo.ID, false)
 	a := askOf(s, todo.ID)
 	if !a.Conclusion || a.AcceptedAt.IsZero() || !a.BySupervisor {
 		t.Fatalf("ask %+v", a)
@@ -283,15 +287,15 @@ func TestJudgeClosedTaskWaitsForNobody(t *testing.T) {
 	}
 }
 
-// A big feature (high priority, #3205) the judge closed is still the owner's to look at.
-func TestJudgeClosedBigFeatureWaitsForTheOwner(t *testing.T) {
+// A big feature accepted with user_check still asks the owner to look themselves.
+func TestAcceptedBigFeatureWithUserCheckWaitsForTheOwner(t *testing.T) {
 	s, f, todo, _, _ := conclusionService(t, false)
 	s.todos.mu.Lock()
 	s.todos.todos[todo.ID].Priority = "high"
 	s.todos.mu.Unlock()
-	judgeClosed(t, s, f, todo.ID)
+	acceptedAfterJudgeDelivery(t, s, f, todo.ID, true)
 	s.verifySupervisedAsks(context.Background())
-	if a := askOf(s, todo.ID); !a.Conclusion || !a.AcceptedAt.IsZero() {
+	if a := askOf(s, todo.ID); a == nil || a.Conclusion || !a.AcceptedAt.IsZero() {
 		t.Fatalf("ask %+v", a)
 	}
 	if n := waitingForOwner(s); n != 1 {

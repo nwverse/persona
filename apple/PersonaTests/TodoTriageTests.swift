@@ -74,8 +74,8 @@ struct TodoTriageTests {
         #expect(t.section == .working && t.rule == .agentRunning)
     }
 
-    @Test func closedIsJustFinishedForADayThenDone() {
-        #expect(at(todo("t", done: 3)).section == .justDone)
+    @Test func closedIsImmediatelyDone() {
+        #expect(at(todo("t", done: 3)).section == .done)
         #expect(at(todo("t", updated: 30, done: 30)).section == .done)
     }
 
@@ -85,7 +85,7 @@ struct TodoTriageTests {
             $0.supervision = acceptedReopened()
         }
         let t = at(td)
-        #expect(t.section == .justDone && t.rule == .accepted)
+        #expect(t.section == .done && t.rule == .accepted)
         let status = TodosLogic.todoStatus(td, lookup: lookup)
         #expect(td.statusLabel(status) == "已验收")
         #expect(td.shownState(status) == .done)
@@ -96,8 +96,30 @@ struct TodoTriageTests {
         #expect(at(todo("t", agents: ["run"]) { $0.supervision = acceptedReopened() }).section == .working)
     }
 
-    @Test func deployedDeliveryIsFinished() {
-        #expect(at(todo("t") { $0.delivery = .init(state: "live", at: ago(2)) }).rule == .deployed)
+    @Test func liveDeliveryWaitsForReviewUntilAccepted() {
+        let recent = todo("t") { $0.delivery = .init(state: "live", at: ago(2)) }
+        #expect(at(recent).section == .justDone && at(recent).rule == .finishedUnseen)
+        #expect(TodoTriageLogic.countsAsOpen(recent, at(recent)))
+        let old = todo("t", updated: 300) { $0.delivery = .init(state: "live", at: ago(300)) }
+        #expect(at(old).section == .justDone && at(old).rule == .finishedUnseen)
+        #expect(TodoTriageLogic.countsAsOpen(old, at(old)))
+    }
+
+    @Test func detailLabelsMatchDeliveryAndOwnerWait() {
+        let delivered = todo("delivery") {
+            $0.supervision = .init(supervisor: "main", state: "pending_review")
+            $0.delivery = .init(state: "live", at: ago(1))
+        }
+        #expect(delivered.statusLabel(.notStarted) == "已交付·待看")
+        #expect(delivered.shownState(.notStarted) == .unread)
+
+        let waiting = todo("waiting") { $0.supervision = .init(supervisor: "main", state: "needs_user") }
+        #expect(waiting.statusLabel(.followup) == "等你处理")
+        #expect(waiting.shownState(.followup) == .needsYou)
+
+        let done = todo("done", done: 1) { $0.supervision = .init(supervisor: "main", state: "needs_user") }
+        #expect(done.statusLabel(.done) == "已完成")
+        #expect(done.shownState(.done) == .done)
     }
 
     @Test func finishedTurnNobodySawIsJustFinished() {
@@ -105,16 +127,22 @@ struct TodoTriageTests {
         #expect(t.section == .justDone && t.rule == .finishedUnseen)
     }
 
-    // #5707: seen (Got It, or opening it) at or after the moment that put it in Just finished, it is Done at once
-    @Test func seenTodoGoesToDoneAtOnceOneSeenBeforeItGotThereStays() {
+    // #5707 + #5732: Seen files ordinary turns, never closure, acceptance of an unaccepted delivery
+    @Test func seenFilesOrdinaryTurnsButNotAcceptanceOrAnUnacceptedDelivery() {
         let closed = { (seen: Double) in self.at(self.todo("t", done: 3) { $0.seenAt = self.ago(seen) }) }
         #expect(closed(2).section == .done && closed(2).rule == .closed)
         #expect(closed(3).section == .done)
-        #expect(closed(4).section == .justDone && closed(4).rule == .closed)
+        #expect(closed(4).section == .done && closed(4).rule == .closed)
         let accepted = at(todo("t", agents: ["idle"]) { $0.supervision = acceptedReopened(); $0.seenAt = ago(4) })
         #expect(accepted.section == .done && accepted.rule == .accepted)
         let deployed = at(todo("t") { $0.delivery = .init(state: "live", at: ago(2)); $0.seenAt = ago(1) })
-        #expect(deployed.section == .done && deployed.rule == .deployed)
+        #expect(deployed.section == .justDone && deployed.rule == .finishedUnseen)
+        let supervisedTodo = todo("t", agents: ["unseen"]) { $0.supervision = TaskSupervision(supervisor: "main"); $0.seenAt = ago(0.5) }
+        let supervised = at(supervisedTodo)
+        #expect(supervised.section == .justDone && supervised.rule == .finishedUnseen)
+        #expect(TodoTriageLogic.seenCanFile(todo("ordinary", agents: ["unseen"])))
+        #expect(!TodoTriageLogic.seenCanFile(supervisedTodo))
+        #expect(!TodoTriageLogic.seenCanFile(todo("live") { $0.delivery = .init(state: "live", at: ago(2)) }))
         let failed = todo("f", done: 2) { $0.startError = "x"; $0.seenAt = ago(1) }
         let superseded = TodoTriageLogic.triage(failed, lookup: lookup, now: now, superseded: true)
         #expect(superseded.section == .done && superseded.rule == .superseded)
@@ -134,8 +162,8 @@ struct TodoTriageTests {
     }
 
     @Test func unfinishedSectionsComeFirstAndOpenShelvedAndDoneFoldedDoneLast() {
-        #expect(TodoSection.allCases == [.waiting, .working, .pr, .other, .justDone, .shelved, .done])
-        #expect(TodoSection.allCases.filter(\.startsFolded) == [.shelved, .done])
+        #expect(TodoSection.allCases == [.waiting, .working, .pr, .other, .justDone, .shelved, .done, .cancelled])
+        #expect(TodoSection.allCases.filter(\.startsFolded) == [.shelved, .done, .cancelled])
     }
 
     @Test func unfinishedTodosLeadARowAndComeBeforeJustFinishedSeenOnesAreDone() {
@@ -150,8 +178,8 @@ struct TodoTriageTests {
         ]
         let r = TodoTriageLogic.triageTodos(list, lookup: look, now: now)
         #expect(r.groups(.other).map { $0.members.map(\.id) } == [["test", "fix"]])
-        #expect(r.groups(.justDone).map(\.lead.id) == ["logs"])
-        #expect(r.groups(.done).map(\.lead.id) == ["speed", "notes"])
+        #expect(r.groups(.justDone).isEmpty)
+        #expect(r.groups(.done).map(\.lead.id) == ["speed", "logs", "notes"])
         #expect(r.open == 2 && r.shelved == 0 && r.finished == 3)
     }
 
@@ -193,6 +221,14 @@ struct TodoTriageTests {
         #expect(tasks == ["task:open"])
         #expect(entries.shelved.map(\.id) == ["task:stale"])
         #expect(!(tray.needsYou + tray.running).contains { $0.id == "task:accepted" || $0.id == "task:done" })
+    }
+
+    @Test func cancelledIsNeitherOpenNorFinished() {
+        let cancelled = todo("cancelled") { $0.cancelledAt = ago(1) }
+        let alone = TodoTriageLogic.triageTodos([cancelled], lookup: lookup, now: now)
+        #expect(alone.open == 0 && alone.cancelled == 1 && alone.finished == 0)
+        let controls = TodoTriageLogic.triageTodos([cancelled, todo("open"), todo("done", done: 2)], lookup: lookup, now: now)
+        #expect(controls.open == 1 && controls.cancelled == 1 && controls.finished == 1)
     }
 
     @Test func ownTodoWithoutAgentsOrDueAheadNeverShelves() {
@@ -245,7 +281,8 @@ struct TodoTriageTests {
     @Test func neverMergesAClosedTodoIntoAnOpenRow() {
         let r = TodoTriageLogic.triageTodos([todo("a", title: "Same title"), todo("b", title: "Same title", done: 1)], lookup: lookup, now: now)
         #expect(r.groups(.other).count == 1)
-        #expect(r.groups(.justDone).count == 1)
+        #expect(r.groups(.justDone).isEmpty)
+        #expect(r.groups(.done).count == 1)
     }
 
     /// The same case as `failed_start_superseded_by_finished_work` in spec/fixtures/triage/groups.json (#3713): a failed
@@ -259,15 +296,16 @@ struct TodoTriageTests {
         let list = [failed, done, other, twin]
         #expect(TodoTriageLogic.supersededFailedStarts(list) == ["f1"])
         let r = TodoTriageLogic.triageTodos(list, lookup: lookup, now: now)
-        #expect(r.groups(.justDone).map { $0.members.map(\.id) } == [["done1", "f1"]])
+        #expect(r.groups(.justDone).isEmpty)
+        #expect(r.groups(.done).map { $0.members.map(\.id) } == [["done1", "f1"]])
         #expect(r.groups(.waiting).map { $0.members.map(\.id) } == [["f2", "f3"]])
         #expect(r.open == 2 && r.finished == 2)
         #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now, superseded: true) == .closed)
         #expect(TodoTriageLogic.bucket(failed, lookup: lookup, now: now) == .open)
         // the checkbox: open while it waits on the owner, done once superseded
         #expect(TodoTriageLogic.checksAsOpen(other, r.groups(.waiting)[0].triage["f2"]))
-        #expect(!TodoTriageLogic.checksAsOpen(failed, r.groups(.justDone)[0].triage["f1"]))
-        #expect(!TodoTriageLogic.checksAsOpen(done, r.groups(.justDone)[0].triage["done1"]))
+        #expect(!TodoTriageLogic.checksAsOpen(failed, r.groups(.done)[0].triage["f1"]))
+        #expect(!TodoTriageLogic.checksAsOpen(done, r.groups(.done)[0].triage["done1"]))
     }
 
     /// A checkbox outside the list (a meeting's action item, #6563) reads a to-do as the list does: a failed start still
@@ -339,12 +377,25 @@ struct TodoTriageTests {
         #expect(bad.delivery == nil)
     }
 
+    @Test func decodesCancellationAndLineage() throws {
+        let json = #"{"id":"old","title":"Old card","done_at":"2026-11-10T08:00:00Z","done_by":"review","cancelled_at":"2026-11-10T08:00:00Z","cancelled_reason":"No longer needed","lineage":[{"todo_id":"old","title":"Old card","started":"2026-11-09T08:00:00Z","ended":"2026-11-10T08:00:00Z","superseded_by":"new","current":true},{"todo_id":"new","title":"New card","started":"2026-11-10T09:00:00Z","continues":"old"}]}"#
+        let t = try JSON.decoder.decode(TodoItem.self, from: Data(json.utf8))
+        #expect(t.isCancelled && t.cancellationReason == "No longer needed")
+        #expect(t.statusLabel(.done) == String(localized: "Canceled"))
+        #expect(t.lineage?.count == 2)
+        #expect(t.lineage?[0].supersededBy == "new")
+        #expect(t.lineage?[1].continues == "old")
+        let legacy = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","done_at":"2026-11-10T08:00:00Z","done_by":"review","done_reason":"Not needed","supervision":{"supervisor":"main","state":"cancelled"}}"#.utf8))
+        #expect(legacy.isCancelled && legacy.cancellationReason == "Not needed")
+        let old = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x"}"#.utf8))
+        #expect(!old.isCancelled && old.lineage == nil)
+    }
+
     @Test func decodesSeenAtAndABadOneFilesNothing() throws {
         let t = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","seen_at":"2026-11-10T08:00:00Z"}"#.utf8))
         #expect(t.seenAt == ISO8601DateFormatter().date(from: "2026-11-10T08:00:00Z"))
         // a mark that does not parse reads as the epoch (JSON.decoder): it files nothing
-        var bad = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","seen_at":"soon"}"#.utf8))
-        bad.doneAt = ago(3)
+        let bad = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","seen_at":"soon","supervision":{"supervisor":"main","state":"pending_review"}}"#.utf8))
         #expect(at(bad).section == .justDone)
     }
 }

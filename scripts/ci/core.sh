@@ -16,8 +16,8 @@ ci_run 'Generated codecs up to date' 900 cargo run --locked --quiet -p persona-c
 # for its link directories) only has to be set.
 ci_run 'HarmonyOS Rust target' 600 rustup target add aarch64-unknown-linux-ohos
 ci_run 'HarmonyOS binding lints' 1200 env OHOS_NDK_HOME="$CI_ROOT/native/app-core/target/no-ohos-sdk" cargo clippy --locked --target aarch64-unknown-linux-ohos -p persona-core-ohos --features ohos -- -D warnings
-# Writes the notices the HAP packages (an ignored build output) from Cargo.lock and the registry sources the step
-# above unpacked. It fails when a locked package has no notice or a vendored upstream notice changed.
+# A clean CI checkout has no OHOS package output to compare against. Generate the ignored notice artifacts here; the
+# generator validates every locked public source and fails when a required notice is absent or inconsistent.
 ci_run 'HarmonyOS core licenses' 300 python3 -I scripts/android-licenses.py --workspace . --registry-src "${CARGO_HOME:-$HOME/.cargo}/registry/src" --output "$CI_ROOT/harmony/build/core-licenses" --crate persona-core-ohos --target aarch64-unknown-linux-ohos --features ohos --label HarmonyOS
 # The generated ArkTS codec is otherwise only checked against itself. This replay runs the continuity corpus through
 # the real runtime (persona-core-ohos's registry, the code under the NAPI entry points), with ArkTS encoding the

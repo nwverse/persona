@@ -68,7 +68,7 @@ func TestLeaderStuckTellsTheMainConversation(t *testing.T) {
 		}
 		return false
 	})
-	if to := e.s.digestTo(e.s.settings(context.Background()), superviseSignal{Todo: id, Kind: sigLeaderStuck}); to != "conv_main" {
+	if to := e.s.digestTo(context.Background(), e.s.settings(context.Background()), superviseSignal{Todo: id, Kind: sigLeaderStuck}); to != "conv_main" {
 		t.Fatalf("goes to %q", to)
 	}
 }
@@ -86,7 +86,7 @@ func TestContextNamesTheDirections(t *testing.T) {
 		t.Fatal(err)
 	}
 	main := e.s.Context(context.Background(), ContextParams{SessionID: "conv_main"}).Text
-	for _, want := range []string{"- conv_lead_a：基建", "- conv_lead_b：conv_lead_b", "task_plan 的 supervisor"} {
+	for _, want := range []string{"- conv_lead_a：基建", "- conv_lead_b：conv_lead_b", "supervisor 不会把督办交给主管", "所有 task_plan 新任务统一由主对话督办"} {
 		if !strings.Contains(main, want) {
 			t.Fatalf("the main context lacks %q:\n%s", want, main)
 		}

@@ -137,9 +137,10 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 }
 
 // rescope is what agent_supervise and agent_send with a task do to a task of conversation self that exists already:
-// self supervises it, and new criteria or a new expected time (none: kept) go through the brief's log as a scope
-// change made through via. Its ledger as it is then.
-func (s *Service) rescope(ctx context.Context, t Todo, self, via string, doneWhen []string, expect int) (Supervision, error) {
+// self authors the scope change, an existing ledger keeps its supervisor (supervisor is the default for one without
+// a ledger), and new criteria or a new expected time (none: kept) go through the brief's log as a scope change made
+// through via. Its ledger as it is then.
+func (s *Service) rescope(ctx context.Context, t Todo, self, supervisor, via string, doneWhen []string, expect int) (Supervision, error) {
 	if len(doneWhen) > 0 || expect > 0 {
 		c := scopeChange{By: self, Why: "set through " + via, Expect: expect} // the tool is named in why, which is not read for risky words
 		if len(doneWhen) > 0 {
@@ -153,11 +154,14 @@ func (s *Service) rescope(ctx context.Context, t Todo, self, via string, doneWhe
 			return Supervision{}, err
 		}
 	}
-	// self supervises it from now on, by the criteria in effect (a task of self's that had no ledger gets one, as before).
+	// The dispatching conversation need not be its supervisor: a repeated side hand-off leaves main in charge (#5732).
 	brief, briefed := s.briefOfTodo(t.ID)
 	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-		same := v.Supervisor == self
-		v.Supervisor = self
+		before := v.Supervisor
+		if before == "" {
+			v.Supervisor = supervisor
+		}
+		same := before == v.Supervisor
 		if briefed && (!slices.Equal(v.DoneWhen, brief.Criteria) || v.ExpectMinutes != brief.ExpectNow) {
 			v.DoneWhen, v.ExpectMinutes, same = slices.Clone(brief.Criteria), brief.ExpectNow, false
 		}
@@ -233,6 +237,7 @@ func (s *Service) clearOverdue(todoID string) {
 	b.mu.Lock()
 	b.init()
 	delete(b.pending, todoID+"|"+sigOverdue)
+	s.forgetSupervisePending(todoID + "|" + sigOverdue)
 	b.mu.Unlock()
 }
 

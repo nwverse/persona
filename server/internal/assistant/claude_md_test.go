@@ -24,6 +24,20 @@ func claudeMDHub(devices ...Device) *fakeHub {
 	return f
 }
 
+// The secretary's instructions never send new task_plan work to a leader for acceptance (#5732).
+func TestAssistantInstructionsKeepNewTaskReviewWithMain(t *testing.T) {
+	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
+	s := newTestService(t, f)
+	s.kb.dir = "<hub>/data"
+	text := s.claudeMD(context.Background(), "server", false)
+	if strings.Contains(text, "交给那个主管督办") || strings.Contains(text, "任务的验收和返工由它做") {
+		t.Fatal("the assistant is still told to delegate new task_plan acceptance to a leader")
+	}
+	if !strings.Contains(text, "新任务统一由主对话督办") {
+		t.Fatal("the assistant instructions do not state universal main supervision")
+	}
+}
+
 // The CLAUDE.md the assistant writes into its directory from what the hub tells it (claudeMD, prepare).
 func TestGoldenAssistantClaudeMD(t *testing.T) {
 	ctx := context.Background()

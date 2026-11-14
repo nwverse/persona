@@ -83,8 +83,8 @@ type PlanTask struct {
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
-	// Supervisor: the leader conversation the main conversation handed the task to (task_plan's supervisor, #3608);
-	// "" the plan's own conversation supervises it, as before.
+	// Supervisor: the legacy task_plan supervisor input (#3608), retained in saved plans so pre-#5732 leader-plan
+	// tasks can be told apart from the manual-Agent exception. It no longer chooses the supervisor of new work.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the

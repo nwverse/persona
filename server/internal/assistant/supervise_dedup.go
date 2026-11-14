@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ const superviseDedupWindow = 30 * time.Minute
 type superviseFingerprint struct {
 	Hash string    `json:"hash"`
 	At   time.Time `json:"at"`
+	Key  string    `json:"key,omitempty"` // the stretch reserved by this fingerprint; empty before #5732
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
@@ -67,12 +70,28 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 	}
 	var out []prompts.SuperviseEntry
 	var kept []superviseSignal
+	// Read the outbox once for the whole batch. Only real delivery or queue admission acknowledges a stretch. An exact
+	// outbox member under the fingerprint's Key may have crashed after reservation. A different Key retries only while
+	// that fingerprint's stretch is still one of its unacknowledged predecessors; a real predecessor ACK removes it.
+	r := &s.relays
+	r.mu.Lock()
+	if !s.relayLocked(ctx) {
+		r.mu.Unlock()
+		return nil, signals, nil, errors.New("load supervision outbox")
+	}
+	pending := maps.Clone(r.st.SupervisePending)
+	r.mu.Unlock()
 	for i, entry := range entries {
 		key, hash := digestFingerprint(entry, signals[i])
+		current, undelivered := pending[signals[i].id()]
 		if seen, ok := next[key]; ok && seen.Hash == hash && now.Sub(seen.At) < superviseDedupWindow {
-			continue
+			retry := undelivered && current.Key == signals[i].Key &&
+				(seen.Key == signals[i].Key || slices.Contains(current.PendingPredecessors, seen.Key))
+			if !retry {
+				continue
+			}
 		}
-		next[key] = superviseFingerprint{Hash: hash, At: now.UTC()}
+		next[key] = superviseFingerprint{Hash: hash, At: now.UTC(), Key: signals[i].Key}
 		out, kept = append(out, entry), append(kept, signals[i])
 	}
 	if len(out) == 0 {
@@ -144,5 +163,12 @@ func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
 			b.pending[g.id()] = joinInbox(g, cur) // the newer item, with the messages of both
 		}
 	}
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, g := range signals {
+			if cur, ok := b.pending[g.id()]; ok {
+				pending[g.id()] = cur
+			}
+		}
+	})
 	s.retryDigestLocked(s.superviseTimings().urgent)
 }

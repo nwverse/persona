@@ -190,6 +190,52 @@ func TestParkedTaskIsNotInNeedsYouAndRaisesNoSignals(t *testing.T) {
 	}
 }
 
+// Parking also silences a stop the turn ledger had not told yet. The replay must acknowledge that obsolete signal,
+// not emit it on every later sweep; without parking, the same untold ledger entry is the control and still replays.
+func TestParkedTaskDoesNotReplayAnUntoldTurnSignal(t *testing.T) {
+	for _, parked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unparked control", true: "parked before ledger replay"}[parked], func(t *testing.T) {
+			s, _, todo := newSupervisedService(t)
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			g := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "stop-before-park", Detail: "在等别人或别的事：旧决定"}
+			markLeaderTurnSignalled(t, s, g)
+			last := proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusIdle, UpdatedAt: time.Now().UTC()}
+			s.tasks.turns.mu.Lock()
+			s.tasks.turns.looked[todo.ID] = lookOf(last) // only the ledger replay is under test, not another transcript read
+			s.tasks.turns.mu.Unlock()
+			if parked {
+				_, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
+					v.State = reviewParked
+					v.Reviews = []TaskReview{{Verdict: reviewParked, At: time.Now().UTC(), Until: time.Now().UTC().Add(time.Hour),
+						WaitingOn: parkSomeoneElse, Reason: "The design team decides"}}
+					return true
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.watchTurn(context.Background(), todoNow(s, todo.ID), []proto.Session{last})
+			got := pendingKinds(s, todo.ID)
+			e, ok := s.turnOf(context.Background(), todo.ID)
+			if !ok || e.Signal == nil {
+				t.Fatalf("the turn signal is missing: %+v", e)
+			}
+			if parked {
+				if len(got) != 0 {
+					t.Fatalf("the pre-park turn replayed: %v", got)
+				}
+				if e.Signal.Told == nil {
+					t.Fatal("the obsolete turn signal was left for every later sweep")
+				}
+			} else {
+				if !slices.Contains(got, sigIdle) || e.Signal.Told != nil {
+					t.Fatalf("the untold control did not replay: signals=%v turn=%+v", got, e.Signal)
+				}
+			}
+		})
+	}
+}
+
 // At its time a parked task comes back to its supervisor once: not before, not a second time, not again after a
 // restart once a message carried it, and not lost by a restart before one did.
 func TestParkedDueComesOnceAtItsTimeAndAfterARestart(t *testing.T) {

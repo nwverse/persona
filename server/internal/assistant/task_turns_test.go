@@ -526,7 +526,10 @@ func TestTaskReceiptReservationIsReleased(t *testing.T) {
 				s.taskTurnEnded(ctx, "box", "s1") // the node answers again, and the same turn end is told again
 			}
 			waitFor(t, "the receipt", func() bool { return len(recoveryReceipts(t, s, todo.ID)) == 1 })
-			waitFor(t, "the task to close", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+			waitFor(t, "judge-done delivery to stay open", func() bool {
+				current := todoNow(s, todo.ID)
+				return current.DoneAt == nil && current.Check != nil && current.Check.Verdict == verdictDone
+			})
 			quiet := time.NewTicker(100 * time.Millisecond)
 			defer quiet.Stop()
 			<-quiet.C // a second receipt or judgment would show by now

@@ -320,7 +320,7 @@ struct ChatsView: View {
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
         SplitNavigation(path: pushing, listKey: unified == nil ? "agents.list" : "sidebar.list",
-                        destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
+                        destinations: AgentsDestinations(path: pushing, unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch) {
             listColumn
         } empty: {
             if unified != nil {
@@ -4805,8 +4805,9 @@ struct MachineSectionHeader: View {
 
 /// The pages the Agents list opens, in either layout (`SplitNavigation`).
 private struct AgentsDestinations: ViewModifier {
+    @Binding var path: NavigationPath
     /// The Sidebar layout (#6332): the Persona page's places (Inbox, To-dos, Machines, extension pages) open on the same
-    /// path, registered here with the Agents' own; nil elsewhere.
+    /// path, registered here with the Agents' own; nil elsewhere. `path` stays present in both layouts for task lineage.
     var unifiedPath: Binding<NavigationPath>? = nil
 
     func body(content: Content) -> some View {
@@ -4831,7 +4832,9 @@ private struct AgentsDestinations: ViewModifier {
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }
             .navigationDestination(for: PersonalAgentsRoute.self) { _ in PersonalAgentListView().splitDetailPage() }
             .navigationDestination(for: PersonalAgentSession.self) { s in PersonalAgentSessionView(session: s).id(s.id).splitDetailPage() }
-            .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id).splitDetailPage() }
+            .navigationDestination(for: TodoDetailRoute.self) { r in
+                TodoDetailView(todoID: r.id, openDetail: { path.append($0) }).splitDetailPage()
+            }
     }
 }
 

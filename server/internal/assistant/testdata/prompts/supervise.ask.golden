@@ -1,5 +1,5 @@
 📋 督办：你派出去的任务有 1 个要你处理
-（这是 Persona 的督办消息，不是用户发的。你是这些任务的 leader 对话，它们是你用 task_plan 派出去的：你自己验收、返工；真要用户决定的用 task_review needs_user，结论卡会发给用户，主对话也会知道。这一轮默认折叠，不会推送给用户。）
+（这是 Persona 的督办消息，不是用户发的。你是这些任务的 leader 对话，它们是用户显式挂到你名下的手动 Agent 任务：你自己验收、返工；真要用户决定的用 task_review needs_user，结论卡会发给用户，主对话也会知道。新 task_plan 任务统一归主对话。这一轮默认折叠，不会推送给用户。）
 <persona-supervision level="triage" />
 
 1. 任务「修登录崩溃」（todo_1）：它的 Agent 有卡片在等，先交给你处理，用户还没收到；在 box session_id=a1b2c3d4

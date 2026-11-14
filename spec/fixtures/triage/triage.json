@@ -428,7 +428,7 @@
     },
     {
       "name": "closed_recently",
-      "description": "关掉 24 小时内：「刚做完」。",
+      "description": "关闭立即归入「已完成」，不进入待验收，无论是否看过。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Decision table\"",
         "web/src/lib/todo-triage.ts triage"
@@ -483,10 +483,10 @@
         }
       },
       "expected": {
-        "section": "just_done",
+        "section": "done",
         "rule": "closed"
       },
-      "from_test": "web/src/lib/todo-triage.test.ts > a closed to-do is Just finished for a day, then Done"
+      "from_test": "web/src/lib/todo-triage.test.ts > a closed to-do is immediately Done"
     },
     {
       "name": "closed_long_ago",
@@ -548,11 +548,11 @@
         "section": "done",
         "rule": "closed"
       },
-      "from_test": "web/src/lib/todo-triage.test.ts > a closed to-do is Just finished for a day, then Done"
+      "from_test": "web/src/lib/todo-triage.test.ts > a closed to-do is immediately Done"
     },
     {
       "name": "accepted_reopened",
-      "description": "验收后被 hub 重开（又派了活）：仍是已验收、刚做完。",
+      "description": "验收后被 hub 重开（又派了活）：立即归入「已完成」，不是重新开放工作。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Decision table\"",
         "web/src/lib/todo-triage.ts triage"
@@ -657,7 +657,7 @@
         }
       },
       "expected": {
-        "section": "just_done",
+        "section": "done",
         "rule": "accepted"
       },
       "from_test": "web/src/lib/todo-triage.test.ts > an accepted task reopened by more work is finished, not Follow up"
@@ -775,7 +775,7 @@
     },
     {
       "name": "deployed",
-      "description": "交付已上线：刚做完。",
+      "description": "交付已上线但未验收：始终待看，不进入完成或搁置。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Decision table\"",
         "web/src/lib/todo-triage.ts triage"
@@ -823,21 +823,21 @@
           "id": "t",
           "title": "t",
           "created_at": "2026-10-29T00:00:00.000Z",
-          "updated_at": "2026-11-10T11:00:00.000Z",
+          "updated_at": "2026-10-29T00:00:00.000Z",
           "done_at": null,
           "agents": [],
           "origin": "conv",
           "delivery": {
             "state": "live",
-            "at": "2026-11-10T10:00:00.000Z"
+            "at": "2026-10-29T00:00:00.000Z"
           }
         }
       },
       "expected": {
         "section": "just_done",
-        "rule": "deployed"
+        "rule": "finished_unseen"
       },
-      "from_test": "web/src/lib/todo-triage.test.ts > a deployed delivery is finished"
+      "from_test": "web/src/lib/todo-triage.test.ts > a live delivery stays awaiting review until accepted"
     },
     {
       "name": "finished_unseen",
@@ -1542,7 +1542,7 @@
       },
       "expected": {
         "section": "just_done",
-        "rule": "deployed"
+        "rule": "finished_unseen"
       },
       "from_test": "web/src/lib/todo-triage.test.ts > a PR the stage says is merged is not PR to merge, whatever the delivery (#3205)"
     },
@@ -2466,6 +2466,53 @@
       "derived": true
     },
     {
+      "name": "cancelled_precedes_agent_and_closed_states",
+      "description": "取消独立显示，先于 Agent 等待和普通完成状态；旧 supervision 形式同样识别。",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Decision table\"",
+        "web/src/lib/todo-triage.ts triage"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "ask",
+            "state": "needs_you",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "t",
+          "title": "Cancelled work",
+          "created_at": "2026-10-29T00:00:00.000Z",
+          "updated_at": "2026-11-10T11:00:00.000Z",
+          "done_at": "2026-11-10T10:00:00.000Z",
+          "done_by": "review",
+          "cancelled_at": "2026-11-10T10:00:00.000Z",
+          "cancelled_reason": "No longer needed",
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "ask",
+              "linked_at": "2026-11-02T04:00:00.000Z"
+            }
+          ],
+          "origin": "conv",
+          "supervision": {
+            "supervisor": "main",
+            "state": "cancelled",
+            "reviews": []
+          }
+        }
+      },
+      "expected": {
+        "section": "cancelled",
+        "rule": "cancelled"
+      }
+    },
+    {
       "name": "closed_seen",
       "description": "关掉后看过（知道了，或打开过）：不等 24 小时，直接「已完成」。",
       "source": [
@@ -2526,11 +2573,11 @@
         "section": "done",
         "rule": "closed"
       },
-      "from_test": "web/src/lib/todo-triage.test.ts > a seen to-do goes to Done at once; one seen before it got there stays"
+      "from_test": "web/src/lib/todo-triage.test.ts > seen files ordinary finished turns, never acceptance of an unaccepted delivery"
     },
     {
       "name": "closed_seen_before_close",
-      "description": "看过之后才关掉：关掉是新动静，还在「刚做完」。",
+      "description": "看过之后才关掉也立即归入「已完成」；Seen 不把关闭变成待验收。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Seen\"",
         "web/src/lib/todo-triage.ts triage"
@@ -2586,10 +2633,10 @@
         }
       },
       "expected": {
-        "section": "just_done",
+        "section": "done",
         "rule": "closed"
       },
-      "from_test": "web/src/lib/todo-triage.test.ts > a seen to-do goes to Done at once; one seen before it got there stays"
+      "from_test": "web/src/lib/todo-triage.test.ts > seen files ordinary finished turns, never acceptance of an unaccepted delivery"
     },
     {
       "name": "accepted_seen",
@@ -2702,11 +2749,11 @@
         "section": "done",
         "rule": "accepted"
       },
-      "from_test": "web/src/lib/todo-triage.test.ts > a seen to-do goes to Done at once; one seen before it got there stays"
+      "from_test": "web/src/lib/todo-triage.test.ts > seen files ordinary finished turns, never acceptance of an unaccepted delivery"
     },
     {
       "name": "deployed_seen",
-      "description": "上线之后看过：「已完成」。",
+      "description": "未验收的上线交付，即使看过也仍是「已交付·待看」，不能由 Seen 关闭（#5732）。",
       "source": [
         "docs/assistant/todo-status-sop.md \"Seen\"",
         "web/src/lib/todo-triage.ts triage"
@@ -2766,10 +2813,10 @@
         }
       },
       "expected": {
-        "section": "done",
-        "rule": "deployed"
+        "section": "just_done",
+        "rule": "finished_unseen"
       },
-      "from_test": "web/src/lib/todo-triage.test.ts > a seen to-do goes to Done at once; one seen before it got there stays"
+      "from_test": "web/src/lib/todo-triage.test.ts > seen files ordinary finished turns, never acceptance of an unaccepted delivery"
     },
     {
       "name": "finished_unseen_seen",
@@ -2837,6 +2884,78 @@
       "expected": {
         "section": "done",
         "rule": "seen"
+      },
+      "from_test": "web/src/lib/todo-triage.test.ts > a finished turn seen since it last moved is Done, unless its PR is open"
+    },
+    {
+      "name": "supervised_finished_unseen_seen_stays_awaiting_review",
+      "description": "督办中的 Agent 做完一轮，即使用户看过，也仍由 main 验收：「已交付·待看」（#5732）。",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Seen\"",
+        "web/src/lib/todo-triage.ts triage"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "ask",
+            "state": "needs_you",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "run",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "idle",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T10:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-06T08:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "t",
+          "title": "t",
+          "created_at": "2026-10-29T00:00:00.000Z",
+          "updated_at": "2026-11-10T11:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "unseen",
+              "linked_at": "2026-11-02T04:00:00.000Z"
+            }
+          ],
+          "origin": "conv",
+          "seen_at": "2026-11-10T11:30:00.000Z",
+          "supervision": {
+            "supervisor": "main"
+          }
+        }
+      },
+      "expected": {
+        "section": "just_done",
+        "rule": "finished_unseen"
       },
       "from_test": "web/src/lib/todo-triage.test.ts > a finished turn seen since it last moved is Done, unless its PR is open"
     },

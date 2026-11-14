@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,9 @@ var (
 // the same signal with the same key is told once.
 type superviseSignal struct {
 	Todo, Kind, Key string
+	// PendingPredecessors: keys of earlier stretches of this id replaced before their delivery or queue acknowledgment.
+	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
+	PendingPredecessors []string
 	// Unreachable: this decision exists because the task leader's agent could not be reached, not because the worker
 	// waits for the user. It stays a decision even though the worker's ledger is not needs_user (task_leader.go).
 	Unreachable      bool
@@ -126,19 +130,26 @@ func (g superviseSignal) urgent() bool {
 func (g superviseSignal) immediate() bool { return g.Kind == sigFailed }
 
 type superviseBook struct {
-	mu      sync.Mutex
-	writeMu sync.Mutex // one ledger write at a time (updateSupervision)
-	dedupMu sync.Mutex // serializes digest reservations and delivery
-	dedup   map[string]superviseFingerprint
-	pending map[string]superviseSignal   // by todo|kind
-	sent    map[string]string            // todo|kind → the key last told
-	asks    map[string]string            // todo → what its agent last asked (InteractionRaised)
-	last    time.Time                    // when the last supervision message went out
-	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
-	timer   *time.Timer
-	timerAt time.Time
-	hold    map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
-	visible map[string]bool      // an explicit user action makes the current triage turn visible
+	mu            sync.Mutex
+	writeMu       sync.Mutex          // one ledger write at a time (updateSupervision)
+	ownerPushMu   sync.Mutex          // ownerPushes only; never held across RPC, todo or database calls
+	ownerPushes   map[string]struct{} // todo + work currently being pushed and receipted
+	dedupMu       sync.Mutex          // serializes digest reservations and delivery
+	dedup         map[string]superviseFingerprint
+	pending       map[string]superviseSignal   // by todo|kind
+	pendingLoadMu sync.Mutex                   // one durable pending restoration at a time
+	pendingLoaded bool                         // the durable pending has been merged into pending
+	sent          map[string]string            // todo|kind → the key last told
+	asks          map[string]string            // todo → what its agent last asked (InteractionRaised)
+	last          time.Time                    // when the last supervision message went out
+	queued        map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
+	// legacyBackground: conversation + "\x00" + todo → an old notice reached this background conversation, so it may
+	// finish that task. relayState persists the same grant across manager restarts.
+	legacyBackground map[string]bool
+	timer            *time.Timer
+	timerAt          time.Time
+	hold             map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
+	visible          map[string]bool      // an explicit user action makes the current triage turn visible
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
@@ -150,10 +161,138 @@ func (b *superviseBook) init() {
 	if b.pending == nil {
 		b.pending, b.sent, b.asks, b.hold = map[string]superviseSignal{}, map[string]string{}, map[string]string{}, map[string]time.Time{}
 		b.visible = map[string]bool{}
+		b.legacyBackground = map[string]bool{}
 	}
 	if b.failSeen == nil {
 		b.failSeen = map[string]failSeen{}
 	}
+}
+
+// restoreSupervisePending merges the durable outbox into the in-memory gather exactly once. A signal that arrived
+// meanwhile wins; a failed read is retried by the digest timer rather than marking the outbox loaded.
+func (s *Service) restoreSupervisePending(ctx context.Context) {
+	b := &s.supervise
+	b.pendingLoadMu.Lock()
+	defer b.pendingLoadMu.Unlock()
+	b.mu.Lock()
+	loaded := b.pendingLoaded
+	b.mu.Unlock()
+	if loaded {
+		return
+	}
+	r := &s.relays
+	r.mu.Lock()
+	if !s.relayLocked(ctx) {
+		r.mu.Unlock()
+		b.mu.Lock()
+		b.init()
+		s.retryDigestLocked(s.superviseTimings().urgent)
+		b.mu.Unlock()
+		return
+	}
+	// A crash between an older queue write and its ACK could leave both. The exact queued stretch wins, even after
+	// the shorter deduplication window has expired; it must not be restored for a second queue admission.
+	var queued []superviseSignal
+	for _, queue := range r.st.Queue {
+		for _, msg := range queue {
+			if msg.Tool == superviseTool && msg.Signals != nil {
+				queued = append(queued, (*msg.Signals)...)
+			}
+		}
+	}
+	before := len(r.st.SupervisePending)
+	ackSupervisePendingLocked(r.st.SupervisePending, queued)
+	if len(r.st.SupervisePending) != before {
+		if len(r.st.SupervisePending) == 0 {
+			r.st.SupervisePending = nil
+		}
+		s.saveRelayLocked()
+	}
+	persisted := make(map[string]superviseSignal, len(r.st.SupervisePending))
+	for id, g := range r.st.SupervisePending {
+		persisted[id] = g
+	}
+	r.mu.Unlock()
+	b.mu.Lock()
+	b.init()
+	for id, g := range persisted {
+		if _, newer := b.pending[id]; !newer {
+			b.pending[id] = g
+		}
+	}
+	b.pendingLoaded = true
+	if len(b.pending) > 0 {
+		s.scheduleDigestLocked(time.Now())
+	}
+	b.mu.Unlock()
+}
+
+// updateSupervisePending changes the durable outbox. Callers may hold supervise.mu: relay code never takes that lock
+// while holding relays.mu. Keeping this per signal, rather than replacing it from pending, preserves in-flight digests.
+func (s *Service) updateSupervisePending(change func(map[string]superviseSignal)) {
+	r := &s.relays
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !s.relayLocked(context.Background()) {
+		return
+	}
+	if r.st.SupervisePending == nil {
+		r.st.SupervisePending = map[string]superviseSignal{}
+	}
+	change(r.st.SupervisePending)
+	if len(r.st.SupervisePending) == 0 {
+		r.st.SupervisePending = nil
+	}
+	s.saveRelayLocked()
+}
+
+// ackSupervisePendingLocked removes exactly these stretches while relays.mu is held and the queue is saved atomically.
+func ackSupervisePendingLocked(pending map[string]superviseSignal, list []superviseSignal) {
+	for _, g := range list {
+		if cur, ok := pending[g.id()]; ok {
+			if cur.Key == g.Key {
+				delete(pending, g.id())
+				continue
+			}
+			// The newer stretch remains, but this predecessor really reached delivery or the durable queue. Its key can
+			// no longer make the replacement retry an unchanged fingerprint; other unacknowledged predecessors remain.
+			keys := slices.DeleteFunc(slices.Clone(cur.PendingPredecessors), func(key string) bool { return key == g.Key })
+			if len(keys) != len(cur.PendingPredecessors) {
+				if len(keys) == 0 {
+					keys = nil
+				}
+				cur.PendingPredecessors = keys
+				pending[g.id()] = cur
+			}
+		}
+	}
+}
+
+// ackSupervisePending removes exactly the stretches delivered or admitted to the persisted relay queue. A newer
+// signal of the same kind with another Key is left for its own digest.
+func (s *Service) ackSupervisePending(list []superviseSignal) {
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		ackSupervisePendingLocked(pending, list)
+	})
+}
+
+// replaceSupervisePending atomically turns an undelivered leader signal into the escalation that replaces it.
+func (s *Service) replaceSupervisePending(old, next superviseSignal) {
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		if cur, ok := pending[old.id()]; ok && cur.Key == old.Key {
+			delete(pending, old.id())
+			pending[next.id()] = next
+		}
+	})
+}
+
+// forgetSupervisePending removes signals answered or silenced elsewhere, whether or not they were restored in memory.
+func (s *Service) forgetSupervisePending(keys ...string) {
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, key := range keys {
+			delete(pending, key)
+		}
+	})
 }
 
 // superviseTimings are how supervision messages gather and space out (Service.superviseTimes; a zero field: the
@@ -206,12 +345,23 @@ func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimin
 // signal records g for the supervisor, unless the same stretch of state was told already, and sees that the message
 // goes out when it is due.
 func (s *Service) signal(g superviseSignal) {
+	s.signalReplacing(nil, g)
+}
+
+// signalReplacing records g and, when old is still pending, atomically replaces that older stretch in the outbox.
+func (s *Service) signalReplacing(old *superviseSignal, g superviseSignal) {
+	if g.Todo != "" {
+		if t, ok := s.todoNow(g.Todo); ok && s.reporterStopped(context.Background(), t.Origin) {
+			return // /stop silences the reporting task's notices on every route until the user speaks again (#3308)
+		}
+	}
 	if g.level() == supervisionInfo {
 		return // Progress is already recorded on the task card; it never wakes the assistant.
 	}
 	if g.At.IsZero() {
 		g.At = time.Now()
 	}
+	s.restoreSupervisePending(context.Background())
 	b := &s.supervise
 	if turnSignalKind(g.Kind) && s.turnSignalled(g) {
 		// How its turn ended was told already, by this manager or by the one before a restart (task_turns.go).
@@ -246,6 +396,22 @@ func (s *Service) signal(g superviseSignal) {
 			}
 		}
 	}
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		// sendDigest may already have taken the older stretch out of b.pending. Its durable outbox entry remains until
+		// real delivery or queue admission, so it is the reliable evidence that this different Key replaces an unACKed one.
+		if cur, ok := pending[g.id()]; ok {
+			g.PendingPredecessors = slices.Clone(cur.PendingPredecessors)
+			if cur.Key != g.Key && !slices.Contains(g.PendingPredecessors, cur.Key) {
+				g.PendingPredecessors = append(g.PendingPredecessors, cur.Key)
+			}
+		}
+		if old != nil {
+			if cur, ok := pending[old.id()]; ok && cur.Key == old.Key {
+				delete(pending, old.id())
+			}
+		}
+		pending[g.id()] = g
+	})
 	b.pending[g.id()] = g
 	s.scheduleDigestLocked(time.Now())
 	b.mu.Unlock()

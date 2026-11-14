@@ -609,7 +609,7 @@ func lockTodoAgentMembership(ctx context.Context, tx pgx.Tx, todoID, machineID, 
 // any existing row (such as a dismissed link from an immediate unlink) is NOT overwritten.
 // Returns (inserted bool, releasedTodoIDs []string, err error).
 func (d *DB) AutoLinkTodoAgent(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) (bool, []string, error) {
-	return d.autoLinkTodoAgent(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt, false)
+	return d.autoLinkTodoAgent(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt, false, false)
 }
 
 // AutoLinkUnlinkedTodoAgent is AutoLinkTodoAgent for an agent that worked for no todo when the link was decided (the
@@ -617,10 +617,17 @@ func (d *DB) AutoLinkTodoAgent(ctx context.Context, todoID, machineID, sessionID
 // written, or was linked to any todo after linkedAt, so a link by hand committed in between is never moved (#2704).
 // A done todo it was on before took part only: that link is released, as a link by hand releases it (#2904).
 func (d *DB) AutoLinkUnlinkedTodoAgent(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) (bool, []string, error) {
-	return d.autoLinkTodoAgent(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt, true)
+	return d.autoLinkTodoAgent(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt, true, false)
 }
 
-func (d *DB) autoLinkTodoAgent(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time, onlyUnlinked bool) (bool, []string, error) {
+// AutoLinkUnlinkedTodoAgentOfDoneTask is the delayed creation-id variant for a card closed after an unknown start.
+// It permits that done target while retaining every automatic-link guard: the membership lock, linkedAt decision time,
+// no release of a newer manual membership, and INSERT ... ON CONFLICT DO NOTHING on the target.
+func (d *DB) AutoLinkUnlinkedTodoAgentOfDoneTask(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) (bool, []string, error) {
+	return d.autoLinkTodoAgent(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt, true, true)
+}
+
+func (d *DB) autoLinkTodoAgent(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time, onlyUnlinked, allowDone bool) (bool, []string, error) {
 	conn, err := d.pool.Acquire(ctx)
 	if err != nil {
 		return false, nil, err
@@ -635,7 +642,7 @@ func (d *DB) autoLinkTodoAgent(ctx context.Context, todoID, machineID, sessionID
 		if err != nil {
 			return err
 		}
-		if targetDoneAt != nil {
+		if targetDoneAt != nil && !allowDone {
 			return ErrTodoCompleted
 		}
 

@@ -197,6 +197,10 @@ type SnapshotTask struct {
 	// Workflows: that agent's background workflow runs still running (#2935): its turn ended to wait for them.
 	Workflows []SnapshotWorkflow
 	Link      string // the todo's page in the hub's web app ("" when the hub has no public_url)
+	// Cancellation and brief lineage keep the history visible in the same snapshot as the state (#5732).
+	CancelledReason                string
+	Continues, ContinuesLink       string
+	SupersededBy, SupersededByLink string
 	// Health: how a task the main conversation supervises stands (normal, stuck N minutes, waiting for an answer, to accept, rework round N, your call,
 	// accepted; #3124), "" for any other; DoneWhen how many criteria it has.
 	Health   string
@@ -382,12 +386,6 @@ type AssistantContext struct {
 	Background        bool
 	BackgroundStarted string
 }
-
-// SupervisorStart is the message the background supervisor's conversation starts with (assistant/supervisor_start):
-// what it is for, before its first supervision message.
-type SupervisorStart struct{ Owner string }
-
-func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
 
 // ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
 type ContextDirection struct{ ID, Name string }
@@ -681,8 +679,8 @@ func RenderAskLater(a AskLater) string { return render("assistant/ask_later", a)
 type Supervise struct {
 	Level   string
 	Entries []SuperviseEntry
-	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
-	// needs_user, told the main conversation.
+	// Leader: it goes to a leader conversation, for a manual Agent explicitly assigned to it (#5732); Escalated: an
+	// entry is a leader's needs_user, told the main conversation.
 	Leader, Escalated bool
 	// Background: with Leader, it goes to the background supervisor (#4927): the leader's message, for tasks other
 	// conversations handed out, whose cards go from it to the user.
@@ -690,7 +688,7 @@ type Supervise struct {
 	// BackgroundEscalated: with Escalated, one of those entries is the background supervisor's needs_user (#4927): no
 	// leader is named for it.
 	BackgroundEscalated bool
-	// Side: it goes to an ordinary side conversation, for the tasks that conversation handed out itself.
+	// Side: a legacy route to an ordinary side conversation for tasks it supervised before universal main supervision.
 	Side bool
 	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool

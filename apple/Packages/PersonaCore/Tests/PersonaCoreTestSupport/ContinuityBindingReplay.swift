@@ -73,8 +73,8 @@ public struct ContinuityBindingReplay: Sendable {
         return patches
     }
 
-    public static func replayAll(in directory: URL = ContinuityCase.repositoryDirectory) throws -> ContinuityBindingReplay {
-        let cases = try ContinuityCase.all(in: directory)
+    @concurrent public static func replayAll(in directory: URL = ContinuityCase.repositoryDirectory) async throws -> ContinuityBindingReplay {
+        let cases = try await ContinuityCase.all(in: directory)
         var steps = 0
         var patches = 0
         for `case` in cases {

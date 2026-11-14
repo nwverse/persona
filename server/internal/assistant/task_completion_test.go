@@ -371,7 +371,10 @@ func TestTaskCompletionWaitsForTheAnswerAfterATool(t *testing.T) {
 			final.Status, final.LastText, final.UpdatedAt = finalStatus, "Delivery verified", time.Now()
 			f.setSessions("box", final)
 			s.setSessions("box", []proto.Session{final})
-			waitFor(t, "completion after the final session update", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+			waitFor(t, "completion after the final session update", func() bool {
+				c := todoNow(s, todo.ID).Check
+				return c != nil && c.Verdict == verdictDone
+			})
 			f.mu.Lock()
 			judged := f.judged
 			f.mu.Unlock()
@@ -406,7 +409,10 @@ func TestTaskCompletionReconcilesAnAnswerArrivingDuringTheRead(t *testing.T) {
 		s.setSessions("box", []proto.Session{final})
 	}})
 	s.taskTurnEnded(ctx, "box", "s1")
-	waitFor(t, "completion without another session update", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+	waitFor(t, "completion without another session update", func() bool {
+		c := todoNow(s, todo.ID).Check
+		return c != nil && c.Verdict == verdictDone
+	})
 }
 
 func TestAutoDoneSkipRecognizesCancellation(t *testing.T) {
@@ -537,6 +543,9 @@ func TestReassignedAbortedAgentSettledDoesNotCompleteTask(t *testing.T) {
 
 	s.taskTurnEnded(ctx, "box", "s2")
 
-	// Now the task SHOULD complete properly by the real agent!
-	waitFor(t, "task completion by active agent", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+	// Now the active agent's work is judged done and delivered for review; the released agent never reached this point.
+	waitFor(t, "task completion by active agent", func() bool {
+		c := todoNow(s, todo.ID).Check
+		return c != nil && c.Verdict == verdictDone
+	})
 }

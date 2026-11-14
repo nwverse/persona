@@ -43,6 +43,9 @@ type SessionHierarchy struct {
 	// StartedAt is when the session began: its transcript's first line, a runtime's created time. Set by the node where
 	// it knows it (Codex rollouts, runtime rows); zero when it does not.
 	StartedAt time.Time `json:"started_at,omitzero"`
+	// CreationID correlates an assistant-dispatched start with its pre-created to-do, including when the start's answer is
+	// lost. Empty for manually opened and older sessions (#5732). Set by the node from its persisted creation record.
+	CreationID string `json:"creation_id,omitempty"`
 	// AskingParentSessionID names the parent of a runtime child that waits for the user (status blocked). Such a row
 	// has is_subagent, parent_session_id and root_session_id cleared, so that apps which fold every child under its
 	// parent still list it while it needs the user (#4494); this keeps its parent known to those that fold it as a card
@@ -97,7 +100,7 @@ type SessionChildren struct {
 }
 
 func (h *SessionHierarchy) empty() bool {
-	return h.ParentAgentID == "" && h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
+	return h.ParentAgentID == "" && h.StartedAt.IsZero() && h.CreationID == "" && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
 		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil
 }
 
@@ -167,6 +170,24 @@ func (s *Session) StartedAt() time.Time {
 		return time.Time{}
 	}
 	return s.Hierarchy.StartedAt
+}
+
+// CreationID is the identity the node recorded for an assistant-dispatched start; "" for any other session.
+func (s *Session) CreationID() string {
+	if s.Hierarchy == nil {
+		return ""
+	}
+	return s.Hierarchy.CreationID
+}
+
+// SetCreationID records an assistant-dispatched start's identity ("" when there is none).
+func (s *Session) SetCreationID(id string) {
+	if s.CreationID() == id {
+		return
+	}
+	h := s.hierarchy()
+	h.CreationID = id
+	s.setHierarchy(h)
 }
 
 // AskingParentSessionID is the parent of a blocked runtime child (SessionHierarchy.AskingParentSessionID).

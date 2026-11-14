@@ -133,13 +133,13 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     expect(openTaskItems(run([freshTodo]))[0]!.countsOpen).toBe(true);
   });
 
-  it("keeps a seen pending-review decision visible in Needs you but counts it only while the page still has it open", () => {
+  it("keeps a seen pending-review decision visible and counted until it is accepted", () => {
     const review = { at: stale, verdict: "needs_user" as const, note: "Choose the route." };
     const seen = base("review-seen", stale, { seen_at: stale, supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
     const got = run([seen]);
     expect(got.needsYou.map((i) => i.key)).toEqual(["task:review-seen"]);
-    expect(openTaskItems(got)[0]!.countsOpen).toBe(false);
-    // nobody looked at the finished turn yet: the page keeps it in Just finished, so it still counts
+    // #5732: Seen is only a receipt, never acceptance. An unaccepted review stays open on the page and in the badge.
+    expect(openTaskItems(got)[0]!.countsOpen).toBe(true);
     const unseen = base("review-unseen", stale, { supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
     expect(openTaskItems(run([unseen]))[0]!.countsOpen).toBe(true);
   });
@@ -161,7 +161,7 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     const pageOpen = triageTodos(todos, makeSessionLookup([workingSession, loneAgent]), now).open;
     const chipOpen = openTaskItems(got).filter((i) => i.countsOpen).length;
     expect(chipOpen).toBe(pageOpen);
-    expect(chipOpen).toBe(2); // Working and unexpired parked; inactivity alone does not end an explicit wait.
+    expect(chipOpen).toBe(3); // working + unexpired parked + unaccepted seen review; stale shelves and done do not count
     expect(got.needsYou.some((i) => i.kind === "plan")).toBe(true);
     expect(got.running.some((i) => i.kind === "agent")).toBe(true);
   });

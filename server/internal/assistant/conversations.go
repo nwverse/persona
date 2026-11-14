@@ -182,6 +182,7 @@ func (s *Service) archiveRoutes() {
 }
 
 var sessionIDRe = lazyre.New(`^[A-Za-z0-9._-]{1,128}$`)
+var legacyTodoIDRe = lazyre.New(`todo_[A-Za-z0-9]+`)
 
 func validSessionID(id string) bool { return sessionIDRe.MatchString(id) }
 
@@ -194,6 +195,9 @@ type relayMsg struct {
 	Text      string    `json:"text"`
 	Hop       int       `json:"hop"`
 	At        time.Time `json:"at"`
+	// Signals is the structured content of a queued supervision message. It lets /stop remove one task and regather
+	// the others even after a restart lost supervise.queued; older messages without it use their embedded task ids.
+	Signals *[]superviseSignal `json:"signals,omitempty"`
 	// State is a task notice's state (quiet.go: done | needs | interrupted | failed); "" for other relays.
 	State string `json:"state,omitempty"`
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
@@ -228,6 +232,12 @@ type relayHop struct {
 type relayState struct {
 	Queue map[string][]relayMsg `json:"queue,omitempty"` // by receiver
 	Hops  map[string]relayHop   `json:"hops,omitempty"`  // by conversation: the hop of the message it is working on
+	// SupervisePending: gathered supervision signals not yet delivered or admitted to Queue. It closes the restart
+	// window for states (notably needs_user) that the watch cannot reconstruct (#5732).
+	SupervisePending map[string]superviseSignal `json:"supervise_pending,omitempty"`
+	// LegacyBackground: conversation + "\x00" + todo whose pre-#5732 supervision notice really reached that conversation.
+	// It survives a manager restart, so an old background can finish exactly those tasks and no new main-supervised ones.
+	LegacyBackground map[string]bool `json:"legacy_background,omitempty"`
 	// Spawned: the conversations conversation_new opened, by id, until they report back or their parent is told
 	// (spawned.go, #4669).
 	Spawned map[string]spawnedConv `json:"spawned,omitempty"`
@@ -276,6 +286,31 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 	}
 	if rs.Spawned == nil {
 		rs.Spawned = map[string]spawnedConv{}
+	}
+	if rs.LegacyBackground == nil {
+		rs.LegacyBackground = map[string]bool{}
+	}
+	if rs.SupervisePending == nil {
+		rs.SupervisePending = map[string]superviseSignal{}
+	}
+	// Upgrade an old queue in place: structured signals are exact; a pre-signals message still carries its todo ids.
+	for conversation, queue := range rs.Queue {
+		for _, msg := range queue {
+			if msg.Tool != superviseTool {
+				continue
+			}
+			if msg.Signals != nil {
+				for _, g := range *msg.Signals {
+					if g.Todo != "" {
+						rs.LegacyBackground[conversation+"\x00"+g.Todo] = true
+					}
+				}
+			} else {
+				for _, id := range legacyTodoIDRe.FindAllString(msg.Text, -1) {
+					rs.LegacyBackground[conversation+"\x00"+id] = true
+				}
+			}
+		}
 	}
 	b.st, b.loaded = rs, true
 	b.sent, b.draining, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]*time.Timer{}
@@ -406,6 +441,13 @@ func (s *Service) queueRelay(to string, msg relayMsg) int {
 	}
 	msg.QueuedAt, msg.Depth = time.Now().UTC(), len(b.st.Queue[to])+1
 	b.st.Queue[to] = append(b.st.Queue[to], msg)
+	if msg.Tool == superviseTool && msg.Signals != nil {
+		// Queue admission and outbox acknowledgment share this one durable write (#5732).
+		ackSupervisePendingLocked(b.st.SupervisePending, *msg.Signals)
+		if len(b.st.SupervisePending) == 0 {
+			b.st.SupervisePending = nil
+		}
+	}
 	s.saveRelayLocked()
 	n := len(b.st.Queue[to])
 	b.mu.Unlock()

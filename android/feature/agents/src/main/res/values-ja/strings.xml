@@ -431,6 +431,12 @@
     <string name="agents_todo_decision_keep_editing">編集を続ける</string>
     <string name="agents_todo_notes_empty">編集をタップして説明と要件を追加…</string>
     <string name="agents_todo_auto_reason">自動完了の理由：%1$s</string>
+    <string name="agents_todo_cancelled">キャンセル済み</string>
+    <string name="agents_todo_cancelled_reason">キャンセル理由：%1$s</string>
+    <string name="agents_todo_lineage">タスクの引き継ぎ履歴</string>
+    <string name="agents_todo_lineage_current">現在のタスク</string>
+    <string name="agents_todo_lineage_continues">%1$s から引き継ぎ</string>
+    <string name="agents_todo_lineage_superseded">%1$s が引き継ぎ済み</string>
     <string name="agents_todo_hold_pr">PR で止まっています</string>
     <string name="agents_todo_due">期限 %1$s</string>
     <string name="agents_todo_was_due">期限切れ %1$s</string>
@@ -520,9 +526,9 @@
     <string name="agents_page_more">さらに読み込む</string>
     <string name="agents_page_previous">前のセッションを読み込む</string>
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
-    <string name="agents_todos_section_waiting">あなた待ち</string>
+    <string name="agents_todos_section_waiting">あなたの対応待ち</string>
     <string name="agents_todos_section_working">作業中</string>
-    <string name="agents_todos_section_just_done">完了したばかり</string>
+    <string name="agents_todos_section_just_done">交付済み・確認待ち</string>
     <string name="agents_todos_section_pr">マージ待ちの PR</string>
     <string name="agents_todos_section_other">その他の未完了</string>
     <string name="agents_todos_section_shelved">保留中</string>

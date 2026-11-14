@@ -500,24 +500,26 @@ func TestAutoFinishLeavesAReopenedTask(t *testing.T) {
 	if todoNow(s, "todo_r").DoneAt != nil || todoNow(s, "todo_h").DoneAt != nil || f.judged != 0 {
 		t.Fatalf("closed: %+v %+v, %d judgments", todoNow(s, "todo_r"), todoNow(s, "todo_h"), f.judged)
 	}
-	// Work after the reopen is judged, and closes it.
+	// Work after the reopen is judged and delivered for review, not closed again (#5732).
 	s.autoFinishTask(todoNow(s, "todo_r"), time.Now(), true)
-	if got := todoNow(s, "todo_r"); got.DoneAt == nil || got.DoneBy != db.DoneByAuto || f.judged != 1 {
-		t.Fatalf("not closed after new work: %+v, %d judgments", got, f.judged)
+	if got := todoNow(s, "todo_r"); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone || f.judged != 1 {
+		t.Fatalf("not judged after new work: %+v, %d judgments", got, f.judged)
 	}
 }
 
-// The agent of a task the judge closed is sent more (agent_send resumes it) and works again: the task is open again
-// while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
-// finished one, a done receipt and the judge, which may close it again (#5892).
+// The agent of a task the supervisor accepted is sent more (agent_send resumes it) and works again: the task is open
+// again while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
+// finished one, a done receipt and a new delivery judgment, still without automatic closure (#5892, #5732).
 func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	s, f := newTaskService(t)
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "设计稿写好了", 0)
-	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {
-		t.Fatalf("auto done: %v %v", ok, err)
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "做完了"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
+		t.Fatalf("accept before more work: %v", err)
 	}
 	if _, ok := s.taskOf(ctx, "box", "s1"); ok {
 		t.Fatal("a closed task still follows its agent")
@@ -562,7 +564,7 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	if rb := lastReceipt(); rb.State != "done" {
 		t.Fatalf("a finished turn of the reopened task: receipt = %+v", rb)
 	}
-	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.DoneBy != db.DoneByAuto {
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone {
 		t.Fatalf("the work after the reopen is not judged: %+v", got)
 	}
 }

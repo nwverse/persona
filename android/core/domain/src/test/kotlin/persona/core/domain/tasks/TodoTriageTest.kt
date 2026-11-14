@@ -91,8 +91,8 @@ class TodoTriageTest {
     }
 
     @Test
-    fun aClosedTodoIsJustFinishedForADayThenDone() {
-        assertEquals(TriageSection.JustDone, at(todo("t", doneAt = hoursAgo(3))).section)
+    fun aClosedTodoIsImmediatelyDone() {
+        assertEquals(TriageSection.Done, at(todo("t", doneAt = hoursAgo(3))).section)
         assertEquals(TriageSection.Done, at(todo("t", doneAt = hoursAgo(30), updated = 30)).section)
     }
 
@@ -100,7 +100,7 @@ class TodoTriageTest {
     fun anAcceptedTaskReopenedByMoreWorkIsFinishedNotFollowUp() {
         val td = todo("t", agents = listOf(agent("idle")), reopenedAt = hoursAgo(4), supervision = acceptedReopened())
         val t = at(td)
-        assertEquals(TriageSection.JustDone, t.section)
+        assertEquals(TriageSection.Done, t.section)
         assertEquals(TriageRule.Accepted, t.rule)
         assertTrue(td.acceptedAtRest(lookup))
         assertEquals(ReviewStage.Accepted, td.reviewStage)
@@ -114,8 +114,15 @@ class TodoTriageTest {
     }
 
     @Test
-    fun aDeployedDeliveryIsFinished() {
-        assertEquals(TriageRule.Deployed, at(todo("t", delivery = TodoDelivery(state = "live", at = hoursAgo(2)))).rule)
+    fun aLiveDeliveryWaitsForReviewUntilAccepted() {
+        val recent = todo("t", delivery = TodoDelivery(state = "live", at = hoursAgo(2)))
+        assertEquals(TriageSection.JustDone, at(recent).section)
+        assertEquals(TriageRule.FinishedUnseen, at(recent).rule)
+        assertTrue(recent.countsAsOpen(at(recent)))
+        val old = todo("t", updated = 300, delivery = TodoDelivery(state = "live", at = hoursAgo(300)))
+        assertEquals(TriageSection.JustDone, at(old).section)
+        assertEquals(TriageRule.FinishedUnseen, at(old).rule)
+        assertTrue(old.countsAsOpen(at(old)))
     }
 
     @Test
@@ -157,6 +164,34 @@ class TodoTriageTest {
         val header = triageTodos(all, lookup, now, zone = zone)
         assertEquals(header.open, all.count { it.bucket(lookup, now) == TodoBucket.Open })
         assertEquals(header.shelved, all.count { it.bucket(lookup, now) == TodoBucket.Shelved })
+    }
+
+    @Test
+    fun cancelledIsNeitherOpenNorFinished() {
+        val cancelled = todo("cancelled").copy(cancelledAt = hoursAgo(1))
+        val alone = triageTodos(listOf(cancelled), groupLookup, now, zone = zone)
+        assertEquals(0, alone.open)
+        assertEquals(1, alone.cancelled)
+        assertEquals(0, alone.finished)
+        val controls = triageTodos(listOf(cancelled, todo("open"), todo("done", doneAt = hoursAgo(2))), groupLookup, now, zone = zone)
+        assertEquals(1, controls.open)
+        assertEquals(1, controls.cancelled)
+        assertEquals(1, controls.finished)
+    }
+
+    @Test
+    fun mainTriageUsesTheCurrentTimeForTheUsageLimitGrace() {
+        val limited = todo("limited", agents = listOf(agent("limited")))
+        val expiredSession = session("limited", "unread").copy(
+            turnError = "usage limit reached", turnErrorKind = "usage_limit",
+            turnErrorResetsAt = Instant.ofEpochMilli(now - 11 * 60_000L).toString(),
+        )
+        val expiredLookup = lookupOf(expiredSession)
+        assertEquals(TriageStatus.Interrupted, limited.triageStatus(expiredLookup, now))
+        assertEquals(TriageSection.Waiting, limited.triage(expiredLookup, now, zone = zone).section)
+
+        val recentLookup = lookupOf(expiredSession.copy(turnErrorResetsAt = Instant.ofEpochMilli(now - 5 * 60_000L).toString()))
+        assertEquals(TriageStatus.UsageLimit, limited.triageStatus(recentLookup, now))
     }
 
     @Test
@@ -220,7 +255,8 @@ class TodoTriageTest {
     fun neverMergesAClosedTodoIntoAnOpenOnesRow() {
         val r = triageTodos(listOf(todo("a", title = "Same title"), todo("b", title = "Same title", doneAt = hoursAgo(1))), groupLookup, now, zone = zone)
         assertEquals(1, r.rows(TriageSection.Other).size)
-        assertEquals(1, r.rows(TriageSection.JustDone).size)
+        assertEquals(0, r.rows(TriageSection.JustDone).size)
+        assertEquals(1, r.rows(TriageSection.Done).size)
     }
 
     @Test
@@ -240,14 +276,15 @@ class TodoTriageTest {
         val list = listOf(failed, done, other, twin)
         assertEquals(setOf("f1"), supersededFailedStarts(list))
         val r = triageTodos(list, groupLookup, now, zone = zone)
-        assertEquals(listOf(listOf("done1", "f1")), r.rows(TriageSection.JustDone).map { g -> g.members.map { it.id } })
+        assertEquals(0, r.rows(TriageSection.JustDone).size)
+        assertEquals(listOf(listOf("done1", "f1")), r.rows(TriageSection.Done).map { g -> g.members.map { it.id } })
         assertEquals(listOf(listOf("f2", "f3")), r.rows(TriageSection.Waiting).map { g -> g.members.map { it.id } })
         assertEquals(2, r.open)
         assertEquals(TodoBucket.Closed, failed.bucket(groupLookup, now, superseded = true))
         assertEquals(TodoBucket.Open, failed.bucket(groupLookup, now))
         // the checkbox: open while it waits on the owner, done once superseded
         assertEquals(true, other.checksAsOpen(r.rows(TriageSection.Waiting)[0].triage["f2"]))
-        assertEquals(false, failed.checksAsOpen(r.rows(TriageSection.JustDone)[0].triage["f1"]))
+        assertEquals(false, failed.checksAsOpen(r.rows(TriageSection.Done)[0].triage["f1"]))
     }
 
     @Test
@@ -280,20 +317,25 @@ class TodoTriageTest {
         )
     }
 
-    // #5707: seen (Got it, or opening it) at or after the moment that put it in Just finished, it is Done at once
+    // #5707 + #5732: Seen files ordinary turns, never closure, acceptance or an unaccepted delivery
     private fun minutesAgo(m: Int) = Instant.ofEpochMilli(now - m * 60_000L).toString()
 
     @Test
-    fun aSeenToDoGoesToDoneAtOnceOneSeenBeforeItGotThereStays() {
+    fun seenFilesOrdinaryTurnsButNotAcceptanceOrAnUnacceptedDelivery() {
         val closed = { seenMinutesAgo: Int -> at(todo("t", doneAt = hoursAgo(3)).copy(seenAt = minutesAgo(seenMinutesAgo))) }
         assertEquals(TriageSection.Done, closed(120).section)
         assertEquals(TriageRule.Closed, closed(120).rule)
         assertEquals(TriageSection.Done, closed(180).section)
-        assertEquals(TriageSection.JustDone, closed(240).section)
+        assertEquals(TriageSection.Done, closed(240).section)
         val accepted = at(todo("t", supervision = acceptedReopened(), agents = listOf(agent("idle"))).copy(seenAt = hoursAgo(4)))
         assertEquals(TriageSection.Done to TriageRule.Accepted, accepted.section to accepted.rule)
         val deployed = at(todo("t", delivery = TodoDelivery(state = "live", at = hoursAgo(2))).copy(seenAt = hoursAgo(1)))
-        assertEquals(TriageSection.Done to TriageRule.Deployed, deployed.section to deployed.rule)
+        assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, deployed.section to deployed.rule)
+        val supervised = at(todo("t", agents = listOf(agent("unseen")), supervision = Supervision(supervisor = "main")).copy(seenAt = minutesAgo(30)))
+        assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, supervised.section to supervised.rule)
+        assertTrue(todo("ordinary", agents = listOf(agent("unseen"))).seenCanFile)
+        assertFalse(todo("supervised", agents = listOf(agent("unseen")), supervision = Supervision(supervisor = "main")).seenCanFile)
+        assertFalse(todo("live", delivery = TodoDelivery(state = "live", at = hoursAgo(2))).seenCanFile)
     }
 
     @Test
@@ -313,10 +355,10 @@ class TodoTriageTest {
     @Test
     fun unfinishedSectionsComeFirstAndOpenShelvedAndDoneFoldedDoneLast() {
         assertEquals(
-            listOf(TriageSection.Waiting, TriageSection.Working, TriageSection.Pr, TriageSection.Other, TriageSection.JustDone, TriageSection.Shelved, TriageSection.Done),
+            listOf(TriageSection.Waiting, TriageSection.Working, TriageSection.Pr, TriageSection.Other, TriageSection.JustDone, TriageSection.Shelved, TriageSection.Done, TriageSection.Cancelled),
             TriageSection.entries.toList(),
         )
-        assertEquals(listOf(TriageSection.Shelved, TriageSection.Done), TriageSection.entries.filter { it.folded })
+        assertEquals(listOf(TriageSection.Shelved, TriageSection.Done, TriageSection.Cancelled), TriageSection.entries.filter { it.folded })
     }
 
     @Test
@@ -333,8 +375,8 @@ class TodoTriageTest {
             look, now, zone = zone,
         )
         assertEquals(listOf(listOf("test", "fix")), r.rows(TriageSection.Other).map { g -> g.members.map { it.id } })
-        assertEquals(listOf("logs"), r.rows(TriageSection.JustDone).map { it.lead.id })
-        assertEquals(listOf("speed", "notes"), r.rows(TriageSection.Done).map { it.lead.id })
+        assertEquals(0, r.rows(TriageSection.JustDone).size)
+        assertEquals(listOf("speed", "logs", "notes"), r.rows(TriageSection.Done).map { it.lead.id })
         assertEquals(listOf(2, 0, 3), listOf(r.open, r.shelved, r.finished))
     }
 

@@ -265,6 +265,7 @@ data class WorkState(
     val wait: String? = null,
     val then: String? = null,
     @WireTime @SerialName("wake_at") val wakeAt: String? = null,
+    @WireTime @SerialName("resets_at") val resetsAt: String? = null,
     val attempts: Int? = null,
     val max: Int? = null,
     @SerialName("interaction_id") val interactionId: String? = null,
@@ -443,6 +444,9 @@ data class Session(
     @WireTime @SerialName("activity_at") val activityAt: String? = null,
     /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
     @SerialName("turn_error") val turnError: String? = null,
+    /** A usage-limit stop is not an interrupted task; the reset is optional on older hubs. */
+    @SerialName("turn_error_kind") val turnErrorKind: String? = null,
+    @WireTime @SerialName("turn_error_resets_at") val turnErrorResetsAt: String? = null,
     /**
      * What the hub recognized of [turnError] (docs/protocol/protocol.md): not_logged_in, auth_failed, model_route,
      * rate_limited or model_fallback_unavailable (the model Claude Code fell back to after a refusal can't be used, #2528:

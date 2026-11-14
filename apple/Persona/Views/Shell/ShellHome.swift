@@ -446,7 +446,7 @@ struct ShellDestinations: ViewModifier {
                     routed(place(route).modifier(ShellPlaceSidebarButton()).modifier(FirstPage(on: !agentRoutes)))
                 }
                 .modifier(InboxDestinations(accounts: accounts.accounts, inboxChat: routeChat, openFeishu: { path.append($0) }))
-                .modifier(AgentRoutes(on: agentRoutes, chat: routeChat, openFeishu: { path.append($0) }))
+                .modifier(AgentRoutes(path: $path, on: agentRoutes, chat: routeChat, openFeishu: { path.append($0) }))
                 .navigationDestination(for: InboxChatRoute.self) { r in routed(ChatView(key: r.key, itemManager: r.manager).id(r.key)) }
                 .environment(\.feishuOpen) { path.append($0) }
                 .environment(\.pushInboxChat, routeChat)
@@ -465,6 +465,7 @@ struct ShellDestinations: ViewModifier {
 
     /// What the Agents list registers as well: here only where it does not (the shell, the iPad's Persona tab).
     private struct AgentRoutes: ViewModifier {
+        @Binding var path: NavigationPath
         var on: Bool
         var chat: ((InboxChatRoute) -> Void)?
         var openFeishu: ((FeishuRoute) -> Void)?
@@ -473,7 +474,7 @@ struct ShellDestinations: ViewModifier {
             if on {
                 content
                     .navigationDestination(for: TodoDetailRoute.self) { r in
-                        TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton())
+                        TodoDetailView(todoID: r.id, openDetail: { path.append($0) }).modifier(ShellPlaceSidebarButton())
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
                     .navigationDestination(for: MachineDetailRoute.self) { r in
@@ -505,7 +506,7 @@ struct ShellDestinations: ViewModifier {
     @ViewBuilder private func place(_ route: ShellRoute) -> some View {
         switch route {
         case .inbox: InboxPage(path: $path, accountState: accounts, embedded: true)
-        case .todos: TodosView()
+        case .todos: TodosView(openDetail: { path.append($0) })
         case .machines: MachinesView()
         case .extensionPage(let r): ExtensionNavPage(route: r)
         case .profile: AssistantProfileView()

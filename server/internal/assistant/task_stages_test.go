@@ -292,6 +292,7 @@ func TestTaskStageReviewVerdict(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := newTaskService(t)
+			setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 			todo := startedTask(t, s, f)
 			ctx := context.Background()
 			s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryMerged})

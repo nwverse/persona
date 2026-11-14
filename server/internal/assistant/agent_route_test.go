@@ -157,8 +157,8 @@ func TestHandStartedAgentUnderALeaderGetsItsSignals(t *testing.T) {
 	}
 }
 
-// task_plan's supervisor: the main conversation hands the plan to a leader, whose tasks they are; nobody else may, and
-// only to a current leader.
+// task_plan validates an explicitly named leader as before, but every new plan is supervised by main (#5732); a custom
+// supervisor no longer creates a second supervision route.
 func TestTaskPlanSupervisor(t *testing.T) {
 	s, f := newQuietService(t)
 	f.known["lead1"] = true
@@ -180,11 +180,11 @@ func TestTaskPlanSupervisor(t *testing.T) {
 		t.Fatalf("handed to a conversation that is no leader: %v", err)
 	}
 	res, err := plan("conv1", "lead1")
-	if err != nil || !strings.Contains(res, "Leader conversation lead1 supervises them") {
-		t.Fatalf("handed to the leader: %s %v", res, err)
+	if err != nil || !strings.Contains(res, "You supervise them") {
+		t.Fatalf("main supervises the explicit-leader plan too: %s %v", res, err)
 	}
 	waitFor(t, "the task", func() bool { return len(onlyTodo(s).Agents) == 1 })
-	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "lead1" || len(v.DoneWhen) != 1 {
+	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "conv1" || len(v.DoneWhen) != 1 {
 		t.Fatalf("supervision: %+v", v)
 	}
 }

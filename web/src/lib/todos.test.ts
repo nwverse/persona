@@ -4,6 +4,8 @@ import {
   DECISIONS_FIRST,
   shownDecisions,
   heldDelivery,
+  isCancelled,
+  cancellationReason,
   isAutoDone,
   isRemovable,
   TODO_STATUS_INFO,
@@ -21,6 +23,7 @@ import {
   resolveLinkCurrentTodoId,
   runningSubagents,
   sortTodos,
+  shownStatus,
   stoppedReason,
   taskNow,
   todoDueBy,
@@ -674,6 +677,37 @@ describe("弹窗关联目标判定 (resolveLinkCurrentTodoId)", () => {
   });
 });
 
+describe("交付与等待处理的状态标签 (#5732)", () => {
+  const base: Todo = { id: "t", title: "交付任务", created_at: "2026-11-04T06:00:00Z", updated_at: "2026-11-04T08:00:00Z" };
+
+  it("pending_review 和未验收的 live 都是已交付·待看，不显示未开始", () => {
+    const pending = { ...base, supervision: { supervisor: "main", state: "pending_review" as const } };
+    expect(todoStatusLabel(pending, "not_started")).toBe("已交付·待看");
+    expect(shownStatus(pending, "not_started")).toBe("unread");
+    const live = { ...base, delivery: { state: "live" as const, at: "2026-11-04T08:00:00Z" } };
+    expect(todoStatusLabel(live, "not_started")).toBe("已交付·待看");
+    expect(shownStatus(live, "not_started")).toBe("unread");
+  });
+
+  it("needs_user 显示等你处理，而不是普通的需要你", () => {
+    const waiting = { ...base, supervision: { supervisor: "main", state: "needs_user" as const } };
+    expect(todoStatusLabel(waiting, "follow_up")).toBe("等你处理");
+    expect(shownStatus(waiting, "follow_up")).toBe("needs_you");
+  });
+
+  it("用户已完成优先于账本里遗留的 needs_user 和待决定 ask", () => {
+    const done = {
+      ...base,
+      done_at: "2026-11-04T09:00:00Z",
+      done_by: "user" as const,
+      supervision: { supervisor: "main", state: "needs_user" as const },
+      ask: { outcome: "decide" as const, verdict: "needs_user", asked_at: "2026-11-04T08:30:00Z" },
+    };
+    expect(todoStatusLabel(done, "done")).toBe("已完成");
+    expect(shownStatus(done, "done")).toBe("done");
+  });
+});
+
 describe("自动完成 (docs/assistant/todos.md「Automatic completion」)", () => {
   const base = { id: "t", title: "统一连接器 logo 尺寸", created_at: "2026-11-04T06:00:00Z", updated_at: "2026-11-04T08:00:00Z" };
   it("hub 判断做完后关掉的任务标「自动完成」", () => {
@@ -873,6 +907,21 @@ describe("任务卡片的进度 (taskNow, #1583)", () => {
     expect(taskNow(s, true)).toEqual({ kind: "step", text: "在搜 Shutdown", since: undefined });
     expect(runningSubagents(s)).toEqual(["Hub children lifecycle survey", "Explore"]);
     expect(runningSubagents(base)).toEqual([]);
+  });
+});
+
+describe("取消是独立状态，不是完成 (#5732)", () => {
+  const closed: Todo = { id: "cancelled", title: "Cancelled", created_at: "2026-11-02T10:00:00Z", updated_at: "2026-11-02T11:00:00Z", done_at: "2026-11-02T11:00:00Z", done_by: "review", done_reason: "Not needed" };
+  it("reads the additive projection and the legacy supervision marker", () => {
+    const current = { ...closed, cancelled_at: closed.done_at, cancelled_reason: "Superseded" };
+    expect(isCancelled(current)).toBe(true);
+    expect(cancellationReason(current)).toBe("Superseded");
+    expect(todoStatusLabel(current, "done")).toBe("已取消");
+    const legacy = { ...closed, supervision: { supervisor: "main", state: "cancelled" as const } };
+    expect(isCancelled(legacy)).toBe(true);
+    expect(cancellationReason(legacy)).toBe("Not needed");
+    expect(todoStatusLabel(legacy, "done")).toBe("已取消");
+    expect(isCancelled(closed)).toBe(false);
   });
 });
 

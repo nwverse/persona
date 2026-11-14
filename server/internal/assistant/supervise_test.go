@@ -363,9 +363,9 @@ func TestTaskHealth(t *testing.T) {
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now}}, "正常"},
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now.Add(-25 * time.Minute)}}, "卡住 25 分钟"},
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateNeedsYou, StateSince: now.Add(-5 * time.Minute)}}, "等回答 5 分钟"},
-		{Todo{Supervision: &Supervision{State: reviewPending}}, nil, "待验收"},
+		{Todo{Supervision: &Supervision{State: reviewPending}}, nil, "已交付·待看"},
 		{Todo{Supervision: &Supervision{State: reviewRework, Round: 2}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now}}, "返工第 2 轮"},
-		{Todo{Supervision: &Supervision{State: reviewNeedsUser}}, nil, "等你决定"},
+		{Todo{Supervision: &Supervision{State: reviewNeedsUser}}, nil, "等你处理"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}, DoneAt: &done}, nil, "已验收"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}}, nil, "正常"}, // reopened by the user
 		{Todo{Supervision: &Supervision{Waits: &OwnerWait{At: now}}}, nil, "停下等用户拍板，别直接验收"},
@@ -489,7 +489,7 @@ func TestGoldenSupervise(t *testing.T) {
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	golden(t, "assistant_snapshot.supervised", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC", Tasks: []prompts.SnapshotTask{
 		{ID: "todo_2", Title: "部署 hub", State: "停着", Health: "等你决定", DoneWhen: 1},
-		{ID: "todo_1", Title: "修登录崩溃", State: "做完了（用户还没看）", Health: "待验收", DoneWhen: 2},
+		{ID: "todo_1", Title: "修登录崩溃", State: "已交付·待看", Health: "已交付·待看", DoneWhen: 2},
 		{ID: "todo_3", Title: "跑 UI 测试", State: "在做", Health: "卡住 35 分钟"},
 		{ID: "todo_4", Title: "迁移数据库", State: "在做", Health: "正常", DoneWhen: 1,
 			Reported: &prompts.SnapshotReport{Kind: "progress", Step: 3, Steps: 5, Text: "在跑迁移脚本", Minutes: 4}},

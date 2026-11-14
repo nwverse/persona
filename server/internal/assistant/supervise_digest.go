@@ -26,6 +26,14 @@ const superviseTool = "supervise"
 // dropped.
 func (s *Service) sendDigest(ctx context.Context) {
 	b := &s.supervise
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		b.mu.Lock()
+		b.init()
+		s.retryDigestLocked(s.superviseTimings().urgent)
+		b.mu.Unlock()
+		return
+	}
+	s.restoreSupervisePending(ctx)
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	b.mu.Lock()
@@ -81,7 +89,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	var leaderOrder []TodoAgent
 	gone := map[string]bool{}      // leaders whose conversation is not there: their signals go to the main one
 	s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed gets a supervisor that can act, before routing
-	if s.backgroundNeeded(here, list) {
+	if s.backgroundNeeded(ctx, here, list) {
 		// The background supervisor is made the first time a signal is for it, and again when it is gone. One that
 		// cannot start leaves here as it was: the gone check below sends its signals to the main conversation.
 		id, was := s.ensureBackground(ctx)
@@ -98,6 +106,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 	}
 	for _, g := range list {
+		original := g
 		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
 			if reachable {
 				key := [2]string{lead.MachineID, lead.SessionID}
@@ -110,11 +119,13 @@ func (s *Service) sendDigest(ctx context.Context) {
 			// Unreachable, not dropped: it becomes a decision for the conversation above the leader (escalateLeaderSignal),
 			// which has its own delivery target below.
 			g = s.escalateLeaderSignal(ctx, g)
-			if g.Todo == "" { // nobody above it: it is told again next time
+			if g.Todo == "" { // nobody above it: restore both the durable outbox and this process's retry (#5732)
+				s.restoreDigest([]superviseSignal{original}, now, prev)
 				continue
 			}
+			s.replaceSupervisePending(original, g)
 		}
-		to := s.digestTo(here, g)
+		to := s.digestTo(ctx, here, g)
 		if to != here.Main {
 			if _, seen := gone[to]; !seen {
 				if to == here.BackgroundSupervisor {
@@ -169,6 +180,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either (task_turns.go)
 	if len(entries) == 0 {
+		s.ackSupervisePending(list) // every signal no longer holds, as the in-memory digest already decided
 		return false
 	}
 	holds := kept
@@ -179,7 +191,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return false
 	}
 	if len(entries) == 0 {
-		s.turnsTold(ctx, holds) // said the same within the window: told
+		s.ackSupervisePending(list) // already covered by the deduplication history
+		s.turnsTold(ctx, holds)     // said the same within the window: told
 		b.mu.Lock()
 		if b.last.Equal(now) {
 			b.last = prev
@@ -187,16 +200,20 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		b.mu.Unlock()
 		return false
 	}
+	background := to != here.Main && to == here.BackgroundSupervisor // old work only; also scopes its closeout grant
 	accepted := false
 	defer func() {
 		if !accepted {
 			rollback()
 			return
 		}
+		if background {
+			s.rememberLegacyBackground(to, kept)
+		}
+		s.ackSupervisePending(list)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.turnsTold(ctx, holds)    // and how a turn ended: kept went, the rest of them was said the same within the window
 	}()
-	background := to != here.Main && to == here.BackgroundSupervisor // the leader's message, told that the tasks are not its own (supervise_background.go)
 	leader := background || to != here.Main && s.isLeader(ctx, to)
 	render := func(list []prompts.SuperviseEntry) string {
 		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
@@ -224,6 +241,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			}
 		}
 		msg.Text, msg.Urgent = render(allEntries), anyDecision(all)
+		signals := slices.Clone(all)
+		msg.Signals = &signals
 		if s.replaceQueuedSupervise(to, msg) {
 			accepted = true
 			b.mu.Lock()
@@ -289,6 +308,8 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 // out), and the digest is tried again in the urgent gap, or later when the gap after prev has not passed yet.
 func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, at, prev time.Time) bool {
 	b := &s.supervise
+	signals := slices.Clone(kept)
+	msg.Signals = &signals
 	if s.queueRelay(to, msg) > 0 {
 		b.mu.Lock()
 		b.setQueuedLocked(to, kept)
@@ -317,6 +338,13 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, a
 			b.pending[id] = joinInbox(g, cur) // the newer item, with the messages of both
 		}
 	}
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, g := range kept {
+			if cur, ok := b.pending[g.id()]; ok {
+				pending[g.id()] = cur
+			}
+		}
+	})
 	s.retryDigestLocked(retry)
 	return false
 }
@@ -352,6 +380,12 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	for i := range q {
 		if q[i].Tool == superviseTool && (i > 0 || !b.draining[to]) {
 			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
+			if msg.Signals != nil {
+				ackSupervisePendingLocked(b.st.SupervisePending, *msg.Signals)
+				if len(b.st.SupervisePending) == 0 {
+					b.st.SupervisePending = nil
+				}
+			}
 			s.saveRelayLocked()
 			return true
 		}

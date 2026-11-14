@@ -140,6 +140,7 @@ func TestDirectCompletionEndsDecisionWithoutSending(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
 				ctx := context.Background()
+				setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
 				todo, err := e.s.createTodo(ctx, "Choose rollout", "Review rollout options", "conv1", "")
 				if err != nil {
 					t.Fatal(err)

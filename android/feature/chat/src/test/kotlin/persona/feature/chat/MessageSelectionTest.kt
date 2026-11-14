@@ -119,8 +119,8 @@ class MessageSelectionTest {
 
     private fun select(id: String, text: String, user: Boolean = false, pending: DeliveryState? = null) {
         rule.runOnIdle { menu.select(MessageTarget(id, text, user, pending = pending)) }
-        rule.waitForIdle()
-        rule.waitForIdle()
+        // The selectable texts register and selectAll runs on frames; idle alone does not advance Robolectric's clock.
+        settle()
     }
 
     private fun copy() {

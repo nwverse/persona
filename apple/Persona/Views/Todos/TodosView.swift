@@ -7,6 +7,9 @@ public struct TodoDetailRoute: Hashable, Sendable, Identifiable {
 }
 
 struct TodosView: View {
+    /// Programmatic opens share the stack's value-based path with rows and lineage links; a view-based destination
+    /// would sit above values pushed from its detail (docs/lessons/ios.md).
+    var openDetail: (TodoDetailRoute) -> Void
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var store = TodoStore.shared
@@ -18,15 +21,13 @@ struct TodosView: View {
     @State private var creatingNotes = ""
     /// The New To-Do sheet's notes mic (#2188).
     @State private var dictation = Dictation()
-    /// Folded sections the user opened (Shelved and Done start folded), and merged rows opened to their members.
+    /// Folded sections the user opened (Shelved, Done and Cancelled start folded), and merged rows opened to their members.
     @State private var unfolded: Set<TodoSection> = []
     @State private var openedGroups: Set<String> = []
     /// Restores from Shelved kept on this device (`TodoRestores`), and the moment the sections are read at: a minute's
     /// tick moves to-dos across the 24 h / 48 h lines while the page stays open.
     @State private var restored = TodoRestores.load()
     @State private var clock = Date.now
-    /// A to-do opened from the calendar (and, in DEBUG screenshots, `-openTodoTitled <text>`: the first whose title has it).
-    @State private var pushed: TodoDetailRoute?
     /// List or calendar, and the calendar's day / week / month (#2029): each device keeps its own.
     @StoredValue("todos.view") private var viewMode = TodosViewMode.list
     @StoredValue("todos.calendar.mode") private var calendarMode = TodoCalendarMode.day
@@ -65,7 +66,7 @@ struct TodosView: View {
             }
             if viewMode == .calendar {
                 TodoCalendarView(todos: store.scopedTodos, mode: $calendarMode, anchor: $calendarAnchor,
-                                 open: { pushed = TodoDetailRoute(id: $0) }, showList: { viewMode = .list })
+                                 open: { openDetail(TodoDetailRoute(id: $0)) }, showList: { viewMode = .list })
             } else {
                 list
             }
@@ -102,18 +103,16 @@ struct TodosView: View {
             if UserDefaults.standard.bool(forKey: "showDoneTodos") { unfolded = [.other, .shelved, .done] }
             if let match = UserDefaults.standard.string(forKey: "openTodoTitled"),
                let todo = store.scopedTodos.first(where: { $0.title.contains(match) }) {
-                pushed = TodoDetailRoute(id: todo.id)
+                openDetail(TodoDetailRoute(id: todo.id))
             }
             #endif
         }
-        // Another assistant is current: the list is its to-dos now, and one opened or being written is the one before's.
+        // Another assistant is current: the list is its to-dos now, and one being written is the one before's.
         .onChange(of: model.assistantSwitches) {
-            pushed = nil
             showCreate = false
             quickAdd = nil
             openedGroups = []
         }
-        .navigationDestination(item: $pushed) { r in TodoDetailView(todoID: r.id) }
         // read when the page opens, and for the assistant made current (a project made meanwhile shows up)
         .task(id: model.assistantSwitches) { await projects.load(model.api?.currentAssistantSettings()) }
     }
@@ -261,8 +260,8 @@ struct TodosView: View {
     }
 
     /// By project (#7077, the web's grouping by project): a section per knowledge-base project with open to-dos, where its
-    /// most pressing one comes in the list, then Unsorted; then Done, folded, as by status. The search and the filter
-    /// narrow them as they narrow the sections.
+    /// most pressing one comes in the list, then Unsorted; then Done and Cancelled, folded, as by status. The search and
+    /// the filter narrow them as they narrow the sections.
     @ViewBuilder private func projectSections(_ result: TodoTriageResult) -> some View {
         let calendar = TodoCalendar.userCalendar
         let open = TodoSection.allCases.filter { $0 != .done }.flatMap { section in
@@ -290,9 +289,15 @@ struct TodosView: View {
             sectionView(.done, groups: done, count: done.reduce(0) { $0 + $1.members.count }, folded: folded)
                 .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
         }
+        let cancelled = TodoListLogic.sorted(result.groups(.cancelled), by: listSort, calendar: calendar)
+        if !cancelled.isEmpty {
+            let folded = TodoSection.cancelled.startsFolded && !isUnfolded(.cancelled)
+            sectionView(.cancelled, groups: cancelled, count: cancelled.reduce(0) { $0 + $1.members.count }, folded: folded)
+                .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
+        }
     }
 
-    /// A folded section (Shelved, Done) is open when the user opened it, or while searching.
+    /// A folded section (Shelved, Done, Cancelled) is open when the user opened it, or while searching.
     private func isUnfolded(_ section: TodoSection) -> Bool {
         unfolded.contains(section) || !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -356,8 +361,8 @@ struct TodosView: View {
     private func todoRow(_ todo: TodoItem, triage: TodoTriage?, related: TodoRelatedToggle? = nil) -> some View {
         // a failed start waiting on the owner reads open: its checkbox and swipe close it (#3713)
         let open = TodoTriageLogic.checksAsOpen(todo, triage)
-        // Got It on a Just finished row (#5707), while the hub keeps seen marks
-        let seen: (() -> Void)? = triage?.section == .justDone && model.hubFeatures.contains(TodoSeen.feature)
+        // Got It only when Seen really files the row; acceptance is a separate action (#5707, #5732).
+        let seen: (() -> Void)? = triage?.section == .justDone && TodoTriageLogic.seenCanFile(todo) && model.hubFeatures.contains(TodoSeen.feature)
             ? { markSeen(todo, after: triage?.last ?? .distantPast) } : nil
         return NavigationLink(value: TodoDetailRoute(id: todo.id)) {
             TodoRow(todo: todo, triage: triage, onToggleDone: { store.toggleDone(todo, done: open) },
@@ -547,7 +552,7 @@ private extension TodoSection {
         case .working: StatusPalette.working
         case .justDone: StatusPalette.unread
         case .pr: StatusTone(dot: Theme.accent, text: Theme.accent)
-        case .other, .shelved, .done: StatusPalette.idle
+        case .other, .shelved, .done, .cancelled: StatusPalette.idle
         }
     }
 }

@@ -34,7 +34,7 @@ var supervisedStarts = map[string]string{
 	// supervises (the main conversation, a leader), a task leader's agent for its workers, else the conversation that planned it.
 	"runPlanTaskStart":    "startPlan",
 	"toolConversationNew": "toolConversationNew", // conversation_new: followed until it reports back (spawned.go, #4669)
-	"runTool":             "quietAgentTask",      // agent_start: a quiet task of the main conversation, or of assistant.agent_tasks (#3638, #3617)
+	"runTool":             "prepareAgentTask",    // agent_start: pre-create its task and main supervision (#5732)
 	"dispatchStart":       "superviseDispatched", // dispatch_start: adopted as the main conversation's task (#3442)
 	"taskSpawn":           "taskSpawn",           // joins the caller's verified task and keeps its existing ledger
 	// a task whose agents all stopped goes on with a new agent on the same task, its ledger kept (#4754)
@@ -56,11 +56,10 @@ var startOptOuts = map[string]string{
 	"runTask":          "a scheduled task's own conversation: its runs report through notify_user, and the schedule follows them",
 	"runAutoReview":    "an independent reviewer of a supervised task: the review is part of that task's supervision",
 	"startRepairAgent": "a launcher repair Agent: the launcher health checks follow it (launcher_repair.go)",
-	"startBackground":  "the background supervisor's own conversation: it is the supervisor of the tasks no leader supervises (supervise_background.go)",
 }
 
 // supervisionCalls make or keep a ledger.
-var supervisionCalls = []string{"superviseTodo", "updateSupervision", "adoptAgent", "adoptAgentAs", "quietAgentTask", "ensureSupervisor"}
+var supervisionCalls = []string{"superviseTodo", "updateSupervision", "adoptAgent", "adoptAgentAs", "ensureSupervisor"}
 
 func TestEveryStartPathIsSupervisedOrOptedOut(t *testing.T) {
 	funcs := parsePackageFuncs(t)
@@ -77,7 +76,7 @@ func TestEveryStartPathIsSupervisedOrOptedOut(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Errorf("these functions start an Agent or open a conversation but are neither supervised nor opted out: %s. "+
-			"Give the work a supervision ledger (superviseTodo / adoptAgent / quietAgentTask, or follow it like "+
+			"Give the work a supervision ledger (superviseTodo / adoptAgent / adoptAgentAs, or follow it like "+
 			"conversation_new) and add it to supervisedStarts, or add it to startOptOuts with the reason", strings.Join(missing, ", "))
 	}
 	for name, via := range supervisedStarts {

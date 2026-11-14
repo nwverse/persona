@@ -41,6 +41,8 @@
   "adopt_failed": "收编没成功：{reason}",
   "interrupt_summary": "停下 {agent} · {machine}",
   "start_remedy_notice": "没开起来：「{title}」。{reason}",
+  "task_needs_user_title": "「{name}」等你处理",
+  "task_needs_user_title_health": "有任务等你处理",
   "admission_no_metrics": "这台电脑还没有上报过资源指标。",
   "admission_stale": "这台电脑的资源指标已经过期。",
   "admission_no_cores": "这台电脑没有上报核数。",

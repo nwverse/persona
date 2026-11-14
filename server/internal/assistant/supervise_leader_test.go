@@ -25,8 +25,8 @@ func (f *fakeHub) noticesTo(id string) []string {
 	return out
 }
 
-// newLeaderService is newQuietService with side conversation lead1 made a leader, and a task lead1 handed out with
-// task_plan: its agent s1 on box at work.
+// newLeaderService is newQuietService with side conversation lead1 made a leader. Its task_plan keeps that origin,
+// while main supervises the task (#5732).
 func newLeaderService(t *testing.T) (*Service, *fakeHub, Todo) {
 	t.Helper()
 	s, f := newQuietService(t)
@@ -43,21 +43,20 @@ func newLeaderService(t *testing.T) (*Service, *fakeHub, Todo) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res, "You supervise them") {
-		t.Fatalf("the leader is not told it supervises them: %s", res)
+	if !strings.Contains(res, "The main conversation supervises them") {
+		t.Fatalf("the leader conversation is not told who supervises: %s", res)
 	}
 	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if v := todo.Supervision; v == nil || v.Supervisor != "lead1" || len(v.DoneWhen) != 1 {
+	if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || len(v.DoneWhen) != 1 {
 		t.Fatalf("supervision = %+v", todo.Supervision)
 	}
 	return s, f, todo
 }
 
-// A leader supervises what it hands out: the supervision message goes to it, not the main conversation; it sends the
-// work back and accepts it with task_review. Its needs_user goes up to the main conversation, which can close the task
-// without taking it over.
-func TestLeaderSupervisesItsTasks(t *testing.T) {
+// A leader conversation's own task is still its origin, but main supervises it (#5732). Main sends the work back,
+// presents any owner decision and accepts it; the origin cannot review it itself.
+func TestLeaderConversationTaskIsSupervisedByMain(t *testing.T) {
 	s, f, todo := newLeaderService(t)
 	ctx := context.Background()
 	if !strings.Contains(s.Context(ctx, ContextParams{SessionID: "lead1"}).Text, "这是 leader 对话") {
@@ -69,15 +68,15 @@ func TestLeaderSupervisesItsTasks(t *testing.T) {
 
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
-	waitFor(t, "the leader's message", func() bool { return len(f.noticesTo("lead1")) == 1 })
-	n := f.noticesTo("lead1")[0]
-	for _, want := range []string{"📋 督办", "你是这些任务的 leader 对话", "hub 判断做完了，等你验收", "pull/7"} {
+	waitFor(t, "main's supervision message", func() bool { return len(f.noticesTo("conv1")) == 1 })
+	n := f.noticesTo("conv1")[0]
+	for _, want := range []string{"📋 督办", "hub 判断做完了，等你验收", "pull/7"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the leader's message lacks %q:\n%s", want, n)
 		}
 	}
-	if got := f.noticesTo("conv1"); len(got) != 0 {
-		t.Fatalf("the main conversation was told too: %q", got)
+	if got := f.noticesTo("lead1"); len(got) != 0 {
+		t.Fatalf("the origin got the supervision message too: %q", got)
 	}
 
 	review := func(self, verdict, note string, extra map[string]any) (string, error) {
@@ -90,9 +89,12 @@ func TestLeaderSupervisesItsTasks(t *testing.T) {
 	if _, err := review("conv2", "rework", "x", nil); err == nil {
 		t.Fatal("another side conversation reviewed the leader's task")
 	}
-	res, err := review("lead1", "rework", "补测试", nil)
+	if _, err := review("lead1", "rework", "x", nil); err == nil {
+		t.Fatal("the origin reviewed a main-supervised task")
+	}
+	res, err := review("conv1", "rework", "补测试", nil)
 	if err != nil || !strings.Contains(res, "Rework round 1") {
-		t.Fatalf("the leader's rework: %s %v", res, err)
+		t.Fatalf("main's rework: %s %v", res, err)
 	}
 	if sent := sentToAgent(f); len(sent) != 1 || !strings.Contains(sent[0], "补测试") {
 		t.Fatalf("sent to the agent: %q", sent)
@@ -100,39 +102,35 @@ func TestLeaderSupervisesItsTasks(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "补了测试", 0)
 	waitFor(t, "the review again", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
-	waitFor(t, "the leader's second message", func() bool { return len(f.noticesTo("lead1")) == 2 })
+	waitFor(t, "main's second message", func() bool { return len(f.noticesTo("conv1")) == 2 })
 
-	// What the user has to decide goes up to the main conversation too, with the leader's recommendation.
-	res, err = review("lead1", "needs_user", "", map[string]any{"reason": "要不要顺手改 iPhone 横屏", "recommend": "先只修 iPad",
+	// Main presents the owner's decision directly; there is no leader escalation to another conversation.
+	res, err = review("conv1", "needs_user", "", map[string]any{"reason": "要不要顺手改 iPhone 横屏", "recommend": "先只修 iPad",
 		"why_owner": "priority", "cost_of_waiting": "iPad 的修复晚一天发",
 		"options": []map[string]string{{"label": "先只修 iPad", "leads_to": "今天就能发"}, {"label": "一起改 iPhone", "leads_to": "多花一天"}}})
 	if err != nil || !strings.Contains(res, "waits for the user") {
-		t.Fatalf("the leader's needs_user: %s %v", res, err)
+		t.Fatalf("main's needs_user: %s %v", res, err)
 	}
-	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	n = f.noticesTo("conv1")[0]
-	for _, want := range []string{"负责它的 leader 对话判断要用户决定", "要不要顺手改 iPhone 横屏", "leader 推荐：先只修 iPad", "leader 升级上来的"} {
-		if !strings.Contains(n, want) {
-			t.Errorf("the main conversation's message lacks %q:\n%s", want, n)
-		}
+	if got := todoNow(s, todo.ID).Supervision.State; got != reviewNeedsUser {
+		t.Fatalf("after needs_user: %q", got)
 	}
-	if strings.Contains(n, "你是这些任务的 leader 对话") {
-		t.Fatalf("the main conversation is told it is the leader:\n%s", n)
+	if ask := listedAsk(t, s, todo.ID); ask == nil || ask["outcome"] != outcomeDecide || ask["recommend"] != "先只修 iPad" {
+		t.Fatalf("owner decision = %+v", ask)
 	}
 
-	// The leader closes it; the main conversation could too, and the task stays the leader's.
-	res, err = review("lead1", "accepted", "用户选了只修 iPad，已合并", nil)
+	// Main closes it too; the origin and supervisor stay distinct.
+	res, err = review("conv1", "accepted", "用户选了只修 iPad，已合并", nil)
 	if err != nil || !strings.Contains(res, "accepted and closed") {
-		t.Fatalf("the leader's accept: %s %v", res, err)
+		t.Fatalf("main's accept: %s %v", res, err)
 	}
 	done := todoNow(s, todo.ID)
-	if done.DoneAt == nil || done.Supervision.State != reviewAccepted || done.Supervision.Supervisor != "lead1" {
+	if done.DoneAt == nil || done.Origin != "lead1" || done.Supervision.State != reviewAccepted || done.Supervision.Supervisor != "conv1" {
 		t.Fatalf("accepted: %+v %+v", done, done.Supervision)
 	}
 }
 
-// The main conversation reviewing a leader's task (the user answered it there) leaves the task the leader's.
-func TestMainReviewKeepsLeaderSupervisor(t *testing.T) {
+// Main's review of a leader conversation's task keeps main as supervisor; the origin cannot take that role back.
+func TestMainReviewKeepsSupervisorWithMain(t *testing.T) {
 	s, f, todo := newLeaderService(t)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了", 0)
@@ -141,14 +139,13 @@ func TestMainReviewKeepsLeaderSupervisor(t *testing.T) {
 		!strings.Contains(res, "Rework round 1") {
 		t.Fatalf("main's rework: %s %v", res, err)
 	}
-	if v := todoNow(s, todo.ID).Supervision; v.Supervisor != "lead1" {
-		t.Fatalf("the main conversation took the leader's task over: %+v", v)
+	if v := todoNow(s, todo.ID).Supervision; v.Supervisor != "conv1" {
+		t.Fatalf("main's review changed the supervisor: %+v", v)
 	}
 }
 
-// Without leaders a task supervised by a side conversation is told in that conversation: the supervisor is the
-// conversation that handed the task out, leader or not, and a task_plan task gets its ledger from it.
-func TestDigestGoesToItsSupervisorWithoutLeader(t *testing.T) {
+// Without an explicit leader assignment, a legacy side-supervised task and every new side task_plan go to main (#5732).
+func TestDigestGoesToMainWithoutAnExplicitLeader(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
 	f.known["lead1"] = true
@@ -163,25 +160,25 @@ func TestDigestGoesToItsSupervisorWithoutLeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.signal(superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "1", Detail: "做完了"})
-	waitFor(t, "the message", func() bool { return len(f.noticesTo("lead1")) == 1 })
-	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "由你督办") {
-		t.Fatalf("the side conversation's message does not say it supervises:\n%s", n)
+	waitFor(t, "the main message", func() bool { return len(f.noticesTo("conv1")) == 1 })
+	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, "📋 督办") {
+		t.Fatalf("main's supervision message:\n%s", n)
 	}
 	s.supervise.dedupMu.Lock()
 	s.supervise.dedupMu.Unlock() // the digest send has finished before checking the non-recipient
-	if got := f.noticesTo("conv1"); len(got) != 0 {
-		t.Fatalf("the main conversation was told a side conversation's task: %q", got)
+	if got := f.noticesTo("lead1"); len(got) != 0 {
+		t.Fatalf("the origin got a second supervision stream: %q", got)
 	}
 	if strings.Contains(s.Context(ctx, ContextParams{SessionID: "lead1"}).Text, "leader") {
 		t.Fatal("a side conversation's context says it is a leader")
 	}
 
-	// task_plan from a side conversation that is not a leader: it supervises it itself.
+	// task_plan from a side conversation that is not an explicit leader: main supervises it.
 	res, err := s.toolTaskPlan(ctx, "lead1", planArgs(true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res, "You supervise them") || strings.Contains(res, "The main conversation supervises them") {
+	if !strings.Contains(res, "The main conversation supervises them") {
 		t.Fatalf("a side conversation is told who supervises: %s", res)
 	}
 	var planned Todo
@@ -194,8 +191,8 @@ func TestDigestGoesToItsSupervisorWithoutLeader(t *testing.T) {
 		}
 		return false
 	})
-	if planned.Supervision == nil || planned.Supervision.Supervisor != "lead1" {
-		t.Fatalf("a side conversation's task is not its own to supervise: %+v", planned.Supervision)
+	if planned.Supervision == nil || planned.Supervision.Supervisor != "conv1" {
+		t.Fatalf("a side conversation's task is not main-supervised: %+v", planned.Supervision)
 	}
 }
 
@@ -228,13 +225,13 @@ func TestDigestTo(t *testing.T) {
 		{"main's task", leaders, superviseSignal{Todo: mains, Kind: sigReview}, "conv1"},
 		{"leader's task", leaders, superviseSignal{Todo: leads, Kind: sigReview}, "lead1"},
 		{"leader's report", leaders, superviseSignal{Todo: leads, Kind: sigReport, Report: upReportQuestion}, "lead1"},
-		{"no leaders: the supervisor conversation itself", none, superviseSignal{Todo: leads, Kind: sigReview}, "lead1"},
+		{"no leaders: main", none, superviseSignal{Todo: leads, Kind: sigReview}, "conv1"},
 		{"leader's task waits for the user", leaders, superviseSignal{Todo: waits, Kind: sigIdle}, "conv1"},
 		{"leader's escalation", leaders, superviseSignal{Todo: waits, Kind: sigEscalated}, "conv1"},
 		{"leader's failed start", leaders, superviseSignal{Todo: leads, Kind: sigFailed}, "conv1"},
 		{"gone", leaders, superviseSignal{Todo: "nope", Kind: sigReview}, "conv1"},
 	} {
-		if got := s.digestTo(c.cfg, c.g); got != c.want {
+		if got := s.digestTo(ctx, c.cfg, c.g); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -310,6 +307,7 @@ func TestCancelStopsAndArchivesAgents(t *testing.T) {
 	})
 	s := ft.s
 	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	todos := map[string]string{}
 	for _, sid := range []string{row.SessionID, other.SessionID} {
 		todo, err := s.createTodo(ctx, "做 "+sid, "做", "conv1", "")

@@ -840,6 +840,12 @@ describe("sending in order, and with no row yet", () => {
       history.replaceState(null, "", "/persona/nope-0000");
       act(() => root.render(<ChatView mid="hub" sid="nope-0000" assistant={assistant} />));
       await flush();
+      // The exact-session read and React.lazy resolution are asynchronous: wait for the visible notice, not a fixed
+      // number of event-loop turns (which still loses under a loaded full suite).
+      await vi.waitFor(async () => {
+        await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+        expect(host.querySelector("[data-chat-not-found]")?.textContent).toContain(t("chat-notfoundnotice.body"));
+      });
       expect(host.querySelector("[data-chat-title]")?.textContent).toBe(t("chat-chatview.not_found_title"));
       expect(host.textContent).not.toContain("nope-0000");
       const notice = host.querySelector("[data-chat-not-found]");

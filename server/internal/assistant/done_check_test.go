@@ -35,18 +35,20 @@ func doneCheck(t *testing.T, s *Service, id, body string) doneCheckAnswer {
 }
 
 // Re-check (#4867): without apply it only answers, as before; with apply it moves the stage from the agent's last reply
-// (a turn end the hub missed) and writes the verdict: an unsupervised task the judge finds done is closed.
-func TestDoneCheckApplyClosesAFinishedTask(t *testing.T) {
+// (a turn end the hub missed) and writes the verdict. Even a legacy unsupervised task becomes delivered and supervised by
+// the main conversation: a judge never closes it (#5732).
+func TestDoneCheckApplyMarksAFinishedTaskDelivered(t *testing.T) {
 	s, f := newTaskService(t)
 	f.judge = `{"verdict":"done","reason":"修好了"}`
 	todo := startedTask(t, s, f)
 	if todo.Supervision != nil {
 		t.Fatalf("supervised: %+v", todo.Supervision)
 	}
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	agentStopped(f, "修好了，PR https://github.com/o/r/pull/9 已合并")
 
 	got := doneCheck(t, s, todo.ID, "")
-	if got.Verdict != verdictDone || !got.WouldClose || got.Applied != nil {
+	if got.Verdict != verdictDone || got.WouldClose || got.Applied != nil {
 		t.Fatalf("answer: %+v", got)
 	}
 	if now := todoNow(s, todo.ID); now.DoneAt != nil || now.Check != nil || stageIndex(now.Stage) >= stageIndex("review") {
@@ -54,15 +56,18 @@ func TestDoneCheckApplyClosesAFinishedTask(t *testing.T) {
 	}
 
 	got = doneCheck(t, s, todo.ID, `{"apply":true}`)
-	if got.Verdict != verdictDone || got.Applied == nil || !*got.Applied || got.Stage != "merge" {
+	if got.Verdict != verdictDone || got.WouldClose || got.Applied == nil || !*got.Applied || got.Stage != "merge" {
 		t.Fatalf("applied: %+v", got)
 	}
 	now := todoNow(s, todo.ID)
-	if now.DoneAt == nil || now.Check == nil || now.Check.Verdict != verdictDone || now.Stage != "merge" || now.PRURL != "https://github.com/o/r/pull/9" {
+	if now.DoneAt != nil || now.Check == nil || now.Check.Verdict != verdictDone || now.Stage != "merge" || now.PRURL != "https://github.com/o/r/pull/9" {
 		t.Fatalf("after apply: done %v, check %+v, stage %q, pr %q", now.DoneAt, now.Check, now.Stage, now.PRURL)
 	}
-	if again := doneCheck(t, s, todo.ID, `{"apply":true}`); again.Applied == nil || *again.Applied || again.Skip != "done" {
-		t.Fatalf("a closed task: %+v", again)
+	if now.Supervision == nil || now.Supervision.Supervisor != "conv1" || now.Supervision.State != reviewPending {
+		t.Fatalf("not delivered to the main reviewer: %+v", now.Supervision)
+	}
+	if again := doneCheck(t, s, todo.ID, `{"apply":true}`); again.Verdict != verdictDone || again.WouldClose || todoNow(s, todo.ID).DoneAt != nil {
+		t.Fatalf("a delivered task closed on another check: %+v", again)
 	}
 }
 

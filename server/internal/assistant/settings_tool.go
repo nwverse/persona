@@ -118,25 +118,25 @@ func (s *Service) ownSettings() []ownSetting {
 			About: prompts.RenderMeetingTranscriptionSetting(), Value: "device or hub"},
 			get: s.getMeetingTranscriptionDefault, set: s.setMeetingTranscriptionDefault},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
-			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
+			About: "off (the default): the done judge uses its verdict alone; on: a task is delivered only once it is live and checked " +
 				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
-				"so with its prompt, and the ones waiting for the user's nod are listed together in the snapshot. Applies from the next judgment / task",
+				"so with its prompt, and the ones waiting for the user's nod are listed together in the snapshot. Either way the judge " +
+				"never closes a supervised task: delivery waits for the main conversation's task_review. Applies from the next judgment / task",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
 		{Setting: Setting{Key: "assistant.review_sample_percent", Title: "Share of finished tasks to spot-check", Actions: getSet,
-			About: "100 (the default): every finished supervised task waits for your task_review. Below 100 the done judge also checks each " +
-				"done_when criterion; a task whose criteria are all checkable and met and whose work is live is closed by the judge, and " +
-				"only this share of those still comes to you to spot-check (tasks that fail the check wait for task_review as before). " +
-				"Applies from the next judgment on",
+			About: "100 (the default): the done judge adds no per-criterion check. Below 100 it also checks each done_when criterion " +
+				"and the delivery as evidence for review. Passing, failing, sampled and unsampled work all stay open as delivered, " +
+				"awaiting the main conversation's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
 			Value: "a whole number, 0–100"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.reviewSamplePercent(ctx)), nil },
 			set: s.setReviewSamplePercent},
 		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
-			About: "empty (the default): only the main conversation supervises the tasks it hands out. A leader is a side conversation " +
-				"(one repository or long-running project each) that supervises the tasks it hands out with task_plan itself: their " +
-				"supervision messages go to it and it reviews them with task_review; needs_user and failed starts still come to the " +
-				"main conversation. Applies to tasks handed out from now on",
+			About: "empty (the default): no manual Agent is assigned to a leader. New task_plan, agent_start and agent_send task work " +
+				"is always supervised by the main conversation, including task_plan(supervisor=leader). The one exception is a manually " +
+				"started Agent the owner explicitly puts under a leader: its ordinary supervision messages go there and that leader reviews " +
+				"them with task_review; needs_user and failed starts still come to the main conversation",
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
@@ -151,13 +151,10 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
 			set: s.setInterjectBackground},
 		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
-			About: "off (the default): only tasks the main conversation or a leader hands out are supervised; an agent started from an " +
-				"app or by agent_start from another conversation is on no task. on: every agent Persona starts gets a quiet to-do (no " +
-				"pushes or badges for it) supervised by the conversation that started it when that is the main conversation or a leader, " +
-				"else by the main conversation: an app's agent once a turn of it did work (edits, commands), a to-do the user made when " +
-				"an agent is linked to it, and report_to_supervisor from an agent on any open to-do reaches its supervisor. Agents " +
-				"started by hand in a terminal are left alone. Costs model calls (the done judge, supervision turns). Applies from the " +
-				"next start, turn end and report",
+			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by main. " +
+				"on: manually linked user to-dos and reporting-Agent compatibility are supervised too; an Agent opened by hand on the Agents " +
+				"page is not adopted merely because it did work. Agents started by hand in a terminal are left alone. Costs model calls " +
+				"(the done judge, supervision turns). Applies from the next start, turn end and report",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
 			set: s.setAgentTasks},

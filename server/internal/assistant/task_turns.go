@@ -702,8 +702,14 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		skip = true
 	}
 	b.mu.Unlock()
-	if tell != nil { // judged before a restart, never told: told now (a signal waiting or told already stays as it is)
-		s.signal(superviseSignal{Todo: t.ID, Kind: tell.Kind, Key: tell.Key, Machine: tell.Machine, Detail: tell.Detail})
+	if tell != nil {
+		if t.Supervision.state(t) == reviewParked {
+			// Parking supersedes the old stop. Acknowledge its exact turn signal so this and every later sweep leave it
+			// untold no longer, rather than reviving the idle/review wait that the parking decision replaced (#7671).
+			s.turnsTold(ctx, []superviseSignal{{Todo: t.ID, Kind: tell.Kind, Key: tell.Key, Machine: tell.Machine}})
+		} else { // judged before a restart, never told: told now (a signal waiting or told already stays as it is)
+			s.signal(superviseSignal{Todo: t.ID, Kind: tell.Kind, Key: tell.Key, Machine: tell.Machine, Detail: tell.Detail})
+		}
 	}
 	if skip {
 		return

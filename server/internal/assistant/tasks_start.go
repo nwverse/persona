@@ -109,23 +109,15 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		t.TodoID = todo.ID
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
 		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
-		// The main conversation or a leader follows up what it hands out (supervise.go); a task the main conversation
-		// handed to a leader is that leader's, while it still is one (else the main conversation's again).
-		if sup := p.Conversation; s.supervises(ctx, sup) {
-			if t.Supervisor != "" && s.isLeader(ctx, t.Supervisor) {
-				sup = t.Supervisor
-				if t.ReuseTodo == "" {
-					s.taskCard(ctx, sup, todo.ID, "") // the leader sees its task's card too; the plan's stays where it was made
+		// Every conversation-dispatched task is supervised by the main conversation; its origin still names where it
+		// was handed out (#5732). A task leader's worker is the exception: its leader Agent supervises it below.
+		if t.Parent == "" {
+			if sup, ok := s.defaultPlanSupervisor(ctx, p.Conversation, ""); ok {
+				if t.ReuseTodo == "" && sup != p.Conversation {
+					s.taskCard(ctx, sup, todo.ID, "")
 				}
+				s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
 			}
-			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
-		} else if sup, ok := s.defaultPlanSupervisor(ctx, p.Conversation, t.Parent); ok {
-			// Any other conversation's task is its own to supervise: its signals go to the conversation that planned it,
-			// which also sees its card and reviews it. No second card when that is the planning conversation itself.
-			if t.ReuseTodo == "" && sup != p.Conversation {
-				s.taskCard(ctx, sup, todo.ID, "")
-			}
-			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
 		}
 		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
 			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
