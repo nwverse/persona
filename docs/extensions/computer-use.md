@@ -474,9 +474,10 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
 
 A hardware video channel next to RFB, so the phone shows a Mac's screen at a fraction of today's bitrate for the same
 picture (from #3067's frames: 0.27–0.31 Mbit/s as HEVC at SSIM ≥ 0.98, against 2.1–2.6 as ZRLE). RFB stays open for
-input, the clipboard and as the fallback; only the picture moves to video. The phone and the web offer it only for a
-Mac whose node advertises `screen_video`, which a node does once it has the helper (the picture switcher in ⋯ stays
-hidden otherwise); until then every client shows RFB. The web, the Mac app and Android don't decode video yet.
+input, the clipboard and as the fallback; only the picture moves to video. The iPhone offers it for a Mac whose node
+advertises `screen_video`, which a node does once it has the helper (the picture switcher in ⋯ stays hidden
+otherwise). The web, the Mac app and Android don't decode video yet: they keep RFB and show no switcher (the web's is
+behind `webVideo.plays` in `web/src/screen/video.ts`).
 
 - **Persona Screen** (`apple/PersonaLink/Sources/PersonaScreen`, `apple/Packages/PersonaScreenKit`): a Swift helper app inside
   Persona Link.app (`Contents/Helpers/Persona Screen.app`, bundle id `<link id>.screen`) that captures one display
@@ -517,9 +518,14 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
     is connected; the token is 16 random bytes, compared in constant time, and the line is read unbuffered so no
     stream bytes go with it. The helper has 10 s to connect and say it.
   - **Permission**: the helper's `--preflight`, run through LaunchServices (so it is about the helper's grant), at most
-    once a minute. `screen_video {version, codecs, permission}` carries it; the node leaves `screen_video` out of the
-    statuses (`advertiseScreenVideo`) until the iPhone's decoder is in the official TestFlight build, since apps
-    before it would show a picture switcher they can't use. `screen.dial` works either way.
+    once a minute. `screen_video {version, codecs, permission, asked}` carries it (`advertiseScreenVideo`, on since the
+    official TestFlight build decodes the video; apps before it show no picture switcher). `screen.dial` works either
+    way.
+  - **Asking once**: macOS lists Persona Screen under Screen & System Audio Recording only after the helper has asked.
+    The first time an app that plays the video (its 5900 stream carries a `pair`) signs in while the helper has no
+    grant, the node starts the helper with `--request-permission`, once per helper version (its stamp, kept in
+    `~/.persona/bin/Persona Screen.asked`). macOS shows its alert on the Mac's own screen, which that app is showing over
+    VNC at that moment; `asked` then tells the app that Persona Screen is in the list.
 - **Hub** (`GET …/screen/video/connect?pair=…`): a binary WebSocket with the same checks as `…/ports/5900/connect`
   (full device, `cua` or `ego` on), counted against the same 64 streams per machine. It calls `screen.dial` and relays
   the bytes without parsing them. The iOS app's screen-sharing stream carries the pair it will bind to
@@ -575,7 +581,7 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   - **Shared with the browser** (#6558): `spec/fixtures/screen-tiers` holds the ladder's and the signals' scenarios
     (input and expected output, one per file), which `TierFixtureTests` writes from these Swift types
     (`PERSONA_WRITE_TIER_FIXTURES=1`) and otherwise checks unchanged. The browser's port (`web/src/screen/tiers/`)
-    replays them, so a change on either side fails both until they agree. The policy's scenarios follow.
+    replays them, so a change on either side fails both until they agree; so do the policy's timelines (route starts, every way down and up, a route change, a new bias, Data Saver and a warm device).
   - **Signals** (the phone's, from the frames): queueing above the 10 s floor of the one-way delay (p50 / p95 over
     0.5 s, rising or falling over 1 s), the rate the link carried while busy (frames queued behind one another: their
     bytes over their arrival gaps, so quiet stretches don't read as a slow link), bursts of large frames, late frames,
@@ -628,7 +634,11 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   Mac hasn't allowed video yet (`permission` missing, so no stream is opened).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
-  and decode are all known (a helper before `timing` gives the phone's numbers only). Over VNC it shows RFB's bitrate
+  and decode are all known (a helper before `timing` gives the phone's numbers only). With quality tiers (#6396) a Tier
+  line shows the Quality choice, the scale and frame rate ("Auto · 1.5× · 60 fps", `ScreenTierText`) and why it last
+  changed in plain words with how long ago (picked for this connection, the connection slowed down or is steady, the
+  network changed, the iPhone is warm or saving power or couldn't keep up, you changed Quality); the resolution is the
+  encoder's after an in-place change (`encoding`), not `hello`'s. Over VNC it shows RFB's bitrate
   and frame rate and, on a line of its own, **Round trip to the hub** (#6558): while the overlay is shown and the app is
   in front, the page pings the app's own connection to that Mac's hub every 2 s (`LiveConnection.roundTrip`, the
   heartbeat's kind of ping) and shows the median of the last 5 from the last 20 s (`HubRoundTrips`). It is the same leg
@@ -645,7 +655,9 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   the user's own taps through Screen Sharing. Nothing in Persona answers it, and Agents' computer-use calls can't target
   System Settings' Privacy & Security or the system alert. Video needs the same login as Screen Sharing (the `pair`
   binding); no password travels anywhere new. `computer.status` / `browser.status` gain `screen_video {version, codecs,
-  permission}` (absent from an old node or one without the helper, so an old app keeps RFB).
+  permission, asked}` (absent from an old node or one without the helper, so an old app keeps RFB). The phone's "How to
+  turn it on" follows `asked`: before it, the Mac is about to show a window (choose Open System Settings, then turn on
+  Persona Screen); after it, where in System Settings to turn it on.
 
 ### Live screen routes (#6398)
 
@@ -706,8 +718,16 @@ iPhone's side comes next.
   another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
   relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
   route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
-- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`, for now only in a DEBUG build launched with
-  `-showScreenRoutes`): the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
+- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`): off in release builds until the real-device
+  acceptance has passed (`ScreenRoutes.releaseEnabled`, one line to turn on); a DEBUG build launched with
+  `-showScreenRoutes` has it meanwhile. While offered, **Settings › This Device › Live Screen**
+  (`LiveScreenSettingsView`) has one switch, "Choose the Fastest Route Automatically", on by default; turned off, the
+  phone asks for no session (everything through the hub, as before) and live sessions move back to their relays at
+  once. The quality tiers (#6396) add their own section to the same page. The stats overlay's Route row shows the route's
+  round trip and packet loss and why it last changed ("Faster route", "Previous route dropped", "Network changed", …, or
+  that the computer's firewall blocks direct connections). The first try of a same-network route shows iOS's local
+  network question with `NSLocalNetworkUsageDescription`; refused, those routes fail quietly and the relay stays.
+  How it works: the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
   `ScreenLinkVideoStream` (`PersonaScreenKit`) read the first message, and when the hub selected the subprotocol the
   stream is the session's channel (`ScreenLinkSession`, an actor holding the channels, the transports, the pings and
   `PathPolicy`), else the same raw stream as before, so the RFB client and the video stream don't change. A session
@@ -912,6 +932,8 @@ Follow the order above, one PR per area. Item 6 can go with b, or a separate sma
   - `ComputerSectionTests.testTheLiveScreenAsksForTheMacsSignIn` taps VNC through to login required (ARD).
   - `ScreenDrawerTests` (mock with `MOCK_COMPUTER_OPERATING=1 MOCK_SCREEN=fake`; without `MOCK_SCREEN=fake`, it uses this Mac's real Screen Sharing, showing "hub doesn't allow this machine's screen" and failing if off; assistant and Agent chats each have a running operation): open the full page from the operating bar and ··· menu in assistant and Agent chats, close with ×.
   - `ScreenPasswordTests`: remember, automatic login next time (PiP on real device, full page in simulator), reenter changed password, forget; one-tap unlock.
+  - `VNCTests.testNotAskedYetSaysAWindowWillShow` (#3954, a second mock with `MOCK_SCREEN_VIDEO=missing` at
+    `TEST_RUNNER_PERSONA_SCREEN_VIDEO_MISSING`): before macOS asked, "How to turn it on" says a window will show.
   - `VNCTests.testVideoTakesThePictureAndFallsBack` (#3954, mock `MOCK_SCREEN_VIDEO=1`, runner
     `TEST_RUNNER_PERSONA_SCREEN_VIDEO=1`): video takes the picture after the sign-in, with Wi-Fi's cap in `start` and
     reports coming back; the Mac locking and the stream dropping each put VNC back with their line, unlocking brings

@@ -130,6 +130,9 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 var verdictWords = map[string]string{verdictNotDone: "没做完", verdictWaiting: "在等别人或别的事", verdictNeedsUser: "要用户决定",
 	verdictUnsure: "看不出做没做完", verdictUndelivered: "做完了但还没上线"}
 
+// ownerPushTimeout bounds one delivery and its receipt, so a stalled hub cannot hold up every other task's owner push.
+var ownerPushTimeout = 10 * time.Second
+
 // noteOwnerWait makes the owner's action the task's visible state and tells the supervisor at once. A stretch pushes
 // once after delivery; an undelivered push may retry when its conversation route recovers (#5732).
 func (s *Service) noteOwnerWait(ctx context.Context, t Todo, work time.Time, reason string) {
@@ -137,7 +140,7 @@ func (s *Service) noteOwnerWait(ctx context.Context, t Todo, work time.Time, rea
 		if v.Waits != nil && v.Waits.Work.Equal(work) && v.State == reviewNeedsUser {
 			return false
 		}
-		v.Waits = &OwnerWait{Work: work.UTC(), At: time.Now().UTC(), Reason: clip(oneLine(reason), 200)}
+		v.Waits = &OwnerWait{Work: work.UTC(), At: time.Now().UTC(), Reason: clip(oneLine(reason), 200), PushPending: true}
 		v.State = reviewNeedsUser
 		return true
 	})
@@ -146,10 +149,37 @@ func (s *Service) noteOwnerWait(ctx context.Context, t Todo, work time.Time, rea
 		return
 	}
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigIdle, Key: work.UTC().Format(time.RFC3339Nano), Detail: "要用户决定：" + reason}) // i18n-ignore: the supervision message is the assistant's prompt
-	if changed || (v.Waits != nil && v.Waits.NotifiedAt == nil) {
+	if changed || (v.Waits != nil && v.Waits.PushPending) {
 		// Quiet suppresses routine notices, not an action only the owner can take. An undelivered wait (for example,
-		// its conversation was not configured yet) may retry; a delivered one is suppressed by NotifiedAt.
-		go s.deliverOwnerWait(context.WithoutCancel(ctx), t, work, reason)
+		// its conversation was not configured yet) may retry; a delivered one has PushPending cleared.
+		s.startOwnerWaitDelivery(ctx, t, work, reason)
+	}
+}
+
+// startOwnerWaitDelivery gives one push and its durable receipt an independent deadline even when its caller is a
+// fire-and-forget settings or judgment path. WithoutCancel only detaches cancellation; it must not remove the bound.
+func (s *Service) startOwnerWaitDelivery(ctx context.Context, t Todo, work time.Time, reason string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ownerPushTimeout)
+	go func() {
+		defer cancel()
+		s.deliverOwnerWait(ctx, t, work, reason)
+	}()
+}
+
+// retryOwnerWaits reconciles explicitly undelivered pushes when a conversation route is restored or todos finish
+// loading. Legacy waits have no PushPending and are never replayed on upgrade; delivered waits have it cleared.
+func (s *Service) retryOwnerWaits(ctx context.Context) {
+	if !s.todosLoaded() {
+		return
+	}
+	for _, t := range s.todosOf(ctx, "*") {
+		if t.DoneAt != nil || t.Supervision == nil || t.Supervision.State != reviewNeedsUser {
+			continue
+		}
+		w := t.Supervision.Waits
+		if w != nil && w.PushPending && w.NotifiedAt == nil {
+			s.startOwnerWaitDelivery(ctx, t, w.Work, w.Reason)
+		}
 	}
 }
 
@@ -161,18 +191,19 @@ func (s *Service) deliverOwnerWait(ctx context.Context, t Todo, work time.Time, 
 	defer b.ownerPushMu.Unlock()
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.Supervision == nil || current.Supervision.Waits == nil || current.Supervision.State != reviewNeedsUser ||
-		!current.Supervision.Waits.Work.Equal(work) || current.Supervision.Waits.NotifiedAt != nil {
+		!current.Supervision.Waits.Work.Equal(work) || !current.Supervision.Waits.PushPending || current.Supervision.Waits.NotifiedAt != nil {
 		return
 	}
 	if !s.notifyTaskNeedsUser(ctx, current, work, reason) {
 		return
 	}
 	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-		if v.Waits == nil || v.State != reviewNeedsUser || !v.Waits.Work.Equal(work) || v.Waits.NotifiedAt != nil {
+		if v.Waits == nil || v.State != reviewNeedsUser || !v.Waits.Work.Equal(work) || !v.Waits.PushPending || v.Waits.NotifiedAt != nil {
 			return false
 		}
 		at := time.Now().UTC()
 		v.Waits.NotifiedAt = &at
+		v.Waits.PushPending = false
 		return true
 	}); err != nil {
 		// The stable notification id still deduplicates a later retry at the real hub if this receipt cannot be saved.

@@ -185,9 +185,23 @@ to-dos its rows list (a merged row's related ones too), in the section's state c
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted and not shelved: Waiting for you, Working,
 PR to merge, Parked, Other open, and every unaccepted Delivered · awaiting review row, including `live` (a finished turn or delivery
 is not acceptance; only a review or the user closes it). An ordinary unsupervised finished turn files under Done once seen.
-**Done** counts non-cancelled closed and accepted ones plus those seen ordinary turns; **Cancelled** is a separate count.
-The sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before; the page lists and counts them.
-A task whose agent never started (rule 1) counts as open while it waits on the owner.
+**Parked**, **inactive**, **done** and **cancelled** count the to-dos in their respective sections, so the header and each
+section's title say the same number. **Done** counts non-cancelled closed and accepted ones plus those seen ordinary turns;
+**Cancelled** is always separate. The sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before;
+the page lists and counts them. A task whose agent never started (rule 1) counts as open while it waits on the owner.
+
+The counts are the same whatever the list is grouped by (web audit item 12), and so is where each to-do is:
+
+- **By folder**: the folders hold every to-do the status sections place outside Done and Cancelled (a merged row's to-dos where the
+  row is), each in its own reading: a failed start waiting on the owner open, with why it did not start, and its folder
+  says Needs you. An ordinary unsupervised Delivered · awaiting review row can offer **Got it** until it is seen; an unaccepted
+  `live` delivery stays open even after that. The folded **Done** and **Cancelled** sections stay separate at the bottom.
+- **By pinned direction**: the directions hold the open to-dos the hub's tree lists (it lists only what counts as open);
+  a line says how many open ones no direction lists; the rest outside Done and Cancelled (unaccepted deliveries awaiting
+  review and inactive work) keep their status sections below the directions, as Android's list does, so a to-do ticked there
+  moves to Done instead of leaving the list. The folded **Done** and **Cancelled** sections stay separate.
+
+Before the first read of the to-dos lands the header shows no counts, not zeros (audit item 83).
 
 ## Shelving
 

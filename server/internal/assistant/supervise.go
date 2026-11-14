@@ -118,13 +118,14 @@ type TaskReview struct {
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
-// when it was judged and the judge's reason. NotifiedAt records a successful push, so an unavailable conversation route
-// can be retried after recovery without repeating a push already delivered for this same stretch.
+// when it was judged and the judge's reason. PushPending marks a new, still-undelivered push; NotifiedAt records its
+// success. Legacy waits have neither and are not replayed on upgrade.
 type OwnerWait struct {
-	Work       time.Time  `json:"work"`
-	At         time.Time  `json:"at"`
-	Reason     string     `json:"reason,omitempty"`
-	NotifiedAt *time.Time `json:"notified_at,omitempty"`
+	Work        time.Time  `json:"work"`
+	At          time.Time  `json:"at"`
+	Reason      string     `json:"reason,omitempty"`
+	PushPending bool       `json:"push_pending,omitempty"`
+	NotifiedAt  *time.Time `json:"notified_at,omitempty"`
 }
 
 type ReviewCheck struct {

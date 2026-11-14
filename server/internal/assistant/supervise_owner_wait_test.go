@@ -125,7 +125,7 @@ func TestNeedsUserPushRecoversAfterMainIsConfigured(t *testing.T) {
 	s, f := newQuietService(t)
 	work := time.Now().UTC()
 	todo := Todo{ID: "leader-worker-no-main", Title: "等待 owner", Origin: "box/s1",
-		Supervision: &Supervision{Supervisor: "box/s1", State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "需要用户本人处理"}}}
+		Supervision: &Supervision{Supervisor: "box/s1", State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "需要用户本人处理", PushPending: true}}}
 	putTodo(s, todo)
 	setSettings(t, s, func(v *Settings) { v.Main = "" })
 	s.notifyTaskNeedsUser(context.Background(), todo, work, "需要用户本人处理")
@@ -136,8 +136,8 @@ func TestNeedsUserPushRecoversAfterMainIsConfigured(t *testing.T) {
 	f.pushes = nil // keep the route-restoration half independent after recording the bad-address assertion above
 	f.mu.Unlock()
 
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	before := todoNow(s, todo.ID).Supervision.UpdatedAt
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	s.noteOwnerWait(context.Background(), todoNow(s, todo.ID), work, "需要用户本人处理")
 	waitFor(t, "the pending push after main is restored", func() bool { return len(f.pushed()) == 1 })
 	pushes := f.pushed()
@@ -151,6 +151,83 @@ func TestNeedsUserPushRecoversAfterMainIsConfigured(t *testing.T) {
 	if got := len(f.pushed()); got != 1 {
 		t.Fatalf("the delivered owner wait pushed %d times", got)
 	}
+}
+
+// Settings recovery itself retries an explicitly undelivered wait. A pre-NotifiedAt legacy wait is not replayed on
+// upgrade, and a delivered pending wait is not repeated by the next settings sweep (#5732).
+func TestNeedsUserPushRetriesWhenSettingsRecover(t *testing.T) {
+	s, f := newQuietService(t)
+	work := time.Now().UTC()
+	pending := Todo{ID: "pending-route-recovery", Title: "等待路由恢复", Origin: "box/s1",
+		Supervision: &Supervision{Supervisor: "box/s1", State: reviewNeedsUser,
+			Waits: &OwnerWait{Work: work, At: work, Reason: "需要用户本人处理", PushPending: true}}}
+	legacy := Todo{ID: "legacy-already-told", Title: "升级前已通知", Origin: "conv1",
+		Supervision: &Supervision{Supervisor: "conv1", State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "旧通知"}}}
+	putTodo(s, pending)
+	putTodo(s, legacy)
+	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	s.settingsChanged(context.Background())
+	if got := f.pushed(); len(got) != 0 {
+		t.Fatalf("an unset main routed a push to a worker: %+v", got)
+	}
+
+	before := todoNow(s, pending.ID).Supervision.UpdatedAt
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" }) // the real settingsChanged hook retries the pending push
+	waitFor(t, "the pending push on settings recovery", func() bool { return len(f.pushed()) == 1 })
+	pushes := f.pushed()
+	if len(pushes) != 1 || pushes[0].SessionID != "conv1" || !strings.Contains(pushes[0].ID, pending.ID) {
+		t.Fatalf("settings recovery pushes = %+v", pushes)
+	}
+	waitFor(t, "the delivery receipt", func() bool { return todoNow(s, pending.ID).Supervision.UpdatedAt.After(before) })
+	s.settingsChanged(context.Background())
+	if got := f.pushed(); len(got) != 1 {
+		t.Fatalf("settings recovery repeated a delivered push: %+v", got)
+	}
+}
+
+type stalledOwnerPushHub struct {
+	*fakeHub
+	entered chan string
+	release chan struct{}
+}
+
+func (h *stalledOwnerPushHub) NotifyRequest(ctx context.Context, p NotifyRequest) error {
+	h.entered <- p.Notification.ID
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-h.release:
+		return nil
+	}
+}
+
+// One hub call that never answers must not hold every later task's push behind the global dedup lock (#5732).
+func TestOwnerPushTimeoutReleasesOtherTasks(t *testing.T) {
+	s, f := newQuietService(t)
+	hub := &stalledOwnerPushHub{fakeHub: f, entered: make(chan string, 2), release: make(chan struct{})}
+	s.hub = hub
+	old := ownerPushTimeout
+	ownerPushTimeout = 25 * time.Millisecond
+	t.Cleanup(func() { ownerPushTimeout = old })
+	for _, id := range []string{"first-stalled", "second-waiting"} {
+		putTodo(s, Todo{ID: id, Title: id, Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1"}})
+	}
+	work := time.Now().UTC()
+	s.noteOwnerWait(context.Background(), todoNow(s, "first-stalled"), work, "first")
+	if id := <-hub.entered; !strings.Contains(id, "first-stalled") {
+		t.Fatalf("first stalled push = %q", id)
+	}
+	s.noteOwnerWait(context.Background(), todoNow(s, "second-waiting"), work.Add(time.Second), "second")
+	select {
+	case id := <-hub.entered:
+		if !strings.Contains(id, "second-waiting") {
+			t.Fatalf("second push = %q", id)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(hub.release)
+		t.Fatal("the second task stayed blocked behind the stalled hub call")
+	}
+	close(hub.release)
 }
 
 // The explicit owner-action safety net still becomes the visible wait and one push when the model itself failed.
@@ -297,6 +374,10 @@ func TestOwnerWaitSurvivesTheLedgerRow(t *testing.T) {
 	if back.Waits == nil || !back.Waits.At.Equal(at) || !back.Waits.Work.Equal(at.Add(-time.Hour)) || back.Waits.Reason != "等用户挑一版" ||
 		back.Waits.NotifiedAt == nil || !back.Waits.NotifiedAt.Equal(notified) {
 		t.Fatalf("waits back from its row = %+v", back.Waits)
+	}
+	pending := supervisionFromRow((&Supervision{Waits: &OwnerWait{PushPending: true}}).row("todo_pending"))
+	if pending.Waits == nil || !pending.Waits.PushPending {
+		t.Fatalf("pending delivery did not round-trip: %+v", pending.Waits)
 	}
 	c := v.clone()
 	c.Waits.Reason = "changed"

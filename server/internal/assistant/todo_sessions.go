@@ -120,6 +120,12 @@ func (b *todoBook) linkedNow(key [2]string) bool {
 	return false
 }
 
+// delayedDoneCreationStore is the database's guarded automatic link for an exact done creation-id. Stores without it
+// must not fall back to the manual upsert, which could override a newer manual membership.
+type delayedDoneCreationStore interface {
+	AutoLinkUnlinkedTodoAgentOfDoneTask(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) (bool, []string, error)
+}
+
 // linkDelayedDoneCreation handles a session whose persisted creation id names a card closed after its start outcome
 // became unknown. It is not a general done-card auto-link: only that exact identity qualifies, prior/dismissed links are
 // left alone, and the session does not fall through to workspace or chat adoption. handled means the done identity was
@@ -151,13 +157,62 @@ func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creat
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := s.writeTodoAgentLink(ctx, creationID, machine, c.SessionID, c.Title, c.Cwd, c.Agent, startError, "assistant_start", creationID, true)
+	linked, err := s.writeDelayedDoneCreation(ctx, creationID, machine, c, startError, time.Now().UTC())
 	s.todos.writing.Unlock()
 	if err != nil {
 		s.logf("todos: delayed creation-id link %s on %s/%s: %v", creationID, machine, c.SessionID, err)
-		return true, false
 	}
-	return true, true
+	return true, linked
+}
+
+// writeDelayedDoneCreation persists an exact done creation-id with the same guards as every other automatic link.
+// todoBook.writing is held. The database commits first; memory mirrors only an actual insert and its released ids, so a
+// newer manual membership that made the guarded insert a no-op is never overridden locally either.
+func (s *Service) writeDelayedDoneCreation(ctx context.Context, todoID, machine string, c proto.Session, startError string, linkedAt time.Time) (bool, error) {
+	st := s.todoDB()
+	if st == nil {
+		if err := s.writeTodoAgentLink(ctx, todoID, machine, c.SessionID, c.Title, c.Cwd, c.Agent, startError, "assistant_start", todoID, true); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	safe, ok := st.(delayedDoneCreationStore)
+	if !ok {
+		return false, fmt.Errorf("store lacks guarded done creation-id auto-link")
+	}
+	inserted, released, err := safe.AutoLinkUnlinkedTodoAgentOfDoneTask(ctx, todoID, machine, c.SessionID, c.Title, c.Cwd, c.Agent, startError, "assistant_start", todoID, linkedAt)
+	if err != nil || !inserted {
+		return false, err
+	}
+	s.todos.mu.Lock()
+	defer s.todos.mu.Unlock()
+	for _, oid := range released {
+		other := s.todos.todos[oid]
+		if other == nil {
+			continue
+		}
+		for i := range other.Agents {
+			a := &other.Agents[i]
+			if a.MachineID == machine && a.SessionID == c.SessionID && a.ReleasedAt == nil {
+				a.ReleasedAt = &linkedAt
+				other.UpdatedAt = linkedAt
+			}
+		}
+	}
+	target := s.todos.todos[todoID]
+	if target != nil {
+		// The guarded insert proved no target row existed. Keep that rule in memory too: no dismissed row is revived.
+		found := false
+		for _, a := range target.Agents {
+			found = found || a.MachineID == machine && a.SessionID == c.SessionID
+		}
+		if !found {
+			target.Agents = append(target.Agents, TodoAgent{MachineID: machine, SessionID: c.SessionID, LinkedAt: linkedAt, Title: c.Title,
+				Cwd: c.Cwd, Agent: c.Agent, StartError: startError, Source: "assistant_start", Via: todoID})
+			target.UpdatedAt = linkedAt
+		}
+	}
+	return true, nil
 }
 
 // autoLinkTodos links the online agents of machine that join a todo on their own: spawned by an agent of an open todo
