@@ -528,12 +528,12 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Fix**: move to the system soft top edge effect, or document the fog with a solid reduced-transparency fallback.
 
 #### HIG-055 Symbol vocabulary leaks in unscanned targets
-- **Severity**: P2. **Platform**: macOS helper, widgets.
-- **Location**: `apple/PersonaLink/Sources/PersonaLink/PairView.swift:145`, `apple/PersonaLink/Sources/PersonaLink/PairView.swift:226`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:163`, `apple/PersonaWidgets/PersonaControls.swift:13`, `apple/PersonaWidgets/FleetLiveActivity.swift:409`, `apple/PersonaTests/IconVocabularyTests.swift:38`.
+- **Severity**: P2. **Platform**: widgets (the separate Mac menu bar package was retired in #6770).
+- **Location**: `apple/PersonaWidgets/PersonaControls.swift:13`, `apple/PersonaWidgets/FleetLiveActivity.swift:409`, `apple/PersonaTests/IconVocabularyTests.swift:38`.
 - **Violates**: [Icons][icons]: use consistent standard symbols (the one-meaning rule is a project rule, see `docs/apple/icons.md`).
-- **Problem**: the test scans only three source folders; the Mac helper uses a retired failure symbol, and widgets use raw strings that duplicate `Theme.Icon` entries. PersonaLink is a separate package and may not see `Icons.swift`.
+- **Problem**: the test scans only three source folders, and widgets use raw strings that duplicate `Theme.Icon` entries.
 - **Evidence**: `Image(systemName: result.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")`.
-- **Fix**: use the app tokens in widgets (Shared is compiled in); extend the test to those targets; give the package a small local copy with a comparison test.
+- **Fix**: use the app tokens in widgets (Shared is compiled in) and extend the test to those targets.
 
 #### HIG-056 Hidden custom spinner and overloaded trash symbol
 - **Severity**: P2. **Platform**: iOS.
@@ -711,13 +711,13 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Evidence**: `static let surface = Color.clear`.
 - **Fix**: a system background for system families and clear only for accessory families; check light, dark, tinted and clear.
 
-#### HIG-078 PersonaLink menu mixes hard-coded Chinese with localized strings
-- **Severity**: P2. **Platform**: macOS helper.
-- **Location**: `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:24`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:57`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:105`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:166`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:186`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:287`, `apple/PersonaLink/Sources/PersonaLink/Attention.swift:277`.
+#### HIG-078 Retired PersonaLink menu mixed hard-coded Chinese with localized strings
+- **Severity**: P2 (historical). **Platform**: retired macOS menu bar UI, removed in #6770.
+- **Location**: former `apple/PersonaLink/Sources/PersonaLink/` (retained in git history).
 - **Violates**: [Layout](https://developer.apple.com/design/human-interface-guidelines/layout): test localizations; [Writing][writing]: one consistent voice.
-- **Problem**: the row title is a plain string, so literals (status, state pill, reconnect and quit rows, and more) are never looked up in the catalog. The same panel then alternates languages for English users. Counts of lines with CJK text: 44 in the menu view, 36 in the pairing view, 5 in the rename view.
+- **Problem**: row titles used plain strings, bypassing the retired package's catalog. The desktop setup now uses its three-language resources, and the connector uses terminal localization.
 - **Evidence**: `MenuRow(title: <hard-coded Chinese>, ...)` versus `MenuRow(title: linkText("Set Web Address…"), ...)`.
-- **Fix**: route every visible string through `linkText(...)` with English keys and en, zh-Hans and ja entries; changing the parameter to a localized key alone would miss this package's bundle. The owner should decide whether the helper is Chinese-first.
+- **Resolution**: the menu bar UI and its separate catalog are removed, not carried into Electron.
 
 #### HIG-079 Live Activity secondary text is regular weight
 - **Severity**: P2. **Platform**: Live Activity.
@@ -727,13 +727,13 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Evidence**: `Text(FleetText.line(item)).font(.caption).foregroundStyle(secondary).lineLimit(1)`.
 - **Fix**: a shared medium-weight caption style, starting with the needs-you request line; use one secondary opacity.
 
-#### HIG-080 PersonaLink menu rows highlight only on hover
-- **Severity**: P2. **Platform**: macOS helper.
-- **Location**: `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:306`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:286`, `apple/PersonaLink/Sources/PersonaLink/PersonaLinkApp.swift:14`, `apple/PersonaLink/Sources/PersonaLink/MenuView.swift:58`.
+#### HIG-080 Retired PersonaLink menu rows highlighted only on hover
+- **Severity**: P2 (historical). **Platform**: retired macOS menu bar UI, removed in #6770.
+- **Location**: former `apple/PersonaLink/Sources/PersonaLink/` (retained in git history).
 - **Violates**: [Buttons][btn]: always include a press state for a custom button; [Accessibility][a11y]: support Full Keyboard Access.
-- **Problem**: rows are plain buttons whose accent fill comes only from hover; keyboard focus gets no highlight and there is no arrow-key navigation (only a quit key equivalent). Rows have visible title text, so VoiceOver is fine.
+- **Problem**: rows were plain buttons whose accent fill came only from hover; keyboard focus had no highlight.
 - **Evidence**: `Button(action: action) { content(hover && !disabled) }.buttonStyle(.plain).onHover { hover = $0 }`.
-- **Fix**: drive the highlight from hover or focus; optionally add arrow-key handling.
+- **Resolution**: the custom menu bar interaction is removed; Link controls live in the Electron setup window and its keyboard/accessibility behavior.
 
 #### HIG-081 Mac Link panel header buttons rely on tooltips
 - **Severity**: P2. **Platform**: macOS.
