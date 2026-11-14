@@ -186,10 +186,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
 			return "", fmt.Errorf("title and body are required")
 		}
+		// An empty level is passed through, not normalised to P1: with ln mode on the hub decides by conversation
+		// (the main conversation's ordinary notices still interrupt, fleet_link.go lnNotifyPushLevel); with it off the
+		// hub derives P1 for a NotifyPush anyway (hub/lnmode.go levelFor), so delivery there is unchanged.
 		switch a.PushLevel {
-		case "":
-			a.PushLevel = assistantwire.LevelP1
-		case assistantwire.LevelP0, assistantwire.LevelP1:
+		case "", assistantwire.LevelP0, assistantwire.LevelP1:
 		default:
 			return "", fmt.Errorf("push_level must be P0 or P1")
 		}
@@ -202,12 +203,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Title, a.Body = healthNotice(s.lang(ctx))
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
-		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
+		res, err := s.pushResult(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
 			Asked: true, Level: a.PushLevel, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200)})
+		if err != nil {
+			return "", err
+		}
 		// The Feishu bot and the channels with pushes on (channels_handler.go).
 		s.channelsPushed(machine, self, a.Title, a.Body)
 		s.recordNotify(ctx, machine, self) // an interruption (north_star.go)
 		s.promoteSupervision(self)
+		if res.Held {
+			// ln mode kept it off the phone (a non-main conversation's ordinary notice): say so, so the model does not
+			// believe the user was alerted.
+			return i18n.T(s.lang(ctx), "assistant-notify.ln_held_notice"), nil
+		}
 		return "Notification sent.", nil
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
@@ -668,9 +677,10 @@ func startResultUnknown(err error) bool {
 }
 
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
-// built (not present before the start) adopts and links it like an answered start; otherwise (or when the pre-start
-// list failed) the model gets neutral text: check the Agents list first and never start a second copy. expectID is
-// the session id the hub asked this start to use, for an exact reconciliation (session_adopt.go).
+// built (not present before the start) adopts and links it like an answered start; otherwise the model gets neutral
+// text: check the Agents list first and never start a second copy. A failed pre-start list disables only the
+// heuristic, not an exact expectID match. expectID is the session id the hub asked this start to use
+// (session_adopt.go).
 func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, cwd, prompt string, tab any, note, expectID string, knownIDs map[string]bool) string {
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
 		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID); ok {
@@ -687,7 +697,8 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string,
 		"session there, and only start again if no new session appears.%s", m.Name, cwd, note)
 }
 
-// knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no adoption).
+// knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no heuristic
+// adoption, though an exact expectID can still be reconciled).
 func (s *Service) knownSessionIDs(ctx context.Context, machine string) map[string]bool {
 	list, err := s.sessions(ctx, machine)
 	if err != nil {

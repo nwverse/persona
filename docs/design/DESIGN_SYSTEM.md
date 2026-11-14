@@ -351,7 +351,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 ### 3.1 Composer
 
 - Use: the one message input for Assistant and Agents chats on iPhone, iPad and Mac.
-- Anatomy: collapsed line `[+] field [mic] [voice/stop]`; expanded card with the field on top and a row `[+] ... [model/effort] [mic] [send]`. Both shapes share one text field so focus and IME text survive the change.
+- Anatomy: collapsed line `[+] field [mic] [voice/stop]`; expanded card with the field on top and a row `[+] ... [model/effort] [mic] [send]`. Both shapes share one text field so focus and IME text survive the change, and one +, mic, voice and stop (`ComposerBoxLayout`, #7278): they sit at the box's bottom corners and move with it between the shapes, in the box's own motion, rather than one copy leaving as another arrives. Only what the card alone has (Hide Keyboard, model, send) fades in and out where it stands.
 - Tokens: radius 32, min field height 44, iOS grows from one through six lines then scrolls (`Theme.Shell.composerPhoneMaximumLines`); Mac retains its eight-line cap. Fill and stroke come from `Shell`.
 - Draft scrolling (iOS, #5650): typing and cursor movement keep the caret visible; unrelated layout updates only correct an offset past the content end. A manual scroll wins over queued caret work and stays put until new input or cursor movement.
 - Full-page editor (iOS, #5650): a dedicated upper-right control row contains Hide Keyboard and Collapse, in the composer's neutral icon ink, with 44 pt touch targets. Quotes and editable text start below that row, never behind the controls. This serves anyone composing and reviewing a long message; it requires no new setting.
@@ -1268,6 +1268,34 @@ count of the same request. The main conversation's **Wrap up: <title>** chips ov
 capsule, one per open item handed to it, at most two.
 
 Today there are seven mechanisms and the same action can use different ones (DS-24). Archive in the sidebar, to-do swipe delete and mail-account delete have no confirmation and no Undo. Only the Mac discards edits with a prompt.
+
+Saved Agent searches (#7753) reuse the command palette and one replacement `Dialog`, switching between its list and
+editor instead of stacking modals. Empty-query shortcuts follow recent chats; applying one fills the search field
+without executing an Agent action. A version conflict keeps the editor draft and shows the current saved values;
+replacing them requires explicit review. Delete is reversible through a revision-guarded Undo, while ordering uses
+visible up/down controls as a keyboard alternative. Returning restores the prior query and focus. These secondary
+controls and their code load on intent, not as another primary destination.
+
+The web command palette's runtime-Agent search (#7624) adds a status line and More/retry controls outside the
+listbox. Local results appear immediately; bounded server pages supply authoritative matches and evidence. New
+results preserve the selected identity rather than the previous numeric row position; a removed selection requires
+a new keyboard choice before Enter opens anything. Loading, failed, expired and loaded-only fallback scopes are
+stated explicitly. This reuses the existing palette, controls and localization without a new search destination.
+
+The optional web workflow board's manual view supports bulk metadata edits (#7583). **Select** reveals native
+checkboxes and a selection bar using the existing `Button` and `Menu` components. **Select all visible** counts only
+cards in the current filters and, on a narrow board, the displayed column; hidden cards are not silently included.
+The bar wraps whole controls without wrapping button text. Movement, pinning and archive/restore use the reversible
+rung: immediate feedback, one atomic write, and **Undo last change** while its acknowledged board revision is current.
+A conflict reloads without replaying the operation or its inverse. This pattern belongs to the optional Agents board,
+not Assistant's primary chat. Older managers and view-only connections retain the existing single-card experience.
+
+The optional workflow board's **Activity** view (#7599) is a read-only `Dialog`, with a matching expandable section
+inside workspace details. It fetches compact revision summaries only after opening and paged before/after changes
+only after expanding. A new-activity hint preserves the reading position until the user requests the latest page.
+Historical names remain as recorded; current workspace navigation appears only for an existing card. An update that
+involves several cards stays one group, including when reached through a card's history. This uses the same buttons,
+loading/retry states and timestamps as other secondary views, and adds no primary destination or rollback control.
 
 ### 4.5 Push, notifications and reminders
 
