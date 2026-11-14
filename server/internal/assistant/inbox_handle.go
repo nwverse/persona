@@ -29,6 +29,9 @@ type inboxNote struct {
 	Who     string `json:"who,omitempty"`
 	Next    string `json:"next,omitempty"`
 	Checks  int    `json:"checks,omitempty"`
+	// Deferred holds this programmatic wake out of every direct delivery path until the unified scheduler admits it.
+	// Pending is persisted but never listed, so this is durable internal bookkeeping rather than client wire state.
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 func renderNote(n inboxNote, owner string) string {
@@ -56,6 +59,12 @@ func (b *inboxBook) tell(it *InboxItem, n inboxNote, wake bool, now time.Time) {
 	if !wake {
 		return
 	}
+	b.wakeInboxConversation(it, now)
+}
+
+// wakeInboxConversation applies tell's wake bookkeeping without adding another note. Under b.mu.
+func (b *inboxBook) wakeInboxConversation(it *InboxItem, now time.Time) {
+	a := it.Agent
 	a.Wake = true
 	if h := it.Handling; h != nil && h.State != HandlingLooking {
 		a.Back = h.State
@@ -65,6 +74,113 @@ func (b *inboxBook) tell(it *InboxItem, n inboxNote, wake bool, now time.Time) {
 	if a.SessionID == "" {
 		a.State, a.Attempts, a.RetryAfter, a.Error = AgentQueued, 0, nil, ""
 	}
+}
+
+// queueInboxWake records a capped source notification immediately. An item already occupying a processing slot reuses
+// it; otherwise the note is held at the item's original first-deferred time until admitInboxSourceWake. Under b.mu.
+func (b *inboxBook) queueInboxWake(it *InboxItem, n inboxNote, reuseSlot bool, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	n.Deferred = true
+	a.queueNote(n)
+	if reuseSlot || inboxConversationRunning(it) {
+		b.admitInboxSourceWake(it, now)
+		return
+	}
+	if a.DeferredAt == nil {
+		t := now.UTC()
+		a.DeferredAt = &t
+	}
+}
+
+// admitInboxSourceWake releases every held note on one item in its original order and applies the same handling and
+// restoration transitions as the former immediate paths. The caller has already reserved a slot, or the item is
+// reusing its own active slot. Under b.mu.
+func (b *inboxBook) admitInboxSourceWake(it *InboxItem, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	for i := range a.Pending {
+		if !a.Pending[i].Deferred {
+			continue
+		}
+		n := a.Pending[i]
+		switch n.Name {
+		case prompts.NoteAgentStopped:
+			// Only a current Agent's stop is a capped wake. Older stops remain non-waking informational notes.
+			if it.Handling != nil {
+				switch it.Handling.State {
+				case HandlingAgent:
+					if a.Back == HandlingAgent {
+						a.Back = ""
+					}
+					b.setHandling(it, HandlingLooking, "", now)
+				case HandlingWaiting:
+					a.Back = HandlingWaiting
+					b.setHandling(it, HandlingLooking, "", now)
+				}
+			}
+			b.wakeInboxConversation(it, now)
+		case prompts.NoteSelfReplied:
+			if it.Handling != nil && it.Handling.State == HandlingAgent {
+				// The current Agent keeps its state and timeout clock. Back remembers a pre-existing wait exactly as
+				// the existing immediate path did; WakeSlot below accounts for this otherwise invisible processing turn.
+				restoreWaiting := a.Back == HandlingWaiting
+				startedAt := a.StartedAt
+				b.wakeInboxConversation(it, now)
+				if restoreWaiting {
+					a.Back = HandlingWaiting
+				}
+				a.StartedAt = startedAt
+			} else {
+				b.wakeInboxConversation(it, now)
+				b.setHandling(it, HandlingLooking, "", now)
+			}
+		case prompts.NoteSelfRead:
+			b.wakeInboxConversation(it, now)
+			b.setHandling(it, HandlingLooking, "", now)
+		default:
+			b.wakeInboxConversation(it, now)
+		}
+		a.Pending[i].Deferred = false
+	}
+	a.DeferredAt = nil
+	// HandlingAgent does not belong in the ordinary processing-conversation count. Keep an explicit reservation
+	// until a turn outcome changes handling and setHandling releases it.
+	a.WakeSlot = a.Wake && !inboxOrdinaryRunning(it)
+}
+
+// flushInboxWakes is the uncapped user/new-counterpart-message path: all held notes may be delivered now, without a
+// programmatic reservation. The caller's own tell decides whether the combined delivery asks for a turn. Under b.mu.
+func (b *inboxBook) flushInboxWakes(it *InboxItem) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	for i := range a.Pending {
+		a.Pending[i].Deferred = false
+	}
+	a.DeferredAt, a.WakeSlot = nil, false
+}
+
+// dropInboxWakes discards held work when handling fails or closes; informational notes already eligible for delivery
+// keep their existing behavior. Under b.mu.
+func (b *inboxBook) dropInboxWakes(it *InboxItem) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	kept := a.Pending[:0]
+	for _, n := range a.Pending {
+		if !n.Deferred {
+			kept = append(kept, n)
+		}
+	}
+	a.Pending = kept
+	a.DeferredAt, a.WakeSlot = nil, false
 }
 
 // setHandling moves the event's processing state, and mirrors it on Agent for the apps from before (an Agent's
@@ -83,6 +199,9 @@ func (b *inboxBook) setHandling(it *InboxItem, state, errText string, now time.T
 	a := it.Agent
 	if a == nil {
 		return
+	}
+	if state != HandlingAgent {
+		a.WakeSlot = false
 	}
 	h.MachineID, h.SessionID = a.MachineID, a.SessionID
 	if g := it.Suggestion; g != nil && g.Kind == SuggestReply && !g.Handback {
@@ -111,6 +230,7 @@ func (b *inboxBook) failHandling(it *InboxItem, reason string, now time.Time) {
 	if it.Agent != nil {
 		it.Agent.Wake = false
 	}
+	b.dropInboxWakes(it)
 	b.setHandling(it, HandlingFailed, reason, now)
 	b.chainAdd(it, InboxChainEntry{Kind: ChainFailed, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.failed"), Detail: reason})
 }
@@ -126,6 +246,7 @@ func (b *inboxBook) closeHandling(it *InboxItem, why string, now time.Time) bool
 	active := it.handled() && !(it.Suggestion != nil && it.Suggestion.Kind == SuggestConclusion && it.Handling.State == HandlingDone)
 	it.Suggestion = nil
 	a.Wake, a.Pending = false, nil
+	a.DeferredAt, a.WakeSlot = nil, false
 	b.setHandling(it, HandlingDone, "", now)
 	if !active || a.SessionID == "" {
 		return false
@@ -174,6 +295,7 @@ func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
 		}
 		a.Of, a.Task, a.Reason = it.Last, it.Summary, it.Reason
 		// (a first message has the item's content: startInboxAgents leaves this one out of it)
+		b.flushInboxWakes(it)
 		b.tell(it, inboxNote{Name: prompts.NoteNewMessages, Context: it.Context}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 		b.settle(w)
@@ -250,8 +372,21 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		b.mu.Unlock()
 		return
 	}
-	machine, sid, wake, told := a.MachineID, a.SessionID, a.Wake, a.told
-	notes := append([]inboxNote(nil), a.Pending...)
+	machine, sid, wake := a.MachineID, a.SessionID, a.Wake
+	pending := append([]inboxNote(nil), a.Pending...)
+	base := a.told - len(pending)
+	delivered := map[int]bool{}
+	notes := make([]inboxNote, 0, len(pending))
+	for i, n := range pending {
+		if !n.Deferred {
+			delivered[base+i+1] = true
+			notes = append(notes, n)
+		}
+	}
+	if len(notes) == 0 {
+		b.mu.Unlock()
+		return
+	}
 	b.mu.Unlock()
 	if s.isWorkMachine(machine) {
 		b.mu.Lock()
@@ -281,7 +416,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	if it.Agent == a && a.SessionID == sid {
 		switch {
 		case err == nil:
-			a.keepToldSince(told) // the notes told while it was sent go next time
+			a.keepToldOthers(delivered) // notes queued while it was sent, including held ones, go next time
 			if wake {
 				a.Wake = false
 				if it.Handling == nil || it.Handling.State != HandlingAgent {
@@ -292,11 +427,13 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		case gone:
 			a.Lost = append(a.Lost, sid)
 			a.MachineID, a.SessionID = "", ""
+			b.dropInboxWakes(it)
 			if a.Wake {
 				a.State, a.Attempts, a.RetryAfter = AgentQueued, 0, nil
 			} else {
 				a.Pending = nil
 			}
+			a.DeferredAt, a.WakeSlot = nil, false
 			if it.Handling != nil {
 				it.Handling.MachineID, it.Handling.SessionID = "", ""
 			}
