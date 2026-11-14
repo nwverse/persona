@@ -6,6 +6,7 @@ plugins {
 
 android {
     namespace = "persona.platform.phonetools"
+    defaultConfig.testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
@@ -22,6 +23,9 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.androidx.work)
     implementation(libs.androidx.health.connect)
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(platform(libs.compose.bom))
