@@ -296,6 +296,19 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
 				return m.ID, sess.SessionID, nil
 			}
+			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
+			// node may not have had the start at all. Wait for the link to come back and look once more; still
+			// nothing, the caller starts it once again (#7511). A link that stayed up is a busy node: no retry.
+			if s.startLinkDown(ctx, m.ID, err) {
+				back := s.waitMachineBack(m.ID)
+				if back {
+					if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
+						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
+						return m.ID, sess.SessionID, nil
+					}
+				}
+				return "", "", startLinkLost{err: err, machine: m.Name, back: back}
+			}
 		}
 		return "", "", err
 	}
