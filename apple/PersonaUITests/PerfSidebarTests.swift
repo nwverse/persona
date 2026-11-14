@@ -16,7 +16,7 @@ final class PerfSidebarTests: PerfTestCase {
 
     /// Hide Sidebar, then Show Sidebar, three times.
     @MainActor func testSidebarHideAndShow() throws {
-        let app = launch(["-tab", "assistant", "-app.tab", "assistant", "-dev.openChat", "", "-openSplitFresh", "YES"],
+        let app = launch(["-tab", "assistant", "-app.tab", "assistant", "-dev.openChat", "", "-openSplitFresh", "YES", "-sidebar.mode", "merged"],
                          ready: XCUIApplication().descendants(matching: .any)["sidebar-main"].firstMatch)
         guard app.windows.firstMatch.frame.width > 900 else { throw XCTSkip("the iPad on its side only") }
         let hide = app.descendants(matching: .any)["assistant-sidebar-collapse"].firstMatch
@@ -29,6 +29,32 @@ final class PerfSidebarTests: PerfTestCase {
                 XCTAssertTrue(main.until("exists == false OR isHittable == false"), "the column did not go")
                 show.tap()
                 XCTAssertTrue(main.until("exists == true AND isHittable == true"), "the column did not come back")
+            }
+        }
+    }
+}
+
+extension PerfSidebarTests {
+    /// The column slid by a finger (#4206): from the line beside it out of the way, then from the screen's edge back,
+    /// three times. Only the column's layer moves and the page's blur advances; compare with the width drag this replaced
+    /// (28.8 fps, 54 ms of main-thread work per frame at p95 on the same simulator).
+    @MainActor func testSidebarDrag() throws {
+        let app = launch(["-tab", "assistant", "-app.tab", "assistant", "-dev.openChat", "", "-openSplitFresh", "YES", "-sidebar.mode", "merged"],
+                         ready: XCUIApplication().descendants(matching: .any)["sidebar-main"].firstMatch)
+        guard app.windows.firstMatch.frame.width > 900 else { throw XCTSkip("the iPad on its side only") }
+        let main = app.descendants(matching: .any)["sidebar-main"].firstMatch
+        let window = app.windows.firstMatch.frame
+        let width = main.frame.maxX + 8
+        func drag(from x: CGFloat, by dx: CGFloat) {
+            let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: window.minX + x, dy: window.midY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: dx, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.05)
+        }
+        measureFrames(metrics()) {
+            for _ in 0..<3 {
+                drag(from: width, by: -(width * 0.8))
+                XCTAssertTrue(main.until("exists == false OR isHittable == false"), "the column did not slide away")
+                drag(from: 2, by: width * 0.8)
+                XCTAssertTrue(main.until("exists == true AND isHittable == true"), "the column did not slide back")
             }
         }
     }

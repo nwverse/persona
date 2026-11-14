@@ -175,9 +175,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key,
                       "agents.list.closed"] { d.removeObject(forKey: k) }
         }
-        // `-openSplitFresh YES`: the lists beside the pages shown (SplitListTests, #2624).
+        // `-openSplitFresh YES`: the lists beside the pages shown, one sidebar for all (SplitListTests, #2624, #4206).
         if d.bool(forKey: "openSplitFresh") {
             for list in ["agents.list", "assistant.list"] { d.removeObject(forKey: list + ".closed") }
+            d.removeObject(forKey: SidebarMode.key)
         }
         // `-openRecapsFresh YES`: no away recap closed yet, so the newest shows open again (RecapInFlowTests).
         if d.bool(forKey: "openRecapsFresh") { d.removeObject(forKey: "closedRecaps") }

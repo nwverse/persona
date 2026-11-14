@@ -251,6 +251,8 @@ struct RootView: View {
     @State private var pad = PadRouter()
     /// Where the system puts its bars down the side (the open iPhone Duo on its side); nil across the top.
     @State private var barEdge: HorizontalEdge?
+    /// Settings › Appearance › Sidebar (#4206).
+    @StoredValue(SidebarMode.key) private var sidebarMode: SidebarMode = .merged
     #endif
 
     var body: some View {
@@ -258,12 +260,26 @@ struct RootView: View {
         let _ = PerfTrace.body("RootTabs")
         #endif
         #if os(iOS)
-        // iPad and the open iPhone Duo (RootTabs is iOS's regular width): one sidebar, no tabs (#4206).
-        ChatsView()
-            .environment(\.oneSidebar, true)
-            .environment(\.oneSidebarSideBars, barEdge != nil)
-            .readsVerticalBarEdge($barEdge)
+        switch sidebarMode {
+        case .merged:
+            // iPad and the open iPhone Duo (RootTabs is iOS's regular width): one sidebar, no tabs (#4206).
+            ChatsView()
+                .environment(\.oneSidebar, true)
+                .environment(\.oneSidebarSideBars, barEdge != nil)
+                .readsVerticalBarEdge($barEdge)
+                .modifier(PadRoutes(router: pad))
+        case .separate:
+            // As before #4206: each tab its own page with its own sidebar (Persona's history, the Agents list), shown or
+            // hidden on its own; the system's tab bar switches them (down the side on the open Duo on its side).
+            // Each tab keeps its own page: back on Agents, the agent opened there is still open (not `selectHomeTab`, whose
+            // return to the list is the phone's; with separate sidebars it emptied the page, 2026-11-13, the owner).
+            TabView(selection: Binding(get: { model.selectedTab }, set: { if $0 != model.selectedTab { model.selectedTab = $0 } })) {
+                AssistantRootTab()
+                AgentsRootTab()
+                if LarkHomePreference.shared.shows { FeishuRootTab() }
+            }
             .modifier(PadRoutes(router: pad))
+        }
         #else
         TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) })) {
             AssistantRootTab()
@@ -503,9 +519,9 @@ nonisolated struct ConnectionShown: Encodable, Equatable {
 }
 #endif
 
-#if os(visionOS)
-/// Messages as a tab: Apple Vision Pro. On iOS it is the shell's third page and, at regular width, under the one
-/// sidebar's More (#4206).
+#if os(iOS) || os(visionOS)
+/// Messages as a tab: Apple Vision Pro, and iOS at regular width with separate sidebars (#4206). On iOS it is otherwise the
+/// shell's third page and, beside the one sidebar, under its More.
 @MainActor private struct FeishuRootTab: TabContent {
     var body: some TabContent<AppTab> {
         Tab(String(localized: "Messages [Quote Views 4da199]"), systemImage: Theme.Icon.feishuChats, value: AppTab.feishu) {

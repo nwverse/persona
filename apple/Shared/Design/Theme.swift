@@ -40,6 +40,20 @@ nonisolated enum AppStyle: String, CaseIterable, Identifiable, Sendable {
 
 nonisolated enum Theme {
     #if os(iOS)
+    /// A split's list column slid by a finger (#4206, `SplitColumnControl`).
+    enum Split {
+        /// How much of the blur over the page a drag reaches (a fraction of `.systemUltraThinMaterial`'s).
+        static let dragBlur: CGFloat = 0.8
+        /// How far across the column's width the finger goes before the blur is at its most.
+        static let blurReach: CGFloat = 0.25
+        /// How much of its most the blur is before the page going away with the column takes the window's width under it.
+        static let reflow: CGFloat = 0.6
+        /// Faster than this, in points a second, the fling decides where the column settles, not how far it went.
+        static let fling: CGFloat = 500
+        /// How long the column takes to settle out or away after the finger lets go, and the page to take its width.
+        static let settle: TimeInterval = 0.28
+    }
+
     /// By Repository's tree on iOS (#2531): a card per repository, its worktrees and their agents a level in each, every
     /// line's mark in one column per level; the agents in the display's rows (#3753).
     enum Tree {
@@ -589,8 +603,6 @@ nonisolated enum Theme {
         static let headerTitle: CGFloat = 480
         /// The list column of a split on iPad: wide enough for the agents' cards and the inbox rows.
         static let sidebarMin: CGFloat = 340
-        /// Narrower than any list column a split gives: one this narrow is still laying itself out (`SplitNavigation.notePosture`).
-        static let sidebarMinPhone: CGFloat = 200
         /// The open iPhone Duo's list column, its one width (#4206), upright over the page and on its side beside it: as
         /// wide as ChatGPT's sidebar on the open Duo (320 of its 669 pt upright, leaving the page most of its 951 pt on its
         /// side). The system's own was about 199 pt upright and 239 on its side, too narrow for the one sidebar's rows.
@@ -598,6 +610,11 @@ nonisolated enum Theme {
         /// The iPad's list column, its one width (#4206); a Mac window's ideal.
         static let sidebar: CGFloat = 400
         static let sidebarMax: CGFloat = 480
+        /// The narrowest a split's page gets beside its list column (iOS, `SplitPageMin`), no narrower than a large phone's
+        /// screen: where the column would leave the page less, it lies over the page instead (the open iPhone Duo and an
+        /// iPad mini, upright). At 349 pt beside the Duo's 320 pt column the split could not settle whether the page fit,
+        /// put the column away and back on every frame, and the scene ran out of its 10 seconds (#4206).
+        static let splitPageMin: CGFloat = 400
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
         static let cardColumn: CGFloat = 330
         /// The narrowest column of a chat's grid of subagent cards: two side by side from about 540 pt (iPad, Mac), as

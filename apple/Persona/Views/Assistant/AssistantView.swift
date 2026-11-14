@@ -37,6 +37,10 @@ struct AssistantView: View {
     @State private var drawer = AssistantDrawer()
     /// Regular width (iPhone Duo open): the sidebar is a column beside the conversation; Chat History shows or hides it.
     @State private var columns = SplitColumns.shown
+    #if os(iOS)
+    /// The history column as UIKit has it (`SplitColumnControl`): a finger moving it, the split's size as a turn lays it out.
+    @State private var splitState = SplitColumnState()
+    #endif
     /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
     @Environment(\.shellRailEdge) private var railEdge
     #if os(iOS)
@@ -117,17 +121,47 @@ struct AssistantView: View {
             }
             #else
             NavigationSplitView(columnVisibility: $columns) {
+                #if os(iOS)
+                // Separate sidebars (#4206): Persona's column in the one sidebar's look, at its one width.
+                OneSidebarPersonaColumn()
+                    .modifier(SidebarWidth())
+                #else
                 // The system sizes the column on iPhone Duo (and moves the divide onto the fold); iPad, as the other tabs.
                 sidebar(column: true)
                     .toolbarVisibility(.hidden, for: .navigationBar)
                     .modifier(SidebarWidth())
+                #endif
             } detail: {
                 stack
+                    #if os(iOS)
+                    // The history slid by a finger (#4206); the page never narrower than its least width beside it.
+                    .background {
+                        SplitColumnControl(drags: true, state: splitState) { [columns = $columns, splitState] shown in
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { columns.wrappedValue = shown ? SplitColumns.shown : .detailOnly }
+                            SplitListMemory.keep("assistant.list", shown: shown, state: splitState)
+                        }
+                    }
+                    .modifier(SplitPageMin())
+                    #endif
             }
+            #if os(iOS)
+            // The column's header folds it away (`OneSidebarHeader`); the status-bar strip over it in its color.
+            .environment(\.splitHideList, SplitShowList { [columns = $columns] in
+                withAnimation(Theme.Motion.layout) { columns.wrappedValue = .detailOnly }
+            })
+            .modifier(SidebarTopFill(shown: columns != .detailOnly, color: OneSidebarMetrics.columnColor))
+            #else
             .modifier(SidebarTopFill(shown: columns != .detailOnly))
+            #endif
             .navigationSplitViewStyle(.balanced)
-            // Whether the history is shown, remembered (#2624).
+            // Whether the history is shown, remembered (#2624): beside the page only (over it, a phone upright, it is not).
+            #if os(iOS)
+            .modifier(SplitListMemory(columns: $columns, key: "assistant.list", state: splitState))
+            #else
             .modifier(SplitListMemory(columns: $columns, key: "assistant.list"))
+            #endif
             #endif
         } else {
             // The sidebar takes the whole height, like ChatGPT's: the tab bar fades away as it comes out

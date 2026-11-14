@@ -701,8 +701,10 @@ private struct AgentsList: View {
     @Environment(\.oneSidebarLead) private var lead
     private var inListControls: Bool { widthClass != .regular || lead != nil }
     private var oneSidebarMode: Bool { lead != nil }
+    private var oneSidebarColumn: Color? { oneSidebarMode ? OneSidebarMetrics.columnColor : nil }
     #else
     private var oneSidebarMode: Bool { false }
+    private var oneSidebarColumn: Color? { nil }
     private var inListControls: Bool { widthClass != .regular }
     #endif
     /// A phone: the page's own top (`AgentsHeader`), not the system's search.
@@ -1230,7 +1232,7 @@ private struct AgentsList: View {
         .overlay { if ScreenProbe.enabled { AgentsListProbe(feed: feed, sessions: base, asks: interactions, page: shell == nil ? nil : "agents") } }
         #endif
         .listSectionSpacing(repoTree ? .custom(Theme.Space.m) : compact ? .compact : .default)
-        .modifier(AgentsListPage(capsules: floating, workspaceSidebar: grouping == .repo && !repoTree))
+        .modifier(AgentsListPage(capsules: floating, workspaceSidebar: grouping == .repo && !repoTree, column: oneSidebarColumn))
         // In the split's sidebar column (iPhone Duo open) the bar sits above the list; on a phone it is the list's
         // first row (above).
         .modifier(TopBar(abovePage: !inListControls) {
@@ -4388,10 +4390,14 @@ private struct AgentsEdge: ViewModifier {
 private struct AgentsListPage: ViewModifier {
     let capsules: Bool
     var workspaceSidebar = false
+    /// In the one sidebar (#4206), its column's one color behind the list whatever the style: BeautifulUI's capsules and
+    /// State Cards drew theirs on the grouped page's grey under the column's lighter header (the owner, 2026-11-13).
+    var column: Color? = nil
 
     func body(content: Content) -> some View {
-        if workspaceSidebar { content.listStyle(.plain).scrollContentBackground(.hidden).background(Theme.WorkspaceSidebar.background) }
-        else if capsules { content.scrollContentBackground(.hidden).background(Theme.groupedPage) }
+        if workspaceSidebar { content.listStyle(.plain).scrollContentBackground(.hidden).background(column ?? Theme.WorkspaceSidebar.background) }
+        else if capsules { content.scrollContentBackground(.hidden).background(column ?? Theme.groupedPage) }
+        else if let column { content.scrollContentBackground(.hidden).background(column) }
         else { content.themedPage() }
     }
 }

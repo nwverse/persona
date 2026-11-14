@@ -29,7 +29,7 @@ final class OneSidebarTests: XCTestCase {
         XCUIDevice.shared.orientation = ProcessInfo.processInfo.environment["PERSONA_ORIENTATION"] == "landscape" ? .landscapeLeft : .portrait
         app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-app.tab", "assistant", "-dev.openChat", "",
-                               "-dev.grouping", "repo", "-agents.list.closed", "NO"]
+                               "-dev.grouping", "repo", "-agents.list.closed", "NO", "-sidebar.mode", "merged"]
     }
 
     override func tearDown() {

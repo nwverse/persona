@@ -7,8 +7,6 @@ import SwiftUI
 // page, and these are the column's first rows (`AgentsList`), its header and its foot.
 
 extension EnvironmentValues {
-    /// The one sidebar is the layout (iPad, iPhone Duo open; `RootTabs`). False elsewhere.
-    @Entry var oneSidebar = false
     /// Folds the split's list column away (the one sidebar's header button); nil outside a split.
     @Entry var splitHideList: SplitShowList? = nil
     /// Slides the list column away if it is laid over the page (the open iPhone Duo upright, #4852), after a pick that
@@ -26,13 +24,12 @@ enum OneSidebarMetrics {
     static func topMargin(sideBars: Bool) -> CGFloat { sideBars ? Theme.Space.l : 0 }
 
     /// The column's one color, behind its rows and its header and over the status bar above it (#4855), on the iPad and
-    /// the open Duo in the glass styles: a neutral grey, as ChatGPT's and the iPhone's drawer (`Theme.Shell.drawer`), not
-    /// the system sidebar's grey-blue (`Theme.systemSidebar`, still the Mac's). The Duo's rows kept the system's and its
-    /// header the page's: in dark three bands down the column, black, grey-blue, black (2026-11-12, the owner). Nil in
-    /// the other styles: the column as it was, the page's color.
-    @MainActor static var columnColor: Color? {
-        AppStyle.current.usesGlass ? Theme.Shell.drawer : nil
-    }
+    /// the open Duo in every style: a neutral grey, as ChatGPT's and the iPhone's drawer (`Theme.Shell.drawer`, which the
+    /// shell's drawer has in every style), not the system sidebar's grey-blue (`Theme.systemSidebar`, still the Mac's).
+    /// The Duo's rows kept the system's and its header the page's: in dark three bands down the column, black, grey-blue,
+    /// black (2026-11-12, the owner). Until 2026-11-13 only the glass styles had it, and in the others the rows were the
+    /// system sidebar's grey under a white header (the owner, on the phone: one color, as ChatGPT's).
+    @MainActor static var columnColor: Color? { Theme.Shell.drawer }
 
     /// The header's background: the column's, so the rows scroll under it unseen and it reads as part of the column.
     @MainActor static var chromeBackground: Color { columnColor ?? Theme.pageBackground }
@@ -124,7 +121,9 @@ struct OneSidebarSections: View {
     var leaveAgent: () -> Void
     /// An agent's page is open beside the column.
     var agentOpen: Bool
-    var menuActions: AgentsListMenu.Actions
+    /// The Agents list's ⋯ beside its heading; nil: no Agents heading and segments (Persona's own column with separate
+    /// sidebars, `OneSidebarPersonaColumn`).
+    var menuActions: AgentsListMenu.Actions?
     @Binding var showNew: Bool
     @State private var moreOpen = false
     /// All Chats, over the window as from the drawer (`AutoConversationsView`).
@@ -158,11 +157,13 @@ struct OneSidebarSections: View {
         VStack { Divider() }.padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s).sidebarRow() // a row lays a bare Divider out upright
         pinned
         allChatsRow
-        agentsHeading
-        AgentsGroupingSegments()
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.bottom, Theme.Space.s)
-            .sidebarRow()
+        if let menuActions {
+            agentsHeading(menuActions)
+            AgentsGroupingSegments()
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.bottom, Theme.Space.s)
+                .sidebarRow()
+        }
     }
 
     // MARK: Places
@@ -304,7 +305,7 @@ struct OneSidebarSections: View {
     // MARK: Agents
 
     /// The Agents list's name, with its ⋯ (grouping, display, machines) and New Session, as the web's sidebar heads it.
-    private var agentsHeading: some View {
+    private func agentsHeading(_ menuActions: AgentsListMenu.Actions) -> some View {
         HStack(spacing: Theme.Space.m) {
             Text("Agents").font(Theme.Font.secondaryMedium).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 0)
@@ -328,7 +329,7 @@ struct OneSidebarSections: View {
 
     private func glyph(_ symbol: String) -> some View {
         // One box for every symbol: a wide one (Knowledge's books) scales down into it instead of pushing its words.
-        Image(systemName: symbol).resizable().scaledToFit().fontWeight(.medium).foregroundStyle(Color.primary)
+        Theme.Icon.image(symbol).resizable().scaledToFit().fontWeight(.medium).foregroundStyle(Color.primary)
             .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
             .scaledFrame(width: Theme.Sidebar.glyphColumn)
     }
@@ -358,6 +359,19 @@ private extension View {
         listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.s, bottom: 0, trailing: Theme.Space.s))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
+    }
+}
+
+/// Persona's column with separate sidebars (#4206, `SidebarMode.separate`): the one sidebar's look, its header, Persona's
+/// places, Pinned and All Chats, and its foot, without the Agents list, which is a tab of its own then. In place of the
+/// column Persona had before the one sidebar (`AssistantSidebar`), so both modes draw Persona's places alike.
+struct OneSidebarPersonaColumn: View {
+    var body: some View {
+        List {
+            OneSidebarSections(leaveAgent: {}, agentOpen: false, menuActions: nil, showNew: .constant(false))
+        }
+        .listStyle(.plain)
+        .modifier(OneSidebarChrome(enabled: true, leaveAgent: {}))
     }
 }
 
@@ -416,7 +430,7 @@ struct OneSidebarFoot: View {
             .accessibilityIdentifier("sidebar-new")
             .layoutPriority(1) // offered the row's room before the spacer, so the name shows wherever it fits
             Spacer(minLength: Theme.Space.s)
-            HStack(spacing: 0) {
+            HStack(spacing: Theme.Space.flush) {
                 footButton(Theme.Icon.search, label: String(localized: "Search Chats [Assistant Sidebar 55c9e4]"), id: "sidebar-search") { fullSearch = true }
                 footButton(Theme.Icon.settings, label: String(localized: "Settings"), id: "sidebar-settings") { model.shellSettings = true }
                     .overlay(alignment: .topTrailing) { ExtensionSettingsBadge() }

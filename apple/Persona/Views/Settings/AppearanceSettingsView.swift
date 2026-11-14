@@ -16,6 +16,7 @@ struct AppearanceSection: View {
     private let layoutDisplay = AgentListDisplayChoice()
     #endif
     @StoredValue(ComposerGlowPrefs.enabledKey) private var composerGlow = false
+    @StoredValue(SidebarMode.key) private var sidebarMode: SidebarMode = .merged
 
     var body: some View {
         Section {
@@ -52,6 +53,15 @@ struct AppearanceSection: View {
                 }
                 .settingsListRow(SettingsPage.layout)
                 .accessibilityIdentifier("settings-layout-page")
+                // One sidebar or each tab its own (#4206): only where there is a sidebar beside the pages.
+                if SidebarMode.available {
+                    NavigationLink(value: SettingsPage.sidebarMode) {
+                        SettingsRow(title: String(localized: "Sidebar [Appearance]"), symbol: Theme.Icon.sidebar, tint: Theme.Hue.indigo,
+                                    value: sidebarMode.title, look: .oneLine)
+                    }
+                    .settingsListRow(SettingsPage.sidebarMode)
+                    .accessibilityIdentifier("settings-sidebar-mode")
+                }
                 #endif
                 #if os(iOS) || os(visionOS)
                 NavigationLink(value: SettingsPage.colorScheme) {

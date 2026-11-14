@@ -246,9 +246,8 @@ resize theirs. Why: dragging laid every row out again on every frame.
   Duo on its side: 951 pt across, the page keeps most of it). A Mac window keeps its range (frozen).
 - **Removed**: `SplitDividerHandle` (handle, drags, double tap, VoiceOver resize), the `splitListWidth` environment value,
   `Theme.Split`, `Theme.Size.splitDetailMin`. `<key>.width` is no longer read (old values are simply ignored).
-- **Kept**: `<key>.closed` through `SplitListMemory` (the closed state's rules, overlay posture included, are unchanged), and
-  `SplitTilePin` (`.tile` while a phone's split is wider than tall; SwiftUI's own behavior back upright, where the overlay is
-  by design, #4852).
+- **Kept**: `<key>.closed` through `SplitListMemory`. `SplitTilePin` (`.tile` while a phone's split was wider than tall) is
+  gone since 2026-11-14: it set what SwiftUI sets back on every update (next section).
 - **Measured** (iPad Pro 13-inch simulator, iPadOS 27.2, on its side; optimized build `-O`, whole module; mock with
   `MOCK_AGENTS=1 MOCK_LONG_ASSISTANT=1 MOCK_ASSISTANT_SIDEBAR=1 MOCK_TASKS=1`; 5 measured runs, medians, from `FrameStats`,
   as `XCTHitchMetric` gives nothing on a simulator):
@@ -268,9 +267,70 @@ resize theirs. Why: dragging laid every row out again on every frame.
 - **Pending**: the open Duo on its side (Device Hub: Open, Rotate Right), then `SplitListTests` and `OneSidebarTests` with
   `TEST_RUNNER_PERSONA_ORIENTATION=landscape`, and a look at the real phone.
 
+## Slide, Merged / Separate, and the turn that hung (2026-11-13/14)
+
+In one commit after `b484a5b25`; checked on a real iPhone Duo by the owner before it was committed.
+
+- **Slide by a finger** (`SplitColumnControl`, as Feishu's): from the window's leading edge while the column is away, from the
+  line beside it while it shows; the page blurs while it moves and takes its new width under the blur (`Theme.Split`).
+  `docs/apple/ios.md`, "The list column beside the page"; `DESIGN_SYSTEM.md`'s gestures table.
+- **Settings › Appearance › Sidebar: Merged / Separate** (`SidebarMode`, `sidebar.mode`, default Merged, only where there is a
+  sidebar). Separate is main's tab view; Persona's tab has the one sidebar's Persona part as its column
+  (`OneSidebarPersonaColumn`); each tab keeps its own column and selection.
+- **The column's color in every style** (`OneSidebarMetrics.columnColor` = `Theme.Shell.drawer`; BeautifulUI and the other
+  non-glass styles had the system's grey under a white header). The Agents list in the column takes it too.
+- **The turn that hung (0x8BADF00D on the phone).** Root causes, found on the open Duo simulator with per-second counters:
+  1. At 320 pt the column fit beside the Duo's upright 669 pt with 349 pt left, at the edge of the system's least page
+     width: UIKit put the column away and back on every pass (728 times in 290 s), the chat laid out each time.
+  2. The first fix set the split's `minimumSecondaryColumnWidth` (and `preferredSplitBehavior`) from UIKit; SwiftUI set them
+     back on every update, 5–11 times a second on a turn, and the phone ran out of the scene's 10 s (00:07 report).
+  Fix: the page's least width said to SwiftUI (`SplitPageMin`, `Theme.Size.splitPageMin` = 400 pt), nothing set from UIKit;
+  the posture by width (`SplitColumns.fitsBeside`); turned to over the column goes away, turned back it comes back as left;
+  only an on-screen person's choice beside the page is kept (`SplitColumnState`). Also: no UserDefaults write of an unchanged
+  value (`StoredValueBox.set`), nothing kept in the background, the inbox's unread count cached per revision.
+  Lessons: `docs/lessons/ios.md`, "A split's posture belongs to SwiftUI".
+- **Measured on simulators** (debug build, mock hub, one change per turn is the aim):
+
+  | Device | Turns | Column changes | Most per turn | Kept by mistake | After a turn |
+  |---|---|---|---|---|---|
+  | iPhone Duo open, Merged | 7 | 7 | 1 | 0 | busy 1–2 s, the chat drawn 8–12 times |
+  | iPhone Duo open, Separate, switching tabs (16 switches) | 8 | one per turn per tab shown | 1 | 0 | — |
+  | iPad mini | 8 | 8 | 1 | 0 | idle in about 0.1 s (before: 53 s to idle, column flipping) |
+  | iPad Pro 11-inch | 8 | 0 (beside both ways) | 0 | 0 | idle at once |
+
+- **Known, not fixed**:
+  - With Separate sidebars the Agents tab's drag leaves an empty column (black in dark): laid over the page for the drag,
+    that split takes its column away. Goes with the redrawn drag (next section).
+  - `SplitColumnControl` still turns the split's own edge swipe off (`presentsWithGesture`), which SwiftUI also sets back on
+    its updates (only around a turn, 1–5 a second, no layout, not a loop). Goes with the redrawn drag.
+
+## Next: decided with the owner, not built (2026-11-14)
+
+The owner lists the bugs first and says when to start; nothing below is started. Ask before posting anything on GitHub.
+
+1. **The drag redrawn from a picture**: as the finger lands, a picture of the whole screen (the top bars and the side bars in
+   it), cut at the line; both halves blurred and stretched or squeezed with the finger, the live columns untouched until the
+   finger lets go; then the split takes its place once, under the pictures, and they fade. Defaults: coming out from away,
+   the column's picture kept from when it last went away (drawn off screen if none); the blur from nothing to its most over
+   about 80 pt; upright, only the column's picture stretches.
+2. **New Chat has one entry**, the sidebar's foot: none on the page (top bar, the Duo's side column) where there is a sidebar,
+   none while the column is away either; on the Agents tab it opens a new Persona chat.
+3. **One split and one sidebar component**: Separate's Persona tab uses the same split (`SplitNavigation`) and the same
+   sidebar with its Agents part off; the Agents tab the same sidebar with its Persona part off and Persona's mark on top.
+   This fixes Separate's top alignment (no top margin there), its rows' height and insets (another `List`), and its second
+   sidebar button (the page's shows while the column's own fold button does). Messages stays a page without a sidebar; fix
+   Settings' Separate summary, which says every tab has a sidebar.
+4. **One search**: the foot's search opens a full-screen page with Chats | Agents; Agents is the Agents list's own search
+   (hub-side, its groupings and row actions), not a second result list; the scope follows what is open; no mixed "All".
+5. The sidebar's foot (New Chat, Search, Settings) stays put when the keyboard comes up (the column ignores the keyboard).
+6. The composer's + and mic are one element each across its one-line and open shapes, one motion (main has this too; owner
+   to decide on a separate issue).
+7. The header's mark on the rows' symbol line; whether "Persona" lines up with the rows' words is the owner's call.
+8. Not built: the right-edge tab strip of the HTML demo; Separate uses the system's tab bar.
+
 ## Right-edge tabs and "Separate sidebars": HTML demo only (2026-11-13)
 
-Not built in Swift yet; an HTML demo for the owner's review is kept outside the repository. Decided so far: icon-only tabs
+**2026-11-14: Separate is built (above); the right-edge strip is not, and will not be (the system's tab bar).** Not built in Swift; an HTML demo for the owner's review is kept outside the repository. Decided so far: icon-only tabs
 (助手 = the Persona mark, Agents = `terminal`, 消息 = `bubble.left.and.bubble.right`; badges; tooltips), on the right edge on
 its side and on the iPad, a vertical strip in the folded shell (today's `ShellSideRail`, with the face and the page's action),
 none upright; tapping a tab on its side opens the column if needed, scrolls to that section and pins it magnetically (80 pt
@@ -283,6 +343,9 @@ Proposed for review: Settings › Appearance › **Sidebar: Merged / Separate** 
 Separate = main's layout: each tab its own sidebar, remembered shown or hidden per tab.
 
 ## 4. Status
+
+2026-11-14: the slide, Merged / Separate and the turn's fix are on the branch, checked on the owner's phone. Next, the list
+in "Next: decided with the owner" when the owner says to start. The claims below run to 2026-11-15.
 
 The six screenshots and the montage were retaken on `5eaff049d` (2026-11-13) and checked: the size, one top-left button,
 one color down the column (dark 23,23,23, light 249,249,249), and the column's width (iPad 400 pt, the Duo 320 pt upright

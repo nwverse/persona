@@ -172423,6 +172423,123 @@
           }
         }
       }
+    },
+    "Sidebar [Appearance]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sidebar"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サイドバー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "侧栏"
+          }
+        }
+      }
+    },
+    "Merged [Sidebar]" : {
+      "comment" : "Settings › Appearance › Sidebar: one sidebar for Persona, its chats and Agents",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まとめる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并"
+          }
+        }
+      }
+    },
+    "Separate [Sidebar]" : {
+      "comment" : "Settings › Appearance › Sidebar: each tab its own sidebar, as before",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Separate"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分开"
+          }
+        }
+      }
+    },
+    "Persona, your chats and Agents in one sidebar, the page beside it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona, your chats and Agents in one sidebar, the page beside it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona、チャット、エージェントを 1 つのサイドバーにまとめ、ページをその横に表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona、你的对话和 Agents 在同一个侧栏里，页面在它旁边。"
+          }
+        }
+      }
+    },
+    "Persona, Agents and Messages each a page of its own with its own sidebar; the tab bar switches between them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona, Agents and Messages each a page of its own with its own sidebar; the tab bar switches between them."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona、エージェント、メッセージはそれぞれ独自のサイドバーを持つ別々のページです。タブバーで切り替えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona、Agents 和消息各是一页，各有自己的侧栏；用标签栏在它们之间切换。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

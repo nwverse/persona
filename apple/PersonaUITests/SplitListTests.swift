@@ -53,12 +53,50 @@ final class SplitListTests: XCTestCase {
         shot(third, "split-shown-again-landscape")
     }
 
+    /// A finger slides the column (#4206, as Feishu's): from the line beside it out of the way, from the screen's edge
+    /// back; a short drag snaps back; where it was left is kept across launches; it comes back at its one width, beside.
+    @MainActor func testDraggingSlidesTheColumnAndIsRemembered() throws {
+        let app = try launch(fresh: true)
+        let width = listWidth(app)
+        let main = element(app, "sidebar-main")
+        // A short drag from the line: back where it was.
+        drag(app, from: width, by: -60)
+        XCTAssertTrue(main.until("exists == true AND isHittable == true"), "a short drag closed the column")
+        // Most of the way: away.
+        drag(app, from: width, by: -(width * 0.8))
+        XCTAssertTrue(main.until("exists == false OR isHittable == false"), "dragged from the line, the column did not go")
+        shot(app, "split-dragged-away-landscape")
+        app.terminate()
+
+        let again = try launch(fresh: false, waitForColumn: false)
+        XCTAssertTrue(showButton(again).waitForExistence(timeout: 10), "no Show Sidebar:\n\(again.debugDescription)")
+        XCTAssertFalse(element(again, "sidebar-main").isHittable, "dragged away is not kept across launches")
+        // From the screen's edge: back.
+        drag(again, from: 2, by: width * 0.8)
+        XCTAssertTrue(element(again, "sidebar-main").until("exists == true AND isHittable == true"), "dragged from the edge, the column did not come")
+        XCTAssertEqual(listWidth(again), width, accuracy: 2, "the column came back at another width")
+        assertBesideThePage(again)
+        shot(again, "split-dragged-back-landscape")
+        again.terminate()
+
+        let third = try launch(fresh: false)
+        XCTAssertTrue(element(third, "sidebar-main").isHittable, "dragged back is not kept across launches")
+    }
+
     // MARK: -
+
+    /// A finger's drag sideways at the middle of the window's height, from `x`.
+    @MainActor private func drag(_ app: XCUIApplication, from x: CGFloat, by dx: CGFloat) {
+        let window = app.windows.firstMatch.frame
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: window.minX + x, dy: window.midY))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: dx, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.05)
+        sleep(1)
+    }
 
     @MainActor private func launch(fresh: Bool, extra: [String] = [], waitForColumn: Bool = true) throws -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "assistant", "-app.tab", "assistant"]
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "assistant", "-app.tab", "assistant", "-sidebar.mode", "merged"]
             + (fresh ? ["-openSplitFresh", "YES"] : []) + extra
         app.launchPinned()
         guard app.windows.firstMatch.waitForExistence(timeout: 10), app.windows.firstMatch.frame.width > 900 else {
