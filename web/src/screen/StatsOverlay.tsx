@@ -7,6 +7,10 @@
 // its first line, then bitrate and frame rate, then the round trip to the hub on a line of its own and named so. That
 // number is the browser's way to the hub, not the picture's latency, so it never sits on the first line the way the
 // iOS app puts the video's end-to-end total there. A number that was not measured is not drawn.
+//
+// Its classes are ones other pages already use: Tailwind writes every class it finds in the source, comments included,
+// into the one stylesheet the first screen sends, so a new one costs every page (startup-preload FIRST_SCREEN_BUDGET:
+// #7368's two new ones, a translucent surface and a minimum width, took the ja first screen 29 B over it).
 import { Fragment, useEffect, useRef, useState } from "react";
 import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
@@ -102,7 +106,7 @@ export function StatsOverlay({ rfb, socket, onClose }: { rfb: object; socket: We
       onPointerUp={end}
       onPointerCancel={end}
       style={{ transform: `translate(${at.x}px, ${at.y}px)` }}
-      className="absolute top-3 right-3 z-10 flex cursor-grab touch-none flex-col gap-1 rounded-card bg-surface/85 px-2.5 py-2 text-label text-ink shadow-overlay backdrop-blur-md select-none tabular-nums active:cursor-grabbing"
+      className="absolute top-3 right-3 z-10 flex cursor-grab touch-none flex-col gap-1 rounded-card bg-surface/90 px-2.5 py-2 text-label text-ink shadow-overlay backdrop-blur-md select-none tabular-nums active:cursor-grabbing"
     >
       <div className="flex items-center gap-1.5 whitespace-nowrap">
         <span className="font-semibold">{t("screen-video.stats_vnc")}</span>
@@ -112,14 +116,14 @@ export function StatsOverlay({ rfb, socket, onClose }: { rfb: object; socket: We
             <span className="text-ink-2">{t("screen-video.stats_via_hub")}</span>
           </>
         )}
-        <span className="min-w-3 flex-1" />
+        <span className="flex-1" />
         <button
           type="button"
           onClick={onClose}
           aria-label={t("screen-video.stats_hide")}
           title={t("screen-video.stats_hide")}
           data-testid="screen-stats-close"
-          className="touch-hit -mr-1 flex size-5 items-center justify-center rounded-chip text-ink-2 hover:bg-hover hover:text-ink"
+          className="touch-hit -mr-1 ml-3 flex size-5 items-center justify-center rounded-chip text-ink-2 hover:bg-hover hover:text-ink"
         >
           <Icon name="x" size={12} />
         </button>
