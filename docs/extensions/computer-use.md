@@ -514,6 +514,8 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   once it took effect, and after `hello`. With a band set, `RateController` keeps the bitrate inside it, a cut goes to
   85% of the rate the last second's reports say arrived (30% down when they say too little), and the first 10 s raise
   25% after each calm second until the first cut; the phone moves to another tier when the band no longer fits.
+  `update.path` (with or without a band) starts the 10 s delay floor, the delivered rate and the calm stretch over
+  (`RateController.pathChanged`): the new route's one-way delay is its own, not a queue.
   `timing` adds `target_kbps` (the bitrate asked of the encoder; `kbps` is what went out), `skipped` (frames left out
   over the 500 ms queue), `blocked_ms` (time frames waited to be written to the stream) and `pending` (the most frames
   the encoder held at once). An app without tiers sends none of the new fields and gets the adaptation above unchanged;

@@ -98,6 +98,8 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
                let kbps = rate.setBand(min: update.minKbps, max: update.maxKbps, target: update.targetKbps) {
                 setBitrate(kbps)
             }
+            // Another route (#6398): its one-way delay is its own, so the queueing delay is measured from it afresh.
+            if update.path != nil { rate.pathChanged() }
             request = r
 
             if update.paused == true {
