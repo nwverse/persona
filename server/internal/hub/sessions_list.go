@@ -50,6 +50,8 @@ const (
 	// background, or the others) and exclude_pane_source=<origin> (all but that origin's rows): the web sidebar's quick
 	// filters on the paged list, docs/protocol/protocol.md "Quick filters" (#6662). An older hub ignores both keys.
 	featureSessionsQuickFilters = "sessions_quick_filters"
+	// featureSessionsTags: a paged GET takes repeated tag=<value> filters (OR) and counts tags. An older hub ignores them.
+	featureSessionsTags = "sessions_tags"
 )
 
 // runtimeList is a transport cache of the manager's already-decorated rows. It
@@ -181,12 +183,13 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
 		Fold: indexedFold(row, root, todo, indexed.Fold), Private: healthSession(row),
 	}
-	// What q finds a row by: the fields the apps' own searches read, the branch too (#4770).
-	text := [...]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}
+	// What q finds a row by: the fields the apps' own searches read, the branch and tags too (#4770, #7527).
+	text := []string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}
+	text = append(text, row.Tags()...)
 	if was, ok := indexed.Full.(json.RawMessage); ok && sameIndexedFull(was, raw, pane) {
 		item.Summary, item.Full = indexed.Summary, indexed.Full
-		if item.SearchText = indexed.SearchText; !joinedBy(item.SearchText, text[:], '\n') {
-			item.SearchText = strings.Join(text[:], "\n")
+		if item.SearchText = indexed.SearchText; !joinedBy(item.SearchText, text, '\n') {
+			item.SearchText = strings.Join(text, "\n")
 		}
 		return item
 	}
@@ -200,7 +203,7 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 	item.Full = runtimeListFields(raw, struct {
 		PaneSource string `json:"pane_source"`
 	}{pane})
-	item.SearchText = strings.Join(text[:], "\n")
+	item.SearchText = strings.Join(text, "\n")
 	return item
 }
 
@@ -209,11 +212,12 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 // new one. Folds are shared between copies of an item and never written in place.
 func indexedFold(row *proto.Session, root, todo string, was *sessionlist.Fold) *sessionlist.Fold {
 	kids := row.Children()
-	fold := sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0}
+	fold := sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0, Tags: sessionlist.CanonicalTags(row.Tags())}
+	plain := fold.Root == "" && fold.Todo == "" && fold.State == row.State && fold.BackgroundWaiting == row.BackgroundWaiting && len(fold.Tags) == 0
 	switch {
-	case fold == sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}:
+	case plain:
 		return nil
-	case was != nil && *was == fold:
+	case was != nil && was.Root == fold.Root && was.State == fold.State && was.Todo == fold.Todo && was.BackgroundWaiting == fold.BackgroundWaiting && slices.Equal(was.Tags, fold.Tags):
 		return was
 	}
 	kept := fold // only a new fold goes to the heap: &fold would put every row's there
@@ -363,7 +367,7 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		TurnErrorResetsAt: s.TurnErrorResetsAt, TurnErrorResumes: s.TurnErrorResumes,
 		PendingInteractions: s.PendingInteractions, Rev: s.Rev, Quiet: s.Quiet,
 		Model: s.Model, Effort: s.Effort, ContextTokens: s.ContextTokens, ContextWindow: s.ContextWindow,
-		Hierarchy: s.Hierarchy, // folded_under, children, started_at: the child cards and the parent's state (#5120)
+		Hierarchy: s.Hierarchy, // folded_under, children, started_at, display_name, tags (#5120, #7527)
 	}
 	if s.Work != nil {
 		out.Work = &proto.WorkState{Phase: s.Work.Phase, On: s.Work.On, Line: rowText(s.Work.Line, 180),
@@ -590,7 +594,7 @@ func (h *Hub) extensionMachines(r *http.Request) (own []string, limited bool) {
 
 // ownCounts are the counts of opts over the machines own only (each machine's, added up).
 func ownCounts(index *sessionlist.Index, opts sessionlist.Options, own []string) (sessionlist.Counts, error) {
-	out := sessionlist.Counts{Machine: map[string]int{}, Project: map[string]int{}, Group: map[string]int{}, State: map[string]int{}}
+	out := sessionlist.Counts{Machine: map[string]int{}, Project: map[string]int{}, Group: map[string]int{}, State: map[string]int{}, Tags: map[string]int{}}
 	for _, mid := range own {
 		o := opts
 		o.Machine, o.Cursor = mid, "" // current membership (a cursor's frozen view is of every machine)
@@ -600,7 +604,7 @@ func ownCounts(index *sessionlist.Index, opts sessionlist.Options, own []string)
 		}
 		out.Total += c.Total
 		out.Revision = c.Revision
-		for dst, src := range map[*map[string]int]map[string]int{&out.Machine: c.Machine, &out.Project: c.Project, &out.Group: c.Group, &out.State: c.State} {
+		for dst, src := range map[*map[string]int]map[string]int{&out.Machine: c.Machine, &out.Project: c.Project, &out.Group: c.Group, &out.State: c.State, &out.Tags: c.Tags} {
 			for k, n := range src {
 				(*dst)[k] += n
 			}
@@ -624,7 +628,7 @@ func ownPage(index *sessionlist.Index, opts sessionlist.Options, own []string, p
 		return json.Unmarshal([]byte(id), &k) != nil || !keep(k[0])
 	})
 	counts, err := ownCounts(index, sessionlist.Options{Since: opts.Since, State: opts.State, Project: opts.Project, Group: opts.Group,
-		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, Places: opts.Places, Spaces: opts.Spaces}, own)
+		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, Places: opts.Places, Spaces: opts.Spaces, Tags: opts.Tags}, own)
 	if err != nil {
 		return sessionlist.Page{}, err
 	}

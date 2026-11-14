@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -15,7 +17,7 @@ import (
 // machine_id filtering. Presence matters: malformed new parameters must be
 // parsed and rejected rather than silently falling back to the legacy API.
 func Enabled(v url.Values) bool {
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog", "todo", "waiting", "exclude_pane_source"} {
+	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog", "todo", "tag", "waiting", "exclude_pane_source"} {
 		if _, exists := v[key]; exists {
 			return true
 		}
@@ -88,6 +90,12 @@ func Parse(v url.Values) (Options, error) {
 			return Options{}, failure("invalid_query", "todo must not be empty")
 		}
 		o.Todo = values[0]
+	}
+	if values, exists := v["tag"]; exists {
+		if len(values) == 0 || len(values) > maxTags {
+			return Options{}, failure("invalid_query", "tag takes between 1 and 16 values")
+		}
+		o.Tags = append([]string(nil), values...)
 	}
 	if values, exists := v["waiting"]; exists {
 		b, err := boolean(values[0])
@@ -166,6 +174,11 @@ func positiveInteger(s string) (int, error) {
 	return int(n), nil
 }
 
+const (
+	maxTags          = 16
+	maxTagCharacters = 64
+)
+
 func validate(o Options) (Options, error) {
 	if o.ID != "" && (o.Cursor != "" || o.Since != "") {
 		return Options{}, failure("invalid_query", "exact identity cannot be combined with cursor or since")
@@ -189,6 +202,27 @@ func validate(o Options) (Options, error) {
 	if err := validPlaces("space", o.Spaces); err != nil {
 		return Options{}, err
 	}
+	if len(o.Tags) > maxTags {
+		return Options{}, failure("invalid_query", "tag takes between 1 and 16 values")
+	}
+	for _, tag := range o.Tags {
+		trimmed := strings.TrimSpace(tag)
+		if trimmed == "" {
+			return Options{}, failure("invalid_query", "tag must not be empty")
+		}
+		if !utf8.ValidString(tag) {
+			return Options{}, failure("invalid_query", "tag must be valid UTF-8")
+		}
+		for _, r := range tag {
+			if unicode.IsControl(r) {
+				return Options{}, failure("invalid_query", "tag must not contain control characters")
+			}
+		}
+		if utf8.RuneCountInString(trimmed) > maxTagCharacters {
+			return Options{}, failure("invalid_query", "tag must contain at most 64 Unicode characters")
+		}
+	}
+	o.Tags = CanonicalTags(o.Tags)
 	for _, origin := range []string{o.PaneSource, o.ExcludePaneSource} {
 		switch origin {
 		case "", "terminal", "feishu", "desktop", "unknown":
@@ -227,7 +261,28 @@ func normalizeQ(s string) string { return strings.ToLower(s) }
 
 func (o Options) filters() filters {
 	return filters{ID: o.ID, State: o.State, Machine: o.Machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
-		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces), Todo: o.Todo, Waiting: o.Waiting, ExcludePaneSource: o.ExcludePaneSource}
+		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces), Todo: o.Todo, Tags: tagsKey(o.Tags), Waiting: o.Waiting, ExcludePaneSource: o.ExcludePaneSource}
+}
+
+// tagsKey spells a canonical tag set as one comparable, order-independent string. Length prefixes keep every valid
+// label unambiguous; lowercasing makes cursor and cache bindings case-insensitive.
+func tagsKey(tags []string) string {
+	canonical := CanonicalTags(tags)
+	if len(canonical) == 0 {
+		return ""
+	}
+	folded := make([]string, len(canonical))
+	for n, tag := range canonical {
+		folded[n] = strings.ToLower(tag)
+	}
+	slices.Sort(folded)
+	var b strings.Builder
+	for _, tag := range folded {
+		b.WriteString(strconv.Itoa(len(tag)))
+		b.WriteByte(':')
+		b.WriteString(tag)
+	}
+	return b.String()
 }
 
 func (o Options) binding() binding {

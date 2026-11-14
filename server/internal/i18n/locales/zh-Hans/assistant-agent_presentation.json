@@ -1,0 +1,9 @@
+{
+  "forbidden": "此设备无权修改 Agent 的显示名或标签",
+  "invalid_name": "显示名只能是单行，且最多 120 个字符",
+  "invalid_tags": "每个标签只能是非空单行，且最多 32 个字符",
+  "too_many_tags": "每个 Agent 最多可有 12 个标签",
+  "empty_update": "请提供要更新的显示名或标签",
+  "unavailable": "无法读取 Agent 的显示设置，请重试",
+  "storage": "无法保存 Agent 的显示设置，请重试"
+}

@@ -267,6 +267,7 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
+	s.agentPresentationRoutes()
 	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
 	s.standingAuthorizationRoutes()

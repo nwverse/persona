@@ -7,6 +7,17 @@ Go marshals a nil slice as `null`, so lifting the last blocked pattern stored no
 the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
 empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
 
+## Archive-only metadata must not allocate a second live-list index (#7527)
+
+- Applying current presentation metadata to archive-only rows first built a `map[sessionID]bool` of every live row to
+find them. That repeated the whole list's memory on every publication and failed the 8,000-session allocation budget.
+`overlayAgentArchives` already appends archive-only rows after the live rows in stable order: decorate that suffix only.
+Measure again with `TestFleetSnapshotAllocations` and `TestSessionReadersCopyNoList`, not just `Session`'s size test.
+- A sparse wire member needs all three paths: the hand-written encoder, the reflect encoder and the decoder. A nested
+`SessionPresentation` keeps ordinary rows cheap, but `json:"-"` on its hierarchy pointer also hides it from reflection;
+`sessionWire` / `sessionWireIn` must embed that pointer too and put it back into the hierarchy after decoding. Check
+`TestSessionWireMatchesReflect`, not only the JSON produced by the fast path.
+
 ## An update waits only for what its restart interrupts (2026-11-13, #6364)
 
 A node update counted every session on the computer as busy: working, background tasks, running subagents, questions on the phone. On a computer whose terminal Agents always run a background workflow it never went through, and the queued update survived hub restarts. The resident node restarts by exec in place and stops only its own headless conversations (`ResidentReload.Prepare`); terminal Agents are other processes and keep running. Before adding a wait in front of a restart, list what that restart actually stops and wait for that, as the hub self-update's `updateBusy` does. When the rule lives on both sides of a connection, gate the new rule on a capability: the hub's lighter wait in front of an old node's strict commit check would re-send the whole build on every refusal. And let the side that enforces the rule report its verdict rather than have the other side rebuild it from rows: the hub first rebuilt the node's check from `sessions.list` rows, but a node never marks its headless rows `Assistant` (the hub's assistant manager adds that later), so the hub saw a busy main chat as idle and re-sent the build until it settled. The node now answers `update_busy`.

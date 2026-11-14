@@ -24,12 +24,23 @@ const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provi
 /** The filters that take several values, each a machine and value pair spelled as a JSON array (`sessions_catalog`,
  * docs/protocol/protocol.md "Projects and spaces"): the rows at any of the places, in any of the spaces. */
 const PAIR_KEYS = ["place", "space"] as const;
+/** Presentation tags (`sessions_tags`): repeatable, OR within the facet, AND with the other filters. */
+const TAG_KEYS = ["tag"] as const;
 
-export type ListFilters = Partial<Record<typeof FILTER_KEYS[number], string>> & Partial<Record<typeof PAIR_KEYS[number], readonly string[]>>;
+export type ListFilters = Partial<Record<typeof FILTER_KEYS[number], string>> & Partial<Record<typeof PAIR_KEYS[number], readonly string[]>> & Partial<Record<typeof TAG_KEYS[number], readonly string[]>>;
 /** A machine and value pair as `place` and `space` take it. */
 export const listPair = (machineId: string, value: string) => JSON.stringify([machineId, value]);
 /** How many pairs one of those filters takes; the hub refuses more. */
 export const LIST_PAIRS_MAX = 64;
+/** Stable, case-insensitive tag identity shared by menu selections and cursor-bound queries. */
+export function normalizeTagFilter(values: readonly string[] | undefined): string[] {
+  const tags = new Map<string, string>();
+  for (const raw of values ?? []) {
+    const tag = raw.trim().toLowerCase();
+    if (tag) tags.set(tag, tag);
+  }
+  return [...tags.values()].sort(compareListIds);
+}
 
 /** A read's query for `filters` in a stable order, so the same scope reached through different filters compares
  * equal: `extra` first (`counts=1`), then each filter by key, a pair filter's values sorted. */
@@ -37,6 +48,7 @@ export function filterQuery(filters: ListFilters, extra: Record<string, string> 
   const params = new URLSearchParams(extra);
   for (const [key, value] of Object.entries(filters).sort(([a], [b]) => a.localeCompare(b))) {
     if (typeof value === "string") { if (value) params.set(key, value); }
+    else if ((TAG_KEYS as readonly string[]).includes(key)) for (const tag of normalizeTagFilter(value)) params.append(key, tag);
     else for (const pair of [...new Set(value ?? [])].sort(compareListIds)) params.append(key, pair);
   }
   return params.toString();
@@ -51,6 +63,8 @@ export interface ListCounts {
   todo?: Record<string, number>;
   /** By where the session was opened (`sessions_pane_source`): terminal, feishu, desktop, unknown. */
   pane_source?: Record<string, number>;
+  /** By presentation tag (`sessions_tags`); absent from an older hub. */
+  tags?: Record<string, number>;
   /** How many of `state.working` only wait in the background (#6045); absent when none. */
   background_waiting?: number;
   revision: string;
@@ -100,6 +114,16 @@ class Rebaseline extends Error {}
  * Rejected reads also set `error`; invalidation is fire-and-forget and records errors without rejecting globally.
  */
 export class SessionList<T> {
+  private static instances = new Set<WeakRef<SessionList<any>>>();
+  /** Apply a confirmed presentation edit to every bounded view of the same collection, including open group sections. */
+  static present<T>(path: string, row: T, matches: (filters: ListFilters, row: T) => boolean): void {
+    for (const ref of SessionList.instances) {
+      const list = ref.deref();
+      if (!list) { SessionList.instances.delete(ref); continue; }
+      if (list.path.split("?", 1)[0] === path) list.presentLocal(row, matches(list.filters, row));
+    }
+  }
+
   private snapshot: ListSnapshot<T> = this.empty();
   private listeners = new Set<() => void>();
   private filters: ListFilters = {};
@@ -134,6 +158,7 @@ export class SessionList<T> {
     this.onDelta = options.onDelta;
     this.pageCounts = options.pageCounts ?? (() => false);
     this.counted = options.counts ?? true;
+    SessionList.instances.add(new WeakRef(this));
   }
 
   isSummary(): boolean { return this.summary; }
@@ -167,6 +192,10 @@ export class SessionList<T> {
     for (const key of FILTER_KEYS) if (filters[key]) next[key] = filters[key];
     // the same pairs in another order are the same filter: the hub binds a cursor to them as a set
     for (const key of PAIR_KEYS) if (filters[key]?.length) next[key] = [...new Set(filters[key])].sort(compareListIds);
+    for (const key of TAG_KEYS) {
+      const tags = normalizeTagFilter(filters[key]);
+      if (tags.length) next[key] = tags;
+    }
     if (!sameValue(next, this.filters)) {
       this.filters = next;
       this.reset();
@@ -201,6 +230,15 @@ export class SessionList<T> {
       this.work.load = true;
       void this.enqueue("load").catch(() => {});
     });
+  }
+
+  private presentLocal(row: T, include: boolean): void {
+    const id = this.identity(row);
+    const had = this.candidates().has(id);
+    this.overlay.set(id, include ? row : null);
+    const total = Math.max(0, this.snapshot.total + (include === had ? 0 : include ? 1 : -1));
+    this.publish({ rows: this.visible(), total });
+    if (this.snapshot.loaded) this.invalidate();
   }
 
   reset(): void {
@@ -271,9 +309,10 @@ export class SessionList<T> {
   private query(extra: Record<string, string>): string {
     const [path, existing = ""] = this.path.split("?");
     const params = new URLSearchParams(existing);
-    for (const key of [...FILTER_KEYS, ...PAIR_KEYS, "summary", "limit", "counts", "with_counts", "cursor", "since", "roots"]) params.delete(key);
+    for (const key of [...FILTER_KEYS, ...PAIR_KEYS, ...TAG_KEYS, "summary", "limit", "counts", "with_counts", "cursor", "since", "roots"]) params.delete(key);
     for (const key of FILTER_KEYS) if (this.filters[key]) params.set(key, this.filters[key]!);
     for (const key of PAIR_KEYS) for (const pair of this.filters[key] ?? []) params.append(key, pair);
+    for (const key of TAG_KEYS) for (const tag of this.filters[key] ?? []) params.append(key, tag);
     if (this.roots) params.set("roots", "1");
     for (const [key, value] of Object.entries(extra)) params.set(key, value);
     return `${path}?${params}`;

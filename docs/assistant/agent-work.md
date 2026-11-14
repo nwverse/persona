@@ -103,6 +103,23 @@ Only web settings controls are added here. iOS and Android can read effective fi
 `X-Persona-Manager` header. They must check all three fields are present before showing controls,
 and verify the returned manager and effective values before showing a save as confirmed.
 
+## Presentation names and tags (#7527)
+
+The same manager-owned `agent.naming.v1` ledger also holds independent `display_name`, `display_fallback` and `tags`
+fields. They do not alter the automatic/native `title`, `raw_title`, `manual`, counters or failure history. A custom
+name takes precedence over the effective title on every session row, so older clients display it too, while the
+additive `display_name` field lets an editor distinguish the override from its default. Clearing it reveals the
+current automatic/native title; an archived row uses the fallback captured when the override was first set.
+
+`PUT /api/v1/sessions/{mid}/{sid}/presentation` accepts sparse updates (`display_name`, `tags`) from a full-user
+device. It never calls `DeviceSessionRename`, changes a tab or writes a transcript. The manager validates and saves
+before publishing, and answers with the decorated session. The hub routes by the session's owner and advertises
+`agent_presentation.v1` only when every manager supports it. Tags are optional additive wire metadata; older clients
+ignore them. Runtime paged lists accept repeated `tag` filters under `sessions_tags` (OR within tags, AND with the
+other filters), with counts, cursors and delta membership handled by the shared session index. Web/Electron provides
+the editor and tag filter; native iOS/Android editor and filter projections are deferred to #7615 as recorded in
+`docs/plans/android-ios-alignment/agents-page.md`.
+
 ## Model
 
 In work terms, each session is in exactly one of three states (`proto.Session.work.phase`):

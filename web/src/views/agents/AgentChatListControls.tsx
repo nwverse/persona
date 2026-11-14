@@ -33,10 +33,11 @@ import { cx, Menu, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
 import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
+import { SessionTags } from "../../ui/SessionTags";
 import { UltraMark } from "../chat/Ultracode";
 import { CURRENT_ROW, type GoFn, type RegFn, type RowMenuFn } from "../SidebarParts";
 
-type FilterPage = "root" | "scope" | "harnesses" | "projects" | "models" | "machines";
+type FilterPage = "root" | "scope" | "harnesses" | "projects" | "models" | "machines" | "tags";
 type FacetKey = Exclude<FilterPage, "root" | "scope">;
 
 const FACET_PAGES: { key: FacetKey; labelKey: string }[] = [
@@ -44,12 +45,13 @@ const FACET_PAGES: { key: FacetKey; labelKey: string }[] = [
   { key: "projects", labelKey: "lib-agent-filter.filter_project" },
   { key: "models", labelKey: "lib-agent-filter.filter_model" },
   { key: "machines", labelKey: "lib-agent-filter.filter_machine" },
+  { key: "tags", labelKey: "lib-agent-filter.filter_tags" },
 ];
 
 /** How many filters are on (the Filter button's count): the query ⌘K put on the list is one, Search as Code is a mode. */
 export function activeFilterCount(f: AgentDimensionFilters): number {
   return (
-    (f.query.trim() ? 1 : 0) + f.harnesses.length + f.projects.length + f.models.length + f.machines.length + (f.pinnedOnly ? 1 : 0) + (f.scope !== "all" ? 1 : 0) + (f.since ? 1 : 0)
+    (f.query.trim() ? 1 : 0) + f.harnesses.length + f.projects.length + f.models.length + f.machines.length + (f.tags?.length ?? 0) + (f.pinnedOnly ? 1 : 0) + (f.scope !== "all" ? 1 : 0) + (f.since ? 1 : 0)
   );
 }
 
@@ -95,8 +97,8 @@ export function AgentFilterButton({
       ];
     }
     if (page !== "root") {
-      const options = facets[page];
-      const selected = filters[page];
+      const options = facets[page] ?? [];
+      const selected = filters[page] ?? [];
       const allIds = options.map((o) => o.id);
       const set = (next: string[]) => onChange({ ...filters, [page]: next });
       return [
@@ -108,15 +110,15 @@ export function AgentFilterButton({
           hint: String(o.count),
           checked: selected.includes(o.id),
           keepOpen: true,
-          onSelect: () => set(toggleFacetValue(selected, o.id, allIds)),
+          onSelect: () => set(toggleFacetValue(selected, o.id, page === "tags" ? undefined : allIds)),
         })),
       ];
     }
-    const facetRows = FACET_PAGES.filter((f) => facets[f.key].length > 1 || filters[f.key].length > 0).map(
+    const facetRows = FACET_PAGES.filter((f) => (f.key === "tags" ? (facets.tags?.length ?? 0) > 0 : (facets[f.key]?.length ?? 0) > 1) || (filters[f.key]?.length ?? 0) > 0).map(
       (f, i): MenuItem => ({
         key: f.key,
         label: t(f.labelKey),
-        hint: filters[f.key].length > 0 ? String(filters[f.key].length) : t("lib-agent-filter.all"),
+        hint: (filters[f.key]?.length ?? 0) > 0 ? String(filters[f.key]!.length) : t("lib-agent-filter.all"),
         divider: i === 0,
         submenu: true,
         onSelect: () => setPage(f.key),
@@ -176,6 +178,43 @@ export function AgentFilterButton({
   );
 }
 
+/** Multi-select tag filtering beside the quick chips. OR within tags; the other filters still apply. */
+export function AgentTagFilterButton({ filters, onChange, facets }: { filters: AgentDimensionFilters; onChange: (next: AgentDimensionFilters) => void; facets: AgentFacetCounts }) {
+  const menu = useMenu();
+  const options = facets.tags ?? [];
+  const selected = filters.tags ?? [];
+  if (options.length === 0 && selected.length === 0) return null;
+  const items: MenuItem[] = [
+    { key: "__all__", label: t("lib-agent-filter.all"), checked: selected.length === 0, onSelect: () => onChange({ ...filters, tags: [] }) },
+    ...options.map((option) => ({
+      key: option.id,
+      label: option.label,
+      hint: String(option.count),
+      checked: selected.includes(option.id),
+      keepOpen: true,
+      onSelect: () => onChange({ ...filters, tags: toggleFacetValue(selected, option.id) }),
+    })),
+  ];
+  const label = selected.length ? `${t("lib-agent-filter.filter_tags")} (${selected.length})` : t("lib-agent-filter.filter_tags");
+  return <>
+    <button
+      type="button"
+      data-testid="agent-tag-filter-button"
+      aria-label={label}
+      title={label}
+      aria-haspopup="menu"
+      aria-expanded={Boolean(menu.anchor)}
+      onClick={menu.open}
+      className={cx("touch-hit relative z-10 flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-[7px] text-xs transition-[background-color,color,box-shadow] duration-150", selected.length ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-2 hover:bg-hover hover:text-ink")}
+    >
+      <Icon name="tag" size={11} stroke={2} />
+      <span>{t("lib-agent-filter.filter_tags")}</span>
+      {selected.length > 0 && <span className="tabular-nums">{selected.length}</span>}
+    </button>
+    {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" width={220} header={t("lib-agent-filter.filter_tags")} items={items} />}
+  </>;
+}
+
 // What filters the list, above it and only while something does (#4397): each filter a chip with ×, the query ⌘K put on
 // the list among them (its text opens ⌘K with it, to change it), then Reset; and with Search as Code on, its plan bar.
 export function AgentFilterChips({
@@ -210,12 +249,12 @@ export function AgentFilterChips({
     chips.push({ key: "pinned", label: t("lib-agent-filter.filter_pinned"), onRemove: () => onChange({ ...filters, pinnedOnly: false }) });
   }
   for (const f of FACET_PAGES) {
-    for (const id of filters[f.key]) {
-      const label = facets[f.key].find((x) => x.id === id)?.label ?? id;
+    for (const id of filters[f.key] ?? []) {
+      const label = facets[f.key]?.find((x) => x.id === id)?.label ?? id;
       chips.push({
         key: `${f.key}:${id}`,
         label: `${t(f.labelKey)}: ${label}`,
-        onRemove: () => onChange({ ...filters, [f.key]: filters[f.key].filter((x) => x !== id) }),
+        onRemove: () => onChange({ ...filters, [f.key]: (filters[f.key] ?? []).filter((x) => x !== id) }),
       });
     }
   }
@@ -494,6 +533,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
               </span>
             )}
           </span>
+          <SessionTags tags={s.tags} className="mt-0.5" />
         </span>
       </a>
 

@@ -51,7 +51,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_tags", "agent_presentation.v1"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
@@ -3049,6 +3049,19 @@ def decorated_session(s):
         s_copy["todo"] = todo
     else:
         s_copy.pop("todo", None)
+    presentation = PRESENTATION.get(LIST_TUPLE(s_copy), {})
+    name = presentation.get("display_name", "")
+    if name:
+        s_copy["title"] = name
+        s_copy["display_name"] = name
+    else:
+        s_copy.pop("display_name", None)
+        if "default_title" in presentation:
+            s_copy["title"] = presentation["default_title"]
+    if presentation.get("tags"):
+        s_copy["tags"] = list(presentation["tags"])
+    else:
+        s_copy.pop("tags", None)
     return s_copy
 
 
@@ -17346,6 +17359,8 @@ def folded_state(s):
 LIST_JOURNAL = {}  # revision -> {identity: row} of the unfiltered list as it was (a bounded delta journal, #3759)
 LIST_JOURNAL_SIZE = 128  # the hub keeps at most 128 revisions too (docs/protocol/protocol.md "Incremental recovery")
 LIST_TUPLE = lambda s: json.dumps([s["machine_id"], s["session_id"]], separators=(",", ":"))
+# Presentation-only Agent names and tags (#7527), keyed by the same machine/session tuple as the list journal.
+PRESENTATION = {}
 
 
 def folder_name(path):
@@ -17518,6 +17533,9 @@ def paged_sessions(query):
     # exclude_pane_source=<origin>
     waiting = query.get("waiting", [""])[0]
     origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
+    selected_tags = [value.strip().lower() for value in query.get("tag", [])]
+    if len(selected_tags) > 16 or any(not value for value in selected_tags):
+        return {"error": "tag takes between 1 and 16 nonempty values", "code": "invalid_query"}, 400
 
     def matching(rows):
         rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
@@ -17530,7 +17548,8 @@ def paged_sessions(query):
                 and (not todo or (s.get("todo") or {}).get("id", "") == ("" if todo == "none" else todo))
                 and (not waiting or bool(s.get("background_waiting")) == (waiting in ("1", "true")))
                 and (not origin or pane_origin(s) == origin) and (not not_origin or pane_origin(s) != not_origin)
-                and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
+                and (not selected_tags or any(tag.lower() in selected_tags for tag in s.get("tags", [])))
+                and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text", "tags")).lower())]
         rows.sort(key=LIST_TUPLE)
         rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
         return rows
@@ -17538,7 +17557,7 @@ def paged_sessions(query):
     if CATALOG and query.get("catalog", [""])[0] in ("1", "true"):
         return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
-        counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}, "todo": {}, "pane_source": {}}
+        counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}, "todo": {}, "pane_source": {}, "tags": {}}
         waits = sum(1 for s in rows if s.get("background_waiting") and state_of(s) == "working")
         if waits:
             counts["background_waiting"] = waits
@@ -17548,6 +17567,8 @@ def paged_sessions(query):
                       "pane_source": pane_origin(s)}
             for key, value in values.items():
                 counts[key][value] = counts[key].get(value, 0) + 1
+            for tag in set(s.get("tags", [])):
+                counts["tags"][tag] = counts["tags"].get(tag, 0) + 1
         return counts, 200
     since = query.get("since", [None])[0]
     removed = []
@@ -26484,6 +26505,37 @@ class H(BaseHTTPRequestHandler):
                     except Exception: pass
             push_machine(mid)
             return self.send_json({"ok": True})
+        if p.startswith("/api/v1/sessions/") and p.endswith("/presentation") and self.command == "PUT":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改 Agent 的显示名和标签", "code": "forbidden"}, 403)
+            mid, sid = p.split("/")[4:6]
+            s = next((s for s in SESSIONS if s["machine_id"] == mid and s["session_id"] == sid), None)
+            if s is None: return self.send_json({"error": "没有这个 Agent"}, 404)
+            body = json.loads(self.last_body or b"{}")
+            if "display_name" not in body and "tags" not in body:
+                return self.send_json({"error": "Provide a display name or tags", "code": "invalid_query"}, 400)
+            key = LIST_TUPLE(s)
+            current = dict(PRESENTATION.get(key, {}))
+            if "display_name" in body:
+                name = str(body.get("display_name") or "").strip()
+                if len(name) > 120 or "\n" in name or "\r" in name:
+                    return self.send_json({"error": "Use a single-line display name of at most 120 characters", "code": "invalid_query"}, 400)
+                if name and "default_title" not in current:
+                    current["default_title"] = s["title"]
+                current["display_name"] = name
+            if "tags" in body:
+                tags, seen = [], set()
+                for raw in body.get("tags") or []:
+                    tag = str(raw).strip()
+                    if not tag or len(tag) > 32 or "\n" in tag or "\r" in tag:
+                        return self.send_json({"error": "Each tag must be a single nonempty line of at most 32 characters", "code": "invalid_query"}, 400)
+                    if tag.lower() not in seen:
+                        seen.add(tag.lower()); tags.append(tag)
+                if len(tags) > 12:
+                    return self.send_json({"error": "An agent can have at most 12 tags", "code": "invalid_query"}, 400)
+                current["tags"] = tags
+            PRESENTATION[key] = current
+            push_machine(mid)
+            return self.send_json({"ok": True, "session": with_fold(decorated_session(s))})
         if p.startswith("/api/v1/sessions/") and p.endswith("/rename"):  # the hub keeps an assistant conversation's title
             body = json.loads(self.last_body or b"{}")
             sid = p.split("/")[5]

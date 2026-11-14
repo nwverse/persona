@@ -16,6 +16,7 @@
   "filter_project": "项目",
   "filter_model": "模型",
   "filter_machine": "机器",
+  "filter_tags": "标签",
   "filter_pinned": "已置顶",
   "reset_filters": "重置",
   "chat_list_view": "对话列表",

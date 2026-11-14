@@ -45,6 +45,11 @@ type agentNameRecord struct {
 	// Requested: the user asked for this automatic name (agent_naming_request.go). It also covers a custom title
 	// and a title of unknown provenance, until the native title changes or the user names the session by hand.
 	Requested bool `json:"requested,omitempty"`
+	// DisplayName is a presentation-only override; DisplayFallback is the effective title it hid, retained so an
+	// archived row can restore it after the override is cleared. Neither changes native/automatic naming state.
+	DisplayName     string   `json:"display_name,omitempty"`
+	DisplayFallback string   `json:"display_fallback,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
 }
 
 type agentNamingBook struct {
@@ -513,50 +518,80 @@ func (s *Service) agentNameDialogue(ctx context.Context, machine, id string) (st
 	return first, strings.Join(lines, "\n"), nil
 }
 
-func (s *Service) agentDisplayName(machine string, c proto.Session) string {
-	title, _ := s.agentDisplay(machine, c)
-	return title
+type agentPresentation struct {
+	title, displayName, fallback string
+	tags                         []string
+	requested                    bool
 }
 
-// agentDisplay is the manager's name for the row ("" for none) and whether the user asked for it as an automatic
-// name: that one stands over a custom title too, so the row's provenance is then the manager's to state.
-func (s *Service) agentDisplay(machine string, c proto.Session) (title string, requested bool) {
+func (s *Service) agentPresentation(machine string, c proto.Session) agentPresentation {
 	if c.Assistant {
-		return "", false
+		return agentPresentation{}
 	}
 	b := &s.agentNames
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.agentNamesLocked(context.Background()) {
-		return "", false
+		return agentPresentation{}
 	}
 	r := b.display[[2]string{machine, c.SessionID}]
+	out := agentPresentation{displayName: r.DisplayName, fallback: r.DisplayFallback, tags: append([]string(nil), r.Tags...)}
+	if r.DisplayName != "" {
+		out.title = r.DisplayName
+		return out
+	}
 	if r.Requested && !r.Manual {
 		if !sameAgentNamingTitle(r.RawTitle, c) {
-			return "", false // the native title changed since: it wins
+			return out // the native title changed since: it wins
 		}
-		return r.Title, r.Title != ""
+		out.title, out.requested = r.Title, r.Title != ""
+		return out
 	}
 	if c.TitleManual || c.TitleSource.String() == "manual" {
-		return "", false
+		return out
 	}
 	if !r.Manual && (!knownAgentTitle(c) || !sameAgentNamingTitle(r.RawTitle, c)) {
-		return "", false
+		return out
 	}
-	return r.Title, false
+	out.title = r.Title
+	return out
 }
 
-// nameAgentRow puts the manager's name on a row the apps get. A name the user asked for is an automatic one whatever
-// the native title's provenance was.
+func (s *Service) agentDisplayName(machine string, c proto.Session) string {
+	return s.agentPresentation(machine, c).title
+}
+
+// agentDisplay is the manager's name for the row ("" for none) and whether the user asked for it as an automatic
+// name: that one stands over a custom title too, so the row's provenance is then the manager's to state.
+func (s *Service) agentDisplay(machine string, c proto.Session) (title string, requested bool) {
+	p := s.agentPresentation(machine, c)
+	return p.title, p.requested
+}
+
+// applyAgentPresentation puts the manager's name and display metadata on a row the apps get. A name the user asked
+// for is an automatic one whatever the native title's provenance was. Archived-only rows also restore the title a
+// cleared override hid; live rows already have their current automatic/native title from the node.
+func (s *Service) applyAgentPresentation(machine string, c *proto.Session, archived bool) {
+	p := s.agentPresentation(machine, *c)
+	if p.title != "" {
+		c.Title = p.title
+		if p.requested {
+			c.TitleSource, c.TitleManual = proto.TitleSourceAuto, false
+		}
+	} else if archived && p.displayName == "" && p.fallback != "" {
+		c.Title = p.fallback
+	}
+	c.SetPresentation(p.displayName, p.tags)
+}
+
+// nameAgentRow puts the manager's name on a row the apps get.
 func (s *Service) nameAgentRow(machine string, c *proto.Session) {
-	title, requested := s.agentDisplay(machine, *c)
-	if title == "" {
-		return
-	}
-	c.Title = title
-	if requested {
-		c.TitleSource, c.TitleManual = proto.TitleSourceAuto, false
-	}
+	s.applyAgentPresentation(machine, c, false)
+}
+
+// decorateAgentPresentation applies the current display-only record.
+func (s *Service) decorateAgentPresentation(machine string, c *proto.Session, archived bool) {
+	s.applyAgentPresentation(machine, c, archived)
 }
 
 // Manual intent is recorded before contacting the node. A refused/uncertain rename

@@ -16,6 +16,7 @@ import { answeredSession, answerPending, lastAnsweredAt } from "./assistant/answ
 import type { AgentState, Session } from "../lib/types";
 import { cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
+import { SessionTags } from "../ui/SessionTags";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
 import { ultracodeMarkShown } from "../lib/ultracode";
 import { Rolling } from "../ui/Rolling";
@@ -292,6 +293,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // runtime's name at the end only repeats them (it stays in the tooltip); a read-only one still says why
   const sameAsMarks = source === "desktop" && s.source_kind === "runtime" && sessionCan(s, "send");
   const tail = [sameAsMarks ? "" : sourceSubtitle(s), hint ?? (tab ? tabLabel(s) : "")].filter(Boolean).join(" · ");
+  const tags = s.tags ?? [];
   const preview = sessionPreview(s);
   // Settings › Appearance › show details on agent rows (#2430): a second line under an agent's title — folder · model · context · age
   const details = useAgentDetails();
@@ -347,7 +349,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       onBlur={() => hover(null)}
       aria-current={active ? "page" : undefined}
       // its mark's name is in the row's tooltip too: the mark steps aside while the row is hovered
-      title={`${sessionTitle(s)}${source ? `\n${sourceName(source)}` : ""}${origin ? `\n${originMarkLabel(origin)}` : ""}${sourceSubtitle(s) ? `\n${sourceSubtitle(s)}` : ""}${hint ? `\n${hint}` : ""}${s.todo ? `\n${t("sidebar.todo_tag", { title: s.todo.title })}` : ""}${preview ? `\n${preview}` : ""}`}
+      title={`${sessionTitle(s)}${source ? `\n${sourceName(source)}` : ""}${origin ? `\n${originMarkLabel(origin)}` : ""}${sourceSubtitle(s) ? `\n${sourceSubtitle(s)}` : ""}${hint ? `\n${hint}` : ""}${s.todo ? `\n${t("sidebar.todo_tag", { title: s.todo.title })}` : ""}${tags.length ? `\n${tags.join(" · ")}` : ""}${preview ? `\n${preview}` : ""}`}
       // a touch screen: rows a finger can hit (44), and room at the end for the ⋯ that is always there; the open row
       // keeps its ⋯ too, so it has room for it
       className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW, // room for "N agents" and the ⋯ beside it (instead of the ⋯'s own)
@@ -362,7 +364,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
-      {ultra || detail.length > 0 || workflow || line || childLine || plan ? (
+      {ultra || detail.length > 0 || workflow || line || childLine || plan || tags.length > 0 ? (
         <span className={cx("flex min-w-0 flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
@@ -377,6 +379,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
             </span>
           )}
           {line && <SecondLine line={line} draft={!!draft} />}
+          <SessionTags tags={tags} />
           {childLine && (
             <span data-children-line title={childLine} className="flex h-4 min-w-0 items-center gap-1 text-[11px] leading-4 text-ink-3">
               <Icon name="agent" size={10} stroke={2.2} className="shrink-0" />

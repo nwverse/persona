@@ -16,6 +16,7 @@
   "filter_project": "プロジェクト",
   "filter_model": "モデル",
   "filter_machine": "マシン",
+  "filter_tags": "タグ",
   "filter_pinned": "ピン留め",
   "reset_filters": "リセット",
   "chat_list_view": "チャット一覧",

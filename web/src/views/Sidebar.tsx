@@ -1,14 +1,14 @@
 import { storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, lazy, Suspense, type ReactNode } from "react";
 import { t } from "../i18n";
 import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, BOTMUX_HIDDEN_KEY, botmuxAndFilter, filterCounts, isBotmux, isSpaceMuted, matchingKeys, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
-import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, NO_FACETS, type AgentDimensionFilters } from "../lib/agent-chatlist-filter";
+import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, NO_FACETS, tagFacetsFromCounts, type AgentDimensionFilters } from "../lib/agent-chatlist-filter";
 import { getAgentListFilters, setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
 import { AGENT_SORT_KEY, AGENT_SORTS, agentSort, byUpdated, machineTreeByUpdate, projectsByUpdate, repoMachinesByUpdate, todoTreeByUpdate, type AgentSort } from "../lib/agent-sort";
-import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
+import { AgentChatListRow, AgentFilterButton, AgentFilterChips, AgentTagFilterButton } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { buildRepoMachineTree } from "../lib/agent-repos";
 import { useWorkspaceCatalog } from "../lib/workspace-catalog";
@@ -29,7 +29,7 @@ import { ConversationRowMenu } from "./ConversationMenu";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
-import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
+import { applyCompleteSessions, getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
 import { conversationTitle } from "./assistant/conversations";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
@@ -63,7 +63,8 @@ import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { runtimeActiveAt, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
 import { SESSIONS_CATALOG_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
-import { SESSIONS_LIST_FEATURE, type ListFilters } from "../lib/session-list";
+import { SESSIONS_LIST_FEATURE, SessionList, type ListFilters } from "../lib/session-list";
+import { AGENT_PRESENTATION_FEATURE, matchesAgentTags, saveAgentPresentation, SESSIONS_TAGS_FEATURE } from "../lib/agent-presentation";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
@@ -86,6 +87,7 @@ const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);
 const LinkTodoDialog = memo(lazyDialog(() => import("./LinkTodoDialog").then((m) => m.LinkTodoDialog)));
 const MarkSeenDialog = memo(MarkSeenDialogContent);
+const AgentPresentationDialog = lazy(() => import("./agents/AgentPresentationDialog").then((m) => ({ default: m.AgentPresentationDialog })));
 
 /** Brings `el` to the middle of its nearest scrolling ancestor when it is not fully in view (rows loading above it
  *  later still leave it on screen). Not `scrollIntoView`: that also scrolls the clipped (overflow-hidden) box of a
@@ -572,6 +574,8 @@ function TodosUnread() {
 
 function AgentsBlock(props: AgentsBlockProps) {
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const tagsSupported = useStore((s) => s.features.includes(SESSIONS_TAGS_FEATURE));
+  const tagsActive = (useAgentListFilters().tags?.length ?? 0) > 0;
   const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
   const todosSupported = useStore((s) => s.todosSupported);
   const todosUnread = useTodosUnread();
@@ -590,7 +594,7 @@ function AgentsBlock(props: AgentsBlockProps) {
   const several = useScope().several;
   // One set of groupings either way (#6662): the paged list draws them all but By repository, whose worktree level needs
   // every session, and By to-do only on a hub that lists sessions by to-do; pins need the complete list too.
-  const paged = pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several });
+  const paged = pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && (!tagsActive || tagsSupported);
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
     setGrouping(g);
@@ -606,6 +610,14 @@ function AgentsBlock(props: AgentsBlockProps) {
 
 /** The Agents block's title, the paged list's as the complete list's (#6662): unpinning changes nothing above the list. */
 const AGENTS_TITLE = "min-w-0 flex-1 text-[11px] font-semibold text-ink-3";
+
+function AgentPresentationEditor({ session, onClose }: { session: Session; onClose: () => void }) {
+  return <Suspense fallback={null}><AgentPresentationDialog session={session} onClose={onClose} onSave={async (input) => {
+    const row = await saveAgentPresentation(session, input);
+    applyCompleteSessions([row]);
+    SessionList.present("/sessions", row, (filters, current) => matchesAgentTags(current, filters.tag));
+  }} /></Suspense>;
+}
 
 /** The Agents title row's ⋯ (Agent list options): the sort and the archived Agents; the clock while sorted by update. */
 function ListMenuButton({ sorted, open, onClick }: { sorted: boolean; open: boolean; onClick: React.MouseEventHandler<HTMLButtonElement> }) {
@@ -661,8 +673,10 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   const machines = useStore(selectSidebarMachines);
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
+  const presentationSupported = useStore((s) => s.features.includes(AGENT_PRESENTATION_FEATURE));
   const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
+  const [presentation, setPresentation] = useState<Session | null>(null);
   const [deleting, setDeleting] = useState<Session | null>(null);
   const [linkTarget, setLinkTarget] = useState<Session>();
   const closeLinkTarget = useCallback(() => setLinkTarget(undefined), []);
@@ -671,6 +685,11 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   // The complete list's grouping bar (#6662): the same segments, so a pin or an unpin changes nothing above the list.
   // By repository takes the complete list (AgentsBlock).
   const groupings = useGroupings();
+  const dimensionFilters = useAgentListFilters();
+  const listQuery = dimensionFilters.query;
+  const selectedTags = useMemo(() => dimensionFilters.tags ?? [], [dimensionFilters.tags]);
+  const queryOnly = useMemo(() => ({ ...DEFAULT_DIMENSION_FILTERS, query: listQuery, tags: selectedTags }), [listQuery, selectedTags]);
+  const setQuery = useCallback((next: AgentDimensionFilters) => setAgentListFilters({ ...getAgentListFilters(), query: next.query, tags: next.tags ?? [] }), []);
   // by to-do: the open to-dos' titles and the To-dos page's order; the hub counts their sessions by id
   const todos = useScopedTodos();
   const todoNames = useMemo((): TodoNames => {
@@ -703,14 +722,10 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     select: QUICK_SELECT[filter],
     exclude: botmuxHidden ? HIDE_BOTMUX : SHOW_ALL,
     // the switch shows while there are Lark sessions to hide, or they are hidden
-    bar: (counts) => <FilterBar selection={filter} counts={counts ?? NO_COUNTS} onChoose={chooseFilter} botmux={(counts?.feishu ?? 0) > 0 || botmuxHidden ? { hidden: botmuxHidden, onToggle: toggleBotmux } : undefined} />,
-  } : undefined, [quickFilters, filter, botmuxHidden, chooseFilter, toggleBotmux]);
+    bar: (counts, tags) => <FilterBar selection={filter} counts={counts ?? NO_COUNTS} onChoose={chooseFilter} botmux={(counts?.feishu ?? 0) > 0 || botmuxHidden ? { hidden: botmuxHidden, onToggle: toggleBotmux } : undefined}
+      tagFilter={Object.keys(tags ?? {}).length > 0 || selectedTags.length > 0 ? <AgentTagFilterButton filters={dimensionFilters} onChange={setAgentListFilters} facets={{ ...NO_FACETS, tags: tagFacetsFromCounts(tags) }} /> : undefined} />,
+  } : undefined, [quickFilters, filter, botmuxHidden, chooseFilter, toggleBotmux, dimensionFilters]);
   const groupsRef = useRef<HTMLDivElement>(null);
-  // the words ⌘K's "Filter Agents list" put on the list, its search (#6589): only its words, which the hub matches as
-  // text; the Filter menu's choices are the complete list's, so a chip shows here only what this list is narrowed by
-  const listQuery = useAgentListFilters().query;
-  const queryOnly = useMemo(() => ({ ...DEFAULT_DIMENSION_FILTERS, query: listQuery }), [listQuery]);
-  const setQuery = useCallback((next: AgentDimensionFilters) => setAgentListFilters({ ...getAgentListFilters(), query: next.query }), []);
   // the complete list's ⋯: its sorts order the sections here (the hub pages the rows newest first either way)
   const listMenu = useMenu();
   const [sortChoice, chooseSort] = useAgentSort();
@@ -726,9 +741,10 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     byUpdate,
     bar: <GroupingBar groupings={groupings} selection={grouping} onChoose={chooseGrouping} />,
     query: listQuery,
+    tags: selectedTags,
     // the to-dos' failure under the chips, lined up with the list's own errors below (the chips' row is padded)
     chips: <><AgentFilterChips filters={queryOnly} onChange={setQuery} facets={NO_FACETS} />{todosUnread && <div className="-mx-1"><TodosUnread /></div>}</>,
-  }), [grouping, todoNames, groupings, chooseGrouping, quick, byUpdate, listQuery, queryOnly, setQuery, todosUnread]);
+  }), [grouping, todoNames, groupings, chooseGrouping, quick, byUpdate, listQuery, selectedTags, queryOnly, setQuery, todosUnread]);
   return <div data-sidebar-agents ref={groupsRef}>
     {/* the complete list's title row (#6662): fold all, the ⋯ with its sorts and the archived Agents, and "+" */}
     <div className={SESSION_LIST_STYLE.heading}>
@@ -750,8 +766,9 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
         const where = [within === "machine" ? "" : machineWithHub(s.machine_id, machines), within === "group" ? "" : s.space_name || baseName(s.cwd)];
         return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag={within !== "todo"} />;
       }} />
-    {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} />}
+    {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} onEditPresentation={presentationSupported ? setPresentation : undefined} />}
     {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
+    {presentation && <AgentPresentationEditor session={presentation} onClose={() => setPresentation(null)} />}
     {deleting && <DeleteSessionDialog open session={deleting} machineName={machineWithHub(deleting.machine_id, machines)} onClose={() => setDeleting(null)} />}
     <LinkTodoDialog open={Boolean(linkTarget)} session={linkTarget} onClose={closeLinkTarget} />
   </div>;
@@ -925,6 +942,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const [renamingSpace, setRenamingSpace] = useState<Session | null>(null);
   const [deleting, setDeleting] = useState<Session | null>(null);
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
+  const presentationSupported = useStore((s) => s.features.includes(AGENT_PRESENTATION_FEATURE));
+  const [presentation, setPresentation] = useState<Session | null>(null);
   const [confirmSeen, setConfirmSeen] = useState<Session[] | null>(null);
   // stable, like `go`: every row gets it, and a new one each render would re-render them all (SessionRow's memo)
   const onRowMenu = useCallback<RowMenuFn>((s, anchor, at) => setRowMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
@@ -996,7 +1015,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       </div>
       <Collapse open={!folded} sidebarFold>
         <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={chooseGroupingOutOfChatList} />
-        <FilterBar selection={filter} counts={filterTotals} onChoose={choose} botmux={botmux} />
+        <FilterBar selection={filter} counts={filterTotals} onChoose={choose} botmux={botmux} tagFilter={(facets.tags?.length ?? 0) > 0 || (dimFilters.tags?.length ?? 0) > 0 ? <AgentTagFilterButton filters={dimFilters} onChange={setDimFilters} facets={facets} /> : undefined} />
       </Collapse>
       </div>
     }>
@@ -1097,7 +1116,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     </SidebarGroup>
       {/* the row's ⋯ (and its right click): pin, rename, mute, the todo it hangs on, close, delete — a long press on iOS
           Safari sends no contextmenu, so nothing lives only there */}
-      {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTargetSession} />}
+      {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTargetSession} onEditPresentation={presentationSupported ? setPresentation : undefined} />}
       {spaceMenu && (
         <SpaceMenu
           sp={spaceMenu.sp}
@@ -1112,6 +1131,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       )}
       {nodeMenu && <NodeMenu node={nodeMenu.node} at={nodeMenu.at} header={nodeMenu.header} onClose={() => setNodeMenu(null)} changed={() => { void refresh().catch(() => {}); void refreshPanes(); }} />}
       {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
+      {presentation && <AgentPresentationEditor session={presentation} onClose={() => setPresentation(null)} />}
       {renamingSpace && <RenameSpaceDialog open session={renamingSpace} onClose={() => setRenamingSpace(null)} />}
       {deleting && <DeleteSessionDialog open session={deleting} machineName={machineWithHub(deleting.machine_id, machines)} onClose={() => setDeleting(null)} />}
       <MarkSeenDialog list={confirmSeen} onClose={closeMarkSeen} onDone={clearKept} />
@@ -1153,9 +1173,9 @@ const GroupingBar = memo(function GroupingBar({ groupings, selection, onChoose }
 /** "All" / "Needs you" / "Unread" / "Working" with their counts (iOS QuickFilterBar): "All" and the states that have agents now; the
  * chosen one stays while it empties, so it can be left. Then "botmux" (#2786), when there are botmux sessions: a
  * show / hide switch that stacks on any filter. Hidden when there is nothing to pick. */
-const FilterBar = memo(function FilterBar({ selection, counts, onChoose, botmux }: { selection: AgentFilter; counts: FilterCounts; onChoose: (f: AgentFilter) => void; botmux?: { hidden: boolean; onToggle: () => void } }) {
+const FilterBar = memo(function FilterBar({ selection, counts, onChoose, botmux, tagFilter }: { selection: AgentFilter; counts: FilterCounts; onChoose: (f: AgentFilter) => void; botmux?: { hidden: boolean; onToggle: () => void }; tagFilter?: ReactNode }) {
   const keys = shownFilters(selection, counts);
-  if (keys.length < 2 && !botmux) return null;
+  if (keys.length < 2 && !botmux && !tagFilter) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-0.5 px-1">
       <div role="radiogroup" aria-label={t("sidebar.quick_filters")} className="contents">
@@ -1198,6 +1218,7 @@ const FilterBar = memo(function FilterBar({ selection, counts, onChoose, botmux 
           {t("lib-agent-filter.botmux")}
         </button>
       )}
+      {tagFilter}
     </div>
   );
 });

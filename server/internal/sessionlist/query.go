@@ -2,7 +2,6 @@ package sessionlist
 
 import (
 	"maps"
-	"reflect"
 	"sort"
 	"strings"
 )
@@ -97,6 +96,7 @@ func copyCounts(c Counts) Counts {
 	c.State = maps.Clone(c.State)
 	c.PaneSource = maps.Clone(c.PaneSource)
 	c.Todo = maps.Clone(c.Todo)
+	c.Tags = maps.Clone(c.Tags)
 	return c
 }
 
@@ -121,7 +121,23 @@ func (f filters) matches(r *record) bool {
 		(f.Manager == "" || f.Manager == r.owner) &&
 		(f.Provider == "" || f.Provider == v.Provider) &&
 		(f.Todo == "" || f.Todo == todo || f.Todo == TodoNone && todo == "") &&
+		(f.Tags == "" || matchesTags(f.Tags, v.tags())) &&
 		(f.Q == "" || strings.Contains(r.search, f.Q))
+}
+
+// matchesTags implements OR within the selected set. Replace stores row tags canonically, so only their display case
+// needs folding here; all other filters combine with this one by AND in matches above.
+func matchesTags(spelled string, tags []string) bool {
+	for spelled != "" {
+		var selected string
+		selected, spelled = lengthPrefixed(spelled)
+		for _, tag := range tags {
+			if strings.EqualFold(selected, tag) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sortEvents(events []event) {
@@ -160,7 +176,7 @@ func (i *Index) remember(key cacheKey, r *result) *result {
 }
 
 func emptyCounts(revision string) Counts {
-	return Counts{Machine: make(map[string]int), Project: make(map[string]int), Group: make(map[string]int), State: make(map[string]int), PaneSource: make(map[string]int), Todo: make(map[string]int), Revision: revision}
+	return Counts{Machine: make(map[string]int), Project: make(map[string]int), Group: make(map[string]int), State: make(map[string]int), PaneSource: make(map[string]int), Todo: make(map[string]int), Tags: make(map[string]int), Revision: revision}
 }
 
 // stateOf is the state v is filtered and counted by: its folded state for Options.Roots (Fold.State, its own state
@@ -180,6 +196,16 @@ func waitingOf(v Item, roots bool) bool {
 
 func addCount(c *Counts, v Item, roots bool, delta int) {
 	c.Total += delta
+	tags := v.tags()
+	if len(tags) > 0 && c.Tags == nil {
+		c.Tags = make(map[string]int)
+	}
+	for _, tag := range tags {
+		c.Tags[tag] += delta
+		if c.Tags[tag] == 0 {
+			delete(c.Tags, tag)
+		}
+	}
 	if v.PaneSource != "" {
 		c.PaneSource[v.PaneSource] += delta
 		if c.PaneSource[v.PaneSource] == 0 {
@@ -285,7 +311,7 @@ func (i *Index) queryResult(o Options) *result {
 	for id, c := range collapsed {
 		before, after := f.matches(c.before), f.matches(c.after)
 		if after {
-			if before && reflect.DeepEqual(c.before.item, c.after.item) {
+			if before && sameItem(&c.before.item, &c.after.item) {
 				continue
 			}
 			r.events = append(r.events, event{id: id, updated: c.after.item.UpdatedAt, value: c.after})

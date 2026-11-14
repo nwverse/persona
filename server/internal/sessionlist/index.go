@@ -3,10 +3,13 @@
 package sessionlist
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,10 +41,10 @@ type Item struct {
 	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
 	// conversation, which an extension's token does not see).
 	Private bool
-	// Fold is the item's optional per-row metadata: its place in the session hierarchy (#5120) and its open to-do
-	// (#6662). Nil for an item with neither, which shows its own State and BackgroundWaiting. It sits behind a pointer
-	// to keep Item in its allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every
-	// pass.
+	// Fold is the item's optional per-row metadata: its place in the session hierarchy (#5120), its open to-do (#6662)
+	// and its tags (#7527). Nil for an item with none of them, which shows its own State and BackgroundWaiting. It sits
+	// behind a pointer to keep Item in its allocation size class: an adapter builds a whole batch as one []Item, as the
+	// hub does on every pass.
 	Fold       *Fold
 	UpdatedAt  time.Time
 	SearchText string
@@ -54,12 +57,54 @@ type Item struct {
 // ancestor), only when that item is in the same batch; State is the state the item shows with the items folded under it
 // ("" for its own); BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items folded under it
 // works or needs the user either. Todo is the id of the open to-do the row is on ("" for none): what Options.Todo
-// selects and Counts.Todo counts. The adapter knows which to-dos are open; the index only compares ids. Options.Roots
-// leaves out the items with a Root and filters and counts the others by their folded state; Options.Under selects the
-// items folded under one. Like the rest of an Item it is immutable once handed to Replace: copies of the item share it.
+// selects and Counts.Todo counts. Tags are the row's canonical labels: what Options.Tags selects and Counts.Tags counts.
+// The adapter knows which to-dos are open; the index only compares ids. Options.Roots leaves out the items with a Root
+// and filters and counts the others by their folded state; Options.Under selects the items folded under one. Like the
+// rest of an Item it is immutable once handed to Replace: copies of the item share it.
 type Fold struct {
 	Root, State, Todo string
 	BackgroundWaiting bool
+	Tags              []string
+}
+
+// CanonicalTags trims tags, removes empty and case-insensitively duplicate
+// values, and sorts them case-insensitively. The first spelling of each tag is
+// retained for display. The input slice is not modified.
+func CanonicalTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	unique := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		folded := strings.ToLower(tag)
+		if _, exists := unique[folded]; !exists {
+			unique[folded] = tag
+		}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(unique))
+	for _, tag := range unique {
+		out = append(out, tag)
+	}
+	slices.SortFunc(out, func(a, b string) int {
+		return cmp.Compare(strings.ToLower(a), strings.ToLower(b))
+	})
+	return out
+}
+
+func canonicalFold(fold *Fold) *Fold {
+	if fold == nil || fold.Tags == nil {
+		return fold
+	}
+	out := *fold
+	out.Tags = CanonicalTags(fold.Tags)
+	return &out
 }
 
 // root is the session v is folded under ("" for none).
@@ -76,6 +121,14 @@ func (v *Item) todo() string {
 		return ""
 	}
 	return v.Fold.Todo
+}
+
+// tags are the canonical labels on v (none without Fold).
+func (v *Item) tags() []string {
+	if v.Fold == nil {
+		return nil
+	}
+	return v.Fold.Tags
 }
 
 // Options selects a filtered full list or an incremental change list. Limit zero
@@ -109,6 +162,9 @@ type Options struct {
 	// Todo (todo=<id>) selects the items on that to-do; TodoNone (todo=none) the items on none. Both bind a cursor as
 	// the other filters do (#6662).
 	Todo string
+	// Tags (tag=<label>, repeatable) selects the items with any selected tag, combined with all other filters. Tags are
+	// trimmed and deduplicated case-insensitively; their order and case do not change a cursor or cache key.
+	Tags []string
 	// Waiting (waiting=1) selects the items that only wait in the background (BackgroundWaiting, by their folded state
 	// with Roots), waiting=0 the others: with state=working, the sidebar's "Waiting in the background" and "Working"
 	// quick filters. ExcludePaneSource (exclude_pane_source=<origin>) leaves out the items of that origin (the
@@ -144,6 +200,9 @@ type Counts struct {
 	PaneSource map[string]int `json:"pane_source,omitempty"`
 	// Todo counts the items by Fold.Todo, "" for the items on no to-do (#6662).
 	Todo map[string]int `json:"todo"`
+	// Tags counts the items by each distinct Fold.Tags label, keyed by the row's retained display spelling. An item with
+	// several labels contributes to each of them.
+	Tags map[string]int `json:"tags,omitempty"`
 	// BackgroundWaiting: how many of State["working"] only wait in the background (#6045): a client that shows them
 	// apart takes them out of its Working count.
 	BackgroundWaiting int    `json:"background_waiting,omitempty"`
@@ -184,9 +243,10 @@ type journalEntry struct {
 
 type filters struct {
 	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource string
-	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
-	Places, Spaces   string
-	Roots, NoPrivate bool
+	// Places and Spaces are Options' as placesKey spells them; Tags is Options' as tagsKey spells it: filters stay
+	// comparable.
+	Places, Spaces, Tags string
+	Roots, NoPrivate     bool
 }
 
 type binding struct {
@@ -308,6 +368,10 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 		// Strip monotonic clock data and normalize zones before comparison.
 		item.UpdatedAt = item.UpdatedAt.Round(0).UTC()
 		previous := old[item.ID]
+		// A previous Fold already holds detached canonical tags and is immutable; adapters reuse it on unchanged rows.
+		if previous == nil || previous.item.Fold != item.Fold {
+			item.Fold = canonicalFold(item.Fold)
+		}
 		if previous != nil && previous.owner == owner && sameItem(&previous.item, &item) {
 			next[item.ID] = previous
 			continue
@@ -361,15 +425,26 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 }
 
 // sameItem is reflect.DeepEqual(*a, *b) without walking what is plainly the same: the attributes compared as values,
-// a payload that is the very bytes stored (an item Items returned, handed back) by its slice. Anything else, such as
-// a payload built again, is left to reflect.DeepEqual.
+// Fold compared field by field, and a payload that is the very bytes stored (an item Items returned, handed back) by its
+// slice. Anything else, such as a payload built again, is left to reflect.DeepEqual.
 func sameItem(a, b *Item) bool {
-	if !samePayload(a.Full, b.Full) || !samePayload(a.Summary, b.Summary) {
+	if !samePayload(a.Full, b.Full) || !samePayload(a.Summary, b.Summary) || !sameFold(a.Fold, b.Fold) {
 		return false
 	}
 	x, y := *a, *b
-	x.Full, x.Summary, y.Full, y.Summary = nil, nil, nil, nil
+	x.Full, x.Summary, x.Fold = nil, nil, nil
+	y.Full, y.Summary, y.Fold = nil, nil, nil
 	return x == y || reflect.DeepEqual(x, y)
+}
+
+// sameFold keeps Fold's value semantics now that Tags makes Fold itself non-comparable. The nil check preserves
+// reflect.DeepEqual's distinction between nil and an explicitly empty tag slice for sameItem's direct callers.
+func sameFold(a, b *Fold) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Root == b.Root && a.State == b.State && a.Todo == b.Todo && a.BackgroundWaiting == b.BackgroundWaiting &&
+		(a.Tags == nil) == (b.Tags == nil) && slices.Equal(a.Tags, b.Tags)
 }
 
 func samePayload(a, b any) bool {

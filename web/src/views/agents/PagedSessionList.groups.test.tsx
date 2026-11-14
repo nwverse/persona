@@ -25,13 +25,13 @@ vi.mock("../../lib/store", () => ({
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
-type Row = { id: string; machine: string; project: string; group: string; state: string };
+type Row = { id: string; machine: string; project: string; group: string; state: string; tags?: string[] };
 const identity = (row: Row) => row.id;
 const compare = (a: Row, b: Row) => a.id.localeCompare(b.id);
-const row = (id: string, machine: string, project: string, group = "", state = "idle"): Row => ({ id, machine, project, group, state });
+const row = (id: string, machine: string, project: string, group = "", state = "idle", tags?: string[]): Row => ({ id, machine, project, group, state, tags });
 const ROWS = [
-  row("a1", "mac", "/Users/me/code/app", "w1", "needs_you"), row("a2", "mac", "/Users/me/code/app", "w1"), row("a3", "mac", "/Users/me/notes"),
-  row("b1", "pc", "C:\\code\\App", "w1"), row("b2", "pc", "D:\\Notes", "w2"), row("c1", "nas", ""), row("d1", "lab", "/srv/tool"),
+  row("a1", "mac", "/Users/me/code/app", "w1", "needs_you", ["review"]), row("a2", "mac", "/Users/me/code/app", "w1", "idle", ["release"]), row("a3", "mac", "/Users/me/notes"),
+  row("b1", "pc", "C:\\code\\App", "w1", "idle", ["review", "release"]), row("b2", "pc", "D:\\Notes", "w2"), row("c1", "nas", ""), row("d1", "lab", "/srv/tool"),
 ];
 const NAMES: Record<string, string> = { mac: "MacBook", pc: "Windows PC", nas: "NAS", lab: "Lab" };
 const ORIGIN: Record<string, string> = { [listPair("mac", "/Users/me/code/app")]: "git.example.com/team/app", [listPair("pc", "C:\\code\\App")]: "git.example.com/team/app" };
@@ -40,9 +40,10 @@ const folder = (path: string) => path.replace(/\\/g, "/").split("/").pop() ?? ""
 const params = (path: string) => new URL(path, "https://example.com").searchParams;
 /** The rows a read selects: the state, the search, a machine, and the place and space pairs. */
 function matching(q: URLSearchParams): Row[] {
-  const places = q.getAll("place"), spaces = q.getAll("space");
+  const places = q.getAll("place"), spaces = q.getAll("space"), tags = q.getAll("tag").map((tag) => tag.toLowerCase());
   return ROWS.filter((r) => (!q.get("state") || q.get("state") === r.state) && (!q.get("machine_id") || q.get("machine_id") === r.machine) &&
     (!q.get("project") || q.get("project") === r.project) && (!q.get("group") || q.get("group") === r.group) && (!q.get("q") || r.id.includes(q.get("q")!)) &&
+    (!tags.length || (r.tags ?? []).some((tag) => tags.includes(tag.toLowerCase()))) &&
     (!places.length || places.includes(listPair(r.machine, r.project))) && (!spaces.length || spaces.includes(listPair(r.machine, r.group))));
 }
 function tally(rows: Row[], key: (r: Row) => string): Record<string, number> {
@@ -50,8 +51,13 @@ function tally(rows: Row[], key: (r: Row) => string): Record<string, number> {
   for (const r of rows) out[key(r)] = (out[key(r)] ?? 0) + 1;
   return out;
 }
+const tagCounts = (rows: Row[]): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const r of rows) for (const tag of new Set(r.tags ?? [])) out[tag] = (out[tag] ?? 0) + 1;
+  return out;
+};
 const countsOf = (rows: Row[]): ListCounts => ({ total: rows.length, revision: "r", machine: tally(rows, (r) => r.machine), project: tally(rows, (r) => r.project),
-  group: tally(rows, (r) => r.group), state: tally(rows, (r) => r.state) });
+  group: tally(rows, (r) => r.group), state: tally(rows, (r) => r.state), tags: tagCounts(rows) });
 /** The hub's catalog of rows: a repository's directories as one project, the rest by folder, spaces by computer. */
 function catalogOf(rows: Row[]): SessionCatalog {
   const projects = new Map<string, SessionCatalog["projects"][number]>();
@@ -117,6 +123,15 @@ async function show({ catalog = true, open = "" }: { catalog?: boolean; open?: s
     label={(dimension, id) => dimension === "machine" ? NAMES[id] ?? id : id} isOpen={(r) => r.id === open}
     placeOf={(r) => ({ machine: r.machine, project: r.project, group: r.group })}
     renderRow={(r, within, group) => <span data-row={r.id} data-within={within ?? ""} data-group={group?.name ?? ""}>{r.id}</span>} />));
+}
+async function showTags(tags: readonly string[]) {
+  if (!list.getSnapshot().loaded) await list.load();
+  await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list" catalog
+    label={(dimension, id) => dimension === "machine" ? NAMES[id] ?? id : id}
+    grouping={{ dimension: "machine", label: t("paged-agents.machine"), tags, bar: <div /> }}
+    placeOf={(r) => ({ machine: r.machine, project: r.project, group: r.group })}
+    renderRow={(r, within, group) => <span data-row={r.id} data-within={within ?? ""} data-group={group?.name ?? ""}>{r.id}</span>} />));
+  await settle();
 }
 const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
 async function browseBy(key: "recent" | "machine" | "project" | "group") {
@@ -235,6 +250,21 @@ describe("the list by computer", () => {
     expect(sections().map(summary)).toEqual(["MacBook 1"]);
     expect(host.querySelector("[data-session-total]")!.textContent).toBe(t("paged-agents.count", { count: 1 }));
     expect(rowsIn(sections()[0])).toEqual(["a1"]);
+  });
+
+  it("keeps computer sections under multi-tag filters and hides groups with no matches", async () => {
+    await showTags(["review"]);
+    expect(sections().map(summary)).toEqual(["MacBook 1 1", "Windows PC 1"]);
+    expect(sections().map(rowsIn)).toEqual([["a1"], ["b1"]]);
+    expect(reads("page").filter((path) => params(path).has("machine_id")).every((path) => params(path).getAll("tag").join(",") === "review")).toBe(true);
+
+    vi.mocked(api).mockClear();
+    await showTags(["review", "release"]);
+    expect(sections().map(summary)).toEqual(["MacBook 1 2", "Windows PC 1"]);
+    expect(sections().map(rowsIn)).toEqual([["a1", "a2"], ["b1"]]);
+    expect(sections().some((section) => heading(section).textContent?.includes("Lab") || heading(section).textContent?.includes("NAS"))).toBe(false);
+    expect(reads("page").filter((path) => params(path).has("machine_id")).every((path) => params(path).getAll("tag").join(",") === "release,review")).toBe(true);
+    expect(reads("counts").some((path) => params(path).getAll("tag").length === 2)).toBe(true);
   });
 
   it("opens by itself the section the open conversation is in", async () => {

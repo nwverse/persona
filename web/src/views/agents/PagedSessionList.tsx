@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { onHubEvent } from "../../lib/store";
-import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
+import { filterQuery, normalizeTagFilter, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
@@ -76,12 +76,14 @@ export interface PagedGrouping {
   /** The words ⌘K's "Filter Agents list" put on the list (#6589), sent as the search: the sidebar's list has no field of
    *  its own, `chips` says what narrows it where the field was. */
   query?: string; chips?: ReactNode;
+  /** Selected presentation tags, sent to the hub rather than filtering only the loaded page. */
+  tags?: readonly string[];
 }
 
 /** The complete list's quick filters on the paged list (`sessions_quick_filters`, #6662), in place of its state chips:
  *  what the chosen chip selects, what every read leaves out (hidden botmux), and the chips, drawn from the counts of
  *  the list without the chip (one read for every chip's number). The caller keeps the choice, the complete list's. */
-export interface PagedQuickFilters { select: ListFilters; exclude: ListFilters; bar: (counts: FilterCounts | undefined) => ReactNode }
+export interface PagedQuickFilters { select: ListFilters; exclude: ListFilters; bar: (counts: FilterCounts | undefined, tags?: Record<string, number>) => ReactNode }
 
 const NONE: ListFilters = {};
 /** The keys a chip selects by: the scope its numbers are counted in leaves them out. */
@@ -143,12 +145,18 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const stateChip = useMemo((): ListFilters => (state ? { state } : NONE), [state]);
   const chip = quick ? quick.select : stateChip;
   const exclude = quick?.exclude ?? NONE;
+  const tagKey = (grouping?.tags ?? []).join("\u0000");
+  const tagFilters = useMemo((): ListFilters => {
+    const tags = normalizeTagFilter(tagKey ? tagKey.split("\u0000") : []);
+    return tags.length ? { tag: tags } : NONE;
+  }, [tagKey]);
   const filters: ListFilters = useMemo(() => ({
     ...(q ? { q } : {}), ...chip, ...(provider ? { provider } : {}),
     ...groupFilters,
     ...(spaceMachine ? { machine_id: spaceMachine } : {}),
     ...exclude,
-  }), [q, chip, groupFilters, spaceMachine, provider, exclude]);
+    ...tagFilters,
+  }), [q, chip, groupFilters, spaceMachine, provider, exclude, tagFilters]);
   const filtered = Object.keys(filters).length > 0;
   // a dimension with no group picked: the list is drawn as its groups, and the one flat list is not read; in the
   // sidebar's groupings a search lists its matches flat
@@ -244,7 +252,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
 
   // The groups of the chosen dimension, for the value pill and the sections: everything that narrows the list but the
   // group itself. Their counts follow the state tab, so a group's number is the number of rows it lists.
-  const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...chip }), [facetFilters, chip]);
+  const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...chip, ...tagFilters }), [facetFilters, chip, tagFilters]);
   const scopeNeeds = scopeCounts?.state?.needs_you;
   // the facets' own read when the groups are drawn from them: its failure is theirs (audit item 4: the root list's read
   // failing left the sections on "Loading…" for good)
@@ -428,7 +436,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {/* under the caller's title row its bar sits where the complete list's does: no padding of this list's above it */}
       <div className={cx("space-y-2 px-1 pb-2", !grouping && "pt-2")}>
         {/* the caller's bar and chips where the complete list has them: its padding, not this list's as well */}
-        {grouping ? <><div className="-mx-1">{grouping.bar}{quick ? quick.bar(quickCounts) : stateChips}</div>{grouping.chips}</> : <>{searchField}
+        {grouping ? <><div className="-mx-1">{grouping.bar}{quick ? quick.bar(quickCounts, facets?.tags) : stateChips}</div>{grouping.chips}</> : <>{searchField}
         <SegmentedTrack role="radiogroup" label={t("paged-agents.group_by")} className="flex gap-0.5 rounded-full p-0.5" thumbClassName="rounded-full bg-surface shadow-btn">
           {dimensions.map((d) => {
             const on = d.key === dimension;

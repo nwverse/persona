@@ -65,6 +65,9 @@ type SessionHierarchy struct {
 	// A session may be named more than once (switched back to and away again), each time for another stretch. Set by
 	// the node.
 	EngineHistory []EngineLeg `json:"engine_history,omitempty"`
+	// Presentation is optional display-only metadata. A pointer adds no object for ordinary rows and keeps Session's
+	// own allocation size unchanged; its members are flattened onto the wire row.
+	Presentation *SessionPresentation `json:"-"`
 }
 
 // EngineLeg is one earlier stretch of a conversation (SessionHierarchy.EngineHistory): the session that ran it, its
@@ -98,7 +101,7 @@ type SessionChildren struct {
 
 func (h *SessionHierarchy) empty() bool {
 	return h.ParentAgentID == "" && h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
-		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil
+		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil && h.Presentation.empty()
 }
 
 // CompletedTodo is the last completed association for navigation, never active work.
@@ -130,6 +133,11 @@ func (s *Session) hierarchy() SessionHierarchy {
 		h.Children = &c
 	}
 	h.EngineHistory = slices.Clone(h.EngineHistory)
+	if h.Presentation != nil {
+		p := *h.Presentation
+		p.Tags = slices.Clone(p.Tags)
+		h.Presentation = &p
+	}
 	return h
 }
 

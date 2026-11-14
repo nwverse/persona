@@ -21,6 +21,8 @@ const (
 	// (POST /api/v1/sessions/{mid}/{sid}/autoname; docs/protocol/protocol.md "Naming an Agent on request"). The hub
 	// lists the agent_autoname feature only while every manager that carries Agents names it.
 	CapabilityAgentAutoname = "agent_autoname"
+	// CapabilityAgentPresentation: display-only names and tags persist without calling the runtime's rename.
+	CapabilityAgentPresentation = "agent_presentation.v1"
 	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
 	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
 	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
@@ -198,6 +200,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/archive",
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/sessions/{mid}/{sid}/autoname",
+	"PUT /api/v1/sessions/{mid}/{sid}/presentation",
 	"POST /api/v1/assistant/conversations/{id}/archive",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",

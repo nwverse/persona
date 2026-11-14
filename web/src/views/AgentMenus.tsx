@@ -23,7 +23,7 @@ import type { SpaceMenuProps } from "./SpaceMenu";
 /** What a row's ⋯ (and its right click) offers. `onLinkTodo`: the row can hang on a todo ("Link to to-do…"; "Move to another to-do…" and
  *  "Unlink" when it does). Everything a row offers is here, so a touch screen (no right click; iOS Safari sends no contextmenu on a
  *  long press) reaches it from the ⋯ (#1996). */
-export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boolean; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void; features?: readonly string[] }): MenuItem[] {
+export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boolean; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void; onEditPresentation?: (s: Session) => void; features?: readonly string[] }): MenuItem[] {
   const { onRename, onDelete, onLinkTodo } = o;
   // "Live link" shows when the chat's ⋯ shows it (sessionMenuActions), and does the same (#3405); so do Archive and Close…
   const allowed = sessionMenuActions(s);
@@ -32,6 +32,7 @@ export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boole
     { key: "pin", label: o.pinned ? t("agentmenus.unpin") : t("agentmenus.pin"), icon: "pin", accel: "p", onSelect: () => void flipPin(s) },
     // as the chat's ⋯: by capabilities.rename where the node says so (a runtime's session, #6294)
     ...(sessionCanRename(s) ? [{ key: "rename", label: t("agentmenus.rename"), icon: "pencil" as const, accel: "r", onSelect: () => onRename(s) }] : []),
+    ...(o.onEditPresentation && !s.assistant ? [{ key: "presentation", label: t("agentmenus.name_tags"), icon: "tag" as const, onSelect: () => o.onEditPresentation!(s) }] : []),
     { key: "mute", label: o.muted ? t("agentmenus.unmute") : t("agentmenus.mute"), icon: o.muted ? "bell" : "bellOff", onSelect: () => void flipMute(s) },
     { key: "persona", label: t("agentmenus.hand_to_persona"), icon: "spark", onSelect: () => void handToPersona(s, machineWithHub(s.machine_id, getState().machines)) },
     // on a todo, the same dialog moves it to another (the hub releases the old link), so it says so (#2348)
@@ -77,7 +78,7 @@ async function unlinkTodo(s: Session, todo: string) {
 
 /** The row's menu, then what any pane offers (split or close it, git, copy its ids): src/lib/node-actions.ts. The path
  *  and the rename are the row's own above. `at`: where a right click opened it (the pointer); without it, beside `anchor`. */
-export function AgentRowMenu({ s, anchor, at, onClose, ...o }: { s: Session; anchor: HTMLElement; at?: MenuAt; onClose: () => void; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void }) {
+export function AgentRowMenu({ s, anchor, at, onClose, ...o }: { s: Session; anchor: HTMLElement; at?: MenuAt; onClose: () => void; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void; onEditPresentation?: (s: Session) => void }) {
   const pinned = useStore((st) => isPinned(s, st.pins));
   const muted = useStore((st) => isMuted(s, st.mutes));
   const features = useStore((st) => st.features);

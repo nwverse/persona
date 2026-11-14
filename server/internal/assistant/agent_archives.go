@@ -241,7 +241,12 @@ func (svc *Service) applyArchives(ctx context.Context, machine string, list []pr
 // their parents among the rows left listed (foldInventory).
 func (svc *Service) archivedInventory(ctx context.Context, machine string) ([]proto.Session, bool, error) {
 	mark := svc.archiveMark()
-	list, changed, err := svc.archivedSessions(ctx, machine, svc.decoratedUnarchived(machine), mark)
+	decorated := svc.decoratedUnarchived(machine)
+	live := len(decorated) // overlayAgentArchives appends archive-only rows after the live ones, in stable order
+	list, changed, err := svc.archivedSessions(ctx, machine, decorated, mark)
+	for i := live; i < len(list); i++ {
+		svc.decorateAgentPresentation(machine, &list[i], true)
+	}
 	svc.foldInventory(machine, list)
 	return list, changed, err
 }
@@ -256,6 +261,9 @@ func (svc *Service) archivedRow(ctx context.Context, machine, sid string) (proto
 	if err := b.lock(ctx); err != nil { // as archivedSessions: the records last published
 		if records := b.snapshot.Load(); records != nil {
 			row, ok := archiveRowOf(machine, sid, *records)
+			if ok {
+				svc.decorateAgentPresentation(machine, &row, true)
+			}
 			return row, ok, err
 		}
 		return proto.Session{}, false, err
@@ -265,6 +273,9 @@ func (svc *Service) archivedRow(ctx context.Context, machine, sid string) (proto
 		return proto.Session{}, false, err
 	}
 	row, ok := archiveRowOf(machine, sid, b.records)
+	if ok {
+		svc.decorateAgentPresentation(machine, &row, true)
+	}
 	return row, ok, nil
 }
 
