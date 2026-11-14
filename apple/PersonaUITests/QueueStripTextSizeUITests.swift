@@ -1,9 +1,10 @@
 import XCTest
 
-/// The queue strip over an agent chat's composer at the largest accessibility text size (#4846): the title has the row's
-/// width and a tap on it opens the strip; Send Now sits on the line under it and still asks before sending. At the
-/// default size the two share one line, as before. Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB): the widget agent
-/// works, a Claude in a terminal, so its queue has Send Now; `/mock/queue?text=…` queues a message for it.
+/// The queue strip over an agent chat's composer at the largest accessibility text size, which the interface caps at
+/// xxxLarge (#4846, #7730): the title has the row's width and a tap on it opens the strip; Send Now sits on the line
+/// under it and still asks before sending. At the default size the two share one line, as before. Against
+/// scripts/mock/mock_hub.py (PERSONA_MOCK_HUB): the widget agent works, a Claude in a terminal, so its queue has Send
+/// Now; `/mock/queue?text=…` queues a message for it.
 /// Each test runs in light and dark (`-ui.scheme`); PERSONA_SHOTS=<dir> keeps each step.
 final class QueueStripTextSizeUITests: XCTestCase {
     private var hub = ""
