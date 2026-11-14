@@ -32,6 +32,31 @@ import UIKit
         print("AgentsListStackTests: first render reached \(used / 1024) KB of stack")
     }
 
+    /// The Assistant page as the phone's shell draws it (its drawer and bottom bar are the shell's), and a conversation:
+    /// 906 KB and 665 KB on a cold first render before their chains were cut (#6735). The Assistant page is still over the
+    /// budget: its ceiling may only go down, until ChatView's binding-heavy modifiers move out of its chain.
+    static let ceilings = ["assistant": 600 * 1024]
+
+    @Test(arguments: ["assistant", "session"]) func theChatPagesRenderWithinAPhonesMainThreadStack(_ page: String) throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "\(page)-stack-" + UUID().uuidString))
+        let root = page == "assistant"
+            ? AnyView(AssistantView().environment(\.shell, ShellState()))
+            : AnyView(NavigationStack { ChatView(key: SessionKey(machineID: "box", sessionID: "stack-test")) })
+        let host = UIHostingController(rootView: root.environment(model))
+        let used = StackPeak.measure {
+            window.rootViewController = host
+            window.isHidden = false
+            window.layoutIfNeeded()
+        }
+        let limit = Self.ceilings[page] ?? Self.budget
+        #expect(used < limit, "the \(page) page's first render reached \(used / 1024) KB into the stack (limit \(limit / 1024) KB)")
+        print("AgentsListStackTests: \(page) first render reached \(used / 1024) KB of stack")
+    }
+
     private static func collectionViews(in view: UIView) -> Int {
         (view is UICollectionView ? 1 : 0) + view.subviews.reduce(0) { $0 + collectionViews(in: $1) }
     }
