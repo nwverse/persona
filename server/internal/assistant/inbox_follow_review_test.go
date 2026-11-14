@@ -234,7 +234,6 @@ func TestNowKeyNeedsNoClock(t *testing.T) {
 	if first != NowNeedsYou {
 		t.Fatalf("a past check_at without due gave %q, want %q", first, NowNeedsYou)
 	}
-	time.Sleep(10 * time.Millisecond)
 	if second := it.nowKey(); second != first {
 		t.Fatalf("nowKey changed from %q to %q", first, second)
 	}
