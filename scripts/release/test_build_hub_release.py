@@ -104,7 +104,7 @@ class ManagerPackageScopeTests(unittest.TestCase):
             'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')}
         _, calls, _ = self.build(parent_environment=proxies)
         tests = [env for args, env in calls if args[:2] == ['go', 'test']]
-        self.assertEqual(len(tests), 6)  # the other packages, two partitions each of assistant and node, the race run
+        self.assertEqual(len(tests), 7)  # the other packages, three assistant and two node partitions, the race run
         for environment in tests:
             self.assertFalse(set(proxies) & set(environment))
         # Network preparation and production artifact construction retain the
@@ -123,8 +123,9 @@ class ManagerPackageScopeTests(unittest.TestCase):
         tests = [args for args, _ in calls if args[:3] == ['go', 'test', '-count=1']]
         self.assertEqual(tests[0], ['go', 'test', '-count=1', 'example/server/internal/hub',
                                     'example/server/internal/node/sub'])
-        self.assertEqual(tests[1:5], [['go', 'test', '-count=1', '-run', '^(TestA|TestC)$', './internal/assistant'],
+        self.assertEqual(tests[1:6], [['go', 'test', '-count=1', '-run', '^(TestA)$', './internal/assistant'],
                                       ['go', 'test', '-count=1', '-run', '^(TestB)$', './internal/assistant'],
+                                      ['go', 'test', '-count=1', '-run', '^(TestC)$', './internal/assistant'],
                                       ['go', 'test', '-count=1', '-run', '^(TestA|TestC)$', './internal/node'],
                                       ['go', 'test', '-count=1', '-run', '^(TestB)$', './internal/node']])
         environments = [env for args, env in calls if args[:2] == ['go', 'test']]
