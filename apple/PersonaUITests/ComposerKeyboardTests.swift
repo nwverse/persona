@@ -41,6 +41,9 @@ final class ComposerKeyboardTests: XCTestCase {
         app.launchPinned()
         XCTAssertTrue(field.waitForExistence(timeout: 15), "the isolated conversation did not open")
         sleep(2)
+        // Only the field: the placeholder over it once carried the identifier too, and on iPhone took the typing (#7632).
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "shell-composer-field").count, 1,
+                       "something besides the field has its identifier")
     }
 
     @MainActor private var field: XCUIElement {
@@ -88,7 +91,8 @@ final class ComposerKeyboardTests: XCTestCase {
             XCTAssertTrue(dismissButton.exists && dismissButton.isHittable, "missing dismiss-keyboard button while typing")
         }
         XCTAssertEqual(field.value as? String, "first line\nsecond line", "return should insert a newline, not send")
-        let send = app.buttons["发送"].firstMatch
+        // By id: the dictation bar's ↑ stays in the tree while the bar is off (#7586), with the same Send label.
+        let send = app.buttons["shell-composer-send"].firstMatch
         XCTAssertTrue(send.exists && send.isEnabled && send.isHittable)
         var frames: [String: CGRect] = [:]
         if shell {
