@@ -325,7 +325,7 @@ class Watcher:
             return False
         comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), getattr(error, "output", "") or str(error),
                                                              git_root=config["checkout"], command=getattr(error, "command", None),
-                                                             failures=getattr(error, "failures", None))
+                                                             failures=getattr(error, "failures", None), environ=verification_env())
         if comparison.get("reproduced"):
             self.log("%s#%s failure also reproduces on clean main; continue the remaining gates" % (repo, number))
             self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %

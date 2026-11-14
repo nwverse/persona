@@ -74,20 +74,20 @@ def failed_go_tests(worktree, text):
     return {name: sorted(tests) for name, tests in failures.items() if list(Path(worktree, "server", name).glob("*.go"))}
 
 
-def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None, failures=None):
+def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None, failures=None, environ=None):
     """Rerun every failed lane independently before calling anything base-owned."""
     if failures:
         evidence = [main_failure_comparison(repo, pr, worktree, item["output"], timeout=timeout,
-                                            git_root=git_root, command=item["command"]) for item in failures]
+                                            git_root=git_root, command=item["command"], environ=environ) for item in failures]
         return {"reproduced": all(item.get("reproduced") for item in evidence), "lanes": evidence,
                 "reason": "Every failed lane must reproduce on clean main."}
     if command:
-        if any(str(worktree) in argument or pr["headRefOid"] in argument for argument in command):
-            return {"reproduced": False, "reason": "Parameterized external evidence cannot be compared with clean main safely."}
         base_worktree = Path(str(worktree) + "-base-check")
+        command = [argument.replace(str(worktree), str(base_worktree)).replace(pr["headRefOid"], pr["baseRefOid"])
+                   for argument in command]
         try:
             checked(["git", "worktree", "add", "--detach", str(base_worktree), pr["baseRefOid"]], cwd=git_root or worktree, timeout=180)
-            result = run(command, cwd=base_worktree, timeout=timeout, environ=verification_env())
+            result = run(command, cwd=base_worktree, timeout=timeout, environ=environ if environ is not None else verification_env())
             output = result.stdout + "\n" + result.stderr
             ids = failure_test_ids(output)
             reproduced = (result.returncode != 0 and ids and ids == failure_test_ids(failure)
@@ -111,7 +111,7 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
         for package in packages:
             expected = grouped[package]
             result = run(["go", "test", "-count=1", "-run", "^(" + "|".join(map(re.escape, expected)) + ")$", "./" + package],
-                         cwd=Path(base_worktree, "server"), timeout=timeout, environ=verification_env())
+                         cwd=Path(base_worktree, "server"), timeout=timeout, environ=environ if environ is not None else verification_env())
             output = result.stdout + "\n" + result.stderr
             reproduced = {name for name in failed_test_names(output) if name in expected}
             if result.returncode == 0 or reproduced != set(expected):
