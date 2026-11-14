@@ -856,6 +856,10 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   (`AgentsListPage(column:)`) and the foot, in the strip over the column on the iPad (`SidebarTopFill(color:)`) and
   behind the phone's drawer. The system sidebar's grey-blue it had stayed under the head and the foot only, in the
   styles whose list paints the page's own color: three bands down the column.
+- **Under side bars** (the open iPhone Duo on its side, `SidebarRoot` reading `readsVerticalBarEdge` into
+  `\.splitSideBars`): nothing is above the columns there, so the column's head and the page's top bar sat at the
+  display's edge, the mark under its rounded corner (#4853). Both columns start `Theme.Space.l` lower, or as low as the
+  lower of their own tops (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the page's top stay on one line.
 - **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`),
   whose detail starts at the Persona conversation: `AssistantView` without a stack of its own (`embedded`), pushing on
   the split's one path (`\.unifiedPath`). A pick in the sidebar replaces what is over the conversation, as the web's

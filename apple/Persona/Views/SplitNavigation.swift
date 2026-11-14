@@ -41,6 +41,13 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     @State private var overlays: Bool?
     /// The list column as UIKit has it (`SplitColumnControl`): a finger moving it, the split's size as a turn lays it out.
     @State private var columnState = SplitColumnState()
+    /// The system's bars down the side (the open iPhone Duo on its side) beside the Sidebar layout's column: nothing is
+    /// above the columns there (`topPad`, #4853).
+    @Environment(\.splitSideBars) private var sideBars
+    /// Each column's own top safe area, outside the margin it is given (the page's has the system's bar room under side
+    /// bars, the list's does not).
+    @State private var listSafeTop: CGFloat = 0
+    @State private var pageSafeTop: CGFloat = 0
     #endif
 
     init(path: Binding<NavigationPath>, listKey: String? = nil, destinations: Destinations, pageSwitch: Bool = false,
@@ -63,6 +70,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
         layout.environment(\.splitPush, SplitPush { [path = $path] value in path.wrappedValue.append(value) })
         #if os(iOS)
             .environment(\.splitDrawer, nil)
+            .environment(\.splitSideBars, false)
         #endif
     }
 
@@ -106,6 +114,12 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 // stack that refused its pushes (a path binding that always read empty) first slid the list away, then
                 // back: the sidebar folded and unfolded on every tap.
                 sidebar.modifier(destinations)
+                    #if os(iOS)
+                    .safeAreaPadding(.top, topPad(listSafeTop))
+                    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { listSafeTop = $0 }
+                    #endif
+                    // Last, on the column's root: under the top margin's padding the column's width no longer reached
+                    // the split (on the Duo on its side).
                     .modifier(SidebarWidth())
             } detail: {
                 NavigationStack(path: $path) {
@@ -114,6 +128,8 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 #if os(iOS)
                 // The stack's root page only: the pages opened on it carry their own (`SplitDetailPage`, #3680).
                 .safeAreaInset(edge: .top, spacing: 0) { if pageSwitch { PageTabSwitchRow() } }
+                .safeAreaPadding(.top, topPad(pageSafeTop))
+                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { pageSafeTop = $0 }
                 .background { columnControl }
                 .modifier(SplitPageMin())
                 #endif
@@ -164,6 +180,15 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     }
 
     #if os(iOS)
+    /// Under side bars both columns start lower, together (#4853): at least `Theme.Space.l`, as ChatGPT's open Duo, and
+    /// as low as the lower of their own tops (the system gives the page room for its bar there), so the column's head and
+    /// the page's top stay on one line. Set inside each column: the split's columns do not take a safe area given
+    /// around it.
+    private func topPad(_ own: CGFloat) -> CGFloat {
+        guard sideBars else { return 0 }
+        return max(0, max(Theme.Space.l, listSafeTop, pageSafeTop) - own)
+    }
+
     /// The list column's control from UIKit (`SplitColumnControl`): slid by a finger where the list's shown state is kept
     /// (`listKey`). In the detail column, which is there while the list is away.
     private var columnControl: some View {
@@ -300,6 +325,9 @@ extension EnvironmentValues {
     #if os(iOS)
     /// The drawer the next `SplitNavigation` puts its list in at a phone's width (the Sidebar layout, #6332).
     @Entry var splitDrawer: AssistantDrawer?
+    /// The system puts its bars down the side beside the next `SplitNavigation` (the Sidebar layout on the open iPhone Duo
+    /// on its side): its columns take a top margin (#4853).
+    @Entry var splitSideBars = false
     #endif
 }
 

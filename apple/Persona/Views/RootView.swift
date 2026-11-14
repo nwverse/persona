@@ -329,6 +329,8 @@ struct RootView: View {
 @MainActor private struct SidebarRoot: View {
     @State private var pad = PadRouter(unified: true)
     @State private var unified = UnifiedSidebar()
+    /// Where the system puts its bars down the side (the open iPhone Duo on its side); nil across the top.
+    @State private var barEdge: HorizontalEdge?
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -336,6 +338,8 @@ struct RootView: View {
         #endif
         ChatsView()
             .environment(\.unifiedSidebar, unified)
+            .environment(\.splitSideBars, barEdge != nil) // the columns' top margin there (#4853)
+            .readsVerticalBarEdge($barEdge)
             .modifier(PadRoutes(router: pad))
     }
 }
