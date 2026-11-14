@@ -6,6 +6,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -163,7 +164,7 @@ class InboxDetailStatusLayoutTest {
         rule.onNodeWithText("Conversation ›").performClick()
         assertEquals(ChatRoute("m1", "s-handling", source = RouteSource.InboxItem("sc-1")), opened.last())
         rule.onNodeWithText("Say something").performClick()
-        rule.onNode(hasSetTextAction()).assertExists()
+        rule.onNode(hasSetTextAction() and !hasTestTag("inbox-handoff-field")).assertExists()
     }
 
     @Config(qualifiers = "en-w320dp-h1800dp-xhdpi")
