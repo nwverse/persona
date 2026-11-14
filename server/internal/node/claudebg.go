@@ -193,13 +193,13 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 					s.Status, s.AttentionReason = proto.StatusBlocked, head
 				}
 			} else if status == proto.StatusBlocked {
-				// The phone answers the dialog on the pane's screen: the row names it, not the computer (#5965).
+				// The phone answers the dialog on the pane's screen: the row names it once it is read (#5965).
 				s.AttentionReason = n.dialogOn(id, pane)
 			}
 		}
-		if status == proto.StatusBlocked && s.PaneID == "" {
-			s.AttentionReason = proto.AttentionClaudeComputer
-			if s.Capabilities != nil && s.Capabilities.Send && asking(c, m) {
+		if status == proto.StatusBlocked && s.AttentionReason == "" {
+			s.AttentionReason = proto.AttentionClaudeComputer // no dialog read from a pane (yet)
+			if s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && asking(c, m) {
 				s.AttentionReason = proto.AttentionClaudeAnswer // a message answers it (sendOutside)
 			}
 		}

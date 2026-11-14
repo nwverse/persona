@@ -81,4 +81,13 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 	if s = wait(func(s proto.Session) bool { return s.AttentionReason == "" }); s.Status == proto.StatusBlocked || s.AttentionReason != "" {
 		t.Fatalf("dialog gone: attention %q (status %s)", s.AttentionReason, s.Status)
 	}
+
+	// A dialog the pane does not show (not read yet, or one the reader does not recognize) leaves the sentence the row
+	// had: never an empty reason on a blocked row.
+	writeOutsideClaude(t, home, sidA, "cli", "waiting", inbox, map[string]any{"tmux": "orc:@11.%11"})
+	for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if s = byID(listSessions(t, n))[sidA]; s.Status != proto.StatusBlocked || s.AttentionReason != proto.AttentionClaudeComputer {
+			t.Fatalf("no dialog on the pane: attention %q (status %s)", s.AttentionReason, s.Status)
+		}
+	}
 }
