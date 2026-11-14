@@ -40,6 +40,19 @@ export async function watchUpdateTestEvents(profile, seconds, predicate, { pollM
   }
 }
 
+export async function finishUpdateTest({ runMain, readEvents, cleanup, report, message }) {
+  let result;
+  let failure;
+  try { result = await runMain(); } catch (error) { failure = message(error); }
+  let profileEvents = [];
+  let receiptFailure;
+  try { profileEvents = await readEvents(); } catch (error) { receiptFailure = `could not read update-test event receipt: ${message(error)}`; }
+  const cleanupFailure = await cleanup();
+  const finalFailure = [failure, receiptFailure, cleanupFailure].filter(Boolean).join("; ");
+  await report({ result, failure: finalFailure || undefined, cleanupFailure: cleanupFailure || undefined, profileEvents });
+  return { ok: !finalFailure, failure: finalFailure || undefined };
+}
+
 export function isNsisInstallAt(event, expectedExecutableDirectory) {
   return event?.event === "nsis-install" && event.executableDirectory === expectedExecutableDirectory;
 }

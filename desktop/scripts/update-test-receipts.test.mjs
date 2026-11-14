@@ -3,7 +3,7 @@ import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { isNsisInstallAt, packagedUpdateConfigPath, readPackagedUpdateConfig, readUpdateTestEvents, watchForNsisInstall, watchUpdateTestEvents } from "./update-test-receipts.mjs";
+import { finishUpdateTest, isNsisInstallAt, packagedUpdateConfigPath, readPackagedUpdateConfig, readUpdateTestEvents, watchForNsisInstall, watchUpdateTestEvents } from "./update-test-receipts.mjs";
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "persona-update-test-receipts-"));
@@ -213,6 +213,51 @@ test("test-only instrumentation forwards the real updater's full restart argumen
   assert.equal(receipt.updaterInstallDirectory, null);
   assert.equal(receipt.executableInRunDirectory, true);
   assert.deepEqual(receipt.forwardedArguments, [true, true]);
+});
+
+test("a failed final receipt snapshot still cleans up and writes a nonzero verdict", async () => {
+  const calls = [];
+  let written;
+  const verdict = await finishUpdateTest({
+    async runMain() { calls.push("main"); throw new SyntaxError("malformed complete event"); },
+    async readEvents() { calls.push("snapshot"); throw new SyntaxError("malformed complete event"); },
+    async cleanup() { calls.push("cleanup"); return undefined; },
+    message: error => error.message,
+    async report(value) { calls.push("report"); written = value; },
+  });
+  assert.deepEqual(calls, ["main", "snapshot", "cleanup", "report"]);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.failure, /malformed complete event/);
+  assert.equal(written.ok, undefined);
+  assert.match(written.failure, /could not read update-test event receipt/);
+});
+
+test("snapshot I/O errors remain distinct from a successful cleanup", async () => {
+  let written;
+  const verdict = await finishUpdateTest({
+    async runMain() { return { install: "not installed: failure before update" }; },
+    async readEvents() { throw Object.assign(new Error("is a directory"), { code: "EISDIR" }); },
+    async cleanup() { return undefined; },
+    message: error => error.message,
+    async report(value) { written = value; },
+  });
+  assert.equal(verdict.ok, false);
+  assert.match(written.failure, /could not read update-test event receipt: is a directory/);
+  assert.equal(written.cleanupFailure, undefined);
+});
+
+test("cleanup errors remain a nonzero result after a valid final snapshot", async () => {
+  let written;
+  const verdict = await finishUpdateTest({
+    async runMain() { return { install: "installed" }; },
+    async readEvents() { return [{ event: "start" }]; },
+    async cleanup() { return "owned removal failed"; },
+    message: error => error.message,
+    async report(value) { written = value; },
+  });
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.failure, "owned removal failed");
+  assert.equal(written.cleanupFailure, "owned removal failed");
 });
 
 test("unsupported platforms cannot silently fall back to the Linux layout", () => {

@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { basename, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, shipItJobLabel, testAppId, updaterCacheName, windowsRegistryKeys } from "./update-test-cache.mjs";
-import { packagedUpdateConfigPath, readPackagedUpdateConfig, readUpdateTestEvents, watchForNsisInstall, watchUpdateTestEvents as watch } from "./update-test-receipts.mjs";
+import { finishUpdateTest, packagedUpdateConfigPath, readPackagedUpdateConfig, readUpdateTestEvents, watchForNsisInstall, watchUpdateTestEvents as watch } from "./update-test-receipts.mjs";
 import { inspectWindowsRegistryKeys, readWindowsInstallLocations, removeOwnedWindowsRegistryKeys as removeWindowsKeys, removeOwnedShipItJob as removeShipItJob } from "./update-test-native.mjs";
 
 const OLD = "0.9.0";
@@ -402,28 +402,37 @@ async function cleanup() {
 }
 
 let result;
-let failure;
 const limit = setTimeout(() => { console.log(`Desktop update test (${platform}): TIMEOUT`); for (const child of owned) stop(child); process.exit(1); }, 75 * 60 * 1000);
-let cleanupFailure;
-try { result = await main(); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
-const profileEvents = work ? await events(join(work, "profile")) : [];
-try {
-  const failures = await cleanup();
-  if (failures.length > 0) cleanupFailure = failures.join("; ");
-} catch (error) { cleanupFailure = error instanceof Error ? error.message : String(error); }
-step("cleanup of this run's owned temporary files", !cleanupFailure, cleanupFailure);
-if (cleanupFailure && !failure) failure = `cleanup failed: ${cleanupFailure}`;
-clearTimeout(limit);
-// Temporary and home paths are this computer's business, not the report's.
-let log = appLog;
-let report = JSON.stringify({ ok: !failure, platform, arch: process.arch, ...(failure ? { failure } : {}), ...(cleanupFailure ? { cleanup: "failed", cleanupFailure } : { cleanup: "succeeded" }), ...result, steps, events: profileEvents, requests }, null, 2);
-for (const [path, name] of [[work, "<temporary directory>"], [runPaths?.home, "<temporary home>"]]) {
-  if (!path) continue;
-  report = report.replaceAll(JSON.stringify(path).slice(1, -1), name).replaceAll(path, name);
-  log = log.replaceAll(path, name);
-}
-await mkdir(output, { recursive: true });
-await writeFile(join(output, "app.log"), log, "utf8");
-await writeFile(join(output, "result.json"), `${report}\n`, "utf8");
-console.log(`Desktop update test (${platform}): ${failure ? `FAIL (${failure})` : `PASS (${OLD} -> ${NEW}; ${result.install})`}`);
-process.exit(failure ? 1 : 0);
+const verdict = await finishUpdateTest({
+  runMain: main,
+  readEvents: () => work ? events(join(work, "profile")) : [],
+  cleanup: async () => {
+    try {
+      const failures = await cleanup();
+      step("cleanup of this run's owned temporary files", failures.length === 0, failures.join("; ") || undefined);
+      return failures.join("; ") || undefined;
+    } catch (error) {
+      const failure = error instanceof Error ? error.message : String(error);
+      step("cleanup of this run's owned temporary files", false, failure);
+      return failure;
+    }
+  },
+  message: error => error instanceof Error ? error.message : String(error),
+  report: async ({ result: update, failure, cleanupFailure, profileEvents }) => {
+    result = update;
+    clearTimeout(limit);
+    // Temporary and home paths are this computer's business, not the report's.
+    let log = appLog;
+    let report = JSON.stringify({ ok: !failure, platform, arch: process.arch, ...(failure ? { failure } : {}), ...(cleanupFailure ? { cleanup: "failed", cleanupFailure } : { cleanup: "succeeded" }), ...result, steps, events: profileEvents, requests }, null, 2);
+    for (const [path, name] of [[work, "<temporary directory>"], [runPaths?.home, "<temporary home>"]]) {
+      if (!path) continue;
+      report = report.replaceAll(JSON.stringify(path).slice(1, -1), name).replaceAll(path, name);
+      log = log.replaceAll(path, name);
+    }
+    await mkdir(output, { recursive: true });
+    await writeFile(join(output, "app.log"), log, "utf8");
+    await writeFile(join(output, "result.json"), `${report}\n`, "utf8");
+  },
+});
+console.log(`Desktop update test (${platform}): ${verdict.failure ? `FAIL (${verdict.failure})` : `PASS (${OLD} -> ${NEW}; ${result.install})`}`);
+process.exit(verdict.ok ? 0 : 1);
