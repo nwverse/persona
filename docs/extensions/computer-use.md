@@ -458,7 +458,8 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
     no frame reordering, `MaxFrameDelayCount` 0, capture queue depth 3, NV12 straight into the encoder; ≈5 ms p50 and
     ≈10 ms p95 from a screen change to an encoded frame at 1080p60). The picture's long edge is at most `start.max_size`
     (never upscaled, even sides), the frame rate 1–60, and a keyframe comes at least every 10 s and whenever asked.
-  - **Messages**: `start` gets `hello` (codec, display, size), then `format` and a keyframe; `format` again whenever the
+  - **Messages**: `start` gets `hello` (codec, display, size, and `features` from a helper that has more, `tiers` for #6396's
+    quality tiers), then `format` and a keyframe; `format` again whenever the
     parameter sets change. A still screen gives no frames, so a `heartbeat` goes out each second nothing did. Each
     second frames did, `timing` carries the helper's medians for the phone's Connection Stats (`TimingWindow`):
     capture (display time to ScreenCaptureKit's callback, about 0), encode (VideoToolbox in to out) and network (half
@@ -518,7 +519,8 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
   signed in, shows its pictures in a layer over RFB's on the same display (`hello.rect`, else the display shown; RFB's layer is
   hidden meanwhile, so a picture of another shape leaves black, not a stale frame), and holds RFB's update requests while
   they show; the request held goes out when video stops, so RFB's picture catches up.
-  Video is chosen by default on a Mac that offers it (⋯ › Picture, kept per Mac) and runs only while one display is
+  Video is chosen by default on a Mac that offers it (⋯ › Picture, kept per Mac; ⋯ › Quality appears only once the
+  helper's `hello.features` has `tiers`, since before #6396 it would change nothing) and runs only while one display is
   shown: the Mac's only one, or one picked from several the node numbered; all of several displays at once stay RFB.
   It pauses while Picture in Picture shows the screen or the app is in the background (RFB carries the picture then).
   When VNC shows instead, a line under the bars says why in plain words: the video stopped, the Mac is locked, or the
