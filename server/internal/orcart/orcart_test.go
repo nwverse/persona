@@ -212,11 +212,20 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := s.Text(); got != "a long line\n❯ next\n" || s.Source != "screen" {
+	if got := s.Text(); got != "a long line\n❯ next\n" || s.Source != "screen" || s.Draft != nil {
 		t.Errorf("text %q source %q", got, s.Source)
 	}
 	if tr := f.Trace("terminal.read"); len(tr) != 1 || tr[0] != `terminal.read {"screen":true,"terminal":"term_1"}` {
 		t.Errorf("read: %v", tr)
+	}
+	for _, draft := range []string{"unfinished\nmessage", ""} {
+		f.Handle("terminal.read", func(map[string]any) any {
+			return map[string]any{"terminal": map[string]any{"tail": []string{"›"}, "source": "screen", "draft": draft}}
+		})
+		s, err = c.Read(context.Background(), orcart.Target{Handle: "term_1"})
+		if err != nil || s.Draft == nil || *s.Draft != draft || s.Text() != "›\n" {
+			t.Fatalf("separate composer draft %q: %+v err=%v", draft, s, err)
+		}
 	}
 	f.Handle("terminal.read", func(map[string]any) any {
 		return map[string]any{"terminal": map[string]any{"handle": "term_1", "tail": []string{}, "source": "screen-unavailable"}}

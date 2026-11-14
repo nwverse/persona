@@ -399,6 +399,18 @@ func shortHash(s string) string {
 // codexScreen reads a Codex pane from the end of its output, colored when the host can: a pane scrolled back at the
 // computer reads as what Codex shows, and the transcript pager (an alternate screen) reads as itself.
 func (n *Node) codexScreen(ctx context.Context, pane string) (screen.CodexScreen, error) {
+	ref := host.ParsePane(pane)
+	if h, ok := n.hosts.Get(ref.Kind).(*orcaHost); ok {
+		read, err := h.readScreen(ctx, ref)
+		if err != nil {
+			return screen.CodexScreen{}, err
+		}
+		s := screen.ReadCodex(read.Text())
+		if s.View == screen.CodexComposer && read.Draft != nil {
+			s.Draft = *read.Draft
+		}
+		return s, nil
+	}
 	if !n.plainScreen(pane) {
 		if text, err := n.readPaneANSI(ctx, pane, "recent", 60); err == nil {
 			return screen.ReadCodex(text), nil

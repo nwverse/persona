@@ -16,6 +16,8 @@ import (
 // errEngineChanged: the engine was switched while a refresh ran; its result is the old engine's and is dropped.
 var errEngineChanged = errors.New("the engine changed during the refresh")
 
+var errRefreshSuperseded = errors.New("a newer host refresh superseded this refresh")
+
 // errNoHost: the node has no terminal host to look at.
 var errNoHost = errors.New("no terminal host")
 
@@ -50,6 +52,8 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 	}
 	n.mu.Lock()
 	epoch := n.engEpoch // a refresh that outlives an engine switch must not bring the old engine's agents back
+	n.hostRefreshSeq++
+	seq := n.hostRefreshSeq
 	n.mu.Unlock()
 	all := n.hosts.All()
 	if len(all) == 0 {
@@ -63,6 +67,7 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 		kind   string
 		agents []host.Agent
 		full   bool
+		layout *layout
 		err    error
 	}
 	outs := make([]outcome, len(targets))
@@ -71,8 +76,8 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 		wg.Add(1)
 		go func(i int, h host.Host) {
 			defer wg.Done()
-			agents, full, err := n.lookAt(ctx, h, epoch)
-			outs[i] = outcome{kind: h.Kind(), agents: agents, full: full, err: err}
+			agents, l, err := n.lookAt(ctx, h)
+			outs[i] = outcome{kind: h.Kind(), agents: agents, full: l != nil, layout: l, err: err}
 		}(i, h)
 	}
 	wg.Wait()
@@ -102,6 +107,15 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 		}
 	}
 
+	// Keep the host union and its session mapping in the same merge. The slow
+	// snapshot I/O above stays outside this lock, including for partial refreshes.
+	n.hostMerge.Lock()
+	defer n.hostMerge.Unlock()
+	if strict {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	n.mu.Lock()
 	if n.engEpoch != epoch {
 		n.mu.Unlock()
@@ -110,9 +124,26 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 	if n.hostAgents == nil {
 		n.hostAgents = map[string][]host.Agent{}
 	}
+	if n.hostApplied == nil {
+		n.hostApplied = map[string]uint64{}
+	}
+	if n.layouts == nil {
+		n.layouts = map[string]layout{}
+	}
+	if strict {
+		for _, o := range outs {
+			if seq < n.hostApplied[o.kind] {
+				n.mu.Unlock()
+				return errRefreshSuperseded
+			}
+		}
+	}
 	answered, snapped, firstErr := false, false, error(nil)
 	heard := map[string]bool{} // the hosts that answered: the merge asks only their panes what they run (setAgentsAt)
 	for _, o := range outs {
+		if seq < n.hostApplied[o.kind] {
+			continue
+		}
 		if o.err != nil && errors.Is(o.err, host.ErrNotRunning) {
 			o.err, o.agents = nil, nil // an answer: nothing runs there
 		}
@@ -124,6 +155,10 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 		} else {
 			answered, snapped = true, snapped || o.full
 			n.hostAgents[o.kind] = o.agents
+			n.hostApplied[o.kind] = seq
+			if o.layout != nil {
+				n.layouts[o.kind] = *o.layout
+			}
 			heard[o.kind] = true
 		}
 	}
@@ -148,14 +183,14 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 
 // lookAt is one host's agents: from a snapshot (full), which also gives the space / slot names; a host that cannot
 // snapshot (older herdr without `api snapshot`) gives its agent list instead.
-func (n *Node) lookAt(ctx context.Context, h host.Host, epoch uint64) (agents []host.Agent, full bool, err error) {
+func (n *Node) lookAt(ctx context.Context, h host.Host) (agents []host.Agent, next *layout, err error) {
 	snap, err := h.Snapshot(ctx)
 	if err != nil {
 		agents, aerr := h.Agents(ctx)
 		if aerr != nil {
-			return nil, false, err
+			return nil, nil, err
 		}
-		return agents, false, nil
+		return agents, nil, nil
 	}
 	l := layout{spaces: map[string]host.Space{}, slots: map[string]host.Slot{}, panes: snap.Panes, paneIndex: snap.PaneIndex, at: time.Now()}
 	for _, w := range snap.Spaces {
@@ -164,20 +199,10 @@ func (n *Node) lookAt(ctx context.Context, h host.Host, epoch uint64) (agents []
 	for _, t := range snap.Slots {
 		l.slots[t.ID] = t
 	}
-	n.mu.Lock()
-	if n.engEpoch != epoch {
-		n.mu.Unlock()
-		return nil, false, errEngineChanged
-	}
-	if n.layouts == nil {
-		n.layouts = map[string]layout{}
-	}
-	n.layouts[h.Kind()] = l
-	n.mu.Unlock()
 	// Panes running an agent the host does not detect (a compatible CLI) become agents of our own.
 	agents = append(snap.Agents, n.traexAgents(ctx, snap.Panes, snap.Agents)...)
 	// Retain active Claude agents when Herdr temporarily drops agent detection during tool or subshell execution (#1641).
-	return append(agents, n.claudeGraceAgents(snap.Panes, agents)...), true, nil
+	return append(agents, n.claudeGraceAgents(snap.Panes, agents)...), &l, nil
 }
 
 // claudeGraceAgents recovers live Claude agents whose terminal panes are still open in snap.Panes

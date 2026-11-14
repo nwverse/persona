@@ -233,6 +233,9 @@ type Screen struct {
 	Wrapped []bool
 	// Source is what was read ("screen"; "stream" is the output's tail, not the screen).
 	Source string
+	// Draft is composer text removed from Lines by newer hosts. Nil means the
+	// host did not report a separate draft; callers can still parse the screen.
+	Draft *string
 }
 
 // Text is the screen as text, soft-wrapped rows joined, one line per row, ending in a newline.
@@ -259,7 +262,8 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 			TailRows []struct {
 				Wrapped bool `json:"wrapped"`
 			} `json:"tailRows"`
-			Source string `json:"source"`
+			Source string  `json:"source"`
+			Draft  *string `json:"draft"`
 		} `json:"terminal"`
 	}
 	p := t.params()
@@ -270,7 +274,7 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 	if res.Terminal.Source == "screen-unavailable" {
 		return nil, fmt.Errorf("orca terminal.read: %w", ErrNoScreen)
 	}
-	s := &Screen{Lines: res.Terminal.Tail, Source: res.Terminal.Source}
+	s := &Screen{Lines: res.Terminal.Tail, Source: res.Terminal.Source, Draft: res.Terminal.Draft}
 	for _, r := range res.Terminal.TailRows {
 		s.Wrapped = append(s.Wrapped, r.Wrapped)
 	}

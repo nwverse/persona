@@ -67,6 +67,9 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   A resident node serves each connection with a new `Node`: on `Background` the old one kept observing forever, and its control kept the attach slot, so the reconnected node got `attach_busy` until the lease ran out.
   To test what one connection leaves behind, serve it under a pprof label and count the goroutines carrying it (`goroutinesOf` in `terminal_conn_test.go`), plus the fake herdr's pids and slot file.
 - A branch's checkout folder is `herdr.WorktreeDirName`, never `WorktreeSlug` alone: the slug drops non-ASCII letters, so a Chinese branch is checked out in the checkouts directory itself and `fix/登录`, `fix/注册` collide. `agent_start` fixed this in #5775; the new-agent worktree (#6115) repeated it.
+- Codex 0.167 replaces shortcut hints with `tab to queue message` or a warnings-only row while working. The empty composer may show just `›`. Capture both idle and working screens when diagnosing `input_draft`; a successful idle send does not exercise the footer used by an asynchronous question answer.
+- Newer Orca `terminal.read` replies move composer text out of `tail` into `draft`. Preserve that field with the same screen read when driving Codex: ignoring it both hides real drafts from the guard and prevents confirming a pasted answer before Enter. Keep screen-only parsing for hosts that omit it; do not reinsert private draft text into the public terminal output.
+- Overlapping terminal-host snapshots can finish out of order within the same engine epoch. Accept each host's snapshots in request order, apply its layout with its agents, and keep the combined inventory merge with session mapping. Otherwise an older empty snapshot can relist a running terminal as read-only history. Test a delayed old snapshot, a newer live snapshot, and a genuinely newer exit snapshot.
 
 ## A shared Codex daemon can keep another Orca terminal’s hook identity
 

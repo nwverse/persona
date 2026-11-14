@@ -177,3 +177,20 @@ func TestReadCodexComposerWithSingleRowFooter(t *testing.T) {
 		})
 	}
 }
+
+func TestReadCodexComposerWithWorkingFooter(t *testing.T) {
+	for _, hint := range []string{"  tab to queue message", "                              ⚠ 2 warnings · f2 to view", "  tab to queue message         ⚠ 1 warning · f2 to view"} {
+		for _, tc := range []struct{ composer, want string }{
+			{"›\n", ""},
+			{"› Ask Codex to do anything\n", ""},
+			{"› keep my draft\n  and its second line\n", "keep my draft\nand its second line"},
+			{"› keep my draft\n  GPT-6.1-Sol xhigh · ~/project\n  tab to queue message\n  and this line\n", "keep my draft\nGPT-6.1-Sol xhigh · ~/project\ntab to queue message\nand this line"},
+		} {
+			s := ReadCodex("• Working (5s • esc to interrupt)\n" + tc.composer +
+				"  GPT-6.1-Sol xhigh · ~/project · Review project\n" + hint + "\n")
+			if s.View != CodexComposer || s.Draft != tc.want {
+				t.Errorf("hint %q composer %q: view=%q draft=%q, want %q", hint, tc.composer, s.View, s.Draft, tc.want)
+			}
+		}
+	}
+}
