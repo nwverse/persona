@@ -938,13 +938,12 @@ release builds until the check on real devices (`ScreenRoutes.udpReleaseEnabled`
   connection from what the phone acknowledged, or over its relay when the route went too. The node never moves RFB or
   link messages onto a flow, and moving the video onto one takes the phone's `use` on it.
 - **The phone's side** (`PersonaScreenKit`, tested with `swift test` against the shared cases): `ScreenUDPWire` (packets,
-  sealing through a `ScreenUDPCipher` the app gives, so the package links no CryptoKit into the Mac's Persona Screen,
-  which shares it), `ReedSolomon`, `ScreenUDPReceiver` (blocks rebuilt from parity; a block still short asked for again
+  sealed with CryptoKit's AES-256-GCM, `ScreenUDPAESGCM`), `ReedSolomon`, `ScreenUDPReceiver` (blocks rebuilt from parity; a block still short asked for again
   once all of it was sent, a message gone quiet for max(6 ms, 2 × jitter) counting as sent; again after max(10 ms,
   1.5 round trips); a message known only from a later one asked for by its place; a frame that held the picture back
   100 ms plus a round trip given up), `ScreenUDPParity` and `ScreenUDPLoss` (below). `ScreenLinkSession` asks for a
   flow once a direct route attaches, takes its keys from the route's TLS exporter, has the app open the socket on the
-  route's interface (`openFlow`, `ScreenLinkUDPSocket`; AES-256-GCM is CryptoKit's), proves its address, and moves the
+  route's interface (`openFlow`, `ScreenLinkUDPSocket`), proves its address, and moves the
   video onto the flow once the route carries the session, from the start of the message it was in the middle of; the
   video's bytes on other transports are ignored meanwhile. It pings the flow every second with the parity and pacing
   it asks for (150 Mbit/s on a LAN route, 40 on Tailscale), and leaves the flow for the route's TLS connection, from

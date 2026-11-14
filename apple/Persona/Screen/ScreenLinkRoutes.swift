@@ -232,24 +232,6 @@ nonisolated final class ScreenLinkUDPSocket: ScreenUDPSocket, @unchecked Sendabl
     func close() { conn.cancel() }
 }
 
-/// AES-256-GCM for a UDP flow's packets (#7873): the ciphertext then the 16-byte tag, the header authenticated.
-nonisolated struct ScreenUDPAESGCM: ScreenUDPCipher {
-    let key: SymmetricKey
-    init(key: Data) { self.key = SymmetricKey(data: key) }
-
-    func seal(_ body: Data, nonce: Data, header: Data) -> Data? {
-        guard let n = try? AES.GCM.Nonce(data: nonce), let box = try? AES.GCM.seal(body, using: key, nonce: n, authenticating: header)
-        else { return nil }
-        return box.ciphertext + box.tag
-    }
-
-    func open(_ sealed: Data, nonce: Data, header: Data) -> Data? {
-        guard sealed.count >= 16, let n = try? AES.GCM.Nonce(data: nonce),
-              let box = try? AES.GCM.SealedBox(nonce: n, ciphertext: sealed.dropLast(16), tag: sealed.suffix(16)) else { return nil }
-        return try? AES.GCM.open(box, using: key, authenticating: header)
-    }
-}
-
 extension Data {
     nonisolated var base64URL: String {
         base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")

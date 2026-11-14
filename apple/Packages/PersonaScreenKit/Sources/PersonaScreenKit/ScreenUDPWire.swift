@@ -1,9 +1,10 @@
+import CryptoKit
 import Foundation
 
 // The live screen's video over UDP (#7873, docs/extensions/computer-use.md "Video over UDP (#7873)"): the phone's end
-// of the packets the node's internal/screenlink sends and takes on a UDP flow. Pure: the AEAD comes from the caller
-// (`ScreenUDPCipher`, CryptoKit's AES-GCM in the app), so this package links no new framework into the Mac's Persona
-// Screen helper, which shares it. spec/fixtures/screen-udp holds both ends to the same bytes.
+// of the packets the node's internal/screenlink sends and takes on a UDP flow. The AEAD is a `ScreenUDPCipher`:
+// CryptoKit's AES-256-GCM (`ScreenUDPAESGCM`), or a test's own. spec/fixtures/screen-udp holds both ends to the same
+// bytes.
 
 public enum ScreenUDPWire {
     public static let version: UInt8 = 1
@@ -39,10 +40,29 @@ public enum ScreenUDPWire {
 }
 
 /// One direction's AEAD: seals a body under a nonce with the header as additional data (ciphertext then the 16-byte
-/// tag), and opens one. The app gives CryptoKit's AES-256-GCM; tests may give their own.
+/// tag), and opens one.
 public protocol ScreenUDPCipher: Sendable {
     func seal(_ body: Data, nonce: Data, header: Data) -> Data?
     func open(_ sealed: Data, nonce: Data, header: Data) -> Data?
+}
+
+/// AES-256-GCM, as the node's crypto/cipher: the ciphertext then the 16-byte tag, the header authenticated.
+public struct ScreenUDPAESGCM: ScreenUDPCipher {
+    let key: SymmetricKey
+
+    public init(key: Data) { self.key = SymmetricKey(data: key) }
+
+    public func seal(_ body: Data, nonce: Data, header: Data) -> Data? {
+        guard let n = try? AES.GCM.Nonce(data: nonce), let box = try? AES.GCM.seal(body, using: key, nonce: n, authenticating: header)
+        else { return nil }
+        return box.ciphertext + box.tag
+    }
+
+    public func open(_ sealed: Data, nonce: Data, header: Data) -> Data? {
+        guard sealed.count >= 16, let n = try? AES.GCM.Nonce(data: nonce),
+              let box = try? AES.GCM.SealedBox(nonce: n, ciphertext: sealed.dropLast(16), tag: sealed.suffix(16)) else { return nil }
+        return try? AES.GCM.open(box, using: key, authenticating: header)
+    }
 }
 
 /// A flow's keys split from the exporter's material: the phone opens with `toPhone` and seals with `toNode`.

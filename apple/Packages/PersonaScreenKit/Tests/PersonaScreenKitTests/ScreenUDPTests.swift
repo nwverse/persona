@@ -1,25 +1,11 @@
-import CryptoKit
 import Foundation
 import XCTest
 @testable import PersonaScreenKit
 
-/// AES-256-GCM as the app gives it (CryptoKit). Only the tests and the app link CryptoKit; the package doesn't, so the
-/// Mac's Persona Screen helper, which shares it, gains no framework.
-struct TestAESGCM: ScreenUDPCipher {
-    let key: SymmetricKey
-    init(_ key: Data) { self.key = SymmetricKey(data: key) }
-
-    func seal(_ body: Data, nonce: Data, header: Data) -> Data? {
-        guard let n = try? AES.GCM.Nonce(data: nonce), let box = try? AES.GCM.seal(body, using: key, nonce: n, authenticating: header)
-        else { return nil }
-        return box.ciphertext + box.tag
-    }
-
-    func open(_ sealed: Data, nonce: Data, header: Data) -> Data? {
-        guard sealed.count >= 16, let n = try? AES.GCM.Nonce(data: nonce),
-              let box = try? AES.GCM.SealedBox(nonce: n, ciphertext: sealed.dropLast(16), tag: sealed.suffix(16)) else { return nil }
-        return try? AES.GCM.open(box, using: key, authenticating: header)
-    }
+/// The tests seal with the cipher the app uses.
+typealias TestAESGCM = ScreenUDPAESGCM
+extension ScreenUDPAESGCM {
+    init(_ key: Data) { self.init(key: key) }
 }
 
 private extension Data {
