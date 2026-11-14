@@ -117,11 +117,15 @@ class AssistantConversationTest {
         val feed = listOf(FeedItem("p-event", "main", plan.createdAt, "plan", "p"))
         val hint = AssistantTaskCards.lines(emptyList(), feed, mapOf("p" to plan), todos)
             .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
-        assertEquals(listOf(DispatchedTask("t", "First, renamed"), DispatchedTask("s", "Second"), DispatchedTask(null, "Failed")), hint.tasks)
+        assertEquals(listOf(
+            DispatchedTask("t", "First, renamed", key = "plan:p:0"),
+            DispatchedTask("s", "Second", key = "plan:p:1"),
+            DispatchedTask(null, "Failed", error = "machine offline", key = "plan:p:2"),
+        ), hint.tasks)
         val one = TaskPlan("q", "main", listOf(PlanTask("Only", todoId = "o")), "started", "2026-11-10T11:00:00Z")
         val single = AssistantTaskCards.lines(emptyList(), listOf(FeedItem("q-event", "main", one.createdAt, "plan", "q")), mapOf("q" to one), emptyList())
             .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
-        assertEquals(listOf(DispatchedTask("o", "Only")), single.tasks)
+        assertEquals(listOf(DispatchedTask("o", "Only", key = "plan:q:0")), single.tasks)
     }
 
     @Test fun aReusedTodoChoosesItsCurrentPlanOverBothHeldCacheSlots() {

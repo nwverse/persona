@@ -191,6 +191,7 @@ class TasksStore(
                     val list = api.todos()
                     _todosSupported.value = true
                     todosLoaded = true
+                    todosReady.value = true
                     synchronized(todosLock) {
                         val shown = list.map { todo ->
                             val completion = finishedTasks[todo.id]?.takeIf { it != completionsBeforeRead[todo.id] }
@@ -336,6 +337,9 @@ class TasksStore(
         api.unlinkTodoAgent(todoId, machineId, sessionId)
         reloadTodos()
     }
+
+    /** A read of the to-dos has answered: until then a missing to-do is still on its way, not gone (#5110). */
+    val todosReady = MutableStateFlow(false)
 
     /** A read of the to-dos has answered: until then nothing tells whether the hub knows projects. */
     @Volatile private var todosLoaded = false
