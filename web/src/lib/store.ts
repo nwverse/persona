@@ -30,6 +30,7 @@ import { releaseAttachments } from "./attachments";
 import { dropElicitationDraft } from "./elicitation";
 import type { OutboxEntry } from "./outbox";
 import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
+import { unreachable } from "./shell";
 import { setOfflineProbe } from "./feedback";
 import { readDirectionTree } from "./direction-names";
 import { unnamedTaskConversations } from "./background-supervisor";
@@ -411,6 +412,18 @@ export function useStore<T>(select: (s: State) => T): T {
     return v;
   };
   return useSyncExternalStore(subscribe, get, get); // the third: static rendering (tests)
+}
+
+// The page's Offline (lib/shell.ts unreachable) as one flag, followed from every change of the state whatever is drawn:
+// a list drawn while the socket retries says Offline as the page does, not Loading… (audit item 36).
+let hubAway = false;
+const readHubAway = () => (hubAway = unreachable(hubAway, state.conn, state.loaded));
+subscribe(() => void readHubAway());
+
+/** Whether the hub has not been reached since the page opened and the socket has given up for now (lib/shell.ts
+ *  unreachable): App.tsx's Offline page and the Agents list read this one flag, so they always agree. */
+export function useHubUnreachable(): boolean {
+  return useSyncExternalStore(subscribe, readHubAway, readHubAway);
 }
 
 // ── what the hub can do (hello `features`) ───────────────
@@ -1503,6 +1516,7 @@ export function reset() {
   disconnect();
   resetMessageFeedback();
   cursor = NO_CURSOR; // another login: another stream
+  hubAway = false; // and its own first connection
   ixChanges.clear();
   resolvedSeen.clear();
   endedHere.clear();
