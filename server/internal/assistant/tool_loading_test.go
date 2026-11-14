@@ -42,13 +42,23 @@ func TestCoreToolsPinned(t *testing.T) {
 	}
 }
 
-// An assistant conversation's tool list has every tool but the core ones deferred; a guest's (no ToolSearch), an
-// agent's and every one while assistant.load_all_tools is on have none deferred.
+// deferringExt is guestExt with every tool arriving deferred, as a connector program sending defer_loading would
+// have it: the manager's rule alone decides.
+type deferringExt struct{ *guestExt }
+
+func (deferringExt) AgentTools(context.Context, bool) (agents, assistantOnly []proto.Tool) {
+	return []proto.Tool{{Name: "conn_read", DeferLoading: true}},
+		[]proto.Tool{{Name: "computer_run", DeferLoading: true}, {Name: "lark_chats", DeferLoading: true}, {Name: "lark_agent_reply", DeferLoading: true}}
+}
+
+// An assistant conversation's tool list has every tool but the core ones deferred; a guest's (no ToolSearch, whether
+// the node or the manager says so), an agent's and every one while assistant.load_all_tools is on have none deferred,
+// whatever the tools arrived with.
 func TestToolLoadingMarksAssistantTools(t *testing.T) {
 	ft := newFleetTest(t)
 	ft.f.hello.Assistant.MachineID = "mac"
 	s := ft.s
-	s.SetExtensions(&guestExt{}) // lark_chats (core), lark_agent_reply and computer_run (not)
+	s.SetExtensions(deferringExt{&guestExt{}}) // lark_chats (core), conn_read, lark_agent_reply and computer_run (not)
 	ctx := context.Background()
 	if err := s.guestSet(ctx, "mac", "g1", []string{"lark_agent_reply", "lark_chats"}); err != nil {
 		t.Fatal(err)
@@ -75,7 +85,8 @@ func TestToolLoadingMarksAssistantTools(t *testing.T) {
 	}
 	got := list("o1", true, false)
 	for name, deferred := range map[string]bool{"agent_read": false, "ask_user": false, "lark_chats": false, "task_plan": false,
-		"inbox_move": true, "view_show": true, "task_plan_withdraw": true, "lark_agent_reply": true, "computer_run": true} {
+		"inbox_move": true, "view_show": true, "task_plan_withdraw": true, "lark_agent_reply": true, "computer_run": true,
+		"conn_read": true} {
 		if d, ok := got[name]; !ok || d != deferred {
 			t.Errorf("%s: listed %v, deferred %v; want deferred %v", name, ok, d, deferred)
 		}
@@ -97,6 +108,7 @@ func TestToolLoadingMarksAssistantTools(t *testing.T) {
 		}
 	}
 	none("a guest", list("g1", true, true))
+	none("a guest the node did not name", list("g1", true, false))
 	none("an agent", list("a1", false, false))
 	setSettings(t, s, func(v *Settings) { on := true; v.LoadAllTools = &on })
 	none("load_all_tools on", list("o1", true, false))
@@ -113,7 +125,7 @@ func TestLoadAllToolsSetting(t *testing.T) {
 	}
 	get := func() string { out, _ := tool(`{"action":"get","key":"assistant.load_all_tools"}`); return out }
 	deferred := func() bool {
-		return s.withToolLoading(ctx, []proto.Tool{{Name: "inbox_move"}})[0].DeferLoading
+		return s.withToolLoading(ctx, []proto.Tool{{Name: "inbox_move"}}, true)[0].DeferLoading
 	}
 	if get() != "false" || !deferred() {
 		t.Fatalf("default: %s, deferred %v", get(), deferred())
@@ -139,5 +151,18 @@ func TestLoadAllToolsSetting(t *testing.T) {
 	}
 	if get() != fmt.Sprint(true) || deferred() {
 		t.Fatalf("after the change: %s, deferred %v", get(), deferred())
+	}
+}
+
+// withToolLoading copies: the list it was given, which may be an extension's cached one, keeps its flags.
+func TestToolLoadingCopies(t *testing.T) {
+	s := newTestService(t, newFakeHub().withMachine())
+	in := []proto.Tool{{Name: "ask_user", DeferLoading: true}, {Name: "inbox_move"}}
+	out := s.withToolLoading(context.Background(), in, true)
+	if out[0].DeferLoading || !out[1].DeferLoading {
+		t.Fatalf("marked %+v", out)
+	}
+	if !in[0].DeferLoading || in[1].DeferLoading {
+		t.Fatalf("the given list changed: %+v", in)
 	}
 }

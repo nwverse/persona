@@ -423,11 +423,20 @@ unreachable; with `ToolSearch` added the model loaded one on request, and the fi
 
 Marking every Persona tool `alwaysLoad` sent 96 full tool schemas with every request, about 49K tokens (Claude's
 tokenizer), while in 30 days of one install's assistant conversations 20 of them made 95% of the Persona calls and 51
-were never called. The manager now defers all but the tools called at least 5 times in that window (`coreTools` in
-`assistant/tool_loading.go`, pinned by `TestCoreToolsPinned`); a new tool is deferred until it is added there. A new
-conversation's request is about 22.5K tokens smaller (measured). A guest conversation is never deferred: its
-`--tools ""` has no `ToolSearch` to load one with. A deferred tool the model calls by name before loading it fails;
-`assistant.load_all_tools` puts every tool back up front from each conversation's next process start.
+were never called. The manager now defers all but the tools called at least 5 times in that window, less the two whose
+every call failed for want of setup (`ask_escalate`, `mail_accounts`): `coreTools` in `assistant/tool_loading.go`,
+pinned by `TestCoreToolsPinned`. A new tool is deferred until it is added there. Deferring all but the 36 tools called
+at least 5 times made a new conversation's request about 22.5K tokens smaller (measured); the shipped set defers those
+two as well, about 23K (estimated). The manager sets the flag on every list itself, so a tool that arrives deferred
+(a connector program's own `defer_loading`) still loads up front for a guest, an agent or while
+`assistant.load_all_tools` is on. A guest conversation is never deferred: its `--tools ""` has no `ToolSearch` to load
+one with. A deferred tool the model calls by name before loading it fails; `assistant.load_all_tools` puts every tool
+back up front from each conversation's next process start. `inbox_suggest`, which the inbox's processing conversations
+must call every round, is deferred too (it had few calls on the measured install), so each such conversation spends one
+ToolSearch call before its first suggestion. It cannot stay up front for those conversations only: a process lists its
+tools when it starts (a spare before it has a conversation), before the manager notes where the conversation came from
+(`originSet`, which `assistant/start.go` calls once the node has answered). Add it to `coreTools` if the AI twin's
+conversations show failed or extra calls.
 
 Claude Code also holds tool search off for a conversation that once ran without `ToolSearch` ("Tool search disabled:
 this conversation has run without ToolSearch, and stays so until it is compacted or cleared"), so conversations started

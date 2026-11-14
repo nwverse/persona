@@ -28,15 +28,15 @@ var coreTools = []string{
 	"task_scope", "todo_get", "todo_list", "todo_update",
 }
 
-// withToolLoading is an assistant conversation's tools with all but coreTools deferred (DeferLoading), or as they are
-// while assistant.load_all_tools is on. A copy: the list it is given may be shared.
-func (s *Service) withToolLoading(ctx context.Context, tools []proto.Tool) []proto.Tool {
-	if s.loadAllTools(ctx) {
-		return tools
-	}
+// withToolLoading is a conversation's tools with DeferLoading set by the manager alone, whatever the list came with (a
+// connector program's tools are decoded as it sent them): when deferring (an assistant conversation that has ToolSearch)
+// all but coreTools are deferred, unless assistant.load_all_tools is on; otherwise (a guest, an agent) none is. A copy:
+// the list it is given may be shared.
+func (s *Service) withToolLoading(ctx context.Context, tools []proto.Tool, deferring bool) []proto.Tool {
+	deferring = deferring && !s.loadAllTools(ctx)
 	out := slices.Clone(tools)
 	for i := range out {
-		out[i].DeferLoading = !slices.Contains(coreTools, out[i].Name)
+		out[i].DeferLoading = deferring && !slices.Contains(coreTools, out[i].Name)
 	}
 	return out
 }
