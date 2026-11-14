@@ -153,9 +153,9 @@ async function packageCheck(file) {
   need("only the three public resources enter the setup directory", ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].every(name => files.includes(name)) && !files.some(name => name.startsWith("/dist/setup/") && !["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].includes(name)));
   need("no test driver or privileged preload enters the public resource directory", !files.some(name => name.includes("first-run")) && !files.includes("/dist/setup/setup-preload.cjs") && files.includes("/dist/setup-preload.cjs"));
 }
-async function launch(file, profile, home) {
+async function launch(file, profile, home, linkLog) {
   const debugPort = await freePort();
-  const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1" };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1", ...(linkLog ? { PERSONA_TEST_LINK_LOG: linkLog } : {}) };
   for (const name of Object.keys(env)) if (name === "PERSONA_HUB_URL" || name.startsWith("PERSONA_DESKTOP_E2E") || name === "PERSONA_DESKTOP_SMOKE" || name === "ELECTRON_RUN_AS_NODE" || name === "NODE_OPTIONS") delete env[name];
   need("the packaged app has no Node runtime overrides", !env.ELECTRON_RUN_AS_NODE && !env.NODE_OPTIONS);
   const args = [`--user-data-dir=${profile}`, `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`];
@@ -241,7 +241,7 @@ process.stdin.on("end", () => {
     const probe = await run(exe, ["status", "--json"], { env: { ...process.env, PERSONA_TEST_LINK_LOG: record }, quiet: true });
     need("the synthetic Link answers status before app launch", probe.code === 0 && JSON.parse(probe.text).machine === "Example computer", probe.text);
   }
-  const { child, client } = await launch(file, profile, home);
+  const { child, client } = await launch(file, profile, home, platform === "win32" ? record : undefined);
   clients.push(client);
   const setup = await client.pageFor("setup with the separately installed test Link", target => target.url === "persona-setup://app/setup.html");
   await until("redacted Link state", () => setup.evaluate("document.querySelector('#link-state')?.textContent.includes('connected') && !document.querySelector('#pair-link').disabled"));

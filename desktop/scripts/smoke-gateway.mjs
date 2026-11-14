@@ -27,12 +27,10 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
   const page = Buffer.from(prefix ? index.replace('<base href="/" />', `<base href="${prefix}/" />`) : index, "utf8");
   const outside = [];
   const requests = [];
-  let strangers = 0;
-  /** A request outside the prefix. Chromium marks what a page asks for (fetch metadata, a socket's Origin); a request
-   *  with neither is another local program trying the port, not the app, and is only counted. */
+  /** A request outside the prefix fails acceptance even without browser metadata. A socket with an Origin or any
+   *  Sec-Fetch-Mode value is also page traffic; absence of these optional headers is not an escape from the boundary. */
   const escaped = (req, method) => {
-    if (!req.headers["sec-fetch-mode"] && !req.headers.origin) { strangers += 1; return; }
-    outside.push(`${method} ${(req.url ?? "").split("?")[0]} (${req.headers["sec-fetch-dest"] ?? "socket"})`);
+    outside.push(`${method} ${(req.url ?? "").split("?")[0]} (${req.headers["sec-fetch-dest"] ?? (req.headers.origin ? "socket" : "request")})`);
   };
   const sockets = new Set();
 
@@ -106,7 +104,6 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     url: `http://127.0.0.1:${port}${prefix}/`,
     /** The page's requests that escaped the prefix, as "METHOD path (destination)" without their query (it can carry a credential). */
     outside: () => [...outside],
-    strangers: () => strangers,
     /** Method, query-free path and response status only; never credentials, bodies or device tokens. */
     requests: () => [...requests],
     async close() {

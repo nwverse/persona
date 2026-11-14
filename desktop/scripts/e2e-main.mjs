@@ -290,10 +290,10 @@ async function finish(error) {
   if (finished) return;
   finished = true;
   clearTimeout(deadline);
-  const ok = !error && steps.length > 0 && steps.every(s => s.ok);
+  const ok = !error && steps.length > 0 && steps.every(s => s.ok) && consoleErrors.length === 0;
   const result = {
     ok, scenario, platform: process.platform, electron: process.versions.electron, hub: prefix ? `prefix ${prefix}` : "root",
-    ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+    ...(error ? { error: error instanceof Error ? error.message : String(error) } : consoleErrors.length ? { error: `Renderer errors: ${consoleErrors[0]}` } : {}),
     steps, screenshots: shots,
     boundary: { notifyRequests, shown: shown.map(n => ({ title: n.title, body: n.body })), closed: closed.length, badges, external },
     window: win && !win.isDestroyed() ? win.getBounds() : undefined,
