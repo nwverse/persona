@@ -282,7 +282,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // against 476,155 B, zh-Hans 477,467 B against 477,133 B; the lists' fields and their strings went; ⌘K's matcher,
 // lib/agent-search.ts, and its Filter's menu load on intent, not here; the idle tier, 43,106 B with ⌘K's Filter button
 // against 41,966 B, stays under its ceiling). main's 96 B of room stay.
-export const FIRST_SCREEN_BUDGET = 480_285;
+// #7329: saved prompts in every composer's "/" list and "Save as Prompt…" on your own messages add 110 B to ja, measured
+// in one environment against main at aa5e1ec43e (ja 480,249 B to 480,359 B; en 476,545 B to 476,668 B, zh-Hans 477,527 B
+// to 477,648 B): the small store the composers read their rows from (lib/saved-prompt-rows.ts) and the Composer's use of
+// it, the page event, the menu item and its words, and the settings tab's name and line. The list, its reads, its words,
+// the editor and the settings page are chunks of their own, loaded the first time a box has the focus, the menu item is
+// picked or the page opens. The budget moves by these 110 B; main's room stays.
+export const FIRST_SCREEN_BUDGET = 480_395;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
