@@ -1,6 +1,6 @@
 {
   "id": "chat-link-reopen",
-  "description": "An ordinary web link reopens at its own URL with no earlier page history; a forwarded port keeps its reload semantics. Needs a local HTTP server and a device, so the runner only launches the chat; the scenes below are driven by hand.",
+  "description": "An ordinary web link reopens at its own URL with no earlier page history; a forwarded port keeps its reload semantics. The runner only launches the chat; the reopen and cookie checks are driven by scripts/app/android_link_reopen_check.py against a local HTTP server, and the rest is by hand.",
   "requires": {
     "fields": []
   },
@@ -11,59 +11,42 @@
       "conversationKind": "agent"
     }
   ],
-  "automatedCoverage": "None: launching the chat proves nothing about page history, cookies or request counts. JVM coverage is ChatWebViewPoolTest and ChatLinkReopenTest, which use Robolectric shadows and do not run a real renderer.",
+  "automatedCoverage": "Runner: launching the chat proves nothing about page history. JVM: ChatWebViewPoolTest, ChatLinkReopenTest and ChatLinkWebSlotTest use Robolectric shadows (the WebView feature probes fixed to unsupported) and prove which view instance the pool hands out, destroys and creates, not what a real renderer keeps. Device helper: `android_link_reopen_check.py reopen` and `cookie` (see localServer) assert history.length, the load number of the page shown, request timestamps and whether the cookie arrives.",
   "localServer": {
-    "description": "Serve from the host machine and reach it from the device over a non-loopback address (adb reverse would make it a loopback port link). Count every request per path.",
+    "description": "Run `python3 scripts/app/android_link_reopen_check.py serve` on the host; it binds this computer's outbound address (not loopback; adb reverse would make it a forwarded port) and logs every request as JSON with a sequence number, a timestamp and whether the session cookie came. Send each printed link (/a, /login, /whoami) as its own message in a conversation, then run `reopen` and `cookie` with the phone's serial, the printed base address and the log path.",
     "pages": {
-      "/a": "Page A with a link to /b and a visible request counter",
-      "/b": "Page B with a link back to /a",
-      "/login": "Sets a long-lived cookie named session and redirects to /a",
-      "/whoami": "Echoes whether the session cookie arrived"
+      "/a": "Shows `page=a load=<request sequence> history=<history.length>` and a link to /b; never cached",
+      "/b": "Same state line for page b, with a link back to /a",
+      "/login": "Sets the session cookie and redirects to /a",
+      "/whoami": "Shows whether the session cookie arrived"
     }
   },
   "manualScenes": [
     {
-      "id": "reopen-after-in-page-navigation",
-      "route": "assistant",
-      "style": "glass",
-      "appearance": ["light", "dark"],
-      "steps": [
-        "Send a message containing the /a link and tap it",
-        "Tap the link to /b inside the page",
-        "Close the card, then tap the same message link again",
-        "Repeat the close and reopen three times"
-      ],
-      "expect": "Every reopen shows /a with the card's Back going straight to close (no page history). The server sees one /a request per opening and no request to /b after the first visit. No second renderer piles up: the process lists at most four WebView renderers."
-    },
-    {
       "id": "first-open-uses-preload",
       "route": "assistant",
       "style": "glass",
-      "appearance": ["light"],
+      "appearance": [
+        "light"
+      ],
       "steps": [
         "Receive an Agent reply containing the /a link and wait for the list to stop scrolling",
-        "Tap the link"
+        "Read the server log, then tap the link"
       ],
-      "expect": "The page is already loaded when the card rises. The server saw the /a request before the tap, not after."
-    },
-    {
-      "id": "cookie-and-cache-survive-reopen",
-      "route": "assistant",
-      "style": "glass",
-      "appearance": ["light", "dark"],
-      "steps": [
-        "Open /login, then close the card",
-        "Open /whoami and read the answer",
-        "Close, reopen /whoami, and watch the server log"
-      ],
-      "expect": "/whoami reports the cookie after every reopen: a new renderer shares the cookie store. The log shows no cache or cookie wipe side effects (a cached sub-resource is not fetched again)."
+      "expect": "The log has a request for /a before the tap (timestamps), and the card shows the page already loaded. No request count is asserted: a cache can answer a load without one."
     },
     {
       "id": "peek-back-and-selection",
       "route": "assistant",
       "style": "glass",
-      "appearance": ["light", "dark"],
-      "orientation": ["portrait", "landscape"],
+      "appearance": [
+        "light",
+        "dark"
+      ],
+      "orientation": [
+        "portrait",
+        "landscape"
+      ],
       "steps": [
         "Open /a, go to /b, shrink the card to Peek and expand it again",
         "Press Back twice",
@@ -75,27 +58,60 @@
       "id": "port-dev-server-keeps-forget-reload",
       "route": "agents",
       "style": "glass",
-      "appearance": ["light"],
+      "appearance": [
+        "light"
+      ],
       "steps": [
         "Run a dev server on the computer and tap its localhost link in an Agent reply",
         "Change a served file, close the card and tap the link again",
         "With the card open, edit a file that triggers hot reload",
         "Stop the server and tap the link"
       ],
-      "expect": "The reopened port shows the new content. Hot reload keeps working while the card is open. The phone's own loopback receives no request before the tap. A stopped server reports the 404 notice as before."
+      "expect": "The reopened port shows the new content. Hot reload keeps working while the card is open. A stopped server reports the 404 notice as before. Not observable here and not claimed: that the phone's own loopback receives no request."
     },
     {
       "id": "native-lark-and-renderer-recovery",
       "route": "assistant",
       "style": "glass",
-      "appearance": ["light"],
+      "appearance": [
+        "light"
+      ],
       "device": "medium tablet",
       "steps": [
         "Open a Feishu document link with the Lark extension on: the native reader shows, no page is loaded",
         "Choose Open as web page, close and reopen",
         "Kill the page's renderer process from adb on a web link and tap Reload"
       ],
-      "expect": "The reader shows without a WebView until switched; after the switch a closed page reopens fresh. A killed renderer shows the quit notice and Reload builds a new view. Not verifiable on a device if the renderer cannot be killed safely: report it as not verified on device."
+      "expect": "The reader shows without a WebView until switched; after the switch a closed page reopens fresh. A killed renderer shows the quit notice and Reload builds a new view. If the renderer cannot be killed safely, report it as not verified on device."
     }
+  ],
+  "automatedScenes": [
+    {
+      "id": "reopen-after-in-page-navigation",
+      "command": "android_link_reopen_check.py reopen --serial <serial> --base <base> --log <log>",
+      "asserts": [
+        "the first opening's history.length is 1",
+        "the reopened page's history.length is 1 (no in-page history from page B)",
+        "the reopened page is a different load than the first one",
+        "that load is a logged /a request made after the card closed",
+        "no /b request after the card closed"
+      ],
+      "reportedNotJudged": [
+        "whether the reopened page's request came before or after the tap (a prerendered page is loaded again when opened)"
+      ]
+    },
+    {
+      "id": "cookie-survives-reopen",
+      "command": "android_link_reopen_check.py cookie --serial <serial> --base <base> --log <log>",
+      "asserts": [
+        "/whoami reports cookie=yes on two openings after /login, each in a new view"
+      ]
+    }
+  ],
+  "notVerified": [
+    "How many WebView renderer processes exist (Chromium shares renderers by site, so the count does not follow the number of views).",
+    "That the phone's own loopback received no request for a forwarded port (nothing counts requests there).",
+    "How many requests one reopen makes: the preload happens when the card closes and the cache mode may answer a load without a request.",
+    "Whether the persisted cookie store and disk cache survive a reopen beyond what the cookie check shows."
   ]
 }
