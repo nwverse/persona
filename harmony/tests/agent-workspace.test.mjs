@@ -366,3 +366,22 @@ test('detail activation while opening cannot freeze an empty list before its sav
   assert.equal(workspace.visibleRows()[0].state, 'idle');
   workspace.hide();
 });
+
+
+test('leaving a retained list revokes an in-flight pin while keeping grouping preferences', async () => {
+ const {workspace,client,state}=await opened();workspace.setGroupingMode('machine');
+ let release,entered;const ready=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+ state.request=async call=>{if(call.path==='/api/v1/pins' && call.method==='GET'){entered();await gate;return {spaces:[],sessions:[]};}};
+ const pending=workspace.togglePin(client.sessions[0]);await ready;workspace.revokeRowActions();release();
+ assert.equal(await pending,false);assert.equal(state.calls.some(c=>c.method==='PUT'),false);assert.equal(workspace.groupingMode,'machine');assert.equal(workspace.isBoundTo(client),true);
+});
+
+
+test('a retired pin completion cannot release the busy lock of a new list operation', async () => {
+ const {workspace,client,state}=await opened({sessions:[agent('s1'),agent('s2')]});
+ const releases=[],arrivals=[];state.request=async call=>{if(call.path==='/api/v1/pins'&&call.method==='GET'){const n=arrivals.length;let release;const gate=new Promise(r=>release=r);releases.push(release);arrivals.push(n);await gate;return {spaces:[],sessions:[]};}};
+ const old=workspace.togglePin(client.sessions[0]);while(arrivals.length<1)await new Promise(r=>setImmediate(r));
+ workspace.revokeRowActions();const fresh=workspace.togglePin(client.sessions[1]);while(arrivals.length<2)await new Promise(r=>setImmediate(r));
+ releases[0]();assert.equal(await old,false);assert.equal(workspace.busy,true,'old finally must not release new operation');
+ releases[1]();assert.equal(await fresh,true);assert.equal(workspace.busy,false);assert.equal(state.calls.filter(c=>c.method==='PUT').length,1);
+});

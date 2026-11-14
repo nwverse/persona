@@ -4435,6 +4435,174 @@
     {
       "name": "session_tools_parent_folder",
       "value": "Parent folder"
+    },
+    {
+      "name": "app_style_system",
+      "value": "System"
+    },
+    {
+      "name": "agent_filter_button",
+      "value": "Filter"
+    },
+    {
+      "name": "agent_filters_title",
+      "value": "Agent filters"
+    },
+    {
+      "name": "agent_density",
+      "value": "List density"
+    },
+    {
+      "name": "agent_density_standard",
+      "value": "Standard"
+    },
+    {
+      "name": "agent_density_compact",
+      "value": "Compact"
+    },
+    {
+      "name": "agent_time_just_now",
+      "value": "Just now"
+    },
+    {
+      "name": "agent_time_minute_suffix",
+      "value": "m ago"
+    },
+    {
+      "name": "agent_time_hour_suffix",
+      "value": "h ago"
+    },
+    {
+      "name": "agent_time_day_suffix",
+      "value": "d ago"
+    },
+    {
+      "name": "conversation_spaces",
+      "value": "Conversations and spaces"
+    },
+    {
+      "name": "assistant_detail_more_tasks",
+      "value": "More tasks:"
+    },
+    {
+      "name": "assistant_detail_view_plan",
+      "value": "View plan"
+    },
+    {
+      "name": "assistant_detail_plan_refresh",
+      "value": "Plan details could not be refreshed."
+    },
+    {
+      "name": "assistant_detail_dismiss_plan",
+      "value": "Not now"
+    },
+    {
+      "name": "assistant_detail_view_receipt",
+      "value": "View receipt"
+    },
+    {
+      "name": "assistant_detail_receipt_done",
+      "value": "Done"
+    },
+    {
+      "name": "assistant_detail_receipt_stopped",
+      "value": "Stopped before completion"
+    },
+    {
+      "name": "assistant_detail_receipt_failed",
+      "value": "Failed to start"
+    },
+    {
+      "name": "assistant_detail_receipt_interrupted",
+      "value": "Interrupted"
+    },
+    {
+      "name": "assistant_detail_receipt_unknown",
+      "value": "Status unavailable"
+    },
+    {
+      "name": "assistant_detail_continued",
+      "value": "Continued after interruption"
+    },
+    {
+      "name": "assistant_detail_model_service_interruption",
+      "value": "Interrupted by a model service error"
+    },
+    {
+      "name": "assistant_detail_criteria",
+      "value": "Checks"
+    },
+    {
+      "name": "assistant_detail_criteria_met",
+      "value": "Met"
+    },
+    {
+      "name": "assistant_detail_criteria_more",
+      "value": "More checks not shown:"
+    },
+    {
+      "name": "assistant_detail_criterion_met",
+      "value": "Met"
+    },
+    {
+      "name": "assistant_detail_criterion_not_met",
+      "value": "Not met"
+    },
+    {
+      "name": "assistant_detail_criterion_unchecked",
+      "value": "Not checked"
+    },
+    {
+      "name": "assistant_detail_criterion_dropped",
+      "value": "Removed"
+    },
+    {
+      "name": "assistant_detail_criterion_unknown",
+      "value": "Unknown"
+    },
+    {
+      "name": "assistant_detail_retry",
+      "value": "Retry"
+    },
+    {
+      "name": "assistant_detail_continue",
+      "value": "Continue"
+    },
+    {
+      "name": "assistant_detail_open_task",
+      "value": "Open task"
+    },
+    {
+      "name": "assistant_detail_not_found",
+      "value": "This item is no longer available."
+    },
+    {
+      "name": "interaction_question_later",
+      "value": "Later"
+    },
+    {
+      "name": "interaction_question_reopen",
+      "value": "Answer"
+    },
+    {
+      "name": "agent_untitled",
+      "value": "Untitled Agent"
+    },
+    {
+      "name": "assistant_detail_goal",
+      "value": "Goal"
+    },
+    {
+      "name": "assistant_detail_out_of_bounds",
+      "value": "Out of bounds"
+    },
+    {
+      "name": "assistant_detail_done_when",
+      "value": "Done when"
+    },
+    {
+      "name": "assistant_detail_brief",
+      "value": "Brief"
     }
   ]
 }

@@ -55,6 +55,11 @@ export function isPersonaAskUserQuestion(request: Decision, selectedKind: string
   return selectedKind === 'conversation' && request.kind === 'question' && interactionToolName(request) === 'ask_user';
 }
 
+/** Later only collapses an open ask_user question in an editable Persona conversation. */
+export function interactionCanDefer(request: Decision, selectedKind: string, readOnly: boolean, busy: boolean): boolean {
+  return !readOnly && !busy && request.status === 'open' && isPersonaAskUserQuestion(request, selectedKind);
+}
+
 /** Keep every other open request blocking, even when an ask_user question precedes it. */
 export function firstBlockingDecision(requests: Decision[], selectedKind: string): Decision | undefined {
   return requests.find((request: Decision): boolean =>

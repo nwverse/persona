@@ -13,6 +13,7 @@ registerHooks({
   load(url, context, next) {
     if (url === 'native-environment:display') return { format: 'module', shortCircuit: true, source: `
       const s = globalThis.__personaNativeEnvironment;
+      export const window = {AvoidAreaType:{TYPE_NAVIGATION_INDICATOR:3}};
       export const display = { isFoldable: () => s.foldable, getCurrentFoldCreaseRegion() {
         if (s.failure) throw new Error('display unavailable'); return s.region;
       } };
@@ -36,4 +37,15 @@ test('ordinary native layout survives absent, invalid or unavailable fold geomet
   environment.update({}); assert.equal(environment.fontScale, 3.2);
   screen.failure = true; environment.update({}); assert.equal(environment.nativeHoverAvailable, false);
   screen.failure = false; screen.foldable = false; environment.update({}); assert.equal(environment.nativeHoverAvailable, false);
+});
+
+
+test('window geometry and native navigation avoidance update together and listeners retire',()=>{
+ const environment=new NativeEnvironment(),handlers=new Map();let rect={top:40,height:1000},bottom=60;
+ const nativeWindow={getWindowProperties:()=>({windowRect:rect}),getWindowAvoidArea:()=>({bottomRect:{height:bottom}}),on:(name,callback)=>handlers.set(name,callback),off:(name,callback)=>{assert.equal(handlers.get(name),callback);handlers.delete(name);}};
+ environment.bindWindow(nativeWindow);assert.equal(environment.safeBottomPx,980);
+ rect={top:40,height:1200};handlers.get('windowSizeChange')({width:600,height:1200});assert.equal(environment.safeBottomPx,1180);
+ bottom=80;handlers.get('avoidAreaChange')({type:3,area:{}});assert.equal(environment.safeBottomPx,1160);
+ rect={top:140,height:1200};handlers.get('windowRectChange')({rect});assert.equal(environment.safeBottomPx,1260);
+ environment.unbindWindow();assert.equal(handlers.size,0);
 });

@@ -121,6 +121,7 @@ test('a stale form cannot submit values to a replacement request',async()=>{
 test('a late approval or interrupt failure cannot overwrite another conversation state',async()=>{
   for (const action of ['answer','stop']) {
     const {model}=fixture(), request=decision(model), wait=deferred();
+    if (action === 'stop') model.selected.state = 'working';
     model.repository.resolve=()=>wait.promise; model.repository.stop=()=>wait.promise;
     const result=action==='answer'?model.answer('approve',{},request):model.stop();
     model.selected=new ResourceRow('chat-two','Other','session'); model.error=''; model.operationState='';
@@ -561,4 +562,44 @@ test('a machine-directory notification requests fresh scoped facts instead of ap
   assert.equal(model.machines[0].id,'owned');
   t.mock.timers.tick(100);await Promise.resolve();
   assert.deepEqual(scopes,[owner]);assert.equal(model.machines[0].id,'owned');
+});
+
+
+test('selecting a context only stages this conversation draft and sends no message',async()=>{
+ const {model,writes}=fixture();model.canCompose=()=>true;model.persistDraft=async()=>{};
+ const item=new ResourceRow('reference','Reference','knowledge');item.group=model.profile.id;item.manager=model.profile.manager;
+ const target=model.target();assert.equal(await model.addDraftContext(item,target,model.connectionGeneration(),model.scope()),true);
+ assert.equal(model.target(),target);assert.equal(writes.length,0);
+ const references=JSON.parse(model.sourceContext).contexts;assert.equal(references.at(-1).id,'reference');assert.equal(references[0].id,'source');
+});
+test('a context from a different owner is not staged',async()=>{
+ const {model}=fixture();model.canCompose=()=>true;const before=model.sourceContext;let writes=0;model.persistDraft=async()=>writes++;
+ const item=new ResourceRow('reference','Reference','todo');item.manager='other';
+ assert.equal(await model.addDraftContext(item,model.target(),model.connectionGeneration(),model.scope()),false);assert.equal(writes,0);assert.equal(model.sourceContext,before);
+});
+test('failed context persistence restores the old context without replacing a newer edit',async()=>{
+ for(const newer of [false,true]){
+  const {model}=fixture();model.canCompose=()=>true;const before=model.sourceContext,wait=deferred();model.persistDraft=()=>wait.promise;
+  const item=new ResourceRow('reference','Reference','inbox');item.manager=model.profile.manager;
+  const pending=model.addDraftContext(item,model.target(),model.connectionGeneration(),model.scope());
+  if(newer){model.sourceContext='newer-context';model.draftRevision='newer-revision';}
+  wait.reject(Error('disk unavailable'));assert.equal(await pending,false);assert.equal(model.sourceContext,newer?'newer-context':before);
+ }
+});
+
+
+test('knowledge contexts retain their entry kind when IDs collide across categories',async()=>{
+ const {model,writes}=fixture();model.canCompose=()=>true;model.persistDraft=async()=>{};model.sourceContext='';
+ for(const path of ['projects','docs','docs']){const row=new ResourceRow('shared-id','Reference','knowledge');row.path=path;row.manager=model.profile.manager;assert.equal(await model.addDraftContext(row,model.target(),model.connectionGeneration(),model.scope()),true);}
+ const refs=JSON.parse(model.sourceContext).contexts;assert.equal(refs.length,2);assert.deepEqual(refs.map(r=>r.entry_kind),['projects','docs']);assert.equal(writes.length,0);assert.match(model.prepareMessageText('Inspect'),/entry_kind/);
+});
+
+
+test('interrupt is active-turn only and its pending admission retires with the route',async()=>{
+ const {model}=fixture();let posts=0;model.repository.stop=async()=>posts++;
+ assert.equal(model.canStop(),false);await model.stop();assert.equal(posts,0);
+ model.selected.state='working';assert.equal(model.canStop(),true);let visible=true;const gate=deferred(),entered=deferred();
+ model.repository.stop=async(row,admit)=>{entered.resolve();await gate.promise;if(admit())posts++;};
+ const stopping=model.stop(()=>visible);await entered.promise;assert.equal(model.stopPending(),true);assert.equal(model.canStop(),false);
+ visible=false;gate.resolve();await stopping;assert.equal(posts,0);assert.equal(model.stopPending(),false);
 });

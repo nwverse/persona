@@ -4435,6 +4435,174 @@
     {
       "name": "session_tools_parent_folder",
       "value": "親フォルダー"
+    },
+    {
+      "name": "app_style_system",
+      "value": "システム"
+    },
+    {
+      "name": "agent_filter_button",
+      "value": "絞り込み"
+    },
+    {
+      "name": "agent_filters_title",
+      "value": "Agent の絞り込み"
+    },
+    {
+      "name": "agent_density",
+      "value": "リストの密度"
+    },
+    {
+      "name": "agent_density_standard",
+      "value": "標準"
+    },
+    {
+      "name": "agent_density_compact",
+      "value": "コンパクト"
+    },
+    {
+      "name": "agent_time_just_now",
+      "value": "たった今"
+    },
+    {
+      "name": "agent_time_minute_suffix",
+      "value": "分前"
+    },
+    {
+      "name": "agent_time_hour_suffix",
+      "value": "時間前"
+    },
+    {
+      "name": "agent_time_day_suffix",
+      "value": "日前"
+    },
+    {
+      "name": "conversation_spaces",
+      "value": "会話とスペース"
+    },
+    {
+      "name": "assistant_detail_more_tasks",
+      "value": "ほかのタスク："
+    },
+    {
+      "name": "assistant_detail_view_plan",
+      "value": "計画を見る"
+    },
+    {
+      "name": "assistant_detail_plan_refresh",
+      "value": "計画の詳細を更新できませんでした。"
+    },
+    {
+      "name": "assistant_detail_dismiss_plan",
+      "value": "今回は見送る"
+    },
+    {
+      "name": "assistant_detail_view_receipt",
+      "value": "記録を見る"
+    },
+    {
+      "name": "assistant_detail_receipt_done",
+      "value": "完了"
+    },
+    {
+      "name": "assistant_detail_receipt_stopped",
+      "value": "完了前に停止"
+    },
+    {
+      "name": "assistant_detail_receipt_failed",
+      "value": "開始に失敗"
+    },
+    {
+      "name": "assistant_detail_receipt_interrupted",
+      "value": "中断"
+    },
+    {
+      "name": "assistant_detail_receipt_unknown",
+      "value": "状態を確認できません"
+    },
+    {
+      "name": "assistant_detail_continued",
+      "value": "中断後に再開"
+    },
+    {
+      "name": "assistant_detail_model_service_interruption",
+      "value": "モデルサービスのエラーにより中断"
+    },
+    {
+      "name": "assistant_detail_criteria",
+      "value": "確認項目"
+    },
+    {
+      "name": "assistant_detail_criteria_met",
+      "value": "達成"
+    },
+    {
+      "name": "assistant_detail_criteria_more",
+      "value": "表示されていない確認項目："
+    },
+    {
+      "name": "assistant_detail_criterion_met",
+      "value": "達成"
+    },
+    {
+      "name": "assistant_detail_criterion_not_met",
+      "value": "未達成"
+    },
+    {
+      "name": "assistant_detail_criterion_unchecked",
+      "value": "未確認"
+    },
+    {
+      "name": "assistant_detail_criterion_dropped",
+      "value": "削除済み"
+    },
+    {
+      "name": "assistant_detail_criterion_unknown",
+      "value": "不明"
+    },
+    {
+      "name": "assistant_detail_retry",
+      "value": "再試行"
+    },
+    {
+      "name": "assistant_detail_continue",
+      "value": "続行"
+    },
+    {
+      "name": "assistant_detail_open_task",
+      "value": "タスクを開く"
+    },
+    {
+      "name": "assistant_detail_not_found",
+      "value": "この項目は利用できません。"
+    },
+    {
+      "name": "interaction_question_later",
+      "value": "後で"
+    },
+    {
+      "name": "interaction_question_reopen",
+      "value": "回答する"
+    },
+    {
+      "name": "agent_untitled",
+      "value": "名前のない Agent"
+    },
+    {
+      "name": "assistant_detail_goal",
+      "value": "目標"
+    },
+    {
+      "name": "assistant_detail_out_of_bounds",
+      "value": "対象外"
+    },
+    {
+      "name": "assistant_detail_done_when",
+      "value": "完了条件"
+    },
+    {
+      "name": "assistant_detail_brief",
+      "value": "概要"
     }
   ]
 }

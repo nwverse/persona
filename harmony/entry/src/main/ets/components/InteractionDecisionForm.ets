@@ -1,15 +1,16 @@
-import { ComposeListItemV2, ContentItemV2, OperateItemV2, OperateCheckV2 } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { Decision, DecisionField, Wire } from '../models/Wire';
 import {
   InteractionChoice, InteractionSchemaField, InteractionValidation,
-  interactionCanSubmit, interactionElicitationDefaults, interactionElicitationMessage,
+  interactionCanDefer, interactionCanSubmit, interactionElicitationDefaults, interactionElicitationMessage,
   interactionElicitationMode, interactionElicitationSupported, interactionElicitationUrl, interactionHistoryResolution,
   interactionPermissionFieldPlaceholder, interactionQuestionOptions,
   interactionSchemaFields, interactionScreenCanCancel, interactionScreenMulti, interactionScreenOptions,
   interactionScreenQuestion, interactionScreenSubmitLabel, validateInteractionElicitation
 } from '../models/InteractionDecision';
 import { Tokens } from '../design/Tokens';
+import { Colors } from '../design/Colors';
+import { ButtonStyles } from '../design/Controls';
 import { tr } from '../design/Strings';
 
 @ComponentV2
@@ -17,6 +18,7 @@ export struct InteractionDecisionForm {
   @Require @Param model: ClientModel;
   @Require @Param request: Decision;
   @Param readOnly: boolean = false;
+  @Param availableHeight: number = 0;
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Local selected: string = '';
   @Local selectedScreen: string = '';
@@ -24,6 +26,9 @@ export struct InteractionDecisionForm {
   @Local screenText: string = '';
   @Local openedUrl: string = '';
   @Local busy: boolean = false;
+  @Local deferred: boolean = false;
+  @Local headerHeight: number = 0;
+  @Local footerHeight: number = 0;
   @Local textValues: Record<string, string> = Wire.payload([], []) as Record<string, string>;
   @Local questionPicks: Record<string, string[]> = Wire.payload([], []) as Record<string, string[]>;
   @Local formValues: Record<string, Object> = Wire.payload([], []);
@@ -34,6 +39,9 @@ export struct InteractionDecisionForm {
     this.selectedScreen = '';
     this.screenOptions = [];
     this.screenText = '';
+    this.deferred = false;
+    this.headerHeight = 0;
+    this.footerHeight = 0;
   }
 
   private resetForm(): void {
@@ -43,6 +51,9 @@ export struct InteractionDecisionForm {
     this.screenText = '';
     this.openedUrl = '';
     this.busy = false;
+    this.deferred = false;
+    this.headerHeight = 0;
+    this.footerHeight = 0;
     this.textValues = Wire.payload([], []) as Record<string, string>;
     this.questionPicks = Wire.payload([], []) as Record<string, string[]>;
     this.formValues = interactionElicitationDefaults(this.request);
@@ -50,6 +61,45 @@ export struct InteractionDecisionForm {
 
   private canRespond(): boolean {
     return !this.busy && this.model.canApprove() && interactionCanSubmit(this.request, this.readOnly);
+  }
+
+  private canDefer(): boolean {
+    return interactionCanDefer(this.request, this.model.selected.kind, this.readOnly, this.busy);
+  }
+
+  private footerButtonCount(): number {
+    if (this.readOnly) return 0;
+    if (this.deferred) return 1;
+    if (this.request.kind === 'question') return 1 + (this.canDefer() ? 1 : 0) + (interactionScreenCanCancel(this.request) ? 1 : 0);
+    if (this.request.kind === 'elicitation') {
+      const mode = interactionElicitationMode(this.request);
+      if (mode === 'url') return 2 + (interactionElicitationUrl(this.request) ? 2 : 0);
+      return 2 + (interactionElicitationSupported(this.request) ? 1 : 0);
+    }
+    return 1;
+  }
+
+  private bodyMaximumHeight(): number {
+    if (this.availableHeight <= 0) return 0;
+    const estimatedFooter = this.footerButtonCount() * Tokens.touch + Math.max(0, this.footerButtonCount() - 1) * Tokens.gap;
+    return Math.max(0, this.availableHeight - this.headerHeight - Math.max(this.footerHeight, estimatedFooter) -
+      Tokens.page * 2 - Tokens.gap * 2);
+  }
+
+  private headerPrompt(): string {
+    if (this.request.kind === 'screen') return interactionScreenQuestion(this.request);
+    if (this.request.kind === 'elicitation') return interactionElicitationMessage(this.request);
+    return this.request.prompt;
+  }
+
+  private submitButtonLabel(): string {
+    return this.request.kind === 'screen' && interactionScreenMulti(this.request) ?
+      interactionScreenSubmitLabel(this.request) : tr('confirm');
+  }
+
+  private submitButtonOption(): string {
+    return this.request.kind === 'screen' && interactionScreenMulti(this.request) ? 'submit' :
+      this.request.kind === 'screen' ? this.selectedScreen : this.selected;
   }
 
   private statusLabel(): string {
@@ -248,40 +298,87 @@ export struct InteractionDecisionForm {
   }
 
   @Builder actionChoice(label: string, value: string) {
-    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: label }),
-      operateItemV2: new OperateItemV2({ radio: new OperateCheckV2({ isCheck: this.selected === value,
-        accessibilityText: label, onChange: (checked: boolean) => { if (checked) this.selected = value; } }) }) })
-      .enabled(this.canRespond())
+    Row({ space: Tokens.inset }) {
+      Text(label).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+      Radio({ value: value, group: 'persona-interaction-action-' + this.request.id })
+        .checked(this.selected === value)
+        .radioStyle({ checkedBackgroundColor: Colors.action, uncheckedBorderColor: Colors.control, indicatorColor: Colors.onAction })
+        .accessibilityText(label).enabled(this.canRespond())
+        .onChange((checked: boolean) => { if (checked) this.selected = value; })
+    }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.fine, bottom: Tokens.fine })
+      .enabled(this.canRespond()).onClick(() => { if (this.canRespond()) this.selected = value; })
+      .id('interaction.action.' + value)
   }
 
   @Builder questionChoice(field: DecisionField, choice: InteractionChoice) {
-    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: choice.label, secondaryText: choice.detail || undefined }),
-      operateItemV2: new OperateItemV2({
-        checkbox: field.kind === 'multi_choice' ? new OperateCheckV2({ isCheck: this.pickedQuestion(field, choice.label),
-          accessibilityText: choice.label, onChange: (checked: boolean) => this.pickQuestion(field, choice, checked) }) : undefined,
-        radio: field.kind !== 'multi_choice' ? new OperateCheckV2({ isCheck: this.pickedQuestion(field, choice.label),
-          accessibilityText: choice.label, onChange: (checked: boolean) => { if (checked) this.pickQuestion(field, choice); } }) : undefined
-      }) }).enabled(this.canRespond())
+    Row({ space: Tokens.inset }) {
+      Column({ space: Tokens.fine }) {
+        Text(choice.label).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
+        if (choice.detail) Text(choice.detail).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick(() => {
+        if (this.canRespond()) this.pickQuestion(field, choice);
+      })
+      if (field.kind === 'multi_choice') Checkbox({ name: choice.label })
+        .select(this.pickedQuestion(field, choice.label)).selectedColor(Colors.action).unselectedColor(Colors.control)
+        .accessibilityText(choice.label).responseRegion({ x: -Tokens.fine, y: -Tokens.fine, width: Tokens.touch, height: Tokens.touch }).enabled(this.canRespond())
+        .onChange((checked: boolean) => this.pickQuestion(field, choice, checked))
+      else Radio({ value: choice.label, group: 'persona-interaction-question-' + this.request.id + '-' + field.key })
+        .checked(this.pickedQuestion(field, choice.label))
+        .radioStyle({ checkedBackgroundColor: Colors.action, uncheckedBorderColor: Colors.control, indicatorColor: Colors.onAction })
+        .accessibilityText(choice.label).responseRegion({ x: -Tokens.fine, y: -Tokens.fine, width: Tokens.touch, height: Tokens.touch }).enabled(this.canRespond())
+        .onChange((checked: boolean) => { if (checked) this.pickQuestion(field, choice); })
+    }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.fine, bottom: Tokens.fine })
+      .enabled(this.canRespond()).onClick(() => { if (this.canRespond() && field.kind !== 'multi_choice') this.pickQuestion(field, choice); })
+      .id('interaction.question.' + field.key + '.' + choice.label)
   }
 
   @Builder screenChoice(choice: InteractionChoice) {
-    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: choice.label, secondaryText: choice.detail || undefined }),
-      operateItemV2: new OperateItemV2({
-        checkbox: interactionScreenMulti(this.request) && choice.kind === 'plain' ? new OperateCheckV2({ isCheck: this.screenPicked(choice),
-          accessibilityText: choice.label, onChange: (checked: boolean) => this.toggleScreenOption(choice, checked) }) : undefined,
-        radio: !interactionScreenMulti(this.request) ? new OperateCheckV2({ isCheck: this.selectedScreen === choice.key,
-          accessibilityText: choice.label, onChange: (checked: boolean) => { if (checked) this.selectedScreen = choice.key; } }) : undefined
-      }) }).enabled(this.canRespond())
+    Row({ space: Tokens.inset }) {
+      Column({ space: Tokens.fine }) {
+        Text(choice.label).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
+        if (choice.detail) Text(choice.detail).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick(() => {
+        if (!this.canRespond()) return;
+        if (interactionScreenMulti(this.request) && choice.kind === 'plain') this.toggleScreenOption(choice);
+        else if (!interactionScreenMulti(this.request)) this.selectedScreen = choice.key;
+      })
+      if (interactionScreenMulti(this.request) && choice.kind === 'plain') Checkbox({ name: choice.label })
+        .select(this.screenPicked(choice)).selectedColor(Colors.action).unselectedColor(Colors.control)
+        .accessibilityText(choice.label).responseRegion({ x: -Tokens.fine, y: -Tokens.fine, width: Tokens.touch, height: Tokens.touch }).enabled(this.canRespond())
+        .onChange((checked: boolean) => this.toggleScreenOption(choice, checked))
+      else if (!interactionScreenMulti(this.request)) Radio({ value: choice.key, group: 'persona-interaction-screen-' + this.request.id })
+        .checked(this.selectedScreen === choice.key)
+        .radioStyle({ checkedBackgroundColor: Colors.action, uncheckedBorderColor: Colors.control, indicatorColor: Colors.onAction })
+        .accessibilityText(choice.label).responseRegion({ x: -Tokens.fine, y: -Tokens.fine, width: Tokens.touch, height: Tokens.touch }).enabled(this.canRespond())
+        .onChange((checked: boolean) => { if (checked) this.selectedScreen = choice.key; })
+    }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.fine, bottom: Tokens.fine })
+      .enabled(this.canRespond()).onClick(() => {
+        if (!this.canRespond()) return;
+        if (!interactionScreenMulti(this.request)) this.selectedScreen = choice.key;
+      }).id('interaction.screen.' + choice.key)
   }
 
   @Builder schemaChoice(field: InteractionSchemaField, index: number) {
-    ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: field.choiceLabels[index] }),
-      operateItemV2: new OperateItemV2({
-        checkbox: field.type === 'array' ? new OperateCheckV2({ isCheck: this.schemaPicked(field, index), accessibilityText: field.choiceLabels[index],
-          onChange: (checked: boolean) => this.toggleSchemaChoice(field, index, checked) }) : undefined,
-        radio: field.type !== 'array' ? new OperateCheckV2({ isCheck: this.schemaPicked(field, index), accessibilityText: field.choiceLabels[index],
-          onChange: (checked: boolean) => { if (checked) this.setValue(field.key, field.choices[index]); } }) : undefined
-      }) }).enabled(this.canRespond())
+    Row({ space: Tokens.inset }) {
+      Text(field.choiceLabels[index]).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1).onClick(() => {
+        if (!this.canRespond()) return;
+        if (field.type === 'array') this.toggleSchemaChoice(field, index, !this.schemaPicked(field, index));
+        else this.setValue(field.key, field.choices[index]);
+      })
+      if (field.type === 'array') Checkbox({ name: field.choiceLabels[index] })
+        .select(this.schemaPicked(field, index)).selectedColor(Colors.action).unselectedColor(Colors.control)
+        .accessibilityText(field.choiceLabels[index]).responseRegion({ x: -Tokens.fine, y: -Tokens.fine, width: Tokens.touch, height: Tokens.touch }).enabled(this.canRespond())
+        .onChange((checked: boolean) => this.toggleSchemaChoice(field, index, checked))
+      else Radio({ value: String(field.choices[index]), group: 'persona-interaction-field-' + this.request.id + '-' + field.key })
+        .checked(this.schemaPicked(field, index))
+        .radioStyle({ checkedBackgroundColor: Colors.action, uncheckedBorderColor: Colors.control, indicatorColor: Colors.onAction })
+        .accessibilityText(field.choiceLabels[index]).responseRegion({ x: -Tokens.fine, y: -Tokens.fine, width: Tokens.touch, height: Tokens.touch }).enabled(this.canRespond())
+        .onChange((checked: boolean) => { if (checked) this.setValue(field.key, field.choices[index]); })
+    }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.fine, bottom: Tokens.fine })
+      .enabled(this.canRespond()).onClick(() => {
+        if (!this.canRespond()) return;
+        if (field.type !== 'array') this.setValue(field.key, field.choices[index]);
+      }).id('interaction.field.choice.' + field.key + '.' + String(index))
   }
 
   private toggleSchemaChoice(field: InteractionSchemaField, index: number, checked: boolean): void {
@@ -297,6 +394,8 @@ export struct InteractionDecisionForm {
       Text(field.title).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
       ForEach(this.questionChoices(field), (choice: InteractionChoice) => this.questionChoice(field, choice), (choice: InteractionChoice) => choice.label)
       TextInput({ text: this.textValues[field.key + ':other'] || '', placeholder: tr('other') })
+        .width('100%').constraintSize({ minHeight: Tokens.touch }).fontColor(Colors.ink).placeholderColor(Colors.secondary).caretColor(Colors.action)
+        .fontSize(Tokens.body).placeholderFont({ size: Tokens.body })
         .enabled(this.canRespond()).onChange((value: string) => this.setText(field.key + ':other', value)).id('interaction.question.' + field.key + '.other')
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -306,6 +405,8 @@ export struct InteractionDecisionForm {
       Text(field.title).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
       TextInput({ text: this.textValues[field.key] || '', placeholder: interactionPermissionFieldPlaceholder(this.request, field.key) })
         .type(field.kind === 'secret' ? InputType.Password : InputType.Normal).showPasswordIcon(false)
+        .width('100%').constraintSize({ minHeight: Tokens.touch }).fontColor(Colors.ink).placeholderColor(Colors.secondary).caretColor(Colors.action)
+        .fontSize(Tokens.body).placeholderFont({ size: Tokens.body })
         .enabled(this.canRespond()).onChange((value: string) => this.setText(field.key, value)).id('interaction.field.' + field.key)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -314,20 +415,22 @@ export struct InteractionDecisionForm {
     Column({ space: Tokens.gap }) {
       Row({ space: Tokens.gap }) {
         Text(field.title).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
-        if (field.required) Text(tr('required')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+        if (field.required) Text(tr('required')).fontSize(Tokens.meta).fontColor(Colors.secondary)
       }.width('100%')
-      if (field.description) Text(field.description).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
+      if (field.description) Text(field.description).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
       if (field.type === 'boolean') {
         Toggle({ type: ToggleType.Switch, isOn: this.formValues[field.key] === true })
-          .enabled(this.canRespond()).onChange((checked: boolean) => this.setValue(field.key, checked)).id('interaction.field.' + field.key)
+          .selectedColor(Colors.action).enabled(this.canRespond()).onChange((checked: boolean) => this.setValue(field.key, checked)).id('interaction.field.' + field.key)
       } else if (field.choices.length > 0) {
         ForEach(field.choices, (_choice: Object, index: number) => this.schemaChoice(field, index), (choice: Object, index: number) => field.key + ':' + String(index) + ':' + String(choice))
       } else {
         TextInput({ text: this.schemaText(field), placeholder: field.title }).type(this.inputType(field)).showPasswordIcon(false)
+          .width('100%').constraintSize({ minHeight: Tokens.touch }).fontColor(Colors.ink).placeholderColor(Colors.secondary).caretColor(Colors.action)
+          .fontSize(Tokens.body).placeholderFont({ size: Tokens.body })
           .enabled(this.canRespond()).onChange((value: string) => this.setValue(field.key, value || undefined)).id('interaction.field.' + field.key)
       }
       if (this.schemaValidation().errors[field.key]) Text(tr(this.schemaValidation().errors[field.key] === 'required' ? 'required' : 'failed')).fontSize(Tokens.meta)
-        .fontColor($r('app.color.persona_danger')).width('100%')
+        .fontColor(Colors.needs).width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -335,54 +438,43 @@ export struct InteractionDecisionForm {
     if (interactionElicitationSupported(this.request)) {
       ForEach(this.schemaFields(), (field: InteractionSchemaField) => this.elicitationField(field), (field: InteractionSchemaField) => field.key)
     } else {
-      Text(tr('unknown_field')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
+      Text(tr('unknown_field')).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
     }
   }
 
   @Builder bodyContent() {
     if (this.request.kind === 'question') {
       ForEach(this.request.fields, (field: DecisionField) => this.questionField(field), (field: DecisionField) => field.key)
-      if (interactionScreenCanCancel(this.request)) Button(tr('cancel')).enabled(this.canRespond()).onClick(() => this.submit('cancel'))
     } else if (this.request.kind === 'plan') {
       this.actionChoice(tr('approve'), 'approve')
       this.actionChoice(tr('deny'), 'deny')
       if (this.selected === 'deny') TextArea({ text: this.textValues['feedback'] || '', placeholder: tr('feedback') })
-        .height(Tokens.inputExpanded).enabled(this.canRespond()).onChange((value: string) => this.setText('feedback', value))
+        .width('100%').constraintSize({ minHeight: Tokens.touch }).fontSize(Tokens.body).lineHeight(Tokens.lineHeight)
+        .fontColor(Colors.ink).placeholderColor(Colors.secondary).caretColor(Colors.action)
+        .enabled(this.canRespond()).onChange((value: string) => this.setText('feedback', value))
     } else if (this.request.kind === 'permission') {
       ForEach(this.request.fields, (field: DecisionField) => this.permissionField(field), (field: DecisionField) => field.key)
       this.actionChoice(tr('allow'), 'approve')
       this.actionChoice(tr('deny'), 'deny')
     } else if (this.request.kind === 'screen') {
-      if (interactionScreenQuestion(this.request)) Text(interactionScreenQuestion(this.request)).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
       ForEach(interactionScreenOptions(this.request), (choice: InteractionChoice) => this.screenChoice(choice), (choice: InteractionChoice) => choice.key)
       if (interactionScreenMulti(this.request) && this.screenFreeText()) TextInput({ text: this.screenText, placeholder: tr('other') })
+        .width('100%').constraintSize({ minHeight: Tokens.touch }).fontSize(Tokens.body).placeholderFont({ size: Tokens.body })
+        .fontColor(Colors.ink).placeholderColor(Colors.secondary).caretColor(Colors.action)
         .enabled(this.canRespond()).onChange((value: string) => this.screenText = value).id('interaction.screen.other')
       else if (!interactionScreenMulti(this.request) && this.selectedScreenChoice()?.kind === 'type_something') TextInput({ text: this.screenText, placeholder: tr('other') })
+        .width('100%').constraintSize({ minHeight: Tokens.touch }).fontSize(Tokens.body).placeholderFont({ size: Tokens.body })
+        .fontColor(Colors.ink).placeholderColor(Colors.secondary).caretColor(Colors.action)
         .enabled(this.canRespond()).onChange((value: string) => this.screenText = value).id('interaction.screen.other')
     } else if (this.request.kind === 'elicitation') {
-      Text(interactionElicitationMessage(this.request)).fontSize(Tokens.body).width('100%')
       if (interactionElicitationMode(this.request) === 'url' && interactionElicitationUrl(this.request)) {
         Text(interactionElicitationUrl(this.request)).fontSize(Tokens.meta).width('100%')
-        Row({ space: Tokens.gap }) {
-          Button(tr('open')).enabled(this.canRespond()).onClick(() => this.openUrl()).id('interaction.open')
-        }.width('100%')
-        Button(tr('continue')).enabled(this.canSubmit()).onClick(() => this.submit('accept')).id('interaction.continue')
       } else if (interactionElicitationMode(this.request) === 'url') {
-        Text(tr('unsafe_endpoint')).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).width('100%')
+        Text(tr('unsafe_endpoint')).fontSize(Tokens.meta).fontColor(Colors.needs).width('100%')
       } else {
         this.elicitationForm()
-        if (interactionElicitationSupported(this.request)) Button(tr('confirm')).enabled(this.canSubmit())
-          .onClick(() => this.submit('accept')).id('interaction.accept')
       }
-      Row({ space: Tokens.gap }) {
-        Button(tr('deny')).enabled(this.canRespond()).onClick(() => this.submit('decline')).layoutWeight(1)
-        Button(tr('cancel')).enabled(this.canRespond()).onClick(() => this.submit('cancel')).layoutWeight(1)
-      }.width('100%')
     }
-    if (this.request.kind !== 'elicitation') Button(this.request.kind === 'screen' && interactionScreenMulti(this.request) ? interactionScreenSubmitLabel(this.request) : tr('confirm')).enabled(this.canSubmit())
-      .width('100%').constraintSize({ minHeight: Tokens.touch }).onClick(() => this.submit(this.request.kind === 'question' ? 'answer' :
-        this.request.kind === 'screen' && interactionScreenMulti(this.request) ? 'submit' :
-          this.request.kind === 'screen' ? this.selectedScreen : this.selected)).id('interaction.submit')
   }
 
   private openUrl(): void {
@@ -392,20 +484,74 @@ export struct InteractionDecisionForm {
     this.openedUrl = address;
   }
 
+  @Builder scrollableBody() {
+    Scroll() {
+      Column({ space: Tokens.section }) { this.bodyContent() }
+        .width('100%').alignItems(HorizontalAlign.Start)
+    }.width('100%').constraintSize({ maxHeight: this.bodyMaximumHeight() }).scrollBar(BarState.Auto).align(Alignment.TopStart)
+  }
+
+  @Builder headerContent() {
+    Column({ space: Tokens.gap }) {
+      if (this.request.status !== 'open' || this.readOnly || this.deferred) Row({ space: Tokens.gap }) {
+        Text(this.deferred ? tr('interaction_question_later') : this.statusLabel()).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).layoutWeight(1)
+        if (this.readOnly) Text(tr('read_only')).fontSize(Tokens.meta).fontColor(Colors.secondary)
+      }.width('100%')
+      if (this.headerPrompt()) Text(this.headerPrompt()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+    }.width('100%').alignItems(HorizontalAlign.Start)
+      .onAreaChange((_old: Area, area: Area) => {
+        const measured = Number(area.height);
+        if (Number.isFinite(measured) && measured >= 0 && Math.abs(measured - this.headerHeight) > 1) this.headerHeight = measured;
+      })
+  }
+
+  @Builder responseFooter() {
+    Column({ space: Tokens.gap }) {
+      if (this.deferred && !this.readOnly) Button(tr('interaction_question_reopen')).attributeModifier(ButtonStyles.secondary).width('100%')
+        .onClick(() => this.deferred = false).id('interaction.reopen')
+      else if (!this.readOnly && this.request.kind === 'question') {
+        if (this.canDefer()) Button(tr('interaction_question_later')).attributeModifier(ButtonStyles.quiet).width('100%')
+          .onClick(() => this.deferred = true).id('interaction.later')
+        if (interactionScreenCanCancel(this.request)) Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).width('100%')
+          .enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.cancel')
+        Button(tr('confirm')).attributeModifier(ButtonStyles.primary).width('100%').enabled(this.canSubmit())
+          .onClick(() => this.submit('answer')).id('interaction.submit')
+      } else if (!this.readOnly && this.request.kind === 'elicitation') {
+        if (interactionElicitationMode(this.request) === 'url' && interactionElicitationUrl(this.request)) {
+          Button(tr('open')).attributeModifier(ButtonStyles.secondary).width('100%').enabled(this.canRespond())
+            .onClick(() => this.openUrl()).id('interaction.open')
+          Button(tr('continue')).attributeModifier(ButtonStyles.primary).width('100%').enabled(this.canSubmit())
+            .onClick(() => this.submit('accept')).id('interaction.continue')
+        } else if (interactionElicitationMode(this.request) !== 'url' && interactionElicitationSupported(this.request)) {
+          Button(tr('confirm')).attributeModifier(ButtonStyles.primary).width('100%').enabled(this.canSubmit())
+            .onClick(() => this.submit('accept')).id('interaction.accept')
+        }
+        Button(tr('deny')).attributeModifier(ButtonStyles.secondary).width('100%').enabled(this.canRespond())
+          .onClick(() => this.submit('decline')).id('interaction.decline')
+        Button(tr('cancel')).attributeModifier(ButtonStyles.quiet).width('100%').enabled(this.canRespond())
+          .onClick(() => this.submit('cancel')).id('interaction.cancel')
+      } else if (!this.readOnly) {
+        Button(this.submitButtonLabel()).attributeModifier(ButtonStyles.primary).width('100%').enabled(this.canSubmit())
+          .onClick(() => this.submit(this.submitButtonOption())).id('interaction.submit')
+      }
+      if (this.model.error) Text(tr(this.model.error)).fontSize(Tokens.meta).fontColor(Colors.needs).width('100%')
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: Tokens.gap })
+      .onAreaChange((_old: Area, area: Area) => {
+        const measured = Number(area.height);
+        if (Number.isFinite(measured) && measured >= 0 && Math.abs(measured - this.footerHeight) > 1) this.footerHeight = measured;
+      })
+  }
+
   build() {
     Column({ space: Tokens.gap }) {
-      if (this.request.status !== 'open' || this.readOnly) Row({ space: Tokens.gap }) {
-        Text(this.statusLabel()).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).layoutWeight(1)
-        if (this.readOnly) Text(tr('read_only')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-      }.width('100%')
-      if (this.request.prompt && this.request.kind !== 'elicitation' && this.request.kind !== 'screen')
-        Text(this.request.prompt).fontSize(Tokens.title).fontWeight(FontWeight.Medium).width('100%')
+      this.headerContent()
       if (this.readOnly) {
-        if (this.historySummary()) Text(this.historySummary()).fontSize(Tokens.body).width('100%')
-      } else {
-        this.bodyContent()
+        if (this.historySummary()) Text(this.historySummary()).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
+      } else if (!this.deferred) {
+        if (this.availableHeight > 0 && this.bodyMaximumHeight() >= Tokens.touch * 2) this.scrollableBody()
+        else this.bodyContent()
       }
-      if (this.model.error) Text(tr(this.model.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).width('100%')
+      this.responseFooter()
     }.width('100%').padding(Tokens.page).alignItems(HorizontalAlign.Start)
   }
 }

@@ -1694,33 +1694,63 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 
 ## HarmonyOS native structure
 
-HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, floating Tabs, lists, menus, sheets and
-confirmation dialogs. The window breakpoint selects stack (XS/SM/MD) or native split (LG/XL); device names do not.
-The master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. Its bottom tabs are 56 vp with a
-12 vp system-component margin; the system safe area is not added a second time.
+HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, lists, menus, sheets, selection controls and
+confirmation dialogs. Persona and Agents are peer conversation views in the native title control. Inbox, Todos,
+Knowledge, Health, Apps, Devices and full Settings open from the native Spaces sheet; extensions do not add peer
+views. Use native `CapsuleSegmentButtonV2` for the peer switch at ordinary font scales and native `Select` at 1.5× or
+larger. XS/SM/MD use a stack and LG/XL use native split navigation, based on the actual window class rather than a
+device name. The expanded master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. It has no
+permanent third pane or replacement navigation rail.
 
-An Agent's detail title is omitted only while its identifying selected row is fully visible in the expanded master.
-Compact, collapsed, filtered-out, offscreen or different-owner contexts restore the native title. Child pages keep
-their own title and back action. A title already provided by the destination is not repeated in the body. Avoid
-explanatory subtitles, explanatory child controls and duplicate actions; native control placement, names and state
-must explain their purpose. Explicit target and consequence text remains necessary for a consequential decision.
+Navigation owns system avoidance on main pages. Content adds only its 4 vp business footer; do not copy the gesture
+area height into padding. A bottom sheet measures the actual content host against the current system avoidance
+boundary after layout and adds only the remaining overlap. Recompute when the host or avoid area changes; an already
+avoided host or centered sheet needs zero. Never hard-code an inset or repeat it on inner rows. Preserve the system
+gesture region and keep the last row and primary action above it.
 
-Glass, Brief and Board preserve this structure and the same fields/actions, using semantic own-message colors with
-light/dark resources. Device-wide Avatar and Accent preferences are independent of the Hub and style. Native
-`WithTheme` supplies both light and dark system tokens; an own-message subtree supplies readable bubble tokens.
+Conversation detail hides its title only while the matching selected row is fully visible in the expanded master
+and identifies the conversation for the same owner. Compact, collapsed, filtered-out, offscreen or different-owner
+contexts restore the native title. Child pages keep their own title and back action. A title already provided by the
+destination is not repeated in the body. Avoid explanatory subtitles, child controls and duplicate actions; native
+control placement, names and state must explain their purpose. Explicit target and consequence text remains
+necessary for consequential decisions.
+
+Use the shared native roles and `Tokens`, not screen-specific literals. The System style's light palette uses the
+emphasized action blue (`#0071E3`) with white on-action text, text-link blue (`#0064C8`) and a light
+own-message bubble (`#DCEAFF`; dark `#233B57`). The emphasized control uses the system's paired light/dark resources.
+Status roles stay distinct: needs-you is `#0064C8` / `#86B6FF`, working is `#9B5500` / `#FFB224`, unread is
+`#1D7A4C` / `#4CC38A`, and positive is `#237337` / `#30D158` in light / dark appearance. Visible state words or
+symbols accompany color. Destructive/error colors are not substitutes for working or positive states.
+The standard system typography is 20 fp title, 17 fp body, 14 fp secondary and 13 fp caption, with 24 fp body line
+height. Follow the application system font scale up to 3.2×; use 16 vp page edges, 12 vp insets, 8 vp gaps, 24 vp
+section spacing, 20 vp business-surface corners and a 48 vp minimum response region. System controls own their
+internal dimensions and material. Fixed icon slots use 22 vp symbols, independently of the text scale.
+The compact Persona/Agents Select caps only its displayed value at 2× so both title actions remain reachable;
+its native option menu and content continue to follow the system text scale.
+
+System is the default style for a fresh or unset preference. Existing explicit Glass, Brief and Board selections stay
+selected and remain available after update. Avatar, Accent, color mode and style are separate. Standard is the
+default row density when an older device-appearance record has no density value; saving density preserves the
+existing Avatar and Accent fields. Agent grouping (flat, computer, repository or worktree) is a separate owner- and
+view-scoped workspace preference, not a device appearance field. Preference restoration finishes before selection
+is enabled, failed writes keep the last confirmed value, and changing one option does not reset the others.
+
+Native `WithTheme` supplies light and dark system tokens; an own-message subtree supplies readable bubble tokens.
 Avatar choices use intrinsic native list groups and Radio controls, with no fixed-height nested list or descriptive
-captions. Preference restoration completes before selection is enabled, and a failed write retains the previous
-selection. Native system materials belong to supported controls; the client does not simulate them with
-another navigation shell. Horizontal half-fold uses `FoldSplitContainer`: reading above, the current decision or
-composer below, with native crease avoidance and a scrollable interaction area. The view samples native crease capability at creation; an image that omits fold geometry retains ordinary native Column/Scroll layout, without fabricated hover regions. Configuration updates do not replace that view’s input or transcript subtree. Ordinary posture uses measured
-interaction height rather than a fixed 50/50 split. A system photo editor returns a separate selected copy; system preview owns supported
-image zoom and document viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and
-verification contract. This is a new platform implementation and does not alter another client's default style.
+captions. Package images remain bounded, decoded natively and installed atomically. Native system materials belong
+to supported controls; the client does not simulate them with another navigation shell. Horizontal half-fold uses
+`FoldSplitContainer`: reading above, the current decision or composer below, with native crease avoidance and a
+scrollable interaction area. The view samples crease capability at creation; an image without fold geometry uses an
+ordinary native Column/Scroll layout, without fabricated hover regions. Configuration changes do not replace the
+view's input or transcript subtree. Ordinary posture uses measured interaction height, not a fixed 50/50 split.
+A system photo editor returns a separate selected copy; system preview owns supported image zoom and document
+viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and verification contract.
 
-The composer uses native GridRow/GridCol spans and order. At an effective application font scale of 2 or higher, or when the pane width
-leaves too little writing space, the same input occupies a full row and full-width actions stack below it, Send before Attach, with single-line labels. The input and draft
-keep their identity; controls grow with their labels instead of clipping a fixed-height row. Native Ability configuration
-callbacks supply the actual application font scale. A local font multiplier is not a substitute for that system value.
+The composer uses native GridRow/GridCol spans and order. Focus, draft, attachments, the actual composer width and
+system font scale rearrange one TextArea in place; they do not replace its node or draft owner. At 1.5× or in a narrow
+pane, actions can stack with complete single-line labels. A local font multiplier is not a substitute for the
+native system scale. Verify focus and IME composition on device when width, keyboard or posture changes; static
+layout and portable tests do not prove native composition continuity.
 
 A HarmonyOS destination has one native route title and the Navigation-owned return action. Content does not repeat
 that title or add another route-back button. Local actions such as returning to a file's parent directory or closing
@@ -1733,9 +1763,20 @@ Open editable questions begin with their prompt, without a generic answer subtit
 states stay explicit. Chat has no permanent Hub/computer/path subtitle. Agent permissions and plans keep their
 existing approval gates.
 
+Plan and receipt summaries open a native detail destination bound to the source conversation and item identity.
+The detail locates that exact item from the feed head through successive cursors; a first-page miss is not evidence
+that the item disappeared. Failed lookup can be retried. An inline cached plan summary may remain readable, but
+plan writes need a fresh authoritative read and the existing owner/admission checks. Receipt detail distinguishes the Hub's `done`,
+`failed` and `interrupted` states; `stopped` is derived only from a successful read showing the associated Todo is
+still open, and a failed Todo read leaves the outcome unknown. Only `met` criteria count as passed; `criteria_more`
+does not imply a result. Done/stopped receipts do not offer continue. Retry requires an eligible failed-start Todo
+and current write capability; Continue requires an incomplete Todo, eligible lead Agent and current write capability.
+Suppress a duplicate Continue while automatic recovery is active, and recheck recovery/reset state before admitting
+an action.
+
 Extension applications open from a root Navigation menu into a native destination and complete List, without adding
-a primary tab. Session actions share one native Menu with MenuItem rows of at least 48vp from the title's More item or the hidden-title pane's
-More button. These are the same captured actions, not two parallel toolbars.
+a peer view. Session actions share one native Menu with MenuItem rows of at least 48 vp from the title's More item or
+the main Persona or hidden-title pane's More button. Read-only details and blocking decisions retain one fallback More button. These are the same captured actions, not parallel toolbars.
 
 The file workspace uses native composed list items, three labeled system-icon controls and scrollable, automatically
 sized local tabs. Computer transfer uses the system sheet, named computer switches, a native Radio list and Progress.

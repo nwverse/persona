@@ -1,12 +1,14 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
-import { ComposeListItemV2, ContentItemV2, CapsuleSegmentButtonV2, SegmentButtonV2Items } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { InboxAttachmentDraft, InboxMailComposeSnapshot, InboxMailMessage, InboxMessage, InboxWorkspace } from '../models/InboxWorkspace';
 import { ResourceRow, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { MarkdownText } from './MarkdownText';
+import { Colors } from '../design/Colors';
+import { ButtonStyles } from '../design/Controls';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 
@@ -173,6 +175,8 @@ export struct InboxWorkspacePage {
   @Param row: ResourceRow | undefined = undefined;
   @Param list: boolean = true;
   @Param visible: boolean = true;
+  @Param handoffRequested: boolean = false;
+  @Event onHandoffConsumed: () => void = (): void => {};
   @Param refreshRevision: number = 0;
   @Event onChanged: () => void = (): void => {};
   @Event onOpen: (row: ResourceRow) => void = (_row: ResourceRow) => {};
@@ -190,18 +194,25 @@ export struct InboxWorkspacePage {
   @Local mediaBusy: boolean = false;
   @Local error: string = '';
   private active: boolean = false;
+  private pendingHandoff: boolean = false;
+  private handoffLoaded: boolean = false;
+  private stopEvents: (() => void) | undefined;
 
   aboutToAppear(): void {
-    this.active = true;
+    this.active = true; this.pendingHandoff = this.handoffRequested; this.handoffLoaded = false;
+    this.stopEvents = this.model.observeEvents((payload: string): void => {
+      if (!this.active || !this.visible || !this.list) return;
+      try { if (Wire.text(Wire.parse(payload), 'type') === 'inbox') this.workspace.refresh().catch(() => undefined); } catch (_) {}
+    });
     this.detailOpen = !this.list && !!this.row;
     this.syncItemRows();
     this.workspace.open(this.model, this.row).then(() => {
       if (this.active && this.row && this.list === false) this.detailOpen = true;
-      this.syncItemRows();
+      this.syncItemRows(); this.handoffLoaded = true; this.consumeHandoff();
     });
   }
 
-  aboutToDisappear(): void { this.active = false; this.workspace.close(); }
+  aboutToDisappear(): void { this.active = false; this.stopEvents?.(); this.stopEvents = undefined; this.workspace.close(); }
 
   @Monitor('model.connected') connectionChanged(): void {
     if (!this.active) return;
@@ -217,7 +228,12 @@ export struct InboxWorkspacePage {
     });
   }
 
+  private consumeHandoff(): void {
+    if (this.handoffRequested && this.pendingHandoff && this.handoffLoaded && this.active && this.visible && this.row && this.workspace.selected.key() === this.row.key() && !this.workspace.isReference()) { this.pendingHandoff = false; this.onHandoffConsumed(); this.openHandoff(); }
+  }
+  @Monitor('handoffRequested') handoffRequestedChanged(): void { this.pendingHandoff = this.handoffRequested; if (this.pendingHandoff) this.consumeHandoff(); }
   @Monitor('model.inbox', 'refreshRevision', 'visible') listRefreshRequested(): void {
+    this.consumeHandoff();
     if (this.active && this.visible && this.list) this.workspace.refresh().catch(() => undefined);
   }
   private acknowledged(changed: boolean): void { if (changed && this.active && this.visible) this.onChanged(); }
@@ -249,6 +265,10 @@ export struct InboxWorkspacePage {
   private rowSource(row: ResourceRow): string {
     const data = row.data();
     return this.sourceLabel(Wire.text(data, 'source')) + ' · ' + Wire.text(data, 'account_name', Wire.text(data, 'account'));
+  }
+  private openListHandoff(row: ResourceRow): void {
+    const copy = ResourceRow.from(row.data(), row.kind); copy.id = row.id; copy.title = row.title; copy.manager = row.manager; copy.group = row.group; copy.path = row.path;
+    const data = row.data(); data['open_handoff'] = true; copy.raw = JSON.stringify(data); this.onOpen(copy);
   }
   private openRow(row: ResourceRow): void {
     this.error = '';
@@ -416,42 +436,48 @@ export struct InboxWorkspacePage {
       Row({ space: Tokens.gap }) {
         Search({ value: this.workspace.search, placeholder: tr('search') })
           .onChange((value: string) => this.workspace.search = value).layoutWeight(1)
-        Button(tr('refresh'), { buttonStyle: ButtonStyleMode.TEXTUAL }).enabled(!this.workspace.loading)
+        Button(tr('refresh')).attributeModifier(ButtonStyles.quiet).enabled(!this.workspace.loading)
           .onClick(() => this.refreshList()).height(Tokens.touch)
-        Button(tr('compose'), { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.openMailCompose()).height(Tokens.touch)
-      }.padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.gap })
+        Button(tr('compose')).attributeModifier(ButtonStyles.quiet).onClick(() => this.openMailCompose()).height(Tokens.touch)
+      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap })
       Row({ space: Tokens.gap }) {
         Select(this.optionList(this.workspace.sourceOptions.map((value: string) => this.sourceLabel(value))))
-          .selected(this.sourceIndex()).onSelect((index: number) => this.workspace.sourceFilter = this.workspace.sourceOptions[index]).layoutWeight(1)
-        Select(this.optionList(this.workspace.accountOptions.map((value: string) => this.workspace.accountName(value))))
-          .selected(this.accountIndex()).onSelect((index: number) => this.workspace.accountFilter = this.workspace.accountOptions[index]).layoutWeight(1)
-      }.padding({ left: Tokens.inset, right: Tokens.inset })
-      CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([{ text: tr('inbox_open') }, { text: tr('done') }, { text: tr('all') }]),
+          .selected(this.sourceIndex()).value(this.sourceLabel(this.workspace.sourceFilter)).onSelect((index: number) => this.workspace.sourceFilter = this.workspace.sourceOptions[index]).layoutWeight(1)
+        Select(this.optionList(this.workspace.accountOptions.map((value: string) => value === 'all' ? tr('all') : this.workspace.accountName(value))))
+          .selected(this.accountIndex()).value(this.workspace.accountFilter === 'all' ? tr('all') : this.workspace.accountName(this.workspace.accountFilter)).onSelect((index: number) => this.workspace.accountFilter = this.workspace.accountOptions[index]).layoutWeight(1)
+      }.padding({ left: Tokens.page, right: Tokens.page })
+      CapsuleSegmentButtonV2({ itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction), itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control), itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta), items: new SegmentButtonV2Items([{ text: tr('inbox_open') }, { text: tr('done') }, { text: tr('all') }]),
         selectedIndex: this.workspace.statusFilter === 'open' ? 0 : this.workspace.statusFilter === 'done' ? 1 : 2,
         $selectedIndex: (index: number) => this.workspace.statusFilter = index === 0 ? 'open' : index === 1 ? 'done' : 'all' })
         .padding({ left: Tokens.page, right: Tokens.page })
       if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: Tokens.page, right: Tokens.page })
       if (this.workspace.loading) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
-      List() {
+      List({ space: Tokens.inset }) {
         ForEach(this.itemRowBindings, (binding: BoundRow<ResourceRow>) => {
           ListItem() {
-            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || binding.value.id,
-              secondaryText: [binding.value.detail || '', this.rowSource(binding.value), this.doneLabel(binding.value)].filter((value: string) => !!value).join(' · ') }) })
-          }.onClick(() => this.openRow(binding.value)).id('inbox.' + binding.value.key())
+            Column({ space: Tokens.gap }) {
+              Column({ space: Tokens.gap }) {
+              Row({ space: Tokens.gap }) { Text(this.rowSource(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary).layoutWeight(1); Text(this.doneLabel(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary) }.width('100%')
+              Text(binding.value.title || tr('inbox')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+              if (binding.value.detail) Text(binding.value.detail).fontSize(Tokens.body).fontColor(Colors.secondary).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+              }.width('100%').constraintSize({ minHeight: Tokens.touch }).alignItems(HorizontalAlign.Start).accessibilityGroup(true).onClick(() => this.openRow(binding.value))
+              if (!this.workspace.isHandled(binding.value)) Button(tr('inbox_handoff_title')).attributeModifier(ButtonStyles.primary).enabled(this.model.connected).onClick(() => this.openListHandoff(binding.value))
+            }.padding(Tokens.card).width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.canvas).borderRadius(Tokens.card)
+          }.id('inbox.' + binding.value.key())
         }, (binding: BoundRow<ResourceRow>) => binding.key)
         if (!this.itemRowBindings.length && !this.workspace.loading)
           ListItem() { Text(tr(this.workspace.search ? 'no_results' : 'empty')).padding(Tokens.page).width('100%') }
-      }.layoutWeight(1).width('100%')
-    }.width('100%').height('100%')
+      }.layoutWeight(1).width('100%').padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.footer })
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
   }
 
   @Builder header() {
     Row({ space: Tokens.gap }) {
       Text(this.workspace.isReference() ? this.workspace.referenceSourceLabel() + (this.workspace.replyAccountLabel() ? ' · ' + this.workspace.replyAccountLabel() : '')
         : this.rowSource(this.workspace.selected)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).maxLines(1).layoutWeight(1)
-      Button(tr('refresh'), { buttonStyle: ButtonStyleMode.TEXTUAL }).height(Tokens.touch).enabled(!this.workspace.detailLoading)
+      Button(tr('refresh')).attributeModifier(ButtonStyles.quiet).height(Tokens.touch).enabled(!this.workspace.detailLoading)
         .onClick(() => this.workspace.refreshDetail())
-    }.width('100%').padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.gap })
+    }.width('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap })
   }
 
   @Builder rowStatus() {
@@ -553,7 +579,7 @@ export struct InboxWorkspacePage {
         Row({ space: Tokens.gap }) {
           Text(tr(this.workspace.isTopicList ? 'inbox_topics' : 'inbox_conversation')).fontSize(Tokens.title).fontWeight(FontWeight.Medium).layoutWeight(1)
           if (this.workspace.threadRoot && !this.workspace.isThreadReference()) Button(tr('back'), { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.workspace.closeThread())
-          Button(tr('refresh'), { buttonStyle: ButtonStyleMode.TEXTUAL }).enabled(!this.workspace.feedLoading).onClick(() => this.workspace.refreshConversation())
+          Button(tr('refresh')).attributeModifier(ButtonStyles.quiet).enabled(!this.workspace.feedLoading).onClick(() => this.workspace.refreshConversation())
         }.width('100%')
         if (this.workspace.feedHasOlder) Button(tr(this.workspace.feedLoading ? 'loading' : 'inbox_older')).enabled(!this.workspace.feedLoading)
           .onClick(() => this.workspace.loadOlder()).width('100%')
@@ -695,12 +721,12 @@ export struct InboxWorkspacePage {
             this.trail()
           }
         }.width('100%').padding(Tokens.page).alignItems(HorizontalAlign.Start)
-      }.layoutWeight(1).width('100%')
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart)
       if (!this.workspace.isReference()) Row({ space: Tokens.gap }) {
-        Button(tr(this.workspace.isHandled() ? 'reopen' : 'process')).enabled(!this.workspace.writeState || !['saving', 'sending'].includes(this.workspace.writeState))
+        Button(tr(this.workspace.isHandled() ? 'reopen' : 'process')).attributeModifier(ButtonStyles.secondary).enabled(!this.workspace.writeState || !['saving', 'sending'].includes(this.workspace.writeState))
           .onClick(() => this.workspace.processInbox().then((changed: boolean) => this.acknowledged(changed))).layoutWeight(1)
-        Button(tr('handoff')).enabled(!this.workspace.handoffBusy).onClick(() => this.openHandoff()).layoutWeight(1)
-      }.width('100%').padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
+        Button(tr('handoff')).attributeModifier(ButtonStyles.primary).enabled(!this.workspace.handoffBusy).onClick(() => this.openHandoff()).layoutWeight(1)
+      }.width('100%').padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.footer })
       this.replyBox()
     }.width('100%').height('100%')
   }
@@ -739,7 +765,7 @@ export struct InboxWorkspacePage {
       if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
       Button(tr(this.workspace.handoffBusy ? 'sending' : ['pending', 'unknown'].includes(this.workspace.writeState) ? 'pending' : 'inbox_handoff_send'))
         .enabled(!!this.handoffText.trim() && !this.workspace.handoffBusy && !['pending', 'unknown'].includes(this.workspace.writeState))
-        .width('100%').height(Tokens.touch).onClick(() => this.confirmHandoff())
+        .attributeModifier(ButtonStyles.primary).width('100%').onClick(() => this.confirmHandoff())
     }.width('100%').padding(Tokens.page).alignItems(HorizontalAlign.Start)
   }
 

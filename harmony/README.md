@@ -1,6 +1,6 @@
 # Persona for HarmonyOS
 
-Native ArkTS / ArkUI client for HarmonyOS 7 phones and foldables (API 26). See the [product, interaction and architecture guide](../docs/harmony/harmony.md).
+Native ArkTS / ArkUI client for HarmonyOS 7 phones and foldables (API 26). Persona and Agents are the two peer conversation views; Inbox and the other workspaces open from native Spaces. See the [product, interaction, architecture and verification guide](../docs/harmony/harmony.md).
 
 Open this directory in DevEco Studio with the HarmonyOS 7 SDK installed, resolve the pinned OHPM dependencies, and select a phone, foldable or wide-foldable emulator. Build the pinned ARM64 SSH core first using [the native build instructions](native/ssh/README.md). With that library and DevEco CLI available:
 
@@ -19,7 +19,7 @@ node --test tests/*.test.mjs
 node tests/run-domain.mjs
 ```
 
-Native SDK tests use the `entry@ohosTest` target and `OpenHarmonyTestRunner`; they exercise actual platform storage, credentials, URL handling, TLS/WebSocket transport and image preview. The transport fixture is separate from a real Hub; see [verification](../docs/harmony/harmony.md#verification). The [native extension fixture](tests/native-extension-fixture/README.md) reproduces legacy and streamed component updates, focus retention and the Hub confirmation gate on a disposable Hub.
+Native SDK tests use the `entry@ohosTest` target and `OpenHarmonyTestRunner`; they exercise actual platform storage, credentials, URL handling, TLS/WebSocket transport and image preview. The transport fixture is separate from a real Hub; see [verification](../docs/harmony/harmony.md#verification) for the three-category UI matrix and the evidence each environment can establish. The [native extension fixture](tests/native-extension-fixture/README.md) reproduces legacy and streamed component updates, focus retention and the Hub confirmation gate on a disposable Hub. These commands are reusable checks, not a claim that production regression, a real Hub or Agent runtime, physical hinge behavior, or device system materials have been verified.
 
 The shared Rust core uses one ohos-rs NAPI library, not a C++ shim. With the API 26 native SDK and Rust 1.98.0 installed:
 

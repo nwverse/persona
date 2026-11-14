@@ -1,10 +1,37 @@
 import type { Configuration } from '@kit.AbilityKit';
-import { display } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 
 /** Native application configuration, shared by workspace and detached views. */
 @ObservedV2
 export class NativeEnvironment {
   @Trace fontScale: number = 1;
+  @Trace safeBottomPx: number = 0;
+  private windowRef: window.Window | undefined;
+  private sizeChanged: (size: window.Size) => void = (_size: window.Size): void => this.refreshWindow();
+  private rectChanged: (event: window.RectChangeOptions) => void = (_event: window.RectChangeOptions): void => this.refreshWindow();
+  private avoidChanged: (event: window.AvoidAreaOptions) => void = (_event: window.AvoidAreaOptions): void => this.refreshWindow();
+
+  bindWindow(value: window.Window): void {
+    this.unbindWindow(); this.windowRef = value;
+    value.on('windowSizeChange', this.sizeChanged);
+    value.on('windowRectChange', this.rectChanged);
+    value.on('avoidAreaChange', this.avoidChanged);
+    this.refreshWindow();
+  }
+  unbindWindow(): void {
+    const value = this.windowRef; this.windowRef = undefined;
+    if (!value) return;
+    try { value.off('windowSizeChange', this.sizeChanged); value.off('windowRectChange', this.rectChanged); value.off('avoidAreaChange', this.avoidChanged); } catch (_) {}
+  }
+  private refreshWindow(): void {
+    if (!this.windowRef) return;
+    try {
+      const rect = this.windowRef.getWindowProperties().windowRect;
+      const bottom = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height;
+      this.safeBottomPx = rect.top + rect.height - bottom;
+    } catch (_) {}
+  }
+
   @Trace nativeHoverAvailable: boolean = false;
   private refreshFoldCapability(): void {
     // Some emulator images report foldable but omit the crease region. The native

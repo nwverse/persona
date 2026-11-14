@@ -4435,6 +4435,174 @@
     {
       "name": "session_tools_parent_folder",
       "value": "上一级文件夹"
+    },
+    {
+      "name": "app_style_system",
+      "value": "系统"
+    },
+    {
+      "name": "agent_filter_button",
+      "value": "筛选"
+    },
+    {
+      "name": "agent_filters_title",
+      "value": "Agent 筛选"
+    },
+    {
+      "name": "agent_density",
+      "value": "列表密度"
+    },
+    {
+      "name": "agent_density_standard",
+      "value": "标准"
+    },
+    {
+      "name": "agent_density_compact",
+      "value": "紧凑"
+    },
+    {
+      "name": "agent_time_just_now",
+      "value": "刚刚"
+    },
+    {
+      "name": "agent_time_minute_suffix",
+      "value": "分钟前"
+    },
+    {
+      "name": "agent_time_hour_suffix",
+      "value": "小时前"
+    },
+    {
+      "name": "agent_time_day_suffix",
+      "value": "天前"
+    },
+    {
+      "name": "conversation_spaces",
+      "value": "会话与空间"
+    },
+    {
+      "name": "assistant_detail_more_tasks",
+      "value": "其他任务："
+    },
+    {
+      "name": "assistant_detail_view_plan",
+      "value": "查看计划"
+    },
+    {
+      "name": "assistant_detail_plan_refresh",
+      "value": "无法刷新计划详情。"
+    },
+    {
+      "name": "assistant_detail_dismiss_plan",
+      "value": "暂不处理"
+    },
+    {
+      "name": "assistant_detail_view_receipt",
+      "value": "查看回执"
+    },
+    {
+      "name": "assistant_detail_receipt_done",
+      "value": "已完成"
+    },
+    {
+      "name": "assistant_detail_receipt_stopped",
+      "value": "未完成便已停止"
+    },
+    {
+      "name": "assistant_detail_receipt_failed",
+      "value": "启动失败"
+    },
+    {
+      "name": "assistant_detail_receipt_interrupted",
+      "value": "已中断"
+    },
+    {
+      "name": "assistant_detail_receipt_unknown",
+      "value": "状态暂不可用"
+    },
+    {
+      "name": "assistant_detail_continued",
+      "value": "中断后已继续"
+    },
+    {
+      "name": "assistant_detail_model_service_interruption",
+      "value": "模型服务错误导致中断"
+    },
+    {
+      "name": "assistant_detail_criteria",
+      "value": "检查项"
+    },
+    {
+      "name": "assistant_detail_criteria_met",
+      "value": "已满足"
+    },
+    {
+      "name": "assistant_detail_criteria_more",
+      "value": "还有未显示的检查项："
+    },
+    {
+      "name": "assistant_detail_criterion_met",
+      "value": "已满足"
+    },
+    {
+      "name": "assistant_detail_criterion_not_met",
+      "value": "未满足"
+    },
+    {
+      "name": "assistant_detail_criterion_unchecked",
+      "value": "未检查"
+    },
+    {
+      "name": "assistant_detail_criterion_dropped",
+      "value": "已移除"
+    },
+    {
+      "name": "assistant_detail_criterion_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "assistant_detail_retry",
+      "value": "重试"
+    },
+    {
+      "name": "assistant_detail_continue",
+      "value": "继续"
+    },
+    {
+      "name": "assistant_detail_open_task",
+      "value": "打开任务"
+    },
+    {
+      "name": "assistant_detail_not_found",
+      "value": "此内容已不可用。"
+    },
+    {
+      "name": "interaction_question_later",
+      "value": "稍后"
+    },
+    {
+      "name": "interaction_question_reopen",
+      "value": "回答"
+    },
+    {
+      "name": "agent_untitled",
+      "value": "未命名 Agent"
+    },
+    {
+      "name": "assistant_detail_goal",
+      "value": "目标"
+    },
+    {
+      "name": "assistant_detail_out_of_bounds",
+      "value": "范围之外"
+    },
+    {
+      "name": "assistant_detail_done_when",
+      "value": "完成条件"
+    },
+    {
+      "name": "assistant_detail_brief",
+      "value": "任务简述"
     }
   ]
 }

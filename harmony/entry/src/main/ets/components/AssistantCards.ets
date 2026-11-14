@@ -1,3 +1,6 @@
+import { util } from '@kit.ArkTS';
+import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
+import { nativeSheetInset } from '../platform/NativeInsets';
 import { AssistantViewCard } from './AssistantViewCard';
 import { assistantCardResource } from '../models/AssistantCardLinks';
 import { ComposeListItemV2, ContentItemV2, OperateItemV2, OperateCheckV2 } from '@kit.ArkUI';
@@ -6,7 +9,10 @@ import { AssistantFeedModel, PlanEditTask } from '../models/AssistantFeed';
 import { ResourceRow, Wire } from '../models/Wire';
 import { MarkdownText } from './MarkdownText';
 import { Tokens } from '../design/Tokens';
+import { Colors } from '../design/Colors';
+import { ButtonStyles } from '../design/Controls';
 import { tr } from '../design/Strings';
+import { projectAssistantReceipt, AssistantReceiptProjection, AssistantReceiptCriterion } from '../models/AssistantReceipt';
 
 // The Hub accepts bypassPermissions for writable task plans; read-only tasks
 // are locked to plan mode and cannot be upgraded from this editor.
@@ -18,12 +24,39 @@ export struct AssistantCards {
   @Require @Param feed: AssistantFeedModel;
   @Param item: Record<string, Object> | undefined = undefined;
   @Param dockOnly: boolean = false;
+  @Param detailOnly: boolean = false;
   @Param active: boolean = false;
   @Event onOpenResource: (row: ResourceRow) => void = () => {};
   @Event onOpenSession: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onOpenTodo: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onOpenInbox: (row: ResourceRow) => void = (_row: ResourceRow) => {};
+  @Event onOpenCard: (itemId: string, kind: string) => void = (_itemId: string, _kind: string) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
+
+  @Local environment: NativeEnvironment = nativeEnvironment;
+  @Local editorInset: number = 0;
+  private editorReady: boolean = false;
+  private editorNodeId: string = 'assistant.editor.' + util.generateRandomUUID();
+  @Monitor('environment.safeBottomPx') editorBoundaryChanged(): void { this.measureEditor(); }
+  private measureEditor(): void {
+    if (!this.editorReady) return;
+    const value = nativeSheetInset(this.getUIContext(), this.editorNodeId, this.environment.safeBottomPx);
+    if (Math.abs(value - this.editorInset) > 0.1) this.editorInset = value;
+  }
+  @Local receiptView: AssistantReceiptProjection = projectAssistantReceipt({}, {}, false);
+  @Local receiptViewStamp: string = '';
+  aboutToAppear(): void { this.updateReceiptView(); }
+  @Monitor('item', 'feed.items', 'feed.todos', 'feed.todosReady', 'feed.todoError', 'feed.busyKeys', 'feed.uncertainKeys', 'model.sessions', 'model.machines', 'model.unresolvedWrites', 'model.selected', 'model.profile', 'model.pendingDecisions', 'model.decision', 'model.connected')
+  receiptFactsChanged(): void { this.updateReceiptView(); }
+  private updateReceiptView(): void {
+    if (!this.item || Wire.text(this.item, 'kind') !== 'receipt') return;
+    const projection = this.receiptProjection(this.item), todo = Wire.text(this.item, 'ref');
+    this.receiptView = projection;
+    const task = this.receiptTodo(this.item), agents = Wire.rows(task, 'agents');
+    const sessions = this.model.sessions.filter((row: ResourceRow) => agents.some((agent: Record<string, Object>) => Wire.text(agent, 'machine_id') === row.machine && Wire.text(agent, 'session_id') === (row.session || row.id)))
+      .map((row: ResourceRow) => [row.key(), row.title, row.machine, this.model.machineName(row.machine)]);
+    this.receiptViewStamp = JSON.stringify([Wire.text(this.item, 'id'), todo, projection, this.feed.todosReady, Wire.text(task, 'id'), agents, sessions, this.feed.busyKeys.includes('todo:' + todo)]);
+  }
 
   private tasks(): Record<string, Object>[] { return this.feed.taskCardsForConversation(); }
 
@@ -35,9 +68,41 @@ export struct AssistantCards {
   private machineLabel(id: string): string { return id ? this.model.machineName(id) || id : ''; }
 
   private planId(item: Record<string, Object>): string { return Wire.text(item, 'ref'); }
-  private plan(item: Record<string, Object>): Record<string, Object> { return Wire.record(this.feed.plans[this.planId(item)]); }
+  private plan(item: Record<string, Object>): Record<string, Object> {
+    const id = this.planId(item), current = Wire.record(this.feed.plans[id]);
+    if (Object.keys(current).length > 0) return current;
+    const snapshot = Wire.object(this.itemBody(item), 'plan');
+    return Wire.text(snapshot, 'id') === id ? snapshot : Wire.payload([], []);
+  }
   private planTasks(item: Record<string, Object>): Record<string, Object>[] { return Wire.rows(this.plan(item), 'tasks'); }
   private planState(item: Record<string, Object>): string { return Wire.text(this.plan(item), 'state', 'unknown'); }
+  private planSummaryTitle(item: Record<string, Object>): string {
+    const tasks = this.planTasks(item);
+    return tasks.length > 0 ? Wire.text(tasks[0], 'title', tr('assistant_feed_plan_unavailable')) : tr('assistant_feed_plan_unavailable');
+  }
+  private planSummaryMore(item: Record<string, Object>): string {
+    const count = this.planTasks(item).length;
+    return count > 1 ? tr('assistant_detail_more_tasks') + ' ' + String(count - 1) : '';
+  }
+  private taskBrief(task: Record<string, Object>): Record<string, Object> { return Wire.object(task, 'brief'); }
+  private taskGoal(task: Record<string, Object>): string {
+    return Wire.text(this.taskBrief(task), 'goal') || Wire.text(task, 'goal');
+  }
+  private taskOutOfBounds(task: Record<string, Object>): string[] {
+    const values = Wire.strings(this.taskBrief(task), 'out_of_bounds');
+    return values.length ? values : Wire.strings(task, 'out_of_bounds');
+  }
+  private taskDoneWhen(task: Record<string, Object>): string[] {
+    const brief = this.taskBrief(task);
+    if (Wire.has(brief, 'criteria')) return Wire.strings(brief, 'criteria');
+    const values = Wire.strings(brief, 'done_when');
+    return values.length ? values : Wire.strings(task, 'done_when');
+  }
+  private taskBriefSource(task: Record<string, Object>): string[] {
+    const brief = this.taskBrief(task), request = Wire.object(brief, 'request');
+    return [Wire.text(request, 'text'), Wire.text(brief, 'handover'), Wire.text(brief, 'reason')]
+      .filter((value: string) => !!value.trim());
+  }
   private itemBody(item: Record<string, Object>): Record<string, Object> { return Wire.object(item, 'body'); }
   private reportText(item: Record<string, Object>): string {
     const body = this.itemBody(item);
@@ -48,6 +113,9 @@ export struct AssistantCards {
   private activeAgents(card: Record<string, Object>): Record<string, Object>[] {
     return Wire.rows(this.taskTodo(card), 'agents').filter((agent: Record<string, Object>) =>
       !Wire.text(agent, 'released_at') && !Wire.text(agent, 'dismissed_at'));
+  }
+  private todoAgents(todoId: string): Record<string, Object>[] {
+    return this.activeAgents(Wire.payload(['todo_id'], [todoId]));
   }
   private openTodo(id: string): void {
     const row = this.feed.openTodo(id);
@@ -71,35 +139,73 @@ export struct AssistantCards {
   private messageTodo(item: Record<string, Object>): Record<string, Object> { return this.feed.todo(this.messageTodoId(item)); }
   private openMessageTodo(item: Record<string, Object>): void { this.openTodo(this.messageTodoId(item)); }
 
+  private openDetail(item: Record<string, Object>): void {
+    const id = Wire.text(item, 'id'), kind = Wire.text(item, 'kind');
+    if (this.active && id && ['plan', 'receipt'].includes(kind)) this.onOpenCard(id, kind);
+  }
+
+  @Builder planSummary(item: Record<string, Object>) {
+    Column({ space: Tokens.gap }) {
+      Text(tr('assistant_feed_plan')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
+      if (Object.keys(this.plan(item)).length > 0) {
+        Text(this.planSummaryTitle(item)).fontSize(Tokens.body).width('100%')
+        if (this.planTasks(item).length > 1) Text(this.planSummaryMore(item))
+          .fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      } else Text(tr('assistant_feed_plan_unavailable')).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      Button(tr('assistant_detail_view_plan')).attributeModifier(ButtonStyles.secondary).width('100%').enabled(this.active)
+        .onClick(() => this.openDetail(item)).id('assistant.detail.plan.' + Wire.text(item, 'id'))
+    }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start).backgroundColor(Colors.grouped)
+  }
+
   @Builder planCard(item: Record<string, Object>) {
     Column({ space: Tokens.gap }) {
       if (!Object.keys(this.plan(item)).length) {
         Text(tr('assistant_feed_plan_unavailable')).fontSize(Tokens.body).fontColor($r('sys.color.font_secondary'))
       } else {
+        if (!this.feed.planIsFresh(this.planId(item))) {
+          if (this.feed.planLoading(this.planId(item))) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
+          else Row({ space: Tokens.gap }) {
+            Text(tr(this.feed.planActionError(this.planId(item)) || this.feed.error || 'assistant_detail_plan_refresh'))
+              .fontSize(Tokens.meta).fontColor(Colors.secondary).layoutWeight(1)
+            Button(tr('retry')).attributeModifier(ButtonStyles.quiet).onClick(() => this.feed.refreshPlan(this.planId(item)))
+          }.width('100%')
+        }
         Row({ space: Tokens.gap }) {
-          Text(tr('assistant_feed_plan')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
+          if (!this.detailOnly) Text(tr('assistant_feed_plan')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
+          else Blank().layoutWeight(1)
           Text(tr('assistant_feed_plan_' + (['open', 'started', 'dismissed'].includes(this.planState(item)) ? this.planState(item) : 'unknown')))
             .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
         }.width('100%')
         ForEach(this.planTasks(item), (task: Record<string, Object>, index: number) => {
           this.plannedTask(task, index)
-        }, (_task: Record<string, Object>, index: number) => String(index))
+        }, (task: Record<string, Object>, index: number) => String(index) + ':' + JSON.stringify(task))
         if (this.planState(item) === 'open') {
           ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('assistant_feed_remember') }),
             operateItemV2: new OperateItemV2({ checkbox: new OperateCheckV2({ isCheck: this.feed.rememberPlan(this.planId(item)),
               accessibilityText: tr('assistant_feed_remember'), onChange: (_checked: boolean) => this.feed.toggleRememberPlan(this.planId(item)) }) }) })
+          Column({ space: Tokens.gap }) {
+            Button(tr('assistant_feed_start')).attributeModifier(ButtonStyles.primary).width('100%')
+              .enabled(this.feed.planCanStart(this.planId(item)) && this.planTasks(item).length > 0)
+              .onClick(() => this.feed.startPlan(this.planId(item), this.feed.rememberPlan(this.planId(item)), undefined,
+                JSON.stringify(this.plan(item))))
+            Button(tr('edit')).attributeModifier(ButtonStyles.secondary).width('100%').enabled(this.feed.planCanEdit(this.planId(item)))
+              .onClick(() => this.feed.editPlan(this.planId(item)))
+          }.width('100%')
           Row({ space: Tokens.gap }) {
-            Button(tr('assistant_feed_start')).enabled(this.feed.planCanStart(this.planId(item)) && this.planTasks(item).length > 0)
-              .height(Tokens.touch).onClick(() => this.feed.startPlan(this.planId(item), this.feed.rememberPlan(this.planId(item))))
-            Button(tr('edit')).enabled(this.feed.planCanStart(this.planId(item))).height(Tokens.touch)
-              .onClick(() => this.feed.beginEditPlan(this.planId(item)))
-            Button(tr('dismiss')).enabled(this.feed.planCanDismiss(this.planId(item))).height(Tokens.touch)
-              .onClick(() => this.feed.dismissPlan(this.planId(item)))
+            Blank().layoutWeight(1)
+            Button(tr('more')).attributeModifier(ButtonStyles.quiet).enabled(this.feed.planCanDismiss(this.planId(item)))
+              .bindMenu([{ value: tr('assistant_detail_dismiss_plan'), action: () =>
+                this.feed.dismissPlan(this.planId(item), JSON.stringify(this.plan(item))) }])
           }.width('100%')
         }
+        if (this.feed.planActionError(this.planId(item)) && this.feed.planIsFresh(this.planId(item))) Row({ space: Tokens.gap }) {
+          Text(tr(this.feed.planActionError(this.planId(item)))).fontSize(Tokens.meta).fontColor(Colors.needs).layoutWeight(1)
+          Button(tr('refresh')).attributeModifier(ButtonStyles.quiet).enabled(!this.feed.planLoading(this.planId(item)))
+            .onClick(() => this.feed.refreshPlan(this.planId(item))).accessibilityText(tr('refresh'))
+        }.width('100%')
       }
-    }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
-      .backgroundColor($r('sys.color.comp_background_tertiary'))
+    }.width('100%').padding(this.detailOnly ? Tokens.page : Tokens.inset).alignItems(HorizontalAlign.Start)
+      .backgroundColor(Colors.grouped)
   }
 
   @Builder plannedTask(task: Record<string, Object>, index: number) {
@@ -116,6 +222,25 @@ export struct AssistantCards {
       }.width('100%')
       if (Wire.text(task, 'why')) Text(Wire.text(task, 'why')).fontSize(Tokens.meta)
         .fontColor($r('sys.color.font_secondary')).width('100%')
+      if (this.taskGoal(task)) Column({ space: Tokens.fine }) {
+        Text(tr('assistant_detail_goal')).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+        Text(this.taskGoal(task)).fontSize(Tokens.body).width('100%')
+      }.width('100%').alignItems(HorizontalAlign.Start)
+      if (this.taskOutOfBounds(task).length > 0) Column({ space: Tokens.fine }) {
+        Text(tr('assistant_detail_out_of_bounds')).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+        ForEach(this.taskOutOfBounds(task), (value: string, valueIndex: number) =>
+          Text(value).fontSize(Tokens.body).width('100%'), (_value: string, valueIndex: number) => String(valueIndex))
+      }.width('100%').alignItems(HorizontalAlign.Start)
+      if (this.taskDoneWhen(task).length > 0) Column({ space: Tokens.fine }) {
+        Text(tr('assistant_detail_done_when')).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+        ForEach(this.taskDoneWhen(task), (value: string, valueIndex: number) =>
+          Text(value).fontSize(Tokens.body).width('100%'), (_value: string, valueIndex: number) => String(valueIndex))
+      }.width('100%').alignItems(HorizontalAlign.Start)
+      if (this.taskBriefSource(task).length > 0) Column({ space: Tokens.fine }) {
+        Text(tr('assistant_detail_brief')).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+        ForEach(this.taskBriefSource(task), (value: string, valueIndex: number) =>
+          Text(value).fontSize(Tokens.body).width('100%'), (_value: string, valueIndex: number) => String(valueIndex))
+      }.width('100%').alignItems(HorizontalAlign.Start)
       if (Wire.text(task, 'prompt')) MarkdownText({ text: Wire.text(task, 'prompt'), onLink: (address: string) => this.onLink(address) })
       if (Wire.text(task, 'error')) Text(Wire.text(task, 'error')).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: Tokens.gap, bottom: Tokens.gap })
@@ -164,15 +289,89 @@ export struct AssistantCards {
     }
   }
 
-  @Builder receipt(item: Record<string, Object>) {
+  private receiptTodo(item: Record<string, Object>): Record<string, Object> { return this.feed.todo(Wire.text(item, 'ref')); }
+
+  private receiptProjection(item: Record<string, Object>): AssistantReceiptProjection {
+    const todoId = Wire.text(item, 'ref'), todo = this.receiptTodo(item);
+    return projectAssistantReceipt(item, todo, this.feed.todosReady, this.feed.receiptLeadAgent(todoId),
+      this.feed.canRetryReceipt(Wire.text(item, 'id'), todoId), this.feed.canContinueReceipt(Wire.text(item, 'id'), todoId), this.model.canApprove());
+  }
+
+  @Builder receiptSummary(item: Record<string, Object>) {
+    ForEach([this.receiptViewStamp], (_stamp: string) => { this.receiptSummaryContent(item, this.receiptView) }, (stamp: string) => stamp)
+  }
+
+  @Builder receiptSummaryContent(item: Record<string, Object>, projection: AssistantReceiptProjection) {
     Column({ space: Tokens.gap }) {
-      Text(Wire.text(this.itemBody(item), 'title', tr('assistant_feed_receipt'))).fontSize(Tokens.body).fontWeight(FontWeight.Medium)
-      if (Wire.text(this.itemBody(item), 'state')) Text(this.stateLabel(Wire.text(this.itemBody(item), 'state'))).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-      if (Wire.text(this.itemBody(item), 'summary')) MarkdownText({ text: Wire.text(this.itemBody(item), 'summary'), onLink: (address: string) => this.onLink(address) })
-      if (Wire.text(this.itemBody(item), 'error')) Text(Wire.text(this.itemBody(item), 'error')).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-      if (Wire.text(this.itemBody(item), 'pr')) MarkdownText({ text: Wire.text(this.itemBody(item), 'pr'), onLink: (address: string) => this.onLink(address) })
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
-      .backgroundColor($r('sys.color.comp_background_tertiary'))
+      Text(projection.title || tr('assistant_feed_receipt')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
+      Text(tr('assistant_detail_receipt_' + projection.outcome)).fontSize(Tokens.meta).fontColor(projection.outcome === 'done' ? Colors.positive : Colors.secondary)
+      if (projection.summary) Text(projection.summary).fontSize(Tokens.body).width('100%').maxLines(3)
+      Button(tr('assistant_detail_view_receipt')).attributeModifier(ButtonStyles.secondary).width('100%').enabled(this.active)
+        .onClick(() => this.openDetail(item)).id('assistant.detail.receipt.' + Wire.text(item, 'id'))
+    }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start).backgroundColor(Colors.grouped)
+  }
+
+  @Builder receiptCriteriaRow(criterion: AssistantReceiptCriterion) {
+    Column({ space: Tokens.fine }) {
+      Row({ space: Tokens.gap }) {
+        Text(criterion.criterion).fontSize(Tokens.body).layoutWeight(1)
+        Text(tr('assistant_detail_criterion_' + criterion.state)).fontSize(Tokens.meta)
+          .fontColor(criterion.state === 'met' ? Colors.positive : Colors.secondary)
+      }.width('100%')
+      if (criterion.evidence) Text(criterion.evidence).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      if (criterion.change) Text(criterion.change).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: Tokens.gap, bottom: Tokens.gap })
+  }
+
+  @Builder receipt(item: Record<string, Object>) {
+    ForEach([this.receiptViewStamp], (_stamp: string) => { this.receiptContent(item, this.receiptView, Wire.text(item, 'ref'), this.receiptTodo(item)) }, (stamp: string) => stamp)
+  }
+
+  @Builder receiptContent(item: Record<string, Object>, projection: AssistantReceiptProjection, todoId: string,
+    todo: Record<string, Object>) {
+    Column({ space: Tokens.gap }) {
+      Text(projection.title || tr('assistant_feed_receipt')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
+      Text(tr('assistant_detail_receipt_' + projection.outcome)).fontSize(Tokens.meta)
+        .fontColor(projection.outcome === 'done' ? Colors.positive : Colors.secondary)
+      if (projection.continued) Text(tr('assistant_detail_continued')).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      if (projection.modelServiceInterruption) Text(tr('assistant_detail_model_service_interruption'))
+        .fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      if (projection.summary) MarkdownText({ text: projection.summary, onLink: (address: string) => this.onLink(address) })
+      if (projection.error && projection.error !== projection.summary) Text(projection.error).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      if (projection.pullRequest) MarkdownText({ text: projection.pullRequest, onLink: (address: string) => this.onLink(address) })
+      if (projection.criteria.length > 0) {
+        Text(tr('assistant_detail_criteria')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
+        Text(tr('assistant_detail_criteria_met') + ' ' + String(projection.metCount) + ' / ' + String(projection.criteria.length))
+          .fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+        ForEach(projection.criteria, (criterion: AssistantReceiptCriterion) => this.receiptCriteriaRow(criterion),
+          (criterion: AssistantReceiptCriterion) => JSON.stringify(criterion))
+      }
+      if (projection.criteriaMore > 0) Text(tr('assistant_detail_criteria_more') + ' ' + String(projection.criteriaMore))
+        .fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+      if (this.feed.todoError) {
+        Text(tr(this.feed.todoError)).fontSize(Tokens.meta).fontColor(Colors.secondary).width('100%')
+        Button(tr('retry')).attributeModifier(ButtonStyles.quiet).width('100%').onClick(() => this.feed.refresh())
+      }
+      if (this.feed.error) Row({ space: Tokens.gap }) {
+        Text(tr(this.feed.error)).fontSize(Tokens.meta).fontColor(Colors.needs).layoutWeight(1)
+        Button(tr('refresh')).attributeModifier(ButtonStyles.quiet).onClick(() =>
+          this.feed.locateItem(Wire.text(item, 'id'), 'receipt'))
+      }.width('100%')
+      if (projection.recovery) {
+        Button(tr('assistant_detail_' + projection.recovery)).attributeModifier(ButtonStyles.primary).width('100%')
+          .enabled(projection.recovery === 'retry' ? this.feed.canRetryReceipt(Wire.text(item, 'id'), todoId) :
+            this.feed.canContinueReceipt(Wire.text(item, 'id'), todoId))
+          .onClick(() => this.feed.retryReceipt(Wire.text(item, 'id'), todoId, projection.recovery))
+          .id('assistant.detail.recovery.' + Wire.text(item, 'id'))
+      }
+      if (todoId && Object.keys(todo).length > 0) {
+        ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('assistant_detail_open_task') }) })
+          .onClick(() => this.openTodo(todoId)).accessibilityText(tr('assistant_detail_open_task'))
+        ForEach(this.todoAgents(todoId), (agent: Record<string, Object>) => this.agentRow(todoId, agent),
+          (agent: Record<string, Object>) => Wire.text(agent, 'machine_id') + '/' + Wire.text(agent, 'session_id'))
+      }
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(this.detailOnly ? Tokens.page : Tokens.inset)
+      .backgroundColor(Colors.grouped)
   }
 
   @Builder answered(item: Record<string, Object>) {
@@ -302,8 +501,8 @@ export struct AssistantCards {
 
   @Builder activity(item: Record<string, Object>) {
     if (Wire.text(item, 'kind') === 'view') AssistantViewCard({ model: this.model, feed: this.feed, item: item, cardKey: this.cardKey(item), active: this.active, onLink: (address: string) => this.onLink(address), onOpenResource: (address: string) => this.openCardResource(address) })
-    else if (Wire.text(item, 'kind') === 'plan') this.planCard(item)
-    else if (Wire.text(item, 'kind') === 'receipt') this.receipt(item)
+    else if (Wire.text(item, 'kind') === 'plan') { if (this.detailOnly) this.planCard(item); else this.planSummary(item) }
+    else if (Wire.text(item, 'kind') === 'receipt') { if (this.detailOnly) this.receipt(item); else this.receiptSummary(item) }
     else if (Wire.text(item, 'kind') === 'answered') this.answered(item)
     else if (Wire.text(item, 'kind') === 'review') this.review(item)
     else if (Wire.text(item, 'kind') === 'routed') this.routed(item)
@@ -351,17 +550,18 @@ export struct AssistantCards {
           ForEach(this.feed.editTasks, (task: PlanEditTask, index: number) => this.editTask(task, index, this.planEditMachineIds()),
             (_task: PlanEditTask, index: number) => String(index))
         }.width('100%').alignItems(HorizontalAlign.Start)
-      }.layoutWeight(1).width('100%')
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart)
       if (this.feed.error) Text(tr(this.feed.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-      Row({ space: Tokens.gap }) {
-        Button(tr('cancel')).height(Tokens.touch).onClick(() => this.feed.cancelPlanEdit())
-        Button(tr('assistant_feed_start')).height(Tokens.touch)
+      Column({ space: Tokens.gap }) {
+        Button(tr('cancel')).attributeModifier(ButtonStyles.secondary).width('100%').onClick(() => this.feed.cancelPlanEdit())
+        Button(tr('assistant_feed_start')).attributeModifier(ButtonStyles.primary).width('100%')
           .enabled(this.feed.planCanStart(this.feed.editingPlanId) && this.feed.editTasks.every((task: PlanEditTask) =>
             task.title.trim().length > 0 && task.prompt.trim().length > 0 && task.machine.trim().length > 0 && task.cwd.trim().length > 0 &&
             (task.readonly || task.permission === 'bypassPermissions')))
           .onClick(() => this.feed.startEditedPlan())
       }.width('100%')
-    }.width('100%').height('100%').padding(Tokens.page).alignItems(HorizontalAlign.Start)
+    }.width('100%').height('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.page, bottom: this.editorInset + Tokens.footer }).alignItems(HorizontalAlign.Start)
+      .id(this.editorNodeId).onAreaChange(() => this.measureEditor())
   }
 
   build() {
@@ -371,10 +571,18 @@ export struct AssistantCards {
       }.width('100%')
         .bindSheet($$this.feed.editing, this.planEditor(), {
           title: { title: tr('assistant_feed_edit_plan') }, height: SheetSize.LARGE, showClose: true,
+          onAppear: () => { this.editorReady = true; this.measureEditor(); }, onDisappear: () => this.editorReady = false,
           onWillDismiss: () => this.feed.cancelPlanEdit()
         })
     } else if (this.item) {
-      this.activity(this.item)
+      if (this.detailOnly) {
+        Column() { this.activity(this.item) }.width('100%')
+          .bindSheet($$this.feed.editing, this.planEditor(), {
+            title: { title: tr('assistant_feed_edit_plan') }, height: SheetSize.LARGE, showClose: true,
+            onAppear: () => { this.editorReady = true; this.measureEditor(); }, onDisappear: () => this.editorReady = false,
+          onWillDismiss: () => this.feed.cancelPlanEdit()
+          })
+      } else this.activity(this.item)
     }
   }
 }

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mainConversationData} from '../entry/src/main/ets/core/DefaultConversation.ts';
 import {readFileSync} from 'node:fs';
 import {registerHooks,stripTypeScriptTypes} from 'node:module';
 registerHooks({resolve(s,c,n){if(c.parentURL?.endsWith('NavigationContext.ets')&&s==='./Wire')return {url:new URL('./Wire.ets',c.parentURL).href,shortCircuit:true};return n(s,c);},load(u,c,n){if(u.endsWith('.ets'))return{format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(u),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};return n(u,c);}});
 const {NavigationContext}=await import('../entry/src/main/ets/models/NavigationContext.ets');
-const {ResourceRow}=await import('../entry/src/main/ets/models/Wire.ets');
+const {ResourceRow,Wire}=await import('../entry/src/main/ets/models/Wire.ets');
 // Load the real shell's navigation methods, excluding only ArkUI builders and platform lifecycle surfaces.
 const source=readFileSync(new URL('../entry/src/main/ets/pages/Index.ets',import.meta.url),'utf8');
 function method(name){
@@ -13,14 +14,14 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown'];
-const NativeNavigation=new Function('NavigationContext','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext);
+const names=['routeTarget','openRow','mainDestination','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown'];
+const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire);
 function row(id='source',manager='owner-b',kind='conversation'){const r=new ResourceRow(id,id,kind);r.manager=manager;r.machine='machine';r.session=id;return r;}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
 function fixture(){const shell=new NativeNavigation(),pushed=[];let gen=1;
  const primary={profile:{id:'hub'},selected:row('primary','owner-a'),connected:true,error:'',connectionGeneration:()=>gen,scope:()=> 'hub/owner-a',owns:(g,s)=>g===gen&&s==='hub/owner-a',reportError(e){this.error=e.message;},hideConversation(){},async listResources(){}};
  const detail={selected:row('previous'),connected:true,async select(r){this.selected=r;},hideConversation(){},showConversation(){},watchDecisions(){}};
- primary.viewFor=async()=>detail;shell.model=primary;shell.detailModel=primary;shell.activeChild='';shell.routeRevision=0;shell.chatReady=false;shell.detailRoute='';shell.stack={pushPath:r=>pushed.push(r),getAllPathName:()=>pushed.map(r=>r.name),getParamByIndex:i=>pushed[i]?.param};shell.savePath=()=>{};
+ primary.viewFor=async()=>detail;shell.model=primary;shell.detailModel=primary;shell.activeChild='';shell.routeRevision=0;shell.creatingConversations=new Map();shell.chatReady=false;shell.detailRoute='';shell.stack={size:()=>pushed.length,clear:()=>pushed.splice(0),pushPath:r=>pushed.push(r),getAllPathName:()=>pushed.map(r=>r.name),getParamByIndex:i=>pushed[i]?.param};shell.savePath=()=>{};
  return {shell,primary,detail,pushed,bump:()=>gen++};
 }
 test('global settings remain workspace-owned and chat settings retain the captured target',()=>{
@@ -77,4 +78,106 @@ test('native extension pushes have distinct route identities and an eight-page l
  for(let i=0;i<10;i++)shell.openExtension(owner,'extension','same-page','Title');
  assert.equal(pushed.length,8);assert.equal(warnings,2);assert.equal(new Set(pushed.map(row=>row.param)).size,8);
  for(const route of pushed){const row=NavigationContext.rowFrom(route.param);assert.equal(row.group,'hub');assert.equal(row.manager,'owner');assert.equal(row.data().ui,'same-page');}
+});
+
+
+test('the default main read cannot steal a same-owner navigation opened while it is pending',async()=>{
+ const {shell,primary,pushed}=fixture(),wait=deferred();let posts=0;
+ const repo={call:async(path,method)=>{assert.equal(path,'/api/v1/assistant');if(method==='POST')posts++;return wait.promise;}};
+ primary.repo=()=>repo;primary.section=0;shell.defaultMainPending=false;
+ const selected=primary.selected,pending=shell.resolveMainDestination();
+ shell.stack.pushPath({name:'resources',param:'knowledge'});
+ wait.resolve({main:'main',machine_id:'machine',conversations:[{id:'main'}]});await pending;
+ assert.equal(posts,0);assert.equal(primary.selected,selected);assert.deepEqual(pushed,[{name:'resources',param:'knowledge'}]);
+});
+test('a default main read uses the same response after a main conversation moves to another machine',async()=>{
+ const {shell,primary,pushed}=fixture();let calls=0;
+ const repo={async call(path,method){calls++;assert.equal(path,'/api/v1/assistant');assert.notEqual(method,'POST');return {main:'main',machine_id:'old',main_machine_id:'new',conversations:[{id:'main',machine_id:'old'},{id:'main',machine_id:'new'}]};}};
+ primary.repo=()=>repo;primary.section=0;primary.mainId='cached';shell.defaultMainPending=false;
+ await shell.resolveMainDestination();assert.equal(calls,1);assert.equal(pushed.length,1);assert.equal(JSON.parse(pushed[0].param).machine,'new');assert.equal(primary.mainId,'main');
+});
+test('unavailable and empty default directories never create or select a conversation',async()=>{
+ for(const failure of [true,false]){
+  const {shell,primary,pushed}=fixture();let calls=0;const selected=primary.selected;
+  primary.repo=()=>repo;primary.section=0;shell.defaultMainPending=false;
+  const repo={async call(path,method){calls++;assert.notEqual(method,'POST');if(failure)throw Error('offline');return {main:'absent',machine_id:'machine',conversations:[]};}};
+  await shell.resolveMainDestination();assert.equal(calls,1);assert.equal(pushed.length,0);assert.equal(primary.selected,selected);
+ }
+});
+
+
+test('an explicit new conversation retires a pending default read without starting another one', async () => {
+ const {shell,primary,pushed}=fixture(), directory=deferred(), creation=deferred();let reads=0;
+ const repo={async call(){reads++;return directory.promise;}};primary.repo=()=>repo;primary.section=0;primary.newConversation=()=>creation.promise;
+ shell.navigationIntent=0;shell.defaultMainPending=false;shell.navigationRestoredScope=primary.scope();
+ const pending=shell.resolveMainDestination();shell.newConversation();
+ directory.resolve({main:'main',machine_id:'machine',conversations:[{id:'main'}]});await pending;
+ assert.equal(reads,1);assert.equal(pushed.length,0);
+ primary.ready=true;primary.mainId='now-known';shell.defaultMainAttempt='';shell.ensureMainDestination();assert.equal(reads,1,'inventory changes during explicit create cannot reopen main');
+ creation.resolve(row('created','owner-a'));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(pushed.length,1);assert.equal(JSON.parse(pushed[0].param).id,'created');
+});
+
+test('opening assistant detail restores decision authorization for its captured conversation',async()=>{
+ const {shell,detail}=fixture(),target=detail.selected,param=JSON.stringify(target);let watching=false;
+ detail.watchDecisions=value=>watching=value;shell.detailModel=detail;shell.activeChild=shell.childKey('assistant',param);
+ await shell.restoreTarget('assistant',param);assert.equal(watching,true);assert.equal(shell.targetReady('assistant',param),true);
+});
+
+test('a new owner receives a fresh stack before async hydration and merges only its own new intent',async()=>{
+ class Stack { routes=[];size(){return this.routes.length;}pushPath(route){this.routes.push(route);}getAllPathName(){return this.routes.map(r=>r.name);}getParamByIndex(i){return this.routes[i]?.param;} }
+ const NativeScope=new Function('Wire','NavPathStack','NavigationContext','return '+stripTypeScriptTypes('class NativeScope {'+['routeRow','restoreScope','savePath','changeSection'].map(method).join('\n')+'}'))(Wire,Stack,NavigationContext);
+ const s=new NativeScope(),gate=deferred(),saved=[];s.model={section:0,scope:()=> 'B',loadView:()=>gate.promise,saveView:async(k,v)=>saved.push(JSON.parse(v)),releaseTerminal(){},sessions:[]};
+ s.stack=new Stack();s.stack.pushPath({name:'conversation',param:'private-A'});s.paths=new Map();s.activeScope='A';s.restoring=0;s.navigationIntent=0;s.rowVisibility=new Map();s.routeRevision=0;s.detailModel={hideConversation(){}};s.wide=()=>false;s.ensureMainDestination=()=>{};
+ const restoring=s.restoreScope();assert.equal(s.stack.size(),0);
+ s.changeSection(1);s.stack.pushPath({name:'session',param:'B-notification'});s.savePath();assert.equal(saved.length,0);
+ gate.resolve(JSON.stringify({section:0,tabs:[{index:0,routes:[{name:'conversation',param:JSON.stringify(row('saved-B','owner-b'))}]}]}));await restoring;
+ assert.equal(s.model.section,1);assert.deepEqual(s.stack.routes,[{name:'session',param:'B-notification'}]);
+ assert.equal(JSON.stringify(saved).includes('private-A'),false);assert.equal(JSON.stringify(saved).includes('saved-B'),true);
+});
+
+
+test('an old owner creation does not suppress the new owners automatic read',async()=>{
+ const {shell,primary}=fixture(),create=deferred();primary.newConversation=()=>create.promise;shell.navigationIntent=0;shell.newConversation();
+ primary.scope=()=> 'hub/owner-b';primary.section=0;primary.ready=true;primary.mainId='main-b';primary.mainMachineId='machine';
+ primary.owns=(g,s)=>g===primary.connectionGeneration()&&s===primary.scope();let reads=0;primary.repo=()=>({async call(){reads++;return {main:'main-b',machine_id:'machine',conversations:[{id:'main-b'}]};}});
+ shell.navigationRestoredScope=primary.scope();shell.defaultMainPending=false;shell.ensureMainDestination();await new Promise(r=>setImmediate(r));assert.equal(reads,1);
+ create.resolve(row('created-in-A','owner-a'));await new Promise(r=>setImmediate(r));assert.equal(shell.creatingConversations.size,0);
+});
+
+
+test('main reached from a source destination retains its child navigation identity',()=>{
+ const {shell,primary}=fixture(),main=row('main','owner-a');main.group='hub';primary.profile.manager='owner-a';primary.mainId='main';primary.mainMachineId='machine';
+ assert.equal(shell.mainDestination('conversation',JSON.stringify(main)),false,'source handoff is a child even though IDs match main');
+ main.raw=JSON.stringify({navigation_root:true});assert.equal(shell.mainDestination('conversation',JSON.stringify(main)),true);
+ assert.equal(shell.mainDestination('assistant',JSON.stringify(main)),false);
+});
+
+
+test('root selection and source links serialize independent route-local copies',async()=>{
+ const {shell,primary,detail,pushed}=fixture(),inventory=row('shared','owner-a','session');inventory.raw=JSON.stringify({capabilities:{send:true}});const original=inventory.raw;
+ shell.openRow(inventory);assert.equal(inventory.raw,original);assert.equal(JSON.parse(JSON.parse(pushed[0].param).raw).navigation_root,true);
+ const previouslyRoot=NavigationContext.rowFrom(pushed[0].param);shell.activeChild='source-todo';primary.viewFor=async()=>detail;
+ await shell.openLinkedResource(previouslyRoot);assert.equal(JSON.parse(JSON.parse(pushed[1].param).raw).navigation_root,false);assert.equal(previouslyRoot.data().navigation_root,true);assert.equal(inventory.raw,original);
+});
+
+
+test('native chrome accepts global destination parameters without parsing them as chat rows',()=>{
+ const {shell}=fixture();
+ for(const [name,param] of [['resources','inbox'],['resources','todo'],['settings','look'],['applications',''],['resources','knowledge']]){
+  assert.equal(shell.mainDestination(name,param),false);assert.equal(shell.hideChatTitle(name,param),false);
+ }
+});
+
+
+test('main row visibility survives an authoritative main identity arriving after layout',()=>{
+ const {shell,primary}=fixture(),r=row('main','owner-a');r.raw=JSON.stringify({navigation_root:true});primary.mainId='main';primary.mainMachineId='machine';primary.target=x=>(x||r).id;
+ shell.mainRowVisible=1;shell.visibilityEpoch=0;shell.rowVisibility=new Map();shell.peer=()=>0;shell.wide=()=>true;shell.rail=()=>false;assert.equal(shell.hideChatTitle('conversation',JSON.stringify(r)),true);
+ shell.mainRowVisible=0;assert.equal(shell.hideChatTitle('conversation',JSON.stringify(r)),false);
+});
+
+
+test('inbox handoff opening is a transient route intent and never part of saved navigation',async()=>{
+ const {shell,primary,pushed}=fixture(),r=row('inbox-intent','owner-a','inbox');r.raw=JSON.stringify({open_handoff:true});await shell.openLinkedResource(r);
+ const target=pushed[0];assert.equal(JSON.parse(JSON.parse(target.param).raw).open_handoff,false);assert.equal(shell.pendingInboxHandoff,shell.childKey(target.name,target.param));assert.equal(r.data().open_handoff,true);
 });

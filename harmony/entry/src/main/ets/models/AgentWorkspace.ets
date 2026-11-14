@@ -18,6 +18,7 @@ interface AgentOwnerSnapshot {
   manager: string;
   rowKey: string;
   rowTarget: string;
+  actionEpoch: number;
 }
 
 @ObservedV2
@@ -104,6 +105,8 @@ export class AgentWorkspace {
   private scope: string = '';
   private viewScope: string = '';
   private revision: number = 0;
+  private actionEpoch: number = 0;
+  revokeRowActions(): void { this.actionEpoch++; this.busy = false; }
   private sourceRows: ResourceRow[] = [];
   private externalSelection: ResourceRow | undefined;
   private historyRows: ResourceRow[] = [];
@@ -140,6 +143,10 @@ export class AgentWorkspace {
     const metadata = this.rowMetadata(row);
     const machineId = rowMachine(row);
     return [this.client?.groupName(row) || '', metadata[1] === machineId ? '' : metadata[1], metadata[3], metadata[4]];
+  }
+
+  isBoundTo(client: ClientModel): boolean {
+    return this.client === client && this.scope === client.scope() && this.owner === client.profile.manager;
   }
 
   async open(client: ClientModel, readingDetail: boolean = false): Promise<void> {
@@ -446,7 +453,7 @@ export class AgentWorkspace {
       const repo = client.repo() as AgentRepository;
       return { root: root, rootScope: root.scope(), rootGeneration: root.connectionGeneration(), revision: this.revision,
         client: client, repo: repo, generation: client.connectionGeneration(), scope: client.scope(),
-        viewScope: this.viewScope, manager: client.profile.manager, rowKey: '', rowTarget: '' };
+        viewScope: this.viewScope, manager: client.profile.manager, rowKey: '', rowTarget: '', actionEpoch: this.actionEpoch };
     } catch (_) { return undefined; }
   }
   private captureRow(row: ResourceRow, path: string): AgentOwnerSnapshot | undefined {
@@ -465,6 +472,7 @@ export class AgentWorkspace {
     return true;
   }
   private ownerActive(snapshot: AgentOwnerSnapshot): boolean {
+    if (snapshot.rowKey && snapshot.actionEpoch !== this.actionEpoch) return false;
     if (this.client !== snapshot.root || this.revision !== snapshot.revision || this.viewScope !== snapshot.viewScope ||
       !snapshot.root.owns(snapshot.rootGeneration, snapshot.rootScope) || !snapshot.client.owns(snapshot.generation, snapshot.scope) ||
       !snapshot.client.connected || snapshot.client.profile.manager !== snapshot.manager) return false;

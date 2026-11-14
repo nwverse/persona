@@ -1,3 +1,4 @@
+import { ThemeScope } from '../design/ThemeScope';
 import { util } from '@kit.ArkTS';
 import { AdminWorkspacePage } from '../components/AdminWorkspacePage';
 import { ExtensionPage } from '../components/ExtensionPage';
@@ -22,7 +23,7 @@ import { deviceFeatures } from '../models/DeviceFeatures';
 import { SessionTools } from '../components/SessionTools';
 import { SessionWorkspace } from '../models/SessionWorkspace';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
@@ -39,6 +40,14 @@ import { DeviceLook, deviceLook } from '../models/DeviceLook';
 import { nativeLookTheme } from '../design/LookTheme';
 import { IconTypeV2 } from '@kit.ArkUI';
 import { Tokens } from '../design/Tokens';
+import { Colors } from '../design/Colors';
+import { Symbols } from '../design/Symbols';
+import { ButtonStyles } from '../design/Controls';
+import { AgentWorkspace } from '../models/AgentWorkspace';
+import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
+import { nativeSheetInset } from '../platform/NativeInsets';
+import { mainConversationData } from '../core/DefaultConversation';
+import { AssistantDetailPage } from '../components/AssistantDetailPage';
 import { tr } from '../design/Strings';
 import { isHubStateKey } from '../core/StorageOwnership';
 
@@ -95,11 +104,101 @@ struct Index {
   @Local settingsPage: string = '';
   @Local activeChild: string = '';
   @Local tool: number = 0;
-  private controllers: TabsController = new TabsController();
+  private titleMaterial: uiMaterial.Material = uiMaterial.isImmersiveMaterialSupported() ? new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN }) : uiMaterial.Material.empty;
+  @Local agentWorkspace: AgentWorkspace = new AgentWorkspace();
+  @Local environment: NativeEnvironment = nativeEnvironment;
+  @Local spacesShown: boolean = false;
+  @Local spacesInset: number = 0;
+  private spacesLayoutReady: boolean = false;
+  @Local inlineStopIdentity: string = '';
+  private defaultMainAttempt: string = '';
+  private navigationRestoredScope: string = '';
+  private navigationIntent: number = 0;
+  private defaultMainPending: boolean = false;
+  private creatingConversations: Map<string, number> = new Map();
   private paths: Map<string, NavPathStack> = new Map();
   private activeScope: string = '';
   private restoring: number = 0;
-  private labels(): string[] { return [tr('persona'), tr('agents'), tr('inbox'), tr('settings')]; }
+  private peer(): number { return this.model.section === 1 ? 1 : 0; }
+  private headerHeight(): number { return Tokens.header * Math.max(1, this.environment.fontScale / 2); }
+  @Local pendingInboxHandoff: string = '';
+  @Local mainRowVisible: number = 0;
+  private mainDestination(name: string, param: Object): boolean {
+    if (name !== 'conversation') return false;
+    const row = this.routeRow(param);
+    return name === 'conversation' && Wire.bool(row.data(), 'navigation_root') && row.id === this.model.mainId && (!row.group || row.group === this.model.profile.id) &&
+      (!row.manager || row.manager === this.model.profile.manager) && (!this.model.mainMachineId || row.machine === this.model.mainMachineId);
+  }
+  private hideChatTitle(name: string, param: Object): boolean {
+    if (name !== 'session' && name !== 'conversation') return false;
+    if (!Wire.bool(this.routeRow(param).data(), 'navigation_root')) return false;
+    if (name === 'session') return this.hideAgentTitle();
+    const row = this.routeRow(param), epoch = this.visibilityEpoch;
+    const visible = row.id === this.model.mainId && row.machine === this.model.mainMachineId ? this.mainRowVisible : this.rowVisibility.get(this.model.scope() + this.model.target(row)) || 0;
+    return name === 'conversation' && this.detailModel === this.model && this.peer() === 0 && this.wide() && !this.rail() &&
+      this.model.target() === this.model.target(row) && visible >= 0.99;
+  }
+  @Builder peerTitle() {
+    Row() {
+      if (this.environment.fontScale >= 1.5) {
+        Select([{ value: tr('persona') }, { value: tr('agents') }]).selected(this.peer()).value(tr(this.peer() === 1 ? 'agents' : 'persona'))
+          .font({ size: String(Tokens.body * Math.min(this.environment.fontScale, Tokens.chromeFontMaxScale)) + 'vp' }).width(this.wide() ? 176 : Tokens.headerSegment).onSelect((index: number) => this.selectPeer(index)).id('shell.peer')
+      } else {
+        CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([{ text: tr('persona') }, { text: tr('agents') }]),
+          selectedIndex: this.peer(), $selectedIndex: (index: number) => this.selectPeer(index),
+          itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction),
+          itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control),
+          itemFontSize: LengthMetrics.fp(Tokens.body), itemSelectedFontSize: LengthMetrics.fp(Tokens.body),
+          itemMinHeight: LengthMetrics.vp(Tokens.chrome - Tokens.fine), buttonMinHeight: LengthMetrics.vp(Tokens.chrome) })
+          .width(this.wide() ? 176 : Tokens.headerSegment).responseRegion({ x: 0, y: -Tokens.fine, width: '100%', height: Tokens.touch }).id('shell.peer')
+      }
+    }.height(this.headerHeight()).padding({ left: Tokens.page }).alignItems(VerticalAlign.Center)
+  }
+  private selectPeer(index: number): void {
+    if (index === this.model.section) return;
+    this.spacesShown = false; this.changeSection(index);
+    if (index === 0) this.ensureMainDestination();
+  }
+  private ensureAgentWorkspace(): void {
+    if (!this.agentWorkspace.isBoundTo(this.model)) this.agentWorkspace.open(this.model, this.peer() === 1).catch(() => {});
+  }
+  @Monitor('model.ready', 'model.mainId', 'model.mainMachineId', 'model.connected') mainAvailabilityChanged(): void { this.ensureMainDestination(); }
+  private ensureMainDestination(): void {
+    if (!this.model.ready || !this.model.connected || this.model.section !== 0 || this.navigationRestoredScope !== this.model.scope() || this.showSheet || this.spacesShown || this.stack.size() || this.defaultMainPending || (this.creatingConversations.get(JSON.stringify([this.model.scope(), this.model.connectionGeneration()])) || 0) > 0) return;
+    const attempt = JSON.stringify([this.model.scope(), this.model.connectionGeneration(), this.model.mainId, this.model.mainMachineId]);
+    if (attempt === this.defaultMainAttempt) return;
+    this.defaultMainAttempt = attempt; this.resolveMainDestination();
+  }
+  private async resolveMainDestination(): Promise<void> {
+    if (this.defaultMainPending || !this.model.connected) return;
+    const owner = this.model, repo = owner.repo(), generation = owner.connectionGeneration(), scope = owner.scope();
+    const stack = this.stack, revision = this.routeRevision, selected = owner.selected.key(), section = owner.section, intent = this.navigationIntent;
+    const names = stack.getAllPathName(), pathStamp = JSON.stringify(names.map((name: string, index: number) => [name, stack.getParamByIndex(index)]));
+    const valid = (): boolean => this.model === owner && owner.connected && owner.owns(generation, scope) && owner.repo() === repo && this.stack === stack &&
+      this.routeRevision === revision && this.navigationIntent === intent && !this.showSheet && !this.spacesShown && owner.section === section && owner.selected.key() === selected &&
+      JSON.stringify(stack.getAllPathName().map((name: string, index: number) => [name, stack.getParamByIndex(index)])) === pathStamp;
+    this.defaultMainPending = true;
+    try {
+      const response = await repo.call('/api/v1/assistant');
+      if (!valid()) return;
+      const data = mainConversationData(response);
+      if (!data) return;
+      const row = ResourceRow.from(data as Object as Record<string, Object>, 'conversation');
+      row.group = owner.profile.id; row.manager = owner.profile.manager;
+      if (!valid()) return;
+      owner.mainId = row.id; owner.mainMachineId = row.machine;
+      this.pushChat(row);
+      this.defaultMainAttempt = JSON.stringify([owner.scope(), generation, owner.mainId, owner.mainMachineId]);
+    } catch (error) { if (valid()) owner.reportError(error as Error); }
+    finally { this.defaultMainPending = false; if (scope !== this.model.scope() || generation !== this.model.connectionGeneration()) this.ensureMainDestination(); }
+  }
+  private openAssistantCard(itemId: string, kind: string): void {
+    const source = this.detailModel.selected;
+    if (!itemId || !this.activeChild || !['conversation', 'session'].includes(source.kind)) return;
+    const row = NavigationContext.rowFrom(JSON.stringify(source));
+    const data = row.data(); data['assistant_item_id'] = itemId; data['assistant_item_kind'] = kind; row.raw = JSON.stringify(data);
+    this.stack.pushPath({ name: 'assistant', param: JSON.stringify(row) }); this.savePath();
+  }
   private wide(): boolean { return this.breakpoint === WidthBreakpoint.WIDTH_LG || this.breakpoint === WidthBreakpoint.WIDTH_XL; }
   private rail(): boolean { return this.wide() && this.collapsed; }
   private filtered(): ResourceRow[] {
@@ -114,7 +213,7 @@ struct Index {
   }
   private openReader(address: string): void { const safe = readerLink(address); if (safe) { this.readerAddress = safe; this.readerTitle = readerHost(safe); this.readerShown = true; } }
   @Builder readerContent() { LinkReader({ address: this.readerAddress, onHost: (host: string) => this.readerTitle = host }) }
-  private openSheet(kind: string): void { if (kind === 'connect') this.pairingRevision++; this.readerShown = false; if (kind === 'newagent') { this.prepareAgent(); return; } this.sheetKind = kind; this.showSheet = true; }
+  private openSheet(kind: string): void { this.navigationIntent++; if (kind === 'connect') this.pairingRevision++; this.readerShown = false; if (kind === 'newagent') { this.prepareAgent(); return; } this.sheetKind = kind; this.showSheet = true; }
   private sheetTitle(): string { return tr(this.sheetKind === 'hub' ? 'hub' : this.sheetKind === 'newagent' ? 'new_agent' : 'welcome'); }
   @Builder sheetContent() {
     if (this.sheetKind === 'hub') this.workspaceSheet()
@@ -140,12 +239,12 @@ struct Index {
     this.bindDeviceOwner(this.model);
     this.applications.bind(this.model); this.applications.refresh();
   }
-  aboutToDisappear(): void { this.applications.dispose(); this.dismissChatActions(); }
+  aboutToDisappear(): void { this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
-  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.dismissChatActions(); this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
-  @Monitor('model.conversations', 'model.mainId') conversationsChanged(): void { this.syncConversationRows(); }
+  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.pendingInboxHandoff = ''; this.agentWorkspace.hide(); this.spacesShown = false; this.dismissChatActions(); this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
+  @Monitor('model.conversations', 'model.mainId', 'model.mainMachineId') conversationsChanged(): void { this.syncConversationRows(); }
   @Monitor('model.appearance') appearanceChanged(): void {
     this.getUIContext().getHostContext()?.getApplicationContext().setColorMode(this.model.appearance === 1 ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT : this.model.appearance === 2 ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
   }
@@ -157,19 +256,30 @@ struct Index {
   }
   private async restoreScope(): Promise<void> {
     const scope = this.model.scope(); if (scope === this.activeScope) return;
-    this.activeScope = scope; this.rowVisibility.clear(); const epoch = ++this.restoring;
-    const view = Wire.parse(await this.model.loadView('navigation'));
+    this.activeScope = scope; this.stack = this.paths.get(scope + ':' + this.model.section) || new NavPathStack(); this.navigationRestoredScope = ''; this.rowVisibility.clear(); const epoch = ++this.restoring, intent = this.navigationIntent;
+    let view: Record<string, Object>;
+    try { view = Wire.parse(await this.model.loadView('navigation')); }
+    catch (_) { if (epoch === this.restoring && scope === this.model.scope()) { this.activeScope = ''; this.model.error = 'cache_unavailable'; } return; }
     if (epoch !== this.restoring || scope !== this.model.scope()) return;
-    this.model.section = Math.max(0, Math.min(3, Wire.number(view, 'section')));
+    if (intent === this.navigationIntent) this.model.section = Math.max(0, Math.min(3, Wire.number(view, 'section')));
     Wire.rows(view, 'tabs').forEach((tab: Record<string, Object>) => {
       const key = scope + ':' + Wire.number(tab, 'index');
       if (!this.paths.has(key)) { const stack = new NavPathStack();
-        Wire.rows(tab, 'routes').forEach((route: Record<string, Object>) => stack.pushPath({ name: Wire.text(route, 'name'), param: Wire.text(route, 'param') }, false));
+        Wire.rows(tab, 'routes').forEach((route: Record<string, Object>, index: number) => {
+          const name = Wire.text(route, 'name'); let param = Wire.text(route, 'param');
+          if (index === 0 && ['session', 'conversation'].includes(name)) { const row = this.routeRow(param), data = row.data(); data['navigation_root'] = true; row.raw = JSON.stringify(data); param = JSON.stringify(row); }
+          stack.pushPath({ name: name, param: param }, false);
+        });
         this.paths.set(key, stack);
       }
     });
     this.stack = this.paths.get(scope + ':' + this.model.section) || new NavPathStack();
     this.paths.set(scope + ':' + this.model.section, this.stack);
+    this.navigationRestoredScope = scope;
+    if (intent !== this.navigationIntent) this.savePath();
+    if (this.model.section === 2 && !this.stack.size()) this.openResources('inbox');
+    else if (this.model.section === 3 && !this.stack.size()) this.openSettingsRoot();
+    else this.ensureMainDestination();
   }
   @Monitor('model.pairingLink') pairingChanged(): void { this.consumePairingLink(); }
   @Monitor('model.notificationTarget') notificationChanged(): void { this.consumeNotification(); }
@@ -183,25 +293,34 @@ struct Index {
     if (!this.model.pairingLink) return; this.address = this.model.pairingLink; this.pairCode = ''; this.model.pairingLink = ''; this.openSheet('connect');
   }
   private savePath(): void {
-    this.paths.set(this.model.scope() + ':' + this.model.section, this.stack);
+    if (this.activeScope !== this.model.scope()) this.restoreScope();
+    this.navigationIntent++;
+    const key = this.model.scope() + ':' + this.model.section;
+    if (this.navigationRestoredScope === this.model.scope() || this.stack.size() || this.paths.has(key)) this.paths.set(key, this.stack);
     const tabs: Record<string, Object>[] = [];
     for (let index = 0; index < 4; index++) { const stack = this.paths.get(this.model.scope() + ':' + index);
       const routes: Record<string, Object>[] = [];
       stack?.getAllPathName().forEach((name: string, position: number) => routes.push(Wire.payload(['name', 'param'], [name, stack.getParamByIndex(position) as string || ''])));
       tabs.push(Wire.payload(['index', 'routes'], [index, routes]));
     }
+    if (this.navigationRestoredScope !== this.model.scope()) return;
     this.model.saveView('navigation', JSON.stringify(Wire.payload(['section', 'tabs'], [this.model.section, tabs]))).catch(() => this.model.error = 'failed');
   }
   private changeSection(index: number): void {
-    this.savePath(); this.routeRevision++; this.activeChild = ''; this.shownName = ''; this.chatReady = false; this.detailRoute = ''; this.detailModel.hideConversation(); this.model.releaseTerminal(); this.model.section = index; this.stack = this.paths.get(this.model.scope() + ':' + index) || new NavPathStack(); this.query = ''; this.filter = 0;
+    this.pendingInboxHandoff = ''; this.savePath(); this.routeRevision++; this.activeChild = ''; this.shownName = ''; this.chatReady = false; this.detailRoute = ''; this.detailModel.hideConversation(); this.model.releaseTerminal(); this.model.section = index; this.stack = this.paths.get(this.model.scope() + ':' + index) || new NavPathStack(); this.query = ''; this.filter = 0;
     if (index === 1 && this.wide() && !this.stack.size() && this.model.sessions.length) this.openRow(this.model.sessions[0]);
     if (index === 2) this.model.listResources('inbox'); this.savePath();
+  }
+  private routeTarget(row: ResourceRow, root: boolean): ResourceRow {
+    const copy = NavigationContext.rowFrom(JSON.stringify(row));
+    if (copy.kind === 'session' || copy.kind === 'conversation') { const data = copy.data(); data['navigation_root'] = root; copy.raw = JSON.stringify(data); }
+    return copy;
   }
   private openRow(row: ResourceRow): void {
     const name = NavigationContext.destination(row);
     this.chatReady = false; this.detailRoute = '';
     if (row.kind === 'session') { this.stack.clear(); this.tool = 0; }
-    this.stack.pushPath({ name: name, param: JSON.stringify(row) }); this.savePath();
+    this.stack.pushPath({ name: name, param: JSON.stringify(this.routeTarget(row, true)) }); this.savePath();
   }
   private async openLinkedResource(row: ResourceRow): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), source = this.activeChild;
@@ -209,7 +328,12 @@ struct Index {
       if (!['inbox', 'todo', 'knowledge', 'file', 'todo_source', 'todo_thread'].includes(row.kind)) await this.model.viewFor(row);
       if (!this.model.owns(generation, scope) || this.activeChild !== source) return;
       this.chatReady = false; this.detailRoute = '';
-      this.stack.pushPath({ name: NavigationContext.destination(row), param: JSON.stringify(row) }); this.savePath();
+      const target = this.routeTarget(row, false), name = NavigationContext.destination(target), data = target.data();
+      const handoff = target.kind === 'inbox' && Wire.bool(data, 'open_handoff');
+      if (Wire.has(data, 'open_handoff')) data['open_handoff'] = false; target.raw = JSON.stringify(data);
+      const param = JSON.stringify(target);
+      if (handoff) this.pendingInboxHandoff = this.childKey(name, param);
+      this.stack.pushPath({ name: name, param: param }); this.savePath();
     } catch (error) { if (this.model.owns(generation, scope) && this.activeChild === source) this.model.reportError(error as Error); }
   }
   private openFrom(name: string, param: Object, row: ResourceRow): void {
@@ -235,19 +359,28 @@ struct Index {
     } catch (error) { if (this.model.owns(generation, scope) && this.activeChild === source) this.model.reportError(error as Error); }
   }
   private childKey(name: string, param: Object): string { return name + ':' + (param as string); }
-  private pushChat(row: ResourceRow): void { this.stack.pushPath({ name: 'conversation', param: JSON.stringify(row) }); this.savePath(); }
-  private openMain(): void { const scope = this.model.scope(), generation = this.model.connectionGeneration(); this.model.openMain().then((row: ResourceRow) => { if (this.model.owns(generation, scope)) this.pushChat(row); }).catch((error: Error) => { if (this.model.owns(generation, scope)) this.model.reportError(error); }); }
+  private pushChat(row: ResourceRow): void {
+    const names = this.stack.getAllPathName();
+    const index = names.findIndex((name: string, position: number) => name === 'conversation' && this.routeRow(this.stack.getParamByIndex(position) as string).key() === row.key());
+    if (index >= 0) this.stack.popToIndex(index);
+    else this.stack.pushPath({ name: 'conversation', param: JSON.stringify(this.routeTarget(row, !this.stack.size())) });
+    this.savePath();
+  }
+  private openMain(): void { this.navigationIntent++; if (this.model.section !== 0) this.changeSection(0); this.resolveMainDestination(); }
   private newConversation(): void {
-    const scope = this.model.scope(), generation = this.model.connectionGeneration();
+    this.navigationIntent++;
+    const scope = this.model.scope(), generation = this.model.connectionGeneration(), ownerKey = JSON.stringify([scope, generation]);
+    this.creatingConversations.set(ownerKey, (this.creatingConversations.get(ownerKey) || 0) + 1);
     this.model.newConversation().then((row: ResourceRow) => { if (this.model.owns(generation, scope)) this.pushChat(row); })
-      .catch((error: Error) => { if (this.model.owns(generation, scope)) this.model.reportError(error); });
+      .catch((error: Error) => { if (this.model.owns(generation, scope)) this.model.reportError(error); })
+      .finally(() => { const remaining = (this.creatingConversations.get(ownerKey) || 1) - 1; if (remaining) this.creatingConversations.set(ownerKey, remaining); else this.creatingConversations.delete(ownerKey); });
   }
   private openResources(kind: string): void { this.resourceKind = kind; this.model.listResources(kind); this.stack.pushPath({ name: 'resources', param: kind }); this.savePath(); }
-  private openSettings(page: string, contextual: boolean = false): void { this.settingsPage = page; this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, contextual ? this.detailModel.selected : undefined) }); this.savePath(); }
+  private openSettings(page: string, contextual: boolean = false): void { if (page === 'appearance') this.ensureAgentWorkspace(); this.settingsPage = page; this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, contextual ? this.detailModel.selected : undefined) }); this.savePath(); }
   private settingsFamily(page: string): string { return ['extension_detail', 'extension_catalog'].includes(page) ? 'extensions' : page === 'connector_detail' ? 'connectors' : page === 'channel_detail' ? 'channels' : page; }
   private isAdminPage(page: string): boolean { return ['assistant', 'memory', 'managers', 'launchers', 'engine', 'hub_update', 'node_update'].includes(page); }
   private settingsLabel(page: string): string { return page === 'ssh' ? 'ssh_settings' : page === 'assistant' ? 'admin_identity' : page === 'memory' ? 'admin_memory' : page === 'managers' ? 'admin_managers' : page === 'launchers' ? 'admin_launchers' : page === 'engine' ? 'admin_machine_engine' : page === 'hub_update' ? 'admin_hub_update' : page === 'node_update' ? 'admin_node_update' : page; }
-  private adminMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), action: () => { if (this.activeChild === this.childKey(name, param)) this.adminRefreshRevision++; } }]; }
+  private adminMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.arrow_clockwise')), action: () => { if (this.activeChild === this.childKey(name, param)) this.adminRefreshRevision++; } }]; }
   private settingsTitle(param: Object): string { const descriptor = NavigationContext.from('settings', param as string); return descriptor.scoped && ['extension_detail', 'connector_detail', 'channel_detail', 'extension_catalog'].includes(descriptor.page) ? descriptor.row.title : tr(this.settingsLabel(descriptor.page)); }
   private openSettingsDetail(page: string, row: ResourceRow): void { this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, row) }); this.savePath(); }
   private openApplications(): void {
@@ -310,18 +443,95 @@ struct Index {
     } catch (_) { if (admit()) this.model.error = 'connection_failed'; }
   }
   private menus(): NavigationMenuItem[] {
-    const result: NavigationMenuItem[] = [];
-    if (!this.rail()) result.push({ value: this.model.profile.name || tr('hub'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.trunk')), action: () => this.openSheet('hub') });
-    if (!this.rail() && this.applications.visible) result.push({ value: tr('applications'), symbolIcon: new SymbolGlyphModifier(extensionIcon('plugin')), action: () => this.openApplications() });
-    if (this.model.section === 1 && !this.rail()) result.push({ value: tr('new_agent'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.plus')), action: () => this.openSheet('newagent') });
-    if (this.wide() && !this.rail()) result.push({ value: tr('collapse'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.chevron_left')), action: () => this.collapsed = true });
-    return result;
+    if (this.rail()) return [];
+    return [
+      { value: tr(this.peer() === 1 ? 'new_agent' : 'new_chat'), symbolIcon: new SymbolGlyphModifier(Symbols.plus), action: () => this.peer() === 1 ? this.openSheet('newagent') : this.newConversation() },
+      { value: tr('conversation_spaces'), symbolIcon: new SymbolGlyphModifier(Symbols.spaces), action: () => this.spacesShown = true }
+    ];
   }
+  @Builder shellMenu() {
+    Row({ space: Tokens.gap }) {
+      if (!this.rail()) ForEach(this.menus(), (item: NavigationMenuItem, index: number) => {
+        Button({ type: ButtonType.Circle }) { SymbolGlyph(index === 0 ? Symbols.plus : Symbols.spaces).fontSize(Tokens.symbolFont).fontColor([Colors.ink]) }
+          .attributeModifier(ButtonStyles.chrome).accessibilityText(item.value as string).onClick(() => item.action?.()).id(index === 0 ? 'shell.new' : 'shell.spaces')
+      })
+    }.height(this.headerHeight()).alignItems(VerticalAlign.Center).padding({ right: Tokens.page })
+  }
+  @Builder destinationMenus(name: string, param: Object) {
+    if (this.mainDestination(name, param) && !this.wide()) this.shellMenu()
+    else Row({ space: Tokens.gap }) {
+      ForEach(this.destinationMenuItems(name, param), (item: NavigationMenuItem) => {
+        Button({ type: ButtonType.Circle }) {
+          if (item.symbolIcon) SymbolGlyph().attributeModifier(item.symbolIcon).fontSize(Tokens.symbolFont)
+          else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
+        }.attributeModifier(ButtonStyles.chrome).accessibilityText(item.value as string).enabled(item.isEnabled !== false).onClick(() => item.action?.())
+      })
+    }.height(this.headerHeight()).alignItems(VerticalAlign.Center).padding({ right: Tokens.page })
+  }
+  private openSettingsRoot(): void { this.stack.pushPath({ name: 'settings_root', param: '' }); this.savePath(); }
+  private openSpace(kind: string): void {
+    this.spacesShown = false;
+    if (kind === 'persona') { this.selectPeer(0); this.openMain(); }
+    else if (kind === 'settings') this.openSettingsRoot();
+    else if (kind === 'devices') this.openSettings('machines');
+    else if (kind === 'applications') this.openApplications();
+    else if (kind === 'hub') this.openSheet('hub');
+    else if (kind === 'collapse') this.collapsed = true;
+    else this.openResources(kind);
+  }
+  private spaceSymbol(kind: string): Resource {
+    if (kind === 'inbox') return Symbols.inbox;
+    if (kind === 'todo') return Symbols.check;
+    if (kind === 'knowledge') return Symbols.document;
+    if (kind === 'health') return Symbols.health;
+    if (kind === 'devices') return Symbols.device;
+    if (kind === 'settings') return Symbols.gear;
+    if (kind === 'applications') return Symbols.apps;
+    if (kind === 'collapse') return Symbols.collapse;
+    return Symbols.spaces;
+  }
+  @Builder spaceRow(kind: string, title: string) {
+    ListItem() {
+      Row({ space: Tokens.inset }) {
+        SymbolGlyph(this.spaceSymbol(kind)).fontSize(Tokens.symbolFont).fontColor([Colors.secondary]).width(Tokens.symbol)
+        Text(title).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).constraintSize({ minHeight: Tokens.touch }).width('100%')
+    }.onClick(() => this.openSpace(kind)).id('spaces.' + kind)
+  }
+  @Builder spacesContent() {
+    Column() {
+      List() {
+        this.spaceRow('persona', tr('main_chat'))
+        ForEach(this.conversationRowBindings, (binding: BoundRow<ResourceRow>) => {
+          ListItem() { this.row(binding) }.onClick(() => { this.spacesShown = false; if (this.model.section !== 0) this.changeSection(0); this.openRow(binding.value); })
+        }, (binding: BoundRow<ResourceRow>) => binding.key)
+        this.spaceRow('inbox', tr('inbox'))
+        this.spaceRow('todo', tr('todos'))
+        this.spaceRow('knowledge', tr('knowledge'))
+        this.spaceRow('health', tr('health_home_title'))
+        if (this.applications.visible) this.spaceRow('applications', tr('applications'))
+        this.spaceRow('devices', tr('machines'))
+        this.spaceRow('settings', tr('settings'))
+        this.spaceRow('hub', this.model.profile.name || tr('hub'))
+        if (this.wide() && !this.rail()) this.spaceRow('collapse', tr('collapse'))
+      }.width('100%').layoutWeight(1)
+    }.width('100%').height('100%').padding({ bottom: this.spacesInset + Tokens.footer }).id('shell.spaces.content')
+      .onAreaChange(() => this.measureSpaces())
+  }
+  private measureSpaces(): void {
+    if (!this.spacesLayoutReady) return;
+    const value = nativeSheetInset(this.getUIContext(), 'shell.spaces.content', this.environment.safeBottomPx);
+    if (Math.abs(value - this.spacesInset) > 0.1) this.spacesInset = value;
+  }
+  @Monitor('environment.safeBottomPx') safeBottomChanged(): void { this.measureSpaces(); }
+  @Monitor('showSheet', 'spacesShown') modalChanged(): void { if (!this.showSheet && !this.spacesShown) this.ensureMainDestination(); }
   private openHistory(): void { this.stack.pushPath({ name: 'history', param: JSON.stringify(this.detailModel.selected) }); this.savePath(); }
   private openTools(path: string = ''): void { const data = Wire.record(JSON.parse(JSON.stringify(this.detailModel.selected)) as Object); if (path) data['open_file'] = path; this.stack.pushPath({ name: 'tools', param: JSON.stringify(data) }); this.savePath(); }
   private destinationMenuItems(name: string, param: Object): NavigationMenuItem[] {
     if (name === 'settings' && this.isAdminPage(this.settingsKind(param))) return this.adminMenus(name, param);
     if (name === 'extension' && this.applicationAllowed(param)) return this.extensionMenus(name, param);
+    if (this.mainDestination(name, param) && !this.wide()) return this.menus();
+    if (this.mainDestination(name, param)) return [];
     if (name === 'session' || name === 'conversation') return [{ value: tr('more'), icon: $r('sys.media.ohos_ic_public_more'), isEnabled: this.targetReady(name, param), action: () => this.showChatActions(name, param) }];
     return [];
   }
@@ -352,17 +562,20 @@ struct Index {
     const computer = this.selectedComputer();
     if (computer) sheets.push({ title: tr('computer_screen_open'), action: () => { if (valid()) this.openComputer(computer); } });
     if (owner.selected.machine) sheets.push({ title: tr('workspace'), action: () => { if (valid()) this.openTools(); } });
-    for (const page of ['model', 'permissions', 'effort', 'voice']) sheets.push({ title: tr(page), action: () => {
-      if (valid()) this.openSettings(page === 'model' ? 'models' : page === 'permissions' ? 'session_permissions' : page === 'effort' ? 'session_effort' : page, true);
+    for (const page of ['permissions', 'voice']) sheets.push({ title: tr(page), action: () => {
+      if (valid()) this.openSettings(page === 'permissions' ? 'session_permissions' : page, true);
     } });
-    if (owner.canInterrupt()) sheets.push({ title: tr('stop'), action: () => { if (valid()) owner.stop(); } });
+    const identity = JSON.stringify([owner.scope(), owner.connectionGeneration(), owner.target()]);
+    const data = owner.selected.data();
+    if (owner.selected.kind === 'session' && Wire.bool(Wire.object(data, 'capabilities'), 'modes') && Wire.strings(data, 'efforts').length) sheets.push({ title: tr('effort'), action: () => { if (valid()) this.openSettings('session_effort', true); } });
+    if (owner.canStop() && this.inlineStopIdentity !== identity) sheets.push({ title: tr('stop'), action: () => { if (valid()) owner.stop(valid); } });
     this.chatMenuRevision++; this.chatMenuActions = sheets;
-    const body = name === 'session' && this.hideAgentTitle();
+    const body = this.mainDestination(name, param) || this.hideChatTitle(name, param);
     this.chatTitleMenuVisible = !body; this.chatBodyMenuVisible = body;
   }
   private syncConversationRows(): void {
     const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
-    const rows = this.model.conversations.filter((row: ResourceRow) => row.id !== this.model.mainId);
+    const rows = this.model.conversations.filter((row: ResourceRow) => row.id !== this.model.mainId || !!this.model.mainMachineId && row.machine !== this.model.mainMachineId);
     this.conversationRowBindings = reconcileBoundRows(this.conversationRowBindings, rows,
       (row: ResourceRow) => row.key(), this.conversationBindingOwner, this.model, this.conversationBindingScope, scope);
     this.conversationBindingOwner = this.model;
@@ -378,28 +591,44 @@ struct Index {
       ListItem() { Text(tr(this.model.error)).fontSize(Tokens.meta).padding(Tokens.page) }
     }
   }
+  private retryRoot(): void {
+    if (this.navigationRestoredScope !== this.model.scope()) { this.activeScope = ''; this.model.error = ''; this.restoreScope(); }
+    else if (this.model.connected) { this.model.error = ''; this.defaultMainAttempt = ''; this.model.refresh().then(() => this.ensureMainDestination()); }
+    else this.model.foregrounded();
+  }
   @Builder connectionState() {
     Row({ space: Tokens.gap }) { Text(tr(this.model.error)).fontSize(Tokens.meta).layoutWeight(1)
-      Button(tr('retry')).onClick(() => this.model.connected ? this.model.refresh() : this.model.foregrounded())
+      Button(tr('retry')).onClick(() => this.retryRoot())
     }.padding(Tokens.inset)
   }
   @Builder personaList() {
-    List() {
+    List({ space: Tokens.section }) {
       if (this.model.error) ListItem() { this.connectionState() }
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('main_chat'),
-        icon: this.look.avatarUri || $r('app.media.foreground'), iconStyle: IconTypeV2.HEAD_SCULPTURE }) }) }.onClick(() => this.openMain()).id('persona.main')
+      ListItemGroup() {
+      ListItem() { Row({ space: Tokens.inset }) { Image(this.look.avatarUri || $r('app.media.foreground')).width(Tokens.symbol).height(Tokens.symbol).objectFit(ImageFit.Contain); Text(tr('main_chat')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).layoutWeight(1) }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).constraintSize({ minHeight: Tokens.header }).width('100%') }.selectable(true).selected(this.detailModel === this.model && this.detailModel.selected.id === this.model.mainId && this.detailModel.selected.kind === 'conversation' && (!this.model.mainMachineId || this.detailModel.selected.machine === this.model.mainMachineId))
+        .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { this.mainRowVisible = visible ? ratio : 0; const row = new ResourceRow(this.model.mainId, '', 'conversation'); row.manager = this.model.profile.manager; row.machine = this.model.mainMachineId; row.session = row.id; if (row.id && row.machine) { this.rowVisibility.set(this.model.scope() + this.model.target(row), visible ? ratio : 0); this.visibilityEpoch++; } })
+        .onDisAppear(() => this.mainRowVisible = 0).onClick(() => this.openMain()).id('persona.main')
       ForEach(this.conversationRowBindings, (binding: BoundRow<ResourceRow>) => {
-        ListItem() { this.row(binding) }.onClick(() => this.openRow(binding.value))
+        ListItem() {
+          Row({ space: Tokens.inset }) { SymbolGlyph(Symbols.spaces).fontSize(Tokens.symbolFont).fontColor([Colors.secondary]).width(Tokens.symbol); Text(binding.value.title).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }) }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).constraintSize({ minHeight: Tokens.touch }).width('100%')
+        }.selectable(true).selected(this.detailModel === this.model && this.model.target() === this.model.target(binding.value))
+          .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { this.rowVisibility.set(this.model.scope() + this.model.target(binding.value), visible ? ratio : 0); if (this.model.target() === this.model.target(binding.value)) this.visibilityEpoch++; })
+          .onDisAppear(() => { this.rowVisibility.delete(this.model.scope() + this.model.target(binding.value)); this.visibilityEpoch++; }).onClick(() => this.openRow(binding.value))
       }, (binding: BoundRow<ResourceRow>) => binding.key)
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('new_chat') }) }) }
-        .onClick(() => this.newConversation())
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('todos') }) }) }.onClick(() => this.openResources('todo'))
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('knowledge') }) }) }.onClick(() => this.openResources('knowledge'))
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('health_home_title') }) }) }.onClick(() => this.openResources('health'))
-    }.width('100%').height('100%').padding({ bottom: Tokens.listTail })
+      }.backgroundColor(Colors.canvas).borderRadius(Tokens.card)
+      ListItemGroup() {
+      this.spaceRow('inbox', tr('inbox'))
+      this.spaceRow('todo', tr('todos'))
+      this.spaceRow('knowledge', tr('knowledge'))
+      this.spaceRow('health', tr('health_home_title'))
+      if (this.applications.visible) this.spaceRow('applications', tr('applications'))
+      this.spaceRow('devices', tr('machines'))
+      this.spaceRow('settings', tr('settings'))
+      }.backgroundColor(Colors.canvas).borderRadius(Tokens.card)
+    }.width('100%').height('100%').backgroundColor(Colors.grouped).padding({ bottom: Tokens.listTail })
   }
   @Builder agentsList() {
-    AgentListPage({ model: this.model, active: this.model.section === 1, selectedRow: this.detailModel.selected, rail: this.rail(), readingDetail: this.model.section === 1,
+    AgentListPage({ model: this.model, workspace: this.agentWorkspace, retainWorkspace: true, active: this.model.section === 1, selectedRow: this.detailModel.selected, rail: this.rail(), readingDetail: this.model.section === 1 && !!this.activeChild && this.detailModel.selected.kind === 'session',
       onOpen: (row: ResourceRow) => this.openRow(row), onVisible: (row: ResourceRow, ratio: number) => {
         this.rowVisibility.set(this.model.scope() + row.key(), ratio); if (row.key() === this.detailModel.selected.key()) this.visibilityEpoch++;
       } })
@@ -415,16 +644,9 @@ struct Index {
       }, (page: string) => page)
     }.width('100%').height('100%').padding({ bottom: Tokens.listTail })
   }
-  @Builder primaryTabs() {
-    Tabs({ barPosition: BarPosition.End, index: this.model.section, controller: this.controllers }) {
-      TabContent() { this.personaList() }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.wand_and_stars')) }, tr('persona')))
-      TabContent() { this.agentsList() }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.computer')) }, tr('agents')))
-      TabContent() { this.inboxList() }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.envelope')) }, tr('inbox')))
-      TabContent() { this.settingsList() }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.gearshape')) }, tr('settings')))
-    }.onChange((index: number) => { if (index !== this.model.section) this.changeSection(index); })
-      .background($r('app.color.persona_canvas')).barHeight(this.rail() ? 0 : Tokens.tabHeight)
-      .barOverlap(!this.rail()).barFloatingStyle(this.rail() ? undefined : { barSideMargin: Tokens.gap, barBottomMargin: Tokens.tabMargin })
-      .width('100%').height('100%')
+  @Builder primaryContent() {
+    if (this.peer() === 1) this.agentsList()
+    else this.personaList()
   }
   @Builder workspaceSheet() {
     List() {
@@ -432,7 +654,7 @@ struct Index {
         .onClick(() => { this.model.selectProfile(profile); this.showSheet = false; }) }, (profile: HubProfile) => profile.id)
       ForEach(this.model.managers, (manager: ResourceRow) => { ListItem() { Text(manager.title).padding(Tokens.page) }
         .onClick(() => { this.model.selectManager(manager.id); this.showSheet = false; }) }, (manager: ResourceRow) => manager.id)
-      ListItem() { Button(tr('connect')).onClick(() => { this.showSheet = false; this.openSheet('connect'); }) }
+      ListItem() { Button(tr('connect')).attributeModifier(ButtonStyles.primary).onClick(() => { this.showSheet = false; this.openSheet('connect'); }) }
     }.width('100%')
   }
   private async scanPairing(): Promise<void> {
@@ -447,11 +669,11 @@ struct Index {
   }
   @Builder pairingForm() {
     Column({ space: Tokens.page }) {
-      if (canIUse('SystemCapability.Multimedia.Scan.ScanBarcode')) Button(tr('scan_qr')).enabled(!this.scanning && !this.model.busy).onClick(() => this.scanPairing()).id('pair.scan')
+      if (canIUse('SystemCapability.Multimedia.Scan.ScanBarcode')) Button(tr('scan_qr')).attributeModifier(ButtonStyles.secondary).enabled(!this.scanning && !this.model.busy).onClick(() => this.scanPairing()).id('pair.scan')
       TextInput({ text: this.address, placeholder: tr('hub_address') }).onChange((value: string) => this.address = value).id('pair.address')
       TextInput({ text: this.pairCode, placeholder: tr('pair_code') }).type(InputType.Password).onChange((value: string) => this.pairCode = value).id('pair.code')
       if (this.model.error) Text(tr(this.model.error)).fontColor($r('app.color.persona_danger'))
-      Button(tr('verify')).enabled(!!this.address.trim() && (!!this.pairCode.trim() || isPairingAddress(this.address.trim())) && !this.model.busy).onClick(() => this.connect()).id('pair.verify')
+      Button(tr('verify')).attributeModifier(ButtonStyles.primary).enabled(!!this.address.trim() && (!!this.pairCode.trim() || isPairingAddress(this.address.trim())) && !this.model.busy).onClick(() => this.connect()).id('pair.verify')
     }.padding(Tokens.page).width('100%')
   }
   @Builder newAgentForm() {
@@ -462,7 +684,7 @@ struct Index {
       TextInput({ text: this.directory, placeholder: tr('directory') }).onChange((value: string) => { this.directory = value; this.saveAgentDraft(); }).id('agent.directory')
       TextInput({ text: this.launcher, placeholder: tr('launcher') }).onChange((value: string) => { this.launcher = value; this.saveAgentDraft(); }).id('agent.launcher')
       if (this.agentModel.error) Text(tr(this.agentModel.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-      Button(tr(this.creatingAgent || this.agentModel.operationBlocked('/api/v1/sessions') ? 'pending' : 'create')).enabled(!this.creatingAgent && !this.agentModel.operationBlocked('/api/v1/sessions') && this.newTask.trim().length > 0 && this.agentMachines().length > 0)
+      Button(tr(this.creatingAgent || this.agentModel.operationBlocked('/api/v1/sessions') ? 'pending' : 'create')).attributeModifier(ButtonStyles.primary).enabled(!this.creatingAgent && !this.agentModel.operationBlocked('/api/v1/sessions') && this.newTask.trim().length > 0 && this.agentMachines().length > 0)
         .onClick(() => this.confirmCreateAgent()).id('agent.create')
     }.padding(Tokens.page)
   }
@@ -535,14 +757,16 @@ struct Index {
       else if (name === 'session' || name === 'conversation') { if (view.connected) view.showConversation(row); }
       if (revision !== this.routeRevision || this.activeChild !== key || !this.model.owns(generation, scope) || view.selected.key() !== row.key()) return;
       this.detailRoute = key; this.chatReady = true;
-      if (name === 'settings' && descriptor.page === 'voice') view.watchDecisions(true);
+      if (name === 'assistant' || name === 'settings' && descriptor.page === 'voice') view.watchDecisions(true);
     } catch (error) { if (revision === this.routeRevision && this.activeChild === key && this.model.owns(generation, scope)) this.model.reportError(error as Error); }
   }
   private routeShown(name: string, param: Object): void {
     if (this.activeChild !== this.childKey(name, param)) this.dismissChatActions();
     this.activeChild = this.childKey(name, param); if (name === 'extension') this.extensionTitle = this.routeRow(param).title; if (name === 'todo') this.todoTitle = this.routeRow(param).title; this.shownName = name; this.shownParam = param as string;
+    this.detailModel.watchDecisions(false);
     if (!['session', 'conversation'].includes(name)) this.detailModel.hideConversation(name !== 'tools');
     if (name === 'applications') this.applications.refresh();
+    if (name === 'settings' && this.settingsKind(param) === 'appearance') this.ensureAgentWorkspace();
     const descriptor = NavigationContext.from(name, param as string);
     if (descriptor.scoped) this.restoreTarget(name, param);
     else { this.routeRevision++; this.chatReady = true; this.detailRoute = this.activeChild; if (name === 'resources') this.model.listResources(param as string); }
@@ -555,10 +779,19 @@ struct Index {
       } else LoadingProgress().width(Tokens.touch).height(Tokens.touch)
     }.width('100%').height('100%').justifyContent(FlexAlign.Center)
   }
+  @Builder destinationTitle(name: string, param: Object) {
+    if (this.mainDestination(name, param) && !this.wide()) this.peerTitle()
+    else Text(this.destinationTitleText(name, param)).height(this.headerHeight()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+  }
+  private destinationTitleText(name: string, param: Object): string {
+    if (name === 'settings_root') return tr('settings');
+    if (name === 'assistant') return tr(Wire.text(this.routeRow(param).data(), 'assistant_item_kind') === 'plan' ? 'assistant_feed_plan' : 'assistant_feed_receipt');
+    return name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'applications' ? tr('applications') : name === 'extension' ? this.extensionTitle : name === 'todo' ? this.todoTitle || this.routeRow(param).title || this.routeRow(param).id : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id;
+  }
   @Builder destination(name: string, param: Object) {
     NavDestination() {
       if (name === 'session' || name === 'conversation') {
-        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: name === 'session' && this.hideAgentTitle(), onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
+        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onPrimaryStop: (shown: boolean) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.inlineStopIdentity = shown ? JSON.stringify([this.detailModel.scope(), this.detailModel.connectionGeneration(), this.detailModel.target()]) : ''; }, onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
         else this.targetLoading(name, param)
       } else if (name === 'history') {
         if (this.targetReady(name, param)) InteractionHistoryPage({ model: this.detailModel, active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
@@ -586,7 +819,7 @@ struct Index {
         if (this.targetReady(name, param)) RemoteDocumentPage({ model: this.detailModel, row: this.routeRow(param), active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
       } else if (name === 'inbox' || name === 'todo_source' || name === 'todo_thread' || name === 'resources' && param === 'inbox') {
-        if (name === 'resources' || this.targetReady(name, param)) InboxWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'resources' ? undefined : this.routeRow(param), list: name === 'resources', visible: this.activeChild === this.childKey(name, param), refreshRevision: this.inboxRefreshRevision,
+        if (name === 'resources' || this.targetReady(name, param)) InboxWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'resources' ? undefined : this.routeRow(param), list: name === 'resources', visible: this.activeChild === this.childKey(name, param), refreshRevision: this.inboxRefreshRevision, handoffRequested: this.pendingInboxHandoff === this.childKey(name, param), onHandoffConsumed: () => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; },
           onChanged: () => { if (this.activeChild === this.childKey(name, param)) this.inboxRefreshRevision++; }, onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onHandoff: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
       } else if (name === 'todo' || name === 'resources' && param === 'todo') {
@@ -603,6 +836,11 @@ struct Index {
         if (name === 'resources' || this.targetReady(name, param)) ResourcePage({ model: name === 'resources' ? this.model : this.detailModel, onLink: (address: string) => this.openReader(address), kind: name === 'resources' ? param as string : this.routeRow(param).kind, list: name === 'resources', onOpen: (row: ResourceRow) => this.openFrom(name, param, row),
           onHandoff: (row: ResourceRow) => this.handoffResource(row) })
         else this.targetLoading(name, param)
+      } else if (name === 'settings_root') {
+        this.settingsList()
+      } else if (name === 'assistant') {
+        if (this.targetReady(name, param)) AssistantDetailPage({ model: this.detailModel, active: this.activeChild === this.childKey(name, param), itemId: Wire.text(this.routeRow(param).data(), 'assistant_item_id'), kind: Wire.text(this.routeRow(param).data(), 'assistant_item_kind'), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
+        else this.targetLoading(name, param)
       } else if (name === 'settings' && (this.settingsKind(param) === 'phone' || this.settingsKind(param) === 'voice')) {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) DevicePage({ model: this.settingsModel(param), page: this.settingsKind(param), active: this.activeChild === this.childKey(name, param), onLeave: (owner: ClientModel) => this.restoreDeviceOwner(owner), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
@@ -614,41 +852,48 @@ struct Index {
         SshSettingsPage({ tunnel: this.settingsModel(param).ssh, active: this.activeChild === this.childKey(name, param),
           onSaved: (): void => { const owner = this.settingsModel(param); if (this.activeChild === this.childKey(name, param)) owner.selectProfile(owner.profile, true); } })
       } else if (name === 'settings') {
-        if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsModel(param), onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
+        if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) SettingsPage({ model: this.settingsKind(param) === 'appearance' ? this.model : this.settingsModel(param), agentWorkspace: this.agentWorkspace, onChat: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openLinkedResource(row); }, active: this.activeChild === this.childKey(name, param), page: this.settingsKind(param), onDetail: (page: string, row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail(page, row); }, onExtension: (extensionId: string, uiId: string, title: string) => { if (this.activeChild === this.childKey(name, param)) this.openExtension(this.settingsModel(param), extensionId, uiId, title); }, onBack: () => { if (this.activeChild === this.childKey(name, param)) { this.stack.pop(); this.savePath(); } }, onComputer: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openComputer(row); }, onOpen: (page: string) => this.openSettings(page, NavigationContext.from(name, param as string).scoped) })
         else this.targetLoading(name, param)
       }
-    }.title(name === 'session' || name === 'conversation' ? this.chatTitle(param) : name === 'resources' ? tr(param === 'todo' ? 'todos' : param === 'inbox' ? 'inbox' : param === 'health' ? 'health_home_title' : 'knowledge') : name === 'applications' ? tr('applications') : name === 'extension' ? this.extensionTitle : name === 'todo' ? this.todoTitle || this.routeRow(param).title || this.routeRow(param).id : name === 'settings' ? this.settingsTitle(param) : name === 'tools' ? tr('workspace') : name === 'history' ? tr('interaction_history') : this.routeRow(param).title || this.routeRow(param).id)
-      .hideTitleBar(name === 'session' && this.hideAgentTitle()).hideBackButton(name === 'session' && this.wide() && this.model.section === 1)
-      .menus(this.destinationMenuItems(name, param))
+    }.title({ builder: () => this.destinationTitle(name, param), height: this.headerHeight() }, { systemMaterial: this.titleMaterial })
+      .hideTitleBar(this.hideChatTitle(name, param)).hideBackButton(this.mainDestination(name, param) || name === 'session' && Wire.bool(this.routeRow(param).data(), 'navigation_root') && this.wide() && this.model.section === 1)
+      .backgroundColor(name === 'resources' && param === 'inbox' ? Colors.grouped : Colors.canvas)
+      .menus(this.destinationMenus(name, param))
       .bindMenu(this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param), this.chatActionsMenu, this.chatMenuOptions(this.chatMenuRevision))
       .onShown(() => this.routeShown(name, param))
-      .onHidden(() => { if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
-      .onBackPressed((): boolean => { this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
+      .onHidden(() => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
+      .onBackPressed((): boolean => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
   }
   build() {
     Stack() {
     WithTheme({ theme: nativeLookTheme(this.look, this.model.style) }) {
+    ThemeScope() {
+    Column() {
       if (!this.model.profile.id) {
         Column({ space: Tokens.section }) {
           Text(tr('welcome')).fontSize(Tokens.title).fontWeight(FontWeight.Bold)
           if (this.model.error) Text(tr(this.model.error)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger'))
-          Button(tr('connect')).onClick(() => this.openSheet('connect')).id('welcome.connect')
-          Button(tr('experience')).onClick(() => this.model.useDemo()).id('welcome.demo')
-          if (this.model.pendingCleanupCount > 0) Button(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
+          Button(tr('connect')).attributeModifier(ButtonStyles.primary).onClick(() => this.openSheet('connect')).id('welcome.connect')
+          Button(tr('experience')).attributeModifier(ButtonStyles.secondary).onClick(() => this.model.useDemo()).id('welcome.demo')
+          if (this.model.pendingCleanupCount > 0) Button(tr('retry_cleanup')).attributeModifier(ButtonStyles.quiet).onClick(() => this.model.retryCleanup())
         }.justifyContent(FlexAlign.Center).width('100%').height('100%')
           .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true })
       } else {
-        Navigation(this.stack) { this.primaryTabs() }.title(this.labels()[this.model.section]).titleMode(NavigationTitleMode.Mini)
-          .hideBackButton(true).hideTitleBar(this.rail()).menus(this.menus())
+        Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
+          .hideBackButton(true).hideTitleBar(this.rail()).menus(this.shellMenu())
           .toolbarConfiguration(this.rail() ? [{ value: tr('expand'), icon: $r('sys.media.ohos_ic_public_arrow_right'), action: () => this.collapsed = false }] : [])
           .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
           .navBarWidth(this.rail() ? Tokens.collapsed : Tokens.master).navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [Tokens.masterMin, Tokens.masterMax])
           .minContentWidth(Tokens.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
           .onAreaChange(() => this.updateBreakpoint()).width('100%').height('100%')
+
           .bindSheet($$this.showSheet, this.sheetContent(), { title: { title: this.sheetTitle() }, height: SheetSize.LARGE, showClose: true })
       }
-    }
     }.width('100%').height('100%')
+      .bindSheet($$this.spacesShown, this.spacesContent(), { title: { title: tr('conversation_spaces') }, height: SheetSize.LARGE, showClose: true, onAppear: () => { this.spacesLayoutReady = true; this.measureSpaces(); }, onDisappear: () => this.spacesLayoutReady = false })
+    }
+    }
+    }.width('100%').height('100%').backgroundColor(Colors.canvas)
       .bindSheet($$this.readerShown, this.readerContent(), { title: { title: this.readerTitle }, height: Tokens.readerFull, width: Tokens.readerFull, preferType: SheetType.BOTTOM,
         detents: [Tokens.readerFull, Tokens.readerPartial], enableOutsideInteractive: true, showClose: true })
   }

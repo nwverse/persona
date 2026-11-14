@@ -47,8 +47,10 @@ export default class EntryAbility extends UIAbility {
     client.openNotification(target).catch(() => {});
   }
   onWindowStageCreate(stage: window.WindowStage): void {
+    nativeEnvironment.bindWindow(stage.getMainWindowSync());
     stage.loadContent('pages/Index', (error) => { if (error.code) client.error = 'failed'; });
   }
+  onWindowStageDestroy(): void { nativeEnvironment.unbindWindow(); }
   onBackground(): void { this.visible = false; this.lifecycle++; deviceLook.bind(undefined).catch(() => {}); Promise.all([KnowledgeRecording.backgroundAll(), deviceFeatures.background(), client.background()]).catch(() => {}); }
   onForeground(): void {
     nativeEnvironment.update(this.context.config);
@@ -61,5 +63,5 @@ export default class EntryAbility extends UIAbility {
     }).catch(() => { if (this.visible && epoch === this.lifecycle) client.error = 'failed'; });
     deviceFeatures.foreground().catch(() => {});
   }
-  onDestroy(): void { this.visible = false; this.lifecycle++; this.pendingNotification = undefined; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
+  onDestroy(): void { nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
 }

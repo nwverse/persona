@@ -108,7 +108,7 @@ export class HubRepository {
     const body = Wire.payload(['text', 'client_msg_id'], [text, op]); if (images.length) body['images'] = images;
     await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true);
   }
-  async stop(row: ResourceRow): Promise<void> { await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/interrupt', 'POST'); }
+  async stop(row: ResourceRow, admit?: () => boolean): Promise<void> { await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/interrupt', 'POST', {}, '', admit); }
   async decisions(): Promise<Record<string, Object>[]> {
     const result = await this.call('/api/v1/interactions'); return Wire.rows(result, 'interactions');
   }

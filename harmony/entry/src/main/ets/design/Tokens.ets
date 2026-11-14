@@ -1,12 +1,32 @@
 // Shared Persona dimensions; system controls own their internal metrics and material.
 export class Tokens {
+  static readonly composerMinColumns: number = 5;
+  static readonly composerNarrowActions: number = 260;
+  static readonly divider: number = 0.5;
+  static readonly card: number = 20;
+  static readonly header: number = 56;
+  static readonly chrome: number = 40;
+  static readonly symbol: number = 22;
+  static readonly symbolFont: string = String(Tokens.symbol) + 'vp';
+  static readonly chromeFontMaxScale: number = 2;
+  static readonly avatar: number = 40;
+  static readonly caption: number = 13;
+  static readonly readingMax: number = 680;
+  static readonly footer: number = 4;
+  static readonly capsule: number = 24;
+  static readonly bubble: number = 20;
+  static readonly lineHeight: number = 24;
+  static readonly inputLines: number = 144;
+  static readonly compactPane: number = 340;
+  static readonly headerSegment: number = 192;
+  static readonly minimumInput: number = 160;
   static readonly hairline: number = 1;
   static readonly fine: number = 4;
   static readonly gap: number = 8;
   static readonly inset: number = 12;
   static readonly page: number = 16;
   static readonly section: number = 24;
-  static readonly body: number = 16;
+  static readonly body: number = 17;
   static readonly meta: number = 14;
   static readonly title: number = 20;
   static readonly markdownHeading1: number = 32;
@@ -25,7 +45,7 @@ export class Tokens {
   static readonly inputExpanded: number = 160;
   static readonly tabHeight: number = 56;
   static readonly tabMargin: number = 12;
-  static readonly listTail: number = 88;
+  static readonly listTail: number = Tokens.footer;
   static readonly master: number = 320;
   static readonly masterMin: number = 280;
   static readonly masterMax: number = 440;

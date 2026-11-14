@@ -1,3 +1,4 @@
+import { receiptWireState } from './AssistantReceipt';
 import { Wire, ResourceRow } from './Wire';
 import type { ClientModel } from './ClientModel';
 import type { HubRepository } from './HubRepository';
@@ -24,6 +25,11 @@ function timestamp(value: string): number {
 function draftPlaceholder(value: string): string {
   const match = /【[^】\n]*】|\{\{[^}\n]*\}\}/.exec(value);
   return match ? match[0] : '';
+}
+
+interface AssistantRouteSnapshot {
+  revision: number;
+  admit: (() => boolean) | undefined;
 }
 
 /** Editable values kept separately from the server's immutable plan until the owner presses Start. */
@@ -63,10 +69,15 @@ export class AssistantFeedModel {
   @Trace loadingMore: boolean = false;
   @Trace error: string = '';
   @Trace todoError: string = '';
+  @Trace todosReady: boolean = false;
+  @Trace itemLookupStatus: string = '';
   @Trace conversationId: string = '';
   @Trace owner: string = '';
   @Trace items: Record<string, Object>[] = [];
   @Trace plans: Record<string, Object> = {};
+  @Trace freshPlanIds: string[] = [];
+  @Trace loadingPlanIds: string[] = [];
+  @Trace planActionErrors: Record<string, Object> = {};
   @Trace taskCards: Record<string, Object>[] = [];
   @Trace todos: Record<string, Object>[] = [];
   @Trace views: Record<string, Object> = {};
@@ -76,6 +87,7 @@ export class AssistantFeedModel {
   @Trace hasLoaded: boolean = false;
   @Trace editing: boolean = false;
   @Trace editingPlanId: string = '';
+  @Trace editingPlanVersion: string = '';
   @Trace editTasks: PlanEditTask[] = [];
   @Trace rememberPlans: string[] = [];
   @Trace busyKeys: string[] = [];
@@ -88,6 +100,8 @@ export class AssistantFeedModel {
   private targetKey: string = '';
   private client: ClientModel | undefined;
   private repository: HubRepository | undefined;
+  private routeAdmission: (() => boolean) | undefined;
+  private routeAdmissionRevision: number = 0;
   private refreshPromise: Promise<void> | undefined;
   private refreshRun: number = -1;
   private offEvents: (() => void) | undefined;
@@ -98,17 +112,38 @@ export class AssistantFeedModel {
       client.scope() === this.scopeKey && client.target() === this.targetKey;
   }
 
+  /** The host supplies route visibility. Existing non-routed callers remain admitted by default. */
+  setRouteAdmission(admit?: () => boolean): void {
+    this.routeAdmission = admit;
+    this.routeAdmissionRevision++;
+  }
+
+  private routeSnapshot(): AssistantRouteSnapshot {
+    return { revision: this.routeAdmissionRevision, admit: this.routeAdmission };
+  }
+
+  private routeIsCurrent(snapshot: AssistantRouteSnapshot): boolean {
+    try { return this.routeAdmissionRevision === snapshot.revision && (!snapshot.admit || snapshot.admit()); }
+    catch (_) { return false; }
+  }
+
+  private routeAdmitted(): boolean {
+    const snapshot: AssistantRouteSnapshot = this.routeSnapshot();
+    return this.routeIsCurrent(snapshot);
+  }
+
   private clearState(): void {
-    this.loading = false; this.loadingMore = false; this.error = ''; this.todoError = '';
-    this.conversationId = ''; this.owner = ''; this.items = []; this.plans = {}; this.taskCards = []; this.todos = [];
+    this.loading = false; this.loadingMore = false; this.error = ''; this.todoError = ''; this.todosReady = false; this.itemLookupStatus = '';
+    this.conversationId = ''; this.owner = ''; this.items = []; this.plans = {}; this.freshPlanIds = []; this.loadingPlanIds = []; this.planActionErrors = {}; this.taskCards = []; this.todos = [];
     this.views = {}; this.viewActions = {}; this.viewBlocks = []; this.nextCursor = ''; this.hasLoaded = false;
-    this.editing = false; this.editingPlanId = ''; this.editTasks = []; this.rememberPlans = [];
+    this.editing = false; this.editingPlanId = ''; this.editingPlanVersion = ''; this.editTasks = []; this.rememberPlans = [];
     this.busyKeys = []; this.uncertainKeys = []; this.pendingMessageIds = []; this.messageDrafts = {};
   }
 
   /** Captures one conversation's generation, scope, selected identity and repository before starting any reads. */
-  async open(model: ClientModel, row: ResourceRow): Promise<void> {
+  async open(model: ClientModel, row: ResourceRow, load: boolean = true, routeAdmission?: () => boolean): Promise<void> {
     this.close();
+    if (routeAdmission) this.setRouteAdmission(routeAdmission);
     const run = this.generation;
     if (row.kind !== 'conversation' || !row.id || model.target() !== model.target(row)) {
       this.error = 'request_updated';
@@ -130,11 +165,12 @@ export class AssistantFeedModel {
     this.owner = owner;
     if (!this.current(run)) { this.error = 'request_updated'; return; }
     this.offEvents = model.observeEvents((raw: string): void => this.receiveEvent(raw, run));
-    await this.refresh();
+    if (load) await this.refresh();
   }
 
   close(): void {
     this.offEvents?.(); this.offEvents = undefined;
+    this.setRouteAdmission(undefined);
     this.generation++;
     this.client = undefined; this.repository = undefined; this.refreshPromise = undefined; this.refreshRun = -1;
     this.clientGeneration = -1; this.scopeKey = ''; this.targetKey = '';
@@ -349,18 +385,78 @@ export class AssistantFeedModel {
     }
   }
 
-  async loadMore(): Promise<void> {
+  async loadMore(): Promise<boolean> {
     const run = this.generation, cursor = this.nextCursor;
-    if (!cursor || !this.current(run) || this.loadingMore) return;
-    this.loadingMore = true; this.todoError = '';
+    if (!cursor || !this.current(run) || this.loadingMore) return false;
+    this.loadingMore = true; this.todoError = ''; this.error = '';
     try {
       const result = await this.readPage(run, cursor);
-      if (!result || !this.current(run)) return;
+      if (!result || !this.current(run)) return false;
       const next = Wire.text(result, 'next_cursor');
-      this.nextCursor = next === cursor ? '' : next;
+      if (next === cursor) { this.error = 'request_updated'; return false; }
+      this.nextCursor = next;
       await this.refreshTodos(run);
-    } catch (error) { if (this.current(run)) this.error = this.errorKey(error as Error); }
+      return this.current(run);
+    } catch (error) { if (this.current(run)) this.error = this.errorKey(error as Error); return false; }
     finally { if (this.generation === run) this.loadingMore = false; }
+  }
+
+  /** Reads the source feed from its head until the exact item is found or the authoritative history ends. */
+  async locateItem(itemId: string, kind: string): Promise<string> {
+    const run = this.generation;
+    if (!itemId || !kind || !this.current(run) || !this.repository || !this.routeAdmitted()) {
+      this.itemLookupStatus = 'error';
+      return this.itemLookupStatus;
+    }
+    this.itemLookupStatus = 'loading';
+    this.error = '';
+    const seen = new Set<string>();
+    let cursor = '';
+    try {
+      while (this.current(run) && this.repository && this.routeAdmitted()) {
+        const result = await this.readPage(run, cursor);
+        if (!result || !this.current(run) || !this.routeAdmitted()) return this.itemLookupStatus;
+        this.hasLoaded = true;
+        const pageItems = Wire.rows(result, 'items').filter((item: Record<string, Object>) => {
+          const conversation = Wire.text(item, 'conversation');
+          const manager = Wire.text(item, 'manager');
+          return (!conversation || conversation === this.conversationId) && (!manager || manager === this.owner);
+        });
+        const found = pageItems.find((item: Record<string, Object>) => Wire.text(item, 'id') === itemId);
+        if (found) {
+          this.nextCursor = Wire.text(result, 'next_cursor');
+          this.itemLookupStatus = Wire.text(found, 'kind') === kind ? 'found' : 'mismatch';
+          if (this.itemLookupStatus === 'found' && kind === 'plan') {
+            const planId = Wire.text(found, 'ref');
+            if (planId) await this.reconcilePlan(planId, run);
+          }
+          await this.refreshTodos(run);
+          return this.itemLookupStatus;
+        }
+
+        const next = Wire.text(result, 'next_cursor');
+        if (!next) {
+          this.nextCursor = '';
+          this.itemLookupStatus = 'missing';
+          await this.refreshTodos(run);
+          return this.itemLookupStatus;
+        }
+        if (next === cursor || seen.has(next)) {
+          this.itemLookupStatus = 'error';
+          this.error = 'failed';
+          return this.itemLookupStatus;
+        }
+        if (cursor) seen.add(cursor);
+        cursor = next;
+        this.nextCursor = next;
+      }
+    } catch (error) {
+      if (this.current(run)) {
+        this.error = this.errorKey(error as Error);
+        this.itemLookupStatus = 'error';
+      }
+    }
+    return this.itemLookupStatus;
   }
 
   private todoIds(): string[] {
@@ -380,9 +476,10 @@ export class AssistantFeedModel {
   private async refreshTodos(run: number): Promise<void> {
     if (!this.current(run) || !this.repository) return;
     const ids = this.todoIds();
-    if (!ids.length) { this.todos = []; this.todoError = ''; return; }
+    if (!ids.length) { this.todos = []; this.todoError = ''; this.todosReady = true; return; }
     let path = '/api/v1/todos';
     if (this.owner) path += '?manager=' + segment(this.owner);
+    this.todosReady = false;
     try {
       if (!this.current(run)) return;
       const result = await this.repository.call(path);
@@ -393,7 +490,8 @@ export class AssistantFeedModel {
         return ids.includes(id) && manager === this.owner && Wire.text(todo, 'origin') === this.conversationId;
       });
       this.todoError = '';
-    } catch (error) { if (this.current(run)) this.todoError = this.errorKey(error as Error); }
+      this.todosReady = true;
+    } catch (error) { if (this.current(run)) { this.todoError = this.errorKey(error as Error); this.todosReady = false; } }
   }
 
   private errorKey(error: Error): string {
@@ -423,24 +521,47 @@ export class AssistantFeedModel {
     const next: Record<string, Object> = {};
     Object.keys(this.plans).forEach((key: string) => next[key] = this.plans[key]);
     next[id] = plan; this.plans = next;
+    this.freshPlanIds = updated(this.freshPlanIds, id, true);
   }
 
   planState(id: string): string { return Wire.text(this.plan(id), 'state', 'unknown'); }
+  planIsFresh(id: string): boolean { return hasId(this.freshPlanIds, id); }
+  planLoading(id: string): boolean { return hasId(this.loadingPlanIds, id); }
+  private setPlanActionError(id: string, error: string): void {
+    const next: Record<string, Object> = {};
+    Object.keys(this.planActionErrors).filter((key: string) => key !== id || !!error)
+      .forEach((key: string) => next[key] = this.planActionErrors[key]);
+    if (error) next[id] = error;
+    this.planActionErrors = next;
+  }
+  planActionError(id: string): string {
+    const error = this.planActionErrors[id];
+    return typeof error === 'string' ? error as string : '';
+  }
+  private planAllowsWrites(): boolean { return !!this.client && this.client.canApprove(); }
   planCanStart(id: string): boolean {
     const path = this.planActionPath(id, 'start');
-    return this.current(this.generation) && this.planState(id) === 'open' && !hasId(this.busyKeys, 'plan:' + id) && !this.blocked(path);
+    return this.current(this.generation) && this.routeAdmitted() && this.planAllowsWrites() && this.planIsFresh(id) && this.planState(id) === 'open' &&
+      !hasId(this.busyKeys, 'plan:' + id) && !this.blocked(path);
   }
   planCanDismiss(id: string): boolean {
     const path = this.planActionPath(id, 'dismiss');
-    return this.current(this.generation) && this.planState(id) === 'open' && !hasId(this.busyKeys, 'plan:' + id) && !this.blocked(path);
+    return this.current(this.generation) && this.routeAdmitted() && this.planAllowsWrites() && this.planIsFresh(id) && this.planState(id) === 'open' &&
+      !hasId(this.busyKeys, 'plan:' + id) && !this.blocked(path);
+  }
+  planCanEdit(id: string): boolean {
+    const path = this.planActionPath(id, 'start');
+    return this.current(this.generation) && this.routeAdmitted() && this.planAllowsWrites() && this.planState(id) === 'open' &&
+      !hasId(this.busyKeys, 'plan:' + id) && !this.blocked(path);
   }
   planBusy(id: string): boolean { return hasId(this.busyKeys, 'plan:' + id); }
   rememberPlan(id: string): boolean { return hasId(this.rememberPlans, id); }
   toggleRememberPlan(id: string): void { this.rememberPlans = updated(this.rememberPlans, id, !this.rememberPlan(id)); }
 
   beginEditPlan(id: string): boolean {
-    if (this.planState(id) !== 'open' || !this.planCanStart(id)) return false;
+    if (!this.planIsFresh(id) || this.planState(id) !== 'open' || !this.planCanStart(id)) return false;
     this.editingPlanId = id;
+    this.editingPlanVersion = JSON.stringify(this.plan(id));
     this.editTasks = Wire.rows(this.plan(id), 'tasks').map((task: Record<string, Object>) => new PlanEditTask(task));
     this.editing = true;
     return true;
@@ -474,7 +595,7 @@ export class AssistantFeedModel {
     });
   }
 
-  cancelPlanEdit(): void { this.editing = false; this.editingPlanId = ''; this.editTasks = []; }
+  cancelPlanEdit(): void { this.editing = false; this.editingPlanId = ''; this.editingPlanVersion = ''; this.editTasks = []; }
 
   async startEditedPlan(): Promise<boolean> {
     const id = this.editingPlanId;
@@ -484,28 +605,56 @@ export class AssistantFeedModel {
     if (this.editTasks.some((task: PlanEditTask) => !task.readonly && task.permission !== 'bypassPermissions')) {
       this.error = 'assistant_feed_permission_required'; return false;
     }
-    const started = await this.startPlan(id, this.rememberPlan(id), this.editPayload());
+    const started = await this.startPlan(id, this.rememberPlan(id), this.editPayload(), this.editingPlanVersion);
     if (started) this.cancelPlanEdit();
     return started;
   }
 
-  async startPlan(id: string, remember: boolean = false, edits?: Record<string, Object>[]): Promise<boolean> {
+  async startPlan(id: string, remember: boolean = false, edits?: Record<string, Object>[], expectedVersion: string = ''): Promise<boolean> {
     const run = this.generation, path = this.planActionPath(id, 'start');
     const repository = this.repository;
-    if (!repository || !this.current(run) || !this.planCanStart(id)) {
+    const route = this.routeSnapshot();
+    if (!repository || !this.current(run) || !this.routeIsCurrent(route)) {
       if (this.blocked(path)) this.error = 'result_unknown';
+      return false;
+    }
+    const displayedVersion = expectedVersion || JSON.stringify(this.plan(id));
+    if (!displayedVersion || displayedVersion === '{}') {
+      this.error = 'request_updated';
+      this.setPlanActionError(id, this.error);
+      return false;
+    }
+    await this.reconcilePlan(id, run);
+    if (!this.current(run) || !this.routeIsCurrent(route)) return false;
+    if (!this.planIsFresh(id)) { if (!this.error) this.error = 'failed'; return false; }
+    const planVersion = JSON.stringify(this.plan(id));
+    if (displayedVersion !== planVersion) {
+      this.error = 'request_updated';
+      this.setPlanActionError(id, this.error);
+      return false;
+    }
+    if (!this.planCanStart(id)) {
+      if (this.blocked(path)) this.error = 'result_unknown';
+      else if (!this.planAllowsWrites()) this.error = 'permission_denied';
+      if (this.error) this.setPlanActionError(id, this.error);
       return false;
     }
     const body = Wire.payload(['remember'], [remember]);
     if (edits) body['tasks'] = edits;
-    this.error = ''; this.markBusy('plan:' + id, true);
+    const admit = (): boolean => this.current(run) && this.repository === repository && this.routeIsCurrent(route) &&
+      this.planAllowsWrites() && this.planState(id) === 'open' && JSON.stringify(this.plan(id)) === planVersion;
+    this.error = ''; this.setPlanActionError(id, ''); this.markBusy('plan:' + id, true);
     try {
-      if (!this.current(run)) return false;
-      const response = await repository.call(path, 'POST', body);
+      if (!admit()) {
+        if (!this.planAllowsWrites()) { this.error = 'permission_denied'; this.setPlanActionError(id, this.error); }
+        else if (this.current(run) && this.routeIsCurrent(route)) { this.error = 'request_updated'; this.setPlanActionError(id, this.error); }
+        return false;
+      }
+      const response = await repository.call(path, 'POST', body, '', admit);
       if (!this.current(run)) return false;
       const started = Wire.object(response, 'plan');
       if (Wire.text(started, 'state') !== 'started' || Wire.text(started, 'id') !== id) {
-        this.markUncertain(path, true); this.error = 'result_unknown';
+        this.markUncertain(path, true); this.error = 'result_unknown'; this.setPlanActionError(id, this.error);
         await this.reconcilePlan(id, run);
         await this.refresh();
         return false;
@@ -517,6 +666,7 @@ export class AssistantFeedModel {
     } catch (error) {
       if (!this.current(run)) return false;
       this.error = this.errorKey(error as Error);
+      this.setPlanActionError(id, this.error);
       if (this.error === 'result_unknown') {
         this.markUncertain(path, true);
         await this.reconcilePlan(id, run);
@@ -532,20 +682,48 @@ export class AssistantFeedModel {
     } finally { if (this.generation === run) this.markBusy('plan:' + id, false); }
   }
 
-  async dismissPlan(id: string): Promise<boolean> {
+  async dismissPlan(id: string, expectedVersion: string = ''): Promise<boolean> {
     const run = this.generation, path = this.planActionPath(id, 'dismiss'), repository = this.repository;
-    if (!repository || !this.current(run) || !this.planCanDismiss(id)) {
+    const route = this.routeSnapshot();
+    if (!repository || !this.current(run) || !this.routeIsCurrent(route)) {
       if (this.blocked(path)) this.error = 'result_unknown';
       return false;
     }
-    this.error = ''; this.markBusy('plan:' + id, true);
+    const displayedVersion = expectedVersion || JSON.stringify(this.plan(id));
+    if (!displayedVersion || displayedVersion === '{}') {
+      this.error = 'request_updated';
+      this.setPlanActionError(id, this.error);
+      return false;
+    }
+    await this.reconcilePlan(id, run);
+    if (!this.current(run) || !this.routeIsCurrent(route)) return false;
+    if (!this.planIsFresh(id)) { if (!this.error) this.error = 'failed'; return false; }
+    const planVersion = JSON.stringify(this.plan(id));
+    if (displayedVersion !== planVersion) {
+      this.error = 'request_updated';
+      this.setPlanActionError(id, this.error);
+      return false;
+    }
+    if (!this.planCanDismiss(id)) {
+      if (this.blocked(path)) this.error = 'result_unknown';
+      else if (!this.planAllowsWrites()) this.error = 'permission_denied';
+      if (this.error) this.setPlanActionError(id, this.error);
+      return false;
+    }
+    const admit = (): boolean => this.current(run) && this.repository === repository && this.routeIsCurrent(route) &&
+      this.planAllowsWrites() && this.planState(id) === 'open' && JSON.stringify(this.plan(id)) === planVersion;
+    this.error = ''; this.setPlanActionError(id, ''); this.markBusy('plan:' + id, true);
     try {
-      if (!this.current(run)) return false;
-      const response = await repository.call(path, 'POST', Wire.payload([], []));
+      if (!admit()) {
+        if (!this.planAllowsWrites()) { this.error = 'permission_denied'; this.setPlanActionError(id, this.error); }
+        else if (this.current(run) && this.routeIsCurrent(route)) { this.error = 'request_updated'; this.setPlanActionError(id, this.error); }
+        return false;
+      }
+      const response = await repository.call(path, 'POST', Wire.payload([], []), '', admit);
       if (!this.current(run)) return false;
       const dismissed = Wire.object(response, 'plan');
       if (Wire.text(dismissed, 'state') !== 'dismissed' || Wire.text(dismissed, 'id') !== id) {
-        this.markUncertain(path, true); this.error = 'result_unknown';
+        this.markUncertain(path, true); this.error = 'result_unknown'; this.setPlanActionError(id, this.error);
         await this.reconcilePlan(id, run); return false;
       }
       this.setPlan(id, dismissed); this.markUncertain(path, false);
@@ -553,6 +731,7 @@ export class AssistantFeedModel {
     } catch (error) {
       if (!this.current(run)) return false;
       this.error = this.errorKey(error as Error);
+      this.setPlanActionError(id, this.error);
       if (this.error === 'result_unknown') this.markUncertain(path, true);
       if (this.error === 'result_unknown' || this.error === 'request_updated' || this.error === 'unsupported') await this.reconcilePlan(id, run);
       return false;
@@ -560,13 +739,20 @@ export class AssistantFeedModel {
   }
 
   private async reconcilePlan(id: string, run: number): Promise<void> {
-    if (!this.current(run) || !this.repository) return;
-    const path = '/api/v1/task-plans/' + segment(id);
+    this.freshPlanIds = updated(this.freshPlanIds, id, false);
+    if (!this.current(run) || !this.repository || !this.routeAdmitted()) return;
+    const repository = this.repository;
+    const path = this.ownerPath('/api/v1/task-plans/' + segment(id));
+    this.loadingPlanIds = updated(this.loadingPlanIds, id, true);
     try {
-      const result = await this.repository.call(path);
-      if (!this.current(run)) return;
+      const result = await repository.call(path);
+      if (!this.current(run) || this.repository !== repository || !this.routeAdmitted()) return;
       const plan = Wire.object(result, 'plan');
-      if (Wire.text(plan, 'id') !== id) return;
+      if (Wire.text(plan, 'id') !== id) {
+        this.error = 'request_updated';
+        this.setPlanActionError(id, this.error);
+        return;
+      }
       this.setPlan(id, plan);
       const state = Wire.text(plan, 'state');
       const actionPath = this.planActionPath(id, 'start');
@@ -574,7 +760,207 @@ export class AssistantFeedModel {
       if (state === 'started' || state === 'dismissed' || state === 'open' && !this.client?.operationBlocked(actionPath) && !this.client?.operationBlocked(dismissPath)) {
         this.markUncertain(actionPath, false); this.markUncertain(dismissPath, false);
       }
-    } catch (_) { /* The retained plan and unknown marker remain visible until a later explicit refresh. */ }
+    } catch (error) {
+      if (this.current(run)) {
+        this.error = this.errorKey(error as Error);
+        this.setPlanActionError(id, this.error);
+      }
+      // Keep the feed snapshot readable, but do not admit writes from a failed current-plan read.
+    } finally {
+      if (this.generation === run) this.loadingPlanIds = updated(this.loadingPlanIds, id, false);
+    }
+  }
+
+  async editPlan(id: string): Promise<boolean> {
+    const run = this.generation, route = this.routeSnapshot();
+    const permission = this.planAllowsWrites();
+    if (!permission) {
+      this.error = 'permission_denied';
+      this.setPlanActionError(id, this.error);
+      return false;
+    }
+    if (!await this.refreshPlan(id) || !this.current(run) || !this.routeIsCurrent(route)) return false;
+    if (!this.planAllowsWrites()) {
+      this.error = 'permission_denied';
+      this.setPlanActionError(id, this.error);
+      return false;
+    }
+    return this.beginEditPlan(id);
+  }
+
+  async refreshPlan(id: string): Promise<boolean> {
+    if (!id || !this.current(this.generation)) return false;
+    const run = this.generation;
+    this.error = '';
+    this.setPlanActionError(id, '');
+    await this.reconcilePlan(id, run);
+    return this.current(run) && this.planIsFresh(id);
+  }
+
+  /** Returns the same lead Agent order used by the task receipt on iOS. */
+  receiptLeadAgent(todoId: string): Record<string, Object> {
+    const todo = this.todo(todoId);
+    let selected: Record<string, Object> = {};
+    let bestPriority = Number.MAX_SAFE_INTEGER;
+    let bestUpdated = 0;
+    Wire.rows(todo, 'agents').filter((agent: Record<string, Object>) => !Wire.text(agent, 'released_at') && !Wire.text(agent, 'dismissed_at'))
+      .forEach((agent: Record<string, Object>) => {
+        const machineId = Wire.text(agent, 'machine_id'), sessionId = Wire.text(agent, 'session_id');
+        if (!machineId || !sessionId) return;
+        const listed = this.client?.sessions.find((candidate: ResourceRow) => candidate.manager === this.owner &&
+          candidate.machine === machineId && (candidate.session || candidate.id) === sessionId);
+        if (!listed) return;
+        const data = listed.data();
+        const state = listed.state || Wire.text(data, 'state', Wire.text(data, 'status'));
+        if (!Wire.text(data, 'state') && !Wire.text(data, 'status') && listed.state) data['state'] = listed.state;
+        const priority = state === 'needs_you' ? 0 : state === 'unread' ? 1 : state === 'working' ? 2 :
+          ['waiting', 'starting', 'not_started'].includes(state) ? 3 : state === 'idle' ? 4 : state === 'unknown' ? 5 : 6;
+        const parsedUpdated = Date.parse(Wire.text(data, 'updated_at', Wire.text(agent, 'updated_at')));
+        const updatedAt = Number.isFinite(parsedUpdated) ? parsedUpdated : 0;
+        if (priority < bestPriority || priority === bestPriority && updatedAt > bestUpdated) {
+          bestPriority = priority;
+          bestUpdated = updatedAt;
+          selected = data;
+        }
+      });
+    return selected;
+  }
+
+  private receiptForRecovery(receiptId: string, todoId: string): Record<string, Object> {
+    if (!receiptId || !todoId) return {};
+    const item = this.items.find((candidate: Record<string, Object>) => Wire.text(candidate, 'id') === receiptId &&
+      Wire.text(candidate, 'kind') === 'receipt' && Wire.text(candidate, 'ref') === todoId &&
+      Wire.text(candidate, 'conversation', this.conversationId) === this.conversationId &&
+      Wire.text(candidate, 'manager', this.owner) === this.owner);
+    if (!item) return {};
+    if (!this.receiptRecoveryResolution(item)) {
+      const at = timestamp(Wire.text(item, 'at'));
+      if (this.items.some((other: Record<string, Object>) => Wire.text(other, 'id') !== receiptId && Wire.text(other, 'kind') === 'receipt' && Wire.text(other, 'ref') === todoId && timestamp(Wire.text(other, 'at')) >= at)) return {};
+      if (Wire.rows(this.todo(todoId), 'agents').some((agent: Record<string, Object>) => !Wire.text(agent, 'released_at') && !Wire.text(agent, 'dismissed_at') && timestamp(Wire.text(agent, 'linked_at')) > at)) return {};
+    }
+    return item;
+  }
+
+  private receiptRecoveryResolution(item: Record<string, Object>): string {
+    return Wire.text(Wire.object(item, 'body'), 'resolution');
+  }
+
+  private receiptRecoveryState(item: Record<string, Object>): string {
+    return receiptWireState(item);
+  }
+
+  private receiptRecoverySnapshot(item: Record<string, Object>): string {
+    return JSON.stringify({
+      id: Wire.text(item, 'id'), kind: Wire.text(item, 'kind'), ref: Wire.text(item, 'ref'),
+      conversation: Wire.text(item, 'conversation', this.conversationId), manager: Wire.text(item, 'manager', this.owner),
+      state: this.receiptRecoveryState(item), resolution: this.receiptRecoveryResolution(item)
+    });
+  }
+
+  private receiptPlanFailure(todo: Record<string, Object>): string {
+    const planId = Wire.text(todo, 'plan_id');
+    const plan = this.plan(planId);
+    const todoId = Wire.text(todo, 'id');
+    const task = Wire.rows(plan, 'tasks').find((candidate: Record<string, Object>) => Wire.text(candidate, 'todo_id') === todoId);
+    return Wire.text(todo, 'start_error') || Wire.text(task || {}, 'error');
+  }
+
+  canRetryReceipt(receiptId: string, todoId: string, allowBusy: boolean = false): boolean {
+    const item = this.receiptForRecovery(receiptId, todoId), todo = this.todo(todoId);
+    const path = this.ownerPath('/api/v1/todos/' + segment(todoId) + '/retry');
+    return this.current(this.generation) && this.routeAdmitted() && this.planAllowsWrites() && !!todoId &&
+      this.receiptRecoveryState(item) === 'failed' && Object.keys(todo).length > 0 &&
+      Wire.text(todo, 'manager', this.owner) === this.owner && Wire.text(todo, 'origin') === this.conversationId &&
+      !!Wire.text(todo, 'plan_id') && !!Wire.text(todo, 'done_at') && !!Wire.text(todo, 'start_error') &&
+      (allowBusy || !hasId(this.busyKeys, 'todo:' + todoId)) && (allowBusy || !this.blocked(path));
+  }
+
+  canContinueReceipt(receiptId: string, todoId: string, allowBusy: boolean = false): boolean {
+    const item = this.receiptForRecovery(receiptId, todoId), resolution = this.receiptRecoveryResolution(item), todo = this.todo(todoId);
+    const path = this.ownerPath('/api/v1/todos/' + segment(todoId) + '/retry');
+    if (!this.current(this.generation) || !this.routeAdmitted() || !this.planAllowsWrites() || !todoId ||
+      this.receiptRecoveryState(item) !== 'interrupted' || !['', 'pending'].includes(resolution) ||
+      !Object.keys(todo).length || Wire.text(todo, 'manager', this.owner) !== this.owner ||
+      Wire.text(todo, 'origin') !== this.conversationId || !Wire.text(todo, 'plan_id') || Wire.text(todo, 'done_at') ||
+      !allowBusy && (hasId(this.busyKeys, 'todo:' + todoId) || this.blocked(path))) return false;
+    const lead = this.receiptLeadAgent(todoId), state = Wire.text(lead, 'state', Wire.text(lead, 'status'));
+    const error = Wire.text(lead, 'turn_error');
+    if (!error || !['idle', 'unread'].includes(state)) return false;
+    const work = Wire.object(lead, 'work');
+    const autoContinues = Wire.bool(lead, 'turn_error_resumes') ||
+      Wire.text(work, 'phase') === 'blocked' && !!Wire.text(work, 'resets_at') && !!Wire.text(work, 'wake_at');
+    const resetAtValue = Wire.text(lead, 'turn_error_resets_at') || Wire.text(work, 'resets_at');
+    const resetAt = Date.parse(resetAtValue);
+    const usageLimited = Wire.text(lead, 'turn_error_kind') === 'usage_limit' && !!error &&
+      ['idle', 'unread'].includes(state) && (!Number.isFinite(resetAt) || Date.now() <= resetAt + 10 * 60 * 1000);
+    // Match the receipt model: an automatic usage-limit continuation blocks a manual action only while the
+    // limit is active. Expired limits are interrupted again; an unknown reset time remains limited.
+    return !(usageLimited && autoContinues);
+  }
+
+  async retryReceipt(receiptId: string, todoId: string, action: string): Promise<boolean> {
+    if (action !== 'retry' && action !== 'continue') return false;
+    if (action === 'retry' ? !this.canRetryReceipt(receiptId, todoId) : !this.canContinueReceipt(receiptId, todoId)) return false;
+    const run = this.generation, repository = this.repository;
+    const route = this.routeSnapshot();
+    if (!repository || !this.current(run) || !this.routeIsCurrent(route)) return false;
+    const clickedReceipt = this.receiptForRecovery(receiptId, todoId);
+    const clickedReceiptSnapshot = this.receiptRecoverySnapshot(clickedReceipt);
+    this.error = '';
+    // Re-read the clicked card from the authoritative feed before preparing its write. This makes the Hub's
+    // resolution (especially `resumed`) part of the user's action even if the view was left open while it changed.
+    const located = await this.locateItem(receiptId, 'receipt');
+    if (!this.current(run) || this.repository !== repository || !this.routeIsCurrent(route)) return false;
+    const freshReceipt = this.receiptForRecovery(receiptId, todoId);
+    if (located !== 'found' || this.receiptRecoverySnapshot(freshReceipt) !== clickedReceiptSnapshot) {
+      this.error = 'request_updated';
+      return false;
+    }
+    if (!this.todosReady) {
+      this.error = this.todoError || 'failed';
+      return false;
+    }
+    if (action === 'retry' ? !this.canRetryReceipt(receiptId, todoId) : !this.canContinueReceipt(receiptId, todoId)) {
+      this.error = 'request_updated';
+      return false;
+    }
+    const path = this.ownerPath('/api/v1/todos/' + segment(todoId) + '/retry');
+    const todoSnapshot = JSON.stringify(this.todo(todoId));
+    const receiptSnapshot = this.receiptRecoverySnapshot(freshReceipt);
+    const resolution = this.receiptRecoveryResolution(freshReceipt);
+    // Busy and the blocked journal row are expected while this write is being journaled. The initial gate above
+    // checks for pre-existing rows; this callback checks the captured receipt and todo after journaling.
+    const canRecover = (): boolean => action === 'retry' ? this.canRetryReceipt(receiptId, todoId, true) : this.canContinueReceipt(receiptId, todoId, true);
+    const admit = (): boolean => {
+      const currentReceipt = this.receiptForRecovery(receiptId, todoId);
+      return this.current(run) && this.repository === repository && this.routeIsCurrent(route) &&
+        this.receiptRecoverySnapshot(currentReceipt) === receiptSnapshot && this.receiptRecoveryResolution(currentReceipt) === resolution &&
+        JSON.stringify(this.todo(todoId)) === todoSnapshot && canRecover();
+    };
+    this.error = '';
+    this.markBusy('todo:' + todoId, true);
+    try {
+      if (!admit()) return false;
+      const response = await repository.call(path, 'POST', Wire.payload([], []), '', admit);
+      if (!this.current(run)) return false;
+      const updatedTodo = Wire.object(response, 'todo');
+      if (Wire.text(updatedTodo, 'id') !== todoId || Wire.text(updatedTodo, 'origin') !== this.conversationId ||
+        Wire.text(updatedTodo, 'manager', this.owner) !== this.owner) {
+        this.error = 'request_updated';
+        return false;
+      }
+      this.markUncertain(path, false);
+      await this.refresh();
+      return this.current(run);
+    } catch (error) {
+      if (!this.current(run)) return false;
+      this.error = this.errorKey(error as Error);
+      if (this.error === 'result_unknown') this.markUncertain(path, true);
+      if (this.error === 'request_updated' || this.error === 'unsupported') await this.refreshTodos(run);
+      return false;
+    } finally {
+      if (this.generation === run) this.markBusy('todo:' + todoId, false);
+    }
   }
 
   setMessageDraft(id: string, value: string): void {
@@ -611,10 +997,17 @@ export class AssistantFeedModel {
     if (this.blocked(path)) { this.error = 'result_unknown'; return false; }
     const repository = this.repository;
     if (!repository || !this.current(run)) return false;
+    const route = this.routeSnapshot();
+    const admit = (): boolean => {
+      const currentItem = this.items.find((value: Record<string, Object>) => Wire.text(value, 'id') === id);
+      return this.current(run) && this.repository === repository && this.routeIsCurrent(route) && !!currentItem &&
+        this.messageState(currentItem) === 'open' && this.messageDraft(currentItem) === text &&
+        Wire.text(currentItem, 'ref') === ref;
+    };
     this.markBusy('message:' + id, true); this.error = '';
     try {
-      if (!this.current(run)) return false;
-      await repository.call(path, 'POST', Wire.payload(['text', 'card'], [text, id]));
+      if (!admit()) return false;
+      await repository.call(path, 'POST', Wire.payload(['text', 'card'], [text, id]), '', admit);
       if (!this.current(run)) return false;
       this.pendingMessageIds = updated(this.pendingMessageIds, id, true);
       await this.refresh();
@@ -636,12 +1029,18 @@ export class AssistantFeedModel {
   async dismissMessage(id: string): Promise<boolean> {
     const run = this.generation, item = this.items.find((value: Record<string, Object>) => Wire.text(value, 'id') === id);
     if (!item || !this.messageCanDismiss(item) || !this.repository) return false;
+    const repository = this.repository, route = this.routeSnapshot();
     const path = '/api/v1/assistant/feed/' + segment(id) + '/dismiss' + (this.owner ? '?manager=' + segment(this.owner) : '');
     const draft = Wire.text(Wire.object(item, 'body'), 'draft');
+    const admit = (): boolean => {
+      const currentItem = this.items.find((value: Record<string, Object>) => Wire.text(value, 'id') === id);
+      return this.current(run) && this.repository === repository && this.routeIsCurrent(route) && !!currentItem &&
+        this.messageState(currentItem) === 'open' && Wire.text(Wire.object(currentItem, 'body'), 'draft') === draft;
+    };
     this.markBusy('message:' + id, true); this.error = '';
     try {
-      if (!this.current(run)) return false;
-      const response = await this.repository.call(path, 'POST', Wire.payload(['draft'], [draft]));
+      if (!admit()) return false;
+      const response = await repository.call(path, 'POST', Wire.payload(['draft'], [draft]), '', admit);
       if (!this.current(run)) return false;
       const updated = Wire.object(response, 'item');
       if (Wire.text(updated, 'id') !== id || Wire.text(updated, 'conversation') !== this.conversationId) { this.error = 'request_updated'; return false; }
@@ -664,12 +1063,18 @@ export class AssistantFeedModel {
   async undoDismissMessage(id: string): Promise<boolean> {
     const run = this.generation, item = this.items.find((value: Record<string, Object>) => Wire.text(value, 'id') === id);
     if (!item || !this.messageCanUndo(item) || !this.repository) return false;
+    const repository = this.repository, route = this.routeSnapshot();
     const token = Wire.text(Wire.object(item, 'body'), 'dismissal_id');
     const path = '/api/v1/assistant/feed/' + segment(id) + '/undo-dismiss' + (this.owner ? '?manager=' + segment(this.owner) : '');
+    const admit = (): boolean => {
+      const currentItem = this.items.find((value: Record<string, Object>) => Wire.text(value, 'id') === id);
+      return this.current(run) && this.repository === repository && this.routeIsCurrent(route) && !!currentItem &&
+        this.messageState(currentItem) === 'dismissed' && Wire.text(Wire.object(currentItem, 'body'), 'dismissal_id') === token;
+    };
     this.markBusy('message:' + id, true); this.error = '';
     try {
-      if (!this.current(run)) return false;
-      const response = await this.repository.call(path, 'POST', Wire.payload(['dismissal_id'], [token]));
+      if (!admit()) return false;
+      const response = await repository.call(path, 'POST', Wire.payload(['dismissal_id'], [token]), '', admit);
       if (!this.current(run)) return false;
       const updated = Wire.object(response, 'item');
       if (Wire.text(updated, 'id') !== id || Wire.text(updated, 'conversation') !== this.conversationId) { this.error = 'request_updated'; return false; }
