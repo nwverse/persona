@@ -141,7 +141,9 @@ func TestRuntimeSearchHierarchyAndRequestValidation(t *testing.T) {
 }
 func TestRuntimeSearchExtensionScopeBeforeRankAndCounts(t *testing.T) {
 	h, base, _, b := reachHub(t)
+	h.devices.mu.Lock()
 	h.cfg.Machines = append(h.cfg.Machines, MachineConfig{ID: "mc", Name: "mc", Kind: "local"})
+	h.devices.mu.Unlock()
 	if _, err := h.moveMachine(context.Background(), "mc", "m-0b0b0b"); err != nil {
 		t.Fatal(err)
 	}
@@ -153,13 +155,26 @@ func TestRuntimeSearchExtensionScopeBeforeRankAndCounts(t *testing.T) {
 	query := "/api/v1/sessions?search=needle&summary=1&limit=1"
 	code, raw := extDo(t, base, "GET", query, "", nil)
 	var first runtimeSearchPage
-	if err := json.Unmarshal([]byte(raw), &first); err != nil || code != 200 || first.Total != 2 || len(first.Hits) != 1 || !first.HasMore || strings.Contains(raw, "foreign") || strings.Contains(raw, "private") || strings.Contains(raw, "assistant") {
+	if err := json.Unmarshal([]byte(raw), &first); err != nil || code != 200 || first.Total != 2 || len(first.Sessions) != 1 || !first.HasMore {
 		t.Fatalf("scoped first: %d %s %v", code, raw, err)
 	}
 	code, raw = extDo(t, base, "GET", query+"&cursor="+url.QueryEscape(first.Cursor), "", nil)
 	var second runtimeSearchPage
-	if err := json.Unmarshal([]byte(raw), &second); err != nil || code != 200 || second.Total != 2 || len(second.Hits) != 1 || second.HasMore || second.Sessions[0].MachineID == first.Sessions[0].MachineID {
+	if err := json.Unmarshal([]byte(raw), &second); err != nil || code != 200 || second.Total != 2 || len(second.Sessions) != 1 || second.HasMore || second.Sessions[0].MachineID == first.Sessions[0].MachineID {
 		t.Fatalf("scoped second: %d %s %v", code, raw, err)
+	}
+	// Inspect values, not JSON field names: a legitimate runtime row carries assistant:false.
+	// Both pages and their evidence maps must contain only the two authorized public rows.
+	for i, page := range []runtimeSearchPage{first, second} {
+		row := page.Sessions[0]
+		title, allowed := map[string]string{"mb": "Needle one", "mc": "Needle two"}[row.MachineID]
+		if !allowed || row.SessionID != "same" || row.Title != title || row.Assistant || row.Space != "" {
+			t.Fatalf("page %d leaked an unauthorized or private row: %+v", i, row)
+		}
+		hit, ok := page.Hits[runtimeListID(row.MachineID, row.SessionID)]
+		if len(page.Hits) != 1 || !ok || hit.Score <= 0 || hit.Evidence != nil {
+			t.Fatalf("page %d leaked or mismatched search evidence: %+v", i, page.Hits)
+		}
 	}
 	for _, suffix := range []string{"&manager=assistant", "&machine_id=ma"} {
 		if code, raw := extDo(t, base, "GET", query+suffix, "", nil); code != http.StatusForbidden {
