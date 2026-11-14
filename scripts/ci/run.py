@@ -2,26 +2,41 @@
 import argparse
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
 import time
 
 
+WINDOWS = os.name == "nt"
+
+
+def signal_tree(process, hard):
+    """Stops the command and what it started: its process group, or on Windows (no process groups here) its tree."""
+    if WINDOWS:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False)
+    else:
+        os.killpg(process.pid, signal.SIGKILL if hard else signal.SIGTERM)
+
+
 def run(label, seconds, command):
     started = time.monotonic()
     print(f"::group::{label}", flush=True)
+    if WINDOWS:
+        # CreateProcess does not look up npm.cmd for "npm" as a shell does: resolve the name through PATHEXT first.
+        command = [shutil.which(command[0]) or command[0], *command[1:]]
     try:
         process = subprocess.Popen(command, start_new_session=True)
     except OSError as error:
         print(f"::endgroup::\nFAIL {label} (could not start command: {error})", flush=True)
         return 127
     def stop(signum, frame):
-        os.killpg(process.pid, signal.SIGTERM)
+        signal_tree(process, False)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            signal_tree(process, True)
             process.wait()
         print(f"INTERRUPTED {label}", flush=True)
         raise SystemExit(128 + signum)
@@ -31,11 +46,11 @@ def run(label, seconds, command):
         code = process.wait(timeout=seconds)
         verdict = "PASS" if code == 0 else "FAIL"
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGTERM)
+        signal_tree(process, False)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            signal_tree(process, True)
             process.wait()
         code, verdict = 124, "TIMEOUT"
     elapsed = time.monotonic() - started
