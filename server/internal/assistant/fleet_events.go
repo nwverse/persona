@@ -154,7 +154,11 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
 		}
 		_ = json.Unmarshal(params, &p)
-		return map[string]any{"tools": s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest)}, true, nil
+		// Only an assistant conversation defers tools: a guest, by the node's word or by the manager's own record
+		// (guest.go), has no ToolSearch to load one with (node/assistant_guest.go).
+		deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
+		tools := s.withToolLoading(ctx, s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest), deferring)
+		return map[string]any{"tools": tools}, true, nil
 	case "mcp.call":
 		var p struct {
 			Name        string          `json:"name"`

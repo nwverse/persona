@@ -269,10 +269,10 @@ func TestAssistantShellLauncherCompaction(t *testing.T) {
 						t.Fatalf("claude saw %s=%q, want %q (the launcher's own)", k, got, want)
 					}
 				}
-				// Only Persona's own tools are eagerly loaded (mcpserver's alwaysLoad marker); other MCP servers
-				// keep the ordinary ToolSearch deferral instead of a process-wide disable (#5838).
-				if got := envValue(lines, "ENABLE_TOOL_SEARCH"); got != "" {
-					t.Fatalf("ToolSearch was disabled process-wide: %q", got)
+				// Tool search is on, also for a conversation that ran without it (#7317), and never disabled
+				// process-wide: false would load every MCP server's tools up front (#5838).
+				if got := envValue(lines, "ENABLE_TOOL_SEARCH"); got != "true" {
+					t.Fatalf("claude saw ENABLE_TOOL_SEARCH=%q, want \"true\" (never false: #5838)", got)
 				}
 			})
 		}

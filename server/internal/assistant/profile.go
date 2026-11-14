@@ -131,6 +131,9 @@ type Settings struct {
 	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default). A round the
 	// user did not start is moved to the background by their message either way (owner_preempt.go).
 	InterjectBackground *bool `json:"interject_background,omitempty"`
+	// LoadAllTools: every Persona tool of an assistant conversation is loaded up front, as before #7317. nil is off
+	// (the default): only the frequently used ones are, the rest wait behind ToolSearch (tool_loading.go).
+	LoadAllTools *bool `json:"load_all_tools,omitempty"`
 	// NextSuggestions: chats that have no suggestion of their own (Persona's conversations, Codex and the other
 	// runtimes) get the next message suggested by the suggest.next model after a turn (#4644, suggest_next.go). nil is
 	// off (the default).
