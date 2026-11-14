@@ -137,6 +137,10 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"negated English owner requirement", "You don't need to approve the release; it is already live.", verdictDone, ""},
 		{"negated English requirement does not hide a later direct one", "You don't need to roll back. You need to approve the release yourself.", verdictNeedsUser, "You need to"},
 		{"negated English contraction does not hide a later direct one", "You won't need to roll back. You'll need to approve the release yourself.", verdictNeedsUser, "You'll need"},
+		{"explicit no action", "You need to do nothing.", verdictDone, ""},
+		{"explicit no further action after delivery", "The work is live. You need to do nothing else.", verdictDone, ""},
+		{"explicit no action does not hide an independent requirement", "You need to do nothing else. Otherwise, you need to approve the release yourself.", verdictNeedsUser, "Otherwise"},
+		{"explicit no action with contraction", "You'll need to do nothing else.", verdictDone, ""},
 		{"English narrative about a choice", "The report evaluates whether you need to split the module and concludes no.", verdictDone, ""},
 		{"Chinese narrative about a choice", "评估了要不要拆分模块，结论是不拆。", verdictDone, ""},
 	} {

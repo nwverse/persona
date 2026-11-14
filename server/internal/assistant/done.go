@@ -70,6 +70,23 @@ func doneSignals(replies []prompts.TaskDoneReply) taskDoneSignals {
 	return s
 }
 
+// ownerNoAction reports a complete no-action predicate after an owner marker. The sentence or clause must end there:
+// "do nothing else but approve" is still an action, while an independent requirement after a period is handled by the
+// next marker occurrence rather than being swallowed with this one.
+func ownerNoAction(rest string) bool {
+	rest = strings.TrimSpace(rest)
+	for _, phrase := range []string{"do nothing else", "do nothing"} {
+		if !strings.HasPrefix(rest, phrase) {
+			continue
+		}
+		tail := strings.TrimSpace(rest[len(phrase):])
+		if tail == "" || strings.ContainsRune(".!?;", rune(tail[0])) {
+			return true
+		}
+	}
+	return false
+}
+
 // directOwnerMarker reports whether any occurrence of marker starts a direct requirement at the line or a
 // sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
 // skipping one such occurrence must not suppress a later direct one. A comma inside that same if-sentence does not end
@@ -101,7 +118,7 @@ func directOwnerMarker(lower, marker string) bool {
 			}
 			direct = !strings.HasPrefix(clause, "if ") || strings.HasSuffix(clause, "otherwise,")
 		}
-		if direct {
+		if direct && !ownerNoAction(lower[i+len(marker):]) {
 			return true
 		}
 		from = i + len(marker)
