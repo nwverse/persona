@@ -15,6 +15,18 @@ the first pages (`sessionSummaries`) is not a computer's count either while the 
 `MOCK_SESSIONS_LIST=1` and without it, with the default roster (several assistants) and `MOCK_MANAGERS=1`, and with
 `GET /api/v1/sessions` answering 500 in the browser.
 
+## A read that only handles the expected failure loads forever (2026-11-14, workflow board)
+
+The board's switch started as "not answered yet" (`enabled: null`) and its read handled only 404; a 500 left it null,
+so `/workspace-board` and Settings showed their loaders until the next reconnect. Any state that a page draws as
+"loading" needs an exit on every failure: keep the reason next to it and draw it with Retry. The same page also read
+every 503 as "this hub has no board, update it", while the manager answers 503 `assistant_offline` while it restarts:
+tell an unsupported hub from a passing failure by the error's `code` (`not_supported`), not by its status, and offer
+Retry only for what a retry can fix. A message about the hub's version belongs on its own, without the controls of a
+page that cannot work there. The switch's module is on the first screen and its pages are lazy: exporting its read for
+their Retry renamed the first screen's imports (ja +120 B), while handing `retry` out through the hook they already
+import, and keeping the 404 as the stored failure rather than a flag of its own, kept it within a few dozen bytes of main.
+
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
 The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.
