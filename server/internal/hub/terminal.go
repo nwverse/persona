@@ -127,6 +127,12 @@ func (h *Hub) terminalSubscribe(ctx context.Context, c *client, machineID, sessi
 	asked := machineID
 	machineID = m.cfg.ID
 	key := [2]string{machineID, sessionID}
+	c.mu.Lock()
+	if c.termSubs == nil {
+		c.termSubs = map[[3]string]bool{}
+	}
+	c.termSubs[[3]string{machineID, sessionID, asked}] = true
+	c.mu.Unlock()
 	t := &h.terms
 	t.mu.Lock()
 	if t.relays == nil {
@@ -172,6 +178,7 @@ func (h *Hub) terminalSubscribe(ctx context.Context, c *client, machineID, sessi
 		}
 	}
 	t.mu.Unlock()
+	h.fleetClientsChanged()
 	if sync {
 		go h.terminalSync(context.WithoutCancel(ctx), m, key, r)
 	}
@@ -428,6 +435,10 @@ func (h *Hub) terminalUnsubscribe(c *client, machineID, sessionID string) {
 // terminalLeave takes asked off the app's subscription to the relay under key (the computer's own id); m is that
 // computer (nil: it is gone, the relay only goes).
 func (h *Hub) terminalLeave(c *client, m *Machine, key [2]string, asked string) {
+	c.mu.Lock()
+	delete(c.termSubs, [3]string{key[0], key[1], asked})
+	c.mu.Unlock()
+	h.fleetClientsChanged()
 	t := &h.terms
 	t.mu.Lock()
 	r := t.relays[key]

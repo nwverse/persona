@@ -50,6 +50,7 @@ import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
+const ClosedTaskNotice = lazy(() => import("./ClosedTaskNotice"));
 import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
@@ -1826,6 +1827,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack from={cameFrom} onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
+      {!assistant && !session?.todo && session?.completed_todo && (
+        <Suspense fallback={null}><ClosedTaskNotice todo={session.completed_todo} writable={canCompose && !stoppedLine} /></Suspense>
+      )}
 
       {/* the page's middle: the chat and (once shown) the terminal stacked in one box; without a terminal to show it adds no box */}
       <div className={switchable ? "relative min-h-0 flex-1" : "contents"}>
@@ -2035,7 +2039,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
         <div ref={composerBox} className="shrink-0" hidden={voiceState === "live" || Boolean(picker)}>
         {stoppedLine ? (
-          <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
+          <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} reason={session?.read_only_reason} />
         ) : (
         <Composer
           draftKey={draftKey}

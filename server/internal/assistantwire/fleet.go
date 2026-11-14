@@ -92,6 +92,9 @@ type FleetLive struct {
 
 // Clients is EventClients' params.
 type Clients struct {
+	// Viewing is the deduplicated set of sessions subscribed by connected apps.
+	// A subscription lasts while its conversation is open, including a quiet turn.
+	Viewing []SessionRef `json:"viewing,omitempty"`
 	// Elicitation: an app that takes MCP elicitations is connected (without one, or ElicitationPush, an elicitation is
 	// handed back to the terminal at once).
 	Elicitation bool `json:"elicitation"`

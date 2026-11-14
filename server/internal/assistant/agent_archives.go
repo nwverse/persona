@@ -162,7 +162,8 @@ func archiveSnapshot(s proto.Session) proto.Session {
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
 		UpdatedAt: s.UpdatedAt, LastText: string(preview),
-		Status: proto.StatusOffline, State: proto.StateOffline,
+		ReadOnlyReason: s.ReadOnlyReason,
+		Status:         proto.StatusOffline, State: proto.StateOffline,
 		Capabilities: &proto.SessionCapabilities{Read: true},
 	}
 }
@@ -303,6 +304,11 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 			active := rec.active(list[i], mark)
 			list[i].Archived = rec.Archived && !pending[key] && !active
 			list[i].ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
+			if list[i].Archived && !rec.ClosedAt.IsZero() && rec.Session.ReadOnlyReason != "" && !agentArchiveBusy(list[i]) {
+				list[i].ReadOnlyReason = rec.Session.ReadOnlyReason
+				list[i].Status, list[i].State = proto.StatusOffline, proto.StateOffline
+				list[i].Capabilities = &proto.SessionCapabilities{Read: true, Terminal: list[i].PaneID != ""}
+			}
 		}
 	}
 	if !rest {

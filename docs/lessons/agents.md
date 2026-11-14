@@ -989,3 +989,13 @@ placeholder examples in complete source text.
 Nanosecond stat fields can repeat across same-size writes within one filesystem timestamp tick. Bypass the parsed
 cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
 the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.
+
+## Task closure is not user inactivity
+
+Closing a task must not interrupt its conversation (#6819). A quiet transcript does not prove the owner is away:
+a connected app may still be reading it, or a user message may be ahead of the next inventory update. Check live app
+subscriptions and durable owner activity before automatic closure/retirement; re-check task ownership after asynchronous
+lookups. Cancellation must use the same idle-only retirement as completion, not a forced stop or terminal-close fallback.
+Keep historical ownership and an explicit stop reason so the remaining transcript explains what happened.
+Input and view-exit activity are not read receipts: writing them as seen can suppress the reply the owner is waiting
+for (`TestQuietPatrolAbsorbedUserQuestionPushes`). Persist them separately and keep notification regressions in the check.

@@ -409,7 +409,7 @@ func (s *Service) decorateTodos(mid string, list []proto.Session) {
 		if l, ok := r.links[key]; ok {
 			list[i].Todo = &proto.TodoRef{ID: l.TodoID, Title: l.Title}
 		} else if l, ok := r.completed[key]; ok {
-			list[i].SetCompletedTodo(&proto.TodoRef{ID: l.TodoID, Title: l.Title})
+			list[i].SetCompletedTodo(&proto.TodoRef{ID: l.TodoID, Title: l.Title, Cancelled: l.Cancelled})
 		}
 		list[i].Quiet = r.quiet[key]
 	}

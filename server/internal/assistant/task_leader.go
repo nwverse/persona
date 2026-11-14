@@ -578,6 +578,11 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new worker for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
 	}
+	if a.Verdict == reviewAccepted || a.Verdict == reviewCancelled {
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			return "", err
+		}
+	}
 	var up string // the conversation a needs_user goes to: whoever handed the leader its task
 	if lt, ok := s.leaderTaskOf(ctx, lead); ok && lt.Supervision != nil {
 		up = lt.Supervision.Supervisor
@@ -645,8 +650,8 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			}
 		}
 		if verdict == reviewCancelled {
-			s.stopTaskAgents(ctx, t)
-			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being stopped (its terminal stays) and archived.", t.ID), nil
+			return fmt.Sprintf("Worker task %s is cancelled and closed; its conversation stays usable until its Agent is idle "+
+				"and the user has been inactive for 10 minutes, then it is stopped and archived (its terminal stays).", t.ID), nil
 		}
 		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is stopped once it stays still (its terminal stays).", t.ID), nil
 	case reviewNeedsUser:
@@ -708,6 +713,10 @@ func (s *Service) rehomeWorker(ctx context.Context, t Todo) (cur Todo, cancelled
 	}
 	up, _ := s.supervisorAboveTask(ctx, t)
 	if up == "" || s.isLeaderRef(up) {
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			s.logf("task %s: rehome deferred: %v", t.ID, err)
+			return t, false
+		}
 		reason := "its task leader is gone, and there is no conversation above it to take it over" // i18n-ignore: done_reason
 		s.logf("task %s: %s; cancelled", t.ID, reason)
 		if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool { v.State = reviewCancelled; return true }); err != nil {
@@ -717,7 +726,6 @@ func (s *Service) rehomeWorker(ctx context.Context, t Todo) (cur Todo, cancelled
 			s.logf("task %s: rehome: %v", t.ID, err)
 		}
 		cur, _ = s.todoNow(t.ID)
-		s.stopTaskAgents(ctx, cur)
 		return cur, true
 	}
 	s.logf("task %s: its task leader is gone; %s takes it over", t.ID, up)

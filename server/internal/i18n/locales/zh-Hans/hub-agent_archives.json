@@ -11,5 +11,6 @@
   "close_node_old": "请更新那台电脑上的 Persona，才能从这里关闭 Agent",
   "close_refused": "电脑没有关闭这个 Agent，它还开着",
   "close_failed": "在电脑上关闭 Agent 失败，它可能还开着",
-  "close_upgrade": "请更新管理器以使用「归档并关闭」"
+  "close_upgrade": "请更新管理器以使用「归档并关闭」",
+  "task_closed": "因待办关闭而停止。对话和终端仍保留；要继续，请在终端页恢复 Agent。"
 }

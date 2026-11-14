@@ -72,6 +72,10 @@ func (s *Service) closeIdleAgents(ctx context.Context, refused taskCloseRefused,
 	}
 	now := time.Now()
 	running := map[[2]string]bool{}
+	closedTasks := map[[2]string]bool{}
+	for _, a := range s.doneTaskAgents() {
+		closedTasks[[2]string{a.machine, a.session}] = true
+	}
 	for _, d := range s.devices(ctx) {
 		if !d.Reachable {
 			for k := range seen { // an unreachable machine keeps what was seen
@@ -96,6 +100,9 @@ func (s *Service) closeIdleAgents(ctx context.Context, refused taskCloseRefused,
 			}
 			key := [2]string{d.ID, c.SessionID}
 			running[key] = true
+			if closedTasks[key] {
+				continue // the task's own grace period and archive belong to closeDoneTaskAgents
+			}
 			since, ok := seen[key]
 			if !ok {
 				seen[key] = now
@@ -103,6 +110,9 @@ func (s *Service) closeIdleAgents(ctx context.Context, refused taskCloseRefused,
 			}
 			open, touched := s.openTaskOf(key)
 			if !idleCloseable(c, since, now, idle, open, touched) {
+				continue
+			}
+			if s.sessionActivityReason(ctx, d.ID, c.SessionID, now) != "" {
 				continue
 			}
 			if r, ok := refused[key]; ok && r.updated.Equal(c.UpdatedAt) && now.Sub(r.at) < taskCloseRetry {
