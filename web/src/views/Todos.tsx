@@ -72,7 +72,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -108,6 +108,7 @@ import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
 import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
+import { retryKey, retryTask, useFeed } from "../lib/feed";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
 
 /** What this browser was last on (#2029): the list or the calendar, the calendar's mode, and whether it shows done ones. */
@@ -242,30 +243,14 @@ export function TodosView({
   // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
   // leaves the finished one out must not put it back in Needs you
   const superseded = useMemo(() => supersededFailedStarts(todos), [todos]);
-  // Each to-do's status section (docs/assistant/todo-status-sop.md), whatever the list is grouped by: the folders and
-  // 常驻 hold what the status sections show open and fold Done's (audit item 12), and the detail reads a failed start
-  // as its row does (audit item 13).
+  // Each to-do's own status section (docs/assistant/todo-status-sop.md), whatever the list is grouped by: its checkbox
+  // and its page read a failed start waiting on the owner as open (audit item 13).
   const sectionOf = useMemo(
     () => new Map(todos.map((td) => [td.id, triage(td, lookup, Date.now(), restored.get(td.id) ?? 0, superseded.has(td.id)).section])),
     [todos, lookup, restored, superseded, tick],
   );
-  // Separate uncompleted and completed todos: completed is the Done section
-  const { uncompleted, completed } = useMemo(() => {
-    const un: Todo[] = [];
-    const comp: Todo[] = [];
-    for (const t of todos) {
-      if (sectionOf.get(t.id) === "done") comp.push(t);
-      else un.push(t);
-    }
-    return {
-      uncompleted: sortTodos(un, lookup),
-      completed: sortTodos(comp, lookup),
-    };
-  }, [todos, lookup, sectionOf]);
   // A sessions push builds a new lookup: what it leaves in the same order stays the same list (and the same groups,
   // the same row views below), so the rows and sections it did not touch skip their render.
-  const steadyUncompleted = useSteady(uncompleted, sameList);
-  const steadyCompleted = useSteady(completed, sameList);
   const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions, sectionOf), [todos, lookup, interactions, sectionOf]), steadyViews);
 
   // The filter by due date and the order inside each section (#3740): this browser's, in both groupings
@@ -295,13 +280,44 @@ export function TodosView({
   // a search and the filter narrow the to-dos first; the sections (or the folders) place what is left
   const filterTodo = (t: Todo) => matchesSearch(t) && inFilter(t);
 
-  const filteredUncompleted = useMemo(() => steadyUncompleted.filter(filterTodo), [steadyUncompleted, search, listFilter, tick]);
-  const filteredCompleted = useMemo(() => steadyCompleted.filter(filterTodo), [steadyCompleted, search, listFilter, tick]);
+  const triaged = useMemo(
+    () => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }),
+    [todos, lookup, restored, search, listFilter, superseded, tick],
+  );
+  // the header's counts: what the filter shows, whatever is searched
+  const triageAll = useMemo(
+    () => (search.trim() ? triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }) : triaged),
+    [todos, lookup, restored, search, listFilter, superseded, triaged, tick],
+  );
+  // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
+  // its most urgent member's), and whether it counts as open (countsAsOpen, the sidebar badge's rule, its own reading).
+  // The folders and 常驻 split by the same placement, so their Done fold is the Done section to the to-do and every
+  // grouping says one number for it (audit item 12).
+  const placed = useMemo(() => {
+    const row = new Map<string, TriageSection>();
+    const open = new Set<string>();
+    for (const sec of TRIAGE_SECTIONS)
+      for (const g of triaged.sections[sec])
+        for (const m of g.members) {
+          row.set(m.id, sec);
+          if (countsAsOpen(m, g.triage.get(m.id)!)) open.add(m.id);
+        }
+    return { row, open };
+  }, [triaged]);
+  const filteredUncompleted = useSteady(
+    useMemo(() => sortTodos(todos.filter((td) => placed.row.has(td.id) && placed.row.get(td.id) !== "done"), lookup), [todos, placed, lookup]),
+    sameList,
+  );
+  const filteredCompleted = useSteady(
+    useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "done"), lookup), [todos, placed, lookup]),
+    sameList,
+  );
   // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
   const kbProjects = useTodoProjects();
   const projectName = useMemo(() => projectNames(kbProjects), [kbProjects]);
   const projectGroups = useSteady(
-    useMemo(() => groupTodosByProject(filteredUncompleted, lookup, Date.now(), projectName), [filteredUncompleted, lookup, projectName]),
+    // a folder holding a to-do in Needs you says so, a failed start waiting on the owner too (audit item 13)
+    useMemo(() => groupTodosByProject(filteredUncompleted, lookup, Date.now(), projectName, (td) => sectionOf.get(td.id) === "waiting"), [filteredUncompleted, lookup, projectName, sectionOf]),
     steadyGroups,
   );
   // each section gets only its own rows' views, so one row's change re-renders that row's section alone
@@ -321,30 +337,41 @@ export function TodosView({
   const grouping: TodoGrouping = chosenGrouping === "direction" && !byDirection && !directionPending ? "status" : chosenGrouping;
   const byStatus = grouping === "status";
   const leaderTitles = useStore((s) => s.assistant?.conversations);
+  // The tree lists only open to-dos (server/internal/assistant/direction_tree.go, the same countsAsOpen rule), so a
+  // direction holds the open ones it lists: one ticked here leaves at once, not when the tree's push comes.
   const directionSections = useMemo(() => {
     if (grouping !== "direction" || !byDirection) return [];
-    const open = new Map(filteredUncompleted.map((td) => [td.id, td]));
+    const open = new Map(filteredUncompleted.filter((td) => placed.open.has(td.id)).map((td) => [td.id, td]));
     return directionTree.directions
       .map((d) => ({ d, todos: (d.tasks ?? []).map((task) => open.get(task.id)).filter((td): td is Todo => !!td) }))
       .filter((g) => g.todos.length > 0)
       .map(({ d, todos }) => ({ d, todos, title: directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title) }));
-  }, [grouping, byDirection, directionTree, filteredUncompleted, leaderTitles]);
+  }, [grouping, byDirection, directionTree, filteredUncompleted, placed, leaderTitles]);
   // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it
   // (server/internal/assistant/direction_tree.go), so the page says how many and where to see them rather than hide them
   const directionUnlisted = useMemo(() => {
     if (grouping !== "direction" || !byDirection) return 0;
     const listed = new Set(directionSections.flatMap((g) => g.todos.map((td) => td.id)));
-    return filteredUncompleted.filter((td) => !listed.has(td.id)).length;
-  }, [grouping, byDirection, directionSections, filteredUncompleted]);
-  const triaged = useMemo(
-    () => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }),
-    [todos, lookup, restored, search, listFilter, superseded, tick],
-  );
-  // the header's counts: what the filter shows, whatever is searched
-  const triageAll = useMemo(
-    () => (search.trim() ? triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }) : triaged),
-    [todos, lookup, restored, search, listFilter, superseded, triaged, tick],
-  );
+    return filteredUncompleted.filter((td) => placed.open.has(td.id) && !listed.has(td.id)).length;
+  }, [grouping, byDirection, directionSections, filteredUncompleted, placed]);
+  // What 常驻 shows below the directions besides Done: the to-dos outside Done that do not count as open (closed in the
+  // last day, accepted, deployed, inactive), which the tree never lists, in their status sections, as Android does
+  // (`DirectionTree.todoRows`), so a to-do ticked here moves to Just finished rather than out of the list.
+  const directionRest = useMemo(() => {
+    if (grouping !== "direction" || !byDirection) return [];
+    return TRIAGE_SECTIONS.filter((sec) => sec !== "done")
+      .map((sec) => ({
+        sec,
+        groups: sortTriageGroups(
+          triaged.sections[sec].flatMap((g): TriageGroup[] => {
+            const members = g.members.filter((m) => !placed.open.has(m.id));
+            return members.length ? [{ ...g, lead: members[0], members }] : [];
+          }),
+          listSort,
+        ),
+      }))
+      .filter((s) => s.groups.length > 0);
+  }, [grouping, byDirection, triaged, placed, listSort]);
   // what waits on the user that the filter leaves out: the line over the sections says how many (#3740)
   const hiddenWaitingCount = useMemo(
     () => (listFilter === "all" ? 0 : hiddenWaiting(todos.filter(matchesSearch), inFilter, lookup, Date.now(), restored, superseded)),
@@ -405,10 +432,10 @@ export function TodosView({
       for (const sec of TRIAGE_SECTIONS) if (!FOLDED_SECTIONS.has(sec) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
       return undefined;
     }
-    // by 常驻: the first row shown (a to-do outside every section is not on the list), else the first completed one
-    if (grouping === "direction") return directionSections[0]?.todos[0] ?? filteredCompleted[0];
+    // by 常驻: the first row shown (a direction's, else an unfolded status section's below them), else the first completed one
+    if (grouping === "direction") return directionSections[0]?.todos[0] ?? directionRest.find((s) => !FOLDED_SECTIONS.has(s.sec))?.groups[0].lead ?? filteredCompleted[0];
     return filteredUncompleted[0] ?? filteredCompleted[0];
-  }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, triaged, grouping, directionSections]);
+  }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, triaged, grouping, directionSections, directionRest]);
 
   // The to-do open beside the calendar: the address's, while it is there.
   const selectedTodo = calendarOn && selectedId ? todos.find((td) => td.id === selectedId) : undefined;
@@ -456,18 +483,25 @@ export function TodosView({
   // On a phone's width a to-do opened from the list takes the focus to the detail's Back, as a page pushed on iOS
   // does; back on the list (Back, Esc, the browser's Back), the list is scrolled where it was and the focus is on that
   // to-do's row again. Side by side, the focus stays on the row and nothing moves.
+  // A to-do shown over the hidden list, a deep link's too: back on the list, the focus goes to its row, not the page.
+  const shownOverList = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     const list = listColumn.current;
+    if (!list) return;
     const from = fromList.current;
-    if (!list || !from) return;
-    if (detailOnNarrow && selectedId === from.id) {
-      if (list.getClientRects().length) fromList.current = undefined;
+    if (detailOnNarrow) {
+      const hidden = !list.getClientRects().length;
+      shownOverList.current = hidden ? selectedId : undefined;
+      if (!from || selectedId !== from.id) return;
+      if (!hidden) fromList.current = undefined;
       else detailColumn.current?.querySelector<HTMLElement>("[data-testid=todos-back] button")?.focus();
-    } else if (!detailOnNarrow) {
-      fromList.current = undefined;
-      if (listBox.current) listBox.current.scrollTop = from.top;
-      list.querySelector<HTMLElement>(`[data-todo="${CSS.escape(from.id)}"]`)?.focus();
+      return;
     }
+    const id = from?.id ?? shownOverList.current;
+    fromList.current = undefined;
+    shownOverList.current = undefined;
+    if (from && listBox.current) listBox.current.scrollTop = from.top;
+    if (id) [...list.querySelectorAll<HTMLElement>("[data-todo]")].find((el) => el.dataset.todo === id)?.focus();
   }, [detailOnNarrow, selectedId]);
   // Esc on a phone's width goes back to the list, as Back does; a dialog or a menu over the page and a field being
   // edited keep it.
@@ -592,8 +626,9 @@ export function TodosView({
             {(todosLoaded || todos.length > 0) && !(todos.length === 0 && todosError) && (
               // a phone's header has the List | Calendar switch to fit (#2029): the counts stay on wider screens
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden" data-testid="todos-summary">
-                {/* one count in every grouping (audit item 12): open as the sidebar's badge counts it, done as the Done section */}
-                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.todoCounts.done })}
+                {/* one count in every grouping (audit item 12): open as the sidebar's badge counts it, the rest as the
+                    sections' titles do (a merged row's members under its section) */}
+                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done") })}
               </span>
             )}
           </div>
@@ -727,7 +762,7 @@ export function TodosView({
               >
                 {todosError}
               </Empty>
-            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0 && directionUnlisted === 0)) && filteredCompleted.length === 0 ? (
+            ) : filteredUncompleted.length === 0 && filteredCompleted.length === 0 ? (
               offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : search.trim() ? (
@@ -775,7 +810,7 @@ export function TodosView({
                       // unfinished to-dos start open, above Just finished; Shelved and Done start folded (#5707)
                       folded={FOLDED_SECTIONS.has(sec)}
                       groups={sortTriageGroups(triaged.sections[sec], listSort)}
-                      count={triaged.sections[sec].reduce((n, g) => n + g.members.length, 0)}
+                      count={sectionSize(triaged, sec)}
                       views={views}
                       selectedId={activeTodo?.id}
                       onSelect={openFromList}
@@ -809,6 +844,22 @@ export function TodosView({
                         {t("todos.direction_unlisted", { count: directionUnlisted })}
                       </p>
                     )}
+                    {directionRest.map(({ sec, groups }) => (
+                      <TodoTriageSection
+                        key={sec}
+                        section={sec}
+                        folded={FOLDED_SECTIONS.has(sec)}
+                        groups={groups}
+                        count={groups.reduce((n, g) => n + g.members.length, 0)}
+                        views={views}
+                        selectedId={activeTodo?.id}
+                        onSelect={openFromList}
+                        onToggleDone={toggleDone}
+                        onRestore={onRestore}
+                        onSeen={seenOn ? onSeen : undefined}
+                        onMenu={openRowMenu}
+                      />
+                    ))}
                   </>
                 ) : projectGroups.map((g) => (
                   <TodoProjectSection
@@ -818,6 +869,7 @@ export function TodosView({
                     selectedId={activeTodo?.id}
                     onSelect={openFromList}
                     onToggleDone={toggleDone}
+                    onSeen={seenOn ? onSeen : undefined}
                     onMenu={openRowMenu}
                   />
                 ))}
@@ -957,6 +1009,11 @@ export function TodosView({
   );
 }
 
+/** The to-dos a status section's rows list, a merged row's related ones too: the number its title shows (#3712). */
+function sectionSize(r: TriageResult, sec: TriageSection): number {
+  return r.sections[sec].reduce((n, g) => n + g.members.length, 0);
+}
+
 /** The list's scroller: where it was scrolled comes back on a return to the page (Back from another page, audit item
  *  88), as on Overview (lib/scroll-memory.ts). */
 function TodoListScroller({ box, children }: { box: RefObject<HTMLDivElement | null>; children: ReactNode }) {
@@ -1037,6 +1094,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
   selectedId,
   onSelect,
   onToggleDone,
+  onSeen,
   onMenu,
 }: {
   group: TodoProjectGroup;
@@ -1045,6 +1103,8 @@ const TodoProjectSection = memo(function TodoProjectSection({
   selectedId: string | undefined;
   onSelect: (id: string) => void;
   onToggleDone: (todo: Todo, open?: boolean) => void;
+  /** Got it on a row in Just finished (one closed in the last day stays in its folder until it is seen). */
+  onSeen?: (id: string) => void;
   onMenu: TodoRowMenuOpener;
 }) {
   const holds = group.todos.some((td) => td.id === selectedId);
@@ -1070,6 +1130,7 @@ const TodoProjectSection = memo(function TodoProjectSection({
               selected={selectedId === todo.id}
               onSelect={onSelect}
               onToggleDone={onToggleDone}
+              onSeen={onSeen}
               onMenu={onMenu}
             />
           ))}
@@ -1434,7 +1495,7 @@ const TodoListItem = memo(function TodoListItem({
   /** Its status section (#3156): a PR to merge shows its link, a shelved one its Restore, a Just finished one Got it. */
   section?: TriageSection;
   onRestore?: (id: string) => void;
-  /** Got it (#5707). */
+  /** Got it (#5707), on a row in Just finished (`section`, else the view's). */
   onSeen?: (id: string) => void;
   onMenu?: TodoRowMenuOpener;
 }) {
@@ -1527,7 +1588,7 @@ const TodoListItem = memo(function TodoListItem({
           {!todo.done_at && activeCount === 0 && (
             <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
           )}
-          {section === "just_done" && onSeen ? (
+          {(section ?? view.section) === "just_done" && onSeen ? (
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
               {!todo.done_at && <ReviewBadge todo={todo} />}
               <SeenButton onClick={() => onSeen(todo.id)} />
@@ -1640,12 +1701,20 @@ function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (va
   const [draft, setDraft] = useState<string>();
   // the change comes from the keyboard: it waits to be committed
   const typed = useRef(false);
+  // the value on its way to the hub: Enter, then the field left before the save is through, sends it once
+  const saving = useRef<string | undefined>(undefined);
   // a part left half-typed (badInput: the browser says "" for it) goes back to what is saved, it does not clear it
   const commit = async (el: HTMLInputElement, next = draft) => {
     typed.current = false;
+    if (next !== undefined && next === saving.current) return;
     if (next === undefined || next === value || el.validity.badInput) return setDraft(undefined);
     setDraft(next);
-    await onCommit(next);
+    saving.current = next;
+    try {
+      await onCommit(next);
+    } finally {
+      if (saving.current === next) saving.current = undefined;
+    }
     setDraft((d) => (d === next ? undefined : d));
   };
   return (
@@ -1991,19 +2060,10 @@ function TodoDetail({
   // did not start; Retry when the hub can start it again from its plan (POST …/retry), else Hand to agent.
   const failedStart = open && Boolean(todo.start_error);
   const canRetry = failedStart && Boolean(todo.plan_id && todo.origin);
-  const [retrying, setRetrying] = useState(false);
-  // the hub reopens it at once and starts its agent in the background; the list says how the start goes
-  const retry = async () => {
-    setRetrying(true);
-    try {
-      await api(`/todos/${enc(todo.id)}/retry`, { method: "POST" });
-      await refreshTodos();
-    } catch (e) {
-      toast(t("todos.action_failed", { error: errorText(e) }), "error");
-    } finally {
-      setRetrying(false);
-    }
-  };
+  // the main chat's task card's Retry (lib/feed retryTask): one on its way at a time from either, and the to-do the hub
+  // reopens shows at once; its agent starts in the background and the list says how the start goes
+  const retrying = useFeed((s) => Boolean(s.busy[retryKey(todo.id)]));
+  const retry = () => retryTask(todo).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
   const toneClass = {

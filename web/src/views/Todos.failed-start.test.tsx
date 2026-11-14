@@ -3,7 +3,8 @@
 // row reads open, not done, and says why in red; ticking it closes it for good (`done: true`, the hub clears the start
 // error). One whose work finished in a related to-do (the same plan) is history: Just finished, ticked, nothing asked.
 // Its page agrees with its row (audit item 13): why it did not start, Retry (from its plan) or Hand to agent, which
-// reopens it only once handed over, and Complete closes it for good as the checkbox does; not Reopen.
+// reopens it only once handed over, and Complete closes it for good as the checkbox does; not Reopen. Its Retry is the
+// main chat's task card's (lib/feed retryTask): one on its way at a time from either, the reopened to-do shown at once.
 // The hub is faked; the data made up.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -129,6 +130,32 @@ describe("the page of a to-do whose agent never started (audit item 13)", () => 
     await flush();
     expect(api.mock.calls.some(([p, init]) => p === "/todos/again/retry" && (init as { method?: string })?.method === "POST")).toBe(true);
     expect(calls("PATCH", "/todos/again")).toEqual([]);
+  });
+
+  it("shares Retry with the main chat's task card: one on its way at a time, and the to-do the hub reopens shows at once", async () => {
+    const reopened = { ...failed("again", "Renew the certificate", "p2"), done_at: null, start_error: null } as unknown as Todo;
+    const waiting: (() => void)[] = [];
+    const answer = () => waiting.splice(0).forEach((r) => r());
+    api.mockImplementation(async (path, init) => {
+      if (path === "/todos/again/retry") {
+        await new Promise<void>((r) => waiting.push(r));
+        return { todo: reopened };
+      }
+      // the list's read stays out, so only the retry's answer can show the to-do reopened
+      if (path === "/todos" && !(init as { method?: string })?.method) return new Promise(() => {});
+      return {};
+    });
+    await show("again");
+    await act(async () => button(t("todos.retry"))!.click());
+    // the chat's card asks too while the page's is on its way: nothing more is sent
+    const { retryTask } = await import("../lib/feed");
+    await act(async () => void retryTask(getState().todos.find((x) => x.id === "again")!));
+    expect(api.mock.calls.filter(([p]) => p === "/todos/again/retry")).toHaveLength(1);
+    await act(async () => answer());
+    await flush();
+    expect(getState().todos.find((x) => x.id === "again")?.done_at).toBeFalsy();
+    expect(host.querySelector("[data-testid=todo-detail-start-failed]")).toBeNull();
+    expect(button(t("todos.retry"))).toBeUndefined();
   });
 
   it("reopens it when it is handed to an agent, not when the dialog only opens", async () => {

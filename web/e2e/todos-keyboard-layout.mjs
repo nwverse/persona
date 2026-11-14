@@ -2,10 +2,11 @@
 // fake hub's to-dos:
 //
 //   - item 2: typing a due date or a reminder segment by segment keeps the focus in the field and saves nothing until
-//     the field is left (Tab) or Enter is pressed, then saves what was typed, once;
+//     the field is left (Tab) or Enter is pressed, then saves what was typed, once, also when the field is left right
+//     after Enter;
 //   - item 74: at a phone's width, Enter on a row opens the to-do with the focus on its Back; Esc, Back and the
 //     browser's Back return to the list with the focus on that row and the list scrolled where it was; Esc in the
-//     title field stays in the field;
+//     title field stays in the field; Esc on a to-do opened by a link puts the focus on its row;
 //   - item 75: at 1920 wide the detail keeps a page's reading width (760 px), centered in its column;
 //   - item 88: back on the page from another one (the browser's Back), the list is scrolled where it was and the open
 //     to-do's row is in view.
@@ -137,10 +138,13 @@ try {
       await page.waitForTimeout(500);
       check((await focus(page)) === "todo-plan-remind" && patches.length === 0, `${theme}: after the hour's first digit the reminder keeps the focus and nothing is saved (${await focus(page)}, ${JSON.stringify(patches)})`);
       await page.keyboard.type("1");
+      // Enter, then the field left at once, before that save is through: one save
       await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
       await page.waitForTimeout(800);
       const want = await page.evaluate(() => new Date("2026-12-05T21:30").toISOString());
-      check(JSON.stringify(patches) === JSON.stringify([{ remind_at: want }]), `${theme}: Enter saves the typed reminder once (${JSON.stringify(patches)})`);
+      check(JSON.stringify(patches) === JSON.stringify([{ remind_at: want }]), `${theme}: Enter saves the typed reminder once, the field left right after too (${JSON.stringify(patches)})`);
       await ctx.close();
     });
 
@@ -181,6 +185,13 @@ try {
       await page.goBack();
       await page.waitForTimeout(600);
       check(Math.abs((await listTop(page)) - before) <= 2 && (await focus(page)) === `row:${NAS}`, `${theme}: the browser's Back does the same (${await listTop(page)}, ${await focus(page)})`);
+      await ctx.close();
+    });
+    await step(`${theme}: a phone's width, opened by a link`, async () => {
+      const { ctx, page } = await open(browser, theme, { width: 390, height: 844 }, "/todos?id=todo_nas");
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(500);
+      check(!page.url().includes("id=") && (await focus(page)) === `row:${NAS}`, `${theme}: Esc on a to-do opened by a link goes to the list with the focus on its row (${page.url().replace(base, "")}, ${await focus(page)})`);
       await ctx.close();
     });
 

@@ -3,7 +3,8 @@
 // typed segment by segment is a valid date after its first digit; saving it then stored a day the user was still typing
 // ("1" of "15" saved the 1st) and disabled the field while it saved, which took the focus away before the "5". Typed
 // changes wait for Enter or for the field to be left; a pick from the browser's picker (a change with no key before it)
-// still saves at once. The hub is faked; the data made up.
+// still saves at once. Leaving the field while that save is on its way sends it no second time. The hub is faked; the
+// data made up.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,6 +97,25 @@ describe("the to-do page's date fields", () => {
     await flush();
     expect(patches()).toEqual([{ remind_at: new Date("2026-12-05T21:30").toISOString() }]);
     expect(remind.disabled).toBe(false);
+  });
+
+  it("save once when the field is left before the save from Enter is through", async () => {
+    // the hub answers the PATCH only when the test says so
+    let answer = () => {};
+    api.mockImplementation(async (path, init) => {
+      if ((init as { method?: string })?.method === "PATCH") await new Promise<void>((r) => (answer = r));
+      return path === "/todos" ? { todos: [todo] } : { todo };
+    });
+    const due = field("todo-plan-due");
+    await type(due, "2", "2026-12-12");
+    await act(async () => due.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await act(async () => due.blur());
+    await act(async () => due.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(patches()).toEqual([{ due_date: "2026-12-12" }]);
+    expect(due.value).toBe("2026-12-12");
+    await act(async () => answer());
+    await flush();
+    expect(patches()).toEqual([{ due_date: "2026-12-12" }]);
   });
 
   it("save a day picked without typing at once", async () => {
