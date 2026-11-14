@@ -3016,6 +3016,168 @@
         "rule": "pr_open"
       },
       "from_test": "web/src/lib/todo-triage.test.ts > a finished turn seen since it last moved is Done, unless its PR is open"
+    },
+    {
+      "name": "finished_unseen_pr_open",
+      "description": "Agent 开了 PR、结束一轮还没人看：仍是「刚完成」，不进「待合并」。",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Seen\"",
+        "web/src/lib/todo-triage.ts triage"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "ask",
+            "state": "needs_you",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "run",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "idle",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T10:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-06T08:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "t",
+          "title": "t",
+          "created_at": "2026-10-29T00:00:00.000Z",
+          "updated_at": "2026-11-10T11:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "unseen",
+              "linked_at": "2026-11-02T04:00:00.000Z"
+            }
+          ],
+          "origin": "conv",
+          "pr_url": "https://github.com/example/app/pull/7",
+          "stage": "review",
+          "pr_status": {
+            "url": "https://github.com/example/app/pull/7",
+            "state": "open",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          }
+        }
+      },
+      "expected": {
+        "section": "just_done",
+        "rule": "finished_unseen"
+      },
+      "from_test": "spec fixture (PR #7614 review): rule 8 before rule 9"
+    },
+    {
+      "name": "pending_review_unseen_pr_open",
+      "description": "待验收、还没人看，PR 开着：仍是「刚完成」。",
+      "source": [
+        "docs/assistant/todo-status-sop.md \"Seen\"",
+        "web/src/lib/todo-triage.ts triage"
+      ],
+      "input": {
+        "now": "2026-11-10T12:00:00Z",
+        "sessions": [
+          {
+            "machine_id": "m",
+            "session_id": "ask",
+            "state": "needs_you",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "run",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "unseen",
+            "state": "unread",
+            "status": "idle",
+            "updated_at": "2026-11-10T11:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "idle",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T10:00:00.000Z"
+          },
+          {
+            "machine_id": "m",
+            "session_id": "old",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-06T08:00:00.000Z"
+          }
+        ],
+        "todo": {
+          "id": "t",
+          "title": "t",
+          "created_at": "2026-10-29T00:00:00.000Z",
+          "updated_at": "2026-11-10T11:00:00.000Z",
+          "done_at": null,
+          "agents": [
+            {
+              "machine_id": "m",
+              "session_id": "idle",
+              "linked_at": "2026-11-02T04:00:00.000Z"
+            }
+          ],
+          "origin": "conv",
+          "pr_url": "https://github.com/example/app/pull/7",
+          "stage": "review",
+          "pr_status": {
+            "url": "https://github.com/example/app/pull/7",
+            "state": "open",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          },
+          "supervision": {
+            "supervisor": "c",
+            "state": "pending_review"
+          }
+        }
+      },
+      "expected": {
+        "section": "just_done",
+        "rule": "finished_unseen"
+      },
+      "from_test": "spec fixture (PR #7614 review): rule 8 before rule 9"
     }
   ]
 }

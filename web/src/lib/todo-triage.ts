@@ -149,7 +149,9 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
   if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
-  if (waitingForMerge(todo, lookup, now)) return at("pr", "pr_open");
+  // rule 8's signals, read here so rule 9 yields to them: a turn or review nobody has looked at stays Just finished
+  const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
+  if (!(finished && !seen(last)) && waitingForMerge(todo, lookup, now)) return at("pr", "pr_open");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
   // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
@@ -159,7 +161,6 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   }
   if (acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
   if (todo.delivery?.state === "live") return at(fresh(ms(todo.delivery.at) || last) ? "just_done" : "done", "deployed");
-  const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   if (finished && !seen(last)) return at("just_done", "finished_unseen");
   // seen since it last moved, and no PR waits on the owner
   if (finished) return at("done", "seen");
