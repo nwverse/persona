@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -97,6 +98,25 @@ func TestUpdateWouldCutIncludesHostVisibleStarts(t *testing.T) {
 	}
 	if updateWouldCut(false, visible, []proto.Session{{SessionID: "new"}}) {
 		t.Fatal("a finished start held the update back")
+	}
+}
+
+// A host-visible unfinished start must report the same busy state commit refuses (#7377).
+func TestSessionsListReportsHostVisibleStartBusy(t *testing.T) {
+	n := assistantNode(t)
+	const id = "new"
+	n.agents[id] = host.Agent{Agent: "claude", AgentStatus: proto.StatusWorking}
+	if err := n.starts.add(id, &startRec{done: make(chan struct{}), session: proto.Session{SessionID: id, Starting: true}}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := request(t, n, "sessions.list", map[string]any{})
+	if err != nil || out["update_busy"] != true {
+		t.Fatalf("a host-visible unfinished start reported update_busy %v, want true (sessions %v, err %v)", out["update_busy"], out, err)
+	}
+	n.starts.finish(id, nil)
+	out, _ = request(t, n, "sessions.list", map[string]any{})
+	if out["update_busy"] != false {
+		t.Fatalf("a finished start still reports update_busy: %v", out["update_busy"])
 	}
 }
 
