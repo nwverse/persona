@@ -113,6 +113,13 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     return data
 
 
+class VerificationError(WatchError):
+    """A completed failed check with enough information for a base comparison."""
+    def __init__(self, message, command=None):
+        super().__init__(message)
+        self.command = command
+
+
 def test_or_fix(pr, names):
     """Maintainer policy: test/fix titles and test-only changes need no screenshots."""
     if re.match(r"^(?:test|fix)(?:\([^)]*\))?:\s+", pr.get("title", ""), re.I):

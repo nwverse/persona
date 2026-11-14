@@ -324,7 +324,8 @@ class Watcher:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            outcome="repair_exhausted", failure=str(error))
             return False
-        comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), str(error), git_root=config["checkout"])
+        comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), str(error),
+                                                             git_root=config["checkout"], command=getattr(error, "command", None))
         if comparison.get("reproduced"):
             self.log("%s#%s failure also reproduces on clean main; continue the remaining gates" % (repo, number))
             self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
@@ -332,7 +333,7 @@ class Watcher:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            base_failures=comparison, verification="base_failure", checks=old.get("checks", []),
                            outcome="passed_with_base_failures", failure=str(error))
-            return True
+            return "base_failure"
         if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
@@ -456,9 +457,18 @@ class Watcher:
             if current.get("verification") not in ("passed", "base_failure"):
                 self.phase(key, "repository verification")
                 phase = "verification"
-                results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
-                current = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                         verification="passed", checks=results)
+                try:
+                    results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
+                except WatchError as error:
+                    repaired = self.repair_verification(config, pr, worktree, error)
+                    if repaired != "base_failure":
+                        return
+                    current = self.state.get(repo, number)
+                else:
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             verification="passed", checks=results)
+            if current.get("verification") == "base_failure":
+                self.phase(key, "continuing after a clean-main failure")
             with self.merging(repo):
                 self.phase(key, "rechecking exact head")
                 current_pr = pr_snapshot(repo, number)
@@ -477,13 +487,10 @@ class Watcher:
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
             if phase == "verification":
-                try:
-                    self.repair_verification(config, pr, worktree, error)
-                except WatchError as repair_error:
-                    self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
-                                 bounded(str(repair_error), 12000))
-                    self.state.put(repo, number, head, evidence_key=evidence_key,
-                                   outcome="failed", failure=str(repair_error))
+                self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
+                             bounded(str(error), 12000))
+                self.state.put(repo, number, head, evidence_key=evidence_key,
+                               outcome="failed", failure=str(error))
                 return
             # A missing semantic answer never becomes approval. Verification
             # Infrastructure failures remain retryable with capped backoff;

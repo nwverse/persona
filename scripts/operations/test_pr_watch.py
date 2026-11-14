@@ -302,6 +302,37 @@ class WatcherTests(unittest.TestCase):
             result = self.watcher.repair_verification(self.config["repositories"][0], pr(), self.root, pr_watch_common.WatchError("--- FAIL: TestBase"))
         self.assertTrue(result)
         self.assertEqual(self.watcher.state.get("example/one", 7)["verification"], "base_failure")
+
+    def test_base_failure_continues_to_exact_head_merge(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.WatchError("--- FAIL: TestBase")), \
+                patch.object(self.watcher, "repair_verification", return_value="base_failure"), \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        merge.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
+
+    def test_repair_commit_is_verified_at_new_head_before_push(self):
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+            def fake_checked(argv, **kwargs):
+                calls.append(argv)
+                if argv[:2] == ["git", "rev-parse"]:
+                    return SHA_B + "\n"
+                return ""
+            def fake_verify(repo, repaired_pr, *args):
+                calls.append(repaired_pr["headRefOid"])
+                return []
+            with patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
+                    patch.object(pr_watch_repair, "verify", side_effect=fake_verify), \
+                    patch.object(pr_watch_repair, "checked", side_effect=fake_checked):
+                pr_watch_repair.commit_and_push_repair("example/one", pr(), directory, SHA_BASE, "failure")
+        self.assertIn(SHA_B, calls)
+        commit_index = next(index for index, argv in enumerate(calls) if isinstance(argv, list) and "commit" in argv)
+        push_index = next(index for index, argv in enumerate(calls) if isinstance(argv, list) and "push" in argv)
+        self.assertLess(commit_index, calls.index(SHA_B))
+        self.assertLess(calls.index(SHA_B), push_index)
     def test_main_comparison_requires_named_tests_and_packages(self):
         comparison = pr_watch_repair.main_failure_comparison("example/one", pr(), ".", "CI server failed")
         self.assertFalse(comparison["reproduced"])

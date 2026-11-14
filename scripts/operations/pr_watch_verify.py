@@ -5,7 +5,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from pr_watch_common import WatchError, bounded, checked, run, test_or_fix, verification_env
+from pr_watch_common import VerificationError, WatchError, bounded, checked, run, test_or_fix, verification_env
 
 
 def command_with_prefix(command, arguments):
@@ -264,5 +264,5 @@ def verify(repo, pr, worktree, config, environ=None):
         result = run_check(name, argv, worktree, timeout, environ)
         results.append(result)
         if not result["ok"]:
-            raise WatchError("%s failed:\n%s" % (name, result["summary"]))
+            raise VerificationError("%s failed:\n%s" % (name, result["summary"]), command=argv)
     return results
