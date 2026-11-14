@@ -84,6 +84,7 @@ try {
       await page.screenshot({ path: join(output, `standing-authorizations-${suffix}.png`) });
       await group.getByRole("button", { name: s.revoke, exact: true }).first().click();
       const dialog = page.getByRole("dialog"); await dialog.waitFor();
+      await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished)));
       assert.equal(writes.length, 0);
       assert((await dialog.textContent()).includes("/code/example"));
       assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), "Dialog has no horizontal overflow");
