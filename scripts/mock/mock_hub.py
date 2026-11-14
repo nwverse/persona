@@ -663,6 +663,7 @@ ASK1 = "b2e4d6f8-0000-4000-8000-000000000001"
 ASK2 = "b2e4d6f8-0000-4000-8000-000000000002"
 ASK3 = "b2e4d6f8-0000-4000-8000-000000000003"
 ASK4 = "b2e4d6f8-0000-4000-8000-000000000004"  # a long one (the top bar must not move as it scrolls)
+ASK5 = "b2e4d6f8-0000-4000-8000-000000000005"  # a completed turn with narration folded out of the newest page
 
 # MOCK_WORKFLOWS=1 (#2935, docs/protocol/protocol.md "workflows"): the widget agent's turn ended to wait for a workflow it runs in
 # the background (one earlier run was stopped). Each agent's transcript reads like a subagent's ("<session>@<agent>").
@@ -926,7 +927,7 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
                       workflows=_wf_runs)
 
 # MOCK_BG_WAITING=1 (#6045): two agents whose turns ended with background commands. One only waits (a loop on the PR's
-# checks): Waiting in the background, apart from Working. The other's background build works: Working, as before.
+# checks): Waiting in the background, apart from Working. The other's build gets the working background-task line (#7341).
 if os.environ.get("MOCK_BG_WAITING") == "1":
     for _s in SESSIONS:
         if _s["session_id"] == BLOG:
@@ -936,7 +937,7 @@ if os.environ.get("MOCK_BG_WAITING") == "1":
                                    "command": "until gh pr checks 7 --watch; do sleep 60; done", "started_at": ago(minutes=9)}])
         if _s["session_id"] == RELEASE:
             _s.update(status="done", state="working", state_since=ago(minutes=4), seen_at=None, background_working=True,
-                      last_text="在后台打包发布产物，完了我核对一下。",
+                      last_text="发布说明整理好了，后台打包结束后我再核对产物。",
                       background=[{"id": "bb1d5te2k", "kind": "shell", "description": "打包发布产物", "command": "make release",
                                    "started_at": ago(minutes=4)}])
 
@@ -7706,6 +7707,14 @@ ITEMS[BLOG] = (
     + tool("Bash", {"command": "npm run build", "description": "构建站点"}, "✓ 32 page(s) built in 4.81s", 15)
     + [it("assistant", "text", 12, text="迁移完成：\n\n- **32 篇文章**都能正常构建，代码高亮、脚注、图片说明都保留了\n- 旧的 `/2023/05/xxx.html` 链接全部加了 **301 跳转**\n- Lighthouse 性能分从 **71 提到 98**\n\n要我顺便把 RSS 也换成 Astro 的官方插件吗？")]
 )
+# A finished exchange proves that the working background command folds the old turn instead of removing it (#7341).
+if os.environ.get("MOCK_BG_WAITING") == "1":
+    ITEMS[RELEASE] = (
+        [it("user", "text", 8, text="整理发布说明，打包先在后台跑。")]
+        + tool("Bash", {"command": "make release", "description": "打包发布产物", "run_in_background": True},
+               "Command running in background with ID: bb1d5te2k.", 6)
+        + [it("assistant", "text", 4, text="发布说明整理好了，后台打包结束后我再核对产物。")]
+    )
 ITEMS[PHOTOS] = [it("user", "text", 10, text="照片同步脚本要支持 HEIC，导出的时候转成 JPEG")] + [it("assistant", "text", 6, text="计划写好了，等你批准后开始改。")]
 ITEMS[ORDERS] = (
     [it("user", "text", 20, text="/orders 接口最近 P95 到了 2 秒，查一下")]
@@ -17340,17 +17349,22 @@ def fold_work(items):
     # a subagent's call stays on the page: the chat draws it as a card that never folds (#5602)
     agents = {x.get("tool_use_id") for x in items if x["kind"] == "tool_use" and x.get("tool_name") in ("Task", "Agent")}
 
-    def inside(x):
+    latest_narration = next((i for i in range(len(items) - 1, -1, -1) if items[i]["role"] == "assistant" and items[i]["kind"] == "text"), -1)
+
+    def inside(i):
+        x = items[i]
         if x["kind"] == "thinking":
             return True
+        if x["kind"] == "text":
+            return bool(x.get("narration")) and i != latest_narration
         t = x.get("tool_use_id")
         return x["kind"] in ("tool_use", "tool_result", "image") and t and t in uses and t in results and t not in agents
     out, i = [], 0
     while i < len(items):
-        if not inside(items[i]):
+        if not inside(i):
             out.append(items[i]); i += 1; continue
         j = i
-        while j < len(items) and inside(items[j]):
+        while j < len(items) and inside(j):
             j += 1
         run = items[i:j]
         if len(run) < 3 and sum(len(x.get("text") or "") + len(json.dumps(x.get("tool_input") or "")) for x in run) < 4096:
@@ -17684,10 +17698,16 @@ def paged_sessions(query):
         return session_catalog(rows, revision, state_of), 200
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}, "todo": {}, "pane_source": {}}
+        if roots:
+            counts["active_agents_by_machine"] = {}
         waits = sum(1 for s in rows if s.get("background_waiting") and state_of(s) == "working")
         if waits:
             counts["background_waiting"] = waits
         for s in rows:
+            if roots and not s.get("assistant") and state_of(s) != "offline":
+                active = counts["active_agents_by_machine"]
+                mid = s["machine_id"]
+                active[mid] = active.get(mid, 0) + 1
             values = {"machine": s["machine_id"], "project": s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", ""),
                       "group": s.get("space_id") or s.get("workspace_id", ""), "state": state_of(s), "todo": (s.get("todo") or {}).get("id", ""),
                       "pane_source": pane_origin(s)}
@@ -19016,6 +19036,16 @@ def mock_chat_search():
     ITEMS[ASK4] = rows
     session = next(s for s in ASSISTANT if s["session_id"] == ASK4)
     session.update(title="琥珀灯塔 AmberTitle 周末出行", last_text=last, updated_at=ago(minutes=1), seen_at=ago(minutes=0), rev=3000, total_items=len(rows))
+    narration = it("assistant", "text", 0.8, text="FoldedNeedle 这段说明必须展开后才能看到。", narration=True)
+    narration["id"] = "narration-target"
+    folded = [it("user", "text", 1, text="把这段过程整理成最终回复"), narration]
+    folded += tool("Read", {"file_path": "/home/me/notes/folded.md"}, "步骤已完成。", 0.7)
+    folded += [it("assistant", "text", 0.2, text="FinalAnswer 最终回答。")]
+    for seq, row in enumerate(folded, 1):
+        row["seq"] = seq
+    ITEMS[ASK5] = folded
+    FULL[narration["id"]] = narration
+    ASSISTANT.append(assistant_sess(ASK5, "折叠回复示例", 1, "FinalAnswer 最终回答。"))
     PAGING["on"] = True
 
 
