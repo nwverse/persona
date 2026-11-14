@@ -24,6 +24,7 @@ READING_FILES = {
     "Views/Chat/FileViewer.swift": "a Markdown file's body",
     "Views/Chat/NotebookFileView.swift": "a notebook's Markdown cells",
     "Views/Inbox/ConnectorThread/GitHubThreadView.swift": "a thread comment's body",
+    "Views/Session/GitPRViews.swift": "a pull request review comment's body (#7014)",
     "Views/Inbox/Lark/LarkMessageContent.swift": "a Lark message's text",
     "Views/Interactions/InteractionViews.swift": "a plan awaiting approval",
     "Views/Interactions/CardFold.swift": "a plan's first lines in its approval card (CardPlan, #6605)",

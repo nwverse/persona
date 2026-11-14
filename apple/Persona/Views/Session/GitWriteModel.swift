@@ -72,6 +72,11 @@ nonisolated struct GitRefusal: Identifiable, Equatable, Sendable {
         case "git_stash_stale": String(localized: "The stash list changed. Refresh and select the stash again.")
         case "git_stash_unsupported": String(localized: "Safe stash removal is unavailable for this repository.")
         case "git_stash_conflicted": String(localized: "Applied with conflicts in these files: resolve them, then commit. The stash is kept.")
+        case "git_not_pushed": String(localized: "Push the branch first: a pull request needs every commit on GitHub")
+        case "git_no_pr": String(localized: "This branch has no pull request")
+        case "git_not_github": String(localized: "This repository has no GitHub remote")
+        case "no_gh": String(localized: "GitHub CLI (gh) is not installed on that computer")
+        case "not_signed_in": String(localized: "GitHub CLI (gh) is not signed in on that computer: run gh auth login there")
         default: nil
         }
     }
