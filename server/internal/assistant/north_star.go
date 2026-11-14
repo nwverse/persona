@@ -195,11 +195,7 @@ func (s *Service) appSendRefused(machine, session string, err error) {
 }
 
 func (s *Service) recordSendAsync(machine, session, op, origin string, main bool, outcome, code, msg string) {
-	s.work.eventWrites.Add(1) // the tests wait for it as for any work event
-	go func() {
-		defer s.work.eventWrites.Done()
-		s.recordSend(machine, session, op, origin, main, outcome, code, msg)
-	}()
+	s.startWorkEventWrite(func() { s.recordSend(machine, session, op, origin, main, outcome, code, msg) })
 }
 
 func errCode(err error) string {

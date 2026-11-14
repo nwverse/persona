@@ -260,9 +260,6 @@ func (s *Service) upgradeScreenCard(machine, session, id string, p *pending) {
 		ctx, cancel := context.WithTimeout(runCtx, 5*time.Second)
 		_, d, err := s.screenDialog(ctx, machine, session)
 		cancel()
-		if runCtx.Err() != nil {
-			return
-		}
 		if err == nil && d != nil {
 			s.fleet.mu.Lock()
 			same := s.fleet.interactions[id] == p
@@ -285,7 +282,7 @@ func (s *Service) upgradeScreenCard(machine, session, id string, p *pending) {
 			ring := s.fleet.interactions[id] == p && !p.announced
 			p.announced = true
 			s.fleet.mu.Unlock()
-			if ring && runCtx.Err() == nil {
+			if ring {
 				s.announce(p.ix)
 			}
 			return

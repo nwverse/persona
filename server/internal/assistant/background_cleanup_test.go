@@ -36,6 +36,9 @@ func drainFleetBackground(t *testing.T, s *Service, cancel context.CancelFunc) {
 	// A screen-upgrade start checks runCtx under fleet.mu; taking it here closes the Add/Wait teardown window.
 	s.fleet.mu.Lock()
 	s.fleet.mu.Unlock()
+	// workEvent and recordSendAsync use work.mu for the same runCtx + Add scheduling gate.
+	s.work.mu.Lock()
+	s.work.mu.Unlock()
 
 	waitFleetBackground(t, "agent naming", &names.runs)
 	waitFleetBackground(t, "direction tree", &tree.runs)
@@ -109,5 +112,10 @@ func TestFleetDatabaseFixtureDrainsBackgroundWork(t *testing.T) {
 	t.Run("work_events", func(t *testing.T) {
 		ft := newFleetTestOn(t, newDelayedBackgroundStore(t))
 		ft.s.workEvent("mac", "s1", "turn_finished", nil)
+	})
+
+	t.Run("work_events_after_stop", func(t *testing.T) {
+		ft := newFleetTestOn(t, newDelayedBackgroundStore(t))
+		time.AfterFunc(50*time.Millisecond, func() { ft.s.workEvent("mac", "s1", "turn_finished", nil) })
 	})
 }

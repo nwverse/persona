@@ -561,6 +561,22 @@ func (s *Service) saveWork(e db.SessionWork) {
 	}
 }
 
+// startWorkEventWrite serializes new event writes with fixture teardown. A stopped service starts no new write; every
+// write already counted finishes normally, including its original error logging.
+func (s *Service) startWorkEventWrite(write func()) {
+	s.work.mu.Lock()
+	if s.runCtx().Err() != nil {
+		s.work.mu.Unlock()
+		return
+	}
+	s.work.eventWrites.Add(1)
+	s.work.mu.Unlock()
+	go func() {
+		defer s.work.eventWrites.Done()
+		write()
+	}()
+}
+
 func (s *Service) workEvent(machine, session, kind string, detail map[string]any) {
 	e := db.WorkEvent{At: time.Now().UTC(), MachineID: machine, SessionID: session, Kind: kind, Detail: detail}
 	st := s.workDB()
@@ -570,15 +586,13 @@ func (s *Service) workEvent(machine, session, kind string, detail map[string]any
 		s.work.mu.Unlock()
 		return
 	}
-	s.work.eventWrites.Add(1)
-	go func() {
-		defer s.work.eventWrites.Done()
+	s.startWorkEventWrite(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := st.AddWorkEvent(ctx, e); err != nil {
 			s.logf("work: event: %v", err)
 		}
-	}()
+	})
 }
 
 // workEntry is a copy of a session's stored work state.
