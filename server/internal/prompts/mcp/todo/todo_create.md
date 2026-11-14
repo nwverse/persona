@@ -106,6 +106,10 @@ Add a to-do to the user's Persona to-dos, when the user asks you to note somethi
                     },
                     "number": {
                       "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "maxLength": 1024
                     }
                   },
                   "additionalProperties": false

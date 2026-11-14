@@ -160,6 +160,7 @@ func (d *DB) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, in r
 				if err != nil {
 					return err
 				}
+				repository.PreserveLinkTitles(row.Links, links)
 				cur.Repositories[index].Links = links
 				cur.Revision++
 				out = cur
@@ -193,12 +194,21 @@ func rememberTodoRepositoryLinksTx(ctx context.Context, tx pgx.Tx, id string, ur
 // Historical imports run once; repeated reports cannot resurrect removed references.
 // An explicit agent/user request can deliberately add a previously removed reference.
 func (d *DB) ImportTodoRepositoryLinks(ctx context.Context, id string, urls []string, source string) (repository.TaskSet, bool, error) {
+	input := make([]repository.LinkInput, 0, len(urls))
+	for _, raw := range urls {
+		input = append(input, repository.LinkInput{URL: raw})
+	}
+	return d.ImportTodoRepositoryLinkDetails(ctx, id, input, source)
+}
+
+// ImportTodoRepositoryLinkDetails uses the same transaction for references and titles.
+func (d *DB) ImportTodoRepositoryLinkDetails(ctx context.Context, id string, input []repository.LinkInput, source string) (repository.TaskSet, bool, error) {
 	var out repository.TaskSet
 	var changed bool
 	if source != "legacy" && source != "report" && source != "explicit" {
 		return out, false, repository.Problem("invalid")
 	}
-	if len(urls) > repository.MaxTaskRepositories*repository.MaxRepositoryLinks {
+	if len(input) > repository.MaxTaskRepositories*repository.MaxRepositoryLinks {
 		return out, false, repository.Problem("limit")
 	}
 	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
@@ -216,16 +226,16 @@ func (d *DB) ImportTodoRepositoryLinks(ctx context.Context, id string, urls []st
 		if source == "legacy" && legacy {
 			return nil
 		}
-		pending := []string{}
+		pending := []repository.LinkInput{}
 		canonical := []string{}
-		for _, raw := range urls {
-			_, link, err := repository.ParseTaskLink(raw)
+		for _, in := range input {
+			_, link, err := repository.ParseTaskLinkInput(in)
 			if err != nil {
 				return err
 			}
 			canonical = append(canonical, link.CanonicalURL)
 			if source == "explicit" || !slices.Contains(seen, link.CanonicalURL) {
-				pending = append(pending, link.CanonicalURL)
+				pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title})
 			}
 		}
 		if len(pending) == 0 {
@@ -238,7 +248,7 @@ func (d *DB) ImportTodoRepositoryLinks(ctx context.Context, id string, urls []st
 		if err != nil {
 			return err
 		}
-		rows, err := repository.MergeTaskLinks(cur.Repositories, pending, catalog)
+		rows, err := repository.MergeTaskLinkDetails(cur.Repositories, pending, catalog)
 		if err != nil {
 			return err
 		}

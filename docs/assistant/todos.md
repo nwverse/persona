@@ -906,8 +906,16 @@ never masquerade as an empty set.
 
 `todo_repositories_get`, `todo_repositories_set`, `todo_repository_links_set` and
 `todo_repository_links_add` expose the same manager-owned store. `todo_get` includes
-its canonical associations. The additive tool accepts `{id, urls}` (one to 50 exact
-issue/PR URLs), infers repository groups offline and needs no preconfigured catalog.
+its canonical associations. The additive tool accepts `{id, links: [{url, title}]}`
+with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
+total), infers repository groups offline and needs no preconfigured catalog.
+Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
+characters are rejected. A nonempty title updates a retained link and increments
+the association revision. Omitted or empty titles in URL-only reports or older
+editors preserve known titles; removing a link removes its title. Agents obtain
+titles from the related work and maintain them through the same tool. The app
+shows a localized type and number until a title is available; it never guesses
+titles or performs a remote metadata request when opening a to-do.
 It preserves source snapshots, aliases and requested refs. Assistant conversations
 can manage their manager's to-dos; task Agents can read or edit only their actively
 linked open to-do, with its ID available through `todo_decisions`. Empty ordinary

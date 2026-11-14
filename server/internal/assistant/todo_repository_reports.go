@@ -15,6 +15,10 @@ type todoRepositoryImportStore interface {
 	ImportTodoRepositoryLinks(context.Context, string, []string, string) (repository.TaskSet, bool, error)
 }
 
+type todoRepositoryLinkDetailsStore interface {
+	ImportTodoRepositoryLinkDetails(context.Context, string, []repository.LinkInput, string) (repository.TaskSet, bool, error)
+}
+
 func knownTodoLinks(todo Todo) []string {
 	out := []string{}
 	for _, raw := range append(append([]string{}, todo.PRs...), todo.PRURL) {
@@ -53,13 +57,17 @@ func (s *Service) importLegacyTodoRepositoryLinks(ctx context.Context, id string
 
 func (s *Service) toolTodoRepositoryLinksAdd(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
 	var in struct {
-		ID   string   `json:"id"`
-		URLs []string `json:"urls"`
+		ID    string   `json:"id"`
+		URLs  []string `json:"urls"`
+		Links []struct {
+			URL   string `json:"url"`
+			Title string `json:"title,omitempty"`
+		} `json:"links"`
 	}
 	if err := decodeTaskRepositoryInput(args, &in); err != nil {
 		return "", err
 	}
-	if len(in.URLs) == 0 || len(in.URLs) > 50 {
+	if count := len(in.URLs) + len(in.Links); count == 0 || count > 50 {
 		return "", repository.Problem("invalid")
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
@@ -78,8 +86,29 @@ func (s *Service) toolTodoRepositoryLinksAdd(ctx context.Context, machine, self,
 	if err := s.importLegacyTodoRepositoryLinks(ctx, in.ID); err != nil {
 		return "", err
 	}
-	if err := s.importTodoRepositoryLinks(ctx, in.ID, in.URLs, "explicit"); err != nil {
-		return "", err
+	if len(in.Links) == 0 {
+		if err := s.importTodoRepositoryLinks(ctx, in.ID, in.URLs, "explicit"); err != nil {
+			return "", err
+		}
+	} else {
+		st, ok := s.store().(todoRepositoryLinkDetailsStore)
+		if !ok {
+			return "", repository.Problem("store_unavailable")
+		}
+		links := make([]repository.LinkInput, 0, len(in.URLs)+len(in.Links))
+		for _, raw := range in.URLs {
+			links = append(links, repository.LinkInput{URL: raw})
+		}
+		for _, link := range in.Links {
+			links = append(links, repository.LinkInput{URL: link.URL, Title: link.Title})
+		}
+		_, changed, err := st.ImportTodoRepositoryLinkDetails(ctx, in.ID, links, "explicit")
+		if err != nil {
+			return "", err
+		}
+		if changed {
+			s.todosChanged(ctx)
+		}
 	}
 	set, err := s.readTodoRepositories(ctx, in.ID)
 	if err != nil {
@@ -96,6 +125,9 @@ func formatTodoRepositoryContext(set repository.TaskSet) string {
 		text += fmt.Sprintf("- %s %s\n", row.RepoID, row.SourceSnapshot.Identity.CanonicalURL)
 		for _, link := range row.Links {
 			text += fmt.Sprintf("  %s %s\n", link.Kind, link.CanonicalURL)
+			if link.Title != "" {
+				text += fmt.Sprintf("    title: %s\n", link.Title)
+			}
 		}
 	}
 	return text

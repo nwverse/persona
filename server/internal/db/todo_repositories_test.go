@@ -185,6 +185,42 @@ func TestTodoRepositoryImportsAndRemovalStayUnified(t *testing.T) {
 	}
 }
 
+func TestTodoRepositoryTitleUpdatesAreAtomicAndRevisionChecked(t *testing.T) {
+	d := open(t)
+	ctx := t.Context()
+	row := TodoRow{ID: "titled", Title: "Work", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := d.CreateTodo(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	url := "https://gitlab.example.com/team/api/-/merge_requests/7"
+	set, changed, err := d.ImportTodoRepositoryLinkDetails(ctx, row.ID, []repository.LinkInput{{URL: url, Title: "Use a stable checkout path"}}, "explicit")
+	if err != nil || !changed || set.Repositories[0].Links[0].Title != "Use a stable checkout path" {
+		t.Fatal(set, changed, err)
+	}
+	oldRevision := set.Revision
+	updated, changed, err := d.ImportTodoRepositoryLinkDetails(ctx, row.ID, []repository.LinkInput{{URL: url, Title: "Keep checkout context across restarts"}}, "explicit")
+	if err != nil || !changed || updated.Revision != oldRevision+1 {
+		t.Fatal(updated, changed, err)
+	}
+	repoID := updated.Repositories[0].RepoID
+	_, err = d.SetTodoRepositoryLinks(ctx, row.ID, repoID, repository.LinksInput{ExpectedRevision: &oldRevision, Links: []repository.LinkInput{}})
+	if err != repository.Problem("revision_conflict") {
+		t.Fatal("stale editor overwrote title update", err)
+	}
+	kept, err := d.SetTodoRepositoryLinks(ctx, row.ID, repoID, repository.LinksInput{ExpectedRevision: &updated.Revision, Links: []repository.LinkInput{{URL: url}}})
+	if err != nil || kept.Repositories[0].Links[0].Title != "Keep checkout context across restarts" {
+		t.Fatal("older client erased title", kept, err)
+	}
+	_, _, err = d.ImportTodoRepositoryLinkDetails(ctx, row.ID, []repository.LinkInput{{URL: url, Title: "Do not partially save"}, {URL: url, Title: "bad\x00title"}}, "explicit")
+	if err == nil {
+		t.Fatal("accepted invalid title batch")
+	}
+	stored, err := d.TodoRepositories(ctx, row.ID)
+	if err != nil || !reflect.DeepEqual(stored, kept) {
+		t.Fatal("invalid batch partially saved", stored, err)
+	}
+}
+
 func TestTodoRepositoryImportCanonicalReceiptAfterRestart(t *testing.T) {
 	d := open(t)
 	ctx := t.Context()

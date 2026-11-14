@@ -163,3 +163,34 @@ func TestTaskLinkReportsPreserveSourcesAndNormalizeReferences(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskLinkTitlesSurviveOlderEditsAndURLReports(t *testing.T) {
+	identity, _ := Parse("https://github.com/example/web", "")
+	catalog := Catalog{Repositories: []CatalogEntry{{ID: "web", Identity: identity}}}
+	rows, err := Bind(nil, []TaskInput{{RepoID: "web", Links: []LinkInput{{Kind: "pull_request", Number: "7", Title: "  Keep the full review title  "}, {Kind: "issue", Number: "7", Title: "Fix sign in"}}}}, catalog)
+	if err != nil || rows[0].Links[0].Title != "Keep the full review title" {
+		t.Fatal(rows, err)
+	}
+	// An older editor knows only the link's identity. It must not erase newer metadata.
+	kept, err := Bind(rows, []TaskInput{{RepoID: "web", Links: []LinkInput{{Kind: "pull_request", Number: "7"}, {Kind: "issue", Number: "7"}}}}, catalog)
+	if err != nil || kept[0].Links[0].Title != rows[0].Links[0].Title || kept[0].Links[1].Title != "Fix sign in" {
+		t.Fatal(kept, err)
+	}
+	updated, err := MergeTaskLinkDetails(kept, []LinkInput{{URL: identity.CanonicalURL + "/pull/7", Title: "Updated review title"}}, catalog)
+	if err != nil || len(updated[0].Links) != 2 || updated[0].Links[0].Title != "Updated review title" || kept[0].Links[0].Title != rows[0].Links[0].Title {
+		t.Fatal(updated, kept, err)
+	}
+	reported, err := MergeTaskLinks(updated, []string{identity.CanonicalURL + "/pull/7"}, catalog)
+	if err != nil || reported[0].Links[0].Title != "Updated review title" {
+		t.Fatal(reported, err)
+	}
+	cleared, err := Bind(rows, []TaskInput{{RepoID: "web", Links: []LinkInput{}}}, catalog)
+	if err != nil || len(cleared[0].Links) != 0 {
+		t.Fatal(cleared, err)
+	}
+	for _, title := range []string{"bad\x00title", "bad\ntitle", strings.Repeat("a", 1025), string([]byte{0xff})} {
+		if _, err := NormalizeLink(identity, LinkInput{Kind: "issue", Number: "7", Title: title}); err == nil {
+			t.Fatal("accepted invalid title")
+		}
+	}
+}

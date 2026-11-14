@@ -171,13 +171,27 @@ func TestTodoRepositoryAgentReportsUseUnifiedStore(t *testing.T) {
 	if got := todoNow(s, todo.ID); got.Stage != "review" || got.DoneAt != nil {
 		t.Fatal("association changed task completion", got)
 	}
-	args, _ := json.Marshal(map[string]any{"id": todo.ID, "urls": []string{"https://github.com/example/web/issues/12"}})
+	args, _ := json.Marshal(map[string]any{"id": todo.ID, "urls": []string{"https://github.com/example/web/issues/12"}, "links": []repository.LinkInput{{URL: "https://github.com/example/web/pull/7", Title: "Keep task context during checkout"}, {URL: "https://github.com/example/web/issues/12", Title: "Retain the current workspace"}}})
 	if _, err = s.toolTodoRepositoryLinksAdd(t.Context(), "", "", "todo_repository_links_add", args); err != nil {
 		t.Fatal(err)
 	}
 	text, err = s.toolTodoGet(t.Context(), json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
-	if err != nil || !strings.Contains(text, "issues/12") || !strings.Contains(text, "pull/7") || !strings.Contains(text, "pull/8") {
+	if err != nil || !strings.Contains(text, "issues/12") || !strings.Contains(text, "pull/7") || !strings.Contains(text, "pull/8") || !strings.Contains(text, "Keep task context during checkout") || !strings.Contains(text, "Retain the current workspace") {
 		t.Fatal("agent context omitted associations", text, err)
+	}
+	set, err = s.readTodoRepositories(t.Context(), todo.ID)
+	if err != nil || len(set.Repositories[0].Links) != 3 || set.Repositories[0].Links[0].Title != "Keep task context during checkout" {
+		t.Fatal(set, err)
+	}
+	// A title refresh is a real metadata change and invalidates an older editor revision.
+	oldRevision := set.Revision
+	args, _ = json.Marshal(map[string]any{"id": todo.ID, "links": []repository.LinkInput{{URL: "https://github.com/example/web/pull/7", Title: "Updated checkout title"}}})
+	if _, err = s.toolTodoRepositoryLinksAdd(t.Context(), "", "", "todo_repository_links_add", args); err != nil {
+		t.Fatal(err)
+	}
+	set, err = s.readTodoRepositories(t.Context(), todo.ID)
+	if err != nil || set.Revision != oldRevision+1 || set.Repositories[0].Links[0].Title != "Updated checkout title" {
+		t.Fatal(set, err)
 	}
 }
 
