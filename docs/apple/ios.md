@@ -1771,6 +1771,44 @@ The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless c
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
 and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
 
+## Agent follow-up settings (#7005)
+
+The web's Settings › Assistant groups "Starting tasks" and "Agent follow-up" (`web/src/views/settings/AssistantSettings.tsx`,
+`AgentAutoNaming.tsx`) on iPhone and iPad, as one page one tap below the profile: **Assistant Profile › On Its Own ›
+Agent Follow-Up** (`AgentFollowUpView`, `AgentFollowUpModel`; Settings search finds it, `SettingsPage.agentFollowUp`). The
+profile shows the row only when the hub sends at least one of its fields, and the page shows each row only for a field the
+hub sends (`GET /api/v1/assistant`, the value in effect). Who it is for: people who hand work to Agents from Persona.
+
+| Section | Row | Field (default) | Control |
+| --- | --- | --- | --- |
+| Starting tasks | Start What I Ask Right Away | `start_requested_tasks` (on) | switch |
+| | New Tasks Prefer | `task_workspace_preference` (`prefer-existing`) | menu: Existing / New Workspaces |
+| Follow-up | Main Chat Supervises Its Own Tasks | `main_supervises_own_tasks` (off) | switch |
+| | Follow Up Every Agent Persona Starts | `agent_tasks` (off) | switch |
+| Tidying up | Stop Idle Agents After | `idle_close_hours` (12; 0 never; at most 8760) | menu: Never, 1, 2, 4, 8, 12, 24, 48 hours, 1 week, Custom… |
+| | Archive Closed Sessions After | `archive_closed_days` (3; 0 never; at most 3650) | menu: Never, 1, 3, 7, 14, 30, 90 days, Custom… |
+| Session names | Fix Unhelpful Session Names | `agent_auto_naming` (on) | switch |
+| | Name Changes per Session (while on) | `agent_auto_naming_max` (1; 1–1000) | menu: 1, 3, 5, 10, Unlimited (1000, the hub's most), Custom… |
+| | Update Names Regularly (while on) | `agent_auto_naming_interval_hours` ≠ 0 (off; on starts at 24) | switch |
+| | Update Every (while regular) | `agent_auto_naming_interval_hours` (1–8760) | menu: 6, 12, 24 hours, 2 days, 1 week, Custom… |
+
+- **Values**: a menu lists a value set elsewhere (the web, the assistant) among its presets, worded in the largest whole
+  unit (`AgentFollowUpText`). Custom… asks for a whole number in an alert, within the hub's bounds. Each footer says the
+  defaults in one sentence; with regular updates on and at most one name change the footer says to raise the limit, as
+  the web's note does.
+- **Writes**: a change shows at once and is one sparse `PUT /api/v1/assistant` with that field alone, naming the manager
+  that answered the read (`X-Persona-Manager`, the default's too: the hub takes the session-name settings only from a
+  request that names its manager, so those rows need `manager` in the read). The hub's answer is kept for that field
+  and handed to `AppModel.assistantConfig`; a refusal puts the page's value back with a toast. A control waits while its
+  own write is out.
+- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524), and
+  `default_permission_mode` has no page in the app yet.
+- **Mock hub**: the default mock sends every field with the hub's defaults and checks a `PUT` as the hub does;
+  `MOCK_LEGACY_HUB=1` has none of them. Debug launch: `-openAssistantPage agentFollowUp`.
+- **Tests**: `AgentFollowUpTests` (reads, each change's request and header, the hub's answer, rollback, the menus'
+  words) and `AgentFollowUpUITests` against the mock hub (light / dark shots with `TEST_RUNNER_PERSONA_SHOTS`);
+  `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` on this page.
+
 ## Background supervisor (#5083)
 
 The hub's built-in background supervisor (`docs/assistant/unified-entry.md`, "Background supervisor") on iPhone, iPad,
@@ -1785,10 +1823,11 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
   the app is open, and only the assistant settings say which one it is: a new assistant conversation with
   `origin: "task"` that the settings held do not list has them read again, once for a conversation
   (`AppModel.unreadTaskConversations`), so the row has the three actions no longer than that request takes.
-- **The switch**: Settings › Assistant › **Main Chat Supervises Its Own Tasks** is the hub's `main_supervises_own_tasks`
-  (`GET` / `PUT /api/v1/assistant`), off by default: while it is off the background supervisor follows up the tasks
-  Persona hands out. It is read and written through `AppModel.assistantConfig` (`setMainSupervisesOwnTasks`: shown at
-  once, put back when the hub refuses), as the two switches above it. A hub that omits the field has no switch.
+- **The switch**: Assistant Profile › Agent Follow-Up › **Main Chat Supervises Its Own Tasks** (on the profile itself
+  before #7005) is the hub's `main_supervises_own_tasks` (`GET` / `PUT /api/v1/assistant`), off by default: while it is
+  off the background supervisor follows up the tasks Persona hands out. The page writes it like its other rows
+  ("Agent follow-up settings" below) and hands the hub's answer to `AppModel.assistantConfig`. A hub that omits the
+  field has no switch.
 - **Its model**: Settings › Models lists the use `assistant.supervise` after the categories and the other uses set
   apart. A hub since #5806 lists it in its catalog: the list reads it there, where the catalog puts it, and sends no
   request by its id (`ModelConfigurationModel.asksApart`). A hub before #5806 leaves it out, so `load` asks for it by
@@ -1804,7 +1843,8 @@ Mac and Vision Pro. Nothing here shows on a hub from before it.
 Mock hub: `MOCK_BACKGROUND_SUPERVISOR=1` adds the conversation (with `MOCK_ORIGINS=1` for the other sources); the
 switch and the model use are there without it, and `MOCK_LEGACY_HUB=1` has none of the three.
 `MOCK_SUPERVISE_LISTED=1` is a hub since #5806: the catalog lists the use and every built-in use has a description.
-Tests: `BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub.
+Tests: `BackgroundSupervisorTests`, and `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` against the mock hub
+(on the Agent Follow-Up page).
 
 ## Standing authorizations (#7002)
 

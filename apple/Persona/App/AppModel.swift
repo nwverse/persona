@@ -1265,6 +1265,10 @@ final class AppModel {
         }
     }
 
+    /// Assistant Profile › Agent Follow-Up saved one of its settings (#7005): the hub's answer is the assistant's settings
+    /// from now on, so the rest of the app (the background supervisor's rows, the profile's rows) reads what was saved.
+    func assistantSettingsSaved(_ st: APIClient.AssistantState) { assistantConfig = st }
+
     /// Whether the main conversation folds its background rounds (docs/apple/ios.md "Background rounds"): on until the
     /// hub says off, an older hub and settings not read yet included.
     var mainBackgroundFolded: Bool { assistantConfig?.backgroundFolded ?? true }

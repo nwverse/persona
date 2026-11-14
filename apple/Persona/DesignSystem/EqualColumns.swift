@@ -36,8 +36,10 @@ struct EqualColumns: Layout {
         }
     }
 
+    /// Equal columns want every column as wide as the widest cell, which is what a `ViewThatFits` around this layout asks.
     private func idealWidth(_ subviews: Subviews) -> CGFloat {
-        subviews.map { $0.sizeThatFits(.unspecified).width }.reduce(0, +) + spacing * CGFloat(max(subviews.count - 1, 0))
+        let widest = subviews.map { $0.sizeThatFits(.unspecified).width * $0[EqualColumnShrink.self] }.max() ?? 0
+        return widest * CGFloat(subviews.count) + spacing * CGFloat(max(subviews.count - 1, 0))
     }
 
     private func columnWidth(_ width: CGFloat, _ count: Int) -> CGFloat {
