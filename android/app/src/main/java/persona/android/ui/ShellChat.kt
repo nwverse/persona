@@ -58,8 +58,9 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val home = rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
         (wiring?.connection ?: session.connection).lastHello?.features.orEmpty())
+    if (home.resolving) { androidx.compose.material3.CircularProgressIndicator(); return }
     val key = home.key
-    val metadata = sessions.firstOrNull { it.key == key }
+    val metadata = (sessions + home.rows).firstOrNull { it.key == key }
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val managerId = metadata?.manager ?: managerChoice.shown
     val assistantManagement = remember(wiring?.assistantManagement, managerId) {
@@ -110,6 +111,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     gitLabel = "Git${git?.files?.size?.takeIf { it > 0 }?.let { " · $it" }.orEmpty()}",
                     actions = actions, connection = wiring?.connection ?: session.connection, requestId = requestId, covered = pane != null || terminalOpen,
                     childSessionId = home.childSessionId,
+                    lookupRows = home.rows,
                     worktrees = wiring?.worktrees,
                     assistantManagement = assistantManagement,
                     leaderConversations = assistantSnapshot.leaders.toSet(),

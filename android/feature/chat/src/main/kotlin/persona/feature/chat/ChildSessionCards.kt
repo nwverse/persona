@@ -26,26 +26,43 @@ import java.time.Duration
 internal data class ChatChildren(val rows: Map<String, Session>, val repository: ChatRepository)
 internal val LocalChatChildren = staticCompositionLocalOf<ChatChildren?> { null }
 
-data class ChildSessionHome(val key: SessionKey, val childSessionId: String? = null)
+data class ChildSessionHome(val key: SessionKey, val childSessionId: String? = null,
+    val rows: List<Session> = emptyList(), val resolving: Boolean = false)
 
 internal fun childSessionHome(key: SessionKey, row: Session?): ChildSessionHome {
     val parent = row?.takeIf { it.key == key }?.foldedUnder?.takeIf { it.isNotBlank() && it != key.sessionId }
     return if (parent == null) ChildSessionHome(key) else ChildSessionHome(SessionKey(key.machineId, parent), key.sessionId)
 }
 
+/** Exact lookups are page metadata, never additions to the root list's membership. */
+internal suspend fun resolveChildSessionHome(key: SessionKey, rows: List<Session>,
+    lookup: suspend (SessionKey) -> Session?): ChildSessionHome {
+    suspend fun row(target: SessionKey): Session? = rows.firstOrNull { it.key == target } ?: try {
+        lookup(target)?.takeIf { it.key == target }
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { null }
+    val child = row(key)
+    val home = childSessionHome(key, child)
+    val parent = if (home.childSessionId == null) null else row(home.key)
+    return home.copy(rows = listOfNotNull(child, parent).filter { found -> rows.none { it.key == found.key } })
+}
+
 /** Resolve before creating the draft editor and file/terminal actions: all of the page belongs to the parent. */
 @Composable
 fun rememberChildSessionHome(key: SessionKey, rows: List<Session>, actions: ChatActions?, features: Collection<String>): ChildSessionHome {
     val listed = rows.firstOrNull { it.key == key }
-    var lookedUp by remember(key) { mutableStateOf<Session?>(null) }
-    LaunchedEffect(key, listed != null, actions, features) {
-        if (listed == null && "sessions_lookup" in features) {
-            try { lookedUp = actions?.completeRow(Session(key.machineId, key.sessionId)) }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { /* Keep the direct link until metadata is available. */ }
+    val local = childSessionHome(key, listed)
+    val missing = listed == null || local.childSessionId != null && rows.none { it.key == local.key }
+    val needsLookup = missing && actions != null && "sessions_lookup" in features
+    var lookedUp by remember(key, actions, listed?.foldedUnder) { mutableStateOf<ChildSessionHome?>(null) }
+    LaunchedEffect(key, listed?.foldedUnder, needsLookup, actions, features) {
+        if (needsLookup) {
+            lookedUp = resolveChildSessionHome(key, rows) { target ->
+                actions?.completeRow(Session(target.machineId, target.sessionId))
+            }
         }
     }
-    return childSessionHome(key, listed ?: lookedUp)
+    return if (needsLookup) lookedUp ?: local.copy(resolving = true) else local
 }
 
 /** Bounded hubs keep children outside the root window; a failed refresh keeps the last confirmed cards. */
@@ -69,7 +86,9 @@ internal fun rememberChatChildren(key: SessionKey, parent: Session?, rows: List<
             }
         }
     }
-    val children = remember(held, rows, key) { childSessions((rows + held).distinctBy { it.key }, key) }
+    val children = remember(held, rows, chrome.lookupRows, key) {
+        childSessions((rows + held + chrome.lookupRows).distinctBy { it.key }, key)
+    }
     return ChatChildren(children.associateBy { it.sessionId }, repository)
 }
 

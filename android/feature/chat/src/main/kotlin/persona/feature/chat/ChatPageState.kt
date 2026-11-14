@@ -67,6 +67,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -657,9 +658,19 @@ internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository
             EntryPointAccessors.fromApplication(application, ChatRenameServices::class.java).sessionRenamer()
         else null
     }
-    val sessionSource = remember(renamer, sessions) { renamer?.project(sessions.sessions) ?: sessions.sessions }
+    // Only the page's own row joins metadata. Looked-up children remain fallback cards, so bounded lists still refresh them.
+    val lookupRows = chrome.lookupRows.filter { it.key == key }
+    val sessionSource = remember(renamer, sessions, lookupRows) {
+        val source = renamer?.project(sessions.sessions) ?: sessions.sessions
+        if (lookupRows.isEmpty()) source else source.map { rows ->
+            val missing = lookupRows.filter { found -> rows.none { it.key == found.key } }
+            if (missing.isEmpty()) rows else rows + missing
+        }
+    }
     // Read once per source, not on every recomposition: only the first value seeds the collected state.
-    val initialSessions = remember(sessionSource) { sessions.sessions.value }
+    val initialSessions = remember(sessionSource) {
+        if (lookupRows.isEmpty()) sessions.sessions.value else (sessions.sessions.value + lookupRows).distinctBy { it.key }
+    }
     val sessionListState = sessionSource.collectAsStateWithLifecycle(initialSessions)
     val managerChoiceState = AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val machinesState = sessions.machines.collectAsStateWithLifecycle()
