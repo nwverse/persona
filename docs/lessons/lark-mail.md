@@ -56,6 +56,11 @@ When mainline hides the send button for an empty composer, attachment drafts sti
   Test ordinary cards, unrelated card mentions, other assignees, context-only assignments and chat mutes as negatives.
   Apply the same empty-label boundary to containers and sibling rows: a field already assigning somebody else
   must not lend its role to an unrelated nested mention.
+  An explicit `at` can still be an ordinary mention without an assignment; an unrelated `person` must not inherit
+  another person's completed role field. Test the emitted assignment flag, not just the actionable tier.
+- A selected historical recovery must finish and persist normal triage before bypassing the twin's age limit.
+  Run triage only for the selected rows, even when twins are disabled; queue afterwards only when the normal verdict,
+  policies and current twin configuration allow it. Do not force every recovered request into Needs You.
 
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 

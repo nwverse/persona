@@ -166,14 +166,30 @@ func (s *Service) handleRecoveredInbox(ctx context.Context, ids []string) {
 	if len(ids) == 0 {
 		return
 	}
-	cfg := s.inboxConfig(ctx).Agent
-	if !cfg.Enabled {
-		return
-	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inboxAgentStartWait)
-		defer cancel()
+		ctx := context.WithoutCancel(ctx)
 		b := &s.inbox
+		// Built-in recoveries are already admitted, but unruled messages still
+		// need normal triage before escalation. Do not run the global pass.
+		b.triaging.Lock()
+		for _, id := range ids {
+			b.mu.Lock()
+			it := b.items[id]
+			needsTriage := it != nil && it.open() && !it.handled() && it.TriagedAt != it.Last && it.Context != ""
+			b.mu.Unlock()
+			if needsTriage {
+				if w := s.triage(ctx, it); w != nil {
+					s.saveWrites(ctx, []*inboxWrite{w}, "its recovered triage")
+				}
+			}
+		}
+		b.triaging.Unlock()
+		cfg := s.inboxConfig(ctx).Agent
+		if !cfg.Enabled {
+			return
+		}
+		ctx, cancel := context.WithTimeout(ctx, inboxAgentStartWait)
+		defer cancel()
 		s.saveWrites(ctx, b.escalate(time.Time{}, time.Now(), ids...), "the recovered items' escalation")
 		if !b.handing.TryLock() {
 			return // an ordinary pass, or the next round, can start the selected queued work

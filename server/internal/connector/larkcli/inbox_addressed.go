@@ -72,9 +72,13 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 	addressed = func(value any, role bool) bool {
 		switch v := value.(type) {
 		case map[string]any:
-			role = role || cardRoleElement(v, requireRole)
 			tag, _ := v["tag"].(string)
-			if tag == "at" && (!requireRole || role) || tag == "person" && role {
+			if tag != "at" && tag != "person" {
+				role = role || cardRoleElement(v, true)
+			}
+			// A direct label belongs to this identity, not to unrelated descendants.
+			identityRole := role || cardRoleElement(v, requireRole)
+			if tag == "at" && (!requireRole || identityRole) || tag == "person" && identityRole {
 				for _, key := range []string{"user_id", "open_id", "id"} {
 					if v[key] == auth.OpenID {
 						return true
@@ -94,7 +98,7 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 				// A role label applies to the next value in this row, not to
 				// unrelated person elements elsewhere in the card.
 				if element, ok := child.(map[string]any); !ok || element["tag"] != "person" && element["tag"] != "at" {
-					role = cardRoleElement(child, requireRole)
+					role = cardRoleElement(child, true)
 				}
 			}
 		}

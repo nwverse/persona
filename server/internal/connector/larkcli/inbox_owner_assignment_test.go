@@ -1,6 +1,7 @@
 package larkcli
 
 import (
+	"context"
 	"testing"
 
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
@@ -26,6 +27,7 @@ func TestCardAssignsOwnerRequiresResponsibilityRole(t *testing.T) {
 		{"ordinary card person", `{"elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, false},
 		{"role does not leak past text", `{"elements":[{"tag":"plain_text","text":"Owner:"},{"tag":"plain_text","text":"Other Person"},{"tag":"at","user_id":"ou_example_owner"}]}`, false},
 		{"completed other field does not cover later mention", `{"elements":[{"tag":"plain_text","content":"Owner: Other Person"},{"tag":"at","user_id":"ou_example_owner"}]}`, false},
+		{"review fixture assigns a peer before mentioning owner", `{"elements":[{"tag":"plain_text","content":"On-call: Example Peer"},{"tag":"at","user_id":"ou_example_owner"}]}`, false},
 		{"completed container label does not cover unrelated mention", `{"tag":"div","text":{"tag":"plain_text","content":"Owner: Other Person"},"elements":[{"tag":"at","user_id":"ou_example_owner"}]}`, false},
 		{"empty container label covers its assigned person", `{"tag":"div","text":{"tag":"plain_text","content":"Owner:"},"elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, true},
 		{"mention all", `{"elements":[{"tag":"plain_text","text":"Owner:"},{"tag":"at","user_id":"all"}]}`, false},
@@ -43,6 +45,38 @@ func TestCardAssignsOwnerRequiresResponsibilityRole(t *testing.T) {
 			message.MsgType = "text"
 			if cardAssignsOwner(message, auth) {
 				t.Fatal("non-card text gained the sender-mute exception")
+			}
+		})
+	}
+}
+
+func TestCardPeerAssignmentAndOwnerMentionDoesNotGainMuteException(t *testing.T) {
+	auth := adapter.AuthStatus{OpenID: "ou_example_owner", AppID: "cli_example_bot", UserName: "Example Owner"}
+	for _, tc := range []struct {
+		name, content string
+		addressed     bool
+	}{
+		{"explicit at remains a mention", `{"elements":[{"tag":"plain_text","content":"On-call: Example Peer"},{"tag":"at","user_id":"ou_example_owner"}]}`, true},
+		{"unrelated person in row", `{"elements":[{"tag":"plain_text","content":"On-call: Example Peer"},{"tag":"person","user_id":"ou_example_owner"}]}`, false},
+		{"unrelated person in container", `{"tag":"div","text":{"tag":"plain_text","content":"On-call: Example Peer"},"elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := addressedMessage("om_example_card", "cli_example_monitor", "Example Monitor", tc.content, "", nil)
+			message.MsgType = "interactive"
+			c := addressedTestConnector(t, []adapter.Message{message}, []adapter.Message{message})
+			groups := c.groupMessages([]adapter.Message{message}, auth, nil)
+			if !tc.addressed {
+				if len(groups) != 0 {
+					t.Fatalf("another person's assignment addressed the owner: %+v", groups)
+				}
+				return
+			}
+			if len(groups) != 1 {
+				t.Fatalf("the explicit owner mention was lost: %+v", groups)
+			}
+			thing := c.thingForGroup(context.Background(), groups[0], auth)
+			if thing.Tier != "action" || thing.OwnerAssigned {
+				t.Fatalf("ordinary owner mention gained the responsibility mute exception: %+v", thing)
 			}
 		})
 	}
