@@ -27,7 +27,7 @@ func TestQuietCardPushHonoursTheManagersLevel(t *testing.T) {
 	if *attempts != 0 {
 		t.Fatalf("a P1 escalation alerted %d times", *attempts)
 	}
-	view := h.push.lnInterceptsView(0)
+	view := h.push.lnInterceptsView("", 0)
 	if len(view) != 1 || view[0].Reason != interceptReasonP1 || view[0].RelatedKey != "ix:ix_p1" {
 		t.Fatalf("intercepts %+v, want the held card", view)
 	}
@@ -48,7 +48,7 @@ func TestQuietOffCardPushIgnoresLevel(t *testing.T) {
 	if *attempts != 1 {
 		t.Fatalf("got %d alerts, want 1", *attempts)
 	}
-	if view := h.push.lnInterceptsView(0); len(view) != 0 {
+	if view := h.push.lnInterceptsView("", 0); len(view) != 0 {
 		t.Fatalf("held with the switch off: %+v", view)
 	}
 }
