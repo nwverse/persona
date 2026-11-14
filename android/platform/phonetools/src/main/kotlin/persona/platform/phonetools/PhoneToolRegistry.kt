@@ -2,10 +2,16 @@ package persona.platform.phonetools
 
 import persona.core.contracts.api.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableJob
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * All execution paths, including stale model calls, pass through this gate.
@@ -26,6 +32,40 @@ class PhonePreparedConfirmation(
     val execute: suspend () -> PhoneToolResult,
 )
 
+/**
+ * Arrival tickets for confirmation cards. A call takes a ticket when it arrives (synchronously, before it first
+ * suspends) and may only queue its card in `PhoneConfirmations` once every earlier ticket has queued its own card or
+ * given up. Preparation can take different times, so without this a quick later call would show its card ahead of an
+ * earlier one that was still preparing; the card order then differs from the order the model made the calls.
+ */
+internal class ConfirmationArrivalOrder {
+    class Ticket internal constructor(private var previous: Job?, private val done: CompletableJob) {
+        private val released = AtomicBoolean(false)
+
+        /** Suspends until every earlier ticket has been released. */
+        suspend fun awaitTurn() { previous?.join() }
+
+        /**
+         * Settles this ticket: queued its card, failed, timed out or was cancelled. Idempotent. [done] completes only after
+         * every earlier ticket did, so a ticket that gives up early cannot let its successors pass a slower predecessor.
+         */
+        fun release() {
+            if (!released.compareAndSet(false, true)) return
+            val earlier = previous
+            previous = null
+            if (earlier == null) done.complete() else earlier.invokeOnCompletion { done.complete() }
+        }
+    }
+
+    private val lock = Any()
+    private var last: Job? = null
+
+    fun take(): Ticket = synchronized(lock) {
+        val done = Job()
+        Ticket(last, done).also { last = done }
+    }
+}
+
 /** A definite pre-write refusal, not an ambiguous provider outcome. */
 internal class PhoneToolWriteRefusal(message: String) : Exception(message)
 
@@ -39,6 +79,7 @@ class PhoneToolRegistry(
     private val prepareConfirmation: (suspend (String, JsonObject) -> PhonePreparedConfirmation)? = null,
 ) {
     private val gate = PhoneToolCallGate()
+    private val arrival = ConfirmationArrivalOrder()
 
     private val _writesInFlight = MutableStateFlow<Set<String>>(emptySet())
     /** call-ids whose confirmed write has entered its local `execute` and must not be killed by a transient
@@ -91,6 +132,8 @@ class PhoneToolRegistry(
 
         // Provider reads needed by a before → after card live in the suspend preparation path, never in the
         // synchronous resource formatter. The prepared value carries its own immutable snapshot into execute.
+        // The card still takes its place in the order the calls arrived, not the order preparation finished.
+        val ticket = arrival.take()
         var prepared: PhonePreparedConfirmation? = null
         val decision = try {
             val text = if (tool.confirmationNeedsPreparation) {
@@ -103,13 +146,20 @@ class PhoneToolRegistry(
             } else {
                 tool.confirmation!!.invoke(call.args)
             }
-            confirm(text)
+            ticket.awaitTurn()
+            coroutineScope {
+                // `confirm` queues its card before its first suspension, so the next ticket may go once it is running.
+                val answer = async(start = CoroutineStart.UNDISPATCHED) { confirm(text) }
+                ticket.release()
+                answer.await()
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: PhoneToolFailure) {
             return PhoneToolText.failure(failure, tool.source)
         }
         catch (invalid: IllegalArgumentException) { return PhoneToolText.invalid(invalid.message ?: "invalid arguments") }
         catch (_: SecurityException) { return PhoneToolText.denied(tool.source) }
+        finally { ticket.release() }
 
         return when (decision) {
             PhoneConfirmation.Allowed -> {

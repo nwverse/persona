@@ -11,6 +11,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -391,9 +392,11 @@ class PhoneToolRegistryTest {
         events: MutableList<String>,
         permitted: () -> Boolean = { true },
         decision: () -> PhoneConfirmation = { PhoneConfirmation.Allowed },
+        /** The text of every card in the order `confirm` received it, which is the order the cards queue on screen. */
+        cards: MutableList<String>? = null,
         prepare: suspend (String, JsonObject) -> PhonePreparedConfirmation,
     ) = PhoneToolRegistry({ PhoneSource.entries.toSet() }, { true }, { true }, { _, _ -> permitted() },
-        { events += "confirm"; decision() },
+        { render -> events += "confirm"; cards?.add(render(res)); decision() },
         { name, _ -> events += "plain:$name"; PhoneToolResult.text("plain") }, prepare)
 
     private fun prepared(events: MutableList<String>, result: suspend () -> PhoneToolResult = { PhoneToolResult.text("done") }) =
@@ -408,22 +411,96 @@ class PhoneToolRegistryTest {
         assertEquals(listOf("prepare", "confirm", "execute"), events)
     }
 
-    @Test fun whilePreparationSuspendsReadsAndAnotherWriteStillComplete() = runTest {
+    private val deleteArgs = buildJsonObject { put("id", "1") }
+    private val createArgs = buildJsonObject {
+        put("title", "x"); put("start", "2026-11-01T10:00:00+08:00"); put("end", "2026-11-01T11:00:00+08:00")
+    }
+
+    /** A slow contact update and a fast event delete: each prepares to a card named after the call. */
+    private fun slowAndFast(events: MutableList<String>, cards: MutableList<String>, slow: suspend () -> Unit) =
+        preparedRegistry(events, cards = cards) { name, _ ->
+            val label = if (name == "phone_contacts_update") "slow" else "fast"
+            if (label == "slow") slow()
+            PhonePreparedConfirmation({ "card:$label" }) { events += "execute:$label"; PhoneToolResult.text(label) }
+        }
+
+    @Test fun whilePreparationSuspendsReadsStillCompleteButLaterCardsWaitForTheirTurn() = runTest {
         val events = mutableListOf<String>()
+        val cards = mutableListOf<String>()
         val release = CompletableDeferred<Unit>()
-        val registry = preparedRegistry(events) { _, _ -> release.await(); prepared(events) }
-        val update = async { registry.call(PhoneToolCall("slow", "phone_contacts_update", updateArgs)) }
+        val registry = slowAndFast(events, cards) { release.await() }
+        val slow = async { registry.call(PhoneToolCall("slow", "phone_contacts_update", updateArgs)) }
         runCurrent()
-        assertFalse(update.isCompleted)
+        // The earlier call is still preparing. A later one that prepares at once (a prepared delete, a plain create)
+        // is ready first but must not queue its card ahead of it.
+        val fast = async { registry.call(PhoneToolCall("fast", "phone_calendar_delete_event", deleteArgs)) }
+        runCurrent()
+        val create = async { registry.call(PhoneToolCall("create", "phone_calendar_create_event", createArgs)) }
+        runCurrent()
+        // Reads are not part of the card order and are never held up.
         assertFalse(registry.call(PhoneToolCall("read", "phone_device_info", buildJsonObject {})).isError)
-        val create = registry.call(PhoneToolCall("other", "phone_calendar_create_event", buildJsonObject {
-            put("title", "x"); put("start", "2026-11-01T10:00:00+08:00"); put("end", "2026-11-01T11:00:00+08:00")
-        }))
-        assertFalse(create.isError)
-        assertFalse(update.isCompleted)
+        assertTrue(cards.toString(), cards.isEmpty())
+        assertFalse(fast.isCompleted)
+        assertFalse(create.isCompleted)
+
         release.complete(Unit)
-        assertFalse(update.await().isError)
-        assertEquals(listOf("plain:phone_device_info", "confirm", "plain:phone_calendar_create_event", "confirm", "execute"), events)
+        assertFalse(slow.await().isError)
+        assertFalse(fast.await().isError)
+        assertFalse(create.await().isError)
+        // Arrival order, not the order preparation finished.
+        assertEquals(3, cards.size)
+        assertEquals(listOf("card:slow", "card:fast"), cards.take(2))
+        assertEquals(listOf("execute:slow", "execute:fast"), events.filter { it.startsWith("execute") })
+    }
+
+    @Test fun aFastCallThatArrivedFirstStillShowsItsCardFirst() = runTest {
+        val events = mutableListOf<String>()
+        val cards = mutableListOf<String>()
+        val release = CompletableDeferred<Unit>()
+        val registry = slowAndFast(events, cards) { release.await() }
+        val fast = async { registry.call(PhoneToolCall("fast", "phone_calendar_delete_event", deleteArgs)) }
+        runCurrent()
+        assertFalse(fast.await().isError)
+        val slow = async { registry.call(PhoneToolCall("slow", "phone_contacts_update", updateArgs)) }
+        runCurrent()
+        release.complete(Unit)
+        assertFalse(slow.await().isError)
+        assertEquals(listOf("card:fast", "card:slow"), cards)
+    }
+
+    @Test fun aPreparationThatTimesOutAnswersTimedOutAndFreesTheCallsBehindIt() = runTest {
+        val events = mutableListOf<String>()
+        val cards = mutableListOf<String>()
+        val registry = slowAndFast(events, cards) { kotlinx.coroutines.delay(600_000) }
+        val hung = async { registry.call(PhoneToolCall("hung", "phone_contacts_update", updateArgs)) }
+        runCurrent()
+        val fast = async { registry.call(PhoneToolCall("fast", "phone_calendar_delete_event", deleteArgs)) }
+        runCurrent()
+        assertTrue(cards.isEmpty())
+        advanceTimeBy(30_001)
+        runCurrent()
+        // Nothing was written yet, so this is an ordinary timeout and not the uncertain write answer.
+        val result = hung.await()
+        assertEquals(text(PhoneToolText.timedOut()), text(result))
+        assertNotEquals(text(PhoneToolText.uncertain()), text(result))
+        assertFalse(fast.await().isError)
+        assertEquals(listOf("card:fast"), cards)
+        assertEquals(listOf("execute:fast"), events.filter { it.startsWith("execute") })
+    }
+
+    @Test fun aCallCancelledWhilePreparingLetsTheNextCardThrough() = runTest {
+        val events = mutableListOf<String>()
+        val cards = mutableListOf<String>()
+        val registry = slowAndFast(events, cards) { kotlinx.coroutines.delay(600_000) }
+        val slow = async { registry.call(PhoneToolCall("slow", "phone_contacts_update", updateArgs)) }
+        runCurrent()
+        val fast = async { registry.call(PhoneToolCall("fast", "phone_calendar_delete_event", deleteArgs)) }
+        runCurrent()
+        assertTrue(cards.isEmpty())
+        slow.cancel()
+        runCurrent()
+        assertFalse(fast.await().isError)
+        assertEquals(listOf("card:fast"), cards)
     }
 
     @Test fun aRepeatedCallIdPreparesAndExecutesOnce() = runTest {
