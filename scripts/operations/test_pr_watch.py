@@ -476,15 +476,17 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(review.call_count, 2)
         self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
 
-    def test_verification_failure_is_not_an_infrastructure_retry(self):
+    def test_repair_infrastructure_failure_retries_without_consuming_round(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(title="feat: an example")), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
                 patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("real test failed")), \
-                patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("real test failed")):
+                patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("worker unavailable")):
             self.watcher.process("example/one", 7)
-        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "failed")
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["outcome"], "retry")
+        self.assertEqual(state.get("repair_rounds", 0), 0)
         self.assertEqual(len(self.comments), 1)
-        self.assertIn("real test failed", self.comments[0])
+        self.assertIn("worker unavailable", self.comments[0])
 
     def test_semantic_failure_retries_with_backoff_without_comment_spam(self):
         for attempt in range(3):

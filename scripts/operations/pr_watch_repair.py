@@ -158,8 +158,11 @@ def update_branch_with_main(repo, pr, worktree, base):
     checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
         raise WatchError("main moved while preparing the repair")
-    if not merge_base_in_isolation(pr, worktree, base):
-        return False
+    if not pr.get("isCrossRepository"):
+        if run(["git", "merge-base", "--is-ancestor", base, pr["headRefOid"]], cwd=worktree).returncode == 0:
+            return None
+        if not merge_base_in_isolation(pr, worktree, base):
+            return None
     checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
         raise WatchError("PR head moved before merging main; nothing was pushed")
@@ -199,7 +202,7 @@ def repair_repository_copy(worktree):
     checked(["git", "clone", "--quiet", "--no-hardlinks", str(source), str(copy)], cwd=parent, timeout=180)
     head = checked(["git", "rev-parse", "HEAD"], cwd=source).strip()
     checked(["git", "checkout", "--quiet", "--detach", head], cwd=copy, timeout=90)
-    checked(["git", "remote", "set-url", "origin", checked(["git", "remote", "get-url", "origin"], cwd=source).strip()], cwd=copy)
+    checked(["git", "remote", "remove", "origin"], cwd=copy)
     return copy
 
 
