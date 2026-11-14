@@ -337,6 +337,10 @@
       "sf": "books.vertical",
       "phosphor": "book-open"
     },
+    "knowledgeMap": {
+      "sf": "map",
+      "phosphor": "tree-structure"
+    },
     "laptop": {
       "sf": "laptopcomputer",
       "phosphor": "laptop"
@@ -644,6 +648,10 @@
     "time": {
       "sf": "clock",
       "phosphor": "clock"
+    },
+    "topic": {
+      "sf": "lightbulb.2",
+      "phosphor": "lightbulb"
     },
     "today": {
       "sf": "sun.max.fill",

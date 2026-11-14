@@ -2608,6 +2608,8 @@ subtopic closed, more than three loose points beside subtopics under one closed 
 a topic or a project its page. From `Theme.Size.knowledgeMapTwoColumns` of width (any iPad in landscape, a 13-inch one upright beside its
 sidebar) the outline sits beside a detail column for the selected node, the web map's side panel.
 Text follows Dynamic Type (the rows are reading content) and every row reads as one VoiceOver element.
+Android (#7678) draws the same outline with the same rules (`KnowledgeMapScreen`): rows of the design system's tokens, a dot and rails
+in the branch's tone, a 48 dp fold target with Expanded / Collapsed read out, in all three styles, with no detail column.
 
 ## Repository link preview
 
