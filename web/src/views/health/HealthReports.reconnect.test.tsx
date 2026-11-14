@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The health page's reports card (docs/assistant/health.md "Health reports") after the hub comes back: a list that could
+// The health page's reports card (docs/assistant/health.md "Checkup reports") after the hub comes back: a list that could
 // not be read while it was away is read again on the next hello, as the page's conversations are, and its error goes.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
