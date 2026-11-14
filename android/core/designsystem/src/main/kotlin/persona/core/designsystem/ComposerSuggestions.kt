@@ -46,9 +46,9 @@ data class ComposerSuggestion(
 /**
  * Suggestions for the word being typed (the "/" quick messages), above the field inside the composer's accessory: the
  * word in bold, what it does beside it when both fit at their measured widths, otherwise below it with no line limit;
- * picking one calls [onPick]. Glass is a soft well inside the
- * floating composer, brief a paper list under hairlines, the board a bordered list. All six quick messages fit;
- * a longer list scrolls. Items in sections have each section's title above its first row, a quiet heading.
+ * picking one calls [onPick]. Glass is a soft well inside the floating composer, brief a paper list under hairlines, the
+ * board a bordered list. Rows grow when their details move below their words, and the list scrolls when they exceed its height.
+ * Items in sections have each section's title above its first row, a quiet heading.
  */
 @Composable
 fun ComposerSuggestions(items: List<ComposerSuggestion>, onPick: (ComposerSuggestion) -> Unit, modifier: Modifier = Modifier) {
