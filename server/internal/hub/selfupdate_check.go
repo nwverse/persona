@@ -17,9 +17,6 @@ import (
 // on and the release is newer and not a build that went back. Each check first brings the Android app the phones
 // update from to the release's (syncAndroid): before, so an install's restart does not cut its download short.
 func (u *updater) loop(ctx context.Context) {
-	if !u.h.selfUpdates() && u.h.build.Channel != update.Docker {
-		return
-	}
 	wait := updateFirstCheck
 	for {
 		select {
@@ -28,7 +25,14 @@ func (u *updater) loop(ctx context.Context) {
 		case <-time.After(wait):
 		}
 		wait = updateCheckEvery
-		u.syncAndroid(ctx)
+		// One scheduler serves both channels. A channel selected after startup is
+		// picked up here too; development updates never fetch mobile artifacts.
+		if !u.selectedDevelopment() {
+			if !u.h.selfUpdates() && u.h.build.Channel != update.Docker {
+				continue
+			}
+			u.syncAndroid(ctx)
+		}
 		if _, err := u.check(ctx); err != nil {
 			continue
 		}
@@ -46,8 +50,15 @@ func (u *updater) wantsAuto() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	r := u.release
-	return (u.loaded || u.h.store == nil) && u.settings.auto() && !u.updateActiveLocked() && r != nil && u.h.build.Newer(r.Manifest.Build) &&
-		!slices.Contains(u.settings.Bad, r.Manifest.Build) && u.h.build.Hold(r.Manifest) == "" && u.blocked == nil
+	if r != nil && r.Development != nil && r.Development.BackupID != "" {
+		return false // Applying a backup is always an explicit manual operation.
+	}
+	hold := ""
+	if r != nil && (r.Development == nil || r.Manifest.Ancestors != "") {
+		hold = u.h.build.Hold(r.Manifest)
+	}
+	return (u.loaded || u.h.store == nil) && u.autoLocked() && !u.updateActiveLocked() && !u.adoptionUnresolved() && u.candidateNewer(r) &&
+		!slices.Contains(u.settings.Bad, r.Manifest.Build) && (r.Development == nil || !slices.Contains(u.settings.DevelopmentBad, r.Development.Commit)) && hold == "" && u.blocked == nil
 }
 
 // noteHeld writes into the history, once per release, that a newer release was not installed by itself because its
@@ -60,7 +71,8 @@ func (u *updater) noteHeld(ctx context.Context) {
 	}
 	u.mu.Lock()
 	r := u.release
-	if !u.settings.auto() || u.updateActiveLocked() || r == nil || !u.h.build.Newer(r.Manifest.Build) || slices.Contains(u.settings.Bad, r.Manifest.Build) {
+	if !u.autoLocked() || u.updateActiveLocked() || u.adoptionUnresolved() || !u.candidateNewer(r) || slices.Contains(u.settings.Bad, r.Manifest.Build) ||
+		(r.Development != nil && (r.Manifest.Ancestors == "" || slices.Contains(u.settings.DevelopmentBad, r.Development.Commit))) {
 		u.mu.Unlock()
 		return
 	}
@@ -79,8 +91,12 @@ func (u *updater) noteHeld(ctx context.Context) {
 	}
 	u.h.logf("update: %s is newer but not installed by itself: %s", r.Manifest.Version, why)
 	now := time.Now()
-	u.record(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
-		Started: now, Ended: now, Result: "held", Reason: why, Auto: true})
+	record := updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
+		Started: now, Ended: now, Result: "held", Reason: why, Auto: true}
+	if r.Development != nil {
+		record.Source, record.Commit = "web-dev", r.Development.Commit
+	}
+	u.record(ctx, record)
 }
 
 // check reads the release now (a Docker hub: its image's tags).
@@ -89,6 +105,30 @@ func (u *updater) check(ctx context.Context) (*update.Published, error) {
 		return nil, err
 	}
 	u.recordRolledBack(ctx)
+	u.mu.Lock()
+	if u.checking || (u.developmentLocked() && u.updateActiveLocked()) {
+		r := u.release
+		u.mu.Unlock()
+		return r, nil
+	}
+	u.checking = true
+	dev := u.developmentLocked()
+	u.mu.Unlock()
+	defer func() { u.mu.Lock(); u.checking = false; u.mu.Unlock() }()
+	if dev {
+		u.setCheckState("checking", "")
+		r, err := u.checkDevelopment(ctx)
+		if err != nil {
+			u.setCheckState("failed", i18n.Localize(err, u.h.userLang()))
+			return nil, err
+		}
+		if u.candidateNewer(r) {
+			u.setCheckState("available", "")
+		} else {
+			u.setCheckState("idle", "")
+		}
+		return r, nil
+	}
 	if u.h.build.Channel == update.Docker {
 		return nil, u.checkImage(ctx)
 	}
@@ -174,7 +214,7 @@ func (u *updater) setCheckState(state, errText string) {
 // most once every releaseRefreshEvery across requests; when it fails the release the hub had stays. Nothing for a
 // Docker hub or a build with nowhere to look.
 func (u *updater) freshRelease(ctx context.Context) {
-	if u == nil || u.h.build.Channel == update.Docker {
+	if u == nil || u.h.build.Channel == update.Docker || u.selectedDevelopment() {
 		return
 	}
 	source := u.h.updateURL()

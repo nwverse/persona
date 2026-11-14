@@ -5,11 +5,35 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 func (u *updater) routes(api *http.ServeMux) {
+	api.HandleFunc("GET /api/v1/hub/update/backups", func(w http.ResponseWriter, r *http.Request) {
+		if err := u.load(r.Context()); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
+			return
+		}
+		backups, err := u.developmentBackups(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		writeJSON(w, map[string]any{"backups": backups})
+	})
+	api.HandleFunc("POST /api/v1/hub/update/backups/{id}/apply", func(w http.ResponseWriter, r *http.Request) {
+		if err := u.load(r.Context()); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
+			return
+		}
+		if err := u.beginDevelopmentRestore(context.WithoutCancel(r.Context()), r.PathValue("id")); err != nil {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		writeJSON(w, u.viewIn(u.h.requestLang(r)))
+	})
 	api.HandleFunc("GET /api/v1/hub/update", func(w http.ResponseWriter, r *http.Request) {
 		if err := u.load(r.Context()); err != nil {
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
@@ -59,9 +83,10 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		var body struct {
-			Auto            *bool `json:"auto"`
-			AutoNoticeSeen  *bool `json:"auto_notice_seen"`
-			AutoUpdateNodes *bool `json:"auto_update_nodes"`
+			Source          *string `json:"source"`
+			Auto            *bool   `json:"auto"`
+			AutoNoticeSeen  *bool   `json:"auto_notice_seen"`
+			AutoUpdateNodes *bool   `json:"auto_update_nodes"`
 		}
 		if err := decodeJSONBody(w, r, &body, 4<<10); err != nil {
 			writeBodyErr(w, err, err)
@@ -74,13 +99,42 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		prev := u.settings
+		if body.Source != nil && u.adoptionUnresolved() {
+			u.mu.Unlock()
+			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_recovery"))
+			return
+		}
+		if body.Auto != nil && *body.Auto && (u.developmentLocked() || (body.Source != nil && *body.Source == "web-dev")) && !u.developmentAvailable() {
+			u.mu.Unlock()
+			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_config"))
+			return
+		}
+		if body.Source != nil && *body.Source != u.settings.Source {
+			if (*body.Source != "release" && *body.Source != "web-dev") || u.updateActiveLocked() || u.checking {
+				u.mu.Unlock()
+				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+				return
+			}
+			if *body.Source == "web-dev" && u.developmentConfig() == nil {
+				u.mu.Unlock()
+				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_config"))
+				return
+			}
+			u.settings.Source = *body.Source
+			u.settings.DevelopmentAuto = false // entering a channel never opts into automatic adoption
+			u.settings.DevelopmentBackup = nil
+		}
 		if body.AutoUpdateNodes != nil {
 			enabled := *body.AutoUpdateNodes
 			u.settings.AutoUpdateNodes = &enabled
 		}
 		if body.Auto != nil {
 			a := *body.Auto
-			u.settings.Auto = &a
+			if u.developmentLocked() {
+				u.settings.DevelopmentAuto = a
+			} else {
+				u.settings.Auto = &a
+			}
 			u.settings.AutoNoticeSeen = true // they chose: no need to tell them again
 		}
 		if body.AutoNoticeSeen != nil {
@@ -90,6 +144,9 @@ func (u *updater) routes(api *http.ServeMux) {
 		if err != nil {
 			// Not saved: an update waiting for idle and the view sent to the apps keep acting on the stored choice.
 			u.settings = prev
+		} else if u.settings.Source != prev.Source {
+			u.release, u.blocked, u.lastCheck = nil, nil, time.Time{}
+			u.state, u.progress, u.errText = "idle", "", ""
 		}
 		u.mu.Unlock()
 		if err != nil {

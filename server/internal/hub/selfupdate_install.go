@@ -21,57 +21,130 @@ import (
 
 // begin starts an update the user asked for; now skips waiting for idle ("Update now" in the second confirmation).
 func (u *updater) begin(ctx context.Context, now bool) error {
-	if !u.h.selfUpdates() {
+	if !u.h.selfUpdates() && !(u.selectedDevelopment() && u.developmentAvailable()) {
 		return u.whyNot()
 	}
 	u.mu.Lock()
-	if u.running {
+	if u.checking {
+		u.mu.Unlock()
+		return errUpdateBusy
+	}
+	if u.updateActiveLocked() {
 		if now {
 			u.now = true
 		}
 		u.mu.Unlock()
 		return nil
 	}
+	if u.adoptionUnresolved() {
+		u.mu.Unlock()
+		return i18n.Err("hub-selfupdate.err_development_recovery")
+	}
 	r := u.release
-	u.mu.Unlock()
-	if r == nil || !u.h.build.Newer(r.Manifest.Build) {
+	if !u.candidateNewer(r) {
+		u.mu.Unlock()
 		return errNoUpdate
 	}
-	if err := u.unreplaced(r.Manifest); err != nil {
-		return err
+	if r.Development == nil {
+		// Service discovery can wait for systemctl/plutil. Keep status/settings
+		// responsive, then verify the selection before reserving this object.
+		u.mu.Unlock()
+		err := u.unreplaced(r.Manifest)
+		u.mu.Lock()
+		if u.checking || u.release != r || u.adoptionUnresolved() {
+			u.mu.Unlock()
+			return errUpdateBusy
+		}
+		if u.updateActiveLocked() {
+			if now {
+				u.now = true
+			}
+			u.mu.Unlock()
+			return nil
+		}
+		if err != nil {
+			u.mu.Unlock()
+			return err
+		}
 	}
-	u.mu.Lock()
+	// Reserve the selected object before returning, so a settings write or second
+	// trigger cannot change the candidate between acceptance and goroutine start.
+	u.running = true
+	if r.Development != nil {
+		u.state = "building"
+	} else {
+		u.state = "downloading"
+	}
+	u.progress, u.errText = "", ""
 	u.now = now
 	u.mu.Unlock()
-	go u.install(ctx, false)
+	go u.installCandidate(ctx, false, r)
 	return nil
 }
 
 // install is one update: download, verify, wait for idle, swap, restart. It returns only when it did not restart.
 func (u *updater) install(ctx context.Context, auto bool) {
 	u.mu.Lock()
-	if u.running {
+	if u.updateActiveLocked() || u.adoptionUnresolved() || u.checking || u.release == nil {
 		u.mu.Unlock()
 		return
 	}
 	u.running = true
 	r := u.release
 	u.mu.Unlock()
+	u.installCandidate(ctx, auto, r)
+}
+
+func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *update.Published) {
+	copy := *candidate
+	manifest := *candidate.Manifest
+	copy.Manifest = &manifest
+	r := &copy // checks and views can retain the original immutable candidate
 	started := time.Now()
 	// What this update downloads goes under staged. Once it fails nothing reads that again (another try downloads
 	// afresh), so it goes before another install can start.
 	staged := u.stagedDir(r.Manifest.Build)
+	var backup *update.DevelopmentBackup
+	var adoption update.Pending
+	swapped := false
+	defer u.removeDevelopmentBuild(r)
 	fail := func(err error) {
-		u.removeDownloads(staged)
+		if !swapped {
+			update.ClearDevelopmentAdoption(u.dir, adoption)
+			u.removeDownloads(staged)
+		}
 		u.mu.Lock()
 		u.running, u.now = false, false
 		u.busy = nil
+		if r.Development != nil && r.Development.BackupID != "" {
+			u.release = nil // A failed restore is not the latest main candidate.
+		}
 		u.mu.Unlock()
 		why := i18n.Localize(err, u.h.userLang())
+		if swapped {
+			why += "; " + su(u.h.userLang(), "err_development_recovery")
+		}
 		u.set("failed", "", why)
 		u.record(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
-			Started: started, Ended: time.Now(), Result: "failed", Reason: why, Auto: auto})
+			Started: started, Ended: time.Now(), Result: "failed", Reason: why, Auto: auto, Source: pendingSource(update.Pending{Development: r.Development}), Commit: r.Manifest.Commit, Backup: backup})
 		u.h.logf("update to %s: %v", r.Manifest.Version, err)
+	}
+	if r.Development != nil {
+		if _, err := os.Lstat(update.DevelopmentAdoptionPath(u.dir)); !errors.Is(err, os.ErrNotExist) {
+			fail(i18n.Err("hub-selfupdate.err_development_recovery"))
+			return
+		}
+		if err := u.buildDevelopment(ctx, r); err != nil {
+			fail(err)
+			return
+		}
+		u.mu.Lock()
+		u.release = r
+		u.mu.Unlock()
+		if auto && u.developmentHold(r.Manifest) != "" {
+			fail(errors.New(u.developmentHold(r.Manifest)))
+			return
+		}
 	}
 	m := r.Manifest
 	file, ok := m.Files[runtime.GOOS+"-"+runtime.GOARCH]
@@ -79,18 +152,21 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(i18n.Err("hub-selfupdate.err_no_binary", i18n.Args{"platform": runtime.GOOS + "/" + runtime.GOARCH}))
 		return
 	}
-	if err := u.unreplaced(m); err != nil {
+	if err := u.unreplacedCandidate(r); err != nil {
 		fail(err)
 		return
 	}
 	u.set("downloading", "hub", "")
 	source := u.h.updateURL()
+	if r.Source != "" {
+		source = r.Source
+	}
 	bin, err := update.Download(ctx, u.client, source, file, staged)
 	if err != nil {
 		fail(err)
 		return
 	}
-	nodes, err := u.stageNodes(ctx, m, staged, bin)
+	nodes, err := u.stageNodesFrom(ctx, m, staged, bin, source, r.Development != nil)
 	if err != nil {
 		fail(err)
 		return
@@ -120,13 +196,22 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		}
 		programs[name] = pb
 	}
+	if r.Development != nil {
+		// Every program and Node package has an independent verified copy in
+		// staged. Only the disposable checkout/build output is removed here;
+		// staged survives idle waiting and exec until confirmation/rollback.
+		u.removeDevelopmentBuild(r)
+		u.mu.Lock()
+		r.Source = ""
+		u.mu.Unlock() // downloads are private staged copies now, including across exec
+	}
 	// Wait until nothing the restart would interrupt is going on (or the user said "Update now").
 	waitStarted := time.Now()
 	for {
 		busy := u.h.updateBusy()
 		u.mu.Lock()
 		u.busy = busy
-		now, autoOn := u.now, u.settings.auto()
+		now, autoOn := u.now, u.autoLocked()
 		u.mu.Unlock()
 		if len(busy) == 0 || now {
 			break
@@ -142,6 +227,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		u.set("waiting_idle", "", "")
 		select {
 		case <-ctx.Done():
+			fail(ctx.Err())
 			return
 		case <-time.After(u.idleEvery):
 		}
@@ -151,33 +237,68 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(err)
 		return
 	}
-	if err := u.unreplaced(m); err != nil { // a service pointed at a program meanwhile
+	if err := u.unreplacedCandidate(r); err != nil { // a service pointed at a program meanwhile
 		fail(err)
 		return
 	}
+	if r.Development != nil {
+		u.mu.Lock()
+		enabled := u.autoLocked()
+		u.mu.Unlock()
+		if auto && !enabled {
+			fail(errUpdateAgain)
+			return
+		}
+		if backup, err = u.backupDevelopment(ctx, r, target); err != nil {
+			fail(err)
+			return
+		}
+	}
 	p := update.Pending{FromVersion: u.h.version, FromBuild: u.h.build.Number, ToVersion: m.Version, ToBuild: m.Build,
 		Target: target, Started: started, Online: u.onlineIDs(), Auto: auto, PID: os.Getpid(), Args: os.Args,
-		HealthURL: u.healthURL(), Nodes: nodes}
+		HealthURL: u.healthURL(), Nodes: nodes, Development: r.Development, Backup: backup}
+	if r.Development != nil {
+		if err := update.BeginDevelopmentAdoption(u.dir, p); err != nil {
+			fail(err)
+			return
+		}
+		adoption = p
+	}
+	restore := func() {
+		if err := update.RestoreAll(p); err == nil {
+			swapped = false
+		} else {
+			u.h.logf("update: restore failed, recovery retained: %v", err)
+		}
+	}
 	prev, err := update.Swap(target, bin)
 	if err != nil {
 		fail(err)
 		return
 	}
+	swapped = true
 	p.Prev = prev
 	for _, name := range update.ProgramNames {
 		if pb, ok := programs[name]; ok {
 			sw, err := update.SwapProgram(filepath.Join(filepath.Dir(target), name), pb)
 			p.Programs = append(p.Programs, sw)
 			if err != nil {
-				_ = update.RestoreAll(p)
+				restore()
 				fail(fmt.Errorf("%s: %w", name, err))
 				return
 			}
 		}
 	}
 	p.Run = runAs(u.self, p.Programs)
+	if r.Development != nil {
+		if err := u.detachDevelopmentWeb(&p); err != nil {
+			restore()
+			fail(err)
+			return
+		}
+	}
 	if err := update.Save(update.PendingPath(u.dir), p); err != nil {
-		_ = update.RestoreAll(p)
+		restore()
 		fail(err)
 		return
 	}
@@ -188,7 +309,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		u.set("restarting", "", "")
 		u.h.logf("update: handing over to %s", m.Version)
 		if err := u.handover(ctx, p.RunPath(), m.Build); err != nil {
-			_ = update.RestoreAll(p)
+			restore()
 			_ = os.Remove(update.PendingPath(u.dir))
 			fail(i18n.Err("hub-selfupdate.err_no_start", i18n.Args{"error": err.Error()}))
 		}
@@ -201,7 +322,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	u.h.logf("update: restarting into %s", m.Version)
 	time.Sleep(500 * time.Millisecond) // the apps get the restarting event before the socket goes
 	if err := u.exec(p.RunPath()); err != nil {
-		_ = update.RestoreAll(p)
+		restore()
 		_ = os.Remove(update.PendingPath(u.dir))
 		fail(err)
 	}

@@ -120,6 +120,8 @@ func restoreUpdateIn(dir string, build int64, cause error) (string, bool) {
 	}
 	if err := update.RestoreAll(p); err != nil {
 		log.Printf("hub edge: restore %s: %v", p.Prev, err)
+	} else {
+		update.ClearDevelopmentAdoption(dir, p)
 	}
 	l := i18n.Default
 	reason := i18n.T(l, "hub-selfupdate.reason_not_confirmed")
@@ -127,7 +129,7 @@ func restoreUpdateIn(dir string, build int64, cause error) (string, bool) {
 		reason = i18n.T(l, "hub-selfupdate.reason_no_takeover", i18n.Args{"error": cause.Error()})
 	}
 	if err := update.Save(update.RolledBackPath(dir), update.RolledBack{FromVersion: p.FromVersion, ToVersion: p.ToVersion,
-		ToBuild: p.ToBuild, Started: p.Started, At: time.Now(), Reason: reason, Auto: p.Auto}); err != nil {
+		ToBuild: p.ToBuild, Started: p.Started, At: time.Now(), Reason: reason, Auto: p.Auto, Development: p.Development, Backup: p.Backup}); err != nil {
 		log.Printf("hub edge: save rollback marker: %v", err)
 	}
 	_ = os.Remove(update.PendingPath(dir))

@@ -13,6 +13,9 @@ export interface BusyItem {
 }
 
 export interface HubUpdateStatus {
+  source?: "release" | "web-dev";
+  development?: { configured: boolean; branch: string; current_commit?: string; current_updated_at?: string };
+  backup?: { id: string; retained: number; pruned: string[] | null };
   version: string;
   build: number;
   channel: string; // release | docker | dev
@@ -28,12 +31,17 @@ export interface HubUpdateStatus {
     bad: boolean;
     /** Why auto-update does not install this newer one. */
     held?: string;
+    commit?: string;
+    updated_at?: string;
+    branch?: string;
+    backup_id?: string;
   };
   state: string;
   progress?: string;
   busy: BusyItem[];
   error?: string;
   auto: boolean;
+  auto_update_nodes?: boolean;
   auto_notice: boolean;
   last_check?: string;
   confirmed: boolean;
@@ -41,6 +49,9 @@ export interface HubUpdateStatus {
 }
 
 export interface HubUpdateRecord {
+  source?: string;
+  commit?: string;
+  backup?: HubUpdateStatus["backup"];
   from_version: string;
   to_version: string;
   to_build: number;
@@ -61,15 +72,25 @@ export const hubUpdate = () => api<HubUpdateStatus>("/hub/update");
 export const checkHubUpdate = () => api<HubUpdateStatus>("/hub/update/check", { method: "POST" });
 /** `now`: don't wait for the assistant and the agents to be idle. */
 export const startHubUpdate = (now: boolean) => api<HubUpdateStatus>("/hub/update", { method: "POST", json: now ? { now: true } : {} });
-export const setHubUpdateSettings = (s: { auto?: boolean; auto_notice_seen?: boolean }) => api<HubUpdateStatus>("/hub/update/settings", { method: "PUT", json: s });
+export const setHubUpdateSettings = (s: { auto?: boolean; auto_notice_seen?: boolean; auto_update_nodes?: boolean; source?: "release" | "web-dev" }) => api<HubUpdateStatus>("/hub/update/settings", { method: "PUT", json: s });
 export const hubUpdateHistory = () => api<{ history: HubUpdateRecord[] | null }>("/hub/update/history").then((r) => r.history ?? []);
+export interface HubUpdateBackup {
+  id: string;
+  version: string;
+  build: number;
+  commit: string;
+  updated_at: string;
+  created_at: string;
+}
+export const hubUpdateBackups = () => api<{ backups: HubUpdateBackup[] }>("/hub/update/backups").then(r => r.backups);
+export const applyHubUpdateBackup = (id: string) => api<HubUpdateStatus>(`/hub/update/backups/${encodeURIComponent(id)}/apply`, { method: "POST" });
 export const skills = (manager?: string) => api<{ machine_id: string; machine?: string; skills: Skill[] | null }>("/skills", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 
 export const DOCKER_COMMAND = "docker compose pull && docker compose up -d";
 
 /** An update is under way (the progress row, no buttons). */
 export function updateWorking(s: HubUpdateStatus): boolean {
-  return ["downloading", "waiting_idle", "restarting", "confirming"].includes(s.state);
+  return ["building", "applying_backup", "backing_up", "downloading", "waiting_idle", "restarting", "confirming"].includes(s.state);
 }
 
 /** A state that ends an update: the history has a new line. */
@@ -83,6 +104,12 @@ export function channelTitle(channel: string): string {
 
 export function updateStateTitle(s: HubUpdateStatus): string {
   switch (s.state) {
+    case "applying_backup":
+      return t("lib-hub-update.state_applying_backup");
+    case "building":
+      return t("lib-hub-update.state_building");
+    case "backing_up":
+      return t("lib-hub-update.state_backing_up");
     case "checking":
       return t("lib-hub-update.state_checking");
     case "downloading":

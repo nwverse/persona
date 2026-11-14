@@ -14,6 +14,8 @@
     "check:deps": "node scripts/installed-deps.mjs",
     "prebuild": "npm run check:privacy && npm run pake:build",
     "build": "tsc -b && vite build && vite build --config vite.public.config.ts",
+    "prebuild:development": "npm run check:privacy && npm run pake:build",
+    "build:development": "tsc -b && vite build --mode development-update && vite build --config vite.public.config.ts",
     "build:public": "vite build --config vite.public.config.ts",
     "dev:public": "vite --config vite.public.config.ts",
     "typecheck": "tsc -b",

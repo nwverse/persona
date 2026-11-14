@@ -63,7 +63,8 @@ func Watch(ctx context.Context, client *http.Client, p Pending, pendingPath stri
 		return err
 	}
 	_ = Save(RolledBackPath(filepath.Dir(pendingPath)), RolledBack{FromVersion: p.FromVersion, ToVersion: p.ToVersion, ToBuild: p.ToBuild,
-		Started: p.Started, At: time.Now(), Reason: "新版本 3 分钟内没有起来并确认（看门狗回滚）", Auto: p.Auto})
+		Started: p.Started, At: time.Now(), Reason: "新版本 3 分钟内没有起来并确认（看门狗回滚）", Auto: p.Auto, Development: p.Development, Backup: p.Backup})
+	ClearDevelopmentAdoption(filepath.Dir(pendingPath), p)
 	if err := os.Remove(marker); errors.Is(err, os.ErrNotExist) && marker != pendingPath {
 		// A hub that started meanwhile put the claim back (Unclaim; launchd restarts a hub that died and leaves this
 		// process running): the rollback just written down ends that update as well.
