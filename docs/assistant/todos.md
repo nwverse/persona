@@ -943,7 +943,10 @@ default; preview options open on request. Labels and fields form compact desktop
 rows and stack on narrow screens. Unset inputs are blank, with localized
 placeholders showing the system default (Assistant settings) or the effective
 Assistant default (task overrides). Clearing and saving removes that override;
-there are no inheritance status labels or reset buttons.
+there are no inheritance status labels or reset buttons. A preview shows the task
+folder once, then a labeled branch for a root repository or each repository's
+folder-to-branch mapping for a container, without repeating the parent path. The
+planning time, time zone and names-only limit stay in a small details disclosure.
 It applies only to explicitly selected backend preparation. It does not change Engine creation, legacy `new`, `existing`
 or `none`, existing preferences, task progress or cleanup.
 

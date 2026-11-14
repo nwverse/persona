@@ -52,10 +52,22 @@ try {
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
       assert.match(await group.locator("[data-naming-root]").innerText(), /^\/home\/example\/workspace\/\d{8}\/task-todo_example-example-task$/);
+      assert.deepEqual(await group.locator("[data-naming-repo]").evaluateAll((rows) => rows.map((row) => [row.querySelector("[data-naming-folder]")?.textContent, row.querySelector("[data-naming-branch]")?.textContent]).sort((a, b) => a[0].localeCompare(b[0]))),
+        [["api", "persona/todo_example"], ["web", "persona/todo_example"]], "container previews each repository's folder and branch");
       await group.getByLabel("Folder layout", { exact: true }).selectOption("root");
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
-      assert.equal(await group.locator("[aria-live] dt").first().innerText(), ".", "root layout uses internal dot mapping");
+      const rootLayout = await group.locator("[aria-live]").innerText();
+      const rootPath = await group.locator("[data-naming-root]").innerText();
+      assert.equal(await group.locator("[data-naming-repo]").count(), 0, "the internal dot is not a row");
+      assert.equal(await group.locator("[data-naming-branch]").innerText(), "persona/todo_example", "the root branch is labeled");
+      assert.equal(rootLayout.split(rootPath).length - 1, 1, "the root path appears once");
+      assert(!rootLayout.split("\n").some((line) => line.trim() === "."), "no standalone dot");
+      assert(!rootLayout.includes("UTC · UTC"), "the timezone is not duplicated");
+      assert.equal(await group.locator("[aria-live] details").getAttribute("open"), null, "routine details stay folded");
+      await group.locator("[aria-live] details summary").click();
+      assert(await group.getByText("Names only. Availability", { exact: false }).isVisible(), "details keep the preview's limits");
+      await group.locator("[aria-live] details summary").click();
       await group.scrollIntoViewIfNeeded();
       assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "no horizontal overflow");
       await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `settings-${scheme}-${width}.jpg`) });
@@ -85,8 +97,14 @@ try {
       assert.equal(await task.inputValue(), "{yyyy}{mmdd}/task-{task-id}-{task-slug}", "hiding preserves saved rules");
       if (width === 390) {
         await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
-        assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "settings fit at 200% text");
-        await group.screenshot({ path: join(shots, `large-text-${scheme}-${width}.png`) });
+        await group.getByText("Preview options", { exact: true }).click();
+        await group.getByRole("button", { name: "Preview naming", exact: true }).click();
+        await group.locator("[data-naming-root]").waitFor();
+        await group.locator("[data-naming-root]").scrollIntoViewIfNeeded();
+        assert.equal(await group.locator("[data-naming-repo]").count(), 2, "the enlarged preview lists both repositories");
+        assert((await group.locator("[data-naming-root]").innerText()).length > 0, "the enlarged preview shows the root path");
+        assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "settings preview fits at 200% text");
+        await page.screenshot({ path: join(shots, `large-text-${scheme}-${width}.png`) });
       }
 
       // Direct API state is supplied by the real fixture, not browser interception.
@@ -107,7 +125,12 @@ try {
       await editor.getByText("Preview options", { exact: true }).click();
       await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
       await editor.locator("[data-naming-root]").waitFor();
-      assert.equal(await editor.locator("[aria-live] dl").count(), 2, "both repository names previewed");
+      const taskPreview = await editor.locator("[aria-live]").innerText();
+      const taskRoot = await editor.locator("[data-naming-root]").innerText();
+      assert.equal(taskPreview.split(taskRoot).length - 1, 1, "the task root appears once");
+      assert.equal(await editor.locator("[aria-live] dl").count(), 0, "no raw dot mapping is shown");
+      const taskRepos = await editor.locator("[data-naming-repo]").evaluateAll((rows) => rows.map((row) => [row.querySelector("[data-naming-folder]")?.textContent, row.querySelector("[data-naming-branch]")?.textContent]).sort((a, b) => a[0].localeCompare(b[0])));
+      assert.deepEqual(taskRepos, [["api", `custom/${todo.id}/api`], ["web", `custom/${todo.id}/web`]], "each repository folder maps to its task branch");
       await field.fill("");
       await editor.getByRole("button", { name: "Save", exact: true }).click();
       await page.waitForFunction(() => !document.body.textContent.includes("Unsaved changes"));
@@ -117,7 +140,7 @@ try {
       await editor.getByText("Preview options", { exact: true }).click();
       await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
       await editor.locator("[data-naming-root]").waitFor();
-      for (const branch of await editor.locator("[aria-live] dl dd:last-child").allTextContents()) assert.equal(branch, `persona/${todo.id}`, "cleared task branch previews assistant fallback");
+      for (const branch of await editor.locator("[aria-live] [data-naming-branch]").allTextContents()) assert.equal(branch, `persona/${todo.id}`, "cleared task branch previews assistant fallback");
       if (width === 390) await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
       assert(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth), "task editor fits at enlarged text");
       if (width === 390) {

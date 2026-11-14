@@ -5,7 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => { window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {} })) as typeof window.matchMedia; });
 import { initI18n } from "../i18n";
 import { credentialOwner, setToken } from "../lib/api";
-import { WorkspaceNaming } from "./WorkspaceNaming";
+import { WorkspaceNaming, WorkspaceNamingPreview } from "./WorkspaceNaming";
+import type { WorkspaceNamingPreview as Preview } from "../lib/workspace-naming";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 type Call = { path: string; init: RequestInit; answer: (body: unknown, status?: number) => void };
@@ -123,4 +124,48 @@ it("keeps a cleared draft after a failed save and saved-baseline reload, then re
   expect(document.querySelectorAll("input")[1].value).toBe(""); expect(button("Save").disabled).toBe(false);
   await click("Save"); expect(JSON.parse(calls.at(-1)!.init.body as string).workspace_rules.task_directory_template).toBeNull();
   await answer(calls.at(-1)!, settings); expect(button("Save").disabled).toBe(true);
+});
+
+const rootPath = "/home/example/workspace/task-todo_example";
+const named = (layout: "root" | "container", repositories: Array<[string, string, string]>, timezone = "UTC"): Preview => ({
+  status: "complete", sample: true, diagnostics: [], plan: {
+    version: "workspace-naming/v1", digest: "digest", base_path: "/home/example/workspace", root_path: rootPath, task_slug: "example-task",
+    node: { home: "/home/example" },
+    source: { manager: "assistant", todo_id: "todo_example", title: "Example task", machine_id: "box", planned_at: "2026-11-14T06:45:00Z", timezone, rules: {}, layout,
+      repository_snapshot: { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 0, digest: "snapshot", repositories: [] } },
+    repositories: repositories.map(([repo_id, relative_path, task_branch]) => ({ repo_id, requested_ref: { kind: "default" }, relative_path, absolute_path: relative_path === "." ? rootPath : `${rootPath}/${relative_path}`, task_branch })),
+  },
+});
+const showPreview = (result: Preview) => act(async () => root.render(<WorkspaceNamingPreview result={result} />));
+
+it("shows the root once with a labeled branch and no standalone dot", async () => {
+  await showPreview(named("root", [["web", ".", "persona/todo_example"]], "Asia/Shanghai"));
+  const text = document.body.textContent ?? "";
+  expect(document.querySelector("[data-naming-root]")?.textContent).toBe(rootPath);
+  expect(text.split(rootPath).length - 1).toBe(1);
+  expect(document.querySelector("[data-naming-repo]")).toBeNull();
+  expect(document.querySelector("[data-naming-branch]")?.textContent).toBe("persona/todo_example");
+  expect(document.querySelector("dl")).toBeNull();
+  expect(text).not.toContain("UTC · UTC");
+  expect(text).toContain("Time zone: Asia/Shanghai");
+  const details = document.querySelector("details")!;
+  expect(details.open).toBe(false);
+  expect(details.textContent).toContain("Names only");
+});
+
+it("maps repository folders to branches without repeating the root or absolute paths", async () => {
+  await showPreview(named("container", [["web", "web", "persona/todo_example-web"], ["api", "api", "persona/todo_example-api"]]));
+  const rows = [...document.querySelectorAll("[data-naming-repo]")].map((row) => [row.querySelector("[data-naming-folder]")?.textContent, row.querySelector("[data-naming-branch]")?.textContent]);
+  expect(rows).toEqual([["web", "persona/todo_example-web"], ["api", "persona/todo_example-api"]]);
+  const text = document.body.textContent ?? "";
+  expect(text.split(rootPath).length - 1).toBe(1);
+  expect(text).not.toContain(`${rootPath}/web`);
+  expect(text).not.toContain(`${rootPath}/api`);
+});
+
+it("keeps diagnostics and preview errors visible without a plan", async () => {
+  await showPreview({ ...named("root", []), status: "invalid", plan: undefined, diagnostics: [{ code: "path_invalid", field: "task_directory_template", severity: "error" }] });
+  expect(document.body.textContent).toContain("The folder template contains an unsafe path");
+  await act(async () => root.render(<WorkspaceNamingPreview error="Couldn’t preview names on this computer." />));
+  expect(document.querySelector("[role=alert]")?.textContent).toBe("Couldn’t preview names on this computer.");
 });

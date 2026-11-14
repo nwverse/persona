@@ -1513,10 +1513,12 @@ show their system default in a placeholder; Todo overrides show the effective
 Assistant default instead. Clearing a field and saving removes that override
 using the existing null patch, without saving a fallback as a custom value.
 There are no inheritance status labels or reset buttons. Preview options remain
-folded until requested. Preview uses the
-selected computer and layout, labels examples, wraps full paths and explains
-that availability and source commits are checked later. A failed save retains
-its draft; reloading updates the saved baseline without replacing local edits.
+folded until requested. The preview result shows the task folder once and then
+either the root repository's labeled branch or each container repository's
+folder-to-branch mapping, never the internal `.` path and never the same absolute
+path twice. Planning time, time zone and the names-only limit sit in a small
+details disclosure below the result. A failed save retains its draft; reloading
+updates the saved baseline without replacing local edits.
 Changing a field, computer or assistant retires earlier previews. The panel
 changes no creation mode and starts nothing. This is a secondary settings
 surface, not another workspace management destination.

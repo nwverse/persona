@@ -37,24 +37,49 @@ export function WorkspaceRulesEditor({ value, inherited, defaultSource = "system
   </div>;
 }
 
+/** A compact result: the root folder once, then its branch or each repository's folder-to-branch mapping. */
 export function WorkspaceNamingPreview({ result, loading, error }: { result?: Preview; loading?: boolean; error?: string }) {
-  return <div aria-live="polite" className="space-y-3 text-label text-ink-2">
+  const plan = result?.plan;
+  const repositories = plan?.repositories ?? [];
+  const rootRepo = repositories.find((repo) => repo.relative_path === ".");
+  const nested = repositories.filter((repo) => repo.relative_path !== ".");
+  // planned_at is UTC; the assistant's zone matters only when it is not UTC, so it is not repeated as "UTC · UTC".
+  const timezone = plan?.source.timezone && !/^(UTC|Etc\/UTC)$/i.test(plan.source.timezone) ? plan.source.timezone : "";
+  return <div aria-live="polite" className="min-w-0 space-y-2 text-label text-ink-2">
     {loading && <Loading label={t("workspace-naming.previewing")} />}
     {error && <p role="alert" className="text-red">{error}</p>}
     {result && <>
       <p className="font-medium text-ink">{t(result.sample ? "workspace-naming.sample" : "workspace-naming.preview_title")}</p>
-      {result.diagnostics.map((d, index) => <p key={index} className={d.severity === "error" ? "text-red" : "text-ink-2"}>
+      {result.diagnostics.length > 0 && <div className="space-y-1">{result.diagnostics.map((d, index) => <p key={index} className={d.severity === "error" ? "text-red" : "text-ink-2"}>
         {t(`workspace-naming.${d.code}`, { field: RULE_FIELDS.includes(d.field as typeof RULE_FIELDS[number]) ? t(`workspace-naming.${d.field}`) : t("workspace-naming.title") })}{d.repo_id ? ` (${d.repo_id})` : ""}
-      </p>)}
-      {result.plan && <>
-        <p className="break-all rounded-control bg-inset p-3 font-mono text-ink" data-naming-root>{result.plan.root_path}</p>
-        <p className="break-words text-meta"><time dateTime={result.plan.source.planned_at}>{result.plan.source.planned_at.slice(0, 16).replace("T", " ")}</time> UTC · {result.plan.source.timezone}</p>
-        {result.plan.repositories.map((repo) => <dl key={repo.repo_id} className="space-y-1 border-t border-line pt-2">
-          <dt className="font-medium text-ink">{repo.relative_path}</dt><dd className="break-all font-mono">{repo.absolute_path}</dd>
-          <dt className="sr-only">{t("workspace-naming.branch_template")}</dt><dd className="break-all font-mono">{repo.task_branch}</dd>
-        </dl>)}
+      </p>)}</div>}
+      {plan && <>
+        <div className="min-w-0 space-y-2 rounded-control bg-inset px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="text-meta text-ink-3">{t("workspace-naming.result_folder")}</p>
+            <p data-naming-root className="mt-0.5 break-all font-mono text-meta text-ink">{plan.root_path}</p>
+          </div>
+          {(rootRepo || nested.length > 0) && <div className="min-w-0 border-t border-line pt-2">
+            {rootRepo
+              ? <><p className="text-meta text-ink-3">{t("workspace-naming.result_branch")}</p>
+                <p data-naming-branch className="mt-0.5 break-all font-mono text-meta text-ink">{rootRepo.task_branch}</p></>
+              : <><p className="text-meta text-ink-3">{t("workspace-naming.result_repositories")}</p>
+                <ul className="mt-1 space-y-1">{nested.map((repo) => <li key={repo.repo_id} data-naming-repo className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                  <span data-naming-folder className="break-all font-mono text-meta text-ink">{repo.relative_path}</span>
+                  <span aria-hidden="true" className="text-ink-3">→</span>
+                  <span className="text-label text-ink-3">{t("workspace-naming.result_branch")}</span>
+                  <span data-naming-branch className="min-w-0 break-all font-mono text-meta text-ink-2">{repo.task_branch}</span>
+                </li>)}</ul></>}
+          </div>}
+        </div>
+        <details className="text-label text-ink-3">
+          <summary className="min-h-11 cursor-pointer py-1.5">{t("workspace-naming.preview_details")}</summary>
+          <div className="space-y-1 pb-1">
+            <p><time dateTime={plan.source.planned_at}>{plan.source.planned_at.slice(0, 16).replace("T", " ")} UTC</time>{timezone && <> · {t("workspace-naming.timezone")}: {timezone}</>}</p>
+            <p className="leading-relaxed">{t("workspace-naming.metadata_only")}</p>
+          </div>
+        </details>
       </>}
-      <p className="text-meta text-ink-3">{t("workspace-naming.metadata_only")}</p>
     </>}
   </div>;
 }
