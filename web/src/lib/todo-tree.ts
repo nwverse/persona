@@ -66,6 +66,8 @@ export interface LooseGroup {
   hint: string;
   /** The most urgent of its agents' states; "Done" for none, which the row does not say. */
   state: TreeState;
+  /** What the row says in place of `state`'s word, when "Done" would hide what its rows say (agentGroupLabel). */
+  label?: string;
   agents: TreeAgent[];
   sessions: Session[];
   folded: boolean;
@@ -109,6 +111,18 @@ export function todoTreeState(status: TodoStatus, agents: readonly Session[] = [
 /** The most urgent of some states ("Done" for none). */
 export function worstTreeState(states: TreeState[]): TreeState {
   return worst(states);
+}
+
+/** What a group of agents says beside its count when its most urgent state is "Done" (Not on a to-do, Recent (not
+ *  running)): the word its rows and the other groupings use, never "Done" over agents that are not. A finished agent
+ *  not looked at yet is Unread, as By status and the quick filter call it, and a group whose agents all stopped is Not
+ *  running; undefined keeps "Done" (agents seen, or a mix of seen and stopped). */
+export function agentGroupLabel(sessions: readonly Session[], state: TreeState): string | undefined {
+  if (state !== "done" || !sessions.length) return undefined;
+  const states = sessions.map(stateOf);
+  if (states.includes("unread")) return stateName("unread");
+  if (states.every((st) => st === "offline")) return stateName("offline");
+  return undefined;
 }
 
 function worst(states: TreeState[]): TreeState {
@@ -279,7 +293,8 @@ function shareNodes<T extends { key: string }>(prev: T[], next: T[]): T[] {
 function looseTree(g: AgentGroup, below: boolean, now: number): LooseGroup {
   const agents = nestAgents(g.sessions, undefined, now);
   const state = worst(agents.map((a) => a.state));
-  return { key: g.key, name: g.name, hint: g.hint ?? "", state, agents, sessions: g.sessions, folded: below && state !== "needs_you" };
+  const label = agentGroupLabel(g.sessions, state);
+  return { key: g.key, name: g.name, hint: g.hint ?? "", state, ...(label && { label }), agents, sessions: g.sessions, folded: below && state !== "needs_you" };
 }
 
 /** The todos page's list by project (#2526): open todos under the project their agents work in, the ones with no agent
