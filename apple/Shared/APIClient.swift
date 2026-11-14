@@ -1334,6 +1334,8 @@ nonisolated struct APIClient: Sendable {
         /// Suggest the next message after replies in open chats (#4696). Off by default; nil from a hub without the
         /// setting, which hides the switch.
         var nextSuggestions: Bool?
+        /// Organize knowledge points by topic (#3783, docs/assistant/knowledge.md "Topics"): on by default, so nil reads as on.
+        var kbTopics: Bool?
         /// The background supervisor's session id once the hub has made it (read-only); nil until then and from an
         /// older hub.
         var backgroundSupervisor: String?
@@ -1346,8 +1348,31 @@ nonisolated struct APIClient: Sendable {
         var meetingGlossary: [String]?
         var meetingTranscriptionExtension: String?
         var meetingTranscriptionReady: Bool?
+        /// The manager that answered (its identity, the default's included): what a write that must name its manager
+        /// names (the session-name settings, #7005). nil from an older hub.
+        var manager: String?
+        // Settings › Assistant Profile › Agent Follow-Up (#7005; the web's Settings › Assistant, "Starting tasks" and
+        // "Agent follow-up"): each the value in effect, nil from a hub without it, which hides its row.
+        /// Start what the owner asked for in a chat right away (#2559). On by default.
+        var startRequestedTasks: Bool?
+        /// `prefer-existing` (the default) or `prefer-new`: the workspace a dispatched task prefers.
+        var taskWorkspacePreference: String?
+        /// Every Agent Persona starts gets a quiet, supervised task (#3617). Off by default.
+        var agentTasks: Bool?
+        /// Hours an idle Agent Persona started runs before it is stopped, its terminal kept (#4754): 0 is never, at
+        /// most 8760; 12 by default.
+        var idleCloseHours: Int?
+        /// Days a closed session with no open task stays listed before it archives itself (#3618): 0 is never, at most
+        /// 3650; 3 by default.
+        var archiveClosedDays: Int?
+        /// Fix unhelpful session names (#4965). On by default; with the two below.
+        var agentAutoNaming: Bool?
+        /// Successful automatic renames per session, 1–1000; 1 by default.
+        var agentAutoNamingMax: Int?
+        /// Hours between regular name updates after new output, 1–8760; 0 (the default) is off.
+        var agentAutoNamingIntervalHours: Int?
         enum CodingKeys: String, CodingKey {
-            case launcher, cwd, conversations, timezone, main, leaders
+            case launcher, cwd, conversations, timezone, main, leaders, manager
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case mainBackgroundFolded = "main_background_folded"
             case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
@@ -1355,7 +1380,11 @@ nonisolated struct APIClient: Sendable {
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
             case meetingTranscriptionExtension = "meeting_transcription_extension"
             case meetingTranscriptionReady = "meeting_transcription_ready"
-            case nextSuggestions = "next_suggestions"
+            case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
+            case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
+            case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
+            case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
         }
 
         /// Whether conversation `id` is the built-in background supervisor (#5083): listed with the scheduled tasks'
@@ -1445,14 +1474,31 @@ nonisolated struct APIClient: Sendable {
         var meetingGlossary: [String]?
         var meetingTranscriptionExtension: String?
         var nextSuggestions: Bool?
+        var startRequestedTasks: Bool?
+        var taskWorkspacePreference: String?
+        var agentTasks: Bool?
+        var idleCloseHours: Int?
+        var archiveClosedDays: Int?
+        var agentAutoNaming: Bool?
+        var agentAutoNamingMax: Int?
+        var agentAutoNamingIntervalHours: Int?
+        var kbTopics: Bool?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
             case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
             case meetingTranscriptionExtension = "meeting_transcription_extension"
-            case nextSuggestions = "next_suggestions"
+            case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
+            case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
+            case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
+            case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
         }
+    }
+    /// A sparse write of the assistant's settings: only the fields set are sent (Agent Follow-Up, #7005).
+    func setAssistant(_ body: AssistantConfigBody) async throws -> AssistantState {
+        owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant", body: body)))
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
                       mainTasksQuiet: Bool? = nil, mainBackgroundFolded: Bool? = nil,

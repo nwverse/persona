@@ -107,6 +107,68 @@ struct ScreenVideoTests {
         s.close()
     }
 
+    /// The helper's `timing` comes through as it is (a chunk's picture, the newest of its burst, follows its other
+    /// messages, so the order within a chunk is not the wire's).
+    @Test func theHelpersTimingComesThrough() async throws {
+        var bytes = try Self.prefix(messages: 4)
+        bytes += Array(ScreenVideoMessage.timing(TimingMessage(captureMs: 0, encodeMs: 5.5, networkMs: 7, kbps: 900, fps: 30)).framed())
+        let t = VideoScript([bytes], holds: true)
+        let seen = Events()
+        let s = ScreenVideoStream(transport: t, start: Self.start) { seen.add($0) }
+        s.run()
+        try await seen.until { $0.contains { $0.hasPrefix("timing") } }
+        #expect(seen.all.contains("timing encode 5.5 network 7.0"), "\(seen.all)")
+        #expect(seen.all.first == "hello hevc 960x600")
+        #expect(s.receivedBytes == bytes.count, "every byte that came is counted")
+        s.close()
+    }
+
+    /// The overlay's reading (#3954): at most once a second, frames shown and megabits that came over it, the median
+    /// decode, and the helper's segments; the total only when encode, network and decode are all known.
+    @Test func theOverlayReadsOnceASecond() {
+        var tally = ScreenVideoTally()
+        let t0 = ContinuousClock.now
+        #expect(tally.reading(at: t0, received: 0) == nil, "no picture yet")
+        for (i, ms) in [4.0, 6.0, 5.0, 30.0].enumerated() { tally.picture(decodeMs: ms, at: t0.advanced(by: .milliseconds(250 * i))) }
+        #expect(tally.reading(at: t0.advanced(by: .milliseconds(900)), received: 200_000) == nil, "not a second yet")
+        let first = tally.reading(at: t0.advanced(by: .seconds(1)), received: 250_000)
+        #expect(first == ScreenVideoReading(fps: 4, mbps: 2, captureMs: nil, encodeMs: nil, networkMs: nil, decodeMs: 5.5))
+        #expect(first?.totalMs == nil, "no helper timing (a helper before it): no total")
+        tally.helper(TimingMessage(captureMs: 0, encodeMs: 5, networkMs: 8, kbps: 1000, fps: 2))
+        tally.picture(decodeMs: 3, at: t0.advanced(by: .milliseconds(1500)))
+        tally.picture(decodeMs: 5, at: t0.advanced(by: .milliseconds(1700)))
+        let second = tally.reading(at: t0.advanced(by: .seconds(2)), received: 375_000)
+        #expect(second == ScreenVideoReading(fps: 2, mbps: 1, captureMs: 0, encodeMs: 5, networkMs: 8, decodeMs: 4))
+        #expect(second?.totalMs == 17, "capture 0 + encode 5 + network 8 + decode 4")
+    }
+
+    /// The round trip to the hub the overlay shows (#6558): the median of the last five from the last 20 s, as the web
+    /// overlay's, so one slow answer doesn't make it jump and an old one isn't shown.
+    @Test func theHubRoundTripIsTheMedianOfTheRecentOnes() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var trips = HubRoundTrips()
+        #expect(trips.median(at: t0) == nil, "none yet: no number")
+        trips.add(ms: .nan, at: t0)
+        trips.add(ms: -1, at: t0)
+        #expect(trips.median(at: t0) == nil, "not a time: not counted")
+        trips.add(ms: 20, at: t0)
+        #expect(trips.median(at: t0) == 20)
+        trips.add(ms: 400, at: t0.addingTimeInterval(2)) // one slow answer
+        trips.add(ms: 22, at: t0.addingTimeInterval(4))
+        #expect(trips.median(at: t0.addingTimeInterval(4)) == 22)
+        for i in 0..<HubRoundTrips.kept { trips.add(ms: 30, at: t0.addingTimeInterval(6 + Double(i))) }
+        #expect(trips.median(at: t0.addingTimeInterval(10)) == 30, "only the last five count")
+        #expect(trips.median(at: t0.addingTimeInterval(10 + HubRoundTrips.fresh + 1)) == nil, "stale: the app was away")
+    }
+
+    /// Bitrates as the overlay writes them: two decimals under 1 Mbps, so a small stream doesn't read as 0.0 (the web's
+    /// rule).
+    @Test func smallBitratesKeepTwoDecimals() {
+        #expect(ScreenStats.mbpsText(12.34) == "12.3 Mbps")
+        #expect(ScreenStats.mbpsText(1) == "1.0 Mbps")
+        #expect(ScreenStats.mbpsText(0.034) == "0.03 Mbps")
+    }
+
     @Test func aFrameThatDoesNotDecodeEnds() async throws {
         var bytes = try Self.prefix(messages: 2)
         bytes += Array(ScreenVideoMessage.frame(VideoFrame(number: 1, captureMicros: 0, flags: .keyframe, sample: Data([0, 0, 0, 4, 1, 2, 3, 4]))).framed())
@@ -162,6 +224,32 @@ struct ScreenVideoTests {
         #expect(link.fallback == nil)
         #expect(said == [.locked, nil])
         link.want(nil)
+    }
+
+    /// ⋯ › Quality only once the helper says it has quality tiers (#6396): the fixture's helper, from before them, says
+    /// nothing, so none is offered; a hello with `features: ["tiers"]` offers it.
+    @MainActor @Test func qualityWaitsForAHelperWithTiers() async throws {
+        let link = ScreenVideoLink()
+        let t = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        link.transport = { _ in t }
+        link.want(.init(display: nil, rect: nil))
+        link.rfb(.init(group: "", machine: "macbook", pair: "0123"))
+        try await Self.until { link.showing }
+        #expect(!link.tiers)
+        guard case var .hello(h) = try Self.messages()[0] else { Issue.record("the fixture starts with hello"); return }
+        h.features = ["tiers"]
+        t.feed(Array(ScreenVideoMessage.hello(h).framed()))
+        try await Self.until { link.tiers }
+        link.want(nil)
+    }
+
+    /// ⋯ › Quality needs this app's side of the tiers too (#6396): a release can pair a helper with tiers and an app
+    /// without them, and then nothing is offered. The iPhone's tier policy turns `appSupported` on.
+    @Test func qualityAlsoWaitsForThisAppsTiers() {
+        #expect(!ScreenTiers.appSupported, "on with the iPhone's tier policy (#6396), not before")
+        #expect(!ScreenTiers.offered(helperHasTiers: true))
+        #expect(ScreenTiers.offered(helperHasTiers: true, appSupported: true))
+        #expect(!ScreenTiers.offered(helperHasTiers: false, appSupported: true))
     }
 
     /// Retries that fail as the first drop did keep the same line: it never blinks off and on between them.
@@ -248,6 +336,7 @@ private final class Events: @unchecked Sendable {
         case let .picture(pb, _): word = "picture \(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb))"
         case let .paused(why): word = "paused \(why)"
         case .resumed: word = "resumed"
+        case let .timing(t): word = "timing encode \(t.encodeMs ?? -1) network \(t.networkMs ?? -1)"
         case let .ended(why): word = "ended \(why)"
         }
         lock.withLock { events.append(word) }
