@@ -195983,29 +195983,6 @@
         }
       }
     },
-    "Network changed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Network changed"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ネットワークが変わりました"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "网络切换了"
-          }
-        }
-      }
-    },
     "iPhone is warm or saving power" : {
       "extractionState" : "manual",
       "localizations" : {
