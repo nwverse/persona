@@ -339,10 +339,15 @@ Picture in Picture (`AVSampleBufferDisplayLayer`) needs access to each frame, wh
 - **Connection**: hub's 5900 forwarding (`RFBWebSocket`), a binary WebSocket over the same route as the App's hub connection (`APIClient.url`: via SSH tunnel when used; `APIClient.session`: pinning for public TLS), with device token (`Authorization`).
 - **Login** (`RFBAuth`):
   - macOS Screen Sharing offers 30 (Apple Remote Desktop), 33, 35, 36. This uses 30:
-    1. Server sends the generator, prime and its public key.
-    2. Client calculates the DH shared secret, using its MD5 as the AES-128 key (ECB).
+    1. Server sends the generator, prime and its public key: macOS 26 a 4096-bit prime with generator 5, older macOS 1024 bits.
+    2. Client calculates the DH shared secret, using its MD5 as the AES-128 key (ECB). This needs no account or password,
+       so `RFBAuth.exchange` runs as soon as the server's numbers arrive, while the sign-in form waits (#7809).
     3. Account and password each occupy 64 bytes, NUL-terminated and padded with random bytes. Send the encrypted 128 bytes first, then the client's public key.
-  - Large-number arithmetic is a custom Montgomery modular exponentiation (`RFBBigUInt`), checked against Python `pow`.
+  - Large-number arithmetic is a custom Montgomery modular exponentiation (`RFBBigUInt`: 64-bit limbs on raw buffers,
+    a 4-bit window, the two exponentiations side by side), checked against Python `pow`. With a 4096-bit prime the old
+    32-bit-limb array version took 48 s in a Debug build after Connect (0.6 s optimized); this takes 0.65 s and 0.03 s.
+    A shared Rust implementation in PersonaCore was weighed and not taken: a new big-number crate and entry points on
+    three clients for one function the Swift fix makes fast enough.
   - Mock Screen Sharing also offers VeNCrypt Plain (19 → 256) for tests; no authentication (1) is accepted too.
   - Account/password come from saved credentials (`ScreenCredentials`, #1322).
 - **Frames** (`RFBFramebuffer`):
@@ -484,6 +489,7 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
       - **Pacing**: the fingers and the coast only move where the wheel should be. A display link sends what that has come to once a frame, about 12 ms behind, at most 2000 notches a second (33 a frame at 60 Hz). No more than 0.1 s worth waits; beyond that the fingers are held to that top speed, so the Mac stops scrolling soon after they do. `RFBSession.scroll` sends every notch it is given (it once dropped any past 20 in a call). The first notch is sent at half a notch; remainders are retained and reverse motion subtracts them.
       - **Coast**: letting go at 250 pt/s or faster continues from the speed the notches were going, with UIScrollView's normal deceleration (0.998 remaining per millisecond), sent no faster than 2000 a second: a harder flick keeps that pace longer before it slows, so it goes further. Touching again stops it and anything not yet sent.
       - In numbers (model of 300 pt drags reaching their speed in 50 ms and lifted moving; a 1920-point Mac on an iPhone's fitted picture, about 4.9 Mac points a view point): slow (200 pt/s) 1470 points, medium (600) about 2990, fast (1500) about 3930; before, 37, 61 and 66.
+      - **Scroll Speed** (Settings › Live Screen, `VNCScrollSpeed`): Slower, Default or Faster scale the whole curve by 0.6, 1 or 1.6, read as two fingers go down; the 2000-a-second top speed stays.
       - Natural scrolling: pulling down reveals content above, like iOS and Mac defaults. Measuring: `VNCTests/testScrollMeasure` (`PERSONA_VNC_SCROLL_MEASURE=1`) plays slow, medium and fast 300 pt drags against the mock, whose relay stamps each notch as it arrives (`wheel_in`). A terminal still moves line by line, and a page stops dead at its ends: smooth, trackpad-like scrolling there needs a process on the Mac that posts continuous scroll events (#7775).
     - Pointer draws the cursor sent by the Mac (Cursor pseudo-encoding), or the app's own arrow until it does, through `VNCPointerArt` (#3075). Drawn at the picture's scale it was a speck: a 1920-pixel Mac on a 402-point phone is 4.8 pixels a point, so macOS's arrow came out about 4 points tall and its one-pixel white outline averaged into the black body; on a dark window or terminal it vanished. Now it is at least `Theme.Size.pointer` (22 pt) tall (its visible part; the Mac's own size when zoomed in further), scaled about the hot spot by whole device pixels so the outline stays a crisp line, and given the rings it needs to read on any background: a pointer that reads on both black and white (macOS's own arrow and I-beam, black with a white outline) is only enlarged; one with no light edge gets a 1 pt white ring, one with no dark edge a 1 pt black ring ("reads": every outline pixel has one within 2 pt that differs from the background by 0.5 in luminance). Any background is far from black or from white, so a pointer that reads on both reads on all. `VNCPointerArtTests` check macOS's arrow (with and without its shadow as a rim), the I-beam and black / white / red crosses over black, white, gray, a dark terminal and a busy picture.
   - **Keyboard**: the bottom-bar Keyboard opens the system keyboard; typed text goes directly to the Mac (`VNCKeyInputView`). A row of Mac keys above it (`VNCShortcutBar`, in the page, moving up with the keyboard): ⌘ ⌥ ⌃ ⇧ tap to hold, tap again to release; Esc, Tab, arrow keys, ⌘C ⌘V ⌘Z ⌘Tab ⌘Space. Latin-1 characters are sent as keys; Chinese and other characters are pasted via clipboard (put in the Mac clipboard, then ⌘V). ⌘ sends Super_L (0xffeb), interpreted as Command by macOS Screen Sharing.
@@ -625,7 +631,9 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
     1×15; Sharper gives up frame rate first (2×60, 2×30, 2×15, 1.5×15, 1×15), Smoother pixels (2×60, 1.5×60, 1×60, 1×30,
     1×15). Every tier keeps at least a pixel per point, so text stays readable. Each band is 0.02–0.08 bits per pixel per
     frame, the ceiling at the phone's cap; a tier whose floor is above the cap is left out, and ones that come out the
-    same on a display merge. On `screenbench` the floor keeps scrolling text at SSIM ≥ 0.98 against what was encoded.
+    same on a display merge. Each tier also carries the scale its picture really has (`pixelsPerPoint`, #7842): on a
+    display at one pixel per point every tier is 1×, and 2× under the phone's long-edge cap is less; the tier line shows
+    it and Data Saver's one pixel per point holds to it. On `screenbench` the floor keeps scrolling text at SSIM ≥ 0.98 against what was encoded.
     The band is per codec (`TierLadder.bitsFactor`; #6558: a browser without HEVC gets H.264). H.264's factor is 1, the
     same as HEVC's, as `screenbench` measured it (2026-11-14, every Auto tier, scene and band end at the same targets):
     text (typing, scrolling) within 0.002 SSIM of HEVC, the video scene 0.003–0.007 lower, and 0–11% more data an hour
@@ -636,8 +644,10 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
     replays them, so a change on either side fails both until they agree; so do the policy's timelines (route starts, every way down and up, a route change, a new bias, Data Saver and a warm device).
   - **Signals** (the phone's, from the frames): queueing above the 10 s floor of the one-way delay (p50 / p95 over
     0.5 s, rising or falling over 1 s), the rate the link carried while busy (frames queued behind one another: their
-    bytes over their arrival gaps, so quiet stretches don't read as a slow link), bursts of large frames, late frames,
-    decode time and pictures replaced before they showed. The route's round trip, jitter and loss are `LinkStats`'.
+    bytes over their arrival gaps, so quiet stretches don't read as a slow link; frames read together all count, #7842),
+    bursts of large frames, late frames, decode time and pictures replaced before they showed. A keyframe (one every
+    10 s) and the frames queued behind it are left out of the p95 that says whether the link is calm: that queue is the
+    keyframe's size, not a slower link, and its burst is the proof of headroom (#7842). The route's round trip, jitter and loss are `LinkStats`'.
   - **Policy**, every 250 ms. A tier fits the link when its floor is at most 80% of what the link carries. Down, fast:
     a long queue (over 400 ms for a quarter second, or skipped frames) or one the bitrate can't fix (the helper's
     bitrate within 15% of the band's floor and over 150 ms), with a tier that no longer fits, goes straight to the best
@@ -646,13 +656,22 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
     first 10 s or after a route change) with proof the link carried 1.25× the next floor, or three large frames at 1.5×
     it; a step up undone within 15 s doubles that tier's window, to 60 s. The start comes from the route: the same
     network the best tier, Tailscale (direct IPv6 too) under 30 ms the best else the second, the relay the second over
-    Wi-Fi, the third over cellular. A slower route steps down at once; a new bias or cap takes the tier the rate fits.
+    Wi-Fi, the third over cellular. A slower route steps down at once; a new bias or cap takes the tier the rate fits,
+    the rate at least the current tier's floor, which the link carries. The helper's `timing` comes once a second only
+    while frames flow, so its skipped frames count until the next is due (1.25 s) and its bitrate proves headroom once:
+    a still screen never steps down or up on an old second's numbers (#7842).
   - **Simulated links** (`TierPolicySimulationTests`, the real types over a shaped link): a steady link never moves in
     10 minutes; the relay settles on 2×60 in 5 s; 25 → 3 Mbit/s steps down in 1 s to 1.5×30 and holds (queueing p50 32
-    / p95 179 ms, against 543 / 1,033 with 2×60 fixed); a link jittering 5–9 Mbit/s for 10 minutes never moves.
+    / p95 179 ms, against 543 / 1,033 with 2×60 fixed); a link jittering 5–9 Mbit/s for 10 minutes never moves. On a
+    display at one pixel per point with light content (scrolling text) and a keyframe every 10 s, as on a real Mac
+    (#7842), a 3 Mbit/s cap steps down once, to 1.5×30, frames read one at a time or several together, and back to 2×60
+    20.5 s after the cap lifts.
   - **The app** (`ScreenVideoTiers`, `ScreenVideoStream`, `ScreenVideoLink`): when the helper's `hello` lists `tiers`
     with the display's points and pixels and this app has them (`ScreenTiers.appSupported`), the stream starts a policy
-    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`). The stream feeds it
+    and sends its first tier as an `update` (`scale`, `fps`, `min_kbps`, `max_kbps`, `target_kbps`) once the first frame
+    arrives: on `hello` the helper's capture hasn't really started, and ScreenCaptureKit drops a configuration change
+    made then, so capture stayed at 60 fps (#7842). Every tier change waits the same way after `hello` and after
+    `paused`, the latest one kept. The stream feeds it
     every frame from its own task (arrival, the time a frame spread over several reads began, decode time, pictures
     replaced before they showed) and ticks it every 250 ms; a new tier goes out as an `update` and to the link (the
     overlay's tier and reason). ⋯ › Quality changes the bias on the running stream; a route change (#6398) restarts the
@@ -687,7 +706,8 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
   and decode are all known (a helper before `timing` gives the phone's numbers only). With quality tiers (#6396) a Tier
-  line shows the Quality choice, the scale and frame rate ("Auto · 1.5× · 60 fps", `ScreenTierText`) and why it last
+  line shows the Quality choice, the picture's own scale and frame rate ("Auto · 1.5× · 60 fps", `ScreenTierText`;
+"1×" on a display at one pixel per point, #7842) and why it last
   changed in plain words with how long ago (picked for this connection, the connection slowed down or is steady, the
   network changed, the iPhone is warm or saving power or couldn't keep up, you changed Quality); the resolution is the
   encoder's after an in-place change (`encoding`), not `hello`'s. Over VNC it shows RFB's bitrate
@@ -824,7 +844,10 @@ iPhone's side comes next.
   **Settings › This Device › Live Screen** (`LiveScreenSettingsView`, shown when a computer offers its live screen)
   has one switch, "Choose the Fastest Route Automatically", on by default; turned off, the
   phone asks for no session (everything through the hub, as before) and live sessions move back to their relays at
-  once. The quality tiers (#6396) add their own section to the same page. The stats overlay's Route row shows the route's
+  once. The quality tiers (#6396) add their own section to the same page, and Scroll Speed (#7775) a third: Slower,
+  Default or Faster (`VNCScrollSpeed`, this device's, for every computer: 0.6×, 1× and 1.6× the two-finger scroll's
+  distance, slow drags too; the top speed stays Screen Sharing's). Since Scroll Speed applies to every computer that
+  shows its live screen, the page is there whenever one does. The stats overlay's Route row shows the route's
   round trip and packet loss and why it last changed ("Faster route", "Previous route dropped", "Network changed", …, or
   that the computer's firewall blocks direct connections). The first try of a same-network route shows iOS's local
   network question with `NSLocalNetworkUsageDescription`; refused, those routes fail quietly and the relay stays.
@@ -850,6 +873,64 @@ iPhone's side comes next.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
+
+### Pixel scrolling (#7775)
+
+Two-finger scrolling over RFB sends wheel notches, and macOS's Screen Sharing scrolls a notch one point: a page follows
+the fingers, but Screen Sharing falls behind past about 2000 notches a second, a terminal moves a whole line per event
+(notches that come together merge), and a page stops dead at its ends. Continuous scroll events posted on the Mac
+itself, as a trackpad's are, scroll by the point with no such ceiling, with the app's own momentum and rubber-banding.
+Approved on #7775: a helper of its own posts them, with the Accessibility permission asked for once; without it,
+scrolling stays on RFB's notches.
+
+- **Persona Input** (`apple/PersonaLink/Input`, a package of its own; bundle `Persona Link.app/Contents/Helpers/Persona
+  Input.app`, bundle id `<link id>.input`): started by the node through LaunchServices as Persona Screen is, on a 0600
+  Unix socket whose first line is a token. It then says `granted` or `missing` (`CGPreflightPostEventAccess()`; missing
+  ends it) and posts every scroll record that comes as `CGEvent(scrollWheelEvent2Source:units: .pixel, …)` with
+  `scrollWheelEventIsContinuous`, the scroll phase and the momentum phase, at the pointer (RFB has just put it there),
+  carrying fractions of a point to the next event. Scroll events only: no clicks, no keys. `--preflight` prints
+  `post_event: granted|missing`, asking nothing; `--request-permission` asks macOS once (`CGRequestPostEventAccess()`),
+  whose window only the user answers. Persona Screen is not touched: its package, binary and Screen Recording grant stay
+  as they were, and the two share no code.
+- **Same bits from build to build**: macOS ties the permission to the helper's code. The package builds in Swift 6 mode
+  (`#file` is the module and file name) and links no debug map, so a build does not depend on its path:
+  `scripts/app/mac-link.sh verify-input` builds it twice from clean copies at two paths and compares the executable and
+  the signed bundle's cdhash (the same on 2026-11-15: executable `659dc1e66ff90a6f`, cdhash `da868531…`). On top of that,
+  `mac-link.sh` keeps the built executable in `~/.persona/cache/persona-input/<key>` (`PERSONA_INPUT_CACHE`), the key a
+  hash of the helper's and `PersonaInputKit`'s sources and the architectures, and reuses it byte for byte: a Persona Link
+  update that leaves those sources alone never changes the helper, whatever checkout or Xcode builds it.
+- **The record** (`PersonaInputKit`'s `ScrollRecord`, the helper and the iOS app; the node's codec in Go, both checked
+  against `spec/fixtures/screen-input`): 16 bytes, big-endian. Byte 0 is **200**, an RFB client message type that IANA's
+  registry leaves unassigned (151–244 are, checked 2026-11-15); the phone sends it inside the RFB stream and the node
+  takes it out, so Screen Sharing never sees it. Then the version (1), the kind (0 hello: the phone can scroll by pixels;
+  1 scroll), the scroll phase (CGScrollPhase: 0 none, 1 began, 2 changed, 4 ended, 8 cancelled), the momentum phase
+  (CGMomentumScrollPhase: 0 none, 1 begin, 2 continue, 3 end), three reserved bytes, then dy and dx as `f32` Mac points
+  (> 0 shows what is above or to the left, as the RFB wheel's up and CGEvent's axes). Another version is refused, never
+  guessed at. The node hands the helper the same 16 bytes.
+- **The node** (`node/rfbinput.go`, `node/inputhelper.go`): on a Mac every paired 5900 stream (after the login observer)
+  is read on the phone's side.
+  - **The handshake** is followed as the bytes go by. With types 1, 2 and 30, macOS's Screen Sharing speaks plain RFB
+    after the login (type 30's key length comes from Screen Sharing's own bytes). With Apple's other types (33, 35, 36)
+    or anything else, nothing is read and the stream passes as it came.
+  - **Messages**: then the six client messages (fixed lengths; SetEncodings' and ClientCutText's from their headers),
+    each passed on at once, byte for byte, however the stream is cut. A message type it doesn't know ends the reading
+    for good.
+  - **Records** (type 200) are taken out:
+    - A hello starts Persona Input for the stream if it may post events: at most 2 at once, only for a stream that
+      signed in, and it ends with the stream. If it may not, the node asks macOS once for this helper version
+      (`--request-permission`, recorded in `~/.persona/bin/Persona Input.asked`; macOS's window shows on the Mac's
+      screen, which the phone is showing).
+    - A scroll goes to the helper through a short queue, so the relay never waits.
+    - One the helper can't take (not started yet, the permission gone, the helper stuck) goes to Screen Sharing as
+      wheel notches instead: a notch a Mac point, at the pointer the phone last placed, at most 200 a record, fractions
+      carried.
+    - A record that doesn't decode is dropped, never passed on.
+  - **Status**: `computer.status` / `browser.status` gain `screen_input {version, permission, asked}`, from the helper's
+    `--preflight`, at most once a minute (`asked` while missing). It is absent without the helper or from an older node,
+    so the phone never sends a record to a node that would pass it to Screen Sharing.
+  - With the node signing setting the node runs its own signed copy (`~/.persona/bin/Persona Input.app`), as for Persona
+    Screen. None of Persona Screen's node code changes for it.
+- Still to come on #7775: the phone saying hello and sending records.
 
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 
