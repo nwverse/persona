@@ -408,6 +408,11 @@ extension Theme {
         static let symlink = "arrow.turn.up.right"
         /// Between two folders in the file page's path bar.
         static let pathSeparator = "chevron.compact.right"
+        /// Inbox folders (#2463): a folder in the Inbox's folder bar, Move to Folder…, a row's folder and Settings › Inbox
+        /// Folders; No Folder takes an item out of every folder; the levels of the folder bar's path.
+        static let inboxFolder = folder
+        static let inboxFolderNone = deleteGroup
+        static let inboxFolderLevel = pathSeparator
         /// A folder that is a git repository (the new chat's directory browser).
         static let gitRepository = "folder.badge.gearshape"
         /// A temporary session: one in Claude's desktop app's scratch folder (New Agent, #5480).

@@ -10,11 +10,21 @@ final class InboxProjection {
         /// The current assistant, on a hub with several (`AppModel.assistantScope`): only its items are in the snapshot,
         /// its source chips included.
         var scope: AssistantScope?
+        /// The folder picked (docs/assistant/inbox.md "Folders"): "" every item, a path (it and everything under it) or
+        /// `InboxFolders.unfiled`. Only while folders show.
+        var folder = ""
+        /// Folders show: the snapshot keeps what the folder bar counts (`filed`).
+        var folders = false
         // Searching and the Moments @Me alias use the current localization, not a cached language's result.
         var localeIdentifier = Locale.current.identifier
         var mentionLabel = String(localized: "@Me")
 
         func matches(_ item: InboxItem) -> Bool {
+            matchesBesidesFolder(item) && InboxFolders.contains(item, filter: folder)
+        }
+
+        /// Everything but the folder: what the folder bar counts.
+        func matchesBesidesFolder(_ item: InboxItem) -> Bool {
             if !source.isEmpty && item.account != source { return false }
             if !kind.isEmpty && !(item.kind == kind || kind == "group" && item.kind == "bot" || kind == "mention" && (item.kind == "doc" || item.kind == "moment" && item.kindLabel == mentionLabel)) { return false }
             if query.isEmpty { return true }
@@ -35,6 +45,8 @@ final class InboxProjection {
     let byTier: [InboxItem.Tier: [InboxItem]]
     let doneItems: [InboxItem]
     let connectorSources: [Source]
+    /// With folders shown, the items the other filters leave (folder and open or not), which the folder bar counts.
+    let filed: [InboxFolders.Filed]
     // Closed Done sections never sort. Expanding, closing and expanding again reuse this snapshot's order.
     private(set) lazy var sortedDoneItems = doneItems.sorted {
         ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast)
@@ -45,13 +57,16 @@ final class InboxProjection {
         var tiers: [InboxItem.Tier: [InboxItem]] = [:]
         var done: [InboxItem] = []
         var sources: [Source] = []
+        var filed: [InboxFolders.Filed] = []
         var seen = Set<String>()
         for item in items where filter.scope.has(item.manager) {
             // Source chips include archived and currently filtered-out items, first occurrence wins.
             if item.connector != nil && seen.insert(item.account).inserted {
                 sources.append(Source(id: item.account, name: item.accountName))
             }
-            guard filter.matches(item) else { continue }
+            guard filter.matchesBesidesFolder(item) else { continue }
+            if filter.folders { filed.append(InboxFolders.Filed(item)) }
+            guard InboxFolders.contains(item, filter: filter.folder) else { continue }
             if item.isDone {
                 done.append(item)
             } else {
@@ -63,6 +78,7 @@ final class InboxProjection {
         byTier = tiers
         doneItems = done
         connectorSources = sources
+        self.filed = filed
     }
 }
 

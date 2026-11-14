@@ -14914,6 +14914,29 @@
       },
       "extractionState" : "manual"
     },
+    "AI puts each new item in a folder such as work/alerts/engine, reusing the folders you already have. Uses the triage model." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI puts each new item in a folder such as work/alerts/engine, reusing the folders you already have. Uses the triage model."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI が新しい項目を work/alerts/engine のようなフォルダに入れます。既存のフォルダを優先して使います。仕分けモデルを使用します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 会把每条新消息放进 work/alerts/engine 这样的文件夹，尽量沿用已有的文件夹。使用分拣模型。"
+          }
+        }
+      }
+    },
     "AI Reply" : {
       "localizations" : {
         "en" : {
@@ -15213,6 +15236,29 @@
       },
       "extractionState" : "manual"
     },
+    "AI will file it" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI will file it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI が分類します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交给 AI 归档"
+          }
+        }
+      }
+    },
     "AI-generated from the recording. Check anything important." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15232,6 +15278,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "録音から AI が作成しました。重要な内容は確認してください。"
+          }
+        }
+      }
+    },
+    "All Folders" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Folders"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのフォルダ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部文件夹"
           }
         }
       }
@@ -58108,6 +58177,52 @@
       },
       "extractionState" : "manual"
     },
+    "e.g. Messages from the build bot go to work/builds; reviews go to projects/<name>/reviews" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "e.g. Messages from the build bot go to work/builds; reviews go to projects/<name>/reviews"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例：ビルドボットのメッセージは work/builds、レビューは projects/<名前>/reviews"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如：构建机器人的消息放到 work/builds；评审放到 projects/<名称>/reviews"
+          }
+        }
+      }
+    },
+    "e.g. work/alerts/engine" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "e.g. work/alerts/engine"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例：work/alerts/engine"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如 work/alerts/engine"
+          }
+        }
+      }
+    },
     "Each agent's row says what it is waiting for" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -62423,6 +62538,167 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "File Items Automatically" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File Items Automatically"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動で分類"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动归档"
+          }
+        }
+      }
+    },
+    "Folder Path" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder Path"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダのパス"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹路径"
+          }
+        }
+      }
+    },
+    "Folder Rules" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder Rules"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分類ルール"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档规则"
+          }
+        }
+      }
+    },
+    "Folder: %@ [Inbox Folders]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダ：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹：%1$@"
+          }
+        }
+      }
+    },
+    "Folders" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folders"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹"
+          }
+        }
+      }
+    },
+    "Folders in Use" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folders in Use"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用中のフォルダ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已有文件夹"
+          }
+        }
+      }
+    },
+    "Folders show in the Inbox while this is on: browse by folder, and move items with Move to Folder…." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folders show in the Inbox while this is on: browse by folder, and move items with Move to Folder…."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンの間、受信トレイにフォルダが表示されます。フォルダごとに見たり、「フォルダに移動…」で項目を移動したりできます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开后收件箱会显示文件夹：可以按文件夹浏览，也可以用“移到文件夹…”手动移动。"
+          }
+        }
+      }
     },
     "FYI" : {
       "localizations" : {
@@ -72534,6 +72810,29 @@
       },
       "extractionState" : "manual"
     },
+    "In your own words. They come before AI’s own choices." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In your own words. They come before AI’s own choices."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自由に書けます。AI 自身の判断より優先されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用你自己的话写，优先于 AI 自己的判断。"
+          }
+        }
+      }
+    },
     "In “%@” and its folders · %lld found" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -72625,6 +72924,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Inbox Folders" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox Folders"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信トレイのフォルダ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱文件夹"
+          }
+        }
+      }
     },
     "Inbox Item…" : {
       "localizations" : {
@@ -79463,6 +79785,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Let AI Decide" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let AI Decide"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI に任せる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交给 AI"
+          }
+        }
+      }
     },
     "Let Claude send you local notifications" : {
       "localizations" : {
@@ -88119,6 +88464,29 @@
         }
       }
     },
+    "Move [Inbox Folders]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移动"
+          }
+        }
+      }
+    },
     "Move Back" : {
       "localizations" : {
         "en" : {
@@ -88252,6 +88620,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "移动到"
+          }
+        }
+      }
+    },
+    "Move to Folder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to Folder"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダに移動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到文件夹"
+          }
+        }
+      }
+    },
+    "Move to Folder…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to Folder…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダに移動…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到文件夹…"
           }
         }
       }
@@ -92880,6 +93294,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No Folder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Folder"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダなし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不放文件夹"
+          }
+        }
+      }
     },
     "No Free Terminal" : {
       "localizations" : {
@@ -128249,6 +128686,52 @@
       },
       "extractionState" : "manual"
     },
+    "Save Rules" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save Rules"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ルールを保存"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存规则"
+          }
+        }
+      }
+    },
+    "settings.search.inbox_folders" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "inbox folders filing folder rules triage"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信トレイ フォルダ 分類 ルール 自動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱 文件夹 归档 规则 自动归档"
+          }
+        }
+      }
+    },
     "SF Mono (System)" : {
       "localizations" : {
         "en" : {
@@ -146584,6 +147067,29 @@
         }
       }
     },
+    "Taken out of its folder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Taken out of its folder"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダから外しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移出文件夹"
+          }
+        }
+      }
+    },
     "Taking a photo, one moment" : {
       "localizations" : {
         "en" : {
@@ -158487,6 +158993,29 @@
         }
       }
     },
+    "This hub doesn't support Inbox folders yet. Update the hub, then turn them on here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub doesn't support Inbox folders yet. Update the hub, then turn them on here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブは受信トレイのフォルダにまだ対応していません。ハブを更新してから、ここでオンにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 hub 还不支持收件箱文件夹。更新 hub 后再在这里打开。"
+          }
+        }
+      }
+    },
     "This Hub Is Disconnected" : {
       "localizations" : {
         "en" : {
@@ -169425,6 +169954,29 @@
       },
       "extractionState" : "manual"
     },
+    "Unfiled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unfiled"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未分類"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未归档"
+          }
+        }
+      }
+    },
     "Unhide [Lark Chat View e0534b]" : {
       "localizations" : {
         "en" : {
@@ -173077,6 +173629,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Use / between levels. AI won’t move it again once you file it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use / between levels. AI won’t move it again once you file it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "階層は / で区切ります。手動で移動したものは AI が動かしません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 / 分隔每一级。你归档后，AI 不会再移动它。"
+          }
+        }
+      }
     },
     "Use Browser" : {
       "localizations" : {

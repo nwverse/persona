@@ -74,6 +74,11 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var handoffs: [Handoff]?
     /// The rows merged into this one by hand (#6480); the hub hides them from every list.
     var mergedFrom: [MergeRef]?
+    /// The folder path it is filed under ("work/alerts/engine", docs/assistant/inbox.md "Folders", #2463); nil: in no
+    /// folder. `folderBy` says who filed it: "model" (the triage model, which may file it again) or "user" (by hand, even
+    /// into no folder: the model leaves it alone). Older hubs leave both out.
+    var folder: String? = nil
+    var folderBy: String? = nil
 
     /// One row merged into another: where it came from.
     nonisolated struct MergeRef: Codable, Hashable, Sendable {
@@ -326,6 +331,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
         case mergedFrom = "merged_from"
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
         case chainCount = "chain_count"
+        case folder, folderBy = "folder_by"
     }
 
     var isDone: Bool { doneAt != nil }
@@ -780,10 +786,79 @@ extension APIClient {
                         kind: kind, title: title, clientID: clientID.uuidString.lowercased()))
     }
 
+    /// The folder settings and the folders in use (docs/assistant/inbox.md "Folders"); an older hub answers 404.
+    func inboxFolders() async throws -> InboxFolderList {
+        try await get("/api/v1/inbox/folders", as: InboxFolderList.self)
+    }
+
+    /// Turns automatic filing on or off and sets the folder rules; answers the settings as the hub kept them.
+    func setInboxFolders(_ settings: InboxFolderSettings) async throws -> InboxFolderList {
+        let data = try await request("PUT", "/api/v1/inbox/folders", body: settings)
+        return try JSON.decoder.decode(InboxFolderList.self, from: data)
+    }
+
+    /// Files an item by hand: a path files it there, "" in no folder (the model leaves it alone either way), nil hands it
+    /// back to the model. Answers the item as listed.
+    func setInboxFolder(_ id: String, _ folder: String?) async throws -> InboxItem {
+        let data = try await request("PUT", "/api/v1/inbox/" + id + "/folder", body: InboxFolderBody(folder: folder))
+        return try JSON.decoder.decode(InboxItem.self, from: data)
+    }
+
     /// Moves one row's status in the document; the item comes back read again.
     func inboxDocStatus(_ id: String, _ change: InboxItem.DocChange) async throws -> InboxItem {
         try await post("/api/v1/inbox/" + id + "/doc/status", body: change, timeout: 60, as: InboxItem.self)
     }
+}
+
+/// `PUT /api/v1/inbox/{id}/folder`'s body: `folder` is always written, `null` included (back to the model).
+nonisolated struct InboxFolderBody: Encodable, Sendable {
+    var folder: String?
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(folder, forKey: .folder)
+    }
+    private enum CodingKeys: String, CodingKey { case folder }
+}
+
+/// The folder settings (`inbox_folders`): whether the model files items, and the user's folder rules. Off by default.
+nonisolated struct InboxFolderSettings: Codable, Equatable, Sendable {
+    var enabled = false
+    var rules = ""
+
+    init(enabled: Bool = false, rules: String = "") {
+        self.enabled = enabled
+        self.rules = rules
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        rules = try c.decodeIfPresent(String.self, forKey: .rules) ?? ""
+    }
+    private enum CodingKeys: String, CodingKey { case enabled, rules }
+}
+
+/// `GET /api/v1/inbox/folders`: the settings and the folders the list's items are filed in, most used first.
+nonisolated struct InboxFolderList: Decodable, Equatable, Sendable {
+    nonisolated struct Folder: Decodable, Equatable, Sendable {
+        var path: String
+        var count: Int
+        var open: Int
+    }
+    var settings: InboxFolderSettings
+    var folders: [Folder]
+
+    init(settings: InboxFolderSettings, folders: [Folder] = []) {
+        self.settings = settings
+        self.folders = folders
+    }
+
+    init(from decoder: Decoder) throws {
+        settings = try InboxFolderSettings(from: decoder)
+        folders = (try? decoder.container(keyedBy: CodingKeys.self).decodeIfPresent([Folder].self, forKey: .folders)) ?? []
+    }
+    private enum CodingKeys: String, CodingKey { case folders }
 }
 
 /// The destination recorded for an already-delivered hand-off.

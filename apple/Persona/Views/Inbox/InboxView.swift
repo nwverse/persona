@@ -77,6 +77,8 @@ struct InboxPage: View {
     var embedded = false
     @StoredValue("inbox.source") private var source = "" // "" all, "feishu", or a mail account id
     @StoredValue("inbox.kind") private var kind = ""     // "" all, agent, dm, mention, group, mail
+    /// The folder picked (#2463): "" all, a folder path (it and everything under it) or `InboxFolders.unfiled`.
+    @StoredValue("inbox.folder") private var storedFolder = ""
     @State private var query = ""
     @State private var itemMemo = InboxProjectionMemo()
     private var accounts: [MailAccount] {
@@ -102,6 +104,7 @@ struct InboxPage: View {
     @State private var showingSubscriptions = false  // source subscriptions (#2041)
     @State private var ruling: InboxPolicyTarget? // a row's Rule for This Chat / Sender / Repository…
     @State private var todoRequest: InboxTodoRequest? // rows waiting for their to-do's due time (#6480)
+    @State private var moving: InboxItem? // a row's Move to Folder… (#2463)
     @State private var confirming = false // Clear All over many items asks first
     /// Selecting (#2059): the picked items' keys (`InboxItem.key`); nil when not selecting. Marking stays in Persona (done, with Undo).
     @State private var picked: Set<String>?
@@ -111,8 +114,14 @@ struct InboxPage: View {
     static let kinds = [("mention", String(localized: "@Me")), ("dm", String(localized: "DMs")), ("group", String(localized: "Group chat")), ("mail", String(localized: "Mail [Assistant View 3d708e]")), ("agent", String(localized: "Agent"))]
 
     private var itemProjection: InboxProjection {
-        itemMemo(store.items, filter: .init(source: source, kind: kind, query: query, scope: model.assistantScope), revision: store.itemsRevision)
+        itemMemo(store.items, filter: .init(source: source, kind: kind, query: query, scope: model.assistantScope, folder: folder, folders: foldersShown),
+                 revision: store.itemsRevision)
     }
+
+    /// Folders show only while automatic filing is on (docs/assistant/inbox.md "Folders"): off, the page is as it was
+    /// before folders, and a folder picked before filters nothing.
+    private var foldersShown: Bool { store.foldersShown }
+    private var folder: String { foldersShown ? storedFolder : "" }
 
     private var openItems: [InboxItem] { itemProjection.openItems }
 
@@ -122,7 +131,7 @@ struct InboxPage: View {
     /// The current assistant's agents (and the assistant) waiting for an answer, an approval or a plan review: they need
     /// the user too, so they head Needs You. Opening one goes to its chat; the Agents tab stays as it is.
     private var waitingAgents: [Interaction] {
-        guard source.isEmpty, kind.isEmpty || kind == "agent" else { return [] }
+        guard source.isEmpty, folder.isEmpty, kind.isEmpty || kind == "agent" else { return [] }
         return model.scopedInteractions.filter { ix in
             !model.isMuted(ix.sessionKey) && (query.isEmpty || [ix.sessionTitle ?? "", ix.summary ?? "", ix.title].contains { $0.localizedCaseInsensitiveContains(query) })
         }
@@ -194,6 +203,7 @@ struct InboxPage: View {
                 .sheet(isPresented: $showingSubscriptions) { SubscriptionsSheet() }
                 .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
                 .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
+                .sheet(item: $moving) { InboxFolderMoveSheet(item: $0) }
                 .confirmationDialog(InboxBulk.confirmTitle, isPresented: $confirming, titleVisibility: .visible) {
                     Button(InboxBulk.confirmButton(count: cleanScope.count)) { clean(confirmed: true) }
                         .accessibilityIdentifier("inbox.cleanConfirm")
@@ -208,6 +218,8 @@ struct InboxPage: View {
                 // the assistant and the accounts it was started with (`ComposeDraft.manager`), and goes out through it.
                 .onChange(of: model.assistantSwitches) {
                     source = ""
+                    storedFolder = "" // the folders are the one before's
+                    moving = nil
                     // This assistant's accounts as last kept (it may be offline), then as the hub has them.
                     accounts = InboxMailAccounts.cached(model.assistantManagerID)
                     Task { await loadAccounts() }
@@ -223,6 +235,7 @@ struct InboxPage: View {
                 .task { await InboxItemSlots.shared.reload() }
                 .task {
                     store.reload()
+                    store.loadFolderSettings()
                     await loadAccounts()
                     // A source kept from another time that no chip stands for now (a connector of another assistant's
                     // items): the list would be empty with nothing to turn off.
@@ -429,7 +442,7 @@ struct InboxPage: View {
     /// store reads it), newest done first.
     private func doneAll(_ listed: [InboxItem]) -> [InboxItem] {
         let have = Set(listed.map(\.key))
-        let filter = InboxProjection.Filter(source: source, kind: kind, query: query)
+        let filter = InboxProjection.Filter(source: source, kind: kind, query: query, folder: folder)
         let older = store.history.filter { $0.isDone && !have.contains($0.key) && filter.matches($0) }
         return older.isEmpty ? listed : (listed + older).sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
     }
@@ -595,6 +608,11 @@ struct InboxPage: View {
             names.append(c.name)
         }
         if let k = Self.kinds.first(where: { $0.0 == kind }) { names.append(k.1) }
+        if folder == InboxFolders.unfiled {
+            names.append(String(localized: "Unfiled"))
+        } else if !folder.isEmpty {
+            names.append(InboxFolders.name(folder))
+        }
         return names
     }
 
@@ -648,6 +666,13 @@ struct InboxPage: View {
             .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: Theme.Space.sm, trailing: Theme.Space.page))
             .listRowSeparator(.hidden)
             .themedRow()
+            // Folders (#2463), only while automatic filing is on: where the list is, and the folders under it.
+            if foldersShown {
+                folderBar(projection.filed)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: Theme.Space.sm, trailing: 0))
+                    .listRowSeparator(.hidden)
+                    .themedRow()
+            }
             // New items the hub holds back until the model sorts them (#1773): above the first item.
             if let line = InboxTriageText.line(store.triage) {
                 InboxTriageBanner(line: line, configurable: InboxTriageText.configurable(store.triage, mayChangeSettings: !model.isDemo))
@@ -718,7 +743,7 @@ struct InboxPage: View {
             if doneCount > 0 {
                 let more = days == nil ? store.historyMore && !store.history.isEmpty : nextGroup != nil || dg.contains { $0.plus }
                 let count = more ? "\(doneCount)+" : "\(doneCount)"
-                let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
+                let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty || !folder.isEmpty
                 if dg.count > 1 {
                     // Its title as a row, not as the header of a section with nothing in it: as that header (with its
                     // Jump To menu, #2979) its text came out washed like a stuck title's wherever it was, and on an
@@ -760,7 +785,10 @@ struct InboxPage: View {
         }
         .listStyle(.plain)
         .themedPage()
-        .refreshable { await store.refresh() }
+        .refreshable {
+            store.loadFolderSettings()
+            await store.refresh()
+        }
         .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
         // Done's day counts once the list is in, so Done lists its groups and counts before it opens (#2969); a hub
         // without them gets the history's first page instead
@@ -903,7 +931,8 @@ struct InboxPage: View {
 
     @ViewBuilder private func row(_ it: InboxItem) -> some View {
         let content = InboxRow(item: it, showAccount: accounts.count > 1, sending: store.sending.contains(it.key),
-                               send: { text in Task { await store.send(it, text: text, changes: it.agent?.changes ?? []) } }, edit: { editingDraft = it })
+                               send: { text in Task { await store.send(it, text: text, changes: it.agent?.changes ?? []) } }, edit: { editingDraft = it },
+                               folder: foldersShown && it.folder != folder ? it.folder : nil)
         if let picked {
             // Selecting (#2059): a tap anywhere on the row picks it (its draft's buttons too); a done item can't be picked.
             let on = picked.contains(it.key)
@@ -959,6 +988,9 @@ struct InboxPage: View {
                 }
             }
             Section { InboxRuleButtons(item: it) { ruling = $0 } }
+        }
+        if foldersShown {
+            Section { InboxFolderMoveButton(item: it) { moving = it } }
         }
     }
 
@@ -1034,6 +1066,92 @@ struct InboxPage: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: Folders (#2463)
+
+    /// The folder bar under the filters (the web's `FolderBar`): "All Folders › work › alerts", each level a link, then
+    /// the folders right under the one picked as chips with their open counts, and Unfiled at the top. `filed`: the items
+    /// the other filters leave.
+    private func folderBar(_ filed: [InboxFolders.Filed]) -> some View {
+        let unfiled = folder == InboxFolders.unfiled
+        let children = unfiled ? [] : InboxFolders.children(filed, of: folder)
+        let none = InboxFolders.unfiledCount(filed)
+        let showsUnfiled = folder.isEmpty && none.count > 0
+        return VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Space.xs) {
+                    crumb(String(localized: "All Folders"), symbol: Theme.Icon.inboxFolder, current: folder.isEmpty) { storedFolder = "" }
+                    if unfiled {
+                        crumbLevel
+                        crumb(String(localized: "Unfiled"), current: true) {}
+                    }
+                    let crumbs = InboxFolders.crumbs(folder)
+                    ForEach(crumbs, id: \.path) { c in
+                        crumbLevel
+                        crumb(c.name, current: c.path == folder) { storedFolder = c.path }
+                    }
+                }
+                .padding(.horizontal, Theme.Space.page)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text("Folders"))
+            .accessibilityIdentifier("inbox.folderCrumbs")
+            if !children.isEmpty || showsUnfiled {
+                if AppStyle.current.usesBeautifulUI {
+                    LarkFlowLayout(spacing: Theme.Space.xs, lineSpacing: Theme.Space.sm) {
+                        ForEach(children) { c in filterChip(Self.folderChipTitle(c.name, open: c.open), on: false) { storedFolder = c.path } }
+                        if showsUnfiled {
+                            filterChip(Self.folderChipTitle(String(localized: "Unfiled"), open: none.open), on: false) { storedFolder = InboxFolders.unfiled }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.Space.l)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Theme.Space.s) {
+                            ForEach(children) { c in
+                                chip(Self.folderChipTitle(c.name, open: c.open), symbol: Theme.Icon.inboxFolder, on: false) { storedFolder = c.path }
+                            }
+                            if showsUnfiled {
+                                chip(Self.folderChipTitle(String(localized: "Unfiled"), open: none.open), on: false) { storedFolder = InboxFolders.unfiled }
+                            }
+                        }
+                        .padding(.horizontal, Theme.Space.l)
+                    }
+                    .accessibilityIdentifier("inbox.subfolders")
+                }
+            }
+        }
+    }
+
+    /// A folder chip's words: its name, then how many open items are in and under it (none: just the name).
+    nonisolated static func folderChipTitle(_ name: String, open: Int) -> String {
+        open > 0 ? "\(name) \(open)" : name
+    }
+
+    /// One level of the folder bar's path: the one shown is in the strong weight and does nothing.
+    private func crumb(_ title: String, symbol: String? = nil, current: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            guard !current else { return }
+            withAnimation(Theme.Motion.standard) { action() }
+            Haptics.tap()
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                if let symbol { ThemedIcon(symbol).font(Theme.Font.label) }
+                Text(title).lineLimit(1)
+            }
+            .font(current ? Theme.Font.secondaryStrong : Theme.Font.secondary)
+            .foregroundStyle(current ? Color.primary : Color.secondary)
+            .scaledFrame(minHeight: Theme.Size.tapTarget)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(current ? .isSelected : [])
+    }
+
+    private var crumbLevel: some View {
+        ThemedIcon(Theme.Icon.inboxFolderLevel).font(Theme.Font.label).foregroundStyle(.tertiary).accessibilityHidden(true)
+    }
+
     /// A section's clear-all on the right: mark all seen (FYI), clear all (Collapsed); none for Needs You and In Progress (the AI is
     /// on those).
     nonisolated static func clearTitle(_ tier: InboxItem.Tier) -> String? {
@@ -1065,6 +1183,8 @@ struct InboxRow: View {
     /// Send / Edit on the AI twin's draft (the list only).
     var send: ((String) -> Void)?
     var edit: (() -> Void)?
+    /// Its folder, when the list shows folders and is not already in it (#2463); nil: no line.
+    var folder: String? = nil
 
     @StoredValue(TranslationPrefs.targetKey) private var translateTarget = TranslationPrefs.defaultTarget
     @StoredValue(TranslationPrefs.enabledKey) private var translating = false
@@ -1116,6 +1236,9 @@ struct InboxRow: View {
                 }
                 if showAccount && !item.isLark {
                     Text(item.accountName).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if let folder, !folder.isEmpty {
+                    InboxFolderLine(path: folder)
                 }
                 if let merged = item.mergedFrom?.count, merged > 0 {
                     // Rows merged into this one (#6480): plain grey small text
@@ -1381,6 +1504,7 @@ struct InboxDetailView: View {
     @State private var sameMatter = false
     @State private var ruling: InboxPolicyTarget?
     @State private var todoRequest: InboxTodoRequest?
+    @State private var moving = false
     @State private var slot: InboxItemSlotModel
 
     init(item: InboxItem, accounts: [MailAccount]) {
@@ -1400,6 +1524,7 @@ struct InboxDetailView: View {
             .sheet(isPresented: $sameMatter) { InboxSameMatterPicker(item: current, tree: nil) }
             .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
             .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
+            .sheet(isPresented: $moving) { InboxFolderMoveSheet(item: current) }
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1422,6 +1547,9 @@ struct InboxDetailView: View {
                         }
                         if let mutes = current.mutes, !mutes.isEmpty {
                             InboxRuleButtons(item: current) { ruling = $0 }
+                        }
+                        if InboxStore.shared.foldersShown {
+                            InboxFolderMoveButton(item: current) { moving = true }
                         }
                         Button { sameMatter = true } label: { Label("Same matter as…", systemImage: Theme.Icon.link) }
                             .accessibilityIdentifier("inbox.detail.sameMatter")
