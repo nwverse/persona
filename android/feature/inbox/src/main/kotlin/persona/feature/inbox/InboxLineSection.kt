@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
@@ -105,9 +106,11 @@ internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, 
         onDismiss = { showSame = false }, onLinked = { tree = it })
 }
 
-/** Isolated so the display package's shared `now` words can replace the legacy fallback when that baseline lands. */
+/** The shared `now` words when the hub supplies them, with the pre-`now` words as the compatibility fallback. */
 @Composable
 internal fun inboxLineStatus(record: InboxRecord): String {
+    val clock = LocalInboxClock.current
+    inboxNowForRow(record, LocalResources.current, currentLocale, now = clock(), zone = LocalInboxZone.current)?.let { return it }
     if (record.item.isDone) return stringResource(if (record.event.doneBy == "manager") R.string.inbox_done_by_manager else R.string.inbox_done)
     return when (val mark = eventMark(record)) {
         is EventMark.Working -> stringResource(mark.word)
@@ -115,6 +118,7 @@ internal fun inboxLineStatus(record: InboxRecord): String {
         is EventMark.Failed -> mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
             ?: stringResource(R.string.inbox_handling_failed)
         is EventMark.Suggests -> stringResource(mark.kind)
+        is EventMark.Now -> mark.text
         null -> when (record.item.section) {
             "working" -> stringResource(R.string.inbox_section_working)
             InboxTier.Action.wire -> stringResource(R.string.inbox_bay_needs_you)

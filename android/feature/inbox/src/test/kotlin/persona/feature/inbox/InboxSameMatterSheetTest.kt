@@ -53,16 +53,14 @@ class InboxSameMatterSheetTest {
         val other = record("other", "Other", manager = "m1")
         val newer = record("newer", "Alpha", manager = "m2", at = "2026-11-13T07:00:00Z")
         val older = record("older", "Beta", manager = "m2", at = "2026-11-12T07:00:00Z")
-        val place = record("place", "Gamma", manager = "m2", at = "2026-11-13T06:00:00Z")
+        val place = record("place", "Gamma", manager = "m2", at = "2026-11-13T06:00:00Z", where = "Warehouse")
         val belowDone = record("below-done", "Below done", manager = "m2", at = "2026-11-13T02:00:00Z")
         val records = listOf(current, child, grandchild, done, other, newer, older, place, belowDone)
         val descendants = listOf(child, grandchild, done, belowDone)
         val all = sameMatterCandidates(records, current, descendants, "")
         assertEquals(listOf("newer", "place", "older"), all.map { it.hubItemId })
         assertEquals(listOf("newer"), sameMatterCandidates(records, current, descendants, "alpha").map { it.hubItemId })
-        assertEquals(listOf("place"), sameMatterCandidates(records, current, descendants, "WAREHOUSE") {
-            if (it.hubItemId == "place") "Warehouse" else null
-        }.map { it.hubItemId })
+        assertEquals(listOf("place"), sameMatterCandidates(records, current, descendants, "WAREHOUSE").map { it.hubItemId })
         assertTrue("all descendants are excluded, including those below a done item", all.none { it.hubItemId in setOf("grandchild", "below-done") })
     }
 
@@ -90,7 +88,7 @@ class InboxSameMatterSheetTest {
     @Test fun pickerFiltersSearchesAndLinksTheRawParentWithoutAConfirmation() {
         val current = record("current", "Current", manager = "m2")
         val child = record("child", "Child", manager = "m2")
-        val alpha = record("alpha", "Alpha", manager = "m2", sender = "Alice", preview = "Latest", at = "2026-11-13T07:00:00Z")
+        val alpha = record("alpha", "Alpha", manager = "m2", sender = "Alice", preview = "Latest", at = "2026-11-13T07:00:00Z", where = "Design")
         val beta = record("beta", "Beta", manager = "m2", at = "2026-11-12T07:00:00Z")
         val done = record("done", "Done", manager = "m2", done = true)
         val tree = InboxLineage(InboxParentRef("inbox", "current"), current, children = listOf(child))
@@ -104,7 +102,7 @@ class InboxSameMatterSheetTest {
         rule.onNodeWithText("Current").assertDoesNotExist()
         rule.onNodeWithText("Child").assertDoesNotExist()
         rule.onNodeWithText("Done").assertDoesNotExist()
-        rule.onNodeWithText("Alice：Latest").assertExists()
+        rule.onNodeWithText("Design · Alice：Latest").assertExists()
         rule.onNode(hasSetTextAction()).performTextReplacement("Beta")
         rule.onNodeWithText("Alpha").assertDoesNotExist()
         rule.onNode(hasText("Beta", substring = true) and hasClickAction() and !hasSetTextAction()).assertExists()
@@ -268,9 +266,9 @@ class InboxSameMatterSheetTest {
     }
 
     companion object {
-        private fun record(id: String, title: String, manager: String? = null, sender: String? = null, preview: String = "", at: String? = null, done: Boolean = false) =
+        private fun record(id: String, title: String, manager: String? = null, sender: String? = null, preview: String = "", at: String? = null, done: Boolean = false, where: String? = null) =
             InboxRecord(InboxItem(InboxItemKey.appId(id, manager), title = title, sender = sender, preview = preview,
-                updatedAt = at, doneAt = if (done) "2026-11-13T09:00:00Z" else null, status = if (done) null else "action"),
-                event = InboxEventFields(status = if (done) null else "action"), manager = manager)
+                updatedAt = at, doneAt = if (done) "2026-11-13T09:00:00Z" else null, status = if (done) null else "action", where = where),
+                event = InboxEventFields(status = if (done) null else "action", where = where), manager = manager)
     }
 }

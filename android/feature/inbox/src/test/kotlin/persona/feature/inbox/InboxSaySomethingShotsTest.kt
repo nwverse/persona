@@ -58,6 +58,31 @@ class InboxSaySomethingShotsTest {
     @Config(qualifiers = "zh-w400dp-h1100dp-xhdpi")
     @Test fun saySheetAtTwoX() = drawSheet("xhdpi")
 
+    @Test fun processingAndSayShareTheEventStateLine() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var run by mutableIntStateOf(0)
+        val repository = Repository(record("current", "Current", InboxHandling(state = "looking", machineId = "m1", sessionId = "s1")))
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                key(run) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
+                        InboxEventScreen(repository, InboxEventRoute("current"), navigator)
+                    }
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d; run++
+            rule.waitForIdle()
+            rule.onNodeWithText("处理对话 ›").assertExists()
+            rule.onNodeWithText("说一句").assertExists()
+            assertTrue("processing comes before Say something", rule.onNodeWithText("处理对话 ›").fetchSemanticsNode().boundsInRoot.left <
+                rule.onNodeWithText("说一句").fetchSemanticsNode().boundsInRoot.left)
+            save("inbox-processing-say-${s.name.lowercase()}-${mode(d)}", rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap())
+        }
+    }
+
     private fun drawEvent(density: String) {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)

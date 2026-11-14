@@ -127,6 +127,15 @@ class InboxSaySomethingTest {
         rule.onNodeWithText("告诉 AI").assertDoesNotExist()
     }
 
+    @Test fun aFailedNowKeyWithoutAHandlingRecordAlsoOffersRetry() {
+        val repository = FakeRepository(record("current", "Current", now = "failed"))
+        show(repository)
+        rule.onNodeWithText("再试一次").performClick()
+        rule.waitForIdle()
+        assertEquals("请再试一次。", repository.requests.single().text)
+        rule.onNodeWithText("说一句").assertDoesNotExist()
+    }
+
     @Test fun aSuggestionCardHasNoSeparateSayOrRetryEntry() {
         show(FakeRepository(record("current", "Current", suggestion = InboxSuggestion(2, "reply", "好"))))
         rule.onNodeWithText("说一句").assertDoesNotExist()
@@ -186,8 +195,8 @@ class InboxSaySomethingTest {
     }
 
     companion object {
-        private fun record(id: String, title: String, handling: InboxHandling? = null, suggestion: InboxSuggestion? = null, done: Boolean = false) =
+        private fun record(id: String, title: String, handling: InboxHandling? = null, suggestion: InboxSuggestion? = null, done: Boolean = false, now: String? = null) =
             InboxRecord(InboxItem(id, title = title, status = if (done) null else "action", doneAt = if (done) "2026-11-13T09:00:00Z" else null),
-                event = InboxEventFields(status = if (done) null else "action", handling = handling, suggestion = suggestion))
+                event = InboxEventFields(status = if (done) null else "action", handling = handling, suggestion = suggestion, now = now))
     }
 }

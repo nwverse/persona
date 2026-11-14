@@ -82,8 +82,8 @@ internal fun sameMatterCandidates(
         .map { it.first }
 }
 
-/** The display package's `where` field replaces this placeholder when its baseline lands; title search works today. */
-internal fun sameMatterWhere(record: InboxRecord): String? = null
+/** Where this item happened, shared with list-row search and metadata. */
+internal fun sameMatterWhere(record: InboxRecord): String? = record.event.where ?: record.item.where
 
 /** The legacy row's sender and latest words. The shared display row meta wraps this once `where` is available. */
 internal fun sameMatterLegacyMeta(record: InboxRecord, res: Resources): String? {
@@ -96,7 +96,8 @@ internal fun sameMatterLegacyMeta(record: InboxRecord, res: Resources): String? 
     }
 }
 
-internal fun sameMatterMeta(record: InboxRecord, res: Resources): String? = sameMatterLegacyMeta(record, res)
+internal fun sameMatterMeta(record: InboxRecord, res: Resources): String? =
+    inboxRowThirdLine(record, res).ifBlank { sameMatterLegacyMeta(record, res) }
 
 /** Every 409 from this route (a cycle or excessive depth) gets the same plain explanation, with no message matching. */
 internal fun isInboxParentConflict(error: Throwable): Boolean = hubCodedFailure(error)?.status == 409

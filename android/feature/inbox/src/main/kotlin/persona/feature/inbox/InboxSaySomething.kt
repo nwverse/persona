@@ -33,12 +33,11 @@ import persona.core.designsystem.icons.PersonaIcons
 
 /** The handling line's instruction entry: Say something, or Try again with the localized default words on failure. */
 @Composable
-internal fun InboxSaySomething(
+internal fun InboxSayAction(
     repository: InboxRepository,
     record: InboxRecord,
     mark: EventMark?,
     onStale: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val feedback = LocalAppFeedback.current
     val res = LocalResources.current
@@ -50,7 +49,7 @@ internal fun InboxSaySomething(
     var writeFailed by remember(record.item.id) { mutableStateOf(false) }
     var last by remember(record.item.id) { mutableStateOf<SuggestionRequest?>(null) }
     val canSay = !record.item.isDone && record.event.suggestion == null && !readOnly
-    val failed = canSay && mark is EventMark.Failed
+    val failed = canSay && (mark is EventMark.Failed || record.event.now == "failed")
 
     fun send(text: String) {
         val instruction = text.trim()
@@ -81,12 +80,9 @@ internal fun InboxSaySomething(
         }
     }
 
-    if (mark != null || canSay) Row(modifier.fillMaxWidth().padding(bottom = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f)) { if (mark != null) EventStateLine(mark) }
-        if (canSay) JTextButton(stringResource(if (failed) R.string.inbox_line_retry else R.string.inbox_line_say),
-            onClick = { if (failed) send(res.getString(R.string.inbox_line_retry_text)) else showSheet = true },
-            enabled = !busy, icon = if (failed) PersonaIcons.retry else PersonaIcons.agentChat)
-    }
+    if (canSay) JTextButton(stringResource(if (failed) R.string.inbox_line_retry else R.string.inbox_line_say),
+        onClick = { if (failed) send(res.getString(R.string.inbox_line_retry_text)) else showSheet = true },
+        enabled = !busy, icon = if (failed) PersonaIcons.retry else PersonaIcons.agentChat)
     if (showSheet && canSay && !failed) JSheet(onDismiss = { showSheet = false }, title = stringResource(R.string.inbox_line_say),
         dismissible = !busy, scrollable = true) {
         Column(Modifier.fillMaxWidth().imePadding()) {
@@ -98,5 +94,20 @@ internal fun InboxSaySomething(
             JTextButton(stringResource(persona.core.designsystem.R.string.designsystem_cancel), { showSheet = false },
                 Modifier.align(Alignment.End).padding(top = Tokens.Space.s), enabled = !busy)
         }
+    }
+}
+
+/** The standalone handling row used by component tests; the event page instead composes [InboxSayAction] after its own state. */
+@Composable
+internal fun InboxSaySomething(
+    repository: InboxRepository,
+    record: InboxRecord,
+    mark: EventMark?,
+    onStale: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier.fillMaxWidth().padding(bottom = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) { if (mark != null) EventStateLine(mark) }
+        InboxSayAction(repository, record, mark, onStale)
     }
 }
