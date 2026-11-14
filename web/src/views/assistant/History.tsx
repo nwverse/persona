@@ -11,7 +11,8 @@ import { ago, stateOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
-import { refreshAssistant, useStore } from "../../lib/store";
+import { onHubEvent, refreshAssistant, useStore } from "../../lib/store";
+import { isResumed } from "../../lib/reconnect";
 import type { AssistantInfo, Session } from "../../lib/types";
 import { leaderItem } from "../ConversationMenu";
 import { Button, Collapse, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
@@ -72,6 +73,15 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   useEffect(() => {
     void load();
   }, [load]);
+  // read again after a reconnect (#4954's rule, as the scheduled tasks are): always when the read failed while the hub
+  // was away, else when the hub could not resume, as the pushes missed meanwhile are not replayed
+  const failed = error !== "";
+  useEffect(() => onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load()), [load, failed]);
+  const [retrying, setRetrying] = useState(false);
+  const retry = () => {
+    setRetrying(true);
+    void load().finally(() => setRetrying(false));
+  };
 
   const all = useMemo(
     () =>
@@ -170,10 +180,18 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
               <Loading />
             </div>
           )}
-          {error && fetched === null && (
-            <Empty icon="info" title={t("assistant-history.load_failed")}>
+          {/* The read failed: in place of the list when there is nothing else to show, else one line over the chats the
+              page has from elsewhere (the sidebar's, the live sessions), which may leave out the archived ones. */}
+          {error && fetched === null && all.length === 0 && (
+            <Empty icon="info" title={t("assistant-history.load_failed")} action={<Button icon="retry" busy={retrying} onClick={retry}>{t("assistant-history-load.retry")}</Button>}>
               {error}
             </Empty>
+          )}
+          {error && fetched === null && all.length > 0 && (
+            <div role="status" className="-mt-3 mb-4 flex items-center gap-2 px-1 text-[12px] text-ink-3">
+              <span className="min-w-0 flex-1" title={error}>{t("assistant-history-load.load_partial")}</span>
+              <Button size="sm" tone="quiet" icon="retry" busy={retrying} onClick={retry} className="touch-hit">{t("assistant-history-load.retry")}</Button>
+            </div>
           )}
           {!loading && !error && all.length === 0 && (
             <Empty icon="chat" title={t("assistant-history.empty_title")}>

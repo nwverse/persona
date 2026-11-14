@@ -10,6 +10,7 @@ import { type KBDetail, type KBDetailResponse, type KBEntry, type KBList } from 
 import { pointDay, pointSources, pointWarns, POINT_KINDS, pointKindLabel } from "../../lib/kb-points";
 import { buildProjectMap, buildTopicMap, layout, pointsUnder, walk, type Box, type MapNode, type Placed, type SummaryItem, type TopicData } from "../../lib/kb-map";
 import { navigate } from "../../lib/router";
+import { onHubEvent } from "../../lib/store";
 import { Button, cx, IconButton, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { settingsHref } from "../settings/nav";
@@ -215,6 +216,10 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
   const [view, setView] = useState<View>("topics");
   const [reload, setReload] = useState(0);
   const load = useMapData(view, reload);
+  // A map that could not be read while the hub was away is read again once it is back (its hello), as Retry would; one
+  // that was read is not, since reading it again means every entry's detail.
+  const failed = Boolean(load && "error" in load);
+  useEffect(() => (failed ? onHubEvent("hello", () => setReload((x) => x + 1)) : undefined), [failed]);
   const [sel, setSel] = useState("");
   const [, bump] = useState(0);
   const [zoom, setZoom] = useState(1);

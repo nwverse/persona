@@ -20,6 +20,7 @@ import {
   type KBResult,
 } from "../../lib/kb";
 import { href, navigate } from "../../lib/router";
+import { onHubEvent } from "../../lib/store";
 import { Button, Collapse, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
 import type { MenuAt } from "../../ui/menu-model";
@@ -106,6 +107,16 @@ export function ListPane({
       ac.abort();
     };
   }, [q, reloadKey, searchRetry]);
+
+  // A read that failed while the hub was away is read again once it is back (its hello), as Retry would, so the page
+  // does not stay on the error. Reads that went through are not repeated on a hello.
+  useEffect(() => {
+    if (!error && !searchError) return;
+    return onHubEvent("hello", () => {
+      if (error) setRetry((x) => x + 1);
+      if (searchError) setSearchRetry((x) => x + 1);
+    });
+  }, [error, searchError]);
 
   const sections = useMemo(() => (list?.items ? groupEntries(kind, list.items, tag) : []), [list, kind, tag]);
   const [open, setOpen] = useState<Set<string>>(new Set());
