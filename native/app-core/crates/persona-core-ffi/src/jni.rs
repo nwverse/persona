@@ -86,6 +86,18 @@ fn core(handle: jlong) -> Option<Arc<persona_core_runtime::Runtime>> {
     crate::runtime(handle as usize as *const PersonaCore)
 }
 
+fn optional_changed_chat(env: &mut JNIEnv, class: &jni::objects::JClass) -> Option<JMethodID> {
+    match env.get_method_id(class, "changedChat", "(Ljava/lang/String;J)V") {
+        Ok(method) => Some(method),
+        Err(_) => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            None
+        }
+    }
+}
+
 fn boolean(value: bool) -> jboolean {
     if value { JNI_TRUE } else { JNI_FALSE }
 }
@@ -101,7 +113,7 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_create(
         let config = env.convert_byte_array(&config).ok()?;
         let class = env.get_object_class(&host).ok()?;
         let changed = env.get_method_id(&class, "changed", "(J)V").ok()?;
-        let changed_chat = env.get_method_id(&class, "changedChat", "(Ljava/lang/String;J)V").ok();
+        let changed_chat = optional_changed_chat(&mut env, &class);
         let run = env.get_method_id(&class, "run", "([B)V").ok()?;
         let host = JHost {
             vm: env.get_java_vm().ok()?,

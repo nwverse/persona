@@ -67,7 +67,17 @@ public final class PersonaCoreClient: @unchecked Sendable {
         }, release: { context in
             guard let context else { return }
             _ = Unmanaged<CallbackBox>.fromOpaque(context).takeRetainedValue()
-        }, changed_chat: { context, chat, length, version in
+        })
+        let bytes = try config.bincodeSerialize()
+        handle = bytes.withUnsafeBufferPointer { buffer in
+            persona_core_new(host, buffer.baseAddress, buffer.count)
+        }
+        guard handle != nil else {
+            // `persona_core_new` consumes the host even when config decoding or worker creation fails.
+            host.context = nil
+            throw PersonaCoreError.creationFailed
+        }
+        let registered = persona_core_set_changed_chat(handle, { context, chat, length, version in
             guard let context else { return }
             let box = Unmanaged<CallbackBox>.fromOpaque(context).takeUnretainedValue()
             guard let callback = box.callbacks.changedChat else {
@@ -79,13 +89,8 @@ public final class PersonaCoreClient: @unchecked Sendable {
                 callback(chat, version)
             }
         })
-        let bytes = try config.bincodeSerialize()
-        handle = bytes.withUnsafeBufferPointer { buffer in
-            persona_core_new(host, buffer.baseAddress, buffer.count)
-        }
-        guard handle != nil else {
-            // `persona_core_new` consumes the host even when config decoding or worker creation fails.
-            host.context = nil
+        guard registered else {
+            close()
             throw PersonaCoreError.creationFailed
         }
     }

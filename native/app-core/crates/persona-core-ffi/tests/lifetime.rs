@@ -56,7 +56,6 @@ fn host() -> (PersonaCoreHost, Receiver<bool>, Receiver<()>) {
             changed: Some(changed),
             run: None,
             release: Some(release),
-            changed_chat: None,
         },
         ready_rx,
         release_rx,

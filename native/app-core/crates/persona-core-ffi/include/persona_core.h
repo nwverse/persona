@@ -27,9 +27,8 @@ typedef struct PersonaCoreHost {
     void (*changed)(void *context, uint64_t version);
     void (*run)(void *context, const uint8_t *effect, size_t length);
     void (*release)(void *context);
-    // Optional targeted wake. When non-null, `changed_chat` identifies the chat; the legacy `changed` remains the
-    // version-only compatibility path. Both are called on the worker and must return promptly.
-    void (*changed_chat)(void *context, const uint8_t *chat, size_t length, uint64_t version);
+// The legacy four-field host layout stays stable. Optional targeted wake is registered separately.
+typedef void (*PersonaCoreChatCallback)(void *context, const uint8_t *chat, size_t length, uint64_t version);
 } PersonaCoreHost;
 
 // Bytes the core allocated; give them back with persona_core_bytes_free.
@@ -41,6 +40,9 @@ typedef struct PersonaCoreBytes {
 
 // Starts a core from an encoded Config. NULL when the config does not decode.
 PersonaCore *persona_core_new(PersonaCoreHost host, const uint8_t *config, size_t length);
+// Optionally register a chat-targeted wake. Until registered, `changed` remains the version-only callback.
+// The callback runs on the worker and must return promptly; it is removed when the core is closed.
+bool persona_core_set_changed_chat(PersonaCore *core, PersonaCoreChatCallback callback);
 // Queues an encoded Action. Safe on the main thread: it only copies the bytes.
 bool persona_core_dispatch(PersonaCore *core, const uint8_t *action, size_t length);
 // The chat's encoded ChatPatch since the last drain. `chat` is UTF-8.
