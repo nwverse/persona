@@ -88,7 +88,15 @@ func directOwnerMarker(lower, marker string) bool {
 		}
 		if strings.HasSuffix(before, ",") {
 			clause := before
-			if end := strings.LastIndexAny(clause, ".!?:;"); end >= 0 {
+			end := strings.LastIndexAny(clause, ".!?;")
+			// A colon starts a clause after whitespace; a time such as 10:30 does not end the conditional scope.
+			if i := strings.LastIndex(clause, ": "); i > end {
+				end = i
+			}
+			if i := strings.LastIndex(clause, ":\t"); i > end {
+				end = i
+			}
+			if end >= 0 {
 				clause = strings.TrimSpace(clause[end+1:])
 			}
 			direct = !strings.HasPrefix(clause, "if ") || strings.HasSuffix(clause, "otherwise,")
@@ -125,11 +133,12 @@ func ownerActionLine(text string) string {
 			if p.marker == "要不要" && !strings.ContainsAny(line, "？?") { // i18n-ignore: parser markers, not display copy
 				continue // evaluating whether to do something is narrative, not asking the owner to choose (#5732)
 			}
-			negated := false
+			candidate := compact
 			for _, n := range p.negations {
-				negated = negated || strings.Contains(compact, n)
+				candidate = strings.ReplaceAll(candidate, n, strings.Repeat(" ", len(n)))
 			}
-			if !negated {
+			// Negation is occurrence-local here too: masking its own phrase cannot hide a later direct requirement.
+			if strings.Contains(candidate, p.marker) {
 				return line
 			}
 		}
