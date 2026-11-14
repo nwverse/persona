@@ -41,8 +41,8 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
 from xml.parsers.expat import ExpatError
 
-ROOT = os.path.abspath(os.environ.get("PERSONA_PRIVACY_ROOT") or subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip())
+ROOT = subprocess.run(["git", "-C", os.environ.get("PERSONA_PRIVACY_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
 HOME = os.path.expanduser("~")
 # Environment variables that name a build config, current name first (config_values reads each one set).
 CONFIG_ENV = ("PERSONA_CONFIG", "JARVIS_CONFIG")

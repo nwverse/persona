@@ -553,9 +553,6 @@ class Watcher:
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
             if phase == "verification":
-                if not self.dry_run:
-                    self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
-                                 bounded(str(error), 12000))
                 attempts = int(old.get("repair_attempts", 0)) + 1
                 self.state.put(repo, number, head, evidence_key=evidence_key,
                                outcome="retry" if attempts < 3 else "failed",
@@ -563,6 +560,9 @@ class Watcher:
                                repair_attempts=attempts,
                                repair_rounds=int(old.get("repair_rounds", 0)),
                                retry_after=time.time() + 300, failure=str(error))
+                if not self.dry_run:
+                    self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
+                                 bounded(str(error), 12000))
                 return
             # A missing semantic answer never becomes approval. Verification
             # Infrastructure failures remain retryable with capped backoff;
