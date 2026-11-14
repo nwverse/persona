@@ -60,7 +60,6 @@ mod binding {
         registry::config().into()
     }
 
-    /// Projects the Agents list from a JSON input string. Pure function, no runtime handle needed.
     #[napi(catch_unwind)]
     pub fn core_project_sort(input: String) -> Result<String> {
         let input: persona_core::sort::Input =
