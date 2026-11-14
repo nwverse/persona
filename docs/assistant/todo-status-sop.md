@@ -204,12 +204,15 @@ Relations chain (A shares a PR with B, B an issue with C: one row). A closed to-
 
 ## Accepted tasks
 
-When `task_review` (or the judge's spot check) accepts a task, the hub closes it. If its conversation then sends its
-agent more work (`agent_send`, `agent_interrupt` with `then`, or the owner's message on its card), the hub reopens it
-(`taskWorking` → `closedTurnReopens` → `reopenTodo`, `docs/assistant/todos.md`) while the supervision still says
-`accepted`. That agent's other turns leave it closed, whether or not its plan started the agent: a wakeup it set
-itself, other conversations' work, the owner typing in its session (#6726, #7539). Their ends raise no review signal
-either. Earlier the page treated every reopened task as not reviewed: it showed "Follow up", its badge
+When `task_review` (or the judge's spot check) accepts a task, the hub closes it. If its conversation, its supervisor
+or the background supervisor that follows it up for the main chat then sends its agent more work (`agent_send`,
+`agent_interrupt` with `then`, or the owner's message on its card), the hub reopens it while the supervision still
+says `accepted` (`docs/assistant/todos.md`). It does so once the agent's computer takes the send (`agentSendNote.sent`
+→ `reopenTodo`): the reopen is stored, so it holds when the agent only queued the text and the manager restarted
+before its turn began. A turn that starts before the send returns reopens it at its start (`taskWorking` →
+`closedTurnReopens`). A send that definitely failed reopens nothing. That agent's other turns leave it closed, whether
+or not its plan started the agent: a wakeup it set itself, other conversations' work, the owner typing in its session
+(#6726, #7539). Their ends raise no review signal either. Earlier the page treated every reopened task as not reviewed: it showed "Follow up", its badge
 "Supervising", and criteria added with the extra work (`agent_supervise` / `agent_send` replace `done_when`, so the
 list grew from 5 to 8) as open with a clock and counted them ("5/8").
 
