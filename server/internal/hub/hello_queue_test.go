@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// D1: deploy cancellation begins closing the app connections; it is not the end of their accepted reports' lifetime.
+// Deploy cancellation begins closing the app connections; it is not the end of their accepted reports' lifetime.
 func TestHelloReportsAfterDeployCancelDrainOnStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		deployCtx, cancelDeploy := context.WithCancel(context.Background())
@@ -55,7 +55,7 @@ func TestHelloReportsAfterDeployCancelDrainOnStop(t *testing.T) {
 	})
 }
 
-// D2: a stalled Store and one reporting connection cannot grow any pending set without limit. Earlier honest work,
+// A stalled Store and one reporting connection cannot grow any pending set without limit. Earlier honest work,
 // queue order, replacement coalescing and producers waiting for detached room all retain their ordinary behavior.
 func TestHelloPendingQueuesBoundAndPreserveEarlierReports(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -226,7 +226,7 @@ func TestHelloPendingQueuesBoundAndPreserveEarlierReports(t *testing.T) {
 	})
 }
 
-// G1: an unreadable existing user locale is not an absent one. Neither device history nor user language may be saved.
+// An unreadable existing user locale is not an absent one. Neither device history nor user language may be saved.
 func TestHelloUserLocaleLoadFailureAbortsAllLocaleWrites(t *testing.T) {
 	h := newTestHub(t)
 	h.assistantOf(assistantwire.AssistantID).updating.Store(true)
@@ -268,7 +268,7 @@ func (s *helloKeyGateStore) Setting(ctx context.Context, key string, out any) (b
 
 func (s *helloKeyGateStore) release() { s.releaseOnce.Do(func() { close(s.released) }) }
 
-// G3: the batch detached behind a keyless report can contain a keyed one that the initial preparation did not cover.
+// The batch detached behind a keyless report can contain a keyed one that the initial preparation did not cover.
 func TestHelloKeyedLocaleBehindKeylessBatchLoadsDeviceHistory(t *testing.T) {
 	h := newTestHub(t)
 	h.assistantOf(assistantwire.AssistantID).updating.Store(true)
@@ -293,7 +293,7 @@ func TestHelloKeyedLocaleBehindKeylessBatchLoadsDeviceHistory(t *testing.T) {
 	}
 }
 
-// G4: persistence can happen much later than reception; every device locale carries the synchronous hello's time.
+// Persistence can happen much later than reception; every device locale carries the synchronous hello's time.
 func TestHelloDeviceLocaleUsesReceiptTime(t *testing.T) {
 	h := newTestHub(t)
 	h.assistantOf(assistantwire.AssistantID).updating.Store(true)
@@ -319,7 +319,7 @@ func TestHelloDeviceLocaleUsesReceiptTime(t *testing.T) {
 	}
 }
 
-// G5: a failed write must not mark the in-memory SeenAt values as persisted; an identical report retries the snapshot.
+// A failed write must not mark the in-memory SeenAt values as persisted; an identical report retries the snapshot.
 func TestClientAppFailedSaveRetriesIdenticalSnapshot(t *testing.T) {
 	h := newTestHub(t)
 	store := newHelloStore()
@@ -354,7 +354,7 @@ func TestClientAppFailedSaveRetriesIdenticalSnapshot(t *testing.T) {
 	}
 }
 
-// G6: a hub and its workers created outside a bubble can accept and finish a report synchronously waited inside one.
+// A hub and its workers created outside a bubble can accept and finish a report synchronously waited inside one.
 func TestHelloOutsideHubCanBeWaitedInsideSynctest(t *testing.T) {
 	h := newTestHub(t)
 	h.assistantOf(assistantwire.AssistantID).updating.Store(true)

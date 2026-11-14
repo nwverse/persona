@@ -152,10 +152,11 @@ on reconnect.
 
 Each pending set is capped at 1,024 entries; phone capacity counts distinct pending devices, so replacing one already
 queued takes no new slot. If two producers race for the same new device, the one that becomes a replacement returns
-its now-redundant admission token immediately. Normally admission is a nonblocking semaphore send. At the cap, only the
-producing read loop waits, for at most the existing Store timeout; it then drops that report and logs once for the
-affected queue rather than once per dropped report. Consumers return capacity as soon as they detach a batch, not when its Store write ends.
-Tests use a separate idle condition—pending empty and no flush in flight—so they still wait for the final save.
+its now-redundant admission token immediately. Normally admission is a nonblocking semaphore send. At the cap, only
+the producing read loop waits, for at most the existing Store timeout; it then drops that report and logs once for the
+affected queue rather than once per dropped report. Consumers return capacity as soon as they detach a batch, not when
+its Store write ends. Tests use a separate idle condition (pending empty and no flush in flight), so they still wait
+for the final save.
 
 A failed load is not an empty setting. `loadClientAppsLocked` used to clear the map and its caller still saved it, so
 one transient read error could drop every other device. Load into temporary state, publish it only after a complete

@@ -67,7 +67,7 @@ func (s *shutdownOrderStore) snapshot() ([]string, bool) {
 	return append([]string(nil), s.events...), s.helloStoppedAtClose
 }
 
-// G7: drive runHub's named cleanup itself. The cancel seam represents a connection that is still open after deploy
+// Drive runHub's named cleanup itself. The cancel seam represents a connection that is still open after deploy
 // cancellation; the real sequence must save its report before the finite-worker join and before closing the Store.
 func TestHubCleanupDrainsHelloBeforeNodeJoinAndDatabaseClose(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -136,7 +136,7 @@ func (s *firstPhoneWriteGate) ReplacePhoneTools(ctx context.Context, registratio
 
 func (s *firstPhoneWriteGate) release() { s.releaseOnce.Do(func() { close(s.released) }) }
 
-// G8: both producers initially wait for the same new device. Releasing one slot at a time identifies the later
+// Both producers initially wait for the same new device. Releasing one slot at a time identifies the later
 // replacement deterministically; its redundant admission token must not survive the final drain.
 func TestPhoneRacingProducersReturnRedundantSlot(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
