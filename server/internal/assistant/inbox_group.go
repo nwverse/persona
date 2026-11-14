@@ -744,8 +744,9 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 			Text: i18n.T(b.userLang(), "assistant-inbox_chain.reopened")})
 	}
 	tierBefore := it.Tier
+	fallbackFloorRaised := false
 	raiseFallbackFloor := func() {
-		if tier == TierNoise {
+		if tier == TierNoise || it.handled() {
 			return
 		}
 		floor := eventRuleTier(thing)
@@ -769,6 +770,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		if higherTier(tier, floor) != tier {
 			// The existing triager and urgency deliberately stay unchanged.
 			it.Tier, it.Reason = floor, b.byRules()
+			fallbackFloorRaised = true
 		}
 	}
 	switch {
@@ -782,10 +784,10 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		if !byModel && !it.handled() {
 			raiseFallbackFloor()
 		}
-	case prev.last != "" && it.handled() && (!byModel || !reopened):
+	case prev.last != "" && it.handled() && !reopened:
 		// Messages that join an event being handled follow it: its tier, words and urgency stay, even for a rewritten
-		// direct-chat join or a fallback reopen; its processing conversation decides (inbox_handle.go). A model-driven
-		// reopen still takes the model's triage below.
+		// direct-chat join; its processing conversation decides (inbox_handle.go). A reopen bypasses this branch so a
+		// model reopen takes the model's triage; raiseFallbackFloor keeps a fallback reopen's handled triage unchanged.
 		it.Title, it.Summary, it.Tier, it.Reason = title, summary, tier, reason
 		it.TriagedBy = cmp.Or(it.TriagedBy, "model")
 		it.Urgent = urgent
@@ -815,15 +817,17 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		}
 		it.Summary, it.Tier, it.Reason, it.TriagedBy, it.TitleBy = "", tier, b.byRules(), "rules", TitleByRules
 	}
+	policyChanged := false
 	if !keepDone && !it.handled() { // what an event's conversation handles keeps its tier
-		b.applyPolicyTier(it)
+		policyChanged = b.applyPolicyTier(it)
 	}
 	it.TriagedAt = it.Last
-	if tierBefore != it.Tier {
-		// An actual tier change is a new decision even when an earlier triage has the same localized text. Other callers
-		// keep noteTriaged's same-text dedup; the version check above still makes a repeated append a no-op.
+	switch {
+	case fallbackFloorRaised && !policyChanged && higherTier(tierBefore, it.Tier) != tierBefore:
+		// Only an actual final rise from this batch's fallback rule floor bypasses noteTriaged's same-text dedup: a
+		// conversation may since have concluded at a lower tier, making this a new decision despite the earlier text.
 		b.chainAdd(it, triagedEntry(b.userLang(), it))
-	} else if prev.last == "" {
+	case !keepDone && (tierBefore != it.Tier || prev.last == ""):
 		b.noteTriaged(it)
 	}
 	if e.continues != "" && e.continues != it.ID {
