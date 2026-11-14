@@ -57,6 +57,7 @@ class ProviderPasteShotsTest {
         val previews = mutableListOf<Pair<String, String?>>()
         val imports = mutableListOf<Triple<String, List<String>, String?>>()
         val added = mutableListOf<NewProvider>()
+        val parsed = mutableListOf<String>()
         override suspend fun presets() = emptyList<ProviderPreset>()
         override suspend fun add(provider: NewProvider) { added += provider }
         override suspend fun launchers() = listOf(
@@ -68,7 +69,7 @@ class ProviderPasteShotsTest {
             HubLauncher("old", source = "persona", origin = "zshrc:cc_imported@mac"),
         )
         override suspend fun launcher(name: String) = launchers().first { it.name == name }
-        override suspend fun parse(text: String) = ProviderPasteResult(format = "shell", drafts = listOf(ProviderPasteDraft(
+        override suspend fun parse(text: String) = ProviderPasteResult(format = if (text.startsWith("persona://provider/import")) "link" else "shell", drafts = listOf(ProviderPasteDraft(
             label = "cc_work",
             provider = PastedProvider(name = "cc_work", displayName = "Work gateway", baseUrl = "https://work.example.com", apiKey = "eg-secret", auth = "bearer",
                 model = "new-model", models = parsedModels, env = "MAX_OUTPUT=8000", headers = "X-Team: synthetic"),
@@ -76,7 +77,7 @@ class ProviderPasteShotsTest {
             skippedHeaders = listOf(ProviderPasteSkipped("X-Api-Key", "credential")),
             matches = listOf(ProviderPasteMatch("work", "Work", sameKey = true)),
             notes = listOf(ProviderPasteNote("args_left_out", line = 2)),
-        )), notes = listOf(ProviderPasteNote("not_claude", name = "other")))
+        )), notes = listOf(ProviderPasteNote("not_claude", name = "other"))).also { parsed += text }
         override suspend fun importPreview(machine: String, alias: String?): List<ImportedProvider> {
             previews += machine to alias
             return listOf(ImportedProvider("cc-work", "https://work.example.com", "new-model", hasKey = true, aliases = listOf("cc_work")))
@@ -123,6 +124,53 @@ class ProviderPasteShotsTest {
         rule.waitForIdle()
         rule.onNodeWithText("1 model", substring = true).assertExists()
         rule.onNodeWithText("1 models", substring = true).assertDoesNotExist()
+    }
+
+    @Test fun anImportLinkLightOpensReviewAndPrefillWithoutSaving() = importLinkOpensReviewAndPrefill(false)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi")
+    @Test fun anImportLinkDarkOpensReviewAndPrefillWithoutSaving() = importLinkOpensReviewAndPrefill(true)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-xhdpi", fontScale = 2.0f)
+    @Test fun anImportLinkLargestTextLightOpensReviewAndPrefill() = importLinkOpensReviewAndPrefill(false, largest = true)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi", fontScale = 2.0f)
+    @Test fun anImportLinkLargestTextDarkOpensReviewAndPrefill() = importLinkOpensReviewAndPrefill(true, largest = true)
+
+    private fun importLinkOpensReviewAndPrefill(dark: Boolean, largest: Boolean = false) {
+        val api = Providers()
+        val firstLink = "persona://provider/import?v=1&data=FAKE-EXAMPLE-KEY"
+        var link by mutableStateOf(firstLink)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1450.dp).background(PersonaTheme.palette.background)) {
+                    NewProviderPage(api, onBack = {}, onSaved = {}, machines = machines, importLink = link)
+                }
+            }
+        }
+        rule.waitForIdle()
+        val suffix = (if (dark) "dark" else "light") + (if (largest) "-ax" else "")
+        rule.onNodeWithText("Opened from a link", substring = true).assertExists()
+        rule.onNodeWithText("A provider import link").assertExists()
+        rule.onNodeWithText("Work gateway").assertExists()
+        rule.onNodeWithText(link, substring = true).assertDoesNotExist()
+        assertTrue("nothing is added before Save", api.added.isEmpty())
+        capture("provider-import-link-review-$suffix")
+
+        val secondLink = "persona://provider/import?v=1&data=ANOTHER-FAKE-KEY"
+        link = secondLink
+        rule.waitForIdle()
+        assertEquals("a newer external link replaces the old review", listOf(firstLink, secondLink), api.parsed)
+        rule.onNodeWithText(secondLink, substring = true).assertDoesNotExist()
+
+        rule.onNodeWithText("Add as a new provider").performClick()
+        rule.onNodeWithText("Continue").performClick()
+        rule.waitForIdle()
+        rule.onAllNodesWithText("cc_work").onFirst().assertExists()
+        rule.onNodeWithText("https://work.example.com").assertExists()
+        rule.onNodeWithText("Save").assertExists()
+        assertTrue("the prefilled form still has not saved", api.added.isEmpty())
+        capture("provider-import-link-prefill-$suffix")
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1500dp-night-xhdpi")

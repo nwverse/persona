@@ -2561,7 +2561,9 @@ that view in its link mode: no text area, a row with the link icon saying it was
 text, that nothing is saved until Save, with **Paste something else** (the status line's action) to go back to the text
 area. The link is read at once and its drafts, choices and notes look exactly like a paste's, so the wizard does not
 grow a second way to review a provider; a refused link is one plain line about what is wrong with it, never its
-content. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
+content. Android uses this same link mode for `persona://provider/import` (#5428). iOS has no paste step, so the hub's
+returned draft opens its existing connection form directly. On both phone apps the link itself is never shown and is
+dropped when the wizard closes. Copying a link starts from the provider's dialog: a ⋯ `IconButton` before Edit opens a `Menu` (one row, **Copy
 import link**), and the row opens a `Dialog` in place of the provider's (Edit does the same), with one line on what the
 link brings, a `Switch` **Put a key in the link** that is off, and **Copy link** as the one primary button. Turning the
 switch on widens what the link exposes, so, as in "Sharing a conversation publicly" (4.9), the key field comes with an

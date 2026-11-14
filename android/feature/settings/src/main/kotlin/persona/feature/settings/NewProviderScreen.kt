@@ -62,6 +62,8 @@ internal fun NewProviderPage(
     machines: List<Machine> = emptyList(),
     /** Opens straight on "Computers" (the provider page's row): back from it leaves, and it saves by itself. */
     startAtComputers: Boolean = false,
+    /** A provider import link opened from outside (#5428); read through the hub after the form loads. */
+    importLink: String? = null,
 ) {
     val model = remember(providers, readiness, existing) {
         NewProviderModel(providers, readiness?.let { source -> suspend { if (source.available.first()) source.readiness(false) else null } })
@@ -79,7 +81,7 @@ internal fun NewProviderPage(
     var sub by rememberSaveable { mutableStateOf(if (startAtComputers) ProviderSub.Computers else null) }
     var discarding by remember { mutableStateOf(false) }
     var foundImport by remember { mutableStateOf<FoundAlias?>(null) }
-    LaunchedEffect(model) {
+    LaunchedEffect(model, importLink) {
         if (existing != null) { model.prepare(existing, existing.hasScope, machines); return@LaunchedEffect }
         // "Computers" needs the computers to choose from: opened where none are known (Model configuration), it waits
         // for the provider's page, and the hub's defaults apply meanwhile.
@@ -88,6 +90,7 @@ internal fun NewProviderPage(
         val importParse = providers.launcherImportParse.first()
         if (hubNames) launch { model.loadReadiness() }
         model.load(preferPreset, hubNames, importParse)
+        if (importLink != null) model.openImportLink(importLink)
     }
     LaunchedEffect(model, machines) { model.setMachines(machines) }
     LaunchedEffect(state.saved) {
@@ -192,7 +195,7 @@ internal fun NewProviderPage(
         when (state.step) {
             WizardStep.Pick -> if (state.loaded) pickStep(res, state, model::choose, onPaste = model::openPaste, onAlias = { foundImport = it })
             WizardStep.Paste -> pasteStep(state, model::editPaste, onRetry = { scope.launch { model.parsePaste() } },
-                onDraft = model::choosePasteDraft, onAction = model::choosePasteAction)
+                onSomethingElse = model::pasteSomethingElse, onDraft = model::choosePasteDraft, onAction = model::choosePasteAction)
             WizardStep.Key -> if (preset != null) keyStep(state, preset, editable, model::editKey, model::setAssign,
                 onRetest = { scope.launch { model.testKey() } }, onModel = { choosingModel = true }, more = more, onMore = { more = !more },
                 onComputers = openComputers)

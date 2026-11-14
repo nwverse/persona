@@ -17,6 +17,10 @@ struct ModelLaunchersView: View {
     @State private var error: String?
     /// The provider sheet, at its first step (Add) or at Import from ~/.zshrc; nil: closed.
     @State private var adding: ProviderWizardStep?
+    /// An import link's draft, pre-filled into the sheet (#5428); nil: the sheet starts empty.
+    @State private var importWizard: ProviderWizardModel?
+    /// Why an import link could not be opened (a refusal, a read failure, a hub that can't read links), shown once.
+    @State private var importNote: String?
     @State private var query = ""
     /// Hidden starts folded (2026-11-01): they are hidden for a reason. A search shows them anyway.
     @State private var showHidden = false
@@ -130,9 +134,9 @@ struct ModelLaunchersView: View {
             }
         }
         #endif
-        .sheet(item: $adding) { step in
+        .sheet(item: $adding, onDismiss: { importWizard = nil }) { step in
             // Saving moves `launchersRevision`, which reloads this list below.
-            if debugOldEditor { LauncherEditor(existing: nil) {} } else { ProviderWizard(start: step) }
+            if debugOldEditor { LauncherEditor(existing: nil) {} } else { ProviderWizard(start: step, wizard: importWizard) }
         }
         #if os(macOS) && DEBUG
         .onAppear { if UserDefaults.standard.bool(forKey: "macLauncherEditor") { adding = .pick } } // `-macLauncherEditor YES`: Add Launcher
@@ -164,6 +168,10 @@ struct ModelLaunchersView: View {
         } message: { _ in Text("The key stored on the hub is deleted too. This can't be undone.") }
         // Again whenever a launcher changes anywhere, its own page included (hide, restore, delete): this page stays
         // built under the one pushed on it, so without this it showed the old list when you came back (#1433).
+        .task(id: model.providerImport) { await openImport() }
+        .alert(String(localized: "Can't Open Import Link"), isPresented: Binding(get: { importNote != nil }, set: { if !$0 { importNote = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(importNote ?? "") }
         .task(id: model.launchersRevision) { await load() }
         .refreshable { await load() }
         #if DEBUG
@@ -337,6 +345,37 @@ struct ModelLaunchersView: View {
     private func machineNames(_ l: LauncherView) -> String? {
         guard let ids = l.machines, !ids.isEmpty else { return nil }
         return ids.map { model.machine(model.hubRef($0))?.name ?? $0 }.joined(separator: String(localized: "、", comment: "Separator between computer names in a list"))
+    }
+
+    /// An import link opened from outside (#5428): read it through the hub's parse route and open the wizard with the
+    /// draft, or say why it can't be opened. The link is dropped here, never shown or kept.
+    private func openImport() async {
+        guard let link = model.providerImport else { return }
+        // A newer link supersedes this task. Only this link's own task may clear it or show its result.
+        defer { if model.providerImport == link { model.providerImport = nil } }
+        // The hello may not have arrived yet when a link opens the app. The parse route is the authority here;
+        // an older hub answers 404, which is the same "can't open import links yet" the web shows.
+        guard let api = requestScope.api(model) else { return }
+        do {
+            let result = try await api.parseProviderImport(text: link)
+            guard model.providerImport == link else { return }
+            if let draft = result.drafts?.first {
+                let wizard = ProviderWizardModel()
+                wizard.applyImport(draft.provider)
+                importWizard = wizard
+                adding = .connect
+            } else {
+                importNote = result.notes?.first?.text ?? String(localized: "This import link has no provider to add.")
+            }
+        } catch is CancellationError {
+            return
+        } catch let error as APIError where error.status == 404 {
+            guard model.providerImport == link else { return }
+            importNote = String(localized: "This hub can't open import links yet. Update the hub to open them.")
+        } catch {
+            guard model.providerImport == link else { return }
+            importNote = String(localized: "Couldn't read the import link: \(error.localizedDescription)")
+        }
     }
 
     private func load() async {

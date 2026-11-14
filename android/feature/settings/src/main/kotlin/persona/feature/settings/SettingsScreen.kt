@@ -361,7 +361,21 @@ private fun SettingsContent(
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)
         "providers" -> {
             val providerService = mine.providers.takeUnless { services.demo }
-            when {
+            // Take the link out of the request queue as the wizard opens. This local state is not saveable: leaving the
+            // page drops it, so a key-bearing link cannot replay on a later visit (#5428).
+            var importLink by remember { mutableStateOf<String?>(null) }
+            val requestedImport = ProviderImportRequests.pending.value
+            LaunchedEffect(requestedImport, providerService != null) {
+                if (requestedImport != null) {
+                    val link = ProviderImportRequests.take()
+                    if (providerService != null) importLink = link
+                }
+            }
+            if (importLink != null && providerService != null) {
+                NewProviderPage(providerService, onBack = { importLink = null; providerStep = null },
+                    onSaved = { importLink = null; providerStep = null }, readiness = services.readiness,
+                    machines = machines, importLink = importLink)
+            } else when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
                     readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })

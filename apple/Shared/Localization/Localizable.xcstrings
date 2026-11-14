@@ -30493,6 +30493,29 @@
       },
       "extractionState" : "manual"
     },
+    "Can't Open Import Link" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't Open Import Link"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インポートリンクを開けません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开导入链接"
+          }
+        }
+      }
+    },
     "Can't Open This File" : {
       "localizations" : {
         "en" : {
@@ -47861,6 +47884,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Couldn't read the import link: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the import link: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インポートリンクを読み込めませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取导入链接失败：%@"
+          }
+        }
+      }
     },
     "Couldn't read the model list: %@. You can add models below." : {
       "localizations" : {
@@ -161675,6 +161721,29 @@
       },
       "extractionState" : "manual"
     },
+    "This hub can't open import links yet. Update the hub to open them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub can't open import links yet. Update the hub to open them."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブではまだインポートリンクを開けません。ハブを更新してからもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 hub 还无法打开导入链接，请更新 hub 后再试。"
+          }
+        }
+      }
+    },
     "This hub can't take part in meetings right now. The recording goes on as usual." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -162562,6 +162631,144 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这张图的数据打不开"
+          }
+        }
+      }
+    },
+    "This import link couldn't be read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link couldn't be read."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクを読み込めませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取这个导入链接。"
+          }
+        }
+      }
+    },
+    "This import link has a field Persona doesn't know." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link has a field Persona doesn't know."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクには Persona が認識できないフィールドがあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接包含 Persona 不识别的字段。"
+          }
+        }
+      }
+    },
+    "This import link has no provider to add." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link has no provider to add."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクには追加できるプロバイダーがありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接里没有可添加的供应商。"
+          }
+        }
+      }
+    },
+    "This import link is a version Persona doesn't know yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link is a version Persona doesn't know yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクのバージョンには、この Persona はまだ対応していません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前 Persona 还不支持这个导入链接的版本。"
+          }
+        }
+      }
+    },
+    "This import link is too long." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link is too long."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクは長すぎます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接过长。"
+          }
+        }
+      }
+    },
+    "This import link isn't valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This import link isn't valid."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このインポートリンクは無効です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个导入链接无效。"
           }
         }
       }
