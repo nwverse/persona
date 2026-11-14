@@ -45,6 +45,12 @@ describe("the task board (iOS TaskBoardSheet)", () => {
     expect(boardSectionOf({ todo: td, status })).toBe(key);
   });
 
+  it("keeps an unaccepted live delivery awaiting review", () => {
+    const td = { ...todo("live", "2026-11-06T00:00:00Z"), delivery: { state: "live" as const, at: "2026-11-06T01:00:00Z" } };
+    expect(boardSectionOf({ todo: td, status: "unread" })).toBe("review");
+    expect(boardSectionOf({ todo: { ...td, done_at: "2026-11-06T02:00:00Z" }, status: "done" })).toBe("done");
+  });
+
   it("puts what the user must act on first: 等你, 待验收, 没开起来, then 在做, 做完了, 停着, 已完成 (#4896)", () => {
     expect(BOARD_ORDER).toEqual(["waiting", "review", "failed", "working", "unread", "stopped", "done"]);
     const rows = [

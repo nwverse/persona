@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Session } from "./types";
 import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
 import { checkCount, checklist, reviewBadge, type Supervision } from "./supervision";
-import { FOLDED_SECTIONS, lastActivity, relatedKeys, seenCanFile, SHELVE_AFTER_MS, supersededFailedStarts, todoBucket, TRIAGE_SECTIONS, triage, triageTodos } from "./todo-triage";
+import { FOLDED_SECTIONS, lastActivity, relatedKeys, SHELVE_AFTER_MS, supersededFailedStarts, todoBucket, TRIAGE_SECTIONS, triage, triageTodos } from "./todo-triage";
+import { seenCanFile } from "./todo-seen";
 import { resetRestoredCache, restoreTodo } from "./todo-restore";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");

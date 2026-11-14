@@ -7,12 +7,12 @@ import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 
 const STAGE_LABEL: Record<TodoStage, string> = {
-  plan: t("todos.stage_plan"),
-  develop: t("todos.stage_develop"),
-  review: t("todos.stage_review"),
-  merge: t("todos.stage_merge"),
-  deploy: t("todos.stage_deploy"),
-  verify: t("todos.stage_verify"),
+  plan: t("todo-status.stage_plan"),
+  develop: t("todo-status.stage_develop"),
+  review: t("todo-status.stage_review"),
+  merge: t("todo-status.stage_merge"),
+  deploy: t("todo-status.stage_deploy"),
+  verify: t("todo-status.stage_verify"),
 };
 
 const DOT: Record<TodoStageState, string> = {
@@ -45,8 +45,8 @@ export function prLink(raw?: string): { url: string; text: string; label: string
   if (u.protocol !== "https:" && u.protocol !== "http:") return null;
   const mr = /\/merge_requests\/(\d+)\/?$/.exec(u.pathname)?.[1];
   const n = /\/(\d+)\/?$/.exec(u.pathname)?.[1];
-  const text = mr ? t("todos.stage_mr_n", { n: mr }) : n ? t("todos.stage_pr_n", { n }) : t("todos.stage_pr");
-  return { url, text, label: t("todos.stage_pr_label", { pr: text, host: u.host }) };
+  const text = mr ? t("todo-status.stage_mr_n", { n: mr }) : n ? t("todo-status.stage_pr_n", { n }) : t("todo-status.stage_pr");
+  return { url, text, label: t("todo-status.stage_pr_label", { pr: text, host: u.host }) };
 }
 
 export function TodoStageBar({ stage, stageKind, prURL, className = "" }: { stage?: string; stageKind?: string; prURL?: string; className?: string }) {
@@ -56,7 +56,7 @@ export function TodoStageBar({ stage, stageKind, prURL, className = "" }: { stag
   return (
     <div className={cx("flex flex-col gap-2", className)}>
       {current >= 0 && (
-        <ol aria-label={t("todos.stage_label")} className="flex w-full items-start">
+        <ol aria-label={t("todo-status.stage_label")} className="flex w-full items-start">
           {TODO_STAGES.map((s, i) => {
             const state = todoStageState(i, current);
             return (

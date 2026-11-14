@@ -74,9 +74,9 @@ describe("TodoStageBar", () => {
   it("is an ordered list of the six steps, in order and named", () => {
     const markup = html("review");
     expect(markup).toContain("<ol ");
-    expect(markup).toContain('aria-label="' + t("todos.stage_label") + '"');
+    expect(markup).toContain('aria-label="' + t("todo-status.stage_label") + '"');
     expect(states(html("plan"))).toEqual({ plan: "current", develop: "ahead", review: "ahead", merge: "ahead", deploy: "ahead", verify: "ahead" });
-    const labels = ["stage_plan", "stage_develop", "stage_review", "stage_merge", "stage_deploy", "stage_verify"].map((k) => t(`todos.${k}`));
+    const labels = ["stage_plan", "stage_develop", "stage_review", "stage_merge", "stage_deploy", "stage_verify"].map((k) => t(`todo-status.${k}`));
     const at = labels.map((label) => markup.indexOf(label));
     expect(at.every((i) => i >= 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
@@ -87,8 +87,8 @@ describe("TodoStageBar", () => {
     expect(markup).toContain('href="https://example.com/pull/7"');
     expect(markup).toContain('target="_blank"');
     expect(markup).toContain('rel="noreferrer noopener"');
-    expect(markup).toContain(t("todos.stage_pr_n", { n: "7" }));
-    expect(markup).toContain('aria-label="' + t("todos.stage_pr_label", { pr: t("todos.stage_pr_n", { n: "7" }), host: "example.com" }) + '"');
+    expect(markup).toContain(t("todo-status.stage_pr_n", { n: "7" }));
+    expect(markup).toContain('aria-label="' + t("todo-status.stage_pr_label", { pr: t("todo-status.stage_pr_n", { n: "7" }), host: "example.com" }) + '"');
   });
 
   it.each([
@@ -102,8 +102,8 @@ describe("TodoStageBar", () => {
     expect(currentSteps(markup)).toEqual(["review"]);
     expect(markup).toContain(`href="${url}"`);
     expect(markup).toContain("MR !42");
-    expect(markup).not.toContain(t("todos.stage_pr_n", { n: "42" }));
-    expect(markup).toContain('aria-label="' + t("todos.stage_pr_label", { pr: t("todos.stage_mr_n", { n: "42" }), host: new URL(url).host }) + '"');
+    expect(markup).not.toContain(t("todo-status.stage_pr_n", { n: "42" }));
+    expect(markup).toContain('aria-label="' + t("todo-status.stage_pr_label", { pr: t("todo-status.stage_mr_n", { n: "42" }), host: new URL(url).host }) + '"');
     expect(markup).toContain('target="_blank"');
     expect(markup).toContain('rel="noreferrer noopener"');
   });
@@ -114,11 +114,11 @@ describe("TodoStageBar", () => {
     "https://example.com/project/issues/7",
     "https://example.com/not_merge_requests/7",
   ])("keeps the existing PR label for other numbered URLs: %s", (url) => {
-    expect(html("review", url, "code")).toContain(t("todos.stage_pr_n", { n: "7" }));
+    expect(html("review", url, "code")).toContain(t("todo-status.stage_pr_n", { n: "7" }));
   });
 
   it("names a PR address without a number just PR, and draws no link for anything but http(s)", () => {
-    expect(html(undefined, "https://example.com/merge_requests")).toContain(">" + t("todos.stage_pr") + "<");
+    expect(html(undefined, "https://example.com/merge_requests")).toContain(">" + t("todo-status.stage_pr") + "<");
     ["javascript:alert(1)", "data:text/html,x", "ftp://example.com/project/merge_requests/42", "not a url"].forEach((url) => {
       expect(html(undefined, url)).toBe("");
       expect(html("review", url, "general")).toBe("");

@@ -1,5 +1,5 @@
 // The sidebar's agent rows say under their title what they need from you or what they did (#3195), so the owner
-// does not have to hover or open each one: the same words as the to-dos page's agent rows (todos.json kicker_*).
+// does not have to hover or open each one: the same words as the to-dos page's agent rows (todo-status.json kicker_*).
 import { stateName } from "./state-labels";
 import { t } from "../i18n";
 import { sessionPreview, stateOf } from "./format";
@@ -15,15 +15,15 @@ import type { Interaction, Session } from "./types";
 export function interactionKicker(ix: Pick<Interaction, "kind"> | undefined): string {
   switch (ix?.kind) {
     case "plan":
-      return t("todos.kicker_plan");
+      return t("todo-status.kicker_plan");
     case "permission":
-      return t("todos.kicker_permission");
+      return t("todo-status.kicker_permission");
     case "screen":
-      return t("todos.kicker_screen");
+      return t("todo-status.kicker_screen");
     case "elicitation":
-      return t("todos.kicker_elicitation");
+      return t("todo-status.kicker_elicitation");
     default:
-      return t("todos.kicker_question");
+      return t("todo-status.kicker_question");
   }
 }
 
@@ -49,13 +49,13 @@ export function rowLine(s: Session, ix?: Interaction, awaiting = false): { lead?
   if (awaiting && st === "idle") {
     const text = plainMarkdown(replyAsk(s)).slice(0, MAX);
     const lead = stateName("awaits_reply");
-    return text ? { lead: t("todos.kicker_line", { kicker: lead }), text, tone: "reply" } : { lead, text: "", tone: "reply" };
+    return text ? { lead: t("todo-status.kicker_line", { kicker: lead }), text, tone: "reply" } : { lead, text: "", tone: "reply" };
   }
   if (st !== "needs_you" && st !== "unread") return undefined;
   if (st === "needs_you" && ix) {
     const kicker = interactionKicker(ix);
     const text = plainMarkdown(interactionAsk(ix)).slice(0, MAX);
-    return text ? { lead: t("todos.kicker_line", { kicker }), text } : { lead: kicker, text: "" };
+    return text ? { lead: t("todo-status.kicker_line", { kicker }), text } : { lead: kicker, text: "" };
   }
   const text = plainMarkdown(sessionPreview(s)).slice(0, MAX);
   return text ? { text } : undefined;
@@ -68,6 +68,6 @@ export function rowLine(s: Session, ix?: Interaction, awaiting = false): { lead?
  */
 export function draftLine(d: { text: string; quoted: boolean }): { lead: string; text: string } | undefined {
   const text = d.text.replace(/\s+/g, " ").trim().slice(0, MAX);
-  if (text) return { lead: t("todos.kicker_line", { kicker: t("sidebar.draft") }), text };
+  if (text) return { lead: t("todo-status.kicker_line", { kicker: t("sidebar.draft") }), text };
   return d.quoted ? { lead: t("sidebar.draft"), text: "" } : undefined;
 }

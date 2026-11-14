@@ -72,8 +72,8 @@ const skipKeys: Record<string, string> = {
   not_a_task: "todos.check_skip_manual", done: "todos.check_skip_done", reopened: "todos.check_skip_reopened",
 };
 const deliveryKeys: Record<string, string> = {
-  live: "todos.check_delivery_live", none: "todos.check_delivery_none", pr: "todos.delivery_pr",
-  merged: "todos.delivery_merged", off: "todos.delivery_off",
+  live: "todos.check_delivery_live", none: "todos.check_delivery_none", pr: "todo-status.delivery_pr",
+  merged: "todo-status.delivery_merged", off: "todo-status.delivery_off",
 };
 const unblockKeys: Record<string, string> = {
   user: "todos.unblock_user", agent: "todos.unblock_agent", other: "todos.unblock_other",

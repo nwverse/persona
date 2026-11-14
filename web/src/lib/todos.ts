@@ -277,7 +277,7 @@ export const TODO_TONE_CLASS: Record<(typeof TODO_STATUS_INFO)[TodoStatus]["tone
  *  or finished-unseen (#4896): a supervised one whose work was judged finished (#3124), or an open one whose result
  *  waits on them — to verify, to acknowledge, or to decide (its `ask`, #2056). */
 export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
-  return (reviewState(todo) === "pending_review" || !!openAsk(todo)) && (status === "follow_up" || status === "unread" || status === "not_started");
+  return !todo.done_at && (reviewState(todo) === "pending_review" || !!openAsk(todo) || todo.delivery?.state === "live") && (status === "follow_up" || status === "unread" || status === "not_started");
 }
 
 /** A task's place in the order: its status's rank, Awaiting review right after Needs you. */
@@ -322,23 +322,16 @@ export function acceptedAtRest(todo: Todo, status: TodoStatus): boolean {
 }
 
 /** A decision only the owner can move reads Waiting for you, consistently with triage and the snapshot (#5732). */
-function waitsForOwner(todo: Todo): boolean {
+export function waitsForOwner(todo: Todo): boolean {
   const outcome = openAsk(todo)?.outcome;
   return !todo.done_at && (reviewState(todo) === "needs_user" || outcome === "decide" || outcome === "cannot");
-}
-
-/** Delivered work at rest still awaits acceptance; live alone never means done (#5732). */
-function deliveredAwaitingReview(todo: Todo, status: TodoStatus): boolean {
-  if (todo.done_at || waitsForOwner(todo)) return false;
-  const atRest = status === "follow_up" || status === "unread" || status === "not_started";
-  return atRest && (awaitsReview(todo, status) || todo.delivery?.state === "live");
 }
 
 /** The status a row draws its tone and mark from: Done for an accepted task at rest, else its own. */
 export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
   if (acceptedAtRest(todo, status)) return "done";
   if (waitsForOwner(todo)) return "needs_you";
-  return deliveredAwaitingReview(todo, status) ? "unread" : status;
+  return awaitsReview(todo, status) ? "unread" : status;
 }
 
 /** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
@@ -346,9 +339,9 @@ export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   if (isCancelled(todo)) return t("lib-todos.review_cancelled");
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
-  if (waitsForOwner(todo)) return t("todos.section_waiting");
-  if (deliveredAwaitingReview(todo, status)) return t("todos.section_just_done");
-  if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
+  if (waitsForOwner(todo)) return t("todo-status.section_waiting");
+  if (awaitsReview(todo, status)) return t("todo-status.section_just_done");
+  if (status === "done" && isReviewDone(todo)) return t("lib-todos.review_done");
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 

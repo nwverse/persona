@@ -12,9 +12,9 @@ export function BriefingMark() {
     <p data-for-briefing="caption" className="flex min-w-0 items-start gap-1.5 text-xs text-ink-2 [overflow-wrap:anywhere]">
       <Icon name="clock" size={13} className="mt-0.5 shrink-0" />
       <span>
-        <span className="font-medium">{t("todos.ask_held")}</span>
+        <span className="font-medium">{t("todo-status.ask_held")}</span>
         {t("assistant-decisionrow.separator")}
-        {t("todos.ask_held_hint")}
+        {t("todo-status.ask_held_hint")}
       </span>
     </p>
   );

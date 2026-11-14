@@ -3,7 +3,7 @@
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
 import { acceptanceStands, latestReview, reviewState } from "./supervision";
-import { isCancelled, openAsk, todoDueBy, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { isCancelled, openAsk, todoDueBy, todoStatus, waitsForOwner, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { todoStageIndex } from "./todo-stage";
 
 /** Where a to-do shows, in the page's order (#5707): explicit parked work stays open (#5929), cancelled apart from Done (#5732). */
@@ -12,7 +12,7 @@ export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "pr
 export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "pr", "parked", "other", "just_done", "shelved", "done", "cancelled"];
 
 /** Sections that start folded: unfinished to-dos stay open (#5707); cancelled folds apart from Done (#5732). */
-export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(["shelved", "done", "cancelled"]);
+export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(TRIAGE_SECTIONS.slice(-3));
 
 /** No activity for this long, nothing of it running: shelved (SOP rule 11). */
 export const SHELVE_AFTER_MS = 48 * 3600_000;
@@ -28,7 +28,6 @@ export type TriageRule =
   | "parked"
   | "closed"
   | "accepted"
-  | "deployed"
   | "finished_unseen"
   | "seen"
   | "pr_open"
@@ -88,12 +87,6 @@ function shelvable(todo: Todo, now: number): boolean {
   return (todo.agents ?? []).length > 0 || Boolean(todo.origin);
 }
 
-/** Whether Got it can file a finished turn under Done. Seen is not acceptance: a supervised task, a pending review and
- *  an unaccepted live delivery stay open, so their rows must not offer an action that says "Moved to Done" (#5732). */
-export function seenCanFile(todo: Todo): boolean {
-  return todo.delivery?.state !== "live" && reviewState(todo) !== "pending_review" && !todo.supervision?.supervisor;
-}
-
 /**
  * A to-do's section by the SOP's table (docs/assistant/todo-status-sop.md, "Decision table"), first match wins:
  *
@@ -133,7 +126,7 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     return at(now - last < SHELVE_AFTER_MS ? "waiting" : "done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
-  if (!todo.done_at && (review === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
+  if (waitsForOwner(todo)) return at("waiting", "owner_decides");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at("done", "closed");
   // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
@@ -145,8 +138,8 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old or seen (#5732).
   if (todo.delivery?.state === "live") return at("just_done", "finished_unseen");
   const finished = status === "unread" || review === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
-  const acceptanceRequired = !seenCanFile(todo);
-  if (finished && (!seen(last) || acceptanceRequired)) return at("just_done", "finished_unseen");
+  // Live returned above. Every other supervised or review-pending task still needs acceptance after Seen.
+  if (finished && (!seen(last) || review === "pending_review" || todo.supervision?.supervisor)) return at("just_done", "finished_unseen");
   if (openPR(todo)) return at("pr", "pr_open");
   // seen since it last moved, and no PR waits on the owner
   if (finished) return at("done", "seen");
@@ -160,7 +153,7 @@ export function countsAsOpen(todo: Todo, t: Triage): boolean {
   // a failed start has done_at too (the hub ends it), yet while it waits on the owner it is theirs to retry: open
   if (t.rule === "failed_start") return t.section === "waiting";
   if (todo.done_at || t.section === "cancelled" || t.section === "shelved" || t.section === "done") return false;
-  return t.rule !== "accepted" && t.rule !== "deployed";
+  return t.rule !== "accepted";
 }
 
 /** Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the conversation's

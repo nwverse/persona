@@ -33,16 +33,16 @@ export async function checkTaskCompletion(id: string, manager: string, signal: A
 }
 
 export function completionCheckError(error: unknown): string {
-  if (error instanceof HubTimeoutError) return t("todos.check_timeout");
-  if (isLegacySpacesRouteError(error)) return t("todos.check_unsupported");
+  if (error instanceof HubTimeoutError) return t("todo-status.check_timeout");
+  if (isLegacySpacesRouteError(error)) return t("todo-status.check_unsupported");
   if (error instanceof ApiError) {
     switch (error.status) {
-      case 401: return t("todos.check_auth");
-      case 403: return t("todos.check_forbidden");
-      case 404: return t("todos.check_missing");
-      case 502: return t("todos.check_model_error");
-      case 503: return t("todos.check_unavailable");
+      case 401: return t("todo-status.check_auth");
+      case 403: return t("todo-status.check_forbidden");
+      case 404: return t("todo-status.check_missing");
+      case 502: return t("todo-status.check_model_error");
+      case 503: return t("todo-status.check_unavailable");
     }
   }
-  return t(error instanceof TypeError ? "todos.check_network" : "todos.check_failed");
+  return t(error instanceof TypeError ? "todo-status.check_network" : "todo-status.check_failed");
 }
