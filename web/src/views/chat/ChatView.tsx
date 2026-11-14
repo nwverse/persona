@@ -1275,6 +1275,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       const deadline = Date.now() + 120_000;
       const target = inputIndex?.inputs.find((input) => `seg:${input.id}` === lineId);
       const cancelled = () => railChat.current !== scope || run !== railRun.current || Boolean(inputIndex?.history && trNow.current.history && inputIndex.history !== trNow.current.history);
+      stopGlide();
+      clearTimeout(landing.current?.quiet);
+      landing.current = null;
       follow(false);
       if (!target || containsInput(trNow.current.items, target)) {
         const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
@@ -1287,7 +1290,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           get: () => trNow.current,
           load: async () => {
             const sc = scroller.current;
-            if (sc) before.current = { h: sc.scrollHeight, top: sc.scrollTop };
+            if (sc && !trNow.current.loadingEarlier) before.current ??= { h: sc.scrollHeight, top: sc.scrollTop };
             try { await trNow.current.loadEarlier(); }
             finally { requestAnimationFrame(() => (before.current = null)); }
           },
@@ -1295,6 +1298,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           stopped: () => cancelled() || Date.now() >= deadline || containsInput(trNow.current.items, target),
           onPage: () => {},
           pages: Number.MAX_SAFE_INTEGER,
+          joinEarlier: true,
         });
         if (cancelled()) return;
         if (!containsInput(trNow.current.items, target)) { toast(t("chat-navrail.target_failed"), "error"); return; }
@@ -1311,7 +1315,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       if (result === "missing") { toast(t("chat-navrail.target_failed"), "error"); return; }
       landRow(result.value, -12);
     },
-    [mid, sid, inputIndex, follow, landRow],
+    [mid, sid, inputIndex, follow, landRow, stopGlide],
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
