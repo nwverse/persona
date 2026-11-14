@@ -3,7 +3,7 @@ import Synchronization
 
 /// Test-only shadow of the iOS continuity adapter. It never selects the production implementation or carries message
 /// contents into diagnostics. The fixture harness supplies the same actions to native ChatStore and this shadow.
-public struct CoreContinuityShadow: Sendable {
+public struct CoreContinuityShadow: ~Copyable, Sendable {
     public struct Mismatch: Error, Equatable, Sendable {
         public let domain: String
         public let rule: String
