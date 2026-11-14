@@ -98,8 +98,8 @@ func TestDialAtReadsMCPWaitUpdates(t *testing.T) {
 }
 
 func TestDialAtWithoutMCPWaitReceiverReturnsResponseUnchanged(t *testing.T) {
-	response := `{"wait_kind":"approval","content":[{"type":"text","text":"done"}]}` + "\n"
-	path, serverDone := mcpWaitTestServer(t, response)
+	response := `{"wait_kind":"approval"}` + "\n"
+	path, serverDone := mcpWaitTestServer(t, response+`{"content":[{"type":"text","text":"a later line must remain unread"}]}`+"\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	line, err := DialAt(ctx, path, Request{Kind: "mcp.call", WaitUpdates: true})
