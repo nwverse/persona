@@ -22,14 +22,18 @@ type inboxNote struct {
 	Name    string `json:"name"`
 	Text    string `json:"text,omitempty"`
 	Edited  bool   `json:"edited,omitempty"`
+	Failed  bool   `json:"failed,omitempty"`
 	Context string `json:"context,omitempty"`
 	Machine string `json:"machine,omitempty"`
 	Session string `json:"session,omitempty"`
+	Who     string `json:"who,omitempty"`
+	Next    string `json:"next,omitempty"`
+	Checks  int    `json:"checks,omitempty"`
 }
 
 func renderNote(n inboxNote, owner string) string {
-	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited,
-		Context: n.Context, Machine: n.Machine, Session: n.Session})
+	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited, Failed: n.Failed,
+		Context: n.Context, Machine: n.Machine, Session: n.Session, Who: n.Who, Next: n.Next, Checks: n.Checks})
 }
 
 // chainLine is a chain entry as the conversation reads it, its time in loc (the user's zone).
@@ -130,11 +134,12 @@ func (b *inboxBook) closeHandling(it *InboxItem, why string, now time.Time) bool
 	return true
 }
 
-// ownSend: the source says the newest message of the item is the user's, and it is the reply Persona sent for a
-// confirmed suggestion (nothing came in since): not the user's own reply. Under b.mu.
+// ownSend: the source says the newest message of the item is the user's, and it is a reply Persona sent (nothing came
+// in since): not a separate reply the user made in the source. SentOf still proves this after a due check or another
+// wake has temporarily moved handling out of waiting. Under b.mu.
 func ownSend(it *InboxItem, last string) bool {
-	a, h := it.Agent, it.Handling
-	return a != nil && h != nil && h.State == HandlingWaiting && a.SentOf != "" && a.SentOf == it.Last && (last == "" || last == it.Last)
+	a := it.Agent
+	return a != nil && it.Handling != nil && a.SentOf != "" && a.SentOf == it.Last && (last == "" || last == it.Last)
 }
 
 // escalate hands the manager its work, under b.mu: a newly triaged Needs you event (recent) gets a processing
@@ -160,6 +165,9 @@ func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
 			continue
 		}
 		w := beginWrite(it)
+		if it.Follow != nil {
+			it.Follow.Checks, it.Follow.Due = 0, false
+		}
 		if a == nil {
 			a = &InboxAgent{State: AgentQueued}
 			it.Agent = a
@@ -275,8 +283,11 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		case err == nil:
 			a.keepToldSince(told) // the notes told while it was sent go next time
 			if wake {
-				t := now.UTC()
-				a.Wake, a.StartedAt = false, &t
+				a.Wake = false
+				if it.Handling == nil || it.Handling.State != HandlingAgent {
+					t := now.UTC()
+					a.StartedAt = &t
+				}
 			}
 		case gone:
 			a.Lost = append(a.Lost, sid)
