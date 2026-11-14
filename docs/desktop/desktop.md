@@ -132,6 +132,125 @@ The Desktop workflow runs it on all three systems (`update` job in `.github/work
 
 Not proven by this test: a signed build updating from a published GitHub Release, the macOS install, notarization, and the tray entries as drawn on screen (their text and order are unit-tested; no screenshot of a native menu is taken).
 
+# Acceptance evidence
+
+The complete acceptance checklist for the desktop migration is in
+[#6770](https://github.com/nwverse/persona/issues/6770). This section is its maintained evidence record: it names what was
+checked, where the result can be reproduced, and what remains unverified. "Implemented" is not the same as "accepted". The
+issue remains open until its installation, signed-release, physical-device and first-run requirements have actual evidence.
+
+Snapshot: 2026-11-14, against `origin/main` at `b5561c9115`. The merged PRs below are the source of the implementation and
+its original verification claims. Their hosted runs were read back by head SHA, and their smoke/update artifacts were read
+directly during this audit. Current local commands reproduce the static checks; they do not manufacture native-device,
+screenshot or release evidence.
+
+## What each kind of evidence proves
+
+- **A hosted macOS or Windows runner is not a physical Mac or Windows PC.** In particular, no person has installed the
+  desktop on a physical Windows machine or checked its taskbar overlay, notification center, lock behavior or tray.
+- **The smoke screenshots prove rendered development builds only.** The driver starts the production main module, not an
+  installed package. The 2026-11-14 audit inspected the macOS/Windows light and dark chat, sign-in, Agents, waiting card,
+  Inbox, To-dos and notification-click captures. These screenshots do not prove first-run setup from an asar, OS-drawn
+  notifications, a taskbar overlay, the native tray menu or a signed installation.
+- **Notification, click and lock coverage stops at the main-process boundary.** The test replaces notification display,
+  idle/support answers and power-monitor events; it asserts the production web/preload/IPC request, route and socket
+  behavior. It does not observe an OS notification click or an actual screen lock. The macOS Dock count is read back;
+  Windows verifies the count passed to the shell, not the taskbar's drawing.
+- **The update test uses a local feed and test-only packages.** Windows installed 0.9.0, verified the 0.9.1 download's
+  SHA-512, installed on quit and reopened as 0.9.1. macOS found and downloaded a checksummed 0.9.1 ZIP, but Squirrel.Mac
+  **refused the ad-hoc-signed build; it was not installed**. Neither is a signed update from a published GitHub Release.
+- **Release tests are static and synthetic.** They check workflow structure, authorization, Environment/credential
+  boundaries, gate decisions and refusal to silently produce unsigned release packages. They do not access credentials,
+  prove that an Environment is configured, run `codesign`, `spctl` or Authenticode against a release, notarize an app or
+  publish an update. No desktop release job has run on a real version tag.
+
+## Acceptance criteria
+
+| Criterion | Merged implementation and evidence | Reproduce / inspect | Unresolved limits and verdict |
+| --- | --- | --- | --- |
+| Native `PersonaMac`, `apple/Mac/` and `apple/PersonaMacTests/` are gone; iOS, watchOS and visionOS still pass | [#7228](https://github.com/nwverse/persona/pull/7228), squash `dce8ed2f`: target/source removal; Xcode 27.1 generic iOS and watchOS builds, iOS test build and shared package tests | Inspect targets with `grep -n PersonaMac apple/project.yml` (no hits); reproduce supported Apple checks with `scripts/ci/apple.sh ios` on the repository's supported Mac/Xcode setup | **Not accepted.** visionOS reproduced existing main failures (`VNCScreenView.swift` / `WindowTextSize`); required iOS 26.0.x simulator tests were not executed and Xcode 26.0.x was not verified. Removal is merged; the platform pass criterion is not met |
+| Installed macOS/Windows apps sign in to root/sub-path hubs and run chat, Agents, Inbox, to-dos and approval cards, with screenshots on both | [#7210](https://github.com/nwverse/persona/pull/7210), squash `ee4fabff`; [#7283](https://github.com/nwverse/persona/pull/7283), squash `30d5fb65`; [#7406](https://github.com/nwverse/persona/pull/7406), squash `0bd77c6b`; [#7464](https://github.com/nwverse/persona/pull/7464), squash `14f8fd8d`. Exact-head run [43567591329](https://github.com/nwverse/persona/actions/runs/43567591329) (`c2a4d4b57b`) passed both platforms, root 14/14 and prefix 12/12 | `scripts/ci/desktop-smoke.sh`; `gh run download 43567591329 -R nwverse/persona -n persona-desktop-macos-smoke -D /tmp/persona-desktop-macos-smoke`; repeat with `persona-desktop-windows-smoke` and a fresh output directory, then open `result.json` and the PNGs | **Not accepted.** Hosted screenshots are development builds against a synthetic hub. A waiting question is rendered, not answered/approved. The packaged clean-profile setup failure below blocks installation acceptance. No physical Windows or signed installation |
+| Closed-window Needs-you notification and Dock/taskbar badge; click opens the session | [#7162](https://github.com/nwverse/persona/pull/7162), squash `d916689d`; [#7210](https://github.com/nwverse/persona/pull/7210); [#7464](https://github.com/nwverse/persona/pull/7464). Run 43567591329 observed notification title/tag/route, badge 2→3 matching web, macOS Dock count 3 and the simulated click route | Same smoke/artifact command. `desktop/test/notifications.test.ts` checks prefixed routes; `web/src/lib/desktop-attention.test.tsx` checks the web/native boundary | **Not accepted.** Main-process calls and synthetic events only; no OS notification display/click, real Windows overlay or real tray interaction. macOS reads Dock's count, not its pixels |
+| `register_desktop` is sent and Phone Muted works while active | [#7162](https://github.com/nwverse/persona/pull/7162) plus [#7464](https://github.com/nwverse/persona/pull/7464). Both runners registered on the authenticated socket; synthetic lock withdrew via `unregister_desktop` (root) or socket close (older hub) and unlock registered again | `scripts/ci/desktop-smoke.sh`; `(cd server && go test ./internal/hub -run 'Desktop|MuteWhileDesktop')`; `desktop/test/presence.test.ts` | **Not accepted.** `server/internal/hub/desktops_test.go` tests the suppression policy and withdrawal; no physical phone received/suppressed a real push, and no real idle/lock occurred |
+| Local Link pairing/status/management is in the app; old Mac menu-bar and Windows tray UIs are removed | [#7209](https://github.com/nwverse/persona/pull/7209), squash `0d3d25a8`; [#7210](https://github.com/nwverse/persona/pull/7210); [#7276](https://github.com/nwverse/persona/pull/7276), squash `3f4e8bb9`; [#7282](https://github.com/nwverse/persona/pull/7282), squash `c01e7992`. Fixed CLI/status boundary and independent macOS universal Link package; Windows service retained without the old tray UI | `npm --prefix desktop test`; `(cd server && go test ./cmd/persona-link)`. The only `server/internal/linktray/host.go` left is the non-UI `PairError` type | **Not accepted.** Unit tests and unsigned/ad-hoc packages, not a live installed Link pairing, reconnect, service operation or Screen Recording permission change. No physical Windows scheduled-task acceptance |
+| CI builds signed macOS and Windows packages | [#7442](https://github.com/nwverse/persona/pull/7442), squash `6af756ba`: protected release jobs, native packaging and static signature-verification steps. [#7406](https://github.com/nwverse/persona/pull/7406) and [#7442](https://github.com/nwverse/persona/pull/7442) built **unsigned development** macOS/Windows packages | `python3 scripts/ci/test_desktop_release.py`, `python3 scripts/ci/test_ci.py`, `python3 scripts/ci/test_release_authorization.py`. Inspect exact-head update evidence below, not as signing evidence | **Not accepted.** No certificate, signed package, notarization or version-tag desktop release run. The Environment-binding correction in open [#7521](https://github.com/nwverse/persona/pull/7521) is still pending supervisor review and is not on this branch's base |
+| Rules/docs describe Electron around the existing web app and independent Link | [#7210](https://github.com/nwverse/persona/pull/7210), [#7276](https://github.com/nwverse/persona/pull/7276), [#7282](https://github.com/nwverse/persona/pull/7282) and [#7442](https://github.com/nwverse/persona/pull/7442) | `python3 scripts/test/test_doc_paths.py`, `test_doc_go_paths.py`, `test_doc_sections.py`, `test_doc_wire.py`; review `CLAUDE.md`, `docs/desktop/desktop.md`, `docs/web/web.md`, `docs/operations/link.md`, `docs/operations/windows.md` and both READMEs | **Static criterion verified; not a substitute for the other acceptance gates.** The old prohibition is replaced with the one-web-UI boundary. Documentation does not prove product behavior |
+
+## Exact-head artifact readback
+
+All three final hosted runs matched the PR head recorded in the merged PR, not an earlier branch revision. They prove their
+own steps only; the squash commits are [#7406](https://github.com/nwverse/persona/pull/7406) `0bd77c6b`,
+[#7464](https://github.com/nwverse/persona/pull/7464) `14f8fd8d` and [#7442](https://github.com/nwverse/persona/pull/7442)
+`6af756ba`.
+
+| Run | PR / exact head | Readback |
+| --- | --- | --- |
+| [43561725548](https://github.com/nwverse/persona/actions/runs/43561725548) | #7406 / `bd45966510` | Linux, macOS and Windows jobs succeeded; unsigned native packages and initial sign-in smoke. Not a signed or installed release |
+| [43567591329](https://github.com/nwverse/persona/actions/runs/43567591329) | #7464 / `c2a4d4b57b` | macOS and Windows: root 14/14, prefix 12/12, 12 screenshots each. Inspected directly for this audit as described above |
+| [43569276735](https://github.com/nwverse/persona/actions/runs/43569276735) | #7442 / `4420bc534c` | All six jobs succeeded. Windows update result: 16/16 steps, SHA-512 match, the installed `ProductVersion` in its `result.json` is the 0.9.1 package's four-part form, and the reopened app is 0.9.1. macOS: checksum match followed by explicit Squirrel.Mac signature refusal and `not installed` |
+
+For the update evidence, use a fresh empty directory per artifact and read the files without executing them:
+
+```sh
+mkdir -p /tmp/persona-desktop-update-evidence
+gh run download 43569276735 -R nwverse/persona -n persona-desktop-update-test-Windows -D /tmp/persona-desktop-update-evidence
+# Read /tmp/persona-desktop-update-evidence/result.json and app.log.
+# Use a different new directory for persona-desktop-update-test-macOS.
+```
+
+To produce new local development-build evidence, run `scripts/ci/desktop-smoke.sh` after `scripts/ci/desktop.sh`; on a
+headless Linux machine use an owned Xvfb display, for example `xvfb-run -a scripts/ci/desktop-smoke.sh`. On a native
+macOS/Windows machine `node desktop/scripts/update-test.mjs <new result directory>` produces the same local-feed test as
+CI. A Linux AppImage update is useful code-path evidence but Linux is not a shipping desktop platform.
+
+## Open first-run blocker and ownership
+
+The original child-agent report in [#7442](https://github.com/nwverse/persona/pull/7442) reproduced a packaged clean-profile
+`setup.html` / asar failure with `grantFileProtocolExtraPrivileges: false` (`ERR_FILE_NOT_FOUND`). The [other leader's
+claim](https://github.com/nwverse/persona/issues/6770#issuecomment-6873777179) owns reproducing and repairing that path.
+This audit preserves that old report; it neither re-runs it nor claims that #7442 fixed it. A preconfigured-hub update test
+passing is not first-install acceptance. Do not relax fuses or the existing origin/IPC boundaries to make this evidence look
+green.
+
+## Owner actions and decisions still required
+
+1. **Protected release configuration:** approve and configure `persona-desktop-release` with administrator-only required
+   reviewers, then supply the Environment secrets listed above. Choose a Developer ID Application certificate and Apple
+   notarization API key for macOS; choose Authenticode signing for Windows. Modern non-exportable Windows certificates need
+   a cloud-signing design decision, not an insecure export workaround. No certificate is available to this repository's
+   static tests.
+2. **Pending static gate correction:** [#7521](https://github.com/nwverse/persona/pull/7521) binds the gate to that
+   Environment. Until it merges, the documented environment-only configuration would make the gate report every secret
+   absent and skip both platforms. This was found statically, not observed as a production signing failure. The follow-up
+   tests here enforce the same documented Environment for all secret-reading release jobs; they do not duplicate its binding.
+3. **Physical platform acceptance:** on an actual Windows PC and a Mac, install the intended packages, exercise first run,
+   Link pairing/reconnect, real notifications/clicks, badge/overlay, lock/unlock and Phone Muted, launch at login and the
+   tray. Capture platform-labelled screenshots and distinguish an installed package from a development run.
+4. **Authorized release:** only the administrator can authorize a real version-tag release. After that actual signed and
+   notarized release, install an older signed version on both platforms and verify a real published update through restart,
+   not merely a local-feed download. `scripts/ci/test_desktop_release.py` passing never substitutes for this step.
+
+## Small CI selection follow-up
+
+`scripts/ci/paths.py` currently selects desktop only for `desktop/**`, `scripts/ci/desktop*.sh` and its workflow. A local
+selection probe returned `desktop: false` for `web/src/main.tsx`, `scripts/mock/mock_hub.py`,
+`scripts/mock/test_desktops_mock.py` and `spec/desktop-bridge.d.ts`, even though the desktop lane builds/loads those
+inputs. A narrowly scoped follow-up should include `web/**`, the mock hub/test files and `spec/desktop-bridge.d.ts` in the
+desktop filter, with a regression in `scripts/ci/test_ci.py`. This does not mean those inputs are untested: default full CI
+runs every lane, and an explicitly dispatched `desktop-test.yml` tests its branch. The gap affects path-filtered `auto`
+selection; this audit does not redesign or change that scheduling.
+
+## Independent-review provenance
+
+Review evidence is separate from test evidence. Only #7442 had the two completed pre-merge independent reviews described
+in its PR: workflow `wf_b0758023-e5f`, reviewers `review:update:0` (`ab2093d409085743b`, security/privilege boundaries) and
+`review:update:1` (`a1ddbee1a621ded96`, correctness/claims), covering the updater/release diff and leading to its macOS
+readiness, signing-boundary, cancellation and test-isolation fixes. Their reviews did not cover the later Environment gate
+finding. **#7406 and #7464 have no completed independent-review evidence.** Their implementation/local/hosted results remain
+useful but must not be described as independent approval, and #7442's reviews do not cover code outside its diff. The
+[issue correction](https://github.com/nwverse/persona/issues/6770#issuecomment-6873821152) is the authoritative provenance
+record; this audit does not backdate a new review or imply a prior one.
+
 ## Migration boundaries
 
 The retired `PersonaMac` target and native-Mac source directory are removed separately, with iOS, watchOS, visionOS and shared package checks. The old Mac menu bar UI and Windows `linktray` are removed too: independent Link installation, pairing/reconnect/status/service controls and Persona Screen packaging now use the CLI and fixed desktop setup bridge. The CLI/service works without the desktop app; Mac uses launchd `com.persona.link`, Windows retains its scheduled task.
