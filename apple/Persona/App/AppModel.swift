@@ -251,6 +251,11 @@ final class AppModel {
         }
     }
 
+    /// `selectedTab` without watching it, as `sessionsNow`: for values worked out where a view is built, not drawn
+    /// (`ShellView`'s initial state is evaluated in `RootView`'s body, which then followed the tab and built the shell's
+    /// tree again on every switch, #5438).
+    var selectedTabNow: AppTab { _selectedTab }
+
     /// The iPhone's shell while it is on screen (`ShellState`): it takes every new tab as it is set.
     @ObservationIgnored weak var tabRouter: (any TabRouter)?
 
@@ -2435,6 +2440,10 @@ final class AppModel {
                 toast = Toast(text, style: .success)
             }
             over()
+            if r.cancel == true, res.already != true || res.resolution?.cancel == true, let closed = Answered.answerLines(ix, r).first {
+                // Match Android's receipt for closing a question without an answer; keep another answer's "already" receipt.
+                toast = Toast(closed.answer, style: .success)
+            }
             Haptics.success()
         } catch let e as APIError where e.code == "prompt_changed" {
             // Nothing pressed: the terminal's dialog changed. The hub has ended a screen card and sends one for what is
