@@ -11,11 +11,4 @@ var boardRoutes = []string{
 	"PUT /api/v1/workspace-board/settings",
 }
 
-// readSettingsRoutes are Manual mark as read's switch (assistant/read_settings.go, #7356); its event (read_settings)
-// comes as ws.broadcast.
-var readSettingsRoutes = []string{
-	"GET /api/v1/read-settings",
-	"PUT /api/v1/read-settings",
-}
-
-func init() { Routes = append(append(Routes, boardRoutes...), readSettingsRoutes...) }
+func init() { Routes = append(Routes, boardRoutes...) }

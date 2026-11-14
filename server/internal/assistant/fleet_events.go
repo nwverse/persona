@@ -228,7 +228,7 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 		var p assistantwire.FleetSeen
 		if json.Unmarshal(params, &p) == nil && p.MachineID != "" && p.SessionID != "" {
 			if m, ok := s.fleetMachine(p.MachineID); ok {
-				s.userSeen(ctx, m.ID, p.SessionID, p.Manual)
+				s.markSeen(ctx, m.ID, p.SessionID)
 			}
 		}
 	default:

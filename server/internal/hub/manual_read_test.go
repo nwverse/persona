@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -56,10 +59,10 @@ func stateOn(t *testing.T, m *Machine, id, want string) {
 }
 
 // Manual mark as read end to end (#7356): an app's WebSocket seen goes through the hub to the manager, which records
-// it only while the switch is off, or when the app says the user pressed Mark as read; the switch itself is the
-// manager's route, relayed.
+// it when the hub's switch is off or the app says the user pressed Mark as read.
 func TestManualReadOverTheHub(t *testing.T) {
 	h := newTestHub(t)
+	h.store = newMeshStore()
 	m := newMachine(h, MachineConfig{ID: "box", Name: "Box", Kind: "local"})
 	h.machines, h.byID["box"] = append(h.machines, m), m
 	connectAssistant(t, h, &settingsOnlyStore{set: map[string][]byte{}})
@@ -131,5 +134,104 @@ func toldApp(t *testing.T, app *client, typ string, want bool) {
 		case <-deadline:
 			t.Fatalf("the app was not told %s manual=%v", typ, want)
 		}
+	}
+}
+
+// A hub preference must still protect a session whose owner has its own settings database.
+func TestManualReadOnSecondaryManager(t *testing.T) {
+	h := newTestHub(t)
+	h.store = newMeshStore()
+	h.bus.idents = &memIdents{}
+	m := newMachine(h, MachineConfig{ID: "box", Name: "Box", Kind: "local"})
+	h.machines, h.byID["box"] = append(h.machines, m), m
+	owner := "m-0b0b0b"
+	h.devices.kept = map[string]string{"box": owner}
+	mux := http.NewServeMux()
+	h.busRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	dialAssistantWithStore(t, h, srv.URL, false, &settingsOnlyStore{set: map[string][]byte{}})
+	events := make(chan assistantwire.FleetSeen, 4)
+	b := connectGuardManager(t, h, srv.URL, owner, func(method string, raw json.RawMessage) (any, error) {
+		var req assistantwire.HTTPRequest
+		if method == assistantwire.MethodHTTP && json.Unmarshal(raw, &req) == nil && req.Path == "/api/v1/sessions/box/session/seen" {
+			return assistantwire.HTTPResponse{Status: http.StatusOK, Body: []byte(`{"ok":true,"recorded":true}`)}, nil
+		}
+		return nil, nil
+	})
+	b.mu.Lock()
+	b.onEvent = func(method string, raw json.RawMessage) {
+		var p assistantwire.FleetSeen
+		if method == assistantwire.EventSeen && json.Unmarshal(raw, &p) == nil {
+			events <- p
+		}
+	}
+	b.mu.Unlock()
+	if got := h.sessionOwner("box", "session"); got != owner {
+		t.Fatalf("owner = %q, want %q", got, owner)
+	}
+	set := func(on bool) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]bool{"manual": on})
+		if w := hubCall(h, "PUT", "/api/v1/read-settings", string(body)); w.Code != http.StatusOK {
+			t.Fatalf("PUT read-settings: %d %s", w.Code, w.Body)
+		}
+	}
+	post := func(body string, recorded bool) {
+		t.Helper()
+		if w := hubCall(h, "POST", "/api/v1/sessions/box/session/seen", body); w.Code != http.StatusOK || !jsonHas(t, w.Body.Bytes(), "recorded", recorded) {
+			t.Errorf("POST seen %q: %d %s, want recorded=%v", body, w.Code, w.Body, recorded)
+		}
+	}
+	ws := func(session string, manual bool) {
+		msg, _ := json.Marshal(map[string]any{"type": "seen", "machine_id": "box", "session_id": session, "manual": manual})
+		h.onClientMessage(context.Background(), &client{device: "phone"}, msg)
+	}
+	expect := func(session string, manual bool) {
+		t.Helper()
+		select {
+		case got := <-events:
+			if got.SessionID != session || got.Manual != manual {
+				t.Errorf("owner received %+v, want %s manual=%v", got, session, manual)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("owner did not receive %s", session)
+		}
+	}
+	post("", true)
+	set(true)
+	post("", false)
+	post(`{"manual":true}`, true)
+	ws("automatic", false)
+	ws("explicit", true)
+	expect("explicit", true)
+	set(false)
+	post("", true)
+	ws("resumed", false)
+	expect("resumed", false)
+}
+
+func TestManualReadSettingsPersistAndRejectUnauthorizedWrites(t *testing.T) {
+	store := newMeshStore()
+	h := newTestHub(t)
+	h.store = store
+	for _, body := range []string{`{}`, `{"manual":"yes"}`, "not json"} {
+		if w := hubCall(h, "PUT", "/api/v1/read-settings", body); w.Code != http.StatusBadRequest {
+			t.Fatalf("invalid PUT %s: %d %s", body, w.Code, w.Body)
+		}
+	}
+	if w := hubCall(h, "PUT", "/api/v1/read-settings", `{"manual":true}`); w.Code != http.StatusOK {
+		t.Fatalf("valid PUT: %d %s", w.Code, w.Body)
+	}
+	restarted := newTestHub(t)
+	restarted.store = store
+	req := httptest.NewRequest("PUT", "/api/v1/read-settings", strings.NewReader(`{"manual":false}`))
+	w := httptest.NewRecorder()
+	restarted.putReadSettings(w, req.WithContext(context.WithValue(req.Context(), principalKey{}, principal{Role: roleAnswer})))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("answer-only PUT: %d %s", w.Code, w.Body)
+	}
+	if w := hubCall(restarted, "GET", "/api/v1/read-settings", ""); w.Code != http.StatusOK || !jsonHas(t, w.Body.Bytes(), "manual", true) {
+		t.Fatalf("GET after restart and rejected PUT: %d %s", w.Code, w.Body)
 	}
 }

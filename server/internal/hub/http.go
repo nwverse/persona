@@ -75,6 +75,7 @@ func (h *Hub) routes() http.Handler {
 	h.metricsRoutesRelayed(api) // the monitoring is the manager's (devices_routes.go)
 	h.lockTestRoutes(api)
 	h.assistantRoutes(api)
+	h.readSettingsRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
 	h.personaRoutes(api)
@@ -1523,7 +1524,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	case "unregister_desktop":
 		h.unregisterDesktop(c)
 	case "seen":
-		if m := h.localMachine(msg.MachineID); m != nil && msg.SessionID != "" {
+		if m := h.localMachine(msg.MachineID); m != nil && msg.SessionID != "" && h.allowSeen(ctx, msg.Manual) {
 			h.markSeen(m.cfg.ID, msg.SessionID, msg.Manual)
 		}
 	case "tool_result":
