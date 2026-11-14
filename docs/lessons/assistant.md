@@ -419,6 +419,21 @@ request lists the deferred tools by name but nothing can load them (the transcri
 Measured on Claude Code 2.1.321 with a 256-tool connector: with `--tools Bash,Read` the connector's tools were
 unreachable; with `ToolSearch` added the model loaded one on request, and the first request stayed ~15K tokens.
 
+## Size a tool's text in tokens, not characters (#7316)
+
+Claude Code refuses an MCP tool's output past 25,000 tokens (`MAX_MCP_OUTPUT_TOKENS`, which Persona does not set) and
+saves it to a file instead, so a result over it costs the call and the reads that recover it: on one install, 54 `kb_get`
+failures in 30 days, all on projects, then about 70 Bash / Read / sub-agent calls. Characters are a poor measure. With
+Claude's tokenizer on knowledge-base text, CJK alone was 1.08 tokens a character, but Chinese mixed with English words,
+digits and markdown (summaries, logs, chat messages) cost up to a third more than "one token a CJK character, two ASCII
+characters a token"; indented JSON was 1.8 characters a token, numeric ids 2.2, English prose 3.1. "One token a CJK
+character, 3.5 ASCII characters a token" put whole `kb_get` results at two thirds of their real count. `kb_get`'s
+ceiling (`estTokens`, `assistant/kb_get_fit.go`) counts a rune past ASCII as 1.25 tokens and an ASCII byte as half of
+one, which stayed within 15% under the real count on all of these, and stops at 20,000. The size came from the data,
+not the model: linking a group chat to a project adds all its members to the project's people, so one project's
+meta.json held 3,708 ids, 92% of a 129,000-character result. Fold such lists in the tool's text rather than count on
+the store staying small.
+
 ## A leader's split must be somewhere the owner can see (#5846)
 
 Owners lost track of their directions because a leader kept its breakdown in its own files and turns: the direction tree
