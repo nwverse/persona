@@ -357,6 +357,8 @@ fun JRow(
     leadingIconTint: Color? = null,
     /** The start of the title in the quiet ink, drawn before [title]: a hub conversation title's day and kind ("1101 | Fix | "), so its topic is what the eye finds (iOS `ConversationTitle`). */
     titleLead: String? = null,
+    /** Lines the title may take before it ends in an ellipsis; rows whose labels must remain readable pass more than one. */
+    titleLines: Int = 1,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
@@ -368,9 +370,9 @@ fun JRow(
         Column(Modifier.weight(1f)) {
             val titleText: @Composable (Modifier) -> Unit = { m ->
                 val ink = if (destructive) palette.danger.text else palette.ink
-                if (titleLead == null) Text(title, m, style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (titleLead == null) Text(title, m, style = PersonaTheme.type.body, color = ink, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
                 else Text(buildAnnotatedString { withStyle(SpanStyle(color = palette.ink3)) { append(titleLead) }; append(title) }, m,
-                    style = PersonaTheme.type.body, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    style = PersonaTheme.type.body, color = ink, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
             }
             if (titleAccessory == null) titleText(Modifier)
             else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
