@@ -67,7 +67,9 @@ Server keeps four independent shards (at most two concurrent runners): browser/n
 formatting/vet/build/Windows/SDK checks. Every package from `go list ./...` belongs to exactly one test shard, including future packages.
 Browser tests remain isolated from other packages. `internal/node` runs its roughly 2,400 serial tests in two concurrent `go test -run '^(…)$'` partitions, split round-robin from `go test -list`; every test runs in exactly one, and each partition keeps `-p 1` and `-timeout=10m`. `scripts/test/go_partitions.py` holds the split for the node shard, the release build (`scripts/release/build_hub_release.py`) and `scripts/test/test-server.sh` on the hub machine (through `scripts/test/go_test_partitioned.py`, which runs the partitions beside the other packages with the caller's flags and prints each partition's output whole when it ends), so they cannot drift; one serial run had outgrown the ten-minute limits (#5328, #5594). A plain `go test ./internal/node`, as a PR verifier runs it (no `-run`, `-list`, `-bench`, `-fuzz`, `-v`, `-json`, coverage or profiles), splits itself the same way: its `TestMain` lists the tests and runs them round-robin in concurrent processes of the test binary, half the CPUs and at most six by default, prints each one's output whole when it ends, keeps go test's cache log, and fails when any partition does (`server/internal/node/partition_test.go`, #5734). A run with `-run` (the partitions above, a helper process) or with `NODE_TEST_PARTITIONS=1` runs in one process; `NODE_TEST_PARTITIONS=n` sets how many share the tests. Go module/build caches are keyed by exact Go version, shard, dependency sums and
 source inputs, with same-shard fallback keys; `-count=1` keeps test execution uncached. Test-event summaries report the slowest real
-tests, rather than inferring runtime from `Sleep` inside fake-clock tests. The full scripts suite splits complete sorted discovery
+tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and end by repeating each failed test with its first lines
+(from its panic, if any; a timeout's names the test still running) so an excerpt that keeps only a log's head and tail, like the
+PR watcher's report, still says what failed (`scripts/ci/server-shards.py`). The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
 
 Android runs two independently isolated lanes, both at once: `lint-build-test-0` (checker tests, all-module lint, the debug APK and
@@ -734,6 +736,8 @@ Long assistant question cards (#4839): `MOCK_AGENTS=1 MOCK_ASK_LONG=actions PORT
 
 A question answer on its way (#6279): `MOCK_RESOLVE=slow` holds every answer to a card for 6 seconds before it goes through, `=fail` refuses it with a 400 (nothing is resolved); `GET /mock/resolve-mode?mode=ok|slow|fail` switches it while the mock runs. With `MOCK_AGENTS=1 MOCK_ASK_LONG=swipe`, `TEST_RUNNER_PERSONA_SENDING_HUB=http://127.0.0.1:<port>` (and `PERSONA_MOCK_HUB`) `xcodebuild test … -only-testing:PersonaUITests/PendingCardsTests/testQuestionShowsSendingAndFailure` checks that the card stays with "Sending…" on the picked row until the hub answers, and that a failed answer keeps the card with its error and Retry; `TEST_RUNNER_PERSONA_SHOTS` saves both states.
 
+Question-only cancellation (#6278): add `MOCK_QUESTION_CANCEL=1` to a mock with `MOCK_AGENTS=1 MOCK_ASK_LONG=actions` to give the main multi-select `ask_user` and the network tests' Agent question `can_cancel:true`; `/mock/reset` restores both after a resolution, and `/mock/resolved` records the exact body. Set `TEST_RUNNER_PERSONA_QUESTION_CANCEL_HUB` to that mock and `TEST_RUNNER_PERSONA_MOCK_HUB` to a plain `MOCK_ASK_LONG=swipe` mock, then run `PersonaUITests/QuestionSkipTests` in each interface style. It checks the leading 44 pt Skip, the exact `{"cancel":true}` body and receipt, no Skip without `can_cancel`, main versus Agent terminal handoff, and a failed Skip keeping the selected option.
+
 Small controls hit as a finger-sized area (`SmallTapTargetsTests`, #6577): `MOCK_PREVIEW=1 MOCK_TERMINAL_PANES=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/SmallTapTargetsTests` checks that full-screen search's clear ×, a waiting comment's ×, a forwarded page's server chooser (`link-servers`) and the Terminals header's ⋯ (`terminals.more`) are each at least 44 × 44 pt, and that a tap off the glyph or the text, inside that area, still clears, drops, lists the servers or opens the menu; in light and dark. Search covers the window only on an open iPhone Duo, so its test opens it with `-openFullSearch YES` (DEBUG: Search over any phone's window). `TEST_RUNNER_PERSONA_SHOTS=<dir>` writes `targets-*.png`.
 
 Terminal questions of several (`ScreenStepsCardTests`, #2970): `MOCK_SCREEN_STEPS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`,
@@ -1285,10 +1289,11 @@ iOS shell and regular-width card inputs retain their original tree: single-line�
 
 ### 全页面性能 UI 测试（#5730）
 
-`./scripts/app/perf-test.sh [agents|assistant|inbox|settings|machines …]` 用优化 Debug 构建、各套件独立 mock 和共享模拟器锁运行。指定已有的专用模拟器 `PERF_SIM`，`PERF_ONLY=PerfMachinesTests/testMachineDetailScroll` 可只运行一项；`PERF_SKIP_BUILD=1` 只在确认 DerivedData 与当前源码一致时使用。编译和执行均经过 `xcode-slot`，输出目录已存在时拒绝覆盖。
+`./scripts/app/perf-test.sh [launch|agents|assistant|composer|inbox|settings|machines …]` 用优化 Debug 构建、各套件独立 mock 和共享模拟器锁运行。指定已有的专用模拟器 `PERF_SIM`，`PERF_ONLY=PerfMachinesTests/testMachineDetailScroll` 可只运行一项；`PERF_SKIP_BUILD=1` 只在确认 DerivedData 与当前源码一致时使用。编译和执行均经过 `xcode-slot`，输出目录已存在时拒绝覆盖。
 
 | 测试文件（`apple/PersonaUITests/`） | 入口及主要跳转 |
 | --- | --- |
+| `PerfLaunchTests.swift` | Fresh-state cold and restored-snapshot warm process launches to the first frame; large Agents / Assistant / history mock, no frame probe |
 | `PerfAgentsTests.swift` | Agents 列表、筛选、开对话、长历史/图片/输入、工作详情、子 Agent 往返、提问卡后滚动、终端、文件/代码、图片翻页、链接卡片 |
 | `PerfAssistantTests.swift` | 主对话滚动/流式/输入/推送、侧栏、切会话/归档、tab 往返、任务坞、欢迎页、助手资料/定时任务、知识库、待办 |
 | `PerfInboxTests.swift` | 收件箱滚动/搜索/推送、飞书与邮件详情往返、群聊/话题/线程/消息页 |
@@ -1297,7 +1302,20 @@ iOS shell and regular-width card inputs retain their original tree: single-line�
 
 `PerfTestCase.swift` 统一 `launchPinned()`、配对、模拟器系统提示处理、原始 frame 附件及各测量入口。需要 mock 的性能测试在普通 UI 测试中跳过；跳过不算测量成功。当前清单覆盖本轮盘点的主要场景，不等于 App 的每个设置叶子页都已有独立性能测量。
 
-Every measured run also has `main_thread_blocks`: the DEBUG watchdog's count, longest duration and five longest sampled
+The `launch` lane uses `XCTApplicationLaunchMetric(waitUntilResponsive: false)` and never passes `-showFrameProbe`. Cold
+resets the pairing and deletes the development snapshot before every launch; the lane installs the built app after boot,
+then the host-side test runner uses the assigned simulator's data container (`PERSONA_PERF_SIM` / `PERSONA_PERF_BUNDLE`,
+supplied by the runner) as a pre-launch deletion barrier rather than changing the app's asynchronous cleanup. The runner
+re-resolves that container after the seed because installation and the first launch can replace its UUID. Warm starts
+from fresh pairing state and waits for all 183 folded long-Assistant items (61 user / work / answer triples), with screen
+probes enabled only in the unmeasured seed. It then backgrounds the app and requires a complete `dev.json` with at least
+one machine and 120 sessions before measuring with the saved pairing and no repeated `adopt()`. XCTest discards its own
+warm-up: cold means fresh pairing/snapshot state with warm OS caches, not a post-reboot device launch. Other persisted
+launch inputs (transcripts, drafts, outbox and personas) are left as they are; this measurement lane does not change their
+loading. Use a fresh `PERF_OUT` for each run; `PERF_ITERATIONS` is the retained sample count, and
+`PERF_ONLY=PerfLaunchTests/testColdLaunch` or `…/testWarmLaunch` selects one case.
+
+Every frame-probe measured run also has `main_thread_blocks`: the DEBUG watchdog's count, longest duration and five longest sampled
 main-thread stacks (#4264). `PerfAssistantTests/testWelcomePageIdle` fails when this count is not zero; the other scenarios
 attach the evidence without enforcing the 100 ms budget. A missing report fails that assertion rather than passing as no blocks.
 
@@ -1305,6 +1323,12 @@ attach the evidence without enforcing the 100 ms budget. A missing report fails 
 In a chat the glide tells the list a finger is on it (`PagePerf.touch`, as `-showPagePerf` does), so the chat stops following its newest end and the list really moves (`PerfLongInputTests`, #5676).
 
 `scripts/app/perf_report.py` 优先导出 xcresult 原始 frame 附件，保存各轮与来源；缺样、失败、工具错误不写成通过。FPS 是 CADisplayLink 回调 cadence，不是 GPU 呈现帧率；hitch 是自定义迟到时间，run-loop busy 不是 CPU 时间。看最低 cadence、最差 hitch 和最长帧，不能只看中位数。`--final-acceptance` 只检查样本完整性，不证明稳定 60 FPS。回归测试：`python3 scripts/app/test_perf_report.py`。
+
+Launch entries use their XCTest metric instead of `frames.json`: the report retains the raw values and units and adds median,
+minimum / maximum and spread in milliseconds for cold and warm tests. Missing, invalid or incomplete launch measurements fail
+the diagnostic report. Simulator values are not gated on the 400 ms recent-iPhone budget. `--final-acceptance` remains scoped
+to tagged glide integrity: launch-only reports are diagnostically complete but not final-acceptance eligible; combined reports
+still require a valid glide.
 
 ### Whole App (any page)
 
