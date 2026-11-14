@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## A folded sidebar group kept every row mounted (web usability audit, 2026-11-14)
+
+`Collapse` keeps its children unless it is `lazy`, and the sidebar's folds were not: with 400 Agents the rows under
+folded groups stayed in the DOM, inert, about 8,800 elements that every page switch laid out again (230–290 ms long
+tasks on a 4x-throttled phone, none with 74 Agents). Sidebar folds are lazy by default now, so a test that looks for a
+folded group's rows (to check they are inert) opens the group first. Two smaller costs hid behind the big DOM: each
+group heading read its height in a layout effect (`getBoundingClientRect`), and one set a custom property on the
+scroller, which restyles everything under it before the next heading's read. Take such heights from a
+`ResizeObserver`: its first report comes after the browser's own layout and before the paint, and `flushSync` applies
+state from it in that frame. Measure with a production build (`vite preview`), CDP CPU throttling and a `longtask`
+observer, against the same mock with fewer sessions (`web/e2e/sidebar-many-agents.mjs`).
+
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
 The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.
