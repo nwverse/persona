@@ -165,3 +165,40 @@ func TestTaskStateFiveFreshRunsCarryOnlyNewFindings(t *testing.T) {
 		}
 	})
 }
+
+func TestTaskStateRecurringFollowupLeavesMainChat(t *testing.T) {
+	node := readyHub()
+	node.settings = &Settings{Main: "main", Timezone: "UTC"}
+	s := newStorelessService(t, node)
+	before := len(s.tasksView(t.Context(), nil))
+	if _, err := s.toolScheduleFollowup(t.Context(), "server", "main", json.RawMessage(
+		`{"title":"Public issue patrol","prompt":"Report only changes","every":"30m"}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	tasks := s.tasksView(t.Context(), nil)
+	if len(tasks) != before+1 {
+		t.Fatalf("expected one new task, got %d", len(tasks)-before)
+	}
+	for _, task := range tasks {
+		if task.Title != "Public issue patrol" {
+			continue
+		}
+		if task.SessionID != "" || task.FreshEachRun {
+			t.Fatalf("expected the task's own reusable chat: %+v", task)
+		}
+		first, err := runNow(t, s, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := runNow(t, s, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.SessionID == "" || first.SessionID == "main" || second.SessionID != first.SessionID {
+			t.Fatalf("recurring runs should share a task chat: first %q, second %q", first.SessionID, second.SessionID)
+		}
+		return
+	}
+	t.Fatal("the patrol was not saved")
+}
