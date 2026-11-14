@@ -343,7 +343,8 @@ class Watcher:
                              bounded(str(error), 6000))
             except WatchError as comment_error:
                 self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                               outcome="base_comment_pending", failure=str(comment_error),
+                               outcome="base_comment_pending", failure=str(error),
+                               comment_failure=str(comment_error),
                                base_failures=comparison, verification="base_failure",
                                checks=getattr(error, "checks", []))
                 return False

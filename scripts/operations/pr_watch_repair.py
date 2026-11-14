@@ -57,6 +57,7 @@ def failure_signature(text):
 def failure_test_ids(text):
     """Unittest/Go test identifiers, not generic words shared by other failures."""
     ids = set(re.findall(r"(?m)^--- FAIL: ([A-Za-z0-9_./-]+)", text or ""))
+    ids = {name.split("/")[0] for name in ids}
     ids.update(re.findall(r"(?m)^(?:FAIL|ERROR): ([A-Za-z0-9_./-]+)", text or ""))
     return ids
 
@@ -93,6 +94,8 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
                 "reason": "Every failed lane must reproduce on clean main."}
     if command:
         base_worktree = Path(str(worktree) + "-base-check")
+        if any("{" in argument and "}" in argument for argument in command):
+            return {"reproduced": False, "reason": "Parameterized adapter output cannot be compared without its original template."}
         command = [argument.replace(str(worktree), str(base_worktree)) if str(worktree) in argument else
                    (pr["baseRefOid"] if argument == pr["headRefOid"] else argument)
                    for argument in command]
@@ -277,9 +280,10 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
     identity_pr = original_pr or pr
-    if identity_pr["number"] != pr["number"]:
-        if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
-            raise WatchError("PR head moved during automatic repair; nothing was pushed")
+    if identity_pr is not None:
+        latest = pr_snapshot(repo, identity_pr["number"])
+        if latest["headRefOid"] != identity_pr["headRefOid"] or latest["baseRefOid"] != identity_pr["baseRefOid"]:
+            raise WatchError("PR head/base moved during automatic repair; nothing was pushed")
     scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
     checked(["git", "diff", "--check"], cwd=worktree)
     paths = checked(["git", "diff", "--cached", "--name-only", "--no-renames", "-z"], cwd=worktree)
@@ -319,14 +323,16 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
         raise WatchError("repair verification changed the checkout after its local commit")
     identity_pr = original_pr or pr
-    if identity_pr["number"] != pr["number"]:
-        if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
-            raise WatchError("PR head moved during automatic repair; nothing was pushed")
+    if identity_pr is not None:
+        latest = pr_snapshot(repo, identity_pr["number"])
+        if latest["headRefOid"] != identity_pr["headRefOid"] or latest["baseRefOid"] != identity_pr["baseRefOid"]:
+            raise WatchError("PR head/base moved during automatic repair; nothing was pushed")
     head = repaired_pr["headRefOid"]
     branch = "pr-watch/repair-%s-%s" % (pr["number"], head[:12]) if pr.get("isCrossRepository") else pr["headRefName"]
-    if identity_pr["number"] != pr["number"]:
-        if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:
-            raise WatchError("PR head moved before the repair push was accepted")
+    if identity_pr is not None:
+        latest = pr_snapshot(repo, identity_pr["number"])
+        if latest["headRefOid"] != identity_pr["headRefOid"] or latest["baseRefOid"] != identity_pr["baseRefOid"]:
+            raise WatchError("PR head/base moved before the repair push was accepted")
     checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
         raise WatchError("base moved before the repair push; nothing was pushed")
