@@ -256,12 +256,45 @@ Only through the hub tunnel, no new externally exposed port:
   - View Only (`viewOnly`) by default. Switching View Only / Take Over in the top bar hands keyboard and mouse (touch) input to that Mac.
   - Scale to the window (`scaleViewport`), without changing the Mac's resolution.
   - On a Mac with several displays, the top bar's Displays menu shows one of them ("Displays" below).
+  - The top bar's Connection stats shows this connection's numbers ("Connection stats on the web" below).
   - On disconnection, offer Reconnect.
 - **Without `crypto.subtle`**: ARD login AES-encrypts the account and password; noVNC's AES uses browser `crypto.subtle`. Pages opened over HTTP (hub LAN address, App WebView) aren't secure contexts and lack `crypto.subtle`.
   - `aes.ts` supplies an AES-CBC-encryption-only substitute when missing.
   - Tests: three FIPS-197 standard vectors and byte-for-byte comparison with WebCrypto.
   - HTTPS or localhost uses the browser's implementation, without the substitute.
 - **View**: Cua Driver operates in the background without taking focus, so the view is the real desktop. Its agent cursor is a topmost window and visible.
+
+#### Connection stats on the web (#6558)
+
+- **Toggle**: the top bar's **Connection stats**, on any live Mac as the App's ⋯ › Connection Stats, off by default and
+  kept per Mac in this browser (`video.ts` `statsShown`). It shows a small panel at the top right of the picture, which
+  drags anywhere inside it and has a close button. A page an app embeds has no bar and no panel. The toggle and the panel
+  are a chunk of their own (`StatsOverlay.tsx`, words in `screen-video`), loaded once the screen is live.
+- **What it shows**, once a second (`meter.ts`): `VNC · Via hub`, then bitrate and frame rate, then on a line of its own
+  **Round trip to the hub N ms**. Only what was measured: a number with nothing behind it is left out, never guessed. A
+  still screen sends nothing, so it says 0 fps.
+- **How**, only while the panel is shown (`probes.ts`):
+  - Bitrate: the page opens the RFB WebSocket itself and hands it to noVNC (its constructor takes a channel: the same URL,
+    no subprotocols, and noVNC closes it). A listener beside noVNC's counts each message's bytes, RFB's own without the
+    WebSocket and TLS framing.
+  - Frame rate: noVNC has no frame event. The hook wraps its display's `flip()`, which puts each finished update on the
+    screen, at once or from its render queue, and counts the flips that draw. A noVNC whose display has no `flip()` and
+    `_renderQ` is not hooked, and the frame rate is left out. `probes.test.ts` runs the hook on the real noVNC 1.7, so an
+    upgrade that changes it fails there.
+  - Round trip to the hub: the screen page holds no hub connection (`main.tsx` loads only `ScreenView` here), and another
+    `/api/v1/ws` would count as one more connection of the device (a `device_sessions` row, every broadcast, the snapshots
+    sent on connect). So every 2 s while the page is visible it fetches `GET /api/v1/health?probe=N` (no sign-in, the
+    hub's memory only; `cache: "no-store"`, `redirect: "manual"`) and takes `responseStart − requestStart` from that
+    request's own Resource Timing entry, through a `PerformanceObserver` (the global buffer is never cleared). A probe
+    counts only when the hub answered `{"ok":true}` and both times are there; the panel shows the median of the last 5
+    from the last 20 s, and a background tab probes nothing. That is the browser's HTTP round trip to the hub, a little
+    of it the hub answering, and not the hub's way on to the Mac, so it never sits on the first line, where the App puts
+    the video's end-to-end total.
+- **Not yet**: the video channel's segments (capture · encode · network · decode), `path` (#6398) and `tier` (#6396)
+  come with the web video path.
+- **Tests**: `meter.test.ts`, `probes.test.ts`, `ScreenView.stats.test.tsx`, and in a real browser against the mock's
+  moving box (`MOCK_COMPUTER=ready MOCK_SCREEN=fake MOCK_SCREEN_ANIMATE=1`) `node web/e2e/screen-stats.mjs <web URL>`:
+  off by default, measured numbers in light and dark, kept per Mac, no round-trip line while the hub's health is refused.
 
 ### Native client in the App (#1343, `apple/Persona/Screen/`)
 
