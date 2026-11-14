@@ -9,7 +9,7 @@ import Testing
 struct HealthSnapshotTests {
     /// In-memory store so the locked paths need neither HealthKit nor the real
     /// Application Support directory.
-    actor FakeHealthSnapshotStore: HealthSnapshotStoring {
+    nonisolated actor FakeHealthSnapshotStore: HealthSnapshotStoring {
         var snapshot: HealthSnapshot?
         var fresh: HealthSnapshot?
         private(set) var saved: [HealthSnapshot] = []
