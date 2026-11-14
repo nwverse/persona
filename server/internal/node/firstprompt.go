@@ -140,10 +140,6 @@ func (n *Node) firstAfterDialog(pane, id, prompt string, since time.Time, wait, 
 			continue
 		}
 		why := n.typeFirstAfterDialog(pane, id, prompt)
-		if why == "" {
-			// Under the lock: a send waiting for it must not put the handoff in front again (engine_switch.go).
-			n.dropHandoffCarried(id, since)
-		}
 		unlock()
 		if why == errDialogBack {
 			continue // another dialog came up first: wait for it too
@@ -391,7 +387,7 @@ func (n *Node) readyForFirstPrompt(ctx context.Context, pane, prompt string, dra
 }
 
 // promptedSince: the session's transcript has a message to the agent from since on (a second earlier, for the
-// transcript's own clock rounding).
+// transcript's own clock rounding), as written now: a held first message that just went in counts (metaNow).
 func (n *Node) promptedSince(id string, since time.Time) bool {
 	p := n.transcriptPath(id)
 	if p == "" {
@@ -401,7 +397,7 @@ func (n *Node) promptedSince(id string, since time.Time) bool {
 	if err != nil {
 		return false
 	}
-	at := n.meta(p, st).lastPromptAt
+	at := n.metaNow(p, st).lastPromptAt
 	return !at.IsZero() && !at.Before(since.Add(-time.Second))
 }
 

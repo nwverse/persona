@@ -622,9 +622,7 @@ func (n *Node) startEngine(ctx context.Context, c *engineCarry, h *pendingHandof
 }
 
 // firstPromptHeldBack: session id's start, from began on, did not type its first message (a dialog of claude's own
-// had the keyboard, the ultracode command may sit in the box: firstPrompt, start). One held for the dialog
-// (lostDialogHeld) may still go in by itself once the dialog is answered, carrying the handoff (firstAfterDialog);
-// until then the handoff waits for the next message as well, so the user's words sent again do not go without it.
+// had the keyboard, held for it or not, the ultracode command may sit in the box: firstPrompt, start).
 func (n *Node) firstPromptHeldBack(id string, began time.Time) bool {
 	lost, ok := n.lostFirst.get(id)
 	return ok && !lost.at.Before(began) && (lost.why == lostDialog || lost.why == lostDialogHeld || lost.why == lostUltracode)
@@ -957,20 +955,6 @@ type pendingHandoff struct {
 func (n *Node) dropHandoff(id string, h *pendingHandoff) {
 	n.state.update(id, func(v *sessionState) bool {
 		if v.PendingHandoff == nil || h != nil && v.PendingHandoff != h {
-			return false
-		}
-		v.PendingHandoff = nil
-		return true
-	})
-}
-
-// dropHandoffCarried clears session id's pending handoff once the first message its start held back for a dialog
-// went in (firstAfterDialog): that message carried the handoff (startEngine). The handoff's start began before the
-// held message was typed (at), so this is send.go's own rule, a session that got a message since the handoff no
-// longer takes it, applied when the delivery is confirmed, not when the transcript's meta is next read.
-func (n *Node) dropHandoffCarried(id string, at time.Time) {
-	n.state.update(id, func(v *sessionState) bool {
-		if v.PendingHandoff == nil || v.PendingHandoff.At.After(at) {
 			return false
 		}
 		v.PendingHandoff = nil
