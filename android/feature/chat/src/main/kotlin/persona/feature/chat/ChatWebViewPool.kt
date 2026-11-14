@@ -21,7 +21,8 @@ import java.util.concurrent.Executors
 import org.json.JSONTokener
 import kotlinx.coroutines.CompletableDeferred
 
-/** What the pool asks the WebView implementation it runs on. Production asks [WebViewFeature]; a test fixes the answers. */
+/** What the pool asks the WebView implementation it runs on. Production asks [WebViewFeature]; a test fixes the answers.
+ * Call sites keep the platform predicate after this one so lint sees the guard and a false test answer short-circuits it. */
 internal fun interface ChatWebFeatures {
     fun supported(feature: String): Boolean
 
@@ -109,7 +110,8 @@ internal class ChatWebViewPool(
         if (closed || isLoopback(url) || pages.containsKey(url)) return
         val view = create()
         pages[url] = view
-        if (features.supported(WebViewFeature.PRERENDER_WITH_URL)) {
+        if (features.supported(WebViewFeature.PRERENDER_WITH_URL) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.PRERENDER_WITH_URL)) {
             speculative.add(url)
             WebViewCompat.prerenderUrlAsync(view, url, null, context.mainExecutor, object : PrerenderOperationCallback {
                 override fun onPrerenderActivated() = Unit
@@ -189,7 +191,8 @@ internal class ChatWebViewPool(
         settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
         settings.setSupportMultipleWindows(true)
         settings.javaScriptCanOpenWindowsAutomatically = false
-        if (features.supported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+        if (features.supported(WebViewFeature.ALGORITHMIC_DARKENING) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, true)
         }
         // Logins embedded in a page (a sign-in frame from another site) need its cookies; every page shares the store.
@@ -251,7 +254,9 @@ internal class ChatWebViewPool(
     }
 
     private fun mute(view: WebView, muted: Boolean) {
-        if (features.supported(WebViewFeature.MUTE_AUDIO)) WebViewCompat.setAudioMuted(view, muted)
+        if (features.supported(WebViewFeature.MUTE_AUDIO) && WebViewFeature.isFeatureSupported(WebViewFeature.MUTE_AUDIO)) {
+            WebViewCompat.setAudioMuted(view, muted)
+        }
     }
 
     fun pause() { pages.values.forEach { mute(it, true); it.onPause() } }

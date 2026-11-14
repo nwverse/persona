@@ -251,7 +251,7 @@ private fun clipped(res: Resources, text: String): String {
     if (text.length <= NOTES_PREVIEW_LENGTH) return text
     var cut = NOTES_PREVIEW_LENGTH
     if (Character.isHighSurrogate(text[cut - 1])) cut--
-    return res.getString(R.string.phonetools_text_clipped, text.substring(0, cut), text.length)
+    return res.getQuantityString(R.plurals.phonetools_text_clipped, text.length, text.substring(0, cut), text.length)
 }
 
 internal data class CalendarUpdatePreparation(

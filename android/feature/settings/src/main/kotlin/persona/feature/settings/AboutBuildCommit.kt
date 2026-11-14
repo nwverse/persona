@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import persona.core.designsystem.JRow
@@ -48,8 +49,9 @@ internal fun Resources.buildCommit(packageName: String): BuildCommit? {
 
 @Composable
 internal fun rememberBuildCommit(): BuildCommit? {
-    val context = LocalContext.current
-    return remember(context) { context.resources.buildCommit(context.packageName) }
+    val resources = LocalResources.current
+    val packageName = LocalContext.current.packageName
+    return remember(resources, packageName) { resources.buildCommit(packageName) }
 }
 
 /**
