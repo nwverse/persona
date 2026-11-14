@@ -25186,6 +25186,29 @@
         }
       }
     },
+    "Assistant [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistant"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅回答"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタント"
+          }
+        }
+      }
+    },
     "Assistant idle" : {
       "localizations" : {
         "en" : {
@@ -60520,6 +60543,29 @@
       },
       "extractionState" : "manual"
     },
+    "Errors [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Errors"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报错异常"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エラー"
+          }
+        }
+      }
+    },
     "Esc" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -66100,6 +66146,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Full Text [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full Text"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全文"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全文"
+          }
+        }
+      }
     },
     "Full Transcript" : {
       "extractionState" : "manual",
@@ -130319,6 +130388,29 @@
       },
       "extractionState" : "manual"
     },
+    "Search In [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search In"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索范围"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索範囲"
+          }
+        }
+      }
+    },
     "Search Knowledge" : {
       "localizations" : {
         "en" : {
@@ -130548,6 +130640,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Search in: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search in: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索范围：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索範囲：%1$@"
+          }
+        }
+      }
     },
     "Search names or numbers" : {
       "localizations" : {
@@ -164510,6 +164625,29 @@
       },
       "extractionState" : "manual"
     },
+    "Title [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅标题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイトルのみ"
+          }
+        }
+      }
+    },
     "Title, e.g. “Morning briefing”" : {
       "localizations" : {
         "en" : {
@@ -173815,6 +173953,29 @@
       },
       "extractionState" : "manual"
     },
+    "User [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "User"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅用户"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ユーザー"
+          }
+        }
+      }
+    },
     "Username" : {
       "localizations" : {
         "en" : {
@@ -180663,6 +180824,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用「%@」"
+          }
+        }
+      }
+    },
+    "Without Tools [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Without Tools"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话正文"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツール除外"
           }
         }
       }

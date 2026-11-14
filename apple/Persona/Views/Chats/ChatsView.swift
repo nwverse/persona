@@ -729,7 +729,8 @@ private struct AgentsList: View {
     @StoredValue("dev.projectFilter") private var projectFilter = ""
     @StoredValue("dev.modelFilter") private var modelFilter = ""
     @StoredValue("dev.pinnedOnly") private var pinnedOnly = false
-    @StoredValue("dev.searchScope") private var searchScope: AgentSearchScope = .all
+    /// What the search reads (#7443; the ⋯ menu's Search In), applied only while something is searched.
+    @StoredValue(AgentSearchScope.key) private var searchScope: AgentSearchScope = .all
     @StoredValue("dev.searchAsCode") private var searchAsCode = false
     /// Several groups of hubs: the one the list shows ("" = all; `HubFilter`).
     @StoredValue(HubFilter.key) private var hubFilter = ""
@@ -860,7 +861,9 @@ private struct AgentsList: View {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
         return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
-                     searchScope: searchScope, searchAsCode: searchAsCode,
+                     // The Sidebar layout's field (chats and Agents) names no scope: Full Text there (`AgentsListMenu`).
+                     searchScope: unified == nil ? searchScope.applied(query: query, searching: searching) : .all,
+                     searchAsCode: searchAsCode,
                      machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
                      pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
                      held: model.heldInList, preferences: preferences,
@@ -4935,11 +4938,27 @@ private struct AgentsSystemSearch: ViewModifier {
     var enabled: Bool
     @Binding var query: String
     @Binding var searching: Bool
+    #if os(iOS)
+    /// What the search reads (#7443): another scope than Full Text is a token in the field, as on a phone
+    /// (`AgentsSearchField`); deleting it searches Full Text again.
+    @StoredValue(AgentSearchScope.key) private var scope: AgentSearchScope = .all
+    private var tokens: Binding<[AgentSearchScope]> {
+        Binding(get: { scope == .all ? [] : [scope] }, set: { scope = $0.last ?? .all })
+    }
+    #endif
 
     func body(content: Content) -> some View {
         if enabled {
+            #if os(iOS)
+            content.pageSearchable(text: $query, tokens: tokens, isPresented: $searching,
+                                   placement: .navigationBarDrawer(displayMode: .automatic),
+                                   prompt: AgentsSearchPrompt.text(scope)) { s in
+                Label(s.title, systemImage: s.symbol)
+            }
+            #else
             content.pageSearchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .automatic),
                                    prompt: AgentsSearchPrompt.text)
+            #endif
         } else {
             content
         }
@@ -4948,6 +4967,14 @@ private struct AgentsSystemSearch: ViewModifier {
 
 enum AgentsSearchPrompt {
     static var text: String { String(localized: "Search spaces, tabs, sessions, content") }
+
+    /// The field's prompt under a scope (#7443): Full Text's names all it reads; another scope is the token before it.
+    static func text(_ scope: AgentSearchScope) -> String { scope == .all ? text : String(localized: "Search") }
+
+    /// What the field searches, spoken (the field at rest is one element: its token is not read on its own).
+    static func spoken(_ scope: AgentSearchScope) -> String {
+        scope == .all ? text : String(localized: "Search in: \(scope.title)")
+    }
 }
 
 /// A bar above a list in a stack (the split's sidebar column). Otherwise nothing: on a phone the bar is the list's

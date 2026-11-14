@@ -687,6 +687,8 @@ extension Theme {
         static let memory = "brain"
         /// Search (a list's, the sidebar's).
         static let search = "magnifyingglass"
+        /// A session's title as what a search reads (the Agents list's Search In › Title, #7443).
+        static let sessionTitle = "textformat"
         /// The knowledge base (~/.persona/data).
         static let knowledge = "books.vertical"
         /// A knowledge-base topic (#7251): what Persona learned on one subject.
