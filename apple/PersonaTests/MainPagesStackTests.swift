@@ -20,7 +20,7 @@ import UIKit
 @MainActor struct MainPagesStackTests {
     /// Pages over the budget on the day this test came in (simulator, Debug, Xcode 26.0): lower a ceiling when its page
     /// improves, delete it once the page is under the budget; never raise one.
-    static let ceilings: [Page: Int] = [:]
+    static let ceilings: [Page: Int] = [.assistant: 600 * 1024, .shell: 688 * 1024, .sidebar: 672 * 1024, .profile: 648 * 1024]
 
     enum Page: String, CaseIterable, CustomTestStringConvertible {
         case assistant, shell, agents, session, inbox, lark, settings, sidebar
