@@ -817,7 +817,12 @@ object TurnDurationSerializer : WireSerializer<TurnDuration>(TurnDuration.genera
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionOptionSerializer::class)
-data class QuestionOption(@SerialName("label") val label: String = "", @SerialName("description") val description: String? = null)
+data class QuestionOption(
+    @SerialName("label") val label: String = "",
+    @SerialName("description") val description: String? = null,
+    /** A manager-local answer (`defer`); absent from older hubs and from choices that message the Agent. */
+    @SerialName("action") val action: String? = null,
+)
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionSerializer::class)
