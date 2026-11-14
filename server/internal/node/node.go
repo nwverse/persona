@@ -629,6 +629,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.handleUpdate(ctx, method, params)
 	}
 	switch method {
+	case "workspace.naming.resolve":
+		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
 		return n.shareProjection(ctx, params)
 	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)

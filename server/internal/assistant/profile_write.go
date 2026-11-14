@@ -7,6 +7,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/workspacenaming"
 	"net/http"
 	"slices"
 	"strconv"
@@ -23,6 +24,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		Settings
+		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
 		MinutesRetention       json.RawMessage `json:"minutes_days"`
 		TranscriptionMode      json.RawMessage `json:"meeting_transcription_default"`
@@ -49,6 +51,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if in.TaskWorkspacePreference != "" && !validWorkspacePreference(in.TaskWorkspacePreference) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("task_workspace_preference must be prefer-existing or prefer-new"))
 		return
+	}
+	if len(in.WorkspaceRulesPatch) > 0 {
+		if !s.explicitSettingsTarget(w, r) {
+			return
+		}
+		if _, err := workspacenaming.Patch(workspacenaming.Rules{}, in.WorkspaceRulesPatch); err != nil {
+			namingError(w, err)
+			return
+		}
 	}
 	before := s.settings(ctx)
 	machine := before.MachineID
@@ -144,6 +155,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+		if len(in.WorkspaceRulesPatch) > 0 {
+			rules, err := workspacenaming.Patch(v.WorkspaceRules, in.WorkspaceRulesPatch)
+			if err != nil {
+				return err
+			}
+			v.WorkspaceRules = rules
+		}
 		*v = s.effective(ctx, *v) // saved as they are in effect, as the hub saved them
 		v.MachineID, v.Launcher = machine, launcher
 		if in.Launcher != "" {

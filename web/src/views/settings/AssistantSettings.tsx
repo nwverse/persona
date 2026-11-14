@@ -28,6 +28,7 @@ import { lazyPage } from "../../lib/lazy-page";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 import { TaskTrust } from "./TaskTrust";
+import { WorkspaceNaming } from "../../ui/WorkspaceNaming";
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
@@ -327,7 +328,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Group>
       )}
 
-      <Group title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
+      <Group anchor="dispatch-tasks" title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
         <Row label={t("settings-assistantsettings.start_requested")} anchor="start-requested">
           <Switch on={info?.start_requested_tasks ?? true} onChange={(on) => void setStartRequested(on)} disabled={!info || startBusy} label={t("settings-assistantsettings.start_requested")} />
         </Row>
@@ -340,6 +341,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
             <option value="prefer-new">{t("settings-assistantsettings.workspace_prefer_new")}</option>
           </select>
         </Row>
+        {info?.manager === manager && info.task_workspace_preference === "prefer-new" && <WorkspaceNaming manager={manager} owner={owner} />}
         <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
 
@@ -468,6 +470,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           <Repositories manager={manager} owner={owner} />
         </Suspense>
       </PageBoundary>
+
 
       <SkillsGroup manager={manager} />
 

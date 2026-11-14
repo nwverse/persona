@@ -4663,3 +4663,29 @@ gets 501 `assistant_service_tier_manager_outdated` before relaying an explicit o
 Resumed sends and non-Codex starts return coded 409 refusals; a native refusal returns
 `assistant_service_tier_refused`, stops the unused new process and persists no conversation before the first turn.
 New Agent starts do not take a speed setting.
+
+### Optional Todo repository metadata
+
+The manager relays `GET /api/v1/todos/{id}/repositories` with `todos.read`, and
+`PUT /api/v1/todos/{id}/repositories` plus
+`PUT /api/v1/todos/{id}/repositories/{repo_id}/links` with `todos.write`.
+Routing uses the Todo owner, including explicit-manager conflicts, just like
+existing Todo detail routes. `POST /api/v1/todos` accepts optional atomic
+`repository_bindings`; omitted fields preserve all legacy creation behavior.
+The full request, revision and source-snapshot contract is in
+`docs/assistant/todos.md` ("Repository associations").
+
+
+### Backend workspace naming metadata
+
+Manager routes and the operation snapshot contract are documented in
+`docs/assistant/todos.md` ("Backend workspace naming").
+
+| Node method | Input and result |
+| --- | --- |
+| `workspace.naming.resolve` | `workspacenaming.Source` → `Preview {status, sample, plan?, diagnostics[]}`. The target supplies `NodeContext`; paths may be absent on disk. Version `workspace-naming/v1`. Local format validation only, with no resource creation, Git network access or Engine call. |
+
+Legacy workspace resolution and `new/existing/none` do not call this method.
+The new Assistant view field `workspace_naming_version` advertises manager
+support; an unavailable computer or unsupported method never falls back to an
+Engine naming path.
