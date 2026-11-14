@@ -38,6 +38,11 @@ if [ -f "$STAMP" ] && cmp -s "$INPUT" "$STAMP" && [ -d "$DEST" ]; then
   exit 0
 fi
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CORE/target/apple}"
+# Public app bundles must not expose this computer's home, Cargo registry host
+# or checkout path through dependency panic locations. Keep the flags outside
+# target-specific linker RUSTFLAGS, and include this script in the cache stamp.
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo${CARGO_ENCODED_RUSTFLAGS:+ $CARGO_ENCODED_RUSTFLAGS}"
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$ROOT=/persona $CARGO_ENCODED_RUSTFLAGS"
 for TARGET in $TARGETS; do
   printf 'persona-core-apple: building %s\n' "$TARGET"
   SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
