@@ -3,7 +3,7 @@
 // answered already (POST …/resolve → {already, resolution}) — the answer that took effect, as its history keeps it.
 import { t } from "../i18n";
 import { fields, type Field } from "./elicitation";
-import { optionDisplay } from "./tool-detail";
+import { optionDisplay, pickedOption } from "./tool-detail";
 import type { Interaction, Question } from "./types";
 
 export type Resolution = Record<string, unknown>;
@@ -30,11 +30,13 @@ const str = (v: unknown) => (typeof v === "string" ? v : "");
 /** A question's answer as the card shows it: the options picked without Claude's "(Recommended)" suffix (the card said
  *  it with its tag; the answer sent back keeps the whole label), words typed instead as they were typed. */
 function shownAnswer(q: Question, answer: string): string {
-  const labels = (q.options ?? []).map((o) => o.label);
+  // the option an answer names, compared as pickedOption does (the label kept raw, the answer trimmed)
+  const option = (a: string) => (q.options ?? []).find((o) => pickedOption(o.label, a, false))?.label;
+  const whole = option(answer);
   // a multi-select answer is its labels joined by ", ", as the cards send it
-  const picks = labels.includes(answer) ? [answer] : q.multi_select ? answer.split(", ") : [];
-  if (!picks.length || !picks.every((p) => labels.includes(p))) return answer;
-  return picks.map((p) => optionDisplay(p).text).join(", ");
+  const picks = whole !== undefined ? [whole] : q.multi_select ? answer.split(", ").map(option) : [];
+  if (!picks.length || picks.some((p) => p === undefined)) return answer;
+  return picks.map((p) => optionDisplay(p!.trim()).text).join(", ");
 }
 
 /** The lines an answered card shows. */
