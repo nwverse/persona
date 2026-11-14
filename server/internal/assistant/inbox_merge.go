@@ -170,6 +170,7 @@ func (b *inboxBook) unmerge(sv *InboxItem, now time.Time) []*InboxItem {
 			continue
 		}
 		m.MergedInto = ""
+		restoreMergeTitle(m) // a row that was itself a merged row's survivor: its own title comes back too
 		sv.Count = max(sv.Count-m.Count, 1)
 		out = append(out, m)
 	}
@@ -179,6 +180,7 @@ func (b *inboxBook) unmerge(sv *InboxItem, now time.Time) []*InboxItem {
 		sv.PreMergeTier = ""
 	}
 	sv.TriagedAt = ""
+	restoreMergeTitle(sv)
 	b.chainAdd(sv, InboxChainEntry{Kind: ChainMerged, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.unmerged")})
 	return out
 }
@@ -305,6 +307,7 @@ func (s *Service) mergeInbox(ctx context.Context, targets []inboxBulkTarget, now
 	}
 	b.mu.Unlock()
 	out.Undo.ID = sv.ID
+	s.titleMerged(ctx, sv.ID) // the model's title for the whole row, when it answers (inbox_merge_title.go)
 	return out, nil
 }
 

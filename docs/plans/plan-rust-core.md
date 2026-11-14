@@ -51,7 +51,7 @@ fixtures first, then each implementation.
   possible later and needs its own issue.
 - **The Go hub** keeps its implementations (`attention`, `triage`, `fold-changes`, the continuity corpus) and keeps
   replaying the fixtures.
-- **The frozen Mac app** links the core only where shared Swift code requires it, to keep building (`docs/apple/mac.md`).
+- **The retired native Mac app** is removed with its target; it does not acquire a new core binding. The Electron desktop keeps its existing web implementation and is not a new Rust binding target (#6770).
 - **Persona Link and the watch.**
 
 ### The iOS reference
