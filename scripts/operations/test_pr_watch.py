@@ -423,6 +423,20 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", env)
         self.assertNotIn("PR_WATCH_WEBHOOK_SECRET", env)
         self.assertIn("ANTHROPIC_API_KEY", env)
+        argv = pr_watch_repair.repair_worker_argv(["claude", "--version"], self.root)
+        home = argv[argv.index("HOME") + 1]
+        self.assertNotEqual(Path(home), self.root)
+        self.assertFalse(Path(home).is_relative_to(self.root))
+
+    def test_dry_run_repair_failure_never_comments(self):
+        self.watcher.dry_run = True
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("failure")), \
+                patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("worker failed")), \
+                patch.object(self.watcher, "comment") as comment:
+            self.watcher.process("example/one", 7)
+        comment.assert_not_called()
 
 
         with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from pr_watch_common import WatchError, bounded, checked, gh_json, pr_snapshot, run, test_or_fix, verification_env
@@ -59,6 +60,19 @@ def failure_test_ids(text):
     return ids
 
 
+def failed_go_tests(worktree, text):
+    """Associate each failed test with its package for an exact main comparison."""
+    failures = {}
+    package = None
+    for line in (text or "").splitlines():
+        match = re.match(r"^--- FAIL: [^ ]+ \(([^,]+),", line)
+        if match and "/server/" in match.group(1):
+            package = match.group(1).split("/server/", 1)[1]
+            test = line.split("--- FAIL: ", 1)[1].split(" ", 1)[0]
+            failures.setdefault(package, set()).add(test.split("/")[0])
+    return {name: sorted(tests) for name, tests in failures.items() if list(Path(worktree, "server", name).glob("*.go"))}
+
+
 def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None, failures=None):
     """Rerun every failed lane independently before calling anything base-owned."""
     if failures:
@@ -85,7 +99,8 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
             run(["git", "worktree", "remove", "--force", str(base_worktree)], cwd=git_root or worktree, timeout=90)
     base_worktree = Path(str(worktree) + "-base-check")
     names = failed_test_names(failure)
-    packages = failed_go_packages(worktree, failure)
+    grouped = failed_go_tests(worktree, failure)
+    packages = sorted(grouped)
     if not names or not packages:
         return {"reproduced": False, "reason": "No isolated Go failure was available for a clean-main comparison."}
     base_worktree = Path(str(worktree) + "-base-check")
@@ -93,11 +108,12 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
         checked(["git", "worktree", "add", "--detach", str(base_worktree), pr["baseRefOid"]], cwd=git_root or worktree, timeout=180)
         failures = []
         for package in packages:
-            result = run(["go", "test", "-count=1", "-run", "^(" + "|".join(map(re.escape, names)) + ")$", package],
+            expected = grouped[package]
+            result = run(["go", "test", "-count=1", "-run", "^(" + "|".join(map(re.escape, expected)) + ")$", "./" + package],
                          cwd=Path(base_worktree, "server"), timeout=timeout, environ=verification_env())
             output = result.stdout + "\n" + result.stderr
-            reproduced = {name for name in failed_test_names(output) if name in names}
-            if result.returncode == 0 or reproduced != set(names):
+            reproduced = {name for name in failed_test_names(output) if name in expected}
+            if result.returncode == 0 or reproduced != set(expected):
                 return {"reproduced": False, "packages": failures,
                         "reason": "Not every named PR failure reproduces on clean main."}
             failures.append({"package": package, "tests": sorted(reproduced),
@@ -156,8 +172,7 @@ def repair_worker_argv(argv, worktree):
     sandbox = shutil.which("bwrap")
     if not sandbox:
         raise WatchError("automatic repair requires the trusted bwrap sandbox")
-    home = Path(worktree) / ".pr-watch-home"
-    home.mkdir(exist_ok=True)
+    home = Path(tempfile.mkdtemp(prefix="pr-watch-repair-home-"))
     env = {key: value for key, value in os.environ.items()
            if key in ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
                       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
@@ -239,6 +254,9 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
         raise WatchError("base moved before the repair push; nothing was pushed")
+    if pr.get("isCrossRepository"):
+        if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode == 0:
+            raise WatchError("continuation branch already exists; choose a fresh head instead of overwriting it")
     checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
     if pr.get("isCrossRepository"):
         issues = linked_issue(pr.get("body", ""), repo)

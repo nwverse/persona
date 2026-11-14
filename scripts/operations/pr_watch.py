@@ -346,7 +346,7 @@ class Watcher:
                 self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
             return False
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                       repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
+                       outcome="repairing", failure=str(error))
         latest = pr_snapshot(repo, number)
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
             self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
@@ -354,6 +354,8 @@ class Watcher:
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
         new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                       repair_rounds=rounds + 1, outcome="repair_published", failure=str(error))
         self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
             self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
@@ -416,7 +418,10 @@ class Watcher:
                 try:
                     rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
                     if rounds >= 2:
-                        self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
+                        if not self.state.get(repo, number).get("repair_exhausted"):
+                            self.state.put(repo, number, head, evidence_key=evidence_key,
+                                           repair_exhausted=True, outcome="repair_exhausted")
+                            self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
                         return
                     worktree = self.worktree(repo, number, pr)
                     if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
@@ -511,8 +516,9 @@ class Watcher:
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
             if phase == "verification":
-                self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
-                             bounded(str(error), 12000))
+                if not self.dry_run:
+                    self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
+                                 bounded(str(error), 12000))
                 self.state.put(repo, number, head, evidence_key=evidence_key,
                                outcome="failed", failure=str(error))
                 return
