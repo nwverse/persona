@@ -334,6 +334,8 @@ type Agent struct {
 	// PaneID is the pane as a PaneRef string (String): a herdr pane id as is ("@<session>:<id>" for a named herdr
 	// session's, herdr.QualifyID).
 	PaneID string
+	// ParentPaneID is an explicit worker/coordinator relation, in the same host's PaneRef namespace.
+	ParentPaneID string
 	// TabID, WorkspaceID: the host's slot and space ids.
 	TabID       string
 	WorkspaceID string

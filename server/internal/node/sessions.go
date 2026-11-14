@@ -328,6 +328,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		return nil
 	}
 	out = out[:j]
+	// Resolve only the public rows kept after scope and engine-history filtering.
+	resolveHostHierarchy(out, agents)
 	linkSideSessions(out, n.offlineParents()) // the desktop app's side sessions under the sessions that started them (#5935)
 	sortNewestFirst(out)
 	return out

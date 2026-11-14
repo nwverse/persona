@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { AgentGroup, AgentMutes } from "./agent-groups";
+import { sessionHost, type AgentGroup, type AgentMutes } from "./agent-groups";
 import { repoOf } from "./agent-repos";
 import { backgroundWaiting, stateOf } from "./format";
 import { buildTodoAgentGroups, interruptedAgent, todoStatus, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus } from "./todos";
@@ -26,7 +26,7 @@ export interface TreeAgent {
   key: string;
   session: Session;
   state: TreeState;
-  /** The agents it spawned for the same todo (todo_agents.source "spawned", via this one). */
+  /** Explicit host/provider children, or agents spawned for the same to-do. */
   children: TreeAgent[];
   folded: boolean;
 }
@@ -167,6 +167,16 @@ const keyOf = (s: Session) => `${s.machine_id}/${s.session_id}`;
 export function nestAgents(sessions: Session[], todo: Todo | undefined, now: number): TreeAgent[] {
   const parentOf = new Map<string, string>();
   for (const a of todo?.agents ?? []) if (!a.released_at && a.source === "spawned" && a.via) parentOf.set(`${a.machine_id}/${a.session_id}`, a.via);
+  const byKey = new Map(sessions.map((s) => [keyOf(s), s]));
+  for (const s of sessions) {
+    const id = s.parent_agent_id || s.parent_session_id;
+    if (!id) continue;
+    const p = byKey.get(`${s.machine_id}/${id}`);
+    if (!p || (p.manager ?? "") !== (s.manager ?? "")) continue;
+    if (s.parent_agent_id ? (p.host || sessionHost(p)) !== (s.host || sessionHost(s)) :
+      (p.source_instance_id ?? "") !== (s.source_instance_id ?? "") || p.agent !== s.agent) continue;
+    parentOf.set(keyOf(s), keyOf(p));
+  }
   const listed = new Set(sessions.map(keyOf));
   const nodes = new Map<string, TreeAgent>();
   for (const s of sessions) nodes.set(keyOf(s), { key: `s:${keyOf(s)}`, session: s, state: agentTreeState(s), children: [], folded: false });

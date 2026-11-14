@@ -2523,3 +2523,30 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 Phone data tools (`phone_*`, the "This iPhone" connector), Live Activities / Dynamic Island, Apple Watch, push notifications and notification actions, phone / watch recording and transcription,
 Siri / Shortcuts / Spotlight, taking photos, saving to Photos, iPad / iPhone Duo layouts, "Persona on Mac is signed in": these all depend on system capabilities or hardware with no browser equivalent.
 Demo mode (viewable without a hub) is not done on the web: the hub hosts the web app, so if it opens, there is a hub.
+
+
+## Agent hierarchy inside groups
+
+The full Agents sidebar nests explicit host workers (`parent_agent_id`) and provider-native children
+(`parent_session_id`) within each existing repository, project, machine, state, to-do, pinned or recent group.
+Orca terminal workers can belong to different tabs of the same workspace: the machine grouping renders their
+agent forest across those tabs. The paged Agents list draws the same `parent_agent_id` rows under their parent
+always open ("Side sessions under their parent", #5935); the chat-list layout retains its existing ordering.
+A parent filtered out or in another group is never fetched or inserted merely to draw a tree; its children stay
+visible at the top. Parent lookup uses machine, manager and host/provider scope, never a title or directory.
+The existing disclosure, fold-all scope, active-row reveal and folded state tally apply at every depth. The
+session title and menu still address the original session. Workspace lineage is a separate tree around it.
+The sidebar's copied rows under a pinned direction keep their own row and descendant-fold keys, and omit
+the redundant workspace/computer context. Their folds remain separate from the Agents list's folds.
+A long group is drawn a part at a time by its top-level agents (`WindowedRows`, "A folded group holds no rows"):
+a branch moves with its parent, and the part holding the open row is the one holding its top-level agent.
+
+`node web/e2e/agent-hierarchy.mjs <web origin> <mock origin> <artifacts>` runs the production client
+against `scripts/mock/mock_worktree_migration.py` with invented siblings and a grandchild in separate Orca tabs.
+It checks all five groupings on desktop/phone in light/dark, exact row uniqueness, descendant tallies and repeated
+pointer/keyboard disclosure. Both origins must be dedicated loopback fixture servers.
+
+
+Synthetic hierarchy screenshots (invented sessions only): [desktop light](screenshots/agent-hierarchy/desktop-light.png),
+[desktop dark](screenshots/agent-hierarchy/desktop-dark.png), [phone light](screenshots/agent-hierarchy/phone-light.png),
+and [phone dark](screenshots/agent-hierarchy/phone-dark.png).

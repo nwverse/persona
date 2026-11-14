@@ -938,3 +938,12 @@ func TestRuntimePageWithCounts(t *testing.T) {
 		t.Error("agents_page_counts must be advertised by the hub")
 	}
 }
+
+func TestRuntimeSummaryRetainsHostParent(t *testing.T) {
+	s := proto.Session{SessionID: "worker", Agent: "codex"}
+	s.SetParentAgentID("coordinator")
+	row := runtimeSummary(s)
+	if row.ParentAgentID() != "coordinator" || row.IsCodexSubagent() {
+		t.Fatalf("host relation changed by summary: %+v", row)
+	}
+}

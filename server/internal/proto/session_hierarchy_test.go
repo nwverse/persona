@@ -8,6 +8,42 @@ import (
 	"time"
 )
 
+func TestSessionHostParentSharesHierarchySafely(t *testing.T) {
+	var s Session
+	s.SetParentAgentID("")
+	if s.Hierarchy != nil {
+		t.Fatal("an absent host parent allocated a hierarchy")
+	}
+	s.SetParentAgentID("coordinator")
+	before := s
+	s.SetFold("root", FoldedAsWorker, &SessionChildren{Total: 2})
+	s.SetEngineHistory([]EngineLeg{{SessionID: "earlier", Agent: "claude"}})
+	if before.FoldedUnder() != "" || len(before.EngineHistory()) != 0 || s.ParentAgentID() != "coordinator" {
+		t.Fatal("a copied hierarchy changed or the host parent was lost")
+	}
+	h := s.Hierarchy
+	s.SetParentAgentID("coordinator")
+	if s.Hierarchy != h {
+		t.Fatal("the same host parent allocated a hierarchy")
+	}
+	s.SetParentAgentID("")
+	if before.ParentAgentID() != "coordinator" || s.FoldedUnder() != "root" || len(s.EngineHistory()) != 1 {
+		t.Fatal("clearing the host parent changed a shared copy or other lineage")
+	}
+	b, err := json.Marshal(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Session
+	if err := json.Unmarshal(b, &back); err != nil || back.ParentAgentID() != "coordinator" || back.IsChild() {
+		t.Fatalf("host relation changed its wire or provider-native semantics: %s, %v", b, err)
+	}
+	before.SetParentAgentID("")
+	if before.Hierarchy != nil {
+		t.Fatal("clearing the only hierarchy field retained an allocation")
+	}
+}
+
 // The hierarchy's members are keys of the row itself, each only when set, and come back as they went (#5120).
 func TestSessionHierarchyWire(t *testing.T) {
 	started := time.Date(2026, 11, 12, 8, 30, 0, 0, time.UTC)

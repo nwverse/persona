@@ -225,3 +225,31 @@ describe("waiting in the background in the tree (#6045)", () => {
     expect(todoTreeState("needs_you", [waiting])).toBe("needs_you");
   });
 });
+
+
+describe("explicit agent hierarchy", () => {
+  const agent = (id: string, patch: Partial<Session> = {}) => s(id, "idle", "/code/app", { host: "orca", agent: "codex", manager: "assistant", ...patch });
+  it("nests multiple levels in input order and rolls up attention", () => {
+    const roots = nestAgents([agent("b", { parent_agent_id: "p" }), agent("g", { parent_agent_id: "b", state: "needs_you" }), agent("p"), agent("a", { parent_agent_id: "p" })], undefined, NOW);
+    expect(roots.map((a) => a.session.session_id)).toEqual(["p"]);
+    expect(roots[0]!.children.map((a) => a.session.session_id)).toEqual(["b", "a"]);
+    expect(roots[0]!.children[0]!.children[0]!.session.session_id).toBe("g");
+    expect(roots[0]!.state).toBe("needs_you");
+  });
+  it("keeps every visible row when the parent is filtered out or cyclic", () => {
+    for (const rows of [
+      [agent("a", { parent_agent_id: "missing" })],
+      [agent("a", { parent_agent_id: "b" }), agent("b", { parent_agent_id: "a" })],
+      [agent("a", { parent_agent_id: "a" })],
+    ]) expect(nestAgents(rows, undefined, NOW)).toHaveLength(rows.length);
+  });
+  it.each([
+    { machine_id: "other" }, { manager: "other" }, { host: "herdr" },
+  ])("does not link an identically named parent in another identity scope: %j", (patch) => {
+    expect(nestAgents([agent("p", patch), agent("c", { parent_agent_id: "p" })], undefined, NOW)).toHaveLength(2);
+  });
+  it("keeps provider-native hierarchy scoped to its source instance", () => {
+    expect(nestAgents([agent("p", { source_instance_id: "one" }), agent("c", { parent_session_id: "p", source_instance_id: "two" })], undefined, NOW)).toHaveLength(2);
+    expect(nestAgents([agent("p"), agent("c", { parent_session_id: "p" })], undefined, NOW)).toHaveLength(1);
+  });
+});

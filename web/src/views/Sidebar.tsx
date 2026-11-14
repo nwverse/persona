@@ -1,3 +1,4 @@
+import { AgentTreeRows } from "./SidebarTree";
 import { storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
@@ -945,7 +946,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const recentState = worstTreeState(recent.map(agentTreeState));
   const recentRows = (
     <>
-      <WindowedRows items={recentShown} holds={(s) => rowKey(s) === activeKey} render={(s) => (
+      <AgentTreeRows sessions={recentShown} activeKey={activeKey} scope="recent-agents" row={(s) => (
         <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} />
       )} />
       {recent.length > 8 && (
@@ -967,6 +968,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const busy = (sp: Space) => sp.sessions.some((s) => !isQuiet(s, mutes) || activeKey === `s:${s.machine_id}/${s.session_id}`);
   // pinned spaces lead; under a quick filter nothing folds into "Idle spaces"
   const { active, idle } = arrangeSpaces(spaces, { pins, mutes, filtered, busy });
+  // "Idle spaces" is one list, drawn a part at a time and nested by agent; each row still names its own space
+  const idleSessions = idle.flatMap((sp) => sp.sessions);
+  const idleSpaceOf = new Map(idle.flatMap((sp) => sp.sessions.map((s) => [rowKey(s), sp] as const)));
   const tree = { machines, reg, hover, activeKey, go, mutes, onSpaceMenu, onRowMenu, onNodeMenu, onNavigate };
 
   // the list menu, the paged list's too (agentListItems); with nothing in it the menu's button goes
@@ -1031,14 +1035,14 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {pinnedAgents.length > 0 && (
         <Section title={<span className="flex items-center gap-1"><Icon name="pin" size={10} stroke={2.2} />{t("sidebar.pinned_section")}</span>} folded={pinnedFolded} onToggle={togglePinned} right={<SessionTally sessions={pinnedAgents} folded={pinnedFolded} />}>
-          {pinnedAgents.map((s) => {
+          <AgentTreeRows sessions={pinnedAgents} activeKey={activeKey} scope="pinned-agents" row={(s) => {
             const key = `s:${s.machine_id}/${s.session_id}`;
             if (chatList) {
               return <AgentChatListRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} pinned mutes={mutes} filters={dimFilters} ctx={evalCtx} onMenu={onRowMenu} />;
             }
             const context = [s.space_name || baseName(s.cwd), machines.length > 1 ? machineWithHub(s.machine_id, machines) : ""].filter(Boolean).join(" · ");
             return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={context} onMenu={onRowMenu} />;
-          })}
+          }} />
         </Section>
       )}
 
@@ -1060,9 +1064,10 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {idle.length > 0 && (
         <Section title={t("sidebar.idle_spaces", { count: idle.length })} folded={idleFolded} onToggle={toggleIdle}>
-          <WindowedRows items={idle.flatMap((sp) => sp.sessions.map((s) => ({ sp, s })))} holds={({ s }) => rowKey(s) === activeKey} render={({ sp, s }) => (
-            <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={sp.sessions.length > 1 ? `${sp.name} › ${tabLabel(s)}` : sp.name} onMenu={onRowMenu} />
-          )} />
+          <AgentTreeRows sessions={idleSessions} activeKey={activeKey} scope="idle-agents" row={(s) => {
+            const sp = idleSpaceOf.get(rowKey(s))!;
+            return <SessionRow s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={sp.sessions.length > 1 ? `${sp.name} › ${tabLabel(s)}` : sp.name} onMenu={onRowMenu} />;
+          }} />
         </Section>
       )}
 
@@ -1244,7 +1249,7 @@ function AgentSection({ group, machines, byTodo, showHost, reg, hover, activeKey
 
   return (
     <Section title={titleNode} folded={folded} onToggle={toggle} right={rightNode}>
-      <WindowedRows items={group.sessions} holds={(s) => rowKey(s) === activeKey} render={row} />
+      <AgentTreeRows sessions={group.sessions} row={row} activeKey={activeKey} scope={group.key} />
     </Section>
   );
 }

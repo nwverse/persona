@@ -314,6 +314,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // a part at a time (views/WindowedRows.tsx), the fold-all a group missed while it was not drawn (lib/fold-all.ts) and
 // the headings' heights from one ResizeObserver (views/SidebarSection.tsx). WindowedRows is not a chunk of its own: the
 // sidebar has no error boundary, so a failed download of it would leave the whole app blank.
+// #4575 takes 256 B of that room in each language, measured in one environment against main at 8bbf69a5b (ja 476,909 B
+// to 477,165 B; en 473,699 B to 473,955 B, zh-Hans 474,524 B to 474,780 B): Orca workers nested under their coordinator
+// in every full-list grouping (the explicit agent forest, its disclosure and folded descendant tally).
 export const FIRST_SCREEN_BUDGET = 480_639;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
