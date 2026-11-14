@@ -22890,8 +22890,8 @@ CATALOG = [
 # Uninstalling it with its members answers 409 partial_uninstall (one member uninstalled, one not, with the hub's reason,
 # one not tried) and changes nothing, so a run can repeat; the real hub tries every member, so its "not tried" is
 # rarely more than the failed ones. Example 套件 isn't installed: its preview names Example Notes as installed and installs
-# Example 日历 together with it.
-if PLUGINS_MODE and os.environ.get("MOCK_EXTENSION_PACK") == "1":
+# Example 日历 together with it. MOCK_EXTENSION_PACK=legacy is the same fixture on a hub without member-following switches.
+if PLUGINS_MODE and os.environ.get("MOCK_EXTENSION_PACK") in ("1", "legacy"):
     PLUGINS["example-pack"] = {
         "id": "example-pack", "name": "Example 合集", "kind": "extension_pack", "status": "running", "version": "1.0.0",
         "source": "installed", "enabled": True, "description": "Example 的几个扩展，一起装。", "contributes": {}, "publisher": "example",
@@ -22905,6 +22905,7 @@ if PLUGINS_MODE and os.environ.get("MOCK_EXTENSION_PACK") == "1":
          "publisher": "example", "tags": ["合集"], "contributes": {}, "permissions": [],
          "extension_pack": [{"id": "example-notes", "version": ">=1.0.0"}, {"id": "example-calendar", "market": MARKETS[_MARKET_A]["spec"]}]},
     ]
+_EXTENSION_PACK_OFF = []
 _PREVIEWS = {}
 _PREVIEW_BODIES = {}
 
@@ -23823,6 +23824,29 @@ def _plugin_needs(pl):
     return pl
 
 
+def _pack_installed_members(pl, enabled=None):
+    for ref in pl.get("extension_pack", []):
+        member = PLUGINS.get(ref["id"])
+        if not member or member.get("source") != "installed":
+            continue
+        if enabled is None or bool(member.get("enabled")) == enabled:
+            yield member
+
+
+def _pack_switch_detail(pl, response):
+    if pl["id"] != "example-pack" or os.environ.get("MOCK_EXTENSION_PACK") != "1":
+        return response
+    response["pack_members_follow"] = True
+    on = [{"id": m["id"], "name": m.get("name") or m["id"]} for m in _pack_installed_members(pl, enabled=True)]
+    if on:
+        response["pack_on"] = on
+    members = {ref["id"] for ref in pl.get("extension_pack", [])}
+    off = [member_id for member_id in _EXTENSION_PACK_OFF if member_id in members]
+    if off:
+        response["pack_off"] = off
+    return response
+
+
 def plugins_route(handler, p, body):
     """MOCK_EXTENSIONS: GET /api/v1/plugins, a plugin's page and its switch, settings and secrets. False otherwise."""
     if not PLUGINS_MODE: return False
@@ -23843,8 +23867,28 @@ def plugins_route(handler, p, body):
     if rest in ([], [""]) and method == "GET":
         pass
     elif rest == ["enabled"] and method == "PUT":
+        following_pack = pl["id"] == "example-pack" and os.environ.get("MOCK_EXTENSION_PACK") == "1"
+        if following_pack and not req.get("enabled"):
+            members = list(_pack_installed_members(pl, enabled=True))
+            for member in members:
+                if member["id"] not in _EXTENSION_PACK_OFF:
+                    _EXTENSION_PACK_OFF.append(member["id"])
+            for member in members:
+                member["enabled"] = False
+                member["status"] = "disabled"
+                _auto_upgrade_paused(member)
         pl["enabled"] = bool(req.get("enabled"))
         pl["status"] = "disabled" if not pl["enabled"] else ("needs_setup" if pl["source"] == "installed" else "running")
+        if following_pack and pl["enabled"]:
+            for member_id in list(_EXTENSION_PACK_OFF):
+                member = PLUGINS.get(member_id)
+                if member and member.get("source") == "installed" and not member.get("enabled"):
+                    member["enabled"] = True
+                    member["status"] = "needs_setup"
+                    _auto_upgrade_paused(member)
+            _EXTENSION_PACK_OFF[:] = []
+        elif pl["id"] in _EXTENSION_PACK_OFF:
+            _EXTENSION_PACK_OFF.remove(pl["id"])
         _auto_upgrade_paused(pl)
     elif rest == ["config"] and method == "PUT":
         cfg = req.get("config") or {}
@@ -23922,7 +23966,7 @@ def plugins_route(handler, p, body):
     if pl["id"] == "ego":
         machines = [m["id"] for m in MACHINES if m.get("browser", {}).get("enabled")]
         pl["config"] = {**{k: v for k, v in pl["config"].items() if k != "machines"}, **({"machines": machines} if machines else {})}
-    handler.send_json({k: v for k, v in _plugin_needs(pl).items() if v is not None})
+    handler.send_json(_pack_switch_detail(pl, {k: v for k, v in _plugin_needs(pl).items() if v is not None}))
     return True
 
 

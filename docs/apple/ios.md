@@ -2261,6 +2261,10 @@ iPhone, iPad and Mac crashes go to the hub's `error_reports` (format and rules: 
 - **New Chat check** (#2189): New Chat taken from a Persona conversation watches for the new-conversation page (`NewChatCheck`, Release too). When it has not appeared 1.5 s later, a report of kind `log`, level `warning` goes into the queue with one line of labels only: `new_chat_check from=<main|other> current_early=… current_late=<main|other|none> drawn_late=<chat|home>` (no text, no ids). The latest line, with its time, is also kept in UserDefaults `diag.newChat` and shown at the foot of Settings › About ("Last New Chat Check"), which has no such row until one was written: a hub without an `error_reports` extension drops the queue.
 - **Not yet** (#5621 phase 2): signal crashes, MetricKit crash and hang diagnostics, the Mac's main-thread exceptions (`NSApplicationCrashOnExceptions`, or reporting what AppKit catches), breadcrumbs, the watch (through the phone) and visionOS.
 
+## Extension pack switches (#1830)
+
+On iOS and visionOS, an extension pack's Enabled switch explains when members follow or will be restored (or, on an older hub, that only the pack changes), asks before disabling enabled members, and then uses the existing dependent confirmation if the hub requires one.
+
 ## Extensions and connectors of several managers (#1827)
 
 [managers.md](../assistant/managers.md) ("Grouping"): with more than one installed manager, the hub's merged lists stamp each item with
