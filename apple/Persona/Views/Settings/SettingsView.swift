@@ -126,7 +126,7 @@ struct SettingsView: View {
             #endif
             #if os(macOS) && DEBUG
             // `-tab settings -openPairSheet YES` (Demo Mode, or paired: Pair Again): the Connect Hub sheet, for screenshots
-            // (scripts/app/mac_shot.sh; with `-openPairSSH YES` its SSH Tunnel sheet over it).
+            // (scripts/app/sim.sh; with `-openPairSSH YES` its SSH Tunnel sheet over it).
             .onAppear { if UserDefaults.standard.bool(forKey: "openPairSheet") { showPair = true } }
             #endif
         } empty: {
@@ -923,7 +923,7 @@ struct WelcomeView: View {
         .sheet(item: $guide) { LinkSheet(target: $0) }
         .onAppear { withAnimation(.spring(duration: 0.8, bounce: 0.35)) { appear = true } }
         #if DEBUG
-        // `-openPairSheet YES` (or `other`): the pairing sheet, for screenshots (scripts/app/mac_shot.sh).
+        // `-openPairSheet YES` (or `other`): the pairing sheet, for screenshots (scripts/app/sim.sh).
         .onAppear {
             switch UserDefaults.standard.string(forKey: "openPairSheet") {
             case "other": pair = .other

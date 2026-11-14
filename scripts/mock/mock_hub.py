@@ -12285,10 +12285,6 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
-# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
-# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
-# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
-# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 # MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
 # (MOCK_INBOX_TODO=time: with a time, so All Day is off).
 if os.environ.get("MOCK_INBOX_TODO"):
@@ -12300,12 +12296,29 @@ if os.environ.get("MOCK_INBOX_TODO"):
         _td["status"] = "action"
 
 
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. Its sessions and their example computer join the ordinary session and machine lists with the
+# same row fields as the mock's other rows, so the timeline and Agents list can show the Agent's live state. This takes
+# precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                   "spec", "fixtures", "inbox", "showcase.json")
     with open(_showcase_path, encoding="utf-8") as _f:
-        INBOX[:] = json.load(_f)["items"]
+        _showcase = json.load(_f)
+    INBOX[:] = _showcase["items"]
+    MACHINES.append({"id": "m1", "name": "示例电脑", "kind": "ssh", "icon": "desktop", "ssh_host": "example-computer", "online": True,
+                     "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user",
+                     "herdr_version": "0.9.5", "claude_version": "2.1.320", "last_seen": ago()})
+    for _i, _row in enumerate(_showcase.get("sessions", [])):
+        _state = _row["state"]
+        _status = {"working": "working", "needs_you": "blocked", "unread": "done", "offline": "offline"}.get(_state, "idle")
+        _session = sess(_row["machine_id"], _row["session_id"], _row["title"], _row.get("cwd", ""),
+                        _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
+        _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
+        SESSIONS.append(_session)
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
