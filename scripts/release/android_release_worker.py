@@ -125,6 +125,8 @@ def build(config, checkout, sha, directory, name=None):
     run(["./gradlew", "--no-daemon", "--console=plain",
          "-PpersonaApplicationId=" + config["application_id"],
          f"-PpersonaVersionCode={code}", "-PpersonaVersionName=" + name,
+         # The About page shows the commit this APK is built from: the checkout's full sha, passed explicitly.
+         "-PpersonaBuildCommit=" + sha,
          ":core:hub:test", ":feature:settings:testDebugUnitTest",
          ":feature:agents:testDebugUnitTest", ":platform:notify:testDebugUnitTest",
          ":app:assembleRelease"], checkout / "android", env=env)

@@ -260,6 +260,57 @@ class ReleaseWorkerTest(unittest.TestCase):
             self.assertEqual(gzip.decompress(archived.read_bytes()), built[mapping])
             self.assertEqual(sorted(p.name for p in directory.iterdir()), sorted(["build.json", "unsigned.apk", archived.name]))
 
+    def test_gradle_release_command_carries_the_source_sha_as_the_build_commit(self):
+        sha = "b" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / "runs" / sha
+            directory.mkdir(parents=True)
+            apk = root / "android/app/build/outputs/apk/release/app-release-unsigned.apk"
+            mapping = root / "android/app/build/outputs/mapping/release/mapping.txt"
+            gradle = []
+
+            def run(args, cwd=None, capture=False, env=None):
+                if args[0] == "./gradlew":
+                    gradle.append(list(args))
+                    for path in (apk, mapping):
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(b"built")
+
+            config = dict(repository="example/app", application_id="com.example.app")
+            with patch.object(worker, "run", side_effect=run), patch.object(worker, "version_code", return_value=100003):
+                worker.build(config, root, sha, directory)
+            self.assertEqual(len(gradle), 1)
+            commits = [arg for arg in gradle[0] if arg.startswith("-PpersonaBuildCommit")]
+            # Exactly the checked-out source, in full: the receipt's source_sha and the APK's commit are one value.
+            self.assertEqual(commits, ["-PpersonaBuildCommit=" + sha])
+            self.assertIn(":app:assembleRelease", gradle[0])
+            # The version name keeps its own short form; the build commit does not change it.
+            self.assertIn("-PpersonaVersionName=0.1.100003-" + sha[:12], gradle[0])
+
+    def test_tag_release_builds_with_the_tagged_commit(self):
+        sha = "c" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / "tags" / "1.2.3"
+            directory.mkdir(parents=True)
+            apk = root / "android/app/build/outputs/apk/release/app-release-unsigned.apk"
+            mapping = root / "android/app/build/outputs/mapping/release/mapping.txt"
+            gradle = []
+
+            def run(args, cwd=None, capture=False, env=None):
+                if args[0] == "./gradlew":
+                    gradle.append(list(args))
+                    for path in (apk, mapping):
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(b"built")
+
+            config = dict(repository="example/app", application_id="com.example.app")
+            with patch.object(worker, "run", side_effect=run), patch.object(worker, "version_code", return_value=100004):
+                worker.build(config, root, sha, directory, "1.2.3")
+            self.assertIn("-PpersonaBuildCommit=" + sha, gradle[0])
+            self.assertIn("-PpersonaVersionName=1.2.3", gradle[0])
+
     def test_new_source_cannot_decrease_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
