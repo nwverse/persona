@@ -28,6 +28,8 @@ public actor ScreenLinkSession {
     public enum Event: Sendable {
         case paths(ScreenLinkPaths)
         case routes([String: LinkStats], current: String, decision: PathPolicy.Decision)
+        /// A direct route's connection ended (it failed, or the app dropped it): dial it again later.
+        case lost(String)
         case ended
     }
 
@@ -326,7 +328,10 @@ public actor ScreenLinkSession {
         l.writer.finish()
         l.transport.close()
         if let k = pendingVideo.removeValue(forKey: id) { k.resume(throwing: ScreenLinkError.closed) }
-        if let route = l.route { lost.insert(route) }
+        if let route = l.route {
+            lost.insert(route)
+            if !ended { emit.yield(.lost(route)) }
+        }
         for (ch, c) in chans where c.active == id && !c.ended {
             chans[ch]?.ended = true
             wake(ch, error: ScreenLinkError.closed)
