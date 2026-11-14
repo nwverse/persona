@@ -175,7 +175,8 @@ reaches the mock. It checks, in light and dark:
   first, Enter scrolls to its row and lights it, and Esc clears the box (audit item 18); the hub's category reads
   "This hub" and Models and Knowledge selection have different icons (audit item 66).
 - Next on an empty custom gateway focuses the first field with a problem, marks it invalid, and its note is inside
-  the dialog's visible area at 1280 x 600; every field that needs something says so; nothing is saved (audit item 19).
+  the dialog's visible area at 1280 x 600; every field that needs something says so, the others with a red edge;
+  nothing is saved (audit item 19).
 - Disconnect this browser asks first, saying pairing is needed again; Cancel revokes nothing and keeps the sign-in
   (audit item 20).
 - Add hub refuses "not a url" and an escaped host under the field and keeps the list as it was, and still adds a real

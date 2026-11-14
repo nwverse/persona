@@ -192,6 +192,15 @@ for (const theme of ["light", "dark"]) {
     check(`19 ${theme}: the first field with a problem is focused, marked invalid and its note is in view`, !!shown, shown ? `${shown.field}: ${shown.note}` : "");
     const flagged = await page.locator('[role="dialog"] [aria-invalid="true"]').count();
     check(`19 ${theme}: every field that needs something says so`, flagged >= 3, `${flagged} fields`);
+    const edged = await page.evaluate(() => {
+      const probe = document.body.appendChild(document.createElement("span"));
+      probe.style.color = "var(--red)";
+      const red = getComputedStyle(probe).color;
+      probe.remove();
+      const others = [...document.querySelectorAll('[role="dialog"] [aria-invalid="true"]')].filter((e) => e !== document.activeElement);
+      return others.length > 0 && others.every((e) => getComputedStyle(e).boxShadow.includes(red));
+    });
+    check(`19 ${theme}: the other fields with a problem have a red edge`, edged);
     check(`19 ${theme}: nothing was saved`, !run.refused.length, run.refused.join(", "));
     await shoot(page, `19-wizard-next-${theme}`);
   });
