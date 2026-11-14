@@ -71,6 +71,7 @@
   "launcher": "起動元",
   "child_count_one": "{count}件の子スペース",
   "child_count_other": "{count}件の子スペース",
+  "side_sessions": "子セッション（{count}）",
   "child_worktree_count_one": "{count}件の子ワークツリー",
   "child_worktree_count_other": "{count}件の子ワークツリー",
   "show_child_workspaces_one": "{count}件の子ワークツリーを表示",

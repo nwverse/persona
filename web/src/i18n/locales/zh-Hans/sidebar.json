@@ -71,6 +71,7 @@
   "launcher": "发起者",
   "child_count_one": "{count} 个子项",
   "child_count_other": "{count} 个子项",
+  "side_sessions": "子会话（{count}）",
   "child_worktree_count_one": "{count} 个子工作树",
   "child_worktree_count_other": "{count} 个子工作树",
   "show_child_workspaces_one": "显示 {count} 个子工作树",

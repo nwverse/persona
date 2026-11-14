@@ -69,7 +69,7 @@ import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu,
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
-import { WindowedRows } from "./WindowedRows";
+import { SideSessionRows, SideSessionsOpen } from "./SideSessionRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
@@ -561,6 +561,9 @@ type AgentsBlockProps = { workspaceActions?: WorkspaceTreeActions; reg: RegFn; h
  *  status for now, saying why with Retry (TodosUnread); a later read that answers brings it back. */
 const useTodosUnread = () => useStore((s) => s.todosError !== null && s.todos.length === 0);
 
+/** The session of an "Idle spaces" row (SideSessionRows nests side sessions by it, #7755). */
+const pairSession = (x: { s: Session }) => x.s;
+
 /** A failed read of the Agents list, the complete one's or the paged one's (audit item 4): the same words either way. */
 const agentsReadFailed = (error: string) => t("sidebar.agents_read_failed", { error });
 
@@ -945,7 +948,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const recentState = worstTreeState(recent.map(agentTreeState));
   const recentRows = (
     <>
-      <WindowedRows items={recentShown} holds={(s) => rowKey(s) === activeKey} render={(s) => (
+      <SideSessionRows items={recentShown} activeKey={activeKey} render={(s) => (
         <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} />
       )} />
       {recent.length > 8 && (
@@ -1002,6 +1005,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     }>
       {listMenu.anchor && <Menu anchor={listMenu.anchor} onClose={listMenu.close} align="right" items={listItems} />}
       <FoldScope.Provider value={AGENTS_FOLD}>
+      {/* a quick filter, a Filter choice or ⌘K's words on the list open every "Side sessions (N)" fold (#7755) */}
+      <SideSessionsOpen.Provider value={filtered}>
       <Collapse open={!folded} sidebarFold unclipped>
       <div inert={folded || undefined}>
       {/* what filters the list, only while something does: the chips and Reset, Search as Code's plan bar */}
@@ -1048,7 +1053,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {listNote ?? (chatList ? (
         <div className="mt-1 flex flex-col gap-1" data-testid="agent-chatlist-section">
-          <WindowedRows items={chatListUnpinned} holds={(s) => rowKey(s) === activeKey} render={(s) => {
+          <SideSessionRows items={chatListUnpinned} activeKey={activeKey} render={(s) => {
             const key = `s:${s.machine_id}/${s.session_id}`;
             return <AgentChatListRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} pinned={false} mutes={mutes} filters={dimFilters} ctx={evalCtx} onMenu={onRowMenu} />;
           }} />
@@ -1060,7 +1065,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
 
       {idle.length > 0 && (
         <Section title={t("sidebar.idle_spaces", { count: idle.length })} folded={idleFolded} onToggle={toggleIdle}>
-          <WindowedRows items={idle.flatMap((sp) => sp.sessions.map((s) => ({ sp, s })))} holds={({ s }) => rowKey(s) === activeKey} render={({ sp, s }) => (
+          <SideSessionRows items={idle.flatMap((sp) => sp.sessions.map((s) => ({ sp, s })))} session={pairSession} activeKey={activeKey} render={({ sp, s }) => (
             <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={sp.sessions.length > 1 ? `${sp.name} › ${tabLabel(s)}` : sp.name} onMenu={onRowMenu} />
           )} />
         </Section>
@@ -1093,6 +1098,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       )}
       </div>
       </Collapse>
+      </SideSessionsOpen.Provider>
       </FoldScope.Provider>
     </SidebarGroup>
       {/* the row's ⋯ (and its right click): pin, rename, mute, the todo it hangs on, close, delete — a long press on iOS
@@ -1244,7 +1250,7 @@ function AgentSection({ group, machines, byTodo, showHost, reg, hover, activeKey
 
   return (
     <Section title={titleNode} folded={folded} onToggle={toggle} right={rightNode}>
-      <WindowedRows items={group.sessions} holds={(s) => rowKey(s) === activeKey} render={row} />
+      <SideSessionRows items={group.sessions} activeKey={activeKey} render={row} />
     </Section>
   );
 }

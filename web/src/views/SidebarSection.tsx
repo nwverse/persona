@@ -144,11 +144,16 @@ export function NeedsCount({ n }: { n: number }) {
 }
 
 /** "Load more" (or "Show N more") under a list's rows: a quiet line in the look of the sidebar's own (Recent, a group's
- *  rows), never a button's pill: the paged list's "Load more" looked like no other row (#6662, the owner). */
-export function ShowMoreRow({ label, onClick }: { label: string; onClick: () => void }) {
+ *  rows), never a button's pill: the paged list's "Load more" looked like no other row (#6662, the owner). `folded`: the
+ *  line folds what follows it ("Side sessions (N)", #7755), with the chevron every fold turns. */
+export function ShowMoreRow({ label, onClick, folded }: { label: string; onClick: () => void; folded?: boolean }) {
+  const fold = folded !== undefined;
   return (
-    <button type="button" onClick={onClick} className="relative z-10 w-full whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-label text-ink-3 hover:text-ink-2 [@media(pointer:coarse)]:min-h-11">
-      {label}
+    <button type="button" onClick={onClick} aria-expanded={fold ? !folded : undefined} className={cx("relative z-10 w-full whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-label text-ink-3 hover:text-ink-2 [@media(pointer:coarse)]:min-h-11", fold && "flex min-w-0 items-center gap-1")}>
+      {fold ? <>
+        <span className="min-w-0 truncate">{label}</span>
+        <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+      </> : label}
     </button>
   );
 }

@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { api } from "../../lib/api";
+import { loadPages } from "../../lib/lazy-page";
 import { SessionList, type ListCounts } from "../../lib/session-list";
+import { setAllFolded } from "../../lib/sidebar-api";
+import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 import { PagedSessionList } from "./PagedSessionList";
 
 vi.mock("../../lib/api", async (original) => ({ ...await original<typeof import("../../lib/api")>(), api: vi.fn() }));
@@ -18,6 +21,8 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// the sections' headings measure themselves with one (jsdom has none)
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
 type Row = { id: string; updated_at: string; state: string; parent?: string };
 const NOW = Date.UTC(2026, 10, 13, 12);
@@ -31,7 +36,8 @@ const compare = (a: Row, b: Row) => Date.parse(b.updated_at) - Date.parse(a.upda
 const activeAt = (r: Row) => Date.parse(r.updated_at);
 const needsYou = (r: Row) => r.state === "needs_you";
 const parentOf = (r: Row) => r.parent;
-const counts: ListCounts = { total: 5, state: { needs_you: 1, idle: 4 }, machine: {}, project: {}, group: {}, revision: "r" };
+// one computer, so Browse by Computer draws one section of them all
+const counts: ListCounts = { total: 5, state: { needs_you: 1, idle: 4 }, machine: { mac: 5 }, project: {}, group: {}, revision: "r" };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -98,5 +104,85 @@ describe("side sessions in the paged list (#5935)", () => {
     expect(shown()).toEqual(["main", "btw-1", "btw-2", "other"]);
     const header = host.querySelector<HTMLElement>("[data-earlier] button");
     expect(header?.textContent).toBe(`${t("paged-agents.earlier")}1`);
+  });
+});
+
+// #7755: "Side sessions (N)" under the parent folds its side sessions, kept per parent, reached by fold-all, opened by a
+// search; a folded one that needs the user stays a row, and no count changes.
+const visible = () => [...host.querySelectorAll("[data-session-row]")].filter((el) => !el.closest("[inert]")).map((el) => `${el.querySelector("[data-nested-session]") ? "  " : ""}${el.textContent}`);
+const fold = () => host.querySelector<HTMLButtonElement>("[data-side-fold] button");
+
+describe("folding side sessions in the paged list (#7755)", () => {
+  it("draws the fold under the parent, open by default", async () => {
+    await show();
+    expect(fold()?.textContent).toBe(t("sidebar.side_sessions", { count: 2 }));
+    expect(fold()?.getAttribute("aria-expanded")).toBe("true");
+    // the fold sits between the parent and its side sessions
+    const group = host.querySelector("[data-side-group]")!;
+    expect([...group.querySelectorAll("[data-session-row], [data-side-fold]")].map((el) => el.matches("[data-side-fold]") ? "fold" : el.textContent)).toEqual(["main", "fold", "btw-1", "btw-2"]);
+    // the fold and the side sessions are one block a level in
+    expect(group.querySelector("[data-side-sessions]")?.textContent).toBe(`${fold()!.textContent}btw-1btw-2`);
+    expect(visible()).toEqual(["main", "  btw-1", "  btw-2", "other", "old"]);
+  });
+
+  it("folds only the side sessions, keeps the one that needs you, and changes no count", async () => {
+    await show();
+    const before = { total: total(), needs: chip(t("lib-state-labels.needs_you")) };
+    act(() => fold()!.click());
+    expect(fold()?.getAttribute("aria-expanded")).toBe("false");
+    expect(visible()).toEqual(["main", "  btw-2", "other", "old"]);
+    expect({ total: total(), needs: chip(t("lib-state-labels.needs_you")) }).toEqual(before);
+    expect(localStorage.getItem("fold:side-sessions:main")).toBe("1");
+    // drawn again, the fold is as it was left
+    act(() => root.unmount());
+    root = createRoot(host);
+    await show();
+    expect(fold()?.getAttribute("aria-expanded")).toBe("false");
+    expect(visible()).toEqual(["main", "  btw-2", "other", "old"]);
+  });
+
+  it("follows Collapse all and Expand all", async () => {
+    await show();
+    act(() => setAllFolded(true));
+    expect(fold()?.getAttribute("aria-expanded")).toBe("false");
+    expect(visible()).toEqual(["main", "  btw-2", "other", "old"]);
+    act(() => setAllFolded(false));
+    expect(fold()?.getAttribute("aria-expanded")).toBe("true");
+    expect(visible()).toEqual(["main", "  btw-1", "  btw-2", "other", "old"]);
+  });
+
+  it("opens the fold while a search is on the list, without changing the kept choice", async () => {
+    localStorage.setItem("fold:side-sessions:main", "1");
+    await show();
+    expect(visible()).not.toContain("  btw-1");
+    const field = host.querySelector<HTMLInputElement>("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "btw");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { vi.advanceTimersByTime(SESSION_LIST_METRICS.searchDelay + 10); });
+    for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
+    expect(fold()?.getAttribute("aria-expanded")).toBe("true");
+    expect(visible()).toContain("  btw-1");
+    expect(localStorage.getItem("fold:side-sessions:main")).toBe("1");
+  });
+});
+
+describe("folding side sessions in a Browse by section (#7755)", () => {
+  beforeAll(() => loadPages(), 60_000);
+
+  it("nests and folds them as the flat list does", async () => {
+    localStorage.setItem("persona.agentBrowseBy", "machine");
+    await show();
+    for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
+    const section = host.querySelector("[data-session-group]")!;
+    expect(section).toBeTruthy();
+    expect(visible()).toEqual(["main", "  btw-1", "  btw-2", "other", "old"]);
+    expect(fold()?.textContent).toBe(t("sidebar.side_sessions", { count: 2 }));
+    act(() => fold()!.click());
+    expect(visible()).toEqual(["main", "  btw-2", "other", "old"]);
+    // the section's count is the hub's either way
+    expect(section.querySelector("[data-sidebar-group-heading]")?.textContent).toContain("5");
+    expect(localStorage.getItem("fold:side-sessions:main")).toBe("1");
   });
 });
