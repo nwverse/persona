@@ -57,20 +57,31 @@ export function SavedSearchesDialog({ model, initialQuery, onReturn, onApply }: 
   const heading = useRef<HTMLHeadingElement>(null);
   const area = useRef<HTMLDivElement>(null);
   const focusAfterAction = useRef(false);
+  const focusAfterEditor = useRef<string | null | undefined>(undefined);
   useLayoutEffect(() => {
+    if (!editor && focusAfterEditor.current !== undefined) {
+      const id = focusAfterEditor.current;
+      focusAfterEditor.current = undefined;
+      // The dialog stays mounted as its editor leaves. Its modal hook does not run again, so replace focus lost
+      // with a removed form control; a close button or another control the user focused deliberately keeps it.
+      if (document.activeElement === document.body) {
+        const row = id ? area.current?.querySelector<HTMLElement>(`[data-saved-search="${id}"] > button`) : null;
+        (row ?? heading.current)?.focus({ preventScroll: true });
+      }
+    }
     if (!busy && focusAfterAction.current) {
       focusAfterAction.current = false;
       if (document.activeElement === document.body) {
         (area.current?.querySelector<HTMLElement>('[data-testid="saved-search-undo"]') ?? heading.current)?.focus({ preventScroll: true });
       }
     }
-  }, [busy, doc, state.canUndo]);
+  }, [editor, busy, doc, state.canUndo]);
   const edit = (item: SavedAgentSearch | null) => {
     if (!doc || !writable || busy) return;
     setAttempted(false);
     setEditor({ item, name: item?.name ?? "", query: item?.query ?? "", revision: doc.revision, returnToPalette: false });
   };
-  const cancelEdit = () => { if (editor?.returnToPalette) onReturn(); else { setEditor(null); setAttempted(false); } };
+  const cancelEdit = () => { if (editor?.returnToPalette) onReturn(); else { focusAfterEditor.current = editor?.item?.id ?? null; setEditor(null); setAttempted(false); } };
   const save = async (reviewed = false) => {
     if (!editor || busy || submitting.current || !writable) return;
     setAttempted(true);
@@ -84,7 +95,7 @@ export function SavedSearchesDialog({ model, initialQuery, onReturn, onApply }: 
       const action = captured.item && !gone ? { action: "update" as const, id: captured.item.id, name: captured.name, query: captured.query }
         : { action: "add" as const, name: captured.name, query: captured.query };
       if (await model.mutate(action, revision) && alive.current && currentEditor.current === captured) {
-        if (captured.returnToPalette) onReturn(); else { setEditor(null); setAttempted(false); }
+        if (captured.returnToPalette) onReturn(); else { focusAfterEditor.current = captured.item?.id ?? null; setEditor(null); setAttempted(false); }
       }
     } finally { submitting.current = false; }
   };

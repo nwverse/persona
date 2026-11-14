@@ -61,7 +61,7 @@ class Fixture {
 
 async function open(browser, fixture, size = "wide", theme = "light", language = "en", textSize = "standard", mode = "normal") {
   const words = await readWords(language, "saved-agent-searches"), paletteWords = await readWords(language, "palette"), atoms = await readWords(language, "ui-atoms");
-  words.manage = paletteWords.saved_searches; words.save_current = paletteWords.save_search;
+  words.manage = paletteWords.saved_searches; words.save_current = paletteWords.save_search; words.cancel = (await readWords(language, "common")).cancel;
   const run = { size, theme, language, textSize, mode, reads: [], writes: [], errors: [], external: [] }; results.runs.push(run);
   const context = await browser.newContext({ viewport: size === "wide" ? { width: 1440, height: 1000 } : { width: 390, height: 844 }, colorScheme: theme, reducedMotion: "reduce", hasTouch: size === "narrow", isMobile: size === "narrow", serviceWorkers: "block" });
   await context.addInitScript(({ theme, language, textSize }) => { localStorage.setItem("persona.token", "synthetic-saved-search-token"); localStorage.setItem("persona.theme", theme); localStorage.setItem("persona.language", language); localStorage.setItem("persona.text-size", textSize); }, { theme, language, textSize });
@@ -148,8 +148,22 @@ async function workflow(browser, size, theme, language = "en", textSize = "stand
     assert.equal(new URL(x.page.url()).pathname, "/workspace-board", "Applying a saved query never opens or executes a result");
     await x.shot("applied");
     await x.manage(); await x.row(id).getByRole("button", { name: fill(x.words.edit_named, { name: "Desktop work" }), exact: true }).click();
-    await x.nameInput().fill("Desktop review"); await x.queryInput().fill("machine:desktop state:working"); await x.save().click();
+    await x.nameInput().fill("Discard this draft");
+    const writesBeforeCancel = x.run.writes.length;
+    await x.dialog().getByRole("button", { name: x.words.cancel, exact: true }).focus(); await x.page.keyboard.press("Enter");
+    await x.row(id).getByText("Desktop work", { exact: true }).waitFor();
+    assert(await x.dialog().evaluate((el) => el.contains(document.activeElement)), "Cancel returns keyboard focus to the list inside the same dialog");
+    await x.page.keyboard.press("Tab");
+    assert(await x.dialog().evaluate((el) => el.contains(document.activeElement)), "Tab remains inside management after cancelling an editor");
+    assert.equal(x.run.writes.length, writesBeforeCancel, "Cancelling a draft writes nothing");
+    await x.row(id).getByRole("button", { name: fill(x.words.edit_named, { name: "Desktop work" }), exact: true }).click();
+    await x.nameInput().fill("Desktop review"); await x.queryInput().fill("machine:desktop state:working");
+    await until(() => x.save().isEnabled(), "The edited draft is ready to save");
+    await x.save().focus(); await x.page.keyboard.press("Enter");
     await x.row(id).getByText("Desktop review", { exact: true }).waitFor();
+    assert(await x.dialog().evaluate((el) => el.contains(document.activeElement)), "Saving an edit returns keyboard focus to the list inside the same dialog");
+    await x.page.keyboard.press("Tab");
+    assert(await x.dialog().evaluate((el) => el.contains(document.activeElement)), "Tab remains inside management after saving an editor");
     await x.row(id).getByRole("button", { name: fill(x.words.move_up, { name: "Desktop review" }), exact: true }).click();
     await until(() => fixture.document().searches[1]?.id === id, "Move up persists the selected query's order");
     const beforeDelete = structuredClone(fixture.document().searches);
@@ -170,7 +184,7 @@ async function workflow(browser, size, theme, language = "en", textSize = "stand
     const reads = x.run.reads.length; fixture.push("unrelated-manager"); await x.page.waitForTimeout(250); assert.equal(x.run.reads.length, reads, "Another manager's hint is ignored");
     await x.close(); const closedReads = x.run.reads.length; fixture.push(); await x.page.waitForTimeout(500); assert.equal(x.run.reads.length, closedReads, "Closed search surfaces neither poll nor refresh on hints");
     if (textSize === "large") assert.equal(await x.page.locator("html").getAttribute("data-text-size"), "large");
-    x.healthy(); peer?.healthy(); results.checks.push(`${size}/${theme}/${language}/${textSize}: save current, apply, edit, reorder, delete/Undo, single modal, owner hints and closed lifetime${peer ? ", second-browser live sync" : ""}`);
+    x.healthy(); peer?.healthy(); results.checks.push(`${size}/${theme}/${language}/${textSize}: save current, apply, keyboard edit Cancel/Save focus, reorder, delete/Undo, single modal, owner hints and closed lifetime${peer ? ", second-browser live sync" : ""}`);
   } catch (error) { await x.capture(error); } finally { await x.dispose(); await peer?.dispose(); }
 }
 

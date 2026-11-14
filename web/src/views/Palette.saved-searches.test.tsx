@@ -119,6 +119,23 @@ describe("saved searches in the palette", () => {
     await press("back_to_search"); expect(getPalette().query).toBe("return query"); expect(dialogs()).toHaveLength(1);
   });
 
+  it.each(["cancel", "save", "add"])("keeps focus in the management dialog after %s returns its editor to the list", async (action) => {
+    const visible = vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+    try {
+      await show(); await manage();
+      if (action === "add") { await press("add"); fill("name", "Added from list"); fill("query", "state:working"); }
+      else { await act(async () => named("edit_named", { name: "Search 1" }).click()); await settle(); if (action === "save") fill("name", "Edited from list"); }
+      const control = action === "cancel" ? buttons().find((element) => element.textContent === t("common.cancel"))! : button("save");
+      await act(async () => { control.focus(); control.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); control.click(); }); await settle();
+      const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      if (action === "save") expect(document.activeElement).toBe(named("apply_named", { name: "Edited from list" }));
+      const last = [...dialog.querySelectorAll<HTMLButtonElement>("button")].at(-1)!;
+      act(() => { last.focus(); last.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })); });
+      expect(dialog.contains(document.activeElement)).toBe(true); expect(document.activeElement).not.toBe(last);
+    } finally { visible.mockRestore(); }
+  });
+
   it("keeps a dirty draft through a push and requires explicit review of the new version", async () => {
     await show(); await manage(); await act(async () => named("edit_named", { name: "Search 1" }).click()); await settle();
     fill("name", "My draft"); fill("query", "model:opus");
