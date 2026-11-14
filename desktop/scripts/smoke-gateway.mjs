@@ -10,8 +10,8 @@ import { extname, join, resolve, sep } from "node:path";
  * With a prefix it behaves like a reverse proxy that mounts the hub below the origin root: only paths inside the
  * prefix exist, the prefix is stripped before forwarding, and `index.html` gets `<base href="/<prefix>/">` as the hub
  * writes it for `X-Forwarded-Prefix` (docs/web/web.md "Subpaths"). Every request outside the prefix is answered 404
- * and the page's own are listed, so a page that builds a root path instead of a prefixed one fails the smoke rather
- * than passing by luck.
+ * and recorded without its query. The isolated acceptance scenario fails closed on any such request; the loopback
+ * listener cannot establish from optional headers whether Electron or another local client sent it.
  */
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json",
@@ -27,8 +27,8 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
   const page = Buffer.from(prefix ? index.replace('<base href="/" />', `<base href="${prefix}/" />`) : index, "utf8");
   const outside = [];
   const requests = [];
-  /** A request outside the prefix fails acceptance even without browser metadata. A socket with an Origin or any
-   *  Sec-Fetch-Mode value is also page traffic; absence of these optional headers is not an escape from the boundary. */
+  /** A request outside the prefix fails acceptance even without browser metadata. Optional headers are recorded only
+   *  as diagnostic labels, not as evidence of which local process sent the request. */
   const escaped = (req, method) => {
     outside.push(`${method} ${(req.url ?? "").split("?")[0]} (${req.headers["sec-fetch-dest"] ?? (req.headers.origin ? "socket" : "request")})`);
   };
@@ -102,7 +102,7 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
   return {
     port,
     url: `http://127.0.0.1:${port}${prefix}/`,
-    /** The page's requests that escaped the prefix, as "METHOD path (destination)" without their query (it can carry a credential). */
+    /** Unattributed requests that reached this test-owned listener, as "METHOD path (diagnostic label)" without their query. */
     outside: () => [...outside],
     /** Method, query-free path and response status only; never credentials, bodies or device tokens. */
     requests: () => [...requests],

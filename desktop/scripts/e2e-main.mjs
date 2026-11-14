@@ -86,6 +86,7 @@ app.on("browser-window-created", (_event, window) => {
   record(window.webContents.getURL());
   // The initial hub window may already have loaded before this observer is installed; its ownership is the saved hub.
   if (window.webContents.getURL().startsWith(hub.href)) {
+    window.webContents.removeListener("console-message", recordConsole);
     window.webContents.on("console-message", recordConsole);
   }
 });
