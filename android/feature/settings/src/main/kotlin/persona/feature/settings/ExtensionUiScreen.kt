@@ -116,7 +116,8 @@ internal suspend fun extensionNotificationLockedAfterUnlockSettles(
 @Composable
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
-                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, notificationActionToken: String? = null,
+                    onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, onAsk: ((String) -> Unit)? = null,
+                    notificationActionToken: String? = null,
                     notificationIntent: Intent? = null,
                     notificationStore: ExtensionNotificationActionStore = ExtensionNotificationActionStore.shared,
                     notificationLocked: (suspend () -> Boolean)? = null) {
@@ -197,12 +198,23 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
         return
     }
     val api = rememberPinned(extensions, extensionPrefixes(extensionId), pageManager)
-    val model = remember(api, extensionId, uiId, pageState) {
-        ExtensionViewModel(api, extensionId, uiId, initialState = pageState)
+    // Inbox Sources (#5278, #5661): these pages alone are told the composer's assistant name, even when it is blank.
+    val assistantName = LocalPersonaName.current
+    val pageContext = if (extensionId == SUBSCRIPTIONS_UI) ExtensionUiContext(assistant = assistantName.ifBlank { "" }) else null
+    val model = remember(api, extensionId, uiId, pageState, pageContext) {
+        ExtensionViewModel(api, extensionId, uiId, context = pageContext, initialState = pageState)
     }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
-    val handle = rememberExtensionView(model, onPush = { push ->
+    val ask = onAsk
+    val handle = rememberExtensionView(model, appLink = { url ->
+        // Set Up with … is only answered here, and only from these pages. Close the page, then hand the text on.
+        val text = ExtensionViewText.askFrom(extensionId, url) ?: return@rememberExtensionView false
+        val send = ask ?: return@rememberExtensionView false
+        onBack()
+        send(text)
+        true
+    }, onPush = { push ->
         ExtensionViewText.pushed(extensionId, uiId, title, depth, push, pageManager)?.let { model.covered(); onPush(it) }
     }, onPop = onBack)
     var notificationActionStarted by remember(model) { mutableStateOf(false) }
