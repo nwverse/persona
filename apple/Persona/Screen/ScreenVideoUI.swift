@@ -83,8 +83,8 @@ struct ScreenStats: Equatable {
 
     var mode: Mode
     var path: Path? = nil
-    var tier: String? = nil            // #6396, e.g. "1080p · 60"
-    var tierReason: String? = nil      // #6396, a short reason shown on a tier change
+    var tier: String? = nil            // #6396, e.g. "Auto · 1.5× · 60 fps" (`ScreenTierText`)
+    var tierReason: String? = nil      // #6396, why it last changed and how long ago, in plain words
     var bitrateMbps: Double? = nil
     var fps: Double? = nil
     var codec: String? = nil           // video only, e.g. "HEVC"
@@ -161,7 +161,11 @@ struct ScreenStatsOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             header
-            if let tier = stats.tier { kv(String(localized: "Tier"), tier, note: stats.tierReason) }
+            if let tier = stats.tier {
+                kv(String(localized: "Tier"), tier)
+                // Why it last changed, on its own line: the reasons are words and would widen the panel past the screen.
+                if let why = stats.tierReason { Text(why).foregroundStyle(.tertiary) }
+            }
             rateLine
             latencyLine
             if let hub = stats.hubRoundTripMs {
@@ -252,8 +256,9 @@ extension ScreenStats {
     /// Sample numbers for previews and `-showScreenStatsDemo` screenshots (video mode shows the per-segment latency).
     /// Capture ≈ 0 ms on the Mac (gate ①: the frame reaches us before its display time), so it's folded into the total.
     static let demoVideo = ScreenStats(
-        mode: .video, path: .directLAN, tier: "1080p · 60", tierReason: nil,
-        bitrateMbps: 1.8, fps: 60, codec: "HEVC", resolution: "1920×1080",
+        mode: .video, path: .directLAN, tier: String(localized: "Auto") + " · 1.5× · 60 fps",
+        tierReason: String(localized: "Connection is steady") + " · " + String(localized: "\(12) s ago"),
+        bitrateMbps: 3.4, fps: 60, codec: "HEVC", resolution: "2268×1472",
         captureMs: nil, encodeMs: 9, networkMs: 6, decodeMs: 8, totalMs: 23, roundTripMs: nil)
     static let demoVNC = ScreenStats(
         mode: .vnc, path: .relay, tier: nil, tierReason: nil,

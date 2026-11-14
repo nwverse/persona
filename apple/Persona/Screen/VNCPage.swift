@@ -594,7 +594,9 @@ struct VNCPage: View {
         #if os(iOS) && canImport(PersonaScreenKit)
         if s.video.showing {
             let v = s.video, r = v.reading
-            return ScreenStats(mode: .video, path: .relay, bitrateMbps: r.mbps, fps: r.fps, codec: v.codec,
+            let tier = v.tier.map { ScreenTierText.value(quality, $0.tier) }
+            let why = v.tier.flatMap { c in v.tierAt.map { ScreenTierText.reason(c.reason, at: $0, now: .now) } }
+            return ScreenStats(mode: .video, path: .relay, tier: tier, tierReason: why, bitrateMbps: r.mbps, fps: r.fps, codec: v.codec,
                                resolution: v.size.map { "\(Int($0.width))×\(Int($0.height))" }, captureMs: r.captureMs,
                                encodeMs: r.encodeMs, networkMs: r.networkMs, decodeMs: r.decodeMs, totalMs: r.totalMs)
         }
