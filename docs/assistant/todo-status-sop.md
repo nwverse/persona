@@ -170,14 +170,20 @@ top of the list (#5707). Now the owner files it:
 
 ## Header count
 
-The web's header reads "N open · N shelved · N done" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
+The web's header reads "N open · N parked · N inactive · N done" beside the title on wider screens (a phone leaves it out); it counts what the list's filter shows, whatever is searched (#3740). The iOS and
 Android lists have no such line (#3712): it said again what the sections say, so each section's title carries the number of
 to-dos its rows list (a merged row's related ones too), in the section's state color, and the counts follow a search and the
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted or deployed,
 and not shelved: Waiting on you, Working, PR to merge, Other open, and Just finished rows still open (a finished turn
 is not a closed to-do; only a review or the user closes it; once the owner has seen it, rule 9a, it is in Done and not
-counted). **Done** counts closed, accepted and deployed ones. The
+counted). **Done** counts the to-dos in the Done section, so the header and that section's title say the same number;
+what closed in the last 24 hours and was not seen yet is under Just finished and counted there, not here. The
 sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before; the page lists and counts them. A task whose agent never started (rule 1) counts as open while it waits on the owner.
+
+The counts are the same whatever the list is grouped by (web audit item 12): by folder and by pinned direction the
+folders hold every to-do the status sections show outside Done, in its own reading (a failed start waiting on the owner
+open, with why it did not start), and the folded **Done** at the bottom holds the Done section's. Before the first read of
+the to-dos lands the header shows no counts, not zeros (audit item 83).
 
 ## Shelving
 

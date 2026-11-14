@@ -231,24 +231,41 @@ export function TodosView({
     if (selectedId) setActiveId(selectedId);
   }, [selectedId]);
 
-  // Separate uncompleted and completed todos
+  // a minute's tick moves to-dos across the 24 h and 48 h lines (and today's end) while nothing else changes
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const [restored, restoreTodo] = useRestoredTodos();
+  // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
+  // leaves the finished one out must not put it back in Needs you
+  const superseded = useMemo(() => supersededFailedStarts(todos), [todos]);
+  // Each to-do's status section (docs/assistant/todo-status-sop.md), whatever the list is grouped by: the folders and
+  // 常驻 hold what the status sections show open and fold Done's (audit item 12), and the detail reads a failed start
+  // as its row does (audit item 13).
+  const sectionOf = useMemo(
+    () => new Map(todos.map((td) => [td.id, triage(td, lookup, Date.now(), restored.get(td.id) ?? 0, superseded.has(td.id)).section])),
+    [todos, lookup, restored, superseded, tick],
+  );
+  // Separate uncompleted and completed todos: completed is the Done section
   const { uncompleted, completed } = useMemo(() => {
     const un: Todo[] = [];
     const comp: Todo[] = [];
     for (const t of todos) {
-      if (t.done_at) comp.push(t);
+      if (sectionOf.get(t.id) === "done") comp.push(t);
       else un.push(t);
     }
     return {
       uncompleted: sortTodos(un, lookup),
       completed: sortTodos(comp, lookup),
     };
-  }, [todos, lookup]);
+  }, [todos, lookup, sectionOf]);
   // A sessions push builds a new lookup: what it leaves in the same order stays the same list (and the same groups,
   // the same row views below), so the rows and sections it did not touch skip their render.
   const steadyUncompleted = useSteady(uncompleted, sameList);
   const steadyCompleted = useSteady(completed, sameList);
-  const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions), [todos, lookup, interactions]), steadyViews);
+  const views = useSteady(useMemo(() => todoRowViews(todos, lookup, interactions, sectionOf), [todos, lookup, interactions, sectionOf]), steadyViews);
 
   // The filter by due date and the order inside each section (#3740): this browser's, in both groupings
   const [listFilter, setListFilter] = useState<TodoListFilter>(() => {
@@ -267,12 +284,6 @@ export function TodosView({
     setPref(SORT_KEY, s);
     setListSort(s);
   };
-  // a minute's tick moves to-dos across the 24 h and 48 h lines (and today's end) while nothing else changes
-  const [tick, setTick] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setTick(Date.now()), 60_000);
-    return () => window.clearInterval(id);
-  }, []);
   const inFilter = (td: Todo) => matchesListFilter(td, listFilter, tick);
   // Filter by search query
   const matchesSearch = (t: Todo) => {
@@ -324,10 +335,6 @@ export function TodosView({
     const listed = new Set(directionSections.flatMap((g) => g.todos.map((td) => td.id)));
     return filteredUncompleted.filter((td) => !listed.has(td.id)).length;
   }, [grouping, byDirection, directionSections, filteredUncompleted]);
-  const [restored, restoreTodo] = useRestoredTodos();
-  // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
-  // leaves the finished one out must not put it back in Needs you
-  const superseded = useMemo(() => supersededFailedStarts(todos), [todos]);
   const triaged = useMemo(
     () => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }),
     [todos, lookup, restored, search, listFilter, superseded, tick],
@@ -541,14 +548,12 @@ export function TodosView({
           {onToggleSidebar && <IconButton icon="sidebar" label={t("agents-agentsview.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
           <div className="flex items-baseline gap-2">
             <h1 className="text-[16px] font-semibold whitespace-nowrap text-ink">{t("todos.title")}</h1>
-            {!(todos.length === 0 && todosError) && (
+            {/* the counts once the list has its to-dos (audit item 83): not while it loads, nor after an empty failed read */}
+            {(todosLoaded || todos.length > 0) && !(todos.length === 0 && todosError) && (
               // a phone's header has the List | Calendar switch to fit (#2029): the counts stay on wider screens
-              <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden">
-                {byStatus
-                  ? listFilter === "all"
-                    ? t("todos.summary_triage", { open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.finished })
-                    : t("todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.finished })
-                  : t("todos.summary", { open: uncompleted.length, done: completed.length })}
+              <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden" data-testid="todos-summary">
+                {/* one count in every grouping (audit item 12): open as the sidebar's badge counts it, done as the Done section */}
+                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: triageAll.todoCounts.parked, shelved: triageAll.shelved, done: triageAll.todoCounts.done })}
               </span>
             )}
           </div>
@@ -623,7 +628,8 @@ export function TodosView({
                 interactions={interactions}
                 showReleased={showReleased}
                 onToggleReleased={() => setShowReleased((v) => !v)}
-                onToggleDone={() => toggleDone(selectedTodo)}
+                open={checksAsOpen(selectedTodo, sectionOf.get(selectedTodo.id))}
+                onToggleDone={(open) => toggleDone(selectedTodo, open)}
                 onOpenHandover={() => openHandover()}
                 onDeleteClick={() => askDelete(selectedTodo.id)}
               />
@@ -838,7 +844,8 @@ export function TodosView({
               interactions={interactions}
               showReleased={showReleased}
               onToggleReleased={() => setShowReleased((v) => !v)}
-              onToggleDone={() => toggleDone(activeTodo)}
+              open={checksAsOpen(activeTodo, sectionOf.get(activeTodo.id))}
+              onToggleDone={(open) => toggleDone(activeTodo, open)}
               onOpenHandover={() => openHandover()}
               onDeleteClick={() => askDelete(activeTodo.id)}
             />
@@ -1273,6 +1280,8 @@ export type TodoRowView = {
   orphaned: boolean;
   /** One of its agents runs with ultracode on (#12): the Agent list row's mark after its title. */
   ultracode: boolean;
+  /** Its status section (sectionOf), in every grouping: its checkbox reads open or done by it (checksAsOpen). */
+  section?: TriageSection;
 };
 
 const DOT_STATE: Record<TodoStatus, AgentState> = {
@@ -1343,9 +1352,9 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   return view;
 }
 
-/** Every todo's row view by id. */
-function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Interaction[]): ReadonlyMap<string, TodoRowView> {
-  return new Map(todos.map((td) => [td.id, todoRowView(td, lookup, interactions)]));
+/** Every todo's row view by id, with its status section. */
+function todoRowViews(todos: Todo[], lookup: SessionLookup, interactions: Interaction[], sections: ReadonlyMap<string, TriageSection>): ReadonlyMap<string, TodoRowView> {
+  return new Map(todos.map((td) => [td.id, { ...todoRowView(td, lookup, interactions), section: sections.get(td.id) }]));
 }
 
 const TONE_CLASS = TODO_TONE_CLASS;
@@ -1381,8 +1390,8 @@ const TodoListItem = memo(function TodoListItem({
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
-  // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713)
-  const open = checksAsOpen(todo, section);
+  // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713), in every grouping
+  const open = checksAsOpen(todo, section ?? view.section);
   const failedOpen = open && Boolean(todo.start_error);
   // Its menu (#4429): a right click opens it at the pointer, the menu key and Shift+F10 on the row
   const menu = onMenu ? contextMenuProps((at) => onMenu(todo, at, open)) : undefined;
@@ -1391,6 +1400,7 @@ const TodoListItem = memo(function TodoListItem({
     <div
       role="button"
       tabIndex={0}
+      data-todo={todo.id}
       aria-current={selected || undefined}
       onClick={() => onSelect(todo.id)}
       // a right click on its PR link keeps the browser's menu (Copy link, open in a new tab)
@@ -1830,6 +1840,7 @@ function TodoDetail({
   interactions,
   showReleased,
   onToggleReleased,
+  open,
   onToggleDone,
   onOpenHandover,
   onDeleteClick,
@@ -1843,7 +1854,10 @@ function TodoDetail({
   interactions: Interaction[];
   showReleased: boolean;
   onToggleReleased: () => void;
-  onToggleDone: () => void;
+  /** Whether it reads open, as its row's checkbox does (checksAsOpen): a failed start waiting on the owner is (#3713). */
+  open: boolean;
+  /** Closes it when `open`, reopens it otherwise: the row's checkbox. */
+  onToggleDone: (open: boolean) => void;
   onOpenHandover: () => void;
   onDeleteClick: () => void;
 }) {
@@ -1895,6 +1909,23 @@ function TodoDetail({
     }
   };
 
+  // A task whose agent never started, waiting on the owner (#3713, audit item 13): open, as its row reads, with why it
+  // did not start; Retry when the hub can start it again from its plan (POST …/retry), else Hand to agent.
+  const failedStart = open && Boolean(todo.start_error);
+  const canRetry = failedStart && Boolean(todo.plan_id && todo.origin);
+  const [retrying, setRetrying] = useState(false);
+  // the hub reopens it at once and starts its agent in the background; the list says how the start goes
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await api(`/todos/${enc(todo.id)}/retry`, { method: "POST" });
+      await refreshTodos();
+    } catch (e) {
+      toast(t("todos.action_failed", { error: errorText(e) }), "error");
+    } finally {
+      setRetrying(false);
+    }
+  };
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
   const toneClass = {
@@ -1968,6 +1999,11 @@ function TodoDetail({
         <span className="text-ink-3">·</span>
         <span>{t("todos.created_at", { time: clock(todo.created_at) })}</span>
       </div>
+      {failedStart && (
+        <p className="mt-2 text-[12.5px] leading-[1.6] text-red" data-testid="todo-detail-start-failed">
+          {t("todos.start_failed", { error: todo.start_error ?? "" })}
+        </p>
+      )}
       {isAutoDone(todo) && (
         <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-3">
           {todo.done_reason ? t("todos.auto_done_reason", { reason: todo.done_reason }) : t("todos.auto_done")}
@@ -2066,7 +2102,7 @@ function TodoDetail({
 
         {activeAgents.length === 0 ? (
           <div className="rounded-control border border-dashed border-line p-6 text-center text-[13px] text-ink-3">
-            {todo.done_at ? t("todos.no_agents_done") : t("todos.no_agents")}
+            {open ? t("todos.no_agents") : t("todos.no_agents_done")}
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -2212,15 +2248,29 @@ function TodoDetail({
         )}
       </div>
 
-      {/* Bottom Action Bar. A done to-do can't be handed over (the hub refuses, #1856): Reopen next to it comes first. */}
+      {/* Bottom Action Bar. A done to-do can't be handed over (the hub refuses, #1856): Reopen next to it comes first. A
+          failed start is open: Retry (or Hand to agent, which reopens it first) and Complete, which closes it for good as
+          its row's checkbox does. */}
       <div className="mt-8 flex flex-wrap items-center gap-2.5 border-t border-line pt-4">
-        {!todo.done_at && (
-          <Button tone="accent" icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px]">
+        {canRetry && (
+          <Button
+            tone="accent"
+            icon="retry"
+            busy={retrying}
+            disabled={retrying}
+            onClick={() => void retry()}
+            className="h-8.5 px-3.5 text-[13px] whitespace-nowrap"
+          >
+            {t("todos.retry")}
+          </Button>
+        )}
+        {open && (
+          <Button tone={canRetry ? "secondary" : "accent"} icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px] whitespace-nowrap">
             {t("todos.hand_over")}
           </Button>
         )}
-        <Button tone="secondary" icon="check" onClick={onToggleDone} className="h-8.5 px-3 text-[13px]">
-          {todo.done_at ? t("todos.reopen") : t("todos.complete")}
+        <Button tone="secondary" icon="check" onClick={() => onToggleDone(open)} className="h-8.5 px-3 text-[13px] whitespace-nowrap">
+          {open ? t("todos.complete") : t("todos.reopen")}
         </Button>
       </div>
     </div>
@@ -2866,10 +2916,17 @@ export function HandoverDialog({
   const pickedBlock = launcherBlock(launchers.find((l) => l.name === (launcher || hubDefault?.provider)));
   const defaultChoice = hubDefault ? defaultLabel(hubDefault, "", launchers) : t("newagent.follow_model_settings");
 
+  // A failed start (#3713) is closed on the hub, which refuses a hand-over to a done to-do (#1856): handing it over reopens
+  // it first, only then, so a dialog closed without a choice leaves it as it was.
+  const reopenFailed = async () => {
+    if (todo.done_at && todo.start_error) await updateTodo(todo.id, { done: false });
+  };
+
   const submitNew = async () => {
     if (!mid) return;
     setBusy(true);
     try {
+      await reopenFailed();
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
       // has answered (#1856).
@@ -2899,6 +2956,7 @@ export function HandoverDialog({
     if (!s) return;
     setBusy(true);
     try {
+      await reopenFailed();
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       const clientMsgId = uuid();
       await api(`/sessions/${enc(s.machine_id)}/${enc(s.session_id)}/messages`, {
