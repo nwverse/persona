@@ -6,7 +6,7 @@ export function SessionTags({ tags, className }: { tags: readonly string[] | und
   if (!tags?.length) return null;
   const text = tags.join(" · ");
   return (
-    <span data-session-tags title={text} aria-label={text} className={cx("flex h-4 min-w-0 items-center gap-1 text-[11px] leading-4 text-ink-3", className)}>
+    <span data-session-tags title={text} aria-label={text} className={cx("flex h-4 min-w-0 items-center gap-1 text-xs leading-4 text-ink-3", className)}>
       <Icon name="tag" size={10} stroke={2} className="shrink-0" />
       <span className="truncate">{text}</span>
     </span>

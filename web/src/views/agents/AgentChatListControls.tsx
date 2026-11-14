@@ -205,7 +205,7 @@ export function AgentTagFilterButton({ filters, onChange, facets }: { filters: A
       aria-haspopup="menu"
       aria-expanded={Boolean(menu.anchor)}
       onClick={menu.open}
-      className={cx("touch-hit relative z-10 flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-[7px] text-[11.5px] transition-[background-color,color,box-shadow] duration-150", selected.length ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-2 hover:bg-hover hover:text-ink")}
+      className={cx("touch-hit relative z-10 flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-[7px] text-xs transition-[background-color,color,box-shadow] duration-150", selected.length ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-2 hover:bg-hover hover:text-ink")}
     >
       <Icon name="tag" size={11} stroke={2} />
       <span>{t("lib-agent-filter.filter_tags")}</span>

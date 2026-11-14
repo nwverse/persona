@@ -101,7 +101,7 @@ export function AgentPresentationDialog({ session, onClose, onSave }: AgentPrese
   };
 
   const customNameActive = Boolean(current.display_name?.trim());
-  const fieldClass = "w-full rounded-control bg-surface px-3 text-[13px] text-ink shadow-btn outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
+  const fieldClass = "w-full rounded-control bg-surface px-3 text-sm text-ink shadow-btn outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
   const actionClass = "touch-hit pointer-coarse:min-h-11";
 
   return (
@@ -129,7 +129,7 @@ export function AgentPresentationDialog({ session, onClose, onSave }: AgentPrese
         }}
       >
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={nameId} className="text-[12px] font-medium text-ink-2">
+          <label htmlFor={nameId} className="text-xs font-medium text-ink-2">
             {t("agent-presentation.display_name")}
           </label>
           <input
@@ -147,7 +147,7 @@ export function AgentPresentationDialog({ session, onClose, onSave }: AgentPrese
             aria-describedby={nameHintId}
             className={`${fieldClass} h-9 pointer-coarse:min-h-11`}
           />
-          <div id={nameHintId} className="flex flex-col gap-1 text-[11.5px] leading-relaxed text-ink-3">
+          <div id={nameHintId} className="flex flex-col gap-1 text-xs leading-relaxed text-ink-3">
             <p>{t("agent-presentation.name_hint", { max: NAME_MAX })}</p>
             <p>
               {customNameActive
@@ -158,7 +158,7 @@ export function AgentPresentationDialog({ session, onClose, onSave }: AgentPrese
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={tagsId} className="text-[12px] font-medium text-ink-2">
+          <label htmlFor={tagsId} className="text-xs font-medium text-ink-2">
             {t("agent-presentation.tags")}
           </label>
           {tags.length > 0 && (
@@ -167,7 +167,7 @@ export function AgentPresentationDialog({ session, onClose, onSave }: AgentPrese
                 <li
                   key={`${tagKey(tag)}-${index}`}
                   data-agent-tag={tag}
-                  className="inline-flex max-w-full items-center gap-1 rounded-full bg-inset py-0.5 pr-1 pl-2.5 text-[12px] font-medium text-ink shadow-hairline"
+                  className="inline-flex max-w-full items-center gap-1 rounded-full bg-inset py-0.5 pr-1 pl-2.5 text-xs font-medium text-ink shadow-hairline"
                 >
                   <span className="min-w-0 break-all">{tag}</span>
                   <IconButton
@@ -204,7 +204,7 @@ export function AgentPresentationDialog({ session, onClose, onSave }: AgentPrese
             className={`${fieldClass} min-h-18 resize-y py-2 leading-relaxed`}
           />
           <div className="flex items-start justify-between gap-3">
-            <p id={tagsHintId} className="text-[11.5px] leading-relaxed text-ink-3">
+            <p id={tagsHintId} className="text-xs leading-relaxed text-ink-3">
               {t("agent-presentation.tags_hint", { maxTags: TAGS_MAX, maxChars: TAG_MAX })}
             </p>
             <Button tone="secondary" className={actionClass} disabled={busy || !tagDraft.trim()} onClick={addTags}>
@@ -213,7 +213,7 @@ export function AgentPresentationDialog({ session, onClose, onSave }: AgentPrese
           </div>
         </div>
         {error && (
-          <p role="alert" className="text-[12.5px] leading-relaxed text-red">
+          <p role="alert" className="text-sm leading-relaxed text-red">
             {error}
           </p>
         )}
