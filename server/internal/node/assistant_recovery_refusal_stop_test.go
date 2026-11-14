@@ -73,7 +73,8 @@ func TestAssistantRecoversARefusalStopWithoutFallback(t *testing.T) {
 }
 
 // Claude Code's own fallback to a model the gateway does not serve ends in a 404 that stays the user's to fix
-// (model_fallback_unavailable, #2203): what the automatic switch used to leave behind a gateway.
+// (model_fallback_unavailable, #2203): what the automatic switch leaves behind a gateway that does not serve the
+// fallback model where the switch stays on (a provider with no model list, or one whose list names the model anyway).
 func TestAssistantLeavesAnUnservedFallbackToTheUser(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
 	const missing = "API Error: 404 fallback-model is not available"

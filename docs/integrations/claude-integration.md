@@ -85,8 +85,11 @@ is not empty and lacks at least one of the three. The session's model can change
 value per process, so the list must have all three to keep the fallback. IDs compare trimmed, in any case and without a
 trailing context marker such as `[1m]`; a vendor prefix or a date makes another ID, since Claude Code asks for the plain
 one. A provider with no model list, or one whose list has all three, keeps Claude Code's fallback: nothing says the
-gateway lacks them. The three IDs are one constant (`refusalFallbackModels` in `node/launcherenv.go`) with the version
-they were seen in, pinned by a test; a later Claude Code that falls back elsewhere is a one-line change there.
+gateway lacks them. The rule reads the list the provider declares, not what the gateway serves: a provider imported
+from a computer's shell aliases lists only the model its alias names, so it launches with the fallback off even on a
+gateway that serves all three, until its list names them or its `env` sets the variable empty. The three IDs are one
+constant (`refusalFallbackModels` in `node/launcherenv.go`) with the version they were seen in, pinned by a test; a
+later Claude Code that falls back elsewhere is a one-line change there.
 
 The value goes wherever the provider's other variables go, in the process environment and the settings env alike:
 `personad launch` (Agents in herdr and the CLI assistant, and the sub-Agents they run), the generated
@@ -971,8 +974,8 @@ either place turns the fallback off. Persona sets it in both places, so a versio
 environment sees it too.
 
 #7319 settled the default for gateway-shaped managed providers whose Base URL is not Anthropic's own API and whose model
-list lacks one of Claude Code's fallback models: they launch with the fallback off (option B), and
-`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` (empty) in the provider's environment turns it back on
+list lacks one of Claude Code's fallback models: they launch with the fallback off (option B, limited to these
+providers), and `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` (empty) in the provider's environment turns it back on
 ([Refusal fallback behind a gateway](#refusal-fallback-behind-a-gateway-7319)). Every other start keeps Claude Code's
 default, and the options below are still open for those:
 

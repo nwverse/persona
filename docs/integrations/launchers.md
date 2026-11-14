@@ -164,7 +164,8 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
 - **No automatic refusal fallback to a model the gateway lacks** (#7319): a provider of #2455's shape with a Base URL whose host is not Anthropic's own API, and whose `models` list is not empty
   but lacks one of the models Claude Code falls back to (`claude-opus-4-8`, `claude-opus-5`, `claude-sonnet-5` as of Claude Code 2.1.322; compared trimmed, in any case, without `[1m]`), gets
   `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` (both in `personad launch` environment and the settings `env` above, the Agent SDK bridge's too), so a refused reply ends on its refusal instead
-  of moving to a model the gateway does not serve. A provider with no `models` list, or one that lists all three, keeps Claude Code's fallback. The provider's `env` wins either way:
+  of moving to a model the gateway does not serve. A provider with no `models` list, or one that lists all three, keeps Claude Code's fallback. The rule reads the declared list, not what the
+  gateway serves: a provider imported from a computer's aliases lists only the model its alias names, so it has the fallback off until its list names all three or its `env` empties the variable. The provider's `env` wins either way:
   `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` keeps the fallback, `=1` turns it off (`docs/integrations/claude-integration.md`, "Refusal fallback behind a gateway").
 - **Authentication method** (`auth`, 2026-11-04): which variable receives the key. `api_key` (default, used by existing launchers) sets `ANTHROPIC_API_KEY`; Claude Code sends
   `x-api-key`, the only method accepted by the official API. `bearer` sets `ANTHROPIC_AUTH_TOKEN` and sends `Authorization: Bearer`, for compatible gateways accepting only Bearer

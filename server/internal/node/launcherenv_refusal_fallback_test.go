@@ -84,7 +84,9 @@ func TestProviderEnvTurnsRefusalFallbackOffForAnUnservedFallback(t *testing.T) {
 		{"the official API", with(func(l *proto.ManagedLauncher) { l.BaseURL = "https://api.anthropic.com" }), "-"},
 		{"the official API in capitals with /v1", with(func(l *proto.ManagedLauncher) { l.BaseURL = " https://API.Anthropic.com/v1/ " }), "-"},
 		{"no base URL", with(func(l *proto.ManagedLauncher) { l.BaseURL = "" }), "-"},
-		{"a launcher from before #2455", proto.ManagedLauncher{Name: "gw", BaseURL: gw, APIKey: "sk-test-1", Model: "m1"}, "-"},
+		// A launcher from before #2455 has no model list (a list would make it provider-shaped), so the no-list rule,
+		// not the providerShaped guard, is what keeps its environment as it always was.
+		{"a launcher from before #2455, which has no list", proto.ManagedLauncher{Name: "gw", BaseURL: gw, APIKey: "sk-test-1", Model: "m1"}, "-"},
 		{"its own environment empties it", with(func(l *proto.ManagedLauncher) { l.Env = refusalFallbackOff + "=" }), ""},
 		{"its own environment empties it in quotes", with(func(l *proto.ManagedLauncher) { l.Env = "export " + refusalFallbackOff + `=""` }), ""},
 		{"its own environment sets it with all three listed", with(func(l *proto.ManagedLauncher) {
