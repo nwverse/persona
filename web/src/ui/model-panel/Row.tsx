@@ -194,7 +194,7 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
         </div>
       )}
       {row.current && model.effortUnavailable && (
-        <div className="min-w-0 pt-1 pl-[26px] text-[12px] leading-[1.4] text-ink-3">{model.effortUnavailable}</div>
+        <div className="min-w-0 pt-1 pl-[26px] text-label leading-[1.4] text-ink-3">{model.effortUnavailable}</div>
       )}
     </div>
   );

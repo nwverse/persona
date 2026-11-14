@@ -8,7 +8,7 @@ import type { ProviderModel, TestResult } from "../../lib/providers";
 import { effortTitle } from "../../lib/session-actions";
 import { Button } from "../../ui/atoms";
 
-const inputClass = "h-9 w-full rounded-control bg-field px-3 text-[13px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
+const inputClass = "h-9 w-full rounded-control bg-field px-3 text-meta text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
 type ProbeResult = TestResult & { effort?: string };
 type Failure = { kind: "auth" | "model" | "timeout" | "other" | "effort"; detail?: string };
 
@@ -133,7 +133,7 @@ export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, o
   return <>
     {supportsField(purpose, "model") && <div className="flex flex-col gap-2">
       <label className="block">
-        <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.api_models")}</span>
+        <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelconfiguration.api_models")}</span>
         <select className={inputClass} value={draft.model} disabled={disabled} onChange={(event) => change({ model: event.target.value })}>
           <option value="">{t("settings-modelconfiguration.follow_default")}</option>
           {draft.model && !models.some((item) => item.id === draft.model) && <option value={draft.model}>{t("settings-modelconfiguration.model_current", { id: draft.model })}</option>}
@@ -141,41 +141,41 @@ export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, o
         </select>
       </label>
       <label className="block">
-        <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.api_model_id")}</span>
+        <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelconfiguration.api_model_id")}</span>
         <input className={`${inputClass} font-mono`} value={draft.model} disabled={disabled} placeholder={model || t("settings-modelconfiguration.follow_default")}
           spellCheck={false} autoComplete="off" onChange={(event) => change({ model: event.target.value })} />
       </label>
-      <p className="text-[11px] text-ink-3">{t("settings-modelconfiguration.api_model_hint")}</p>
-      {listing && <p role="status" className="text-[11px] text-ink-3">{t("settings-modelconfiguration.api_models_loading")}</p>}
-      {listError && <div role="alert" className="flex items-start gap-2 text-[11px] text-ink-3">
+      <p className="text-caption2 text-ink-3">{t("settings-modelconfiguration.api_model_hint")}</p>
+      {listing && <p role="status" className="text-caption2 text-ink-3">{t("settings-modelconfiguration.api_models_loading")}</p>}
+      {listError && <div role="alert" className="flex items-start gap-2 text-caption2 text-ink-3">
         <span className="min-w-0 break-words">{t("settings-modelconfiguration.list_error", { error: listError })}</span>
         <button type="button" disabled={disabled || listing} onClick={() => setReload((value) => value + 1)} className="shrink-0 whitespace-nowrap font-medium text-accent-ink hover:underline">{t("settings-modelconfiguration.retry")}</button>
       </div>}
     </div>}
     {supportsField(purpose, "effort") && <label className="block">
-      <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.effort")}</span>
+      <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelconfiguration.effort")}</span>
       <select className={inputClass} value={draft.effort} disabled={disabled || (unsupported && !draft.effort)} onChange={(event) => change({ effort: event.target.value })}>
         <option value="">{inheritedEffort ? t("settings-modelconfiguration.api_effort_inherit", { effort: effortLabel(inheritedEffort) }) : t("settings-modelconfiguration.follow_default")}</option>
         {draft.effort && !efforts?.includes(draft.effort) && <option value={draft.effort}>{t("settings-modelconfiguration.model_current", { id: draft.effort })}</option>}
         {efforts.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}
       </select>
-      <span className="mt-1 block text-[11px] text-ink-3">{unsupported ? t("settings-modelconfiguration.api_effort_unsupported")
+      <span className="mt-1 block text-caption2 text-ink-3">{unsupported ? t("settings-modelconfiguration.api_effort_unsupported")
         : reportedEfforts === undefined ? t("settings-modelconfiguration.api_effort_unknown") : t("settings-modelconfiguration.api_effort_hint")}</span>
     </label>}
     <div className="flex flex-col items-start gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <Button tone="secondary" busy={testing} disabled={disabled || !name || unresolvedInheritance} onClick={() => void test()}>{t("settings-modelconfiguration.api_test")}</Button>
-        {testing && <p role="status" className="text-[12px] text-ink-3">{t("settings-modelconfiguration.api_test_running")}</p>}
-      {!testing && !verified && !failure && <p role="status" className="text-[12px] text-ink-3">{t("settings-modelconfiguration.api_test_unverified")}</p>}
-        {verified && <p role="status" className="text-[12px] text-accent-ink">{t("settings-modelconfiguration.api_test_ok", { ms: verified.ms })}</p>}
+        {testing && <p role="status" className="text-label text-ink-3">{t("settings-modelconfiguration.api_test_running")}</p>}
+      {!testing && !verified && !failure && <p role="status" className="text-label text-ink-3">{t("settings-modelconfiguration.api_test_unverified")}</p>}
+        {verified && <p role="status" className="text-label text-accent-ink">{t("settings-modelconfiguration.api_test_ok", { ms: verified.ms })}</p>}
       </div>
-      {!name && <p role="status" className="text-[12px] text-ink-3">{t("settings-modelconfiguration.api_provider_unsupported")}</p>}
-      {unresolvedInheritance && <p role="status" className="text-[12px] text-ink-3">{t("settings-modelconfiguration.api_test_inheritance")}</p>}
-      {failure && <div role="alert" className="text-[12px] text-red">
+      {!name && <p role="status" className="text-label text-ink-3">{t("settings-modelconfiguration.api_provider_unsupported")}</p>}
+      {unresolvedInheritance && <p role="status" className="text-label text-ink-3">{t("settings-modelconfiguration.api_test_inheritance")}</p>}
+      {failure && <div role="alert" className="text-label text-red">
         <p>{t(`settings-modelconfiguration.api_test_${failure.kind}`)}</p>
-        {failure.detail && <p className="mt-1 break-words text-[11px]">{failure.detail}</p>}
+        {failure.detail && <p className="mt-1 break-words text-caption2">{failure.detail}</p>}
       </div>}
-      <p className="text-[11px] leading-relaxed text-ink-3">{t("settings-modelconfiguration.api_test_hint")}</p>
+      <p className="text-caption2 leading-relaxed text-ink-3">{t("settings-modelconfiguration.api_test_hint")}</p>
     </div>
   </>;
 }
