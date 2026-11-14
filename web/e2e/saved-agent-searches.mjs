@@ -62,13 +62,18 @@ class Fixture {
 async function open(browser, fixture, size = "wide", theme = "light", language = "en", textSize = "standard", mode = "normal") {
   const words = await readWords(language, "saved-agent-searches"), paletteWords = await readWords(language, "palette"), atoms = await readWords(language, "ui-atoms");
   words.manage = paletteWords.saved_searches; words.save_current = paletteWords.save_search; words.cancel = (await readWords(language, "common")).cancel;
-  const run = { size, theme, language, textSize, mode, reads: [], writes: [], errors: [], external: [] }; results.runs.push(run);
+  const run = { size, theme, language, textSize, mode, reads: [], writes: [], errors: [], external: [], importFailures: 0, runtimeReads: 0 }; results.runs.push(run);
   const context = await browser.newContext({ viewport: size === "wide" ? { width: 1440, height: 1000 } : { width: 390, height: 844 }, colorScheme: theme, reducedMotion: "reduce", hasTouch: size === "narrow", isMobile: size === "narrow", serviceWorkers: "block" });
   await context.addInitScript(({ theme, language, textSize }) => { localStorage.setItem("persona.token", "synthetic-saved-search-token"); localStorage.setItem("persona.theme", theme); localStorage.setItem("persona.language", language); localStorage.setItem("persona.text-size", textSize); }, { theme, language, textSize });
   await context.route("**/*", async (route) => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname.replace(/^\/api\/v1/, "");
     if (url.origin !== base.origin) { run.external.push(url.pathname); return route.abort(); }
-    if (!url.pathname.startsWith("/api/")) return route.continue();
+    if (!url.pathname.startsWith("/api/")) {
+      if (mode === "import-once" && /\/SavedSearchesDialog-[^/]+\.js$/.test(url.pathname) && !run.importFailures) {
+        run.importFailures++; return route.abort("failed");
+      }
+      return route.continue();
+    }
     try {
       if (path === PATH) {
         const manager = request.headers()["x-persona-manager"];
@@ -83,6 +88,13 @@ async function open(browser, fixture, size = "wide", theme = "light", language =
         await route.fulfill(response); if (response.status === 200) fixture.push(manager); return;
       }
       assert(["GET", "HEAD"].includes(request.method()), `No Agent send, start, stop, file or Git writes: ${path}`);
+      if (mode === "import-once" && path === "/sessions" && url.searchParams.has("search")) {
+        run.runtimeReads++;
+        assert(!url.searchParams.has("manager"), "Runtime search remains hub-wide");
+        const remote = { ...sessions[1], session_id: "remote-working", title: "Remote working task" };
+        return route.fulfill({ json: { sessions: [remote], revision: "recovered-query", total: 1, has_more: false,
+          search_hits: { [JSON.stringify([remote.machine_id, remote.session_id])]: { score: 105 } } } });
+      }
       const data = {
         "/machines": { machines }, "/sessions": { sessions }, "/interactions": { interactions: [] }, "/assistant": { machine_id: "laptop", conversations: [], tasks: [], memory: [] },
         "/todos": { todos: [] }, "/agents/sessions": { sessions: [] }, "/agents/prefs": {}, "/mutes": { spaces: [], sessions: [], allowed: [] }, "/pins": { spaces: [], sessions: [], sections: [] },
@@ -95,12 +107,13 @@ async function open(browser, fixture, size = "wide", theme = "light", language =
   const ownSockets = new Set();
   await context.routeWebSocket("**/api/v1/ws**", (socket) => {
     fixture.sockets.add(socket); ownSockets.add(socket);
-    socket.send(JSON.stringify({ type: "hello", server_version: "synthetic-saved-search", hub_name: "Example hub", protocol: 1, features: ["managers"] }));
+    socket.send(JSON.stringify({ type: "hello", server_version: "synthetic-saved-search", hub_name: "Example hub", protocol: 1, features: mode === "import-once" ? ["managers", "sessions_search", "saved_agent_searches"] : ["managers"] }));
     socket.onMessage((raw) => { const message = JSON.parse(String(raw)); if (message.type === "ping") socket.send(JSON.stringify({ type: "pong", id: message.id })); else assert.equal(message.type, "client_hello", "No Agent commands over WebSocket"); });
   });
   const page = await context.newPage(); page.setDefaultTimeout(12_000);
   page.on("pageerror", (error) => run.errors.push(error.message));
-  page.on("console", (message) => { if (message.type() === "error" && !/Failed to load resource: the server responded with a status of (500|503|409)/.test(message.text())) run.errors.push(message.text()); });
+  page.on("console", (message) => { if (message.type() === "error" && !/Failed to load resource: the server responded with a status of (500|503|409)/.test(message.text())
+      && !(mode === "import-once" && run.importFailures === 1 && /Failed to load resource: net::ERR_FAILED/.test(message.text()))) run.errors.push(message.text()); });
   await page.goto(`${base.origin}/workspace-board`); await page.locator("main").waitFor(); await page.waitForTimeout(200);
   assert.equal(run.reads.length, 0, "No saved-query reads before opening search");
   const dialog = () => page.getByRole("dialog");
@@ -246,12 +259,31 @@ async function scopeChange(browser) {
   } catch (error) { await x.capture(error); } finally { await x.dispose(); }
 }
 
+async function importRecovery(browser) {
+  const x = await open(browser, new Fixture(), "wide", "light", "en", "standard", "import-once");
+  try {
+    await x.palette(); await x.dialog().getByRole("combobox").fill("state:working");
+    await x.dialog().getByRole("alert").filter({ hasText: x.paletteWords.saved_searches_failed }).waitFor();
+    assert.equal(x.run.importFailures, 1, "The shared search-tools chunk failed once");
+    assert.equal(x.run.reads.length, 0, "No saved-query request ran before its tools loaded");
+    assert.equal(x.run.runtimeReads, 0, "No runtime query ran before its tools loaded");
+    await x.shot("import-failed");
+    await x.dialog().getByRole("button", { name: x.paletteWords.saved_searches_retry, exact: true }).click();
+    await x.dialog().getByRole("option").filter({ hasText: "Remote working task" }).waitFor();
+    assert(x.run.reads.length > 0 && x.run.runtimeReads > 0, "Explicit import retry restores both saved and runtime readers");
+    await x.shot("import-recovered");
+    await x.manage(); await x.row(sid(1)).waitFor();
+    assert.equal(x.run.writes.length, 0, "Recovering search tools never performs a mutation");
+    x.healthy(); results.checks.push("Shared search-tool import failure: explicit retry restores saved definitions and an unloaded runtime match without mutations");
+  } catch (error) { await x.capture(error); } finally { await x.dispose(); }
+}
+
 let browser;
 try {
   const i = args.indexOf("--chromium"); browser = await chromium.launch({ ...(i >= 0 ? { executablePath: args[i + 1] } : { channel: "chrome" }), headless: true });
   for (const theme of ["light", "dark"]) for (const size of ["wide", "narrow"]) await workflow(browser, size, theme, "en", "standard", size === "wide" && theme === "light");
   for (const [language, textSize] of [["en", "large"], ["zh-Hans", "standard"], ["ja", "standard"]]) await workflow(browser, "narrow", "dark", language, textSize);
-  await conflictAndFailure(browser); await boundaries(browser); await scopeChange(browser); results.status = "passed";
+  await conflictAndFailure(browser); await boundaries(browser); await scopeChange(browser); await importRecovery(browser); results.status = "passed";
 } catch (error) { results.status = "failed"; results.failure = error.stack; process.exitCode = 1; }
 finally { clearTimeout(watchdog); await browser?.close(); await writeFile(join(output, "results.json"), `${JSON.stringify(results, null, 2)}\n`); }
 console.log(`${results.status === "passed" ? "PASS" : "FAIL"} saved Agent searches acceptance: ${results.checks.length} scenarios, ${results.screenshots.length} screenshots`);
