@@ -407,7 +407,7 @@ internal fun InteractionForm(
                     DecisionOption(numberedOption("${index + 1}", display.text), { act(AnswerAction.PickOption, draft.copy(optionIndex = index)) },
                         detail = option.description, recommended = display.recommended,
                         selected = option.label in draft.picks[question.question].orEmpty(),
-                        enabled = editable && (!stoppedWork || (!question.multiSelect && option.action == "defer")),
+                        enabled = editable && (!stoppedWork || question.isDeferChoice(option.label)),
                         multiSelect = question.multiSelect, position = index + 1 to question.options.size, fullText = full)
                 }
                 var otherOpen by rememberSaveable(interaction.id, question.question) { mutableStateOf(false) }
@@ -549,19 +549,22 @@ private fun CommandAskContent(ask: CommandAsk, now: Instant) {
 private val Interaction.isManagerWorkCard: Boolean
     get() = kind == "question" && toolName == "persona_triage"
 
+private fun Question.isDeferChoice(label: String): Boolean =
+    !multiSelect && options.any { it.label == label && it.action == "defer" }
+
 /** The stopped-Agent subset of Web's workCardLocalResolution: bare dismiss, or answers made only from explicit,
  * single-choice defer options. Missing actions from an older hub never turn into local answers. */
 private fun Interaction.stoppedWorkAnswerAllowed(action: AnswerAction, draft: AnswerDraft): Boolean {
     val questions = questions.orEmpty()
     fun deferredPick(question: Question): Boolean {
-        if (question.multiSelect || !draft.other[question.question].isNullOrBlank()) return false
+        if (!draft.other[question.question].isNullOrBlank()) return false
         val picks = draft.picks[question.question].orEmpty()
-        return picks.isNotEmpty() && picks.all { label -> question.options.any { it.label == label && it.action == "defer" } }
+        return picks.isNotEmpty() && picks.all(question::isDeferChoice)
     }
     return when (action) {
         AnswerAction.Dismiss -> true
         AnswerAction.PickOption -> questions.getOrNull(draft.page)?.let { question ->
-            !question.multiSelect && question.options.getOrNull(draft.optionIndex)?.action == "defer"
+            question.options.getOrNull(draft.optionIndex)?.let { question.isDeferChoice(it.label) } == true
         } == true
         AnswerAction.Advance -> questions.getOrNull(draft.page)?.let(::deferredPick) == true
         AnswerAction.Submit -> questions.isNotEmpty() && questions.all(::deferredPick)
@@ -578,9 +581,7 @@ private fun Interaction.stoppedWorkResultAllowed(result: AnswerResult): Boolean 
     if (answers.isEmpty() || resolution != Resolution(answers = answers)) return false
     val questions = questions.orEmpty()
     return answers.all { (questionText, answer) ->
-        questions.firstOrNull { it.question == questionText }?.let { question ->
-            !question.multiSelect && question.options.any { it.label == answer && it.action == "defer" }
-        } == true
+        questions.firstOrNull { it.question == questionText }?.isDeferChoice(answer) == true
     }
 }
 

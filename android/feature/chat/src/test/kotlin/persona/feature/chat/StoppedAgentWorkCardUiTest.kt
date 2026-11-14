@@ -167,6 +167,25 @@ class StoppedAgentWorkCardUiTest {
         assertEquals(listOf(Resolution(answers = mapOf(firstPrompt to "Leave it", secondPrompt to "Leave it"))), sent)
     }
 
+    @Test fun stoppedWorkUnansweredPageMovesForwardAfterDeferPick() {
+        val sent = mutableListOf<Resolution>()
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                InteractionPanel(listOf(multiWork), null, 600.dp, null, emptySet(), { _, resolution -> sent += resolution },
+                    null, {}, blockedReason = "The Agent has stopped")
+            }
+        }
+        val next = resources.getString(R.string.chat_question_next)
+        val submit = resources.getString(R.string.chat_question_submit)
+        rule.onNodeWithText(next).assertIsNotEnabled()
+        rule.onNodeWithText("2. Leave it").assertIsEnabled().performClick()
+        rule.onNodeWithText(secondPrompt).assertIsDisplayed()
+        assertTrue("A single-choice defer pick moves forward without resolving", sent.isEmpty())
+        rule.onNodeWithText("2. Leave it").assertIsEnabled().performClick()
+        rule.onNodeWithText(submit).assertIsEnabled().performClick()
+        assertEquals(listOf(Resolution(answers = mapOf(firstPrompt to "Leave it", secondPrompt to "Leave it"))), sent)
+    }
+
     @Test fun runningWorkAdvanceStillSubmitsCompleteAnswerSet() {
         val sent = mutableListOf<Resolution>()
         rule.setContent {
