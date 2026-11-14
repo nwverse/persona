@@ -16,6 +16,7 @@ import { hubPartition } from "./sessions.js";
 import { installSmokeCapture } from "./smoke.js";
 import { installAutoUpdate } from "./updater.js";
 import { desktopPresence } from "./presence.js";
+import { NotchIsland } from "./island.js";
 
 installSmokeCapture();
 
@@ -27,6 +28,14 @@ let setupWindow: BrowserWindow | undefined;
 let screenLocked = false;
 let presenceTimer: ReturnType<typeof setInterval> | undefined;
 const store = () => JSONStore.inUserData(app.getPath("userData"));
+// The island at the MacBook notch (#7669): off until the person turns it on; a clicked row opens as a notification does.
+const island = new NotchIsland(route => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send("desktop:notification-open", route);
+  } else void showMain();
+});
 
 function navigateFromDeepLink(raw: string): void {
   const link = parseDeepLink(raw);
@@ -119,6 +128,15 @@ async function showMain(): Promise<void> {
   const removeIPC = installDesktopIPC(current, {
     hub: () => hub,
     presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
+    island: {
+      status: () => island.status(),
+      set: async enabled => {
+        const status = island.setEnabled(enabled);
+        await store().update({ island: status.enabled });
+        return status;
+      },
+      state: value => island.setState(value),
+    },
     notifications: new DesktopNotifications(route => {
       current.show();
       current.focus();
@@ -218,8 +236,9 @@ else {
       changed: state => { updateItems = updateMenu(state, strings); tray?.setUpdate(updateItems); },
       prepareQuit: () => { quitting = true; },
     });
-    const saved = await store().read<{ hub?: string }>();
+    const saved = await store().read<{ hub?: string; island?: boolean }>();
     try { hub = parseHubAddress(process.env.PERSONA_HUB_URL ?? saved?.hub ?? ""); } catch { hub = undefined; }
+    if (saved?.island === true) island.setEnabled(true);
     for (const scheme of ["persona", "jarvis"]) {
       if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
     }

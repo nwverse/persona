@@ -4,6 +4,7 @@ import type { BrowserWindow } from "electron";
 import { inHub } from "./urls.js";
 import { notificationRoute } from "./contract.cjs";
 import type { HubAddress } from "./urls.js";
+import type { IslandStatus } from "./island-model.js";
 
 function text(value: unknown, maximum: number): string {
   return typeof value === "string" ? value.trim().slice(0, maximum) : "";
@@ -51,14 +52,21 @@ export function installDesktopIPC(window: BrowserWindow, deps: {
   readonly hub: () => HubAddress | undefined;
   readonly notifications: DesktopNotifications;
   readonly presence: () => { active: boolean; notifies: boolean };
+  /** The island at the MacBook notch (#7669, island.ts): its status, turning it on or off (kept), the web's state. */
+  readonly island: {
+    readonly status: () => IslandStatus;
+    readonly set: (enabled: boolean) => Promise<IslandStatus>;
+    readonly state: (value: unknown) => void;
+  };
 }): () => void {
   const authorized = (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean => {
     const hub = deps.hub();
     return event.sender === window.webContents && !window.isDestroyed() && event.senderFrame === event.sender.mainFrame && !!hub && inHub(hub, event.sender.getURL());
   };
-  const names = ["desktop:notification-permission", "desktop:badge", "desktop:notify", "desktop:notifications-clear", "desktop:notification-close", "desktop:presence"];
+  const names = ["desktop:notification-permission", "desktop:badge", "desktop:notify", "desktop:notifications-clear", "desktop:notification-close", "desktop:presence", "desktop:island-state"];
+  const handlers = ["desktop:login-get", "desktop:login-set", "desktop:island-get", "desktop:island-set"];
   for (const name of names) ipcMain.removeAllListeners(name);
-  for (const name of ["desktop:login-get", "desktop:login-set"]) ipcMain.removeHandler(name);
+  for (const name of handlers) ipcMain.removeHandler(name);
   ipcMain.on("desktop:notification-permission", event => {
     event.returnValue = authorized(event) && Notification.isSupported() ? "granted" : "denied";
   });
@@ -92,9 +100,18 @@ export function installDesktopIPC(window: BrowserWindow, deps: {
     const settings = app.getLoginItemSettings();
     return { enabled: settings.openAtLogin, requiresApproval: process.platform === "darwin" && settings.status === "requires-approval" };
   });
+  ipcMain.handle("desktop:island-get", event => (authorized(event) ? deps.island.status() : { supported: false, enabled: false }));
+  ipcMain.handle("desktop:island-set", (event, enabled: unknown) => {
+    if (!authorized(event)) return { supported: false, enabled: false };
+    if (typeof enabled !== "boolean") throw new TypeError("The island expects a boolean");
+    return deps.island.set(enabled);
+  });
+  ipcMain.on("desktop:island-state", (event, value: unknown) => {
+    if (authorized(event)) deps.island.state(value);
+  });
   return () => {
     for (const name of names) ipcMain.removeAllListeners(name);
-    for (const name of ["desktop:login-get", "desktop:login-set"]) ipcMain.removeHandler(name);
+    for (const name of handlers) ipcMain.removeHandler(name);
     deps.notifications.closeAll();
   };
 }
