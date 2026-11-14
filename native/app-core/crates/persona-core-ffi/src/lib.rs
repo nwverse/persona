@@ -299,10 +299,10 @@ pub unsafe extern "C" fn persona_core_project_sort(input: *const u8, length: usi
         let Ok(input_str) = std::str::from_utf8(input) else {
             return PersonaCoreBytes::empty();
         };
-        let Ok(input) = serde_json::from_str::<persona_core::sort::Input>(input_str) else {
+        let Ok(input) = serde_json::from_str::<persona_core_domain::sort::Input>(input_str) else {
             return PersonaCoreBytes::empty();
         };
-        let projection = persona_core::sort::project(&input);
+        let projection = persona_core_domain::sort::project(&input);
         let Ok(json) = serde_json::to_string(&projection) else {
             return PersonaCoreBytes::empty();
         };

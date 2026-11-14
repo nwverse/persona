@@ -208,8 +208,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
 ) -> JString<'a> {
     catch_unwind(AssertUnwindSafe(|| {
         let input: String = env.get_string(&input).ok()?.into();
-        let input: persona_core::sort::Input = serde_json::from_str(&input).ok()?;
-        let projection = persona_core::sort::project(&input);
+        let input: persona_core_domain::sort::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::sort::project(&input);
         let json = serde_json::to_string(&projection).ok()?;
         env.new_string(json).ok()
     }))
