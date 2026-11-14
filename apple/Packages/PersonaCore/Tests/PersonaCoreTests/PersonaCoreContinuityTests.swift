@@ -16,6 +16,8 @@ final class PersonaCoreContinuityTests: XCTestCase {
             // The version is global but does not identify a chat. This smoke test uses the drain below for each chat;
             // two callbacks before either drain proves the old global wake loss cannot reappear.
             changes.withLock { $0["wake", default: []].append(version) }
+        }, changedChat: { chat, version in
+            changes.withLock { $0["wake", default: []].append(version) }
         }, run: { _ in }))
         for chat in ["a", "b"] {
             try client.dispatch(.openChat(chat: chat, snapshot: ChatSnapshot(
@@ -66,7 +68,20 @@ final class PersonaCoreContinuityTests: XCTestCase {
         ))))
         try client.flush()
         XCTAssertEqual(wakes.withLock { $0.last?.0 }, "b")
-        XCTAssertEqual(try client.drain(chat: "b").ops.count, 1)
+        XCTAssertEqual(try client.drain(chat: "b").ops.count, 2)
+        client.close()
+    }
+
+    func testLegacyChangedCallbackStillRunsWhenTargetedWakeIsAbsent() throws {
+        let versions = Mutex<[UInt64]>([])
+        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changed: { version in
+            versions.withLock { $0.append(version) }
+        }, run: { _ in }))
+        try client.dispatch(.openChat(chat: "legacy", snapshot: ChatSnapshot(
+            itemsJson: "[]", history: nil, covered: 0, hasMore: nil, loadedOnce: false
+        )))
+        try client.flush()
+        XCTAssertEqual(versions.withLock { $0.count }, 1)
         client.close()
     }
 
