@@ -89,6 +89,89 @@ class RepairIntegrationTests(unittest.TestCase):
                 pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.base, "failure", {"profile": "commands", "commands": [["true"]]})
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
 
+    # #7840: main moves every few minutes and a verification takes longer; a repair follows it when it only moved on.
+    def push_main(self, name, parent=None):
+        """A new commit on origin's main, on top of `parent` (a rewrite) or of its current tip; the checkout stays put."""
+        branch = self.git("rev-parse", "--abbrev-ref", "HEAD")
+        self.git("fetch", "-q", "origin", "main")
+        self.git("checkout", "-q", "--detach", parent or "FETCH_HEAD")
+        (self.repo / (name + ".txt")).write_text(name + "\n")
+        self.git("add", name + ".txt")
+        self.git("commit", "-qm", name)
+        self.git("push", "-q", "--force", "origin", "HEAD:refs/heads/main")
+        tip = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", branch)
+        return tip
+
+    def passthrough(self):
+        return patch.object(pr_watch_repair, "checked", side_effect=lambda argv, **kwargs:
+                            self.git(*argv[1:], cwd=kwargs.get("cwd")) if argv[0] == "git" else "")
+
+    def test_merge_follows_main_that_moved_after_the_pr_was_read(self):
+        newer = self.push_main("newer")
+        updated = pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main)
+        self.assertEqual(self.git("show", "-s", "--format=%P", updated).split(), [self.head, newer])
+        self.assertEqual(pr_watch_repair.merged_main(str(self.repo), updated), newer)
+
+    def test_a_pr_up_to_date_with_its_verified_base_is_not_merged_when_only_main_moved(self):
+        self.git("merge", "-q", "--no-edit", self.main)
+        head = self.git("rev-parse", "HEAD")
+        self.push_main("newer")
+        self.assertIsNone(pr_watch_repair.update_branch_with_main("example/one", dict(self.pr, headRefOid=head),
+                                                                  str(self.repo), self.main))
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+
+    def test_a_rewritten_main_stops_the_merge(self):
+        self.push_main("rewritten", parent=self.base)
+        with self.assertRaisesRegex(pr_watch_repair.WatchError, "main was rewritten"):
+            pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main)
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
+
+    def fork_merge(self):
+        pr = dict(self.pr, isCrossRepository=True)
+        updated = pr_watch_repair.update_branch_with_main("example/one", pr, str(self.repo), self.main)
+        base = pr_watch_repair.merged_main(str(self.repo), updated)
+        return pr, dict(pr, headRefOid=updated, baseRefOid=base), base
+
+    def test_fork_continuation_follows_main_moving_during_verification(self):
+        pr, merged, base = self.fork_merge()
+        later = self.push_main("later")
+        snapshots = {7: dict(pr, baseRefOid=later), 8: dict(merged, number=8)}
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=lambda argv, **kwargs: [] if argv[:2] == ["pr", "list"] else {"number": 8}):
+            number, _ = pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure",
+                                                               {"profile": "commands", "commands": [["true"]]},
+                                                               allow_merge_only=True, original_pr=pr)
+        self.assertEqual(number, 8)
+        branch = "refs/heads/pr-watch/repair-7-" + merged["headRefOid"][:12]
+        self.assertEqual(self.git("ls-remote", "origin", branch).split()[0], merged["headRefOid"])
+
+    def test_fork_continuation_refuses_a_main_rewritten_before_the_push(self):
+        pr, merged, base = self.fork_merge()
+        rewritten = self.push_main("rewritten", parent=self.base)
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(pr, baseRefOid=rewritten)), \
+                patch.object(pr_watch_repair, "gh_json") as gh:
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "base moved before the repair push"):
+                pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure",
+                                                       {"profile": "commands", "commands": [["true"]]},
+                                                       allow_merge_only=True, original_pr=pr)
+        gh.assert_not_called()
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
+
+    def test_a_model_repair_still_refuses_a_moved_base(self):
+        (self.repo / "repair.txt").write_text("repair\n")
+        self.git("add", "repair.txt")
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(self.pr, baseRefOid="d" * 40)):
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "head/base moved"):
+                pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.main, "failure",
+                                                       {"profile": "commands", "commands": [["true"]]})
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
+
 
 if __name__ == "__main__":
     unittest.main()

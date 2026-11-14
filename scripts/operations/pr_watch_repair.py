@@ -169,20 +169,42 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
         run(["git", "worktree", "remove", "--force", str(base_worktree)], cwd=git_root or worktree, timeout=90)
 
 
+def contains(worktree, ancestor, descendant):
+    return run(["git", "merge-base", "--is-ancestor", ancestor, descendant], cwd=worktree).returncode == 0
+
+
+def fetch_current_main(pr, worktree, base):
+    """The base branch's tip now. Main moves every few minutes and a verification takes longer (#7840), so a repair
+    merges the main it fetched as long as that still contains `base`, the one read before verifying; a rewritten main
+    stops it."""
+    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
+    tip = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip()
+    if tip != base and not contains(worktree, base, tip):
+        raise WatchError("main was rewritten while preparing the repair")
+    return tip
+
+
+def merged_main(worktree, head):
+    """The main a repair merge brought in (its second parent): the base the merged head is verified and reviewed on."""
+    parents = checked(["git", "show", "-s", "--format=%P", head], cwd=worktree).split()
+    if len(parents) != 2:
+        raise WatchError("repair head is not a merge of main")
+    return parents[1]
+
+
 def merge_base_in_isolation(pr, worktree, base):
-    """Merge main locally for either branch type without touching a fork."""
+    """Merge current main locally for either branch type without touching a fork."""
     if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
         raise WatchError("repair worktree is not at the reviewed PR head")
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
         raise WatchError("repair worktree is not clean before the base merge")
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
-    if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
-        raise WatchError("main moved while preparing the repair")
-    if run(["git", "merge-base", "--is-ancestor", base, pr["headRefOid"]], cwd=worktree).returncode == 0:
+    main = fetch_current_main(pr, worktree, base)
+    # Whether the PR is behind is judged on the base it was verified on; what it is brought up to is current main.
+    if contains(worktree, base, pr["headRefOid"]):
         return False
     identity = ["-c", "user.name=" + checked(["git", "config", "user.name"], cwd=worktree).strip(),
                 "-c", "user.email=" + checked(["git", "config", "user.email"], cwd=worktree).strip()]
-    result = run(["git"] + identity + ["merge", "--no-ff", "--no-edit", base], cwd=worktree, timeout=180)
+    result = run(["git"] + identity + ["merge", "--no-ff", "--no-edit", main], cwd=worktree, timeout=180)
     if result.returncode:
         raise WatchError("cannot merge current main automatically: " + bounded(result.stderr or result.stdout, 2000))
     return True
@@ -196,18 +218,8 @@ def update_branch_with_main(repo, pr, worktree, base):
         return None
     if not pr.get("headRefName") or pr["headRefName"].startswith("-"):
         raise WatchError("PR branch name is unsafe for an authorized update")
-    if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
-        raise WatchError("repair worktree is not at the reviewed PR head")
-    if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
-        raise WatchError("repair worktree is not clean before the base merge")
-    checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
-    if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
-        raise WatchError("main moved while preparing the repair")
-    if not pr.get("isCrossRepository"):
-        if run(["git", "merge-base", "--is-ancestor", base, pr["headRefOid"]], cwd=worktree).returncode == 0:
-            return None
-        if not merge_base_in_isolation(pr, worktree, base):
-            return None
+    if not merge_base_in_isolation(pr, worktree, base):
+        return None
     return checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
 
 
@@ -300,14 +312,24 @@ def repair_with_model(repo, pr, worktree, failure, config):
         return diff
 
 
+def moved(latest, expected, follows_main):
+    """The PR moved under a repair: its head always counts; its base counts unless the repair follows main."""
+    return latest["headRefOid"] != expected["headRefOid"] or (not follows_main and latest["baseRefOid"] != expected["baseRefOid"])
+
+
 def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False, original_pr=None):
-    """Run relevant checks and privacy before pushing an ordinary repair commit."""
+    """Run relevant checks and privacy before pushing an ordinary repair commit.
+
+    A merge of main into a fork (`allow_merge_only` with `original_pr`) follows main (#7840): main may move on from
+    `base`, the main it merged, while the merged head is verified, as long as it still contains it. The continuation PR
+    is reviewed again on its own head; the PR's head must still be the one merged."""
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
+    follows_main = allow_merge_only and original_pr is not None
     identity_pr = original_pr or pr
     if identity_pr is not None:
         latest = pr_snapshot(repo, identity_pr["number"])
-        if latest["headRefOid"] != identity_pr["headRefOid"] or latest["baseRefOid"] != identity_pr["baseRefOid"]:
+        if moved(latest, identity_pr, follows_main):
             raise WatchError("PR head/base moved during automatic repair; nothing was pushed")
     scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
     checked(["git", "diff", "--check"], cwd=worktree)
@@ -348,16 +370,17 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     identity_pr = original_pr or pr
     if identity_pr is not None:
         latest = pr_snapshot(repo, identity_pr["number"])
-        if latest["headRefOid"] != identity_pr["headRefOid"] or latest["baseRefOid"] != identity_pr["baseRefOid"]:
+        if moved(latest, identity_pr, follows_main):
             raise WatchError("PR head/base moved during automatic repair; nothing was pushed")
     head = repaired_pr["headRefOid"]
     branch = "pr-watch/repair-%s-%s" % (pr["number"], head[:12]) if pr.get("isCrossRepository") else pr["headRefName"]
     if identity_pr is not None:
         latest = pr_snapshot(repo, identity_pr["number"])
-        if latest["headRefOid"] != identity_pr["headRefOid"] or latest["baseRefOid"] != identity_pr["baseRefOid"]:
+        if moved(latest, identity_pr, follows_main):
             raise WatchError("PR head/base moved before the repair push was accepted")
     checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["baseRefName"]], cwd=worktree, timeout=180)
-    if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != base:
+    tip = checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip()
+    if tip != base and not (follows_main and contains(worktree, base, tip)):
         raise WatchError("base moved before the repair push; nothing was pushed")
     if pr.get("isCrossRepository"):
         existing = gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number"]) or []
