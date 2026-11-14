@@ -120,7 +120,7 @@ class HomeNavigationShotsTest {
         val levels = listOf("home-level-centered-full", "home-level-centered-compact",
             "home-level-gap-full", "home-level-gap-compact", "home-level-stacked")
         val rows = mutableListOf("style\ttrailing\twidth_dp\tfont_scale\tlevel\tleft_dp\tright_dp")
-        for (s in AppStyle.entries) for (actions in 1..2) for (scale in listOf(1f, 1.45f, 2f)) for (w in listOf(320, 360, 384, 393, 400, 411)) {
+        for (s in AppStyle.entries) for (actions in 1..2) for (scale in listOf(1f, 1.45f, 2f)) for (w in listOf(200, 240, 280, 320, 360, 384, 393, 400, 411)) {
             rule.runOnIdle { style = s; trailingActions = actions; fontScale = scale; paneWidth = w.dp }
             rule.waitForIdle()
             val level = levels.firstOrNull { tag ->
@@ -129,6 +129,6 @@ class HomeNavigationShotsTest {
             val bounds = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
             rows += "${s.name.lowercase()}\t$actions\t$w\t$scale\t$level\t${bounds.left.value}\t${bounds.right.value}"
         }
-        File("build/home-navigation-layout-table-v2.tsv").writeText(rows.joinToString("\n") + "\n")
+        File("build/home-navigation-layout-table-v3.tsv").writeText(rows.joinToString("\n") + "\n")
     }
 }

@@ -267,8 +267,11 @@ fun HomeNavigation(
     val density = androidx.compose.ui.platform.LocalDensity.current
     val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
     if (PersonaTheme.style != AppStyle.Glass) {
-        val switcher: @Composable (Boolean) -> Unit = { compact ->
-            Box(Modifier.width(IntrinsicSize.Max)) {
+        val switcher: @Composable (Boolean, Boolean) -> Unit = { compact, centered ->
+            Box(
+                Modifier.width(IntrinsicSize.Max),
+                contentAlignment = if (centered) Alignment.Center else Alignment.CenterStart,
+            ) {
                 JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
                     items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { index ->
                         val key = items[index].key
@@ -287,9 +290,9 @@ fun HomeNavigation(
             hasEndAccessory = false,
             leading = leading,
             trailing = trailing,
-            fullSwitcher = { switcher(false) },
-            compactSwitcher = { switcher(true) },
-            stackedSwitcher = { switcher(true) },
+            fullSwitcher = { switcher(false, false) },
+            compactSwitcher = { switcher(true, false) },
+            stackedSwitcher = { switcher(true, true) },
         )
         return
     }
@@ -319,9 +322,10 @@ fun HomeNavigation(
         },
         stackedSwitcher = { available ->
             val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
-                .coerceAtLeast(0.dp)
+                .coerceIn(0.dp, segmentWidth)
             GlassHomeSwitcher(items, selected, fittedWidth, scale,
-                textWidth = HomeTokens.segmentWidth * scale, onClick = choose)
+                textWidth = minOf(HomeTokens.segmentWidth * scale, fittedWidth),
+                narrowText = fittedWidth < segmentWidth, onClick = choose)
         },
     )
 }
@@ -439,6 +443,7 @@ private fun GlassHomeSwitcher(
     segmentWidth: Dp,
     scale: Float,
     textWidth: Dp = segmentWidth,
+    narrowText: Boolean = false,
     surfacePadding: Dp = Tokens.Space.xs,
     badgeOffset: Dp = Tokens.Space.s,
     modifier: Modifier = Modifier,
@@ -456,7 +461,18 @@ private fun GlassHomeSwitcher(
                 val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
                 val available = with(density) { textWidth.toPx() }
                 val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
-                val fittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+                val baseFittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+                val fittedSize = if (narrowText) {
+                    var candidate = baseFittedSize
+                    while (candidate.value > Tokens.Type.Label.size.value) {
+                        val result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
+                        if (!result.isLineEllipsized(0)) break
+                        candidate = maxOf(Tokens.Type.Label.size.value, candidate.value * 0.95f).sp
+                    }
+                    candidate
+                } else baseFittedSize
                 Box(Modifier.width(segmentWidth).height(HomeTokens.segmentHeight * scale)
                     .clip(CircleShape).background(if (chosen) {
                         if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight

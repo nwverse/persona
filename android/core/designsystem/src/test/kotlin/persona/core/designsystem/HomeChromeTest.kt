@@ -371,6 +371,131 @@ class HomeChromeTest {
         }
     }
 
+    @Test fun stackedSwitchersAreCenteredWithShortAndLongLabels() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var assistant by mutableStateOf("Assistant")
+        var width by mutableStateOf(200.dp)
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = 1.45f)) {
+                PersonaTheme(style = style, reduceMotion = true) {
+                    Box(Modifier.width(width).height(200.dp).testTag("pane")) {
+                        HomeNavigation(
+                            items = listOf(
+                                NavItem("assistant", assistant, PhIcons.ChatCircle),
+                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                            ),
+                            selected = "agents", onSelect = {},
+                            leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                            trailing = {
+                                JIconButton(PhIcons.NotePencil, "New session", {})
+                                JIconButton(PersonaIcons.moreMenu, "List options", {})
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (label in listOf("Assistant", "助手")) {
+            val widths = if (s == AppStyle.Brief && label == "助手") listOf(200.dp, 320.dp) else listOf(200.dp, 360.dp)
+            for (w in widths) {
+            rule.runOnIdle { style = s; assistant = label; width = w }
+            rule.waitForIdle()
+            rule.onNodeWithTag("home-level-stacked").assertExists("expected stacked layout: $s $label $w")
+            val pane = rule.onNodeWithTag("pane").getBoundsInRoot()
+            val switcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            val paneCenter = (pane.left.value + pane.right.value) / 2
+            val switcherCenter = (switcher.left.value + switcher.right.value) / 2
+            assertTrue("$s $label $w stacked center is off by ${switcherCenter - paneCenter}dp",
+                kotlin.math.abs(switcherCenter - paneCenter) <= 0.51f)
+            }
+        }
+    }
+
+    @Test fun glassStackedCapsuleDoesNotExceedMainFullWidth() {
+        var width by mutableStateOf(200.dp)
+        var fontScale by mutableStateOf(1.3f)
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
+                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                    Box(Modifier.width(width).height(200.dp).testTag("pane")) {
+                        HomeNavigation(
+                            items = listOf(
+                                NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                            ),
+                            selected = "agents", onSelect = {},
+                            leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                            trailing = {
+                                JIconButton(PhIcons.NotePencil, "New session", {})
+                                JIconButton(PersonaIcons.moreMenu, "List options", {})
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        for (w in listOf(200.dp, 240.dp, 280.dp, 320.dp, 360.dp, 411.dp)) for (scale in listOf(1.3f, 1.45f, 2f)) {
+            rule.runOnIdle { width = w; fontScale = scale }
+            rule.waitForIdle()
+            rule.onNodeWithTag("home-level-stacked").assertExists()
+            val switcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            val scale = (scale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
+            val mainSegment = HomeTokens.segmentWidth * scale + if (fontScale > 1f) Tokens.Space.s else 0.dp
+            val fullWidth = mainSegment * 2 + Tokens.Space.xs * 2
+            assertTrue("stacked capsule exceeds main full width: $w / $fontScale / $switcher / $fullWidth",
+                switcher.right - switcher.left <= fullWidth + 1.dp)
+            if (w >= 320.dp) assertEquals("stacked capsule must equal full width when it fits: $w / $fontScale",
+                fullWidth.value, (switcher.right - switcher.left).value, 1f)
+        }
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-xhdpi")
+    @Test fun narrowLabelEllipsisMatchesPublishedRevision() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var width by mutableStateOf(200.dp)
+        var fontScale by mutableStateOf(1.3f)
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
+                PersonaTheme(style = style, reduceMotion = true) {
+                    Box(Modifier.width(width).height(220.dp)) {
+                        HomeNavigation(
+                            items = listOf(
+                                NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                            ),
+                            selected = "agents", onSelect = {},
+                            leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                            trailing = {
+                                JIconButton(PhIcons.NotePencil, "New session", {})
+                                JIconButton(PersonaIcons.moreMenu, "List options", {})
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (w in listOf(200.dp, 240.dp, 280.dp)) for (scale in listOf(1.3f, 1.45f, 2f)) {
+            rule.runOnIdle { style = s; width = w; fontScale = scale }
+            rule.waitForIdle()
+            val expected = when (s) {
+                AppStyle.Glass -> (scale == 2f && w <= 240.dp) to (w == 200.dp && scale == 2f)
+                AppStyle.Brief -> false to ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f))
+                AppStyle.Board -> ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f)) to
+                    ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f))
+            }
+            val agentsLabel = if (s == AppStyle.Glass) "Agents" else "Agents 2"
+            assertEquals("$s $w $scale Assistant ellipsis", expected.first, isTextEllipsized("Assistant"))
+            assertEquals("$s $w $scale $agentsLabel ellipsis", expected.second, isTextEllipsized(agentsLabel))
+        }
+    }
+
+    private fun isTextEllipsized(text: String): Boolean {
+        val layouts = mutableListOf<TextLayoutResult>()
+        placedText(text, useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        return layouts.single().isLineEllipsized(0)
+    }
+
     @Config(sdk = [35], qualifiers = "en-w400dp-h800dp-xhdpi")
     @Test fun board400DpKeepsOriginalVerticalPosition() {
         var fontScale by mutableStateOf(1f)
