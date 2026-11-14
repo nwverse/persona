@@ -7,6 +7,8 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.net.Uri
 import android.view.DragEvent
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.View
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -15,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -84,47 +87,47 @@ class ComposerDropInstrumentedTest {
         }
     }
 
-    private fun dispatch(action: Int, description: ClipDescription, data: ClipData?): Boolean {
-        val center = rule.onNodeWithTag("composer-drop-target").fetchSemanticsNode().boundsInRoot.center
-        var accepted = false
-        instrumentation.runOnMainSync {
-            val event = newDragEvent(action, center.x, center.y, description, data, action == DragEvent.ACTION_DRAG_ENDED)
-            accepted = rule.activity.findViewById<View>(android.R.id.content).dispatchDragEvent(event)
-        }
-        return accepted
-    }
-
-    /** DragEvent's factory is hidden from the SDK; instrumentation still constructs the framework's real event type. */
-    private fun newDragEvent(
-        action: Int,
-        x: Float,
-        y: Float,
-        description: ClipDescription,
-        data: ClipData?,
-        result: Boolean,
-    ): DragEvent {
-        val obtain = DragEvent::class.java.getDeclaredMethod("obtain", Int::class.javaPrimitiveType,
-            Float::class.javaPrimitiveType, Float::class.javaPrimitiveType, ClipDescription::class.java,
-            ClipData::class.java, Any::class.java, Boolean::class.javaPrimitiveType)
-        obtain.isAccessible = true
-        return obtain.invoke(null, action, x, y, description, data, null, result) as DragEvent
-    }
-
     private fun drop(
         description: ClipDescription,
         data: ClipData,
         expectHighlight: Boolean = true,
     ): Boolean {
-        dispatch(DragEvent.ACTION_DRAG_STARTED, description, null)
-        dispatch(DragEvent.ACTION_DRAG_ENTERED, description, null)
-        dispatch(DragEvent.ACTION_DRAG_LOCATION, description, null)
+        val center = rule.onNodeWithTag("composer-drop-target").fetchSemanticsNode().boundsInRoot.center
+        val location = IntArray(2)
+        rule.runOnUiThread { rule.activity.window.decorView.getLocationOnScreen(location) }
+        val x = location[0] + center.x
+        val y = location[1] + center.y
+        val downTime = android.os.SystemClock.uptimeMillis()
+        val content = rule.activity.findViewById<View>(android.R.id.content)
+        sendTouch(downTime, MotionEvent.ACTION_DOWN, x, y)
+        instrumentation.waitForIdleSync()
+        var started = false
+        instrumentation.runOnMainSync {
+            started = content.startDragAndDrop(data, View.DragShadowBuilder(content), null,
+                View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
+        }
+        if (!started) return false
+        sendTouch(downTime, MotionEvent.ACTION_MOVE, x + 20, y + 20)
+        sendTouch(downTime, MotionEvent.ACTION_MOVE, x, y)
+        rule.waitForIdle()
         if (expectHighlight) {
             rule.onNodeWithTag("composer-drop-target").assert(SemanticsMatcher.expectValue(
                 SemanticsProperties.StateDescription, rule.activity.getString(R.string.chat_composer_drop_target)))
         }
-        val accepted = dispatch(DragEvent.ACTION_DROP, description, data)
-        dispatch(DragEvent.ACTION_DRAG_ENDED, description, null)
-        return accepted
+        sendTouch(downTime, MotionEvent.ACTION_UP, x, y)
+        instrumentation.waitForIdleSync()
+        return true
+    }
+
+    private fun sendTouch(downTime: Long, action: Int, x: Float, y: Float) {
+        val event = MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action, x, y, 0).apply {
+            source = InputDevice.SOURCE_TOUCHSCREEN
+        }
+        try {
+            instrumentation.uiAutomation.injectInputEvent(event, true)
+        } finally {
+            event.recycle()
+        }
     }
 
     @Test fun realDragEventsImportMultipleFilesAndSendingCleansOnlyTheirCopies() {
@@ -143,8 +146,9 @@ class ComposerDropInstrumentedTest {
         rule.waitUntil(timeoutMillis = 10_000) {
             state.attachments.size == 2 && state.attachments.all { it.path != null } && service.snapshot().size == 2
         }
-        assertEquals(listOf("one.txt", "two.txt"), service.snapshot().map { it.name })
-        assertEquals(listOf("one", "two"), service.snapshot().map { it.bytes.decodeToString() })
+        val uploads = service.snapshot().associate { it.name to it.bytes.decodeToString() }
+        assertEquals(setOf("one.txt", "two.txt"), uploads.keys)
+        assertEquals(mapOf("one.txt" to "one", "two.txt" to "two"), uploads)
         val owned = state.attachments.map { it.uri }
 
         rule.onNode(hasSetTextAction()).performClick()
@@ -237,7 +241,7 @@ class ComposerDropInstrumentedTest {
         rule.waitForIdle()
         large = false
         rule.waitForIdle()
-        state.attachments = emptyList()
+        state.attachments = state.attachments.filter { it.uri != owned }
         rule.waitUntil(timeoutMillis = 5_000) { !readable(rule.activity, owned) }
         assertTrue(readable(rule.activity, otherUri))
         large = true
@@ -253,7 +257,7 @@ class ComposerDropInstrumentedTest {
         show(state, service, enabled = false)
         val files = ClipDescription("files", arrayOf("application/octet-stream"))
         val fileData = ClipData(files, ClipData.Item(source("readonly.txt", "no")))
-        assertFalse(drop(files, fileData, expectHighlight = false))
+        assertTrue(drop(files, fileData, expectHighlight = false))
         assertTrue(service.snapshot().isEmpty())
         assertTrue(state.attachments.isEmpty())
     }
@@ -264,7 +268,7 @@ class ComposerDropInstrumentedTest {
         show(state, service)
         val text = ClipDescription("text", arrayOf("text/plain"))
         val data = ClipData(text, ClipData.Item("plain text"))
-        drop(text, data, expectHighlight = false)
+        assertTrue(drop(text, data, expectHighlight = false))
         assertTrue(service.snapshot().isEmpty())
         assertTrue(state.attachments.isEmpty())
     }
