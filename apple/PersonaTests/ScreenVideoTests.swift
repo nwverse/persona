@@ -320,6 +320,11 @@ struct ScreenVideoTests {
         #expect(ScreenTierText.value(.auto, t) == "\(ScreenQuality.auto.label) · 1.5× · 60 fps")
         let one = TierLadder.Tier(scale: 1, fps: 15, width: 1512, height: 982, minKbps: 200, maxKbps: 1_782)
         #expect(ScreenTierText.value(.sharper, one).hasSuffix(" · 1× · 15 fps"))
+        // The picture's own scale (#7842): a 1× display's every tier is 1×; 2× under the phone's long-edge cap is 1.9×.
+        let plain = TierLadder.make(points: (1920, 1080), pixels: (1920, 1080), maxSize: 2868, bias: .auto, capKbps: 12_000, maxFps: 60)
+        #expect(ScreenTierText.value(.auto, plain[0]).hasSuffix(" · 1× · 60 fps"))
+        let capped = TierLadder.make(points: (1512, 982), pixels: (3024, 1964), maxSize: 2868, bias: .auto, capKbps: 12_000, maxFps: 60)
+        #expect(ScreenTierText.value(.auto, capped[0]).hasSuffix(" · 1.9× · 60 fps"))
         let at = Date(timeIntervalSince1970: 1_000)
         #expect(ScreenTierText.reason(.linkSlowed, at: at, now: at.addingTimeInterval(12))
             == ScreenTierText.words(.linkSlowed) + " · " + String(localized: "\(12) s ago"))
