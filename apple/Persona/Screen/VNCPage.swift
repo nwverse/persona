@@ -36,6 +36,8 @@ struct VNCPage: View {
     @State private var hubTrips = HubRoundTrips()
     /// The app is in front: the round trip to the hub is timed only then.
     @State private var appActive = true
+    /// The mobile-data question shows (#6396, `ScreenMobileDataCard`).
+    @State private var mobileDataCard = false
     /// `-showScreenFallbackDemo`'s reason, for screenshots of the fallback line (#3954); the real one is `fallback`.
     @State private var fallbackDemo: ScreenVideoFallback?
     /// The not-allowed line's "How to turn it on" is showing its one sentence.
@@ -77,6 +79,22 @@ struct VNCPage: View {
                 #if os(iOS) || os(visionOS)
                 if let f = fallback { fallbackBanner(f) }
                 #endif
+                #if os(iOS) && canImport(PersonaScreenKit)
+                if mobileDataCard || session?.video.askMobileData == true {
+                    ScreenMobileDataCard(hotspot: session?.video.onHotspot == true) { choice in
+                        withAnimation(Theme.Motion.standard) {
+                            mobileDataCard = false
+                            if let s = session { s.video.chooseMobileData(choice) } else { ScreenMobileData.choose(choice) }
+                        }
+                    } close: {
+                        withAnimation(Theme.Motion.standard) {
+                            mobileDataCard = false
+                            session?.video.dismissMobileData()
+                        }
+                    }
+                    .transition(.opacity)
+                }
+                #endif
                 ZStack {
                     Color.black
                     if let s = session { content(s) }
@@ -113,9 +131,14 @@ struct VNCPage: View {
             if args.contains("-showScreenVideoDemo") { picture = .video }
             if args.contains("-showScreenStatsDemo") { statsOn = true }
             if args.contains("-showScreenFallbackDemo") { fallbackDemo = .lost }
+            // `-showScreenMobileData`: the mobile-data question, for screenshots (#6396).
+            #if os(iOS) && canImport(PersonaScreenKit)
+            if args.contains("-showScreenMobileData") { mobileDataCard = true }
+            #endif
             #endif
             #endif
             #if os(iOS) && canImport(PersonaScreenKit)
+            session?.video.setQuality(quality) // before the stream opens: its first tier follows the choice (#6396)
             session?.video.want(videoWant)
             #endif
         }
@@ -382,7 +405,13 @@ struct VNCPage: View {
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("screen-picture")
                 if picture == .video, qualityOffered {
-                    Picker(selection: Binding(get: { quality }, set: { quality = $0; ScreenQuality.set($0, for: ref) })) {
+                    Picker(selection: Binding(get: { quality }, set: { q in
+                        quality = q
+                        ScreenQuality.set(q, for: ref)
+                        #if os(iOS) && canImport(PersonaScreenKit)
+                        session?.video.setQuality(q)
+                        #endif
+                    })) {
                         ForEach(ScreenQuality.allCases, id: \.self) { q in Text(q.label).tag(q) }
                     } label: {
                         Label("Quality", systemImage: Theme.Icon.pluginGauge)
