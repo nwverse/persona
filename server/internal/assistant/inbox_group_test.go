@@ -1860,9 +1860,13 @@ func TestInboxGroupReopenWakesTheTwin(t *testing.T) {
 	h.collectInbox(context.Background(), roundPoll)
 	h.waitGrouping()
 
-	if !it.open() || it.Handling.State != HandlingLooking || it.Agent.SessionID != "s1" {
-		t.Fatalf("reopened event %+v, handling %+v", it, it.Handling)
-	}
+	func() {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if !it.open() || it.Handling.State != HandlingLooking || it.Agent.SessionID != "s1" {
+			t.Fatalf("reopened event %+v, handling %+v", it, it.Handling)
+		}
+	}()
 	waitFor(t, "the new messages told to the conversation", func() bool {
 		return strings.Contains(strings.Join(notesOf(h.f, "s1"), "\n"), "有了新消息")
 	})
@@ -2066,7 +2070,7 @@ func TestInboxGroupDMFallbackNewReopenLeavesTwinDisabled(t *testing.T) {
 }
 
 // Fallback validation accepts a direct assignment to any supplied done candidate, independently of the direct-chat
-// fallback-new rewrite. Its messages follow the same default reopen path and preserve ordinary fallback triage.
+// fallback-new rewrite. Its messages follow the same default reopen path and monotonic fallback tier floor.
 func TestInboxGroupFallbackAssignsDoneEvent(t *testing.T) {
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, ruleTier: TierAction, fallback: connector.GroupFallbackResult{
 		Assign: []connector.GroupAssign{{Message: "m1060", Event: "lark:F1:900"}, {Message: "m1061", Event: "lark:F1:900"}}}}
@@ -2086,11 +2090,11 @@ func TestInboxGroupFallbackAssignsDoneEvent(t *testing.T) {
 		t.Fatalf("appends %+v", g.appends)
 	}
 	if !it.open() || it.DoneBy != "" || it.Read || it.Title != "示例上周的发布" || it.Summary != "示例原总结" ||
-		it.Tier != TierFYI || it.Reason != "示例原理由" || it.TriagedBy != "model" || it.Count != 3 || it.Last != "1061" {
+		it.Tier != TierAction || it.Reason != "按规则" || it.TriagedBy != "model" || it.Count != 3 || it.Last != "1061" {
 		t.Fatalf("reopened event %+v", it)
 	}
 	kinds := chainKinds(it)
-	if len(kinds) < 2 || kinds[0] != ChainReceived || kinds[1] != ChainReopened {
+	if len(kinds) != 3 || kinds[0] != ChainReceived || kinds[1] != ChainReopened || kinds[2] != ChainTriaged {
 		t.Fatalf("chain %v", kinds)
 	}
 	if len(h.inbox.items) != 2 || h.inbox.items["lark:F1:1060"] != nil {

@@ -1,6 +1,7 @@
 // A sidebar group: its heading stays in view while its rows scroll, a section folds under it, and its count says what
 // it counts. Kept apart from the sidebar's own parts so that a list outside the sidebar can draw the same sections.
 import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { t } from "../i18n";
 import { stateCount } from "../lib/state-labels";
 import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
@@ -9,6 +10,20 @@ import { Icon } from "../ui/icons";
 import type { MenuAt } from "../ui/menu-model";
 
 const GroupHeadingOffset = createContext({ offset: 0, depth: 0 });
+
+// Every heading's height comes from one observer, after the browser's own layout: a heading's layout effect that read
+// it (getBoundingClientRect) made the browser lay out the whole list there and then, on every list drawn and every
+// group opened. flushSync applies the heights before that frame is painted, as the layout effect did.
+const headingReports = new Map<Element, (height: number) => void>();
+let headingSizes: ResizeObserver | null = null;
+function watchHeading(el: Element, report: (height: number) => void): () => void {
+  headingSizes ??= new ResizeObserver((entries) => flushSync(() => {
+    for (const e of entries) headingReports.get(e.target)?.(e.borderBoxSize?.[0]?.blockSize ?? e.target.getBoundingClientRect().height);
+  }));
+  headingReports.set(el, report);
+  headingSizes.observe(el);
+  return () => { headingReports.delete(el); headingSizes?.unobserve(el); };
+}
 
 /** Real headings stay interactive while pinned; each nested group reserves its parent's measured height. */
 export function SidebarGroup({ heading, children, className }: { heading: React.ReactNode; children: React.ReactNode; className?: string }) {
@@ -20,15 +35,11 @@ export function SidebarGroup({ heading, children, className }: { heading: React.
     if (!el) return;
     const scroller = el.closest<HTMLElement>("[data-sidebar-rows]");
     const controls = el.querySelector("[data-sidebar-agents-controls]");
-    const measure = () => {
-      const height = el.getBoundingClientRect().height;
+    const stop = watchHeading(el, (height) => {
       setHeight(height);
       if (controls) scroller?.style.setProperty("--sidebar-controls-height", `${height}px`);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => { observer.disconnect(); if (controls) scroller?.style.removeProperty("--sidebar-controls-height"); };
+    });
+    return () => { stop(); if (controls) scroller?.style.removeProperty("--sidebar-controls-height"); };
   }, []);
   return <div className={className} data-sidebar-group>
     <div ref={ref} data-sidebar-group-heading className="sidebar-group-heading" style={{ top: `calc(var(--sidebar-sticky-top, 0px) + ${above}px)`, zIndex: 24 - depth }}>{heading}</div>
