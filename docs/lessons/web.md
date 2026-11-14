@@ -8,8 +8,12 @@ page. The Machines cards and a computer's page read `sessions[mid]` and said "No
 computer. Read a computer's Agents the way the Agents list does (`useFullAgentSessions`, folded, without the assistant's
 conversations), and keep the older hub's pushed path working (the same hook returns the store's rows there). A count
 whose source has not been read yet, or failed, is unknown, not zero: `useFullAgentSessions().loaded` / `failed` and
-`useAgentListStatus()` tell the page to say "Loading…" or "Couldn't load …" instead. Check with
-`MOCK_SESSIONS_LIST=1` and without it, and with `GET /api/v1/sessions` answering 500 in the browser.
+`useAgentListStatus()` tell the page to say "Loading…" or "Couldn't load …" instead. Take that status from the same
+source as the count: with several assistants Overview counts from the complete list, and a status read from the paged
+list said "loaded" while the complete list was still on its way or had failed (`useScopedAgentListStatus`). A count of
+the first pages (`sessionSummaries`) is not a computer's count either while the list has more pages. Check with
+`MOCK_SESSIONS_LIST=1` and without it, with the default roster (several assistants) and `MOCK_MANAGERS=1`, and with
+`GET /api/v1/sessions` answering 500 in the browser.
 
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
