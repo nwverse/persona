@@ -58,6 +58,9 @@ type Request struct {
 	CodexThreadID string `json:"codex_thread_id,omitempty"`
 	Assistant     bool   `json:"assistant,omitempty"` // the caller is the assistant's MCP server
 	Guest         bool   `json:"guest,omitempty"`     // a guest conversation's MCP server (assistant_guest.go)
+	// ToolSet: mcp.tools of a process started with a narrower tool set (PERSONA_TOOL_SET: "supervise", a background
+	// supervisor's round, node/assistant_round.go); "" the whole list.
+	ToolSet string `json:"tool_set,omitempty"`
 	// Attempt is the hook process's own id, the same on each reconnect; Resume marks those reconnects.
 	Attempt string `json:"attempt,omitempty"`
 	Resume  bool   `json:"resume,omitempty"`

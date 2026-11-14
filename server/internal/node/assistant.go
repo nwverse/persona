@@ -142,6 +142,11 @@ type assistantProc struct {
 	// owner: the Node that took it over from an earlier connection of a resident node (assistant_keep.go); nil: the
 	// one that started it.
 	owner atomic.Pointer[Node]
+
+	// round: it runs a round of the background supervisor, resumed at the end of the conversation's first turn
+	// (assistant_round.go). It is never compacted when idle: that would cut the first turn off the chain the next
+	// round resumes on.
+	round bool
 }
 
 func (p *assistantProc) write(line []byte) error {
@@ -366,6 +371,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if eff == "" {
 			eff = execution.Effort
 		}
+		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
 		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Model, eff)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
@@ -475,6 +481,21 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if p != nil && p.alive() && p.agent != agent {
 		return "", errors.New("换到另一种 Agent 需要新建对话")
 	}
+	// A round of the background supervisor resumes at the end of its first turn, in a new process (assistant_round.go):
+	// the idle one stops, and the round gets the whole snapshot, the earlier ones being out of its context.
+	var round spawnRound
+	if r := superviseRoundFrom(ctx); r != nil {
+		if round = n.superviseRound(ctx, r, id, p, agent, guest != nil, execution); round.anchor != "" {
+			if p != nil {
+				n.stopAssistantProcess(id)
+				n.rememberTasks(id, nil) // idle, with no background task (superviseRound)
+				p = nil
+			}
+			n.mu.Lock()
+			delete(n.ctxSent, id)
+			n.mu.Unlock()
+		}
+	}
 	// The mode this message runs in: its own, or the one the app set (persisted, it outlives the node).
 	want := mode
 	if want == "" && p != nil {
@@ -505,7 +526,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	fresh := p == nil
 	if p == nil {
-		if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
+		if p, err = n.spawnAssistantWith(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, round, execution); err != nil {
 			return "", err
 		}
 	}
@@ -650,6 +671,18 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		timing.mark("start_attempt_failed", false)
 		n.stopAssistantProcess(id)
+		if round.anchor != "" {
+			// The round's start was refused (Claude Code changed its undocumented --resume-session-at, or the anchor
+			// went meanwhile): the message goes in as before, once, and the next round tries again.
+			n.logf("assistant %s: the supervision round did not start from its first turn (%v); resuming it as before", short(id), werr)
+			round = spawnRound{}
+			superviseRoundFrom(ctx).set(roundKept, roundWhyStartFailed)
+			if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
+				return "", err
+			}
+			n.noteAssistantRecoveryProcess(ctx, p)
+			continue
+		}
 		if !p.missingCommand() || attempt > assistantStartRetries {
 			timing.mark("start_failed", false)
 			return "", p.startRefusal(werr)
@@ -665,7 +698,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// Keep the original choices when retrying that transient startup failure.
 		n.noteModes(id, retryMode, retryEffort)
 		n.persistModes(id, retryMode, retryEffort)
-		if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
+		if p, err = n.spawnAssistantWith(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, round, execution); err != nil {
 			return "", err
 		}
 		n.noteAssistantRecoveryProcess(ctx, p) // the replacement is the process the recovery follows now (#3495)
