@@ -19,14 +19,14 @@ vi.hoisted(() => {
 });
 
 const calls = vi.hoisted(() => ({
-  list: [] as { path: string; json?: unknown; headers?: unknown }[],
+  list: [] as { path: string; method?: string; json?: unknown; headers?: unknown }[],
   items: [] as unknown[],
   suggestion: undefined as (() => Promise<unknown>) | undefined,
 }));
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
-  api: (path: string, init?: { json?: unknown; headers?: unknown }) => {
-    calls.list.push({ path, json: init?.json, headers: init?.headers });
+  api: (path: string, init?: { method?: string; json?: unknown; headers?: unknown }) => {
+    calls.list.push({ path, method: init?.method, json: init?.json, headers: init?.headers });
     if (path.startsWith("/inbox?")) return Promise.resolve({ items: calls.items });
     if (path === "/mail/accounts") return Promise.resolve({ accounts: [] });
     if (path.startsWith("/mail/messages/")) {
@@ -51,6 +51,7 @@ import { resetInboxForTests, shortTime, sourceLine } from "../../lib/inbox";
 import { rowMeta } from "../../lib/inbox-now";
 import { chainRows, type ChainEntry } from "../../lib/inbox-events";
 import { ApiError } from "../../lib/api";
+import enInboxEvent from "../../i18n/locales/en/inbox-inboxevent.json";
 import { resetMailForTests } from "../../lib/mail";
 import { getState } from "../../lib/store";
 import type { AgentState, Session } from "../../lib/types";
@@ -129,6 +130,9 @@ afterEach(() => {
 });
 
 describe("收件箱事件：详情", () => {
+  it("calls the section Timeline in English", () => {
+    expect(enInboxEvent.chain).toBe("Timeline");
+  });
   it("matches every shared timeline case, including via and reported icons", () => {
     for (const c of timeline.cases) {
       const chain = c.input.item.chain;
@@ -188,7 +192,9 @@ describe("收件箱事件：详情", () => {
     const embedded = { ...showcase.items[0], lark: reply.lark };
     act(() => root.render(<InboxDetail item={embedded} loaded />));
     expect(host.querySelector("[data-detail-meta] span")?.textContent).toBe("订单群 · 张三：好的，我看一下新的");
-    expect(host.querySelector("[data-detail-meta] button")).toBeNull(); // an embedded chat has no separate Original page
+    expect(host.querySelector("[data-detail-meta] button")?.textContent).toBe("看原文");
+    expect(host.querySelector("[data-detail-meta] button")?.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('[data-event-body="embedded"]')).toBeNull();
     expect(host.querySelector("[data-event-now]")?.textContent).toContain("等张三确认新报价");
     expect(host.querySelector("[data-event-now]")?.textContent).toContain("问更正后的报价行不行");
 
@@ -362,28 +368,40 @@ describe("收件箱事件：详情", () => {
     await press("看处理");
     expect(host.querySelector("[data-event-body]")).not.toBeNull();
   });
-  it("a Feishu item: the event above its chat, no 看原文; a chain entry scrolls the chat to its message (#3262)", async () => {
+  it("a Feishu item starts collapsed; Original mounts its chat and a chain entry focuses its message (#3262)", async () => {
     const item: InboxItem = { ...reply, lark: { ...reply.lark!, start_position: "102" } };
     const around = () => calls.list.map((c) => c.path).filter((p) => p.includes("around="));
+    const reports = () => calls.list.filter((c) => c.method === "POST" && /\/lark\/conversations\/[^/]+\/read(?:\?|$)/.test(c.path));
     act(() => root.render(<InboxDetail item={item} loaded />));
     await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).toBeNull();
+    expect(buttons()).toContain("看原文");
+    expect(around()).toEqual([]); // the collapsed chat has not read its conversation
+    expect(reports()).toEqual([]);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="inbox-original-row-toggle"]')!.click());
+    await flush();
     expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
-    expect(buttons()).not.toContain("看原文");
     expect(around().at(-1)).toContain("around=102"); // the chat, at the first new message
     const received = host.querySelector('[data-chain-entry="received"]')!;
     await act(async () => received.querySelector("button")!.click());
     await flush();
-    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull(); // the page stays
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull(); // the page stays expanded
     expect(around().at(-1)).toContain("around=100");
   });
-  it("a mail item: the event above its body, no 看原文; a chain entry opens that UID in place (#5471)", async () => {
+  it("a mail item starts collapsed; Original reads and marks its body, then a chain entry opens that UID (#5471)", async () => {
     const item: InboxItem = { ...agentSuggestion, mail: { ...agentSuggestion.mail!, uids: [88, 89] } };
     const reads = () => calls.list.map((c) => c.path).filter((p) => p.startsWith("/mail/messages/") && !p.endsWith("/flags"));
     const flags = () => calls.list.map((c) => c.path).filter((p) => p.endsWith("/flags"));
     act(() => root.render(<InboxDetail item={item} loaded />));
     await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).toBeNull();
+    expect(buttons()).toContain("看原文");
+    expect(reads()).toEqual([]);
+    expect(flags()).toEqual([]);
+    expect(host.textContent).not.toContain("mail body 89");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="inbox-original-row-toggle"]')!.click());
+    await flush();
     expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
-    expect(buttons()).not.toContain("看原文");
     expect(reads()).toEqual(["/mail/messages/a1/89?mailbox=INBOX"]);
     expect(flags()).toEqual(["/mail/messages/a1/89/flags"]); // an unseen body is really opened, not a seen fixture
     expect(host.textContent).toContain("mail body 89");
