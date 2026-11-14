@@ -431,6 +431,14 @@ struct ChatsView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { newSession.wrappedValue = true } label: { Label("New Session [Chats View 58e21b]", systemImage: Theme.Icon.compose) }
                     }
+                    #if os(iOS)
+                    // Where the system's Hide Sidebar was, in a glass circle of its own as that one: the column is slid
+                    // by a finger now (#4206).
+                    if widthClass == .regular && unified == nil {
+                        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                        ToolbarItem(placement: .topBarTrailing) { SplitHideListButton() }
+                    }
+                    #endif
                 }
             }
             #else
