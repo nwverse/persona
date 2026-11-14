@@ -969,6 +969,16 @@
           "origin": "conv",
           "delivery": {
             "state": "pr"
+          },
+          "pr_url": "https://example.com/synthetic/pull/1",
+          "pr_status": {
+            "url": "https://example.com/synthetic/pull/1",
+            "state": "open",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
           }
         }
       },
@@ -1038,7 +1048,16 @@
             }
           ],
           "origin": "conv",
-          "pr_url": "https://example.com/pull/1"
+          "pr_url": "https://example.com/pull/1",
+          "pr_status": {
+            "url": "https://example.com/pull/1",
+            "state": "open",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          }
         }
       },
       "expected": {
@@ -1390,7 +1409,16 @@
           ],
           "origin": "conv",
           "pr_url": "https://example.com/pull/1",
-          "stage": "review"
+          "stage": "review",
+          "pr_status": {
+            "url": "https://example.com/pull/1",
+            "state": "open",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          }
         }
       },
       "expected": {
@@ -2971,7 +2999,16 @@
           "origin": "conv",
           "seen_at": "2026-11-10T11:30:00.000Z",
           "pr_url": "https://github.com/example/app/pull/7",
-          "stage": "review"
+          "stage": "review",
+          "pr_status": {
+            "url": "https://github.com/example/app/pull/7",
+            "state": "open",
+            "draft": false,
+            "review": "pending",
+            "checks": "none",
+            "conflicts": false,
+            "checked_at": "2026-11-10T12:00:00Z"
+          }
         }
       },
       "expected": {

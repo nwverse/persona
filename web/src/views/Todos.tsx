@@ -71,7 +71,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -1519,7 +1519,7 @@ const TodoListItem = memo(function TodoListItem({
               <Icon name="pullRequest" size={11} />
               {pr.text}
             </a>
-            <span className="truncate">· {t("todos.pr_idle", { age: view.age })}</span>
+            <span className="truncate">· {prBlockers(todo).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</span>
           </div>
         )}
 

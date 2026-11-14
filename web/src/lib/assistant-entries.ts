@@ -2,7 +2,7 @@ import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./backg
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { reviewState } from "./supervision";
-import { supersededFailedStarts } from "./todo-triage";
+import { supersededFailedStarts, triage } from "./todo-triage";
 import { dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
@@ -39,6 +39,8 @@ export interface AssistantEntries {
   /** Open tasks with no progress for 48 hours and nothing running (the To-dos page's shelved, #3331): folded under
    *  In progress, not counted. */
   shelved: RunningItem[];
+  /** Fresh open PRs with no active agent, separate from In progress; still open tasks. */
+  pr: RunningItem[];
 }
 
 export interface AssistantEntriesInput {
@@ -116,6 +118,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const deciding: { item: NeedsYouItem; rank: number; at: string }[] = [];
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
+  const pr: { item: RunningItem; at: string }[] = [];
   const folded = new Set<string>();
   for (const card of taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain)) {
     const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
@@ -138,6 +141,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       }
     }
     // a parked task waits on purpose (#3804): with the tasks in progress however long it has been still, never folded away
+    else if (triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "pr") pr.push({ item: { kind: "task", key, card, todo, status, countsOpen }, at: card.at });
     else if (bucket === "open" || reviewState(todo) === "parked") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup), countsOpen }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: card.at });
     else continue;
@@ -171,6 +175,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     ],
     running: [...open.sort(newest).map((row) => row.item), ...agentsRunning],
     shelved: shelved.sort(newest).map((row) => row.item),
+    pr: pr.sort(newest).map((row) => row.item),
   };
 }
 

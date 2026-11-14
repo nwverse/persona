@@ -380,6 +380,7 @@ func (s *Service) sweepDeploys(now time.Time) {
 		}
 	}
 	b.mu.Unlock()
+	s.sweepPRStatuses(ctx, now)
 	hub, err := s.runningHubCommit(ctx)
 	if err != nil {
 		s.logf("deploys: the hub's health: %v", err)
