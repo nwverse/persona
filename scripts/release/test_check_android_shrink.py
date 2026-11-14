@@ -342,7 +342,15 @@ class MethodSizeTests(unittest.TestCase):
                                ("persona.A.c(V)V 10001", "not a dex descriptor"),
                                ("persona.A.c([)V 10001", "not a dex descriptor"),
                                ("persona.A.c()Lfoo 10001", "not a dex descriptor"),
-                               ("persona.A.c(I)Void 10001", "not a dex descriptor")):
+                               ("persona.A.c(I)Void 10001", "not a dex descriptor"),
+                               # A class name stops at the characters that close or nest a descriptor.
+                               ("persona.A.c(Lfoo(bar;)V 10001", "not a dex descriptor"),
+                               ("persona.A.c(Lfoo)bar;)V 10001", "not a dex descriptor"),
+                               ("persona.A.c(Lfoo<Bar>;)V 10001", "not a dex descriptor"),
+                               ("persona.A.c()Lfoo(bar; 10001", "not a dex descriptor"),
+                               ("persona.A.c(L[foo;)V 10001", "not a dex descriptor"),
+                               # void is a return type of its own, never an array.
+                               ("persona.A.c()[V 10001", "not a dex descriptor")):
             with self.subTest(line):
                 path = Path(directory) / "list.txt"
                 path.write_text("persona.A.b()V 10001\n" + line + "\n")
@@ -351,14 +359,19 @@ class MethodSizeTests(unittest.TestCase):
                 message = str(raised.exception)
                 self.assertIn("list.txt:2:", message)
                 self.assertIn(expected, message)
-        # Every real shape still parses: primitives, objects, both kinds of array and an object return.
+        # Every real shape still parses: primitives, objects, both kinds of array, an object return, and the `$` and
+        # `/` a nested class or a package puts in a name.
         path = Path(directory) / "list.txt"
         path.write_text("persona.A.a()V 10001\npersona.A.b(Lfoo;[I[[Ljava/lang/String;)J 10001\n"
-                        "persona.A.c()Ljava/lang/String; 10001\n")
+                        "persona.A.c()Ljava/lang/String; 10001\npersona.A.d(Lfoo$Bar;)V 10001\n"
+                        "persona.A.e(I)Lfoo/Bar$Baz; 10001\npersona.A.f([[I)V 10001\n")
         self.assertEqual(shrink.read_known(path)[0], {
             "persona.A.a()V": 10001,
             "persona.A.b(Lfoo;[I[[Ljava/lang/String;)J": 10001,
             "persona.A.c()Ljava/lang/String;": 10001,
+            "persona.A.d(Lfoo$Bar;)V": 10001,
+            "persona.A.e(I)Lfoo/Bar$Baz;": 10001,
+            "persona.A.f([[I)V": 10001,
         })
 
     def test_a_list_line_at_or_under_the_limit_is_rejected(self):

@@ -74,8 +74,11 @@ NEAR_LIMIT = 9000
 KNOWN_OVERSIZED = Path(__file__).with_name("known_oversized_methods.txt")
 # One `Class.method(descriptor) size` per line, the descriptor carrying its return type (`()V`); a name without a
 # descriptor, a bare class name or a descriptor no dex method can have would never match and is rejected.
-FIELD_DESCRIPTOR = r"(?:\[*[ZBSCIJFD]|\[*L[^\s;]+;)"  # a parameter: never void, never a lone array bracket
-RETURN_DESCRIPTOR = r"(?:\[*[VZBSCIJFD]|\[*L[^\s;]+;)"
+# A class name inside a descriptor: what dex allows (`$`, `/`, `-`, digits, any non-ASCII letter), and none of the
+# characters that end or nest a descriptor (`(`, `)`, `[`, `<`, `>`); `Lfoo)bar;` or `Lfoo<Bar>;` names no class.
+DESCRIPTOR_CLASS = r"[^\s;()\[\]<>]+"
+FIELD_DESCRIPTOR = r"(?:\[*[ZBSCIJFD]|\[*L" + DESCRIPTOR_CLASS + r";)"  # a parameter: never void
+RETURN_DESCRIPTOR = r"(?:V|\[*[ZBSCIJFD]|\[*L" + DESCRIPTOR_CLASS + r";)"  # void stands alone, never an array
 KNOWN_LINE = re.compile(r"^(\S+\.\S+)\.([^\s.()]+)\((\S*)\)(\S+)\s+(\d+)$")
 
 
