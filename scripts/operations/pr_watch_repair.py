@@ -47,7 +47,7 @@ def failure_signature(text):
     signatures = []
     for line in (text or "").splitlines():
         if re.search(r"(?:--- FAIL:|AssertionError|FileNotFoundError|ModuleNotFoundError|"
-                     r"No such file or directory|panic:|^FAIL\s+\S|baseline|not found)", line):
+                     r"No such file or directory|panic:|^FAIL\s+\S|baseline|not found)", line) and not line.startswith("--- FAIL:"):
             normalized = re.sub(r"0x[0-9a-fA-F]+", "<address>", line)
             normalized = normalized.replace("'plutil'", "plutil").replace('"plutil"', "plutil")
             signatures.append(normalized.strip())

@@ -95,7 +95,7 @@ def strings(o, key=()):
 
 def example_values():
     try:
-        return {v for _, v in strings(json.load(open(os.path.join(ROOT, "config.example.json"))))}
+        return {v for _, v in strings(json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.example.json"))))}
     except (OSError, ValueError):
         return set()
 

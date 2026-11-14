@@ -435,9 +435,9 @@ class Watcher:
                 self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
                              bounded(old.get("failure", ""), 6000))
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                 outcome="passed_with_base_failures", review_posted=True,
+                                 outcome="passed_with_base_failures", review_posted=False,
                                  verification=old.get("verification"), checks=old.get("checks", []),
-                                 base_failures=old.get("base_failures"))
+                                 base_failures=old.get("base_failures"), base_comment_posted=True)
         if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
@@ -589,14 +589,15 @@ class Watcher:
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
             if phase == "verification":
-                attempts = int(old.get("repair_attempts", 0)) + 1
+                attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
+                latest = self.state.get(repo, number)
                 self.state.put(repo, number, head, evidence_key=evidence_key,
                                outcome="retry" if attempts < 3 else "failed",
                                review_attempts=attempts,
                                repair_attempts=attempts,
-                               repair_rounds=int(old.get("repair_rounds", 0)),
-                               verification=old.get("verification"), checks=old.get("checks", []),
-                               base_failures=old.get("base_failures"),
+                               repair_rounds=int(latest.get("repair_rounds", 0)),
+                               verification=latest.get("verification"), checks=latest.get("checks", []),
+                               base_failures=latest.get("base_failures"),
                                retry_after=time.time() + 300, failure=str(error))
                 if not self.dry_run:
                     self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
