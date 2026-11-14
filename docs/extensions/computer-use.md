@@ -637,7 +637,7 @@ iPhone's side comes next.
   `…/ports/5900/connect?pair=…` and `…/screen/video/connect?pair=…`. The hub then passes `link: true` in `port.dial` /
   `screen.dial`, and selects the subprotocol only when the node answers `{link: 1}`. The web's noVNC (`binary`), apps
   before it (no subprotocol), a hub before it (never passes `link`) and a node before it (answers `{}`) all keep the raw
-  stream, byte for byte.
+  stream, byte for byte. hub.json's `screen_link_off` turns sessions off for everyone: the hub then never passes `link` on.
 - **Wire**: the video wire's framing (u32 length, u8 type, body) with its own types: `data` (channel, offset, bytes),
   `ack` (channel, received through), `paths` (the token; candidates and the certificate with the direct routes), `attach`
   / `attached` (a transport joining with the token), `ping` / `pong` (the pong adds the node's TCP retransmitted and sent
