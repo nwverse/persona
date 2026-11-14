@@ -304,27 +304,16 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 	q := r.st.Queue[conversation]
 	kept := make([]relayMsg, 0, len(q))
 	var regather, taken []superviseSignal
+	changed := false
 	for i, m := range q {
 		if m.Tool != superviseTool {
 			kept = append(kept, m)
 			continue
 		}
-		if i == 0 && r.draining[conversation] {
-			// The send owns this head until it finishes. Keep it in place, but let rehoming replay the selected
-			// structured signals; the other tasks in a mixed digest stay with this delivery only.
-			if m.Signals != nil {
-				for _, g := range *m.Signals {
-					if ids[g.Todo] {
-						taken = append(taken, g)
-					}
-				}
-			}
-			kept = append(kept, m)
-			continue
-		}
 		target := false
 		var remaining []superviseSignal
-		if m.Signals != nil && len(*m.Signals) > 0 {
+		structured := m.Signals != nil && len(*m.Signals) > 0
+		if structured {
 			for _, g := range *m.Signals {
 				if ids[g.Todo] {
 					target = true
@@ -357,6 +346,21 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 				}
 			}
 		}
+		if i == 0 && r.draining[conversation] {
+			// The send owns this head's text until it finishes. Keep the message, but detach replayed structured
+			// signals so a later restore cannot mistake the old queue for main's durable-delivery acknowledgment.
+			// Other tasks in a mixed digest stay with this delivery only; a pre-structured head uses the text fallback.
+			if target && structured {
+				if len(remaining) == 0 {
+					m.Signals = nil
+				} else {
+					m.Signals = &remaining
+				}
+				changed = true
+			}
+			kept = append(kept, m)
+			continue
+		}
 		if !target {
 			kept = append(kept, m)
 			continue
@@ -364,7 +368,7 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 		regather = append(regather, remaining...)
 	}
 	n := len(q) - len(kept)
-	if n == 0 {
+	if n == 0 && !changed {
 		r.mu.Unlock()
 		return 0, taken
 	}
@@ -379,14 +383,18 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, g := range regather {
-		if _, newer := b.pending[g.id()]; !newer {
-			b.pending[g.id()] = g
-		}
-	}
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {
 		for _, g := range regather {
-			pending[g.id()] = g
+			cur, ok := b.pending[g.id()]
+			if !ok {
+				// The durable outbox can hold a newer stretch before its normal in-memory restore.
+				cur, ok = pending[g.id()]
+			}
+			if !ok {
+				cur = g
+			}
+			b.pending[g.id()] = cur
+			pending[g.id()] = cur
 		}
 	})
 	b.mu.Unlock()

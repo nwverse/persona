@@ -236,6 +236,38 @@ func TestRehomeRestoreKeepsNewerDurableReview(t *testing.T) {
 	}
 }
 
+// The other task in a mixed digest is regathered too. Its older queued stretch must not replace a newer durable one.
+func TestDropMixedDigestKeepsNewerDurableSignal(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, _, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	other := Todo{ID: "other-task", Supervision: &Supervision{Supervisor: "side1", State: reviewPending}}
+	putTodo(s, other)
+	at := time.Now()
+	target := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "target-old", Detail: "target", At: at}
+	oldOther := superviseSignal{Todo: other.ID, Kind: sigReview, Key: "other-old", Detail: "other old", At: at}
+	s.signal(target)
+	s.signal(oldOther)
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "mixed", At: at},
+		[]superviseSignal{target, oldOther}, at, time.Time{}) {
+		t.Fatal("the mixed digest did not enter the queue")
+	}
+	newOther := superviseSignal{Todo: other.ID, Kind: sigReview, Key: "other-new", Detail: "other new", At: at.Add(time.Second)}
+	s.signal(newOther)
+	if got := storedSupervisePending(t, s)[newOther.id()]; got.Key != newOther.Key {
+		t.Fatalf("the newer mixed-digest stretch was not durable: %+v", got)
+	}
+
+	simulateSupervisionRestart(t, s)
+	n, taken := s.dropQueuedSupervisionTasks("side1", map[string]bool{todo.ID: true}, []Todo{todo, other})
+	if n != 1 || len(taken) != 1 || taken[0].Key != target.Key {
+		t.Fatalf("drop = %d, taken %+v", n, taken)
+	}
+	if got := storedSupervisePending(t, s)[newOther.id()]; got.Key != newOther.Key || got.Detail != newOther.Detail {
+		t.Fatalf("regathering the mixed digest replaced the newer durable stretch: %+v", got)
+	}
+}
+
 // blockedAssistantDrain holds the old side's real drain without fakeHub's global lock, so rehome and main can proceed.
 type blockedAssistantDrain struct {
 	Hub
@@ -316,8 +348,14 @@ func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
 		t.Fatal("the old side did not start draining its queued review")
 	}
 
-	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
 	s.rehomeSupervisedTodos(ctx)
+	// A second restart before main's send must not let the old draining head acknowledge the replayed outbox signal.
+	simulateSupervisionRestart(t, s)
+	s.restoreSupervisePending(ctx)
+	if got := storedSupervisePending(t, s)[g.id()]; got.Key != g.Key {
+		t.Fatalf("the old draining head acknowledged main's replay before delivery: %+v", got)
+	}
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
 	s.sendDigest(ctx)
 	waitFor(t, "the draining side's review replayed to main", func() bool {
 		got := h.text("conv1")
@@ -331,6 +369,52 @@ func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
 	}
 	if got := todoNow(s, todo.ID); got.DoneAt == nil {
 		t.Fatal("main's acceptance did not close the rehomed task")
+	}
+}
+
+// A pre-structured queue head has no Signals after restart. Its text's todo id is the compatible fallback even while
+// that head is draining, so the rehomed task still reaches main instead of being stranded in the old conversation.
+func TestLegacySideDrainingTextNoticeRehomesAfterRestart(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor, v.State = "side1", reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "legacy-text-review", Detail: "legacy text", At: time.Now()}
+	s.signal(g)
+	reserveUndelivered(t, s, g)
+	s.queueRelay("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "pre-structured review for " + todo.ID, At: g.At})
+	s.ackSupervisePending([]superviseSignal{g}) // queue admission had acknowledged the old outbox before the restart
+	simulateSupervisionRestart(t, s)
+
+	h := &blockedAssistantDrain{Hub: f, started: make(chan struct{}), release: make(chan struct{}), texts: map[string][]string{}}
+	setHub(s, h)
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(h.release) }) }
+	defer unblock()
+	main := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	side := proto.Session{SessionID: "side1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	f.setSessions("server", main, side)
+	s.drainRelays("server", []proto.Session{side})
+	select {
+	case <-h.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the old side did not start draining its pre-structured notice")
+	}
+
+	s.rehomeSupervisedTodos(ctx)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	s.sendDigest(ctx)
+	waitFor(t, "the pre-structured draining notice replayed to main", func() bool {
+		return strings.Contains(h.text("conv1"), todo.ID)
+	})
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
+		t.Fatalf("main could not accept the pre-structured notice's task: %v", err)
 	}
 }
 
