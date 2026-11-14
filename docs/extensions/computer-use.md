@@ -714,8 +714,16 @@ iPhone's side comes next.
   another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
   relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
   route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
-- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`, for now only in a DEBUG build launched with
-  `-showScreenRoutes`): the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
+- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`): off in release builds until the real-device
+  acceptance has passed (`ScreenRoutes.releaseEnabled`, one line to turn on); a DEBUG build launched with
+  `-showScreenRoutes` has it meanwhile. While offered, **Settings › This Device › Live Screen**
+  (`LiveScreenSettingsView`) has one switch, "Choose the Fastest Route Automatically", on by default; turned off, the
+  phone asks for no session (everything through the hub, as before) and live sessions move back to their relays at
+  once. The quality tiers (#6396) add their own section to the same page. The stats overlay's Route row shows the route's
+  round trip and packet loss and why it last changed ("Faster route", "Previous route dropped", "Network changed", …, or
+  that the computer's firewall blocks direct connections). The first try of a same-network route shows iOS's local
+  network question with `NSLocalNetworkUsageDescription`; refused, those routes fail quietly and the relay stays.
+  How it works: the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
   `ScreenLinkVideoStream` (`PersonaScreenKit`) read the first message, and when the hub selected the subprotocol the
   stream is the session's channel (`ScreenLinkSession`, an actor holding the channels, the transports, the pings and
   `PathPolicy`), else the same raw stream as before, so the RFB client and the video stream don't change. A session
