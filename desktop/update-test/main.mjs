@@ -1,0 +1,40 @@
+// Entry of the test-only update build (electron-builder.update-test.yml). A release package never contains this file.
+//
+// It observes the real updater and the real main process; it does not replace either. The feed address is the one
+// baked into this build's app-update.yml.
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { app } from "electron";
+import electronUpdater from "electron-updater";
+
+const { autoUpdater } = electronUpdater;
+const directory = app.getPath("userData");
+mkdirSync(directory, { recursive: true });
+const record = entry => appendFileSync(join(directory, "update-test.jsonl"), `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
+
+// A test build must not take over the persona:// links of a real install on the same computer.
+app.isDefaultProtocolClient = () => true;
+app.setAsDefaultProtocolClient = () => false;
+
+record({ event: "start", version: app.getVersion(), platform: process.platform, packaged: app.isPackaged });
+autoUpdater.on("checking-for-update", () => record({ event: "checking" }));
+autoUpdater.on("update-available", info => record({ event: "available", version: info.version }));
+autoUpdater.on("update-not-available", info => record({ event: "current", version: info.version }));
+autoUpdater.on("error", error => record({ event: "error", message: String(error?.message ?? error).slice(0, 2000) }));
+autoUpdater.on("update-downloaded", info => {
+  record({ event: "downloaded", version: info.version, file: info.downloadedFile });
+  // The same path as the tray's Quit: the downloaded update installs on the way out.
+  setTimeout(() => { record({ event: "quit" }); app.quit(); }, 3000);
+});
+
+await import("../dist/main.js");
+
+// The product ships no Linux package, so its updater stays off there. Checking from here lets a Linux computer
+// exercise the same feed, download, checksum and install-on-quit path through the packaged AppImage.
+if (process.platform === "linux") {
+  void app.whenReady().then(() => {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    return autoUpdater.checkForUpdates();
+  }).catch(error => record({ event: "error", message: String(error?.message ?? error).slice(0, 2000) }));
+}

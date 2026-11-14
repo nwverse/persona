@@ -298,7 +298,7 @@ class DesktopWorkflowTests(unittest.TestCase):
         self.assertIn('desktop: ${{ steps.paths.outputs.desktop }}', ci)
         self.assertIn('needs: [changes, server, web, android, apple, core, runtimes, desktop, scripts]', ci)
         workflow = yaml.load((root / '.github/workflows/desktop-test.yml').read_text(), Loader=yaml.BaseLoader)
-        self.assertEqual(set(workflow['jobs']), {'linux', 'macos', 'windows'})
+        self.assertEqual(set(workflow['jobs']), {'linux', 'macos', 'windows', 'update'})
         self.assertEqual(workflow['on']['workflow_call']['inputs']['signed']['default'], 'false')
         self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['signed']['default'], 'false')
         unsigned = yaml.load((root / 'desktop/electron-builder.unsigned.yml').read_text(), Loader=yaml.BaseLoader)
