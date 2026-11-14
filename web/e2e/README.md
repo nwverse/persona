@@ -16,6 +16,28 @@ node web/e2e/ask-card-dock.mjs <loopback-web-origin> <artifact-directory> [--chr
 
 Opens the real app against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data. The main conversation shows an ask_user card with four described options in the Pending tray at 1280 × 600, 1024 × 520, 390 × 664 and 360 × 560 (touch), light and dark. It checks the card's send button and the three tray entries are not under the composer before any scrolling, and that "Or write your own" is fully visible (not under the sticky answer row or the tray's title) once tapped and typed into. Writes `results.json` and before/after-typing screenshots; exits nonzero on failure or the four-minute timeout.
 
+## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
+
+```sh
+MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/chat-content.mjs <loopback-web-origin> <artifact-directory> [--big] [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in Simplified Chinese, light and dark. It
+checks what jsdom cannot show from the web usability audit of 2026-11-14: Persona's message to a task folds to its first
+line without Markdown marks and opens drawn as Markdown, and the supervisor's rework note keeps its lines apart (item 7);
+the main chat's runtime line is absent when nothing is known and reads just "主对话 · 运行中" for a report intercepted in
+the browser, whose place and harness Settings › Assistant shows instead (item 80); the model pill's name is not cut under
+a 600 px composer and a phone keeps the 64 px tile and chevron (item 50); in a 390 px window with a pointer, Tab reaches
+your bubble's first action inside the window, the bar under the bubble stays while the pointer goes down to it and takes
+no clicks once hidden, and in a 1440 px window the bar stays beside the bubble (item 73); on a 390 px phone a "#" column is at most 40 px and the table copy button
+covers no header words of a table that fits (item 77). `--big` runs against the mock started with `MOCK_BIG=1` instead
+(item 90): opening the "worked 1 h 10 min" fold, no animation frame draws more than 60 rows at once, all 650 rows are
+drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
+fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
+(`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.
