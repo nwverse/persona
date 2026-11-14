@@ -63,6 +63,45 @@ set to a model of its own is marked only when that model's window is 1M or more 
 hold a smaller one to its size. An ID already ending in `[1m]` is left alone, and one with no known window is passed as
 it is.
 
+## Refusal fallback behind a gateway (#7319)
+
+When a reply stops on a refusal, recent Claude Code retries once and then switches the request to a fallback model whose
+ID is fixed inside Claude Code: no setting changes it, `ANTHROPIC_DEFAULT_*_MODEL` included. A gateway that does not
+serve that ID answers 404 "model not found" after two requests that could not succeed, and a sub-Agent just fails (on
+one install over 7 days, all 4 automatic switches in a private profile ended in 404, while 71 such stops with the switch
+off ended without one). Claude Code 2.1.322 was seen falling back to three models; which one depends on the session's
+model and the stop's category:
+
+| Session model | Fallback |
+| --- | --- |
+| `claude-opus-5-5` | `claude-opus-4-8` or `claude-opus-5` |
+| `claude-opus-5` | `claude-opus-4-8` |
+| `claude-sonnet-5-5` | `claude-sonnet-5` |
+| Any other (a gateway's non-Claude models included) | `claude-opus-4-8` or `claude-opus-5` |
+
+So `providerEnv` sets `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` for a gateway-shaped managed provider (`providerShaped`,
+with a Base URL) whose host is not Anthropic's own API (`proto.AnthropicAPI`) and whose declared model list (`models`)
+is not empty and lacks at least one of the three. The session's model can change at run time and the variable is one
+value per process, so the list must have all three to keep the fallback. IDs compare trimmed, in any case and without a
+trailing context marker such as `[1m]`; a vendor prefix or a date makes another ID, since Claude Code asks for the plain
+one. A provider with no model list, or one whose list has all three, keeps Claude Code's fallback: nothing says the
+gateway lacks them. The rule reads the list the provider declares, not what the gateway serves: a provider imported
+from a computer's shell aliases lists only the model its alias names, so it launches with the fallback off even on a
+gateway that serves all three, until its list names them or its `env` sets the variable empty. The three IDs are one
+constant (`refusalFallbackModels` in `node/launcherenv.go`) with the version they were seen in, pinned by a test; a
+later Claude Code that falls back elsewhere is a one-line change there.
+
+The value goes wherever the provider's other variables go, in the process environment and the settings env alike:
+`personad launch` (Agents in herdr and the CLI assistant, and the sub-Agents they run), the generated
+`launcher-settings` files and a Persona conversation's own settings, the Agent SDK bridge's child and the settings env it
+pins. A private profile gets it too, which the user's `~/.claude/settings.json` never reaches. Such a turn ends on its
+refusal (`system/model_refusal_no_fallback` and a synthetic reply with `stop_reason: "refusal"`), which the headless
+assistant's bounded recovery takes as a safeguards refusal ([Headless assistant](#headless-assistant-chat-tab)), and a
+sub-Agent fails with the refusal instead of a misleading 404. The provider's own environment is applied last and wins
+either way: `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` (empty) keeps the fallback on a gateway whose list lacks a model it
+serves after all, and `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` turns it off for one with no list; the next process start
+picks it up. Plain `claude`, shell launchers and providers from before #2455 keep their own environment.
+
 ## Persona tools Agents call without a card
 
 An Agent Persona starts has Persona's MCP tools (`~/.persona/mcp.json`) and, in Claude Code's default mode, would ask
@@ -863,7 +902,7 @@ failure rather than a configuration error.
   sentence naming the model by its short name ("The upstream refused this request, so it switched to Sonnet 5.5"); the
   models as recorded, the category, the explanation, the refusal's own words and the error since sit under a closed
   Details (#5202, web and iOS). Agents conversations show everything.
-- No configuration is required. Claude Code's own session-scoped fallback and the headless assistant's bounded recovery in [Headless assistant](#headless-assistant-chat-tab) are separate mechanisms. The latter handles a final safeguards / 429 / 5xx turn error without rewriting the request; it never replays this section's `model_fallback_unavailable` 404 and does not change Claude Code's own fallback policy.
+- No configuration is required. Claude Code's own session-scoped fallback and the headless assistant's bounded recovery in [Headless assistant](#headless-assistant-chat-tab) are separate mechanisms. The latter handles a final safeguards / 429 / 5xx turn error without rewriting the request; it never replays this section's `model_fallback_unavailable` 404 and does not change Claude Code's own fallback policy. A gateway-shaped managed provider whose model list lacks one of Claude Code's fallback models turns that fallback off at launch instead ([Refusal fallback behind a gateway](#refusal-fallback-behind-a-gateway-7319)), so there the refusal itself ends the turn and the recovery takes it. This section's fallback rows still come from every start that keeps the switch: Anthropic's own API and a gateway whose list has every fallback model, where the fallback model exists, and plain `claude`, shell launchers, providers from before #2455, providers that declare no model list and providers that turn the switch back on, where a gateway without that model still answers 404.
 
 Client follow-up remains necessary for dedicated cards, an always-visible notice, an actual-model/Fell Back marker,
 explicit recovery buttons, and suppressing the old error cards' Retry/Continue or model-settings buttons. Clients may
@@ -927,9 +966,18 @@ Old clients show notice's Chinese text. Synthetic text without `API Error:` pref
 Old web / Android task cards ignore `turn_error_kind` and still show Interrupted + Continue; this needs client updates.
 Hub `continueTask` does not reject cause refusal: the user's explicit Continue is their decision, but new clients offer no such button.
 
-### Default policy (decision pending)
+### Default policy (decided behind a gateway, pending elsewhere)
 
-`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK` is read only from process environment, not `--settings` env (tested in issue). Three options:
+Claude Code 2.1.322 reads `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK` from `process.env` each time it checks, and it copies
+each settings source's `env` (`--settings` and the user's `settings.json` included) into `process.env`, so a value in
+either place turns the fallback off. Persona sets it in both places, so a version that reads only the process
+environment sees it too.
+
+#7319 settled the default for gateway-shaped managed providers whose Base URL is not Anthropic's own API and whose model
+list lacks one of Claude Code's fallback models: they launch with the fallback off (option B, limited to these
+providers), and `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` (empty) in the provider's environment turns it back on
+([Refusal fallback behind a gateway](#refusal-fallback-behind-a-gateway-7319)). Every other start keeps Claude Code's
+default, and the options below are still open for those:
 
 - **A. Keep Claude Code's default automatic fallback, only make it visible.** No launch changes; answers continue, but users may not know a weaker model is now used for the session—the Fell Back badge addresses this.
 - **B. Disable automatic fallback for all Persona-started Claude.** Block stops work; user chooses rephrase, model change, or abandonment. With increasing refusals, stops and stalled tasks become noticeably more frequent.
@@ -938,7 +986,7 @@ Hub `continueTask` does not reject cause refusal: the user's explicit Continue i
 Variable injection when disabled:
 
 - Herdr pane: prepend `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1 ` to pane run command and herdr `resume_argv` (`claudeCommandLine` in `node/herdrresume.go`). Most launchers are shell functions; env cannot run functions. Assignment + function forwards the variable to launched Claude in zsh / bash; fish differs, as in report-only hooks above. Verify each.
-- Managed launchers: `managedEnv` in `node/managed.go`, like `CLAUDE_CODE_DISABLE_ARTIFACT`; personad launch carries it.
+- Managed launchers: `managedEnv` in `node/managed.go`, like `CLAUDE_CODE_DISABLE_ARTIFACT`; personad launch carries it. Done for gateway-shaped providers not on Anthropic's own API whose model list lacks a fallback model, in both the environment and the settings env ([Refusal fallback behind a gateway](#refusal-fallback-behind-a-gateway-7319)).
 - Headless assistant: `cmd.Env` in node/assistant_start.go.
 - User-started computer sessions are untouched, display only. Setting changes affect only subsequently started / resumed processes; explain in UI.
 

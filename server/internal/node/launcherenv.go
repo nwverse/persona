@@ -234,6 +234,45 @@ func tierModel(l proto.ManagedLauncher, m string) string {
 	return m
 }
 
+// refusalFallbackModels: the models Claude Code moves a refused reply to, space-separated, as observed in Claude
+// Code 2.1.322 (#7319). Which one a stopped reply goes to depends on the session's model and the stop's category:
+//
+//	session model       fallback
+//	claude-opus-5-5     claude-opus-4-8 or claude-opus-5
+//	claude-opus-5       claude-opus-4-8
+//	claude-sonnet-5-5   claude-sonnet-5
+//	any other model     claude-opus-4-8 or claude-opus-5 (a gateway's non-Claude models included)
+//
+// The session's model can change at run time and CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK is one value per process, so a
+// launcher keeps the fallback only when its list has all of them. A version that falls back elsewhere is a change to
+// this line and to TestRefusalFallbackModelsAsObserved.
+const refusalFallbackModels = "claude-opus-4-8 claude-opus-5 claude-sonnet-5"
+
+// declaredModelID is a model ID as the fallback check compares it: trimmed, lower case and without a trailing context
+// marker such as "[1m]" (Claude Code drops it before it calls the gateway).
+func declaredModelID(id string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if i := strings.LastIndexByte(id, '['); i >= 0 && strings.HasSuffix(id, "]") {
+		id = strings.TrimSpace(id[:i])
+	}
+	return id
+}
+
+// lacksRefusalFallback: l declares the models its gateway serves (Models, blank IDs aside) and at least one of
+// refusalFallbackModels is not among them. A launcher that declares none is not known to lack any.
+func lacksRefusalFallback(l proto.ManagedLauncher) bool {
+	declared := map[string]bool{}
+	for _, m := range l.Models {
+		if id := declaredModelID(m.ID); id != "" {
+			declared[id] = true
+		}
+	}
+	if len(declared) == 0 {
+		return false
+	}
+	return slices.ContainsFunc(strings.Fields(refusalFallbackModels), func(m string) bool { return !declared[m] })
+}
+
 // providerShaped: a provider as #2455 models it (an API provider, or any of its fields set), which gets a gateway's
 // extras (no nonessential traffic, a long timeout). A launcher from before gets exactly the env it always had.
 func providerShaped(l proto.ManagedLauncher) bool {
@@ -259,6 +298,14 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	if l.BaseURL != "" && providerShaped(l) {
 		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 		env["API_TIMEOUT_MS"] = strconv.Itoa(cmp.Or(l.TimeoutMS, gatewayTimeoutMS))
+		// Claude Code moves a refused reply to a fallback model of its own choosing (refusalFallbackModels), an ID no
+		// setting changes, and a gateway that does not serve it answers 404 after two requests that cannot succeed
+		// (#7319). Off when the launcher's model list shows the gateway lacks one: the turn then ends on its refusal,
+		// which the assistant's recovery reads (assistant_recovery.go). A launcher that declares no list, or one with
+		// them all, keeps Claude Code's fallback; the launcher's own environment, applied below, wins either way.
+		if !proto.AnthropicAPI(l.BaseURL) && lacksRefusalFallback(l) {
+			env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] = "1"
+		}
 	} else if l.TimeoutMS > 0 {
 		env["API_TIMEOUT_MS"] = strconv.Itoa(l.TimeoutMS)
 	}

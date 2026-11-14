@@ -161,6 +161,12 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
   The settings file also sets `"enableArtifact": false` (Claude Code honors disabling it through `--settings`). Artifacts publish to claude.ai and cannot work with a gateway + API key anyway.
   Since 2.1.26x, Claude Code enables them by default, adding Artifacts skill instructions to system messages in interactive sessions. Some gateways reject this in capability checks
   (`400 request is not representable on this edge: Claude Code Artifacts are enabled`), failing a new herdr Agent's first turn; `claude -p` is unaffected.
+- **No automatic refusal fallback to a model the gateway lacks** (#7319): a provider of #2455's shape with a Base URL whose host is not Anthropic's own API, and whose `models` list is not empty
+  but lacks one of the models Claude Code falls back to (`claude-opus-4-8`, `claude-opus-5`, `claude-sonnet-5` as of Claude Code 2.1.322; compared trimmed, in any case, without `[1m]`), gets
+  `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` (both in `personad launch` environment and the settings `env` above, the Agent SDK bridge's too), so a refused reply ends on its refusal instead
+  of moving to a model the gateway does not serve. A provider with no `models` list, or one that lists all three, keeps Claude Code's fallback. The rule reads the declared list, not what the
+  gateway serves: a provider imported from a computer's aliases lists only the model its alias names, so it has the fallback off until its list names all three or its `env` empties the variable. The provider's `env` wins either way:
+  `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` keeps the fallback, `=1` turns it off (`docs/integrations/claude-integration.md`, "Refusal fallback behind a gateway").
 - **Authentication method** (`auth`, 2026-11-04): which variable receives the key. `api_key` (default, used by existing launchers) sets `ANTHROPIC_API_KEY`; Claude Code sends
   `x-api-key`, the only method accepted by the official API. `bearer` sets `ANTHROPIC_AUTH_TOKEN` and sends `Authorization: Bearer`, for compatible gateways accepting only Bearer
   (common relay gateways accept both, requiring no change). When the manager directly calls the Messages API with a launcher (triage, translation, etc.), it follows this header choice too; Responses already uses Bearer and needs no selection.
@@ -298,7 +304,7 @@ Persona-managed providers add these fields following cindy's model (`proto.Manag
 
 | Field | Meaning |
 | --- | --- |
-| `models` | Gateway models `[{id, name?, context_window?, efforts?, default_effort?, price?}]`; the session's model runs as `<id>[1m]` when its window is above 200K (its window also goes to the compact window and context limit); a tier, the small model or the sub-Agent model set to a model runs as `<id>[1m]` when that model's window is 1M or more (#5149). An ID already ending in `[1m]`, or one `models` gives no window, is passed as it is (`docs/integrations/claude-integration.md`, "Model variables and the 1M marker") |
+| `models` | Gateway models `[{id, name?, context_window?, efforts?, default_effort?, price?}]`; the session's model runs as `<id>[1m]` when its window is above 200K (its window also goes to the compact window and context limit); a tier, the small model or the sub-Agent model set to a model runs as `<id>[1m]` when that model's window is 1M or more (#5149). An ID already ending in `[1m]`, or one `models` gives no window, is passed as it is (`docs/integrations/claude-integration.md`, "Model variables and the 1M marker"). A list that lacks one of Claude Code's refusal fallback models turns that fallback off (#7319, "No automatic refusal fallback" above) |
 | `opus_model` / `sonnet_model` / `haiku_model` / `fable_model` | Models for each tier (`ANTHROPIC_DEFAULT_*_MODEL`), falling back to `model` when empty |
 | `subagent_force` | `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` |
 | `headers` | Custom request headers (`ANTHROPIC_CUSTOM_HEADERS`), one “name: value” per line |
