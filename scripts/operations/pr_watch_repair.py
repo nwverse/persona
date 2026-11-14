@@ -266,11 +266,12 @@ def repair_with_model(repo, pr, worktree, failure, config):
         return diff
 
 
-def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False):
+def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None, allow_merge_only=False, original_pr=None):
     """Run relevant checks and privacy before pushing an ordinary repair commit."""
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
-    if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:
+    identity_pr = original_pr or pr
+    if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
         raise WatchError("PR head moved during automatic repair; nothing was pushed")
     scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
     checked(["git", "diff", "--check"], cwd=worktree)
@@ -310,7 +311,8 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         raise WatchError("the verified tree differs from the tree being published")
     if checked(["git", "status", "--porcelain"], cwd=worktree).strip():
         raise WatchError("repair verification changed the checkout after its local commit")
-    if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:
+    identity_pr = original_pr or pr
+    if pr_snapshot(repo, identity_pr["number"])["headRefOid"] != identity_pr["headRefOid"]:
         raise WatchError("PR head moved during automatic repair; nothing was pushed")
     head = repaired_pr["headRefOid"]
     branch = "pr-watch/repair-%s-%s" % (pr["number"], head[:12]) if pr.get("isCrossRepository") else pr["headRefName"]

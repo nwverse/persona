@@ -356,7 +356,7 @@ class Watcher:
             checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
                     cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
             if pr.get("isCrossRepository"):
-                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], str(error), config["verify"], allow_merge_only=True)
+                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], str(error), config["verify"], allow_merge_only=True, original_pr=pr)
                 self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                                outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
                 self.comment(repo, number, "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
@@ -474,7 +474,7 @@ class Watcher:
                         checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
                                 cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
                         if pr.get("isCrossRepository"):
-                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], "conflicting base", config["verify"], allow_merge_only=True)
+                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], "conflicting base", config["verify"], allow_merge_only=True, original_pr=pr)
                             self.state.put(repo, number, head, evidence_key=evidence_key,
                                            outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
                             self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
@@ -549,6 +549,11 @@ class Watcher:
                 except pr_watch_common.VerificationError as error:
                     if self.dry_run:
                         raise
+                    if old.get("repair_rounds", 0) >= 2:
+                        self.comment(repo, number, "Automatic verification repair stopped after two rounds.\n\n```text\n%s\n```" % bounded(str(error), 12000))
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       outcome="repair_exhausted", repair_exhausted=True, failure=str(error))
+                        return
                     repaired = self.repair_verification(config, pr, worktree, error)
                     if repaired != "base_failure":
                         return
