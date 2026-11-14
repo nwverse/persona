@@ -407,7 +407,7 @@ class Watcher:
             return
         if old.get("outcome") == "continuation":
             return
-        if old.get("head") == head and old.get("repair_exhausted"):
+        if old.get("repair_exhausted"):
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
             if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":

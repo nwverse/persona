@@ -83,7 +83,8 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
                 "reason": "Every failed lane must reproduce on clean main."}
     if command:
         base_worktree = Path(str(worktree) + "-base-check")
-        command = [argument.replace(str(worktree), str(base_worktree)).replace(pr["headRefOid"], pr["baseRefOid"])
+        command = [argument.replace(str(worktree), str(base_worktree)) if str(worktree) in argument else
+                   (pr["baseRefOid"] if argument == pr["headRefOid"] else argument)
                    for argument in command]
         try:
             checked(["git", "worktree", "add", "--detach", str(base_worktree), pr["baseRefOid"]], cwd=git_root or worktree, timeout=180)
@@ -271,7 +272,9 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         message_path = Path(message_file.name)
     try:
         checked(["python3", "-I", str(scanner), "--staged", "--commit-msg", str(message_path)], cwd=worktree, timeout=180,
-                environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
+                environ={key: value for key, value in os.environ.items()
+                         if key in ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
+                                    "PERSONA_CONFIG", "JARVIS_CONFIG")} | {"PERSONA_PRIVACY_ROOT": str(worktree)})
         identity = ["-c", "user.name=chyroc", "-c", "user.email=chyroc@users.noreply.github.com"]
         if checked(["git", "diff", "--cached", "--stat"], cwd=worktree).strip():
             checked(["git"] + identity + ["commit", "-F", str(message_path)], cwd=worktree)
