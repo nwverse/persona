@@ -340,7 +340,11 @@ func TestHeldEscalationIsNotReEscalatable(t *testing.T) {
 			t.Fatalf("re-escalation %v: %v", args, err)
 		}
 	}
+	// The rejected re-escalations above add no second push; settle the service before the final count.
 	e.settle()
+	// The held escalation's P1 push is handed to the hub on deliver()'s own goroutine, so wait for it to land
+	// before reading the pushes.
+	waitFor(t, "the held escalation's P1 push", func() bool { return len(e.cardPushes("ix1")) == 1 })
 	if got := e.cardPushes("ix1"); len(got) != 1 || got[0] != assistantwire.LevelP1 {
 		t.Fatalf("the rejected re-escalation pushed: %v", got)
 	}
