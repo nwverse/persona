@@ -39,9 +39,10 @@ class AppleRenameTests(unittest.TestCase):
                 self.assertFalse((APPLE / (FORMER_NAME + suffix)).exists())
                 self.assertTrue((APPLE / ('Persona' + suffix)).is_dir())
         self.assertFalse((APPLE / 'PersonaLink/Sources' / (FORMER_NAME + 'Link')).exists())
-        self.assertTrue((APPLE / 'PersonaLink/Sources/PersonaLink').is_dir())
+        self.assertFalse((APPLE / 'PersonaLink/Sources/PersonaLink').exists())
+        self.assertTrue((APPLE / 'PersonaLink/Sources/PersonaScreen').is_dir())
         tracked = subprocess.run(['git', 'ls-files', '--', 'mac'], cwd=ROOT, capture_output=True, text=True, check=True).stdout
-        self.assertEqual(tracked, '', 'the menu bar app is apple/PersonaLink/')
+        self.assertEqual(tracked, '', 'the independent Link helper package is apple/PersonaLink/')
         self.assertIn('name: Persona\n', PROJECT)
         if (APPLE / 'Persona.xcodeproj').exists():
             self.assertTrue((APPLE / 'Persona.xcodeproj').is_dir())
@@ -182,16 +183,17 @@ class AppleRenameTests(unittest.TestCase):
         # Capture controls can select style/color, but cannot choose a different navigation tree.
         self.assertEqual(set(re.findall(r'"(-ui\.[^"]+)"', fresh)), {'-ui.style', '-ui.color'})
 
-    def test_menu_bar_package_uses_canonical_process_name(self):
+    def test_independent_link_package_contains_only_persona_screen(self):
         package = (APPLE / 'PersonaLink/Package.swift').read_text()
-        self.assertIn('name: "PersonaLink"', package)
-        self.assertIn('path: "Sources/PersonaLink"', package)
-        info = plistlib.loads((APPLE / 'PersonaLink/Info.plist').read_bytes())
-        self.assertEqual(info['CFBundleExecutable'], 'PersonaLink')
+        self.assertIn('name: "PersonaScreen"', package)
+        self.assertIn('path: "Sources/PersonaScreen"', package)
+        self.assertNotIn('path: "Sources/PersonaLink"', package)
+        self.assertFalse((APPLE / 'PersonaLink/Info.plist').exists())
         script = (ROOT / 'scripts/app/mac-link.sh').read_text()
-        self.assertIn('-scheme PersonaLink', script)
-        self.assertIn('cp "$bin" "$APP/Contents/MacOS/PersonaLink"', script)
-        self.assertIn('pkill -x PersonaLink', script)
+        self.assertIn('-scheme PersonaScreen', script)
+        self.assertNotIn('-scheme PersonaLink', script)
+        self.assertIn('persona-link" install --node-bin', script)
+        self.assertNotIn('open "/Applications/Persona Link.app"', script)
 
     def test_entitlement_checker_accepts_only_the_canonical_product(self):
         spec = importlib.util.spec_from_file_location('entitlements', ROOT / 'scripts/release/entitlements.py')
