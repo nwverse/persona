@@ -8,15 +8,14 @@ import type { Session } from "../../lib/types";
 import { mergeRuntimeHits } from "./RuntimeSearchResults";
 
 const review = { machine_id: "mac", session_id: "review", title: "Review PR 42", cwd: "/code", status: "idle", state: "idle" } as Session;
-const search = (session: Session): RuntimeSearchSnapshot => ({ query: "merge", hits: [{ session, score: 50 }], loaded: true, loading: false, loadingMore: false, error: "", moreError: "", hasMore: false, total: 1, expired: false, supported: true, retryable: true });
+const search = (session: Session, side?: string): RuntimeSearchSnapshot => ({ query: "merge", hits: [{ session, score: 50, side }], loaded: true, loading: false, loadingMore: false, error: "", moreError: "", hasMore: false, total: 1, expired: false, supported: true, retryable: true });
 
 afterEach(() => setSideFold(false));
 
 describe("mergeRuntimeHits", () => {
   it("opens a hit in a folded side at the side's link, and any other hit at its own", () => {
     setSideFold(true);
-    const inSide = { ...review, hit_session_id: "btw" } as Session;
-    expect(mergeRuntimeHits([], [], search(inSide)).hits.map((h) => h.to)).toEqual([{ name: "session", mid: "mac", sid: "btw" }]);
+    expect(mergeRuntimeHits([], [], search(review, "btw")).hits.map((h) => h.to)).toEqual([{ name: "session", mid: "mac", sid: "btw" }]);
     expect(mergeRuntimeHits([], [], search(review)).hits.map((h) => h.to)).toEqual([{ name: "session", mid: "mac", sid: "review" }]);
   });
 });

@@ -17455,6 +17455,9 @@ def folded_state(s):
         return "needs_you"
     if c.get("working") and own != "unread" and not (own == "idle" and s.get("awaits_reply")):
         return "working"
+    # #7944: an unread side makes its parent unread, unless the parent works itself (sides only)
+    if c.get("sides_unread") and own != "working":
+        return "unread"
     return own
 
 

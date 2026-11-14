@@ -102,11 +102,16 @@ describe("with sessions_side_fold", () => {
     expect(sideOrder(chat, chat)).toBe(0);
   });
 
-  it("reads the side a search hit names through one helper", () => {
-    expect(searchHitSide({ ...parent, hit_session_id: "btw" } as Session)).toBeUndefined();
+  it("reads the side a search hit is in (search_hits[<id>].hit_session_id) through one helper", () => {
+    expect(searchHitSide({ session: parent, side: "btw" })).toBeUndefined();
     setSideFold(true);
-    expect(searchHitSide({ ...parent, hit_session_id: "btw" } as Session)).toBe("btw");
-    expect(searchHitSide({ ...parent, hit_session_id: "review" } as Session)).toBeUndefined();
-    expect(searchHitSide(parent)).toBeUndefined();
+    expect(searchHitSide({ session: parent, side: "btw" })).toBe("btw");
+    expect(searchHitSide({ session: parent, side: "review" })).toBeUndefined();
+    expect(searchHitSide({ session: parent })).toBeUndefined();
+  });
+
+  it("keeps a row that works itself working beside an unread side", () => {
+    setSideFold(true);
+    expect(foldedState(row("p", { state: "working", status: "working", children: { total: 1, sides: 1, sides_unread: 1 } }))).toBe("working");
   });
 });

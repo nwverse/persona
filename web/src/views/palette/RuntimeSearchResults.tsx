@@ -86,7 +86,7 @@ export function mergeRuntimeHits(localHits: RuntimePaletteHit[], sessions: reado
     const existing = positions.get(identity), key = `s:${identity}`;
     // a hit in a folded side session (#7944) is its parent's row naming the side: the side's link, which opens the
     // parent's page with that side shown
-    const hit: RuntimePaletteHit = { key, s, to: { name: "session", mid: s.machine_id, sid: searchHitSide(result.session) ?? s.session_id }, score: result.score, evidence: result.evidence };
+    const hit: RuntimePaletteHit = { key, s, to: { name: "session", mid: s.machine_id, sid: searchHitSide(result) ?? s.session_id }, score: result.score, evidence: result.evidence };
     if (existing === undefined) { positions.set(identity, hits.length); hits.push(hit); } else hits[existing] = hit;
     remoteKeys.add(key);
   }

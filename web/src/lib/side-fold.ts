@@ -69,7 +69,8 @@ export function countSides(sides: readonly Session[]): SideRollup {
 
 /** The state a parent shows and is counted under (the hub's `Session.FoldedState`): it needs you if it or any folded row
  *  does; else it works if any folded row works, unless its own reply is unread or awaits the user's; else it is unread if
- *  it is or one of its sides is (sides only: Codex children and workers stay as before); else its own. `sides`: the
+ *  it is or one of its sides is and it does not work itself (sides only: Codex children and workers stay as before);
+ *  else its own. `sides`: the
  *  rollup of the side rows the client holds, which stands in for the hub's side part of `children`. */
 export function foldedStateWith(s: Session, sides?: SideRollup): AgentState {
   const own = stateOf(s);
@@ -81,7 +82,8 @@ export function foldedStateWith(s: Session, sides?: SideRollup): AgentState {
   const working = (c?.working ?? 0) - (local ? hub?.working ?? 0 : 0) + (local?.working ?? 0);
   if (own === "needs_you" || needs > 0) return "needs_you";
   if (working > 0 && own !== "unread" && !(own === "idle" && s.awaits_reply)) return "working";
-  if (own === "unread" || ((local ?? hub)?.unread ?? 0) > 0) return "unread";
+  // a row at work itself stays working beside an unread side
+  if (own === "unread" || (own !== "working" && ((local ?? hub)?.unread ?? 0) > 0)) return "unread";
   return own;
 }
 
@@ -99,10 +101,18 @@ export function sidesAmong(rows: readonly Session[]): Session[] {
   return rows.filter(isSide).sort(sideOrder);
 }
 
-/** The side session a search hit in a folded side names (#7944: with `roots=1` the hub returns the side's topmost
- *  parent's row and names the side that matched). The one place that knows the hub's field name: the server PR is
- *  written in parallel, and this follows its spec's example, `hit_session_id`. */
-export function searchHitSide(row: Session): string | undefined {
-  const side = (row as Session & { hit_session_id?: unknown }).hit_session_id;
-  return sideFold && typeof side === "string" && side && side !== row.session_id ? side : undefined;
+/** The chat a card is answered in: the side session it belongs to (`folded_side`, or its own session when that is a
+ *  side), else the row it shows under (spec/fixtures/side-fold, "chat"). In the parent's page a side's card is also in
+ *  the parent's dock while another side is shown (DESIGN_SYSTEM 4.8). */
+export function cardChat(ix: Folded & { session_id: string }): string {
+  if (sideFold && ix.folded_side) return ix.folded_side;
+  if (isSide(ix)) return ix.session_id;
+  return foldsUnder(ix) || ix.session_id;
+}
+
+/** The side session a search hit is in (#7944: with `roots=1` the hub returns the side's topmost parent's row and names
+ *  the side in that row's `search_hits[<id>].hit_session_id`, lib/runtime-search.ts `side`): opened as the side's link,
+ *  its parent's page with the side shown. Undefined for a hit in the row's own conversation. */
+export function searchHitSide(hit: { session: Pick<Session, "session_id">; side?: string }): string | undefined {
+  return sideFold && hit.side && hit.side !== hit.session.session_id ? hit.side : undefined;
 }
