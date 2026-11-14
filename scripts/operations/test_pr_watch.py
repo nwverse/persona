@@ -337,6 +337,9 @@ class WatcherTests(unittest.TestCase):
         python_failure = "Traceback (most recent call last):\n  File \"test_x.py\", line 2\n    self.assertEqual(1, 2)\nAssertionError: 1 != 2\nFAILED (failures=1)"
         summary = pr_watch_verify.result_summary(subprocess.CompletedProcess([], 1, python_failure, ""))
         self.assertIn("AssertionError: 1 != 2", summary)
+        other = subprocess.CompletedProcess([], 1, "output before\nError: compiler rejected input\n1 tests failed.", "")
+        summary = pr_watch_verify.result_summary(other)
+        self.assertIn("compiler rejected input", summary)
 
     def test_unknown_mergeability_waits(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="UNKNOWN")), \

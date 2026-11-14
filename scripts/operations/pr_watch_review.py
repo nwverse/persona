@@ -149,7 +149,12 @@ def split_diff(text, limit=180_000, worktree=None, base=None, head=None):
                 hunks.append("".join(current_hunk))
             piece = header
             if not hunks:
-                raise WatchError("one diff header exceeds the semantic-review chunk bound; review this file manually")
+                if "GIT binary patch" in original_piece or "Binary files " in original_piece:
+                    if len(original_piece) > limit:
+                        raise WatchError("one binary file diff exceeds the semantic-review chunk bound; review it manually")
+                    file_chunks = [(original_piece, original_piece)]
+                else:
+                    raise WatchError("one diff header exceeds the semantic-review chunk bound; review this file manually")
             for hunk in hunks:
                 if len(hunk) + len(header) > limit:
                     raise WatchError("one diff hunk exceeds the semantic-review chunk bound; review this file manually")
@@ -213,6 +218,8 @@ def review(repo, pr, worktree, config):
                              (index, len(chunks), result.returncode, bounded(result.stderr, 1200)))
         findings.extend(parse_result(result.stdout, anchors))
     unique = {(f["path"], f["line"], f["summary"]): f for f in findings}
+    if len(unique) > 20:
+        raise WatchError("aggregated semantic review exceeds the 20-finding publication bound")
     return list(unique.values())
 
 

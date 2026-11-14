@@ -22,9 +22,13 @@ def result_summary(result):
     lines = output.splitlines()
     selected = set()
     marker = re.compile(r"(?:^--- FAIL:|^FAIL(?:\s|\t)|^FAILED(?:\s|:)|^\s*(?:AssertionError|ERROR):|"
-                        r"^panic:|^Traceback|^FAIL\s+\S|^(?:fatal|time out|command not found)\b)", re.I)
+                        r"^panic:|^Traceback|^FAIL\s+\S|^(?:fatal|time out|command not found)\b|"
+                        r"\b(?:error|failed|panic|timeout)\b|\d+ tests? failed)", re.I)
+    generic = re.compile(r"\b(?:error|failed|panic|timeout)\b|\d+ tests? failed", re.I)
+    precise = re.compile(r"(?:^--- FAIL:|^FAIL(?:\s|\t)|^FAILED(?:\s|:)|^\s*(?:AssertionError|ERROR):|"
+                         r"^panic:|^Traceback|^FAIL\s+\S|^(?:fatal|time out|command not found)\b)", re.I)
     for index, line in enumerate(lines):
-        if marker.search(line):
+        if marker.search(line) and not (line.startswith(("PASS", "ok ")) and generic.search(line) and not precise.search(line)):
             selected.update(range(max(0, index - 4), min(len(lines), index + 6)))
     if selected:
         evidence = "\n".join(line for index, line in enumerate(lines) if index in selected)
