@@ -60,6 +60,25 @@ type droppedError struct{}
 func (droppedError) Error() string        { return ErrClosed.Error() }
 func (droppedError) Is(target error) bool { return target == ErrClosed }
 
+// ErrNotSent marks an error returned before the request was written: the caller stopped waiting, or the connection
+// closed, while the call still waited to write. The other side never saw the request. NotSent wraps the cause, which
+// errors.Is still finds (context.Canceled, ErrClosed) and whose words it keeps, so a caller that cannot tell this
+// apart reads it as before.
+var ErrNotSent = errors.New("rpc: request not sent")
+
+// NotSent marks err (non-nil) as returned before the request went out (ErrNotSent).
+func NotSent(err error) error {
+	if err == nil || errors.Is(err, ErrNotSent) {
+		return err
+	}
+	return notSentError{err}
+}
+
+type notSentError struct{ err error }
+
+func (e notSentError) Error() string   { return e.err.Error() }
+func (e notSentError) Unwrap() []error { return []error{e.err, ErrNotSent} }
+
 // Limits are optional transport budgets for untrusted runtime peers. Zero preserves
 // existing process/node behavior; configure them before Serve or any concurrent call.
 type Limits struct{ FrameBytes, ConcurrentRequests, PendingCalls int }
@@ -280,23 +299,23 @@ func (p *Peer) writeContext(ctx context.Context, m message) error {
 		return errFrameBudget
 	}
 	// Wait for the writer, but not past the caller or the connection: the write ahead may never finish. A write
-	// already under way cannot be interrupted.
+	// already under way cannot be interrupted. Until the write begins nothing went out (NotSent).
 	select {
 	case p.wsem <- struct{}{}:
 	case <-ctx.Done():
-		return ctx.Err()
+		return NotSent(ctx.Err())
 	case <-p.closed:
-		return ErrClosed
+		return NotSent(ErrClosed)
 	}
 	defer func() { <-p.wsem }()
 	// Both may have become ready together and select picks at random: check again so a cancelled request never
 	// reaches the wire.
 	if err := ctx.Err(); err != nil {
-		return err
+		return NotSent(err)
 	}
 	select {
 	case <-p.closed:
-		return ErrClosed
+		return NotSent(ErrClosed)
 	default:
 	}
 	_, err = p.w.Write(b)
@@ -307,7 +326,7 @@ func (p *Peer) writeContext(ctx context.Context, m message) error {
 // into the request's line.
 func (p *Peer) Call(ctx context.Context, method string, params any, out any) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return NotSent(err)
 	}
 	id := fmt.Sprintf("%s%d", p.prefix, p.nextID.Add(1))
 	ch := make(chan message, 1)

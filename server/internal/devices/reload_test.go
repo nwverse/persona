@@ -126,6 +126,90 @@ func TestResidentReloadRetriesOnlyNotStartedRequests(t *testing.T) {
 	}
 }
 
+// A call that never went out is said to be one (rpc.ErrNotSent), for a caller that must tell it from one that may have
+// reached the node: the caller's wait ran out between retries of the node's not-started refusals, or while the call
+// waited for the resident handover with no connection. A send that may have been taken stays unmarked.
+func TestACallThatNeverWentOutSaysSo(t *testing.T) {
+	t.Run("refused as restarting until the wait ran out", func(t *testing.T) {
+		d := newTestDevices(t)
+		m := newMachine(d, MachineConfig{ID: "example-machine", Kind: "ssh"})
+		var attempts atomic.Int32
+		m.dialNode = func(ctx context.Context) (net.Conn, error) {
+			a, b := net.Pipe()
+			peer := rpc.New("n", b)
+			peer.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+				switch method {
+				case "node.info":
+					return proto.NodeInfo{Version: "test"}, nil
+				case "sessions.list":
+					return map[string]any{"sessions": []proto.Session{}}, nil
+				case "session.send":
+					attempts.Add(1)
+					return nil, &rpc.Error{Code: nodeproto.CodeRestarting, Message: nodeproto.CodeRestarting}
+				}
+				return map[string]any{"ok": true}, nil
+			}
+			go func() { _ = peer.Serve(ctx, b); _ = b.Close() }()
+			return a, nil
+		}
+		d.addEntry(m)
+		runMachine(t, m)
+		eventually(t, time.Second, "node ready", func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.online })
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		_, err := d.CallNode(ctx, m.cfg.ID, "session.send", json.RawMessage(`{"session_id":"example-session"}`))
+		if !errors.Is(err, rpc.ErrNotSent) || !errors.Is(err, context.DeadlineExceeded) || attempts.Load() < 2 {
+			t.Fatalf("a send the node refused as restarting until the wait ran out: %v (attempts %d), want a deadline marked not sent",
+				err, attempts.Load())
+		}
+	})
+	t.Run("waited for the resident handover", func(t *testing.T) {
+		d := newTestDevices(t)
+		m := newMachine(d, MachineConfig{ID: "example-machine"})
+		d.addEntry(m)
+		m.mu.Lock()
+		m.warmUntil, m.warmed = time.Now().Add(5*time.Second), make(chan struct{})
+		m.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		_, err := d.CallNode(ctx, m.cfg.ID, "session.send", json.RawMessage(`{"session_id":"example-session"}`))
+		if !errors.Is(err, rpc.ErrNotSent) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a send that waited for the handover until its wait ran out: %v, want a deadline marked not sent", err)
+		}
+	})
+	t.Run("dropped once it went out", func(t *testing.T) {
+		d := newTestDevices(t)
+		m := newMachine(d, MachineConfig{ID: "example-machine", Kind: "ssh"})
+		m.dialNode = func(ctx context.Context) (net.Conn, error) {
+			a, b := net.Pipe()
+			peer := rpc.New("n", b)
+			peer.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+				switch method {
+				case "node.info":
+					return proto.NodeInfo{Version: "test"}, nil
+				case "sessions.list":
+					return map[string]any{"sessions": []proto.Session{}}, nil
+				case "session.send":
+					_ = b.Close() // it may have been typed: the connection goes before the answer
+					return nil, rpc.ErrClosed
+				}
+				return map[string]any{"ok": true}, nil
+			}
+			go func() { _ = peer.Serve(ctx, b); _ = b.Close() }()
+			return a, nil
+		}
+		d.addEntry(m)
+		runMachine(t, m)
+		eventually(t, time.Second, "node ready", func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.online })
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := d.CallNode(ctx, m.cfg.ID, "session.send", json.RawMessage(`{"session_id":"example-session"}`))
+		if err == nil || errors.Is(err, rpc.ErrNotSent) {
+			t.Fatalf("a send dropped once it went out: %v, want an error not marked not sent", err)
+		}
+	})
+}
+
 func TestSchedulingAndAppsAgreeDuringResidentReconnect(t *testing.T) {
 	d := newTestDevices(t)
 	m := newMachine(d, MachineConfig{ID: "example-machine"})

@@ -56,6 +56,8 @@ func (m *Machine) expectedReload() bool {
 
 // call retries only an explicit not-started refusal or a close before writing. An ambiguous dropped write is never
 // replayed. The retry budget bounds waiting, not the operation's original execution deadline after the node is ready.
+// When the budget or the caller's wait runs out between tries, the last try had not started: that is said
+// (rpc.NotSent), so a caller can tell it from a request that may have reached the node.
 func (m *Machine) call(ctx context.Context, method string, params any, out any) error {
 	var deadline time.Time
 	for {
@@ -68,11 +70,11 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 			deadline = time.Now().Add(20 * time.Second)
 		}
 		if time.Until(deadline) <= 0 {
-			return context.DeadlineExceeded
+			return rpc.NotSent(context.DeadlineExceeded)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return rpc.NotSent(ctx.Err())
 		case <-time.After(min(100*time.Millisecond, time.Until(deadline))):
 		}
 	}
