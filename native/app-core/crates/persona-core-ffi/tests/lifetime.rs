@@ -6,8 +6,9 @@ use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use persona_core::{
-    PersonaCore, PersonaCoreHost, persona_core_bytes_free, persona_core_dispatch, persona_core_drain,
-    persona_core_flush, persona_core_free, persona_core_new,
+    PersonaCore, PersonaCoreChatCallback, PersonaCoreHost, notify_drain_started_for_test, persona_core_bytes_free,
+    persona_core_dispatch, persona_core_drain, persona_core_flush, persona_core_free, persona_core_new,
+    persona_core_set_changed_chat,
 };
 use persona_core_runtime::wire::{self, Action, ChatEvent, ChatPatch, ChatSnapshot, Config, WireBatch};
 
@@ -20,11 +21,15 @@ struct Context {
     ready: Sender<bool>,
     release: Sender<()>,
     reenter: Option<SendPointer>,
+    hold: Option<Receiver<()>>,
 }
 
 unsafe extern "C" fn changed(context: *mut c_void, _version: u64) {
     let context = unsafe { &*(context as *const Context) };
     let _ = context.ready.send(true);
+    if let Some(hold) = &context.hold {
+        let _ = hold.recv_timeout(Duration::from_secs(5));
+    }
 }
 
 unsafe extern "C" fn release(context: *mut c_void) {
@@ -44,6 +49,7 @@ fn host() -> (PersonaCoreHost, Receiver<bool>, Receiver<()>) {
         ready: ready_tx,
         release: release_tx,
         reenter: None,
+        hold: None,
     })) as *mut c_void;
     (
         PersonaCoreHost {
@@ -97,8 +103,15 @@ fn free(core: *mut PersonaCore) {
     unsafe { persona_core_free(core) }
 }
 
-fn flush_shared(core: SendPointer, timeout_ms: u32) -> bool {
-    unsafe { persona_core_flush(core.0, timeout_ms) }
+fn free_shared(core: SendPointer) {
+    free(core.0);
+}
+
+fn drain_shared(core: SendPointer) -> bool {
+    let bytes = unsafe { persona_core_drain(core.0, c"chat".as_ptr() as *const u8, 4) };
+    let present = !bytes.data.is_null();
+    unsafe { persona_core_bytes_free(bytes) };
+    present
 }
 
 fn exercise_until(core: SendPointer, barrier: Arc<Barrier>, action: Vec<u8>, deadline: Instant) {
@@ -115,30 +128,20 @@ fn exercise_until(core: SendPointer, barrier: Arc<Barrier>, action: Vec<u8>, dea
 }
 
 #[test]
-fn close_waits_for_an_in_progress_call_and_releases_the_host_once() {
+fn release_releases_the_host_once_and_rejects_later_calls() {
     let (core, _context, ready, release) = new_core();
     let action = reconnect();
     assert!(unsafe { persona_core_dispatch(core, action.as_ptr(), action.len()) });
     assert!(unsafe { persona_core_flush(core, 5_000) });
-    let core = SendPointer(core);
-
-    let barrier = Arc::new(Barrier::new(2));
-    let caller_barrier = barrier.clone();
-    let caller = std::thread::spawn(move || {
-        caller_barrier.wait();
-        // A close racing this call must not invalidate its runtime reference before it returns.
-        flush_shared(core, 5_000)
-    });
-    barrier.wait();
-    free(core.0);
-    assert!(caller.join().unwrap());
+    // The successful flush returned while the handle was live. Close must not require a fresh flush on a closed ID.
+    free(core);
     release
         .recv_timeout(Duration::from_secs(5))
         .expect("the host is released exactly once");
     assert!(release.try_recv().is_err());
-    assert!(!unsafe { persona_core_flush(core.0, 0) });
-    assert!(!unsafe { persona_core_dispatch(core.0, std::ptr::null(), 0) });
-    let empty = unsafe { persona_core_drain(core.0, std::ptr::null(), 0) };
+    assert!(!unsafe { persona_core_flush(core, 0) });
+    assert!(!unsafe { persona_core_dispatch(core, std::ptr::null(), 0) });
+    let empty = unsafe { persona_core_drain(core, std::ptr::null(), 0) };
     assert!(empty.data.is_null());
     unsafe { persona_core_bytes_free(empty) };
     let _ = ready;
@@ -159,6 +162,56 @@ fn live_empty_patch_stays_distinct_from_a_closed_drain() {
     unsafe { persona_core_bytes_free(empty) };
     free(core);
     release.recv_timeout(Duration::from_secs(5)).expect("host released");
+}
+
+#[test]
+fn last_lease_drain_does_not_join_a_callback_that_is_still_finishing() {
+    let (core, context, ready, release) = new_core();
+    let (hold_tx, hold_rx) = channel();
+    unsafe { (*context).hold = Some(hold_rx) };
+    let action = open();
+    assert!(unsafe { persona_core_dispatch(core, action.as_ptr(), action.len()) });
+    recv_ready(&ready); // The worker is now in its callback, not merely scheduled.
+    let core = SendPointer(core);
+    let (drain_started, drain_started_rx) = channel();
+    notify_drain_started_for_test(core.0, drain_started);
+    let drained = std::thread::spawn(move || drain_shared(core));
+    drain_started_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("drain acquired its lease before close");
+    // The callback is held, but drain has already leased the runtime. Close can only join the worker on its own path.
+    let (close_finished_tx, close_finished_rx) = channel();
+    let closer = std::thread::spawn(move || {
+        free_shared(core);
+        let _ = close_finished_tx.send(());
+    });
+    assert!(drained.join().expect("drain thread panicked"));
+    assert!(
+        close_finished_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "close must not return while its worker callback is held"
+    );
+    let _ = hold_tx.send(());
+    closer.join().expect("close thread panicked");
+    release
+        .recv_timeout(Duration::from_secs(5))
+        .expect("host released after its callback completes");
+}
+
+unsafe extern "C" fn changed_chat(context: *mut c_void, chat: *const u8, length: usize, _version: u64) {
+    let context = unsafe { &*(context as *const Context) };
+    let chat = unsafe { std::slice::from_raw_parts(chat, length) };
+    let _ = context.ready.send(chat == b"chat");
+}
+
+#[test]
+fn close_rejects_late_targeted_registration() {
+    let (core, _context, _ready, release) = new_core();
+    assert!(unsafe { persona_core_set_changed_chat(core, PersonaCoreChatCallback(changed_chat)) });
+    free(core);
+    assert!(!unsafe { persona_core_set_changed_chat(core, PersonaCoreChatCallback(changed_chat)) });
+    release
+        .recv_timeout(Duration::from_secs(5))
+        .expect("host released once");
 }
 
 #[test]

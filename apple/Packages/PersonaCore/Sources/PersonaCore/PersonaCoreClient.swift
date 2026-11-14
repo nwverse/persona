@@ -7,11 +7,14 @@ import Synchronization
 /// or synchronously flush the client that is invoking them. Network and other blocking work belongs to the host.
 public struct PersonaCoreCallbacks: Sendable {
     public var changed: @Sendable (UInt64) -> Void
+    public var changedChat: (@Sendable (String, UInt64) -> Void)?
     public var run: @Sendable (Effect) throws -> Void
 
     public init(changed: @escaping @Sendable (UInt64) -> Void = { _ in },
+                changedChat: (@Sendable (String, UInt64) -> Void)? = nil,
                 run: @escaping @Sendable (Effect) throws -> Void) {
         self.changed = changed
+        self.changedChat = changedChat
         self.run = run
     }
 }
@@ -31,9 +34,9 @@ private final class CallbackBox: @unchecked Sendable {
     init(_ callbacks: PersonaCoreCallbacks) { self.callbacks = callbacks }
 }
 
-/// An owned C core handle. Value codecs are Sendable. The native lease registry accepts calls racing close and drops
-/// the last lease outside its lock; this adapter clears its ID before native destruction. `flush` remains test-only
-/// and must not run synchronously in a host callback. Call `close` outside the callback for an orderly stop.
+/// An owned C core handle. Value codecs are Sendable. The native lease registry accepts calls racing close and never
+/// joins the worker on an ordinary call's last lease. Close clears the ID and owns worker shutdown outside the lock.
+/// `flush` remains test-only and must not run synchronously in a host callback; `close` also belongs outside it.
 private struct NativeHandle: @unchecked Sendable {
     let raw: OpaquePointer
 }
@@ -72,6 +75,22 @@ public final class PersonaCoreClient: @unchecked Sendable {
         guard handle != nil else {
             // `persona_core_new` consumes the host even when config decoding or worker creation fails.
             host.context = nil
+            throw PersonaCoreError.creationFailed
+        }
+        let registered = persona_core_set_changed_chat(handle, { context, chat, length, version in
+            guard let context else { return }
+            let box = Unmanaged<CallbackBox>.fromOpaque(context).takeUnretainedValue()
+            guard let callback = box.callbacks.changedChat else {
+                box.callbacks.changed(version)
+                return
+            }
+            let data = chat.map { Data(bytes: $0, count: length) } ?? Data()
+            if let chat = String(data: data, encoding: .utf8) {
+                callback(chat, version)
+            }
+        })
+        guard registered else {
+            close()
             throw PersonaCoreError.creationFailed
         }
     }

@@ -1,5 +1,12 @@
 # Lessons: hub / node and networking
 
+## An empty list sent as null means "no change" to an optional field (2026-11-14)
+
+The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.
+Go marshals a nil slice as `null`, so lifting the last blocked pattern stored none on the hub but left the node blocking
+the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
+empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
+
 ## A node binary's name does not prove its platform (2026-11-14, #7206)
 
 The local node package lookup trusted `personad-<os>-<arch>` and `persona-node-<os>-<arch>` filenames without reading the executable, so one misnamed Hub build could be sent to every node of that named platform. Check the Go build info before selecting a local or bundled candidate and ignore a mismatch, allowing the normal release lookup to supply the right build; do not run a cross-platform binary on the Hub. The install path needs its own failure boundary too: verify `.new` before renaming it over the active binary, through direct and nested SSH, and remove it when the check fails. A test that only checks an error message misses whether the old executable survived.

@@ -91,6 +91,15 @@ def save_build_failure(output, error):
     raise ValueError('Gradle build failed with exit ' + str(error.returncode) + '; see gradle.txt') from error
 
 
+def instrumentation_output(command, timeout):
+    """A nonzero JUnit process carries evidence; the caller still enforces its real test result."""
+    try:
+        result = run(command, timeout=timeout, capture_output=True)
+    except subprocess.CalledProcessError as error:
+        return build_output(error)
+    return result.stdout + result.stderr
+
+
 def benchmark_report(output, nonce, args, adb, props):
     """Recover the deliberate FAIL's raw evidence before enforcing its unchanged performance budgets."""
     if args.suite not in ('benchmark', 'attribution', 'control'):
@@ -214,10 +223,10 @@ def main():
         if '/androidTest/release/' not in str(args.apk):
             raise ValueError('benchmark requires the non-debuggable release androidTest APK')
         mapping = args.apk.parents[3] / 'mapping' / 'releaseAndroidTest' / 'mapping.txt'
-        # R8 writes mapping after packaging the test APK, so mapping's mtime is normally later. Rebuild that
-        # exact variant before installing rather than accepting an unrelated debug or stale release artifact.
         android = args.apk.parents[5].parents[1]
         repository = android.parent
+        # R8 writes mapping after packaging the test APK, so mapping's mtime is normally later. Rebuild that
+        # exact variant before installing rather than accepting an unrelated debug or stale release artifact.
         try:
             result = run(['bash', str(android / 'gradlew'), '--no-daemon', '--no-watch-fs', '--console=plain', '--max-workers=2',
                           '-PpersonaApplicationId=com.example.persona', '-PpersonaGoogleOAuthScheme=persona.oauth.unset',
@@ -277,8 +286,7 @@ def main():
                 'persona.core.rustcore.android.test/androidx.test.runner.AndroidJUnitRunner']
     started = time.monotonic()
     try:
-        result = run(command, timeout=args.timeout, capture_output=True)
-        output = result.stdout + result.stderr
+        output = instrumentation_output(command, args.timeout)
     except subprocess.TimeoutExpired as error:
         output = build_output(error)
         (args.output / 'instrumentation.txt').write_text(output)

@@ -54,6 +54,22 @@ class AndroidPackageReportTests(unittest.TestCase):
 
 
 class DeviceBenchmarkGateTests(unittest.TestCase):
+    def test_instrumentation_nonzero_is_captured_before_the_budget_failure(self):
+        calls = []
+        failure = subprocess.CalledProcessError(1, ['am', 'instrument'], output='INSTRUMENTATION_CODE: -1\n',
+                                                stderr='FAILURES!!!\n')
+        def captures_nonzero(command, **kwargs):
+            calls.append(command)
+            raise failure
+        original = runner.run
+        runner.run = captures_nonzero
+        try:
+            self.assertEqual(runner.instrumentation_output(['am', 'instrument'], 30),
+                             'INSTRUMENTATION_CODE: -1\nFAILURES!!!\n')
+        finally:
+            runner.run = original
+        self.assertEqual(calls, [['am', 'instrument']])
+
     def test_debug_benchmark_apk_is_rejected_before_adb(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

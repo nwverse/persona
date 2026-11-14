@@ -75,9 +75,17 @@ it never overrides a disabled setting or retries a marked bad build.
 The worker holds a local lock for the whole cycle, and publication holds a remote
 lock through confirmation. Build numbers must increase and new source must contain
 the previous source. Files have immutable checksum names. Interrupted attempts
-reuse the same build and artifact, with a 15-minute failure backoff; they cannot
-turn a rolled-back build into a new version just by retrying. Recent local attempts
-and remote artifacts have bounded retention. Failure leaves the updater in charge
+reuse the same build and artifact, with a failure backoff; they cannot
+turn a rolled-back build into a new version just by retrying. The backoff applies to
+every new head of the followed branch, not only the failed commit, so a red `main`
+is not rebuilt in full at every timer firing: 15 minutes after the first failure in a row,
+doubling with each further failure up to 2 hours; `last.json` keeps the `failures` count
+and a success resets it. `--retry` and a pinned `--commit` run immediately. Recent local attempts
+(the last five, failed ones included) and remote artifacts have bounded retention. After each
+attempt the worker runs `go clean -cache` when `go env GOCACHE` is larger than
+`go_cache_limit_gib` from the worker config (default 20): Go itself only drops entries
+unused for five days, which a worker validating every new head outgrows by tens of GB a day.
+Failure leaves the updater in charge
 of rollback; the publisher never restarts the host or the Hub service.
 
 Bootstrap once with a verified binary containing the private update source, set
@@ -563,6 +571,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      Update history and bad versions still go into Postgres.
 4. **Wait for idle** (check every 30 seconds; also do not restart while redeploying a machine): automatic and manual are the same: **restart only when the assistant and every Agent are idle**, with no time-of-day restriction (user, 2026-11-02).
    - Idle = no session working or waiting for the user's answer (both assistant chats and Agents in herdr count). If they never become idle, never install; keep the download ready.
+   - A chat that waits only on the assistant's `ask_user` cards asked without waiting (`wait: false`, or a question that let go of its turn) is idle for this: no turn waits on them and they outlive a restart, so a card that is up for two hours does not hold the update (`hub/selfupdate_install.go` `updateBusy`, #7392; `docs/assistant/assistant.md`, "Asking without holding the turn"). A running turn, a blocked terminal, any other card of that chat, or a card the hub was not shown still holds it.
    - For a manual update, the App shows "what is still busy" (which chats, on which machine), and offers **Update Now** in a second confirmation:
      the confirmation states, "This interrupts anything waiting on the hub (the assistant's current turn, uploads in progress, terminal connections). Agents in herdr aren't affected and reconnect on their own."
      After confirmation, skip waiting for idle; all other steps (verification, rollback) stay the same.
