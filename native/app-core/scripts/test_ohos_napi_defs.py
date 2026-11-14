@@ -78,7 +78,16 @@ class OhosNapiDefinitionsTests(unittest.TestCase):
             declaration.write_text(GENERATOR.generate(records()))
             command = ["python3", "-I", str(SCRIPT), "--records", str(record_file), "--declaration", str(declaration)]
             subprocess.run(command + ["--check"], check=True, capture_output=True, text=True)
-            declaration.write_text(declaration.read_text().replace("Uint8Array", "Array<number>"))
+            original = declaration.read_text()
+            for old, new in [("Uint8Array", "Array<number>"),
+                             ("changed(version: number): void", "changed(version: string): void"),
+                             ("run(effect: Uint8Array): void", "run(effect: Array<number>): void")]:
+                with self.subTest(declaration_drift=old):
+                    declaration.write_text(original.replace(old, new))
+                    mismatch = subprocess.run(command + ["--check"], capture_output=True, text=True)
+                    self.assertNotEqual(mismatch.returncode, 0)
+                    self.assertIn("declaration differs", mismatch.stderr)
+            declaration.write_text(original.replace("Uint8Array", "Array<number>"))
             mismatch = subprocess.run(command + ["--check"], capture_output=True, text=True)
             self.assertNotEqual(mismatch.returncode, 0)
             self.assertIn("declaration differs", mismatch.stderr)
