@@ -10,6 +10,12 @@ export interface WorkspaceBoardSetting {
   /** null until the hub answered: nothing shows the board (or says it is off) before that. */
   enabled: boolean | null;
   canWrite: boolean;
+  /** The hub has no switch (404: a hub from before it). The board shows, as it did there, and only updating the hub
+   *  brings the switch: Settings says that rather than "read-only device". */
+  unsupported?: boolean;
+  /** What failed reading the switch while nothing was known of it yet (unset once the hub answered): the board page and
+   *  Settings say why (errorText) with Retry instead of loading forever; the next hello reads it again too. */
+  error?: unknown;
 }
 
 let state: WorkspaceBoardSetting = { enabled: null, canWrite: false };
@@ -22,7 +28,7 @@ let rev = 0;
 const listeners = new Set<() => void>();
 
 function set(next: WorkspaceBoardSetting) {
-  if (next.enabled === state.enabled && next.canWrite === state.canWrite) return;
+  if (next.enabled === state.enabled && next.canWrite === state.canWrite && next.unsupported === state.unsupported && next.error === state.error) return;
   state = next;
   listeners.forEach((l) => l());
 }
@@ -60,9 +66,11 @@ async function readSwitch(): Promise<void> {
     const r = await api<{ enabled?: boolean; can_write?: boolean }>("/workspace-board/settings");
     if (mine === rev) set({ enabled: r.enabled === true, canWrite: r.can_write === true });
   } catch (e) {
+    if (mine !== rev) return;
     // a hub from before the switch showed the board to everyone and has nothing to turn it off with
-    if (e instanceof ApiError && e.status === 404 && mine === rev) set({ enabled: true, canWrite: false });
-    // anything else: keep what we had, the next hello asks again
+    if (e instanceof ApiError && e.status === 404) set({ enabled: true, canWrite: false, unsupported: true });
+    // anything else: keep what we had (the next hello asks again); with nothing yet, say why, so the page can offer Retry
+    else if (state.enabled === null) set({ ...state, error: e });
   }
 }
 
@@ -100,8 +108,10 @@ const subscribe = (l: () => void) => {
   };
 };
 
-export function useWorkspaceBoardSetting(): WorkspaceBoardSetting {
-  return useSyncExternalStore(subscribe, getWorkspaceBoardSetting, getWorkspaceBoardSetting);
+/** The switch, and `retry` to read it again (Retry beside a failed read; the pages are lazy, and a name this module
+ *  did not hand them before would rename the first screen's imports). */
+export function useWorkspaceBoardSetting(): WorkspaceBoardSetting & { retry: () => Promise<void> } {
+  return { ...useSyncExternalStore(subscribe, getWorkspaceBoardSetting, getWorkspaceBoardSetting), retry: refreshWorkspaceBoardSetting };
 }
 
 /** Only for tests: back to "not answered yet". */

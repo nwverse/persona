@@ -1,6 +1,7 @@
 // The workflow board's switch (#2475) takes only answers newer than what it shows (#4136): a read on its way when the
 // switch is flipped, or a write overtaken by the next flip, does not put the old value back.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "./api";
 import { getWorkspaceBoardSetting, refreshWorkspaceBoardSetting, resetWorkspaceBoardSettingForTest, setWorkspaceBoardEnabled } from "./workspace-board-setting";
 
 interface Held {
@@ -112,5 +113,45 @@ describe("workspace board switch: a read asked for while one is out", () => {
     await settle();
     expect(held).toHaveLength(2);
     expect(getWorkspaceBoardSetting().enabled).toBe(false);
+  });
+});
+
+describe("workspace board switch: a read that fails", () => {
+  it("with nothing known yet, keeps why (not loading forever), and the next read that works clears it", async () => {
+    const held = heldHub();
+    const read = refreshWorkspaceBoardSetting();
+    await settle();
+    held[0].answer({ error: "database is down", code: "internal" }, 500);
+    await read;
+    expect(getWorkspaceBoardSetting().enabled).toBeNull();
+    expect((getWorkspaceBoardSetting().error as ApiError).status).toBe(500);
+
+    const again = refreshWorkspaceBoardSetting(); // Retry, or the next hello
+    await settle();
+    held[1].answer({ enabled: true, can_write: true });
+    await again;
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: true });
+  });
+
+  it("after the hub answered once, keeps what it said and adds no error", async () => {
+    const held = heldHub();
+    const first = refreshWorkspaceBoardSetting();
+    await settle();
+    held[0].answer({ enabled: true, can_write: true });
+    await first;
+    const second = refreshWorkspaceBoardSetting();
+    await settle();
+    held[1].answer({ error: "busy" }, 503);
+    await second;
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: true });
+  });
+
+  it("404 (a hub from before the switch): the board shows, and the switch is missing rather than read-only", async () => {
+    const held = heldHub();
+    const read = refreshWorkspaceBoardSetting();
+    await settle();
+    held[0].answer({ error: "Not Found", code: "not_found" }, 404);
+    await read;
+    expect(getWorkspaceBoardSetting()).toEqual({ enabled: true, canWrite: false, unsupported: true });
   });
 });

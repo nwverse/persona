@@ -107,3 +107,91 @@ describe("the workflow board switch", () => {
     expect(discoveryCalls()).toBeGreaterThan(before);
   });
 });
+
+describe("when the hub can't give the switch or the board", () => {
+  // every request goes to `answer` first; what it leaves is the hub above
+  const stubHub = (answer: (path: string, method: string) => Response | undefined) =>
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input).split("?")[0]!;
+      const method = init?.method ?? "GET";
+      const own = answer(path, method);
+      if (!own) return hub(input, init);
+      calls.push({ method, path });
+      return Promise.resolve(own);
+    }));
+  const buttons = (text: string) => [...host.querySelectorAll("button")].filter((b) => b.textContent === text);
+  const notFound = () => json({ error: "Not Found", code: "not_found" }, 404);
+  const settingReads = () => calls.filter((c) => c.path === "/api/v1/workspace-board/settings" && c.method === "GET").length;
+
+  it("a switch read that fails says why with Retry, on the page and in Settings, instead of loading forever", async () => {
+    let failing = true;
+    stubHub((path) => (path === "/api/v1/workspace-board/settings" && failing ? json({ error: "database is down", code: "internal" }, 500) : undefined));
+    act(() => root.render(<><AgentGroup /><WorkspaceBoard /></>));
+    await flush();
+    expect(host.textContent).not.toContain("正在读取工作流看板的开关");
+    expect(host.textContent).toContain("读不到工作流看板的开关");
+    expect(host.textContent).toContain("HTTP 500");
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    expect(buttons("重试")).toHaveLength(2); // the page's and Settings'
+
+    const before = settingReads();
+    failing = false;
+    act(() => buttons("重试")[0].click());
+    await flush();
+    expect(settingReads()).toBe(before + 1);
+    expect(host.textContent).not.toContain("读不到工作流看板的开关");
+    expect(host.textContent).toContain("工作流看板未开启"); // the hub answered: off
+    expect(host.querySelector('button[role="switch"][aria-label="工作流看板"]')).not.toBeNull();
+  });
+
+  it("an older hub (404): one message to update the hub, none of the board's controls, and Settings says the hub lacks the switch", async () => {
+    stubHub((path) => (path.startsWith("/api/v1/workspace-board") ? notFound() : undefined));
+    act(() => root.render(<><AgentGroup /><WorkspaceBoard /></>));
+    await flush();
+    expect(host.textContent).toContain("更新 hub 后才能用工作流看板");
+    expect(host.textContent?.match(/还用不了工作流看板/g)).toHaveLength(1); // said once
+    expect(host.textContent).not.toContain("看板暂不可用");
+    expect(buttons("重试")).toHaveLength(0); // retrying can't help
+    // nothing that would change nothing: search, machine filter, archived, manual / auto, the auto view's promo
+    expect(host.querySelector('input[aria-label="搜索工作空间"]')).toBeNull();
+    expect(host.querySelector("select")).toBeNull();
+    expect(buttons("已归档")).toHaveLength(0);
+    expect(host.querySelector('[role="group"]')).toBeNull();
+    expect(host.textContent).not.toContain("点我切换到自动模式");
+    const open = buttons("打开 hub 设置")[0]!;
+    // Settings: no switch that can't move, and not "read-only device"
+    expect(host.querySelector('button[role="switch"]')).toBeNull();
+    expect(host.textContent).not.toContain("只读设备");
+    expect(host.textContent).toContain("这个 hub 的版本还没有这个开关");
+    act(() => open.click());
+    expect(location.pathname + location.search).toBe("/settings?tab=hub");
+  });
+
+  it("a manager that is away (503 assistant_offline) keeps the board's controls and says it once, with Retry", async () => {
+    let away = true;
+    stubHub((path) => {
+      if (path === "/api/v1/workspace-board/settings") return json({ enabled: true, can_write: true });
+      if (path === "/api/v1/workspace-board" && away) return json({ error: "assistant offline", code: "assistant_offline" }, 503);
+      return undefined;
+    });
+    act(() => root.render(<WorkspaceBoard />));
+    await flush();
+    expect(host.textContent).not.toContain("更新 hub");
+    expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    expect(host.textContent).toContain("看板暂不可用");
+    expect(host.querySelector('input[aria-label="搜索工作空间"]')).not.toBeNull();
+    away = false;
+    act(() => buttons("重试")[0].click());
+    await flush();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('section[aria-label="待办"]')).not.toBeNull();
+  });
+
+  it("a read-only device is still told it is read-only", async () => {
+    stubHub((path) => (path === "/api/v1/workspace-board/settings" ? json({ enabled: true, can_write: false }) : undefined));
+    act(() => root.render(<AgentGroup />));
+    await flush();
+    expect(host.textContent).toContain("只读设备不能改这个开关");
+    expect(host.querySelector<HTMLButtonElement>('button[role="switch"]')!.disabled).toBe(true);
+  });
+});
