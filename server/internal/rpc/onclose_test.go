@@ -14,10 +14,12 @@ import (
 func TestCloseReportsCallsCutOff(t *testing.T) {
 	hub, node := pair(t)
 	release := make(chan struct{})
+	arrived := make(chan struct{}, 3)
 	node.OnRequest = func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
 		if method == "quick" {
 			return "ok", nil
 		}
+		arrived <- struct{}{} // registered on the hub's side before it was written
 		select {
 		case <-release:
 		case <-ctx.Done():
@@ -38,18 +40,12 @@ func TestCloseReportsCallsCutOff(t *testing.T) {
 	for _, method := range []string{"session.start", "ping", "ping"} {
 		go func() { errs <- hub.Call(context.Background(), method, nil, nil) }()
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		hub.mu.Lock()
-		n := len(hub.methods)
-		hub.mu.Unlock()
-		if n == 3 {
-			break
+	for range 3 {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the calls did not reach the node")
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%d calls pending, want 3", n)
-		}
-		time.Sleep(time.Millisecond)
 	}
 	why := errors.New("half-open link")
 	hub.Close(why)
