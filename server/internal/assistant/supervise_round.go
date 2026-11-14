@@ -27,10 +27,12 @@ import (
 // round: no round is asked for, the message is rendered whole and the process keeps every tool.
 //
 // The node says how each round went (superviseRoundAnswered). A round it could not start from the first turn because
-// that turn is no longer on the conversation's chain (a compaction, before #7315 or since: no_anchor), and one whose
-// transcript outgrew backgroundTranscriptLimit, get the background supervisor replaced the next time a signal is for it
-// while it is idle (backgroundOutgrown, ensureBackground): a new one starts, what was queued for the old one moves to it,
-// and the old one is put away like a former main chat, titled "… · until M/D" and archived (putAwayBackground).
+// that turn is no longer on the conversation's chain (a compaction, before #7315 or since: no_anchor), and a round that
+// restarted the process with a transcript over backgroundTranscriptLimit, get the background supervisor replaced the
+// next time a signal is for it while it is idle (backgroundOutgrown, ensureBackground): a new one starts, what was
+// queued for the old one moves to it, and the old one is put away like a former main chat, titled "… · until M/D" and
+// archived (putAwayBackground). What the answers said is kept in this manager's memory only: after a restart a
+// replacement whose rounds still have no anchor can be replaced once more (at most once per backgroundRetry).
 
 // superviseRoundParam marks an assistant.send to the background supervisor that is a round (node/assistant_round.go).
 const superviseRoundParam = "supervise_round"
@@ -60,17 +62,17 @@ func roundTools(list []proto.Tool) []proto.Tool {
 	return out
 }
 
-// backgroundTranscriptLimit is how large the background supervisor's transcript grows before it is replaced. Nothing
-// shortens that file any more: a round's process is never compacted (node/assistant_round.go), and every round restarts
-// it, so Claude Code reads and parses the whole file at each round's start, as the node does to find the anchor and the
-// app's history after a node restart, though the round uses only the first turn. Measured with Claude Code 2.1.322 and
-// a local mock of the model API (node/assistant_round_live_test.go, lines of about 4 KiB): a round asks the model
-// 0.24 s after its process starts with a small file, 0.47 s at 32 MiB and about 0.8 s at 128 MiB, and the node's anchor
-// scan takes 0.09 s and 0.35 s. Real transcripts parse slower than those lines (docs/lessons/agents.md: 317 MB in about
-// 20 s on a cold open, so about 2 s for 32 MiB). A round writes about 0.1 to 0.4 MB (estimated: the snapshot, its
-// message, its tool calls), so at the audited 60 to 75 rounds a day 32 MiB is a replacement every few days, while each
-// round's start stays under half a second more than a new conversation's; without a limit the file would reach a
-// gigabyte within months.
+// backgroundTranscriptLimit is how large the background supervisor's transcript grows before it is replaced. The file
+// only grows (a compaction appends to it too), and every round now restarts the process, so Claude Code reads and
+// parses all of it at each round's start, as the node does to find the anchor and the app's history after a node
+// restart, though the round uses only the first turn. Measured with Claude Code 2.1.322 and a local mock of the model
+// API on synthetic lines of about 4 KiB (node/assistant_round_live_test.go): a round asks the model 0.24 s after its
+// process starts with a small file, 0.47 s at 32 MiB and about 0.8 s at 128 MiB, and the node's anchor scan takes
+// 0.09 s and 0.35 s. Real transcripts that large were not measured and may parse slower (docs/lessons/agents.md: the
+// app's reader took about 20 s for 317 MB on a cold open, which would be about 2 s for 32 MiB). A round writes about 0.1
+// to 0.4 MB (estimated: the snapshot, its message, its tool calls), so at the audited 60 to 75 rounds a day 32 MiB is a
+// replacement every few days; without a limit the file would reach a gigabyte within months. Only a round that
+// restarted the process counts (superviseRoundAnswered).
 const backgroundTranscriptLimit int64 = 32 << 20
 
 // backgroundKeepsContext is assistant.background_supervisor_keeps_context in effect with settings cfg: the background
@@ -128,7 +130,10 @@ func (s *Service) superviseRoundAnswered(to string, res superviseRoundReply) {
 			return
 		}
 		why = "no_anchor"
-	case res.TranscriptBytes > backgroundTranscriptLimit:
+	case res.TranscriptBytes > backgroundTranscriptLimit && (res.Context == "fresh" || res.Why == "start_failed"):
+		// Only where rounds restart the process (backgroundTranscriptLimit): a conversation that keeps its context for
+		// good (an older Claude Code, another runtime: unsupported) is neither restarted per round nor spared idle
+		// compaction, and replacing it would only throw that context away.
 		why = "oversized"
 	}
 	if why == "" {
