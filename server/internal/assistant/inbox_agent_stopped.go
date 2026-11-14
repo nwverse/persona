@@ -98,7 +98,6 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 
 		a := it.Agent
 		if enabled && a != nil && a.SessionID != "" {
-			back := a.Back
 			if current {
 				// A stopped current Agent is never a state to restore; an earlier waiting restoration point stays intact.
 				if a.Back == HandlingAgent {
@@ -110,12 +109,8 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 				}
 			}
 			b.tell(it, inboxNote{Name: prompts.NoteAgentStopped, Text: detail, Failed: failed,
-				Machine: sess.MachineID, Session: sess.SessionID}, true, now)
-			if !current {
-				// An older Agent's stop still wakes the chat but must not replace the newer Agent's restoration point.
-				a.Back = back
-			}
-			wake[w] = true
+				Machine: sess.MachineID, Session: sess.SessionID}, current, now)
+			wake[w] = current
 		}
 		b.settle(w)
 		writes = append(writes, w)
