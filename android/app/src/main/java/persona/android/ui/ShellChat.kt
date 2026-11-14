@@ -56,9 +56,10 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         return
     }
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
+    val routingConnection = wiring?.connection ?: session.connection
+    val routingState by routingConnection.state.collectAsStateWithLifecycle()
     val home = rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
-        (wiring?.connection ?: session.connection).lastHello?.features.orEmpty())
-    if (home.resolving) { androidx.compose.material3.CircularProgressIndicator(); return }
+        routingConnection.lastHello?.features.orEmpty(), routingState == ConnectionState.Online)
     val key = home.key
     val metadata = (sessions + home.rows).firstOrNull { it.key == key }
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()

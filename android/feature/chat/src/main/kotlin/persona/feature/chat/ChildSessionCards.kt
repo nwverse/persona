@@ -7,8 +7,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import persona.core.contracts.*
@@ -27,42 +26,46 @@ internal data class ChatChildren(val rows: Map<String, Session>, val repository:
 internal val LocalChatChildren = staticCompositionLocalOf<ChatChildren?> { null }
 
 data class ChildSessionHome(val key: SessionKey, val childSessionId: String? = null,
-    val rows: List<Session> = emptyList(), val resolving: Boolean = false)
+    val rows: List<Session> = emptyList())
 
-internal fun childSessionHome(key: SessionKey, row: Session?): ChildSessionHome {
+internal fun childSessionHome(key: SessionKey, row: Session?, parentRow: Session? = null): ChildSessionHome {
     val parent = row?.takeIf { it.key == key }?.foldedUnder?.takeIf { it.isNotBlank() && it != key.sessionId }
-    return if (parent == null) ChildSessionHome(key) else ChildSessionHome(SessionKey(key.machineId, parent), key.sessionId)
+        ?.let { SessionKey(key.machineId, it) }?.takeIf { it == parentRow?.key }
+    return if (parent == null) ChildSessionHome(key) else ChildSessionHome(parent, key.sessionId)
 }
 
 /** Exact lookups are page metadata, never additions to the root list's membership. */
-internal suspend fun resolveChildSessionHome(key: SessionKey, rows: List<Session>,
+internal suspend fun resolveChildSessionHome(key: SessionKey, rows: List<Session>, connected: Boolean = true,
     lookup: suspend (SessionKey) -> Session?): ChildSessionHome {
-    suspend fun row(target: SessionKey): Session? = rows.firstOrNull { it.key == target } ?: try {
+    suspend fun row(target: SessionKey): Session? = rows.firstOrNull { it.key == target } ?: if (!connected) null else try {
         lookup(target)?.takeIf { it.key == target }
     } catch (cancelled: CancellationException) { throw cancelled }
     catch (_: Exception) { null }
     val child = row(key)
-    val home = childSessionHome(key, child)
-    val parent = if (home.childSessionId == null) null else row(home.key)
+    val parentKey = child?.foldedUnder?.takeIf { it.isNotBlank() && it != key.sessionId }?.let { SessionKey(key.machineId, it) }
+    val parent = parentKey?.let { row(it) }
+    val home = childSessionHome(key, child, parent)
     return home.copy(rows = listOfNotNull(child, parent).filter { found -> rows.none { it.key == found.key } })
 }
 
-/** Resolve before creating the draft editor and file/terminal actions: all of the page belongs to the parent. */
+/** Keep cached pages mounted while looking up metadata; only a confirmed child and parent change the page key. */
 @Composable
-fun rememberChildSessionHome(key: SessionKey, rows: List<Session>, actions: ChatActions?, features: Collection<String>): ChildSessionHome {
+fun rememberChildSessionHome(key: SessionKey, rows: List<Session>, actions: ChatActions?, features: Collection<String>,
+    connected: Boolean): ChildSessionHome {
     val listed = rows.firstOrNull { it.key == key }
-    val local = childSessionHome(key, listed)
-    val missing = listed == null || local.childSessionId != null && rows.none { it.key == local.key }
-    val needsLookup = missing && actions != null && "sessions_lookup" in features
+    val parent = listed?.foldedUnder?.let { id -> rows.firstOrNull { it.machineId == key.machineId && it.sessionId == id } }
+    val local = childSessionHome(key, listed, parent)
+    val missing = listed == null || !listed.foldedUnder.isNullOrBlank() && parent == null
+    val needsLookup = missing && connected && actions != null && "sessions_lookup" in features
     var lookedUp by remember(key, actions, listed?.foldedUnder) { mutableStateOf<ChildSessionHome?>(null) }
     LaunchedEffect(key, listed?.foldedUnder, needsLookup, actions, features) {
         if (needsLookup) {
-            lookedUp = resolveChildSessionHome(key, rows) { target ->
+            lookedUp = resolveChildSessionHome(key, rows, connected) { target ->
                 actions?.completeRow(Session(target.machineId, target.sessionId))
             }
         }
     }
-    return if (needsLookup) lookedUp ?: local.copy(resolving = true) else local
+    return if (missing) lookedUp ?: local else local
 }
 
 /** Bounded hubs keep children outside the root window; a failed refresh keeps the last confirmed cards. */
@@ -70,29 +73,34 @@ fun rememberChildSessionHome(key: SessionKey, rows: List<Session>, actions: Chat
 internal fun rememberChatChildren(key: SessionKey, parent: Session?, rows: List<Session>, chrome: ChatChromeBindings,
     repository: ChatRepository): ChatChildren {
     val features = chrome.connection?.lastHello?.features ?: LocalHubFeatures.current
-    var held by remember(key) { mutableStateOf(emptyList<Session>()) }
+    val list = remember(key, chrome.actions, chrome.connection) { ChildSessionList(key) }
+    val held by list.state.collectAsStateWithLifecycle()
     val local = remember(rows, key) { childSessions(rows, key) }
-    val missing = (parent?.children?.total ?: 0) > local.size
+    val children = remember(held, local, chrome.lookupRows, key) {
+        childSessionRows(key, local, held, chrome.lookupRows)
+    }
+    val hasChildren = (parent?.children?.total ?: 0) > 0 || children.isNotEmpty()
+    val latestParent by rememberUpdatedState(parent)
+    val latestLocal by rememberUpdatedState(local)
+    // Retain invalidations while covered/backgrounded without doing HTTP work there.
+    val invalidation = produceState<String?>(null, chrome.connection) {
+        value = null
+        chrome.connection?.events?.filterIsInstance<SessionsListEvent>()?.collect { value = it.revision }
+    }
+    val connected = chrome.connection?.state?.collectAsStateWithLifecycle()?.value == ConnectionState.Online
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(key, parent?.children, missing, features, chrome.actions, chrome.covered, lifecycle) {
-        if (!missing) { held = emptyList(); return@LaunchedEffect }
-        if (parent == null || "sessions_hierarchy" !in features || chrome.covered) return@LaunchedEffect
+    LaunchedEffect(key, parent?.key, hasChildren, features, chrome.actions, chrome.connection, connected, chrome.covered, lifecycle) {
+        if (parent == null || !hasChildren || "sessions_hierarchy" !in features || chrome.covered || !connected) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            while (true) {
-                try { held = chrome.actions?.childRows(parent) ?: held }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { /* Preserve the last confirmed child rows. */ }
-                delay(CHILD_REFRESH_MILLIS)
+            val actions = chrome.actions ?: return@repeatOnLifecycle
+            val events = snapshotFlow { invalidation.value }.filterNotNull()
+            list.watch(events, { needsChildSessionRead(latestParent, childSessionRows(key, latestLocal, list.state.value, emptyList())) }) {
+                actions.childPage(parent, it)
             }
         }
     }
-    val children = remember(held, rows, chrome.lookupRows, key) {
-        childSessions((rows + held + chrome.lookupRows).distinctBy { it.key }, key)
-    }
     return ChatChildren(children.associateBy { it.sessionId }, repository)
 }
-
-private const val CHILD_REFRESH_MILLIS = 5_000L
 
 /** The existing task card, with its child's own metadata and a transcript read only while open. */
 @Composable

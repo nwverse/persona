@@ -81,6 +81,13 @@ interface RequestEditorServices {
     fun chats(): ChatRepository
 }
 
+/** Missing child metadata retains the ordinary request policy; only a known child can override it. */
+internal fun requestApprovalBlockedReason(request: Interaction, child: Session?, fallback: String?,
+    blocked: (Session) -> String?): String? =
+    if (!request.foldedUnder.isNullOrBlank() && child != null && child.key == request.sessionKey) {
+        if (child.canApprove) null else blocked(child)
+    } else fallback
+
 /** Both request inbox and conversation use the same form, journal and validation. */
 @Composable
 fun RequestEditor(
@@ -97,9 +104,9 @@ fun RequestEditor(
     val context = LocalContext.current.applicationContext
     val childRows = LocalChatChildren.current?.rows
     val child = childRows?.get(request.sessionId)
-    val requestBlock = if (!request.foldedUnder.isNullOrBlank() && childRows != null) {
-        if (child?.canApprove == true) null else approvalBlockedReason(context.resources, child)
-    } else blockedReason
+    val requestBlock = requestApprovalBlockedReason(request, child, blockedReason) {
+        approvalBlockedReason(context.resources, it)
+    }
     val shown = if (!request.foldedUnder.isNullOrBlank() && request.sessionTitle.isNullOrBlank())
         request.copy(sessionTitle = stringResource(R.string.chat_subagent_untitled)) else request
     val services = remember(context) { EntryPointAccessors.fromApplication(context, RequestEditorServices::class.java) }

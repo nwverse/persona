@@ -187,8 +187,9 @@ fun ChatDestination(
     val wiring by remember(services, requested) { services.chatWiring().bindingsFor(requested) }.collectAsStateWithLifecycle()
     if (wiring == null) { androidx.compose.material3.CircularProgressIndicator(); return }
     val metadata by services.sessions().sessions.collectAsStateWithLifecycle()
-    val home = rememberChildSessionHome(requested, metadata, wiring?.actions, wiring?.connection?.lastHello?.features.orEmpty())
-    if (home.resolving) { androidx.compose.material3.CircularProgressIndicator(); return }
+    val routingState = wiring?.connection?.state?.collectAsStateWithLifecycle()?.value
+    val home = rememberChildSessionHome(requested, metadata, wiring?.actions, wiring?.connection?.lastHello?.features.orEmpty(),
+        routingState == ConnectionState.Online)
     val session = home.key
     val shownMetadata = metadata + home.rows
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()

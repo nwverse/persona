@@ -285,11 +285,15 @@ separate definition (`docs/protocol/protocol.md`, "Session hierarchy"). Older hu
 
 In every style, the parent's chat places each child by `started_at` inside the exchange's folded work, reusing the
 subagent task card. Opening a card reads its own transcript; full text is fetched from that child too. A paged chat
-reads every `parent_session_id` page while visible, refreshing every five seconds or when the child rollup changes;
-an already complete local list needs no child-page reads. Child requests keep their original answer target but have
-one parent home (`Interaction.homeKey`), with **From subagent · title**. Child links resolve before the draft editor
-and open the parent with that card expanded. Covered by `SessionHierarchyTest`, `ChildSessionsTest`,
-`ChildSessionCardsTest`, `HttpHierarchyTest`, `ChildSessionHomeTest`, `FoldedSessionsShotsTest` and
+reads an initial `parent_session_id` baseline and responds to `sessions_list` invalidations with `since` deltas.
+All cursor pages succeed before upserts, removals and the checkpoint commit; expired checkpoints read a new baseline.
+Held rows count toward coverage, so a complete, settled and unchanged list needs no read on resume and has no polling timer.
+Child requests keep their original answer target but have one parent home (`Interaction.homeKey`), with
+**From subagent · title**. Missing child metadata keeps the ordinary approval policy until the child's capabilities arrive.
+Links show the requested cached page immediately, look up metadata only while online, and move to the parent with the
+child card expanded only when that parent row exists. Covered by `SessionHierarchyTest`, `ChildSessionsTest`,
+`ChildSessionCardsTest`, `ChildSessionListTest`, `HttpHierarchyTest`, `ChildSessionHomeTest`, `ChildSessionHomeStateTest`,
+`RequestApprovalTest`, `FoldedSessionsShotsTest` and
 `ChildSessionsShotsTest` (Glass, Brief and Board, light/dark).
 
 - **Sorting**: the list settings have "Sort: **Status first** / **Recently updated**" (iOS `AgentSort`, stored on the device). With recently updated, sessions in each group sort only by time, and active spaces, repositories and computers sort by their newest session, first. With status first the sections stay the same; only the order inside a section is by time. The logic is in `AgentList.kt` in `core:domain` (`AgentListSettings.sort`).
