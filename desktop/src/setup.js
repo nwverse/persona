@@ -63,10 +63,24 @@ document.querySelector("#pair").addEventListener("submit", event => {
   void command({ action: "pair-active", value: document.querySelector("#pair-link").value });
 });
 
+const loginToggle = document.querySelector("#launch-at-login");
+loginToggle.addEventListener("change", async () => {
+  const enabled = loginToggle.checked;
+  loginToggle.disabled = true;
+  try {
+    const state = await window.desktopSetup.setLaunchAtLogin(enabled);
+    loginToggle.checked = state.enabled;
+    document.querySelector("#launch-at-login-status").textContent = state.requiresApproval ? t("launch_requires_approval") : "";
+  } finally { loginToggle.disabled = false; }
+});
+
 void window.desktopSetup.getHub().then(async ({ address, locale, strings }) => {
   field.value = address;
   words = strings;
   document.documentElement.lang = locale;
   for (const element of document.querySelectorAll("[data-i18n]")) element.textContent = t(element.dataset.i18n);
+  const login = await window.desktopSetup.getLaunchAtLogin();
+  loginToggle.checked = login.enabled;
+  document.querySelector("#launch-at-login-status").textContent = login.requiresApproval ? t("launch_requires_approval") : "";
   await refreshLink();
 });

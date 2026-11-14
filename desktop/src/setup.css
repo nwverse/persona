@@ -11,6 +11,8 @@ summary { cursor: pointer; font-weight: 600; min-height: 2.75rem; align-content:
 .actions button { width: auto; min-width: 8rem; margin: 0; padding: .5rem .75rem; }
 p { line-height: 1.5; }
 label { display: block; font-weight: 600; margin: 1.5rem 0 .5rem; }
+.choice { display: flex; align-items: center; gap: .6rem; min-height: 2.75rem; margin: 0; cursor: pointer; }
+.choice input { width: 1.25rem; min-height: 1.25rem; margin: 0; }
 input { width: 100%; min-height: 2.75rem; padding: .6rem .75rem; border: 1px solid GrayText; border-radius: .5rem; font: inherit; background: Field; color: FieldText; }
 .hint { font-size: .875rem; opacity: .75; }
 #error { color: #c33; }

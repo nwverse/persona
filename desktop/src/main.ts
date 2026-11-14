@@ -203,7 +203,8 @@ else {
     powerMonitor.on("lock-screen", () => { screenLocked = true; publishPresence(); });
     powerMonitor.on("unlock-screen", () => { screenLocked = false; publishPresence(); });
     powerMonitor.on("suspend", () => { screenLocked = true; publishPresence(); });
-    powerMonitor.on("resume", () => { screenLocked = false; publishPresence(); });
+    // Resume by itself is not proof that the person unlocked the computer; only unlock-screen restores presence.
+    powerMonitor.on("resume", publishPresence);
     presenceTimer = setInterval(publishPresence, 30_000);
     installAutoUpdate();
     const saved = await store().read<{ hub?: string }>();
