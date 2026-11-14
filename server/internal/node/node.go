@@ -172,20 +172,22 @@ type Node struct {
 	events    *herdrEvents               // herdr's event stream (herdrevents.go)
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
-	hooks     *hookTurns                 // per-session turn counters from Persona's hooks (hookturn.go)
-	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
-	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
-	codices   *codexRegistry
-	takeovers codexTakeovers
-	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
-	machineID string
-	sends     sentLog         // recent client_msg_ids (sendsafe.go)
-	echoes    echoLog         // sends tied to their transcript lines (echo.go)
-	typing    typingLocks     // one send at a time per session (sendsafe_turns.go)
-	sendOrder sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
-	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
-	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
-	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
+	// profileSeedMu orders a new/empty assistant profile's hook seed across concurrent starts of one launcher.
+	profileSeedMu sync.Mutex
+	hooks         *hookTurns  // per-session turn counters from Persona's hooks (hookturn.go)
+	live          liveReplies // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
+	bgWait        bgWatch     // whether background commands only wait (bgwait.go)
+	codices       *codexRegistry
+	takeovers     codexTakeovers
+	usageWin      usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
+	machineID     string
+	sends         sentLog         // recent client_msg_ids (sendsafe.go)
+	echoes        echoLog         // sends tied to their transcript lines (echo.go)
+	typing        typingLocks     // one send at a time per session (sendsafe_turns.go)
+	sendOrder     sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
+	cx            codexCards      // Codex questions and approvals listed to the hub (codexask.go)
+	kept          map[string]bool // sessions always listed (node.configure keep_sessions)
+	forked        map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
 	freshForks map[string]bool
 	starts     startLog       // sessions starting in the background (starting.go)

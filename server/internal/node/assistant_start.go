@@ -247,7 +247,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	}
 	configDir := n.assistantConfigDir(launcher, execution.ConfigDir)
 	configPath := n.assistantConfigPath(execution.ConfigDir)
-	if err := os.MkdirAll(configPath, 0o700); err != nil {
+	if err := n.prepareAssistantProfile(configPath); err != nil {
 		return nil, err
 	}
 	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
