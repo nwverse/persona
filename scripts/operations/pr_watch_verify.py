@@ -93,11 +93,32 @@ APPLE_VISUAL_MARKERS = re.compile(
     r"foregroundColor|opacity|offset|position|lineLimit|minimumScaleFactor)\s*\(")
 
 
+APPLE_NON_UI_SHARED = (
+    "schema/",
+    "spec/",
+    "scripts/ci/",
+    "scripts/app/",
+    "docs/",
+)
+APPLE_PORTABLE_CORE = (
+    "native/app-core/crates/persona-core-runtime/",
+    "native/app-core/crates/persona-core-ohos/",
+)
+APPLE_ANDROID_SHARED = (
+    "android/core/rustcore/",
+)
+
+
 def non_ui_apple_change(worktree, base, head, names):
-    """Apple-only changes without a production visual change need no screenshots."""
-    if not names or not all(name.startswith(APPLE_NON_UI_PATHS) for name in names):
+    """Shared backend/schema changes can use the Linux non-visual policy too."""
+    if not names or not all(name.startswith(APPLE_NON_UI_PATHS + APPLE_NON_UI_SHARED +
+                                          APPLE_PORTABLE_CORE + APPLE_ANDROID_SHARED) for name in names):
         return False
     for path in names:
+        if path == "native/app-core/crates/persona-core-runtime/src/wire.rs":
+            return False
+        if not path.startswith("apple/"):
+            continue
         parts = path.split("/")
         test_path = (len(parts) >= 2 and parts[1] in ("PersonaTests", "PersonaUITests")) or (
             len(parts) >= 5 and parts[1] == "Packages" and parts[3] == "Tests") or (
@@ -134,7 +155,7 @@ def persona_checks(worktree, pr, timeout, config):
     names = checked(["git", "diff", "--name-only", "--no-renames", base + "..." + head], cwd=worktree).splitlines()
     selected = load_paths(Path(__file__).resolve().parents[2]).select(names)
     commands = []
-    for lane in ("server", "web", "android", "runtimes", "scripts"):
+    for lane in ("server", "web", "android", "runtimes", "scripts", "core", "desktop"):
         if selected.get(lane):
             commands.append(("CI " + lane, ["bash", "scripts/ci/" + lane + ".sh"]))
     if selected.get("apple"):
