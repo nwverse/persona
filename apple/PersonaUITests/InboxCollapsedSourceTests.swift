@@ -93,6 +93,7 @@ final class InboxCollapsedSourceTests: XCTestCase {
 
     /// Regular width keeps one detail column for every item: an expanded source must not stay open for the next item.
     @MainActor func testAnotherItemOpensCollapsed() throws {
+        try resetFixture(Self.chatItem)
         openDetail(Self.chatItem)
         try requireWide()
         let toggle = element("inbox.detail.source")
@@ -134,7 +135,12 @@ final class InboxCollapsedSourceTests: XCTestCase {
         repeat {
             let rows = app.staticTexts.matching(identifier: title).allElementsBoundByIndex
             if let row = rows.first(where: { $0.isHittable && $0.frame.maxX < half }) { return row }
-            app.swipeUp(velocity: .slow) // a section below the first screen
+            // Down the list column only: the detail column beside it scrolls the open page.
+            let window = app.windows.firstMatch
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.8))
+                .press(forDuration: 0.05,
+                       thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.3)),
+                       withVelocity: .slow, thenHoldForDuration: 0.05)
             usleep(250_000)
         } while Date.now < deadline
         return nil
@@ -165,7 +171,8 @@ final class InboxCollapsedSourceTests: XCTestCase {
 
     @MainActor private func assertLabel(_ label: String, on element: XCUIElement, _ what: String,
                                         timeout: TimeInterval = 5) {
-        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", label), object: element)
+        // The button reads as its preview and its action: the action is the part to look for, not the whole label.
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", label), object: element)
         XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: timeout), .completed,
                        "\(what) does not say \(label):\n\(app.debugDescription)")
     }
