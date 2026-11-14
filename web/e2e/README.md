@@ -16,6 +16,28 @@ node web/e2e/ask-card-dock.mjs <loopback-web-origin> <artifact-directory> [--chr
 
 Opens the real app against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data. The main conversation shows an ask_user card with four described options in the Pending tray at 1280 × 600, 1024 × 520, 390 × 664 and 360 × 560 (touch), light and dark. It checks the card's send button and the three tray entries are not under the composer before any scrolling, and that "Or write your own" is fully visible (not under the sticky answer row or the tray's title) once tapped and typed into. Writes `results.json` and before/after-typing screenshots; exits nonzero on failure or the four-minute timeout.
 
+## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
+
+```sh
+MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/chat-content.mjs <loopback-web-origin> <artifact-directory> [--big] [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in Simplified Chinese, light and dark. It
+checks what jsdom cannot show from the web usability audit of 2026-11-14: Persona's message to a task folds to its first
+line without Markdown marks and opens drawn as Markdown, and the supervisor's rework note keeps its lines apart (item 7);
+the main chat's runtime line is absent when nothing is known and reads just "主对话 · 运行中" for a report intercepted in
+the browser, whose place and harness Settings › Assistant shows instead (item 80); the model pill's name is not cut under
+a 600 px composer and a phone keeps the 64 px tile and chevron (item 50); in a 390 px window with a pointer, Tab reaches
+your bubble's first action inside the window, the bar under the bubble stays while the pointer goes down to it and takes
+no clicks once hidden, and in a 1440 px window the bar stays beside the bubble (item 73); on a 390 px phone a "#" column is at most 40 px and the table copy button
+covers no header words of a table that fits (item 77). `--big` runs against the mock started with `MOCK_BIG=1` instead
+(item 90): opening the "worked 1 h 10 min" fold, no animation frame draws more than 60 rows at once, all 650 rows are
+drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
+fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
+(`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.
@@ -71,6 +93,16 @@ node web/e2e/overview-machines-layout.mjs http://127.0.0.1:<web port> <artifact-
 ```
 
 Run against an exclusively owned mock-backed web server, once with `MOCK_MANAGERS=1` (one assistant) and once with the mock's default roster (several assistants); `MOCK_SESSIONS_MANY=300` adds a list longer than its first page. The runner reads the mock's own complete session list (every page, `roots=1`) and holds each Machines card to it: the agents that are not offline, without the assistant's conversations, on a hub that pushes no sessions. At 768, 1024, 1280 and 1920 px, light and dark, it checks every online card's count, a gap of at least 8 px between the card's state line and its versions, and that no metric value is cut (the text's own width against its box, since `scrollWidth` rounds away the half pixel Chrome already cuts with "…"), with the widest rate a card can show ("↓ 1023 MB/s", "↑ 1000 KB/s") answered for one computer in the browser, and that a card's metrics are one row or two columns, never three with one left alone (one row at 1280 and 1920 px). On Overview it answers an example extension's overview card in the browser (its place, list and view, with the UI-slot features added to the hub's hello) and checks that a lone card is the page's width at 1280 px and one of two columns at 1440, 1680 and 1920 px. Then it fails the list Overview counts from in the browser (the paged list's reads with one assistant, the complete list's with several) and checks that the summary says it couldn't read the agents, as a live region, with **Retry**, with no **All set** and no computer count; after the route is lifted, **Retry** brings the summary back and each online computer's count matches the mock's, or, while the paged list has more pages, no count. Nothing is written to the hub. It saves a screenshot of each page and size, prints one line per check, and ends with a verdict; it exits 1 on a failed check and 2 on its three-minute timeout.
+
+## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
+
+```sh
+MOCK_TASKS=1 MOCK_TODO_ASKS=1 MOCK_LEADERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/todos-keyboard-layout.mjs <loopback-web-origin> [--shots <artifact-directory>] [--executable <chromium>]
+```
+
+Run against an exclusively owned mock-backed web server; the date checks save to the mock, so use a disposable one. In Chinese, light and dark, it types a due day and a reminder hour segment by segment in the to-do's page (1280 × 820) and checks the field keeps the focus and nothing is saved until the field is left or Enter is pressed, then the typed value is saved once, also when the field is left right after Enter; at 390 × 844 it opens a to-do from a focused row with Enter (the focus lands on Back), checks Esc in the title field stays there, and goes back by Esc, Back and the browser's Back, each time with the list scrolled where it was and the focus on that row, and Esc on a to-do opened by a link puts the focus on its row; at 1920 × 1080 it checks the detail is at most 760 px wide and centered; at 1440 × 700 it leaves the page for Machines and comes back with the browser's Back, the list scrolled where it was and the open row in view. A part that throws counts as a failed check and the run goes on; one line per check, a final verdict, exit 1 on a failure or after four minutes. `--shots` saves the typed date field, the narrow detail and list, the wide detail and the list after Back. Browser and mock checks only.
 
 ## Knowledge kind chips stay put
 
@@ -175,3 +207,13 @@ checked and sends nothing, that Auto is posted and shown at once, and that Full 
 asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
+
+## Keyboard around the overlays
+
+```sh
+MOCK_RECENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/keyboard-overlays.mjs <loopback-web-origin> [--shots <dir>] [--executable <chromium>]
+```
+
+Run against an exclusively owned mock-backed web server, in Chinese, light and dark, a fresh browser context each. It checks that the session ⋯ menu shows every row at 1280 × 820, and at 1280 × 560 (too short for it) opens beside its button (not over it) with a fade at the edge where rows are cut and End scrolling the last row into view; that Escape anywhere in the ⌘K palette closes it and gives the focus back to the composer it was opened from; that ⌘/ and ⌘K replace one another instead of stacking two dialogs; that Tab in the shortcut help reaches "Change in Settings" after the scrolling list and wraps to Close; that Escape out of a menu's Rename leaves the focus on the row with the Rename row highlighted, so Enter renames again; that Escape clears the To-dos search; and that a theme, theme color or language picked in one tab reaches the other, the language's reload waiting (with a toast) while that tab holds a draft. Every hub write except the sign-in is answered in the browser. It prints one line per check and a verdict, and exits nonzero on a failure or its three-minute timeout.

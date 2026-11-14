@@ -29,12 +29,13 @@ import { AgentMark, SessionMark } from "../ui/AgentMark";
 import { CARD_OUT, EASE, EXIT_MS, Kbd, toast, useExit } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
-import { useModalFocus } from "../ui/overlay";
+import { useEscapeClose, useModalFocus } from "../ui/overlay";
 import { copyFileMention, FilesHeading, FilesNotice, FileResultRow, openFileHit, usePaletteFiles, type FileRow } from "./palette/FilesSection";
 import { AgentConditions } from "./palette/AgentConditions";
 import { t } from "../i18n";
 import { byTime } from "../lib/times";
 import { STATE_LABEL } from "../lib/state-labels";
+import { plainMarkdown } from "../lib/plain-markdown";
 import { PHONE, useMedia } from "../lib/viewport";
 import type { AssistantSearchAnswer, AssistantSearchHit } from "../lib/assistant-search";
 
@@ -106,10 +107,11 @@ const ROW_TITLE = "block truncate text-[13px] font-medium text-ink";
 const ROW_DETAIL = "block truncate text-[11.5px] text-ink-3";
 const ROW_END = "shrink-0 text-[11px] text-ink-3";
 
-/** A group's heading above its first row ("Inbox", "Go to"). */
-const groupHeadingClass = "px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase";
-function GroupHeading({ children }: { children: React.ReactNode }) {
-  return <div className={groupHeadingClass}>{children}</div>;
+/** A group's heading above its first row ("Inbox", "Go to"), in a label's capitals; `asWritten`: one that holds a name
+ *  (the pane's, the space's), which capitals would rewrite. */
+const groupHeadingClass = "px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3";
+function GroupHeading({ children, asWritten = false }: { children: React.ReactNode; asWritten?: boolean }) {
+  return <div className={asWritten ? groupHeadingClass : `${groupHeadingClass} uppercase`}>{children}</div>;
 }
 
 /** One row of the list as drawn: the option, and the heading above it when a group starts there. */
@@ -361,6 +363,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   // a modal for the keyboard (ui/overlay.ts): Tab stays in, and closing gives the focus back to where it was. Called
   // before the effect below, so it notes that place before the field takes the focus.
   useModalFocus(card, open);
+  // Esc closes it wherever the focus is in it (the field, a row Tab reached, the Filter), and only it: a Dialog under it
+  // stays open, a menu over it (the Filter's) closes first
+  useEscapeClose(open, onClose);
   // the field takes the focus on every open (opened again on its way out, it is not mounted anew)
   useEffect(() => {
     if (open) input.current?.focus({ preventScroll: true });
@@ -404,7 +409,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
-              if (composing(e.nativeEvent)) return;
+              if (composing(e.nativeEvent)) {
+                if (e.key === "Escape") e.stopPropagation(); // it ends the input method's word, not the palette
+                return;
+              }
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                 e.preventDefault();
                 if (shown.length) setActive((a) => (a + (e.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length);
@@ -418,7 +426,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
                   onClose();
                   void copyFileMention(row);
                 } else if (row) pick(row);
-              } else if (e.key === "Escape") onClose();
+              }
             }}
             placeholder={command ? t("palette.command_placeholder") : files.ctx ? t("files-find.searching_placeholder") : t("palette.search_placeholder")}
             className="min-w-0 flex-1 bg-transparent text-[14px] text-ink outline-none placeholder:text-ink-3"
@@ -445,7 +453,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
               const heading = c.section && c.section !== (shown[i - 1] as Extract<Row, { kind: "command" }> | undefined)?.cmd.section;
               return {
                 key: r.key,
-                heading: heading ? <GroupHeading>{c.section}</GroupHeading> : null,
+                heading: heading ? <GroupHeading asWritten={c.sectionAsWritten}>{c.section}</GroupHeading> : null,
                 row: (
                   <button ref={ref} type="button" {...option} onMouseMove={() => setActive(i)} onClick={() => pick(r)} className={rowClass}>
                     <span className="flex size-5 shrink-0 items-center justify-center">{c.icon && <Icon name={c.icon} size={13} className={c.danger ? "text-red" : "text-ink-3"} />}</span>
@@ -525,7 +533,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
             }
             const h = r.hit;
             const st = stateOf(h.s);
-            const meta = h.assistant ? "Persona" : [machineWithHub(h.s.machine_id, machines), h.s.space_name, tabLabel(h.s)].filter(Boolean).join(" › ");
+            // a Persona chat says what was said last (its folder is the assistant's own, the same for every chat); an Agent
+            // where it runs
+            const meta = h.assistant ? plainMarkdown(h.s.last_text) || "Persona" : [[machineWithHub(h.s.machine_id, machines), h.s.space_name, tabLabel(h.s)].filter(Boolean).join(" › "), shortPath(h.s.cwd)].filter(Boolean).join(" · ");
             return {
               key: h.key,
               heading: sessionsHeading,
@@ -549,7 +559,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
                       {(found.marks?.(h.said.snippet, h.said.ranges, phone ? "phone" : "wide") ?? [[h.said.snippet, false] as [string, boolean]]).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
                     </span>
                   ) : (
-                    <span className={ROW_DETAIL}>{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>
+                    <span className={ROW_DETAIL}>{meta}</span>
                   )}
                 </span>
                 <span className={ROW_END}>{st === "offline" || h.assistant ? ago(h.s.updated_at) : STATE_LABEL[st]}</span>

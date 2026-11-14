@@ -15,6 +15,28 @@ the first pages (`sessionSummaries`) is not a computer's count either while the 
 `MOCK_SESSIONS_LIST=1` and without it, with the default roster (several assistants) and `MOCK_MANAGERS=1`, and with
 `GET /api/v1/sessions` answering 500 in the browser.
 
+## A date field's change fires per typed segment; a list hidden under a narrow detail drops the focus (web audit, 2026-11-14)
+
+- `<input type="date">`, `time` and `datetime-local` fire `input` (React's `onChange`) whenever the typed segments make
+  a valid value: the "1" of a day "15" is already the 1st. A field that saves on `onChange` and disables itself while
+  saving stores the half-typed day and takes the focus away before the next digit. Save typed changes on blur or Enter
+  and a change with no key before it (the browser's picker) at once, and never disable a field mid-edit
+  (`PlanField` in `web/src/views/Todos.tsx`). A half-typed field reads `""` with `validity.badInput`: go back to the
+  saved value, do not clear it. Chrome's first Tab out of the last segment stops on the picker button. Playwright's
+  `fill` sends no keys, so a test needs real `keyboard.type` (`web/e2e/todos-keyboard-layout.mjs`).
+- A list hidden with `display: none` under a phone-width detail takes the focused row with it: the focus falls to
+  `<body>`. Move it to the detail's Back when a row opens it, and back to that row on the way back (Back, Esc, the
+  browser's Back). Chrome keeps a hidden scroller's offset but reads `scrollTop` as 0 while hidden and fires a scroll
+  event, so a scroll memory that saves on every event can store 0.
+- A count shown under one name ("Done") must come from the rule that fills the section of that name, in every
+  grouping: the header counting closed to-dos by `done_at` disagreed with the Done section (seen or 24 hours old) and
+  with a failed start the sections show open. Count a merged row's to-dos under the row's section, as the section titles
+  do, not each under its own.
+- A grouping drawn from a hub list that holds only some to-dos (the pinned directions' tree lists only open ones,
+  `server/internal/assistant/direction_tree.go`) must still place the ones it leaves out: a to-do moved out of the
+  page's Done fold vanished from 常驻 and was counted as "open, under no direction". Check every grouping for each
+  to-do state a rule change moves.
+
 ## A read that only handles the expected failure loads forever (2026-11-14, workflow board)
 
 The board's switch started as "not answered yet" (`enabled: null`) and its read handled only 404; a 500 left it null,
@@ -1242,6 +1264,30 @@ px, while `offsetHeight` and the computed height say 44. Reduced motion only sho
 frame is still drawn. Wait for the panel's animations before measuring:
 `await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)))`
 (`web/e2e/standing-authorizations.mjs`).
+
+## A focus trap that lists only controls misses Chrome's focusable scrollers
+
+Chrome lets the keyboard focus a scrolling element with no focusable child of its own (the shortcut help's list). A
+modal's Tab trap that only knows the controls from `focusables()` sees the focus "outside" its list there and jumps back
+to the first control, so the controls after the scroller are never reached by Tab. Decide from where the focus is in
+the document instead: inside the modal but on no listed control, let the browser's order go on and wrap only past either
+end (`trapTabIn` in `web/src/ui/overlay.ts`). Check a trap with Tab in a real browser, not only in jsdom, which has no such
+focus stops.
+
+## Uppercase label styles rewrite names
+
+A heading styled as a label (`uppercase tracking-[0.06em]`) also capitalizes whatever is put in it. A menu header or a
+palette section that holds a space, project or computer name then shows "weather" as "WEATHER", a name the user never
+typed. Give those headings their text as written (`Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`) and
+keep the label style for label words.
+
+## A reload another tab asks for waits for a calm page
+
+A `storage` listener that reloads the page (a language picked in another tab) runs whatever the page holds: a half-typed
+dialog or field is lost, and a page with a `beforeunload` guard pops a leave-page prompt from a background tab. Reuse
+the calm test a new build waits for (`mayReload(pageCalm())` in `web/src/lib/new-version.ts`: no draft, no open dialog or
+menu, the page hidden or left alone) and offer the reload in a toast meanwhile (`web/src/lib/language-sync.ts`). Its
+words come from the catalog's rest, which `main.tsx`'s own imports do not wait for: wait for `i18nRest()` before `t()`.
 
 ## Testing Web Push in Playwright needs a real profile (2026-11-14, #7459)
 
