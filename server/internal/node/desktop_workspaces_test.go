@@ -63,6 +63,37 @@ func TestDesktopWorkspacesWithoutTerminalOrSessions(t *testing.T) {
 	}
 }
 
+func TestDesktopWorkspacesKeepRuntimeCatalog(t *testing.T) {
+	n, _ := runtimeNode(t)
+	if err := n.useEngine(context.Background(), proto.EnginePaseo); err != nil {
+		t.Fatal(err)
+	}
+	dir := resolved(t, t.TempDir())
+	desktopCatalogJSON(t, filepath.Join(n.codexHome(), ".codex-global-state.json"), map[string]any{
+		"local-projects": map[string]codexAppProject{"desktop": {Name: "Desktop project", RootPaths: []string{dir}}},
+	})
+	if got := catalog(t, n); len(got) != 1 {
+		t.Fatalf("desktop catalog while the runtime is away: %+v", got)
+	}
+	rt := dialRuntime(t, n, paseoWorkspacesHello())
+	if err := rt.peer.Notify("runtime.workspaces", map[string]any{"workspaces": []any{
+		map[string]any{"workspace_id": "wks_main", "title": "Runtime project", "cwd": dir, "kind": "checkout", "space_id": "prj_1", "space_name": "Runtime project", "repo_root": dir},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "desktop and runtime catalogs", func() bool { return len(catalog(t, n)) == 2 })
+	got := catalog(t, n)
+	if got["wks_main"].Source != proto.EnginePaseo || got["wks_main"].ProjectID != "prj_1" {
+		t.Fatalf("runtime project lost its identity: %+v", got)
+	}
+	for _, row := range got {
+		if row.Source == codexAppSource && row.Title == "Desktop project" && row.Cwd == dir {
+			return
+		}
+	}
+	t.Fatalf("runtime catalog hid the desktop project in the same directory: %+v", got)
+}
+
 func TestDesktopWorkspacesKeepPartialSourcesAndEmptyCatalog(t *testing.T) {
 	home := t.TempDir()
 	state := filepath.Join(home, ".codex", ".codex-global-state.json")

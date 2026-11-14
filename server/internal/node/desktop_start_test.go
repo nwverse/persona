@@ -143,7 +143,7 @@ func TestCodexAppFirstMessageFailurePreservesCreatedSession(t *testing.T) {
 }
 
 func TestCodexAppMetadataFailurePreservesCreatedSession(t *testing.T) {
-	n, bus, _, _ := codexAppNode(t)
+	n, bus, _, opened := codexAppNode(t)
 	n.codices = newCodexRegistry()
 	n.configureCodex(proto.CodexConfig{LegacyHome: n.codexHome()})
 	id := newUUID()
@@ -159,6 +159,23 @@ func TestCodexAppMetadataFailurePreservesCreatedSession(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	for _, text := range []string{
+		`<persona-context kind="skill" ref="old-selection">review</persona-context>`,
+		`<persona-context kind="skill">review</persona-context>`,
+	} {
+		_, err := request(t, n, "session.send", map[string]any{"session_id": n.codexPublicID(n.codexHome(), id), "skill_owner": "agents:helper", "text": text})
+		if code, data := refusalOf(t, err); code != "skill_unavailable" || data["delivered"] != deliveredNone {
+			t.Fatalf("desktop retry accepted an unavailable skill: %v (%v)", err, data)
+		}
+	}
+	if len(*opened) != 0 {
+		t.Fatalf("refused skill opened the desktop: %v", *opened)
+	}
+	select {
+	case turn := <-bus.turns:
+		t.Fatalf("refused skill reached the desktop: %v", turn)
+	default:
+	}
 	if err := n.send(ctx, n.codexPublicID(n.codexHome(), id), "hello", nil, sendOpts{}); err != nil {
 		t.Fatalf("retry could not reach the original desktop thread: %v", err)
 	}

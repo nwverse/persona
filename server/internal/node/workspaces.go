@@ -75,13 +75,16 @@ func fillSpaceDirectories(spaces []host.Space, panes []host.Agent) {
 	}
 }
 
+// listWorkspaces is the machine's workspace catalog: native desktop projects, each terminal host's workspaces, and
+// those of each engine runtime that keeps workspaces of its own (Paseo's, runtimeworkspaces.go), with or without sessions.
 func (n *Node) listWorkspaces(ctx context.Context) (proto.WorkspacesResponse, error) {
 	out := proto.WorkspacesResponse{Workspaces: []proto.Workspace{}}
 	desktop, desktopSources, desktopErrors := n.desktopWorkspaces()
 	out.Workspaces = append(out.Workspaces, desktop...)
 	out.Errors = append(out.Errors, desktopErrors...)
 	hs := n.hosts.All()
-	if len(hs) == 0 && desktopSources == 0 && len(desktopErrors) == 0 {
+	runtimes, runtimeEngine := n.catalogRuntimes()
+	if len(hs) == 0 && !runtimeEngine && desktopSources == 0 && len(desktopErrors) == 0 {
 		return out, fmt.Errorf("unsupported: this node has no workspace host")
 	}
 	var failures []error
@@ -128,18 +131,16 @@ func (n *Node) listWorkspaces(ctx context.Context) (proto.WorkspacesResponse, er
 				continue
 			}
 			seen[s.ID] = true
-			cwd := s.Cwd
-			if path := n.resolvePath(cwd, ""); path != "" && !inICloud(path) {
-				if real, err := filepath.EvalSymlinks(path); err == nil && !inICloud(real) {
-					cwd = real
-				}
-			}
 			out.Workspaces = append(out.Workspaces, proto.Workspace{ID: s.ID, Source: h.Kind(), SourceID: s.ID,
-				Title: firstOf(s.DisplayName, s.Label), Cwd: cwd, Branch: s.Branch, Online: true, Available: true,
+				Title: firstOf(s.DisplayName, s.Label), Cwd: n.catalogDir(s.Cwd), Branch: s.Branch, Online: true, Available: true,
 				ParentSourceID: s.ParentID, Index: s.Number,
 				ProjectID: s.ProjectID, ProjectName: s.ProjectName, ProjectPath: s.ProjectPath, IsMain: s.IsMain,
 				Unread: s.Unread, SidebarStatus: s.SidebarStatus, WorkspaceKind: s.WorkspaceKind, Head: s.Head})
 		}
+	}
+	for _, h := range runtimes {
+		succeeded++
+		out.Workspaces = append(out.Workspaces, n.runtimeWorkspaceRows(h)...)
 	}
 	if succeeded == 0 && len(failures) > 0 {
 		// Every source that runs here failed: an error, not an empty catalog.
