@@ -86,6 +86,12 @@ class DesktopPackageScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("not a semantic version", result.stderr)
 
+    def test_windows_packages_include_the_same_unpacked_app_for_first_run(self):
+        # electron-builder target names belong after --win; a bare `dir` is an unknown CLI argument.
+        script = PACKAGE.read_text()
+        self.assertIn('args+=(nsis dir)', script)
+        self.assertNotIn('args+=(dir)', script)
+
     def test_no_registered_identity_is_written_into_the_repository(self):
         production = yaml.load((ROOT / "desktop/electron-builder.yml").read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(production["appId"], "${env.PERSONA_DESKTOP_APP_ID}")
