@@ -272,7 +272,7 @@ async function main() {
   const seen = await events(profile);
   need("the packaged old version started", seen[0]?.event === "start" && seen[0].version === OLD && seen[0].packaged === true, seen[0]);
   need("it found the new version in the feed", seen.find(entry => entry.event === "available")?.version === NEW, requests.filter(entry => entry.path.endsWith(".yml")).map(entry => `${entry.path} ${entry.status}`));
-  need("its main window loaded the saved hub address", requests.some(entry => entry.path === "/" && entry.status === 200));
+  need("its main window loaded the saved hub address", await watch(profile, 30, () => requests.some(entry => entry.path === "/" && entry.status === 200)), requests.filter(entry => entry.path === "/"));
   need("the feed served the package", requests.some(entry => entry.path === `/${next.path}` && (entry.status === 200 || entry.status === 206)));
 
   if (platform === "darwin") {
