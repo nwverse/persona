@@ -206,6 +206,28 @@ asks first. It then checks that the session waits (`bypass_pending`, the chip st
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
 
+## The app shell's connection states, dead links and keyboard focus (web usability audit)
+
+```sh
+MOCK_TASKS=1 MOCK_SESSIONS_LIST=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/shell-connection.mjs http://127.0.0.1:<web port> http://127.0.0.1:<port> <artifact directory>
+```
+
+Needs a fake hub of its own: the runner takes it down (`/mock/down`) and refuses this browser's credential for a while
+(`/mock/reject`), and puts both back at the end. In Chrome, light and dark, it checks that folding the sidebar to its
+rail by the keyboard leaves the focus on the rail's expand button and opening it again on the collapse button; that an
+Agent's page names its browser tab after the session's title; that an unknown address says **Page not found** and
+keeps the address, a knowledge entry the hub doesn't have says **Entry not found** in the shared empty state (no
+title made of its id, no disabled buttons), and `/a/<missing>` says the conversation isn't there once, under the list's
+name, with no message box left loading; that the
+first key press makes no `AudioContext` while the alert sound is off and one when it is on; that the reconnect pill
+covers none of the to-dos' fields, buttons or titles at 390 px and 1280 px, and its details open over the page; that
+the English Offline line wraps only between words; and that a credential refused while the page is open reaches the
+sign-in page with "signed out" within 25 seconds. Each block of checks fails on its own and the run goes on; it prints
+one line per check and a verdict, saves screenshots in the artifact directory, and exits 1 on a failure and 2 on its
+five-minute timeout.
+
 ## Keyboard around the overlays
 
 ```sh
