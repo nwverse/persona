@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -182,7 +181,8 @@ class HomeChromeTest {
             NavItem("assistant", "Assistant", PhIcons.ChatCircle),
             NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
         )
-        val expectedTextSizes = mutableMapOf<String, androidx.compose.ui.unit.TextUnit>()
+        val expectedTextSizes = mutableMapOf<String, Float>()
+        val expectedDefaultTextSizes = mutableMapOf<String, Float>()
         rule.setContent {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
                 PersonaTheme(style = style, reduceMotion = true) {
@@ -201,12 +201,16 @@ class HomeChromeTest {
                                 val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
                                 val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
                                 expectedTextSizes[item.label] =
-                                    maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+                                    maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit) * density.fontScale
                             }
                         } else {
                             val fontSize = (if (style == AppStyle.Brief) PersonaTheme.type.label else PersonaTheme.type.labelSmall).fontSize
-                            expectedTextSizes["Assistant"] = fontSize
-                            expectedTextSizes["Agents 2"] = fontSize
+                            expectedTextSizes["Assistant"] = fontSize.value * density.fontScale
+                            expectedTextSizes["Agents 2"] = fontSize.value * density.fontScale
+                        }
+                        if (density.fontScale == 1f) {
+                            expectedDefaultTextSizes.clear()
+                            expectedDefaultTextSizes.putAll(expectedTextSizes)
                         }
                     }
                     Box(Modifier.width(width).height(220.dp).testTag("pane")) {
@@ -224,7 +228,7 @@ class HomeChromeTest {
             }
         }
         val widths = if (checkMainTextScale) listOf(320.dp, 360.dp, 411.dp) else listOf(200.dp, 280.dp, 320.dp, 360.dp, 400.dp)
-        val scales = if (checkMainTextScale) listOf(1.3f, 1.6f, 2f) else listOf(1f, 2f)
+        val scales = if (checkMainTextScale) listOf(1f, 1.3f, 1.6f, 2f) else listOf(1f, 2f)
         for (w in widths) for (scale in scales) {
             rule.runOnIdle { width = w; fontScale = scale }
             rule.waitForIdle()
@@ -233,6 +237,12 @@ class HomeChromeTest {
             if (checkMainTextScale || w >= 320.dp || scale == 1f) {
                 assertTextNotEllipsized("Assistant", case, expectedTextSizes["Assistant"])
                 assertTextNotEllipsized(agentsLabel, case, expectedTextSizes[agentsLabel])
+            }
+            if (checkMainTextScale && scale > 1f) {
+                assertTrue("main text must grow at $case",
+                    expectedTextSizes.getValue("Assistant") > expectedDefaultTextSizes.getValue("Assistant"))
+                assertTrue("main text must grow at $case",
+                    expectedTextSizes.getValue(agentsLabel) > expectedDefaultTextSizes.getValue(agentsLabel))
             }
             val pane = rule.onNodeWithTag("pane").getBoundsInRoot()
             val face = rule.onNodeWithContentDescription("Sidebar").getBoundsInRoot()
@@ -285,13 +295,14 @@ class HomeChromeTest {
         rule.onAllNodesWithText(text, useUnmergedTree = useUnmergedTree)
             .filter(SemanticsMatcher("placed in the top bar") { it.boundsInRoot.top > 0f }).onFirst()
 
-    private fun assertTextNotEllipsized(text: String, case: String, expectedSize: androidx.compose.ui.unit.TextUnit? = null) {
+    private fun assertTextNotEllipsized(text: String, case: String, expectedSize: Float? = null) {
         val layouts = mutableListOf<TextLayoutResult>()
         placedText(text, useUnmergedTree = true)
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         val result = layouts.single()
-        assertTrue("$text is ellipsized: $case; expectedSize=$expectedSize actualSize=${result.layoutInput.style.fontSize} layoutWidth=${result.size.width}", !result.isLineEllipsized(0))
-        expectedSize?.let { assertEquals("$text font size differs from main: $case", it, result.layoutInput.style.fontSize) }
+        val actualSize = result.layoutInput.style.fontSize.value * result.layoutInput.density.fontScale
+        assertTrue("$text is ellipsized: $case; expectedSize=$expectedSize actualSize=$actualSize layoutWidth=${result.size.width}", !result.isLineEllipsized(0))
+        expectedSize?.let { assertEquals("$text effective font size differs from main: $case", it, actualSize, 0.001f) }
     }
 
     @Test fun glassWideSwitcherIsCenteredWithOneAndTwoTrailingActions() {
