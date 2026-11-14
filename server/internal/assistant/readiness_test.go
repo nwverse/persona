@@ -200,6 +200,25 @@ func TestReadinessClaudeMissingWhileUpdating(t *testing.T) {
 	}
 }
 
+// A launcher health check caught in the same self-update records "command not found: claude" once: the node's
+// self-check decides, so Send stays on. A second miss in a row stands.
+func TestReadinessClaudeHealthMissWhileUpdating(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	record := LauncherHealth{Machine: "server", Launcher: "claude", State: healthFailing, Kind: classifyLauncherError("zsh:1: command not found: claude"),
+		Error: "zsh:1: command not found: claude", CheckedAt: time.Now(), Source: healthSourceCheck, Fails: 1}
+	s.health.loaded = true
+	s.health.recs = map[string]*LauncherHealth{healthKey("server", "claude"): &record}
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepOK || r.Mode != ReadinessFull {
+		t.Fatalf("one miss: claude = %+v (%s)", cl, r.Mode)
+	}
+	record.Fails = 2
+	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("two misses in a row: %+v", cl)
+	}
+}
+
 // A node with no self-check (an old one) leaves Claude Code unknown, which does not stop the main conversation.
 func TestReadinessOldNodeUnknown(t *testing.T) {
 	f, s, _ := readyMachine(t)
