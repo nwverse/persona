@@ -114,8 +114,16 @@ export function setFaviconBadge(needs: number): void {
 let ctx: AudioContext | undefined;
 let gestured = false;
 
+const GESTURES = ["pointerdown", "keydown", "touchend"] as const;
+
+/** Listens for the gesture that starts audio, or stops listening (adding the same listener twice adds it once). */
+function listen(on: boolean) {
+  for (const ev of GESTURES) window[on ? "addEventListener" : "removeEventListener"](ev, unlock, { capture: true });
+}
+
 function unlock() {
   gestured = true;
+  listen(false);
   try {
     ctx ??= new AudioContext();
     void ctx.resume();
@@ -123,8 +131,6 @@ function unlock() {
     // no WebAudio here: silent
   }
 }
-
-const GESTURES = ["pointerdown", "keydown", "touchend"] as const;
 
 /**
  * Browsers only start audio after a user gesture: until one has happened nothing plays (and nothing is queued). Making
@@ -134,33 +140,16 @@ const GESTURES = ["pointerdown", "keydown", "touchend"] as const;
  */
 export function armAudio(): () => void {
   if (typeof window === "undefined") return () => {};
-  let armed = false;
-  const onGesture = () => {
-    disarm();
-    unlock();
-  };
-  const disarm = () => {
-    if (!armed) return;
-    armed = false;
-    for (const ev of GESTURES) window.removeEventListener(ev, onGesture, { capture: true });
-  };
   const follow = () => {
-    if (!attentionSoundEnabled()) return disarm();
-    if (ctx?.state === "running") return;
-    if (typeof navigator !== "undefined" && navigator.userActivation?.isActive) {
-      disarm();
-      unlock();
-      return;
-    }
-    if (armed) return;
-    armed = true;
-    for (const ev of GESTURES) window.addEventListener(ev, onGesture, { capture: true });
+    const want = attentionSoundEnabled() && ctx?.state !== "running";
+    if (want && navigator.userActivation?.isActive) unlock();
+    else listen(want);
   };
   follow();
   const off = onAttentionSoundChange(follow);
   return () => {
     off();
-    disarm();
+    listen(false);
   };
 }
 
