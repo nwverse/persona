@@ -24,6 +24,16 @@ nonisolated enum DispatchedTasks {
     /// `SAME_HANDOFF_MS`, #5096).
     static let sameHandoff: TimeInterval = 120
 
+    /// The card's title, as the web's (`session.title`, then the Agent row, then the task). A session titled "Claude Code"
+    /// stays: the web does not skip that name (`Handoff.tsx`).
+    static func cardTitle(sessionTitle: String?, agentTitle: String?, taskTitle: String) -> String {
+        let session = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !session.isEmpty { return session }
+        let agent = agentTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !agent.isEmpty { return agent }
+        return taskTitle
+    }
+
     /// One card per Agent this hand-off started (#5110). No Agent yet: the one task card, which says it is starting,
     /// why it did not, or that it closed.
     static func cards(of entry: Entry, todo: TodoItem?) -> [Entry] {
@@ -65,8 +75,9 @@ nonisolated enum DispatchedTasks {
             guard let ref = item.ref, let plan = plans[ref] ?? item.plan,
                   plan.conversation == item.conversation, plan.state == .started else { return nil }
             return plan.tasks.enumerated().map { index, task in
+                // A plan's tasks are New. A later `task` item for one of them adds no card, so its wake cannot change this.
                 Entry(id: "plan:\(plan.id):\(index)", todoID: task.todoID,
-                      title: task.todoID.flatMap(titleOf) ?? task.title, error: task.error, conversation: item.conversation)
+                      title: task.todoID.flatMap(titleOf) ?? task.title, wake: nil, error: task.error, conversation: item.conversation)
             }
         case .task:
             guard let id = item.ref else { return [] }

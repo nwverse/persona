@@ -59,13 +59,10 @@ struct DispatchHandoffCard: View {
         return shown
     }
 
-    /// The session's own title, then the Agent row's, then the task's.
+    /// The session's own title, then the Agent row's, then the task's. Same order as the web, including a session
+    /// whose title is the runtime's default.
     private func title(session: Session?) -> String {
-        if let title = session?.title.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, title != "Claude Code" {
-            return title
-        }
-        if let title = entry.agentTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty { return title }
-        return entry.title
+        DispatchedTasks.cardTitle(sessionTitle: session?.title, agentTitle: entry.agentTitle, taskTitle: entry.title)
     }
 
     private func agentSession(_ todo: TodoItem?) -> Session? {

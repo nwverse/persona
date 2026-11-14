@@ -128,6 +128,19 @@ class AssistantConversationTest {
         assertEquals(listOf(DispatchedTask("o", "Only", key = "plan:q:0")), single.tasks)
     }
 
+    @Test fun aPlanTaskIsNewEvenWhenItsTaskRecordSaysOtherwise() {
+        val plan = TaskPlan("p", "main", listOf(PlanTask("First", todoId = "t")), "started", "2026-11-10T10:00:00Z")
+        val active = FeedItem("t-event", "main", "2026-11-10T10:01:00Z", "task", "t", buildJsonObject { put("wake", "active") })
+        val planned = AssistantTaskCards.lines(emptyList(), listOf(FeedItem("p-event", "main", plan.createdAt, "plan", "p"), active),
+            mapOf("p" to plan), listOf(Todo("t", "First", origin = "main", planId = "p")))
+            .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
+        assertNull(planned.tasks.single().wake)
+        val resumed = FeedItem("z-event", "main", "2026-11-10T10:02:00Z", "task", "z", buildJsonObject { put("wake", "resumed") })
+        val standalone = AssistantTaskCards.lines(emptyList(), listOf(resumed), emptyMap(), listOf(Todo("z", "Standalone", origin = "main")))
+            .filterIsInstance<ChatLine.Extra>().single { it.payload is DispatchHint }.payload as DispatchHint
+        assertEquals("resumed", standalone.tasks.single().wake)
+    }
+
     @Test fun aReusedTodoChoosesItsCurrentPlanOverBothHeldCacheSlots() {
         val old = TaskPlan("old", "main", listOf(PlanTask("Previous run", todoId = "t")), "started", "2026-11-09T10:00:00Z")
         val current = TaskPlan("new", "main", listOf(PlanTask("Current run", todoId = "t")), "started", "2026-11-10T10:00:00Z")

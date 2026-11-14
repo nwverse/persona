@@ -191,7 +191,6 @@ class TasksStore(
                     val list = api.todos()
                     _todosSupported.value = true
                     todosLoaded = true
-                    todosReady.value = true
                     synchronized(todosLock) {
                         val shown = list.map { todo ->
                             val completion = finishedTasks[todo.id]?.takeIf { it != completionsBeforeRead[todo.id] }
@@ -203,7 +202,10 @@ class TasksStore(
                         }
                         finishedTasks.keys.retainAll(shown.map { it.id }.toSet())
                         answered = shown
-                        if (shown != _todos.value) _todos.value = shown
+                        // The list first, then the flag, in this block: a card must not see "the list is in" while it
+                        // still holds the previous one and call a just-dispatched task gone (#5110).
+                        _todos.value = shown
+                        todosReady.value = true
                     }
                     dropStaleRoutes()
                     remember()
@@ -213,7 +215,11 @@ class TasksStore(
                     val status = error::class.java.methods.firstOrNull { it.name == "getStatus" }?.invoke(error) as? Int
                     if (status == 404 || error.message?.contains("404") == true) {
                         _todosSupported.value = false
-                        synchronized(todosLock) { answered = emptyList(); _todos.value = emptyList() }
+                        synchronized(todosLock) {
+                            answered = emptyList()
+                            _todos.value = emptyList()
+                            todosReady.value = true
+                        }
                         remember()
                     }
                     // Failed reads retain the last confirmed binding; a reconnect or open retries the read.
@@ -338,7 +344,10 @@ class TasksStore(
         reloadTodos()
     }
 
-    /** A read of the to-dos has answered: until then a missing to-do is still on its way, not gone (#5110). */
+    /**
+     * A read of the to-dos has answered: until then a missing to-do is still on its way, not gone (#5110).
+     * A hub switch builds a new [TasksStore] (`AppServices`), so this starts false again with that hub.
+     */
     val todosReady = MutableStateFlow(false)
 
     /** A read of the to-dos has answered: until then nothing tells whether the hub knows projects. */

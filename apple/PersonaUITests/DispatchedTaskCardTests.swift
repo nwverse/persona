@@ -48,16 +48,19 @@ final class DispatchedTaskCardTests: XCTestCase {
     }
 
     /// The first card can sit under the Assistant tabs. `isHittable` is then true while a tap lands on the tab, so
-    /// keep scrolling until the whole card is between the tabs and the dock.
+    /// keep scrolling until the whole card is between the tab bar and the dock. Their frames come from the app.
     @MainActor private func link(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         let link = app.buttons["dispatch.task.\(id)"]
+        let tabs = app.buttons["shell-assistant"]
+        let dock = app.otherElements["action-bar"]
         let deadline = Date.now.addingTimeInterval(30)
         while Date.now < deadline {
             if link.exists {
                 let frame = link.frame
-                if link.isHittable, frame.minY > 130, frame.maxY < 720 { return link }
-                // Below the tabs the card is too low (or still off the bottom); above them it is under the tabs.
-                if frame.minY > 130 { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
+                let top = tabs.exists ? tabs.frame.maxY : app.frame.minY
+                let bottom = dock.exists ? dock.frame.minY : app.frame.maxY
+                if link.isHittable, frame.minY >= top, frame.maxY <= bottom { return link }
+                if frame.minY < top { app.swipeDown(velocity: .slow) } else { app.swipeUp(velocity: .slow) }
             }
             usleep(400_000)
         }

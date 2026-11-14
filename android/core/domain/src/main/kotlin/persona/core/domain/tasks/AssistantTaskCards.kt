@@ -165,7 +165,8 @@ object AssistantTaskCards {
                 DispatchedTask(card.todo?.id ?: card.identity.todoId,
                     card.todo?.title ?: planned?.title.orEmpty(),
                     error = planned?.error,
-                    wake = card.records.lastOrNull { it.kind == "task" }?.field("wake"),
+                    // A plan's tasks are New. A standalone task item's wake is the badge (#5110).
+                    wake = if (card.identity.index == null) card.records.lastOrNull { it.kind == "task" }?.field("wake") else null,
                     key = card.identity.id)
             })
         }

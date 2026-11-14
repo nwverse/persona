@@ -122,6 +122,24 @@ struct DispatchedTasksTests {
         #expect(DispatchedTasks.cards(of: entry, todo: nil) == [entry])
     }
 
+    @Test func theTitleIsTheSessionsThenTheAgentsThenTheTasks() {
+        #expect(DispatchedTasks.cardTitle(sessionTitle: "Claude Code", agentTitle: "Layout", taskTitle: "Task") == "Claude Code")
+        #expect(DispatchedTasks.cardTitle(sessionTitle: "  ", agentTitle: " Layout ", taskTitle: "Task") == "Layout")
+        #expect(DispatchedTasks.cardTitle(sessionTitle: nil, agentTitle: " ", taskTitle: "Task") == "Task")
+    }
+
+    @Test func aPlanTasksStayNewWhenTheirTaskItemSaysOtherwise() throws {
+        let p = plan([task("Planned", id: "one")])
+        let entries = try #require(DispatchedTasks.entries(for: feed(.plan), plans: [p.id: p],
+                                                          titleOf: { _ in "Planned" }, fallback: "Task"))
+        #expect(entries.allSatisfy { $0.wake == nil })
+        let active = feed(.task, ref: "one", body: .object(["wake": .string("active")]))
+        #expect(DispatchedTasks.entries(for: active, plans: [p.id: p], titleOf: { _ in nil }, fallback: "Task") == [])
+        let alone = try #require(DispatchedTasks.entries(for: feed(.task, ref: "other", body: .object(["wake": .string("resumed")])),
+                                                         plans: [:], titleOf: { _ in "Other" }, fallback: "Task"))
+        #expect(alone.first?.wake == "resumed")
+    }
+
     @Test func decisionsAndDismissedPlansKeepTheirNormalCards() {
         for state in [TaskPlan.State.open, .dismissed, .unknown] {
             let p = plan([task("Proposed")], state: state)
