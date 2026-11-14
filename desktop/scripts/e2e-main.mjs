@@ -19,6 +19,11 @@ import { app, BrowserWindow, ipcMain, nativeTheme, Notification, powerMonitor, s
  *   no notification service and nobody at the keyboard. Lock and unlock are the power monitor's own events, emitted.
  * - `shell.openExternal` records the address instead of starting a browser.
  */
+// Load the production entry before the app can become ready: its setup-scheme registration is synchronous at module
+// evaluation. The same module creates the windows observed below.
+await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
+const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
+
 const output = process.env.PERSONA_DESKTOP_E2E ? resolve(process.env.PERSONA_DESKTOP_E2E) : "";
 const scenario = process.env.PERSONA_DESKTOP_E2E_SCENARIO ?? "";
 const hubURL = process.env.PERSONA_HUB_URL ?? "";
@@ -266,7 +271,6 @@ async function subpathScenario() {
 async function main() {
   await mkdir(output, { recursive: true });
   const created = new Promise(done => app.once("browser-window-created", (_event, window) => done(window)));
-  await import(pathToFileURL(join(import.meta.dirname, "..", "dist", "main.js")).href);
   win = await created;
   win.webContents.on("console-message", event => { if (event.level === "error") consoleErrors.push(String(event.message).slice(0, 300)); });
   await until("first load", () => !win.webContents.isLoading() && win.webContents.getURL().startsWith(hub.href), 45_000);

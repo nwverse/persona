@@ -17,14 +17,17 @@ test("window restore clamps sizes and rejects offscreen coordinates", () => {
 });
 
 test("concurrent window saves cannot lose the hub or fail a queued update", async () => {
-  const store = new JSONStore(join(await mkdtemp(join(tmpdir(), "persona-desktop-state-")), "desktop-state.json"));
-  const file = Reflect.get(store, "file") as string;
+  const directory = await mkdtemp(join(tmpdir(), "persona-desktop-state-"));
+  // Production creates a new facade for hub writes and each window event; they must share the same file queue.
+  const hub = JSONStore.inUserData(directory);
+  const firstWindow = JSONStore.inUserData(directory);
+  const lastWindow = JSONStore.inUserData(directory);
   await Promise.all([
-    store.saveWindow({ x: 10, y: 20, width: 1000, height: 700, maximized: false }),
-    store.update({ hub: "http://127.0.0.1:12345/" }),
-    store.saveWindow({ x: 30, y: 40, width: 1000, height: 700, maximized: false }),
+    firstWindow.saveWindow({ x: 10, y: 20, width: 1000, height: 700, maximized: false }),
+    hub.update({ hub: "http://127.0.0.1:12345/" }),
+    lastWindow.saveWindow({ x: 30, y: 40, width: 1000, height: 700, maximized: false }),
   ]);
-  const state = JSON.parse(await readFile(file, "utf8"));
+  const state = JSON.parse(await readFile(join(directory, "desktop-state.json"), "utf8"));
   assert.equal(state.hub, "http://127.0.0.1:12345/");
   assert.equal(state.window.x, 30);
 });

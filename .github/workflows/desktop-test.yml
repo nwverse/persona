@@ -91,6 +91,8 @@ jobs:
         run: scripts/ci/desktop-package.sh mac
       - name: Packaged universal app first-run acceptance
         if: ${{ !cancelled() }}
+        env:
+          PERSONA_DESKTOP_TEST_PACKAGE: desktop/release/Persona-${{ env.PERSONA_DESKTOP_VERSION || '0.1.0' }}-mac-universal.zip
         run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
@@ -148,7 +150,7 @@ jobs:
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
         run: scripts/ci/desktop-package.sh win
-      - name: Packaged NSIS first-run acceptance
+      - name: Packaged Windows app first-run acceptance
         if: ${{ !cancelled() }}
         shell: bash
         run: node desktop/scripts/first-run-test.mjs desktop/release/first-run

@@ -1,10 +1,11 @@
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { WindowState } from "./window-state.js";
 
 /** The state file contains geometry only, never a hub credential or web storage. */
+const pendingWrites = new Map<string, Promise<unknown>>();
+
 export class JSONStore {
-  private pending: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly file: string) {}
   static inUserData(userData: string): JSONStore { return new JSONStore(join(userData, "desktop-state.json")); }
@@ -17,11 +18,13 @@ export class JSONStore {
   }
 
   async update(patch: Record<string, unknown>): Promise<void> {
-    // Window events and the setup-to-hub transition can save in the same turn. Serialize each read-modify-rename so
-    // neither one overwrites the other's hub/geometry, and a queued failure cannot reject a later operation.
-    const next = this.pending.then(() => this.writeUpdate(patch), () => this.writeUpdate(patch));
-    this.pending = next;
-    return next;
+    // Window events and the setup-to-hub transition can save in the same turn. Serialize each read-modify-rename by
+    // canonical file: main's store() factory deliberately returns a new facade for each caller.
+    const file = resolve(this.file);
+    const previous = pendingWrites.get(file) ?? Promise.resolve();
+    const next = previous.then(() => this.writeUpdate(patch), () => this.writeUpdate(patch));
+    pendingWrites.set(file, next);
+    try { await next; } finally { if (pendingWrites.get(file) === next) pendingWrites.delete(file); }
   }
 
   private async writeUpdate(patch: Record<string, unknown>): Promise<void> {

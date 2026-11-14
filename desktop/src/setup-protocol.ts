@@ -1,10 +1,9 @@
 import { net, protocol } from "electron";
 import { SETUP_SCHEME, setupResourceURL } from "./setup-resources.js";
+export { SETUP_SCHEME };
 
-// A stable origin makes the three relative setup resources work in development and in an asar. It grants no file:,
-// Node, service-worker, fetch, streaming or CSP-bypass capability.
-protocol.registerSchemesAsPrivileged([{ scheme: SETUP_SCHEME, privileges: { standard: true, secure: true } }]);
-
+// The main entry point registers the scheme before app.ready, then installs this exact handler from its ready callback.
+// It grants no file:, Node, service-worker, fetch/stream or CSP-bypass capability.
 export function installSetupProtocol(): void {
   protocol.handle(SETUP_SCHEME, async request => {
     const resource = setupResourceURL(request.url, request.method);

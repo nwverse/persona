@@ -4,12 +4,12 @@
 //
 // Builds the ordinary unsigned production app for the current host, launches its unchanged entry point with an empty
 // profile and no hub environment, and drives its existing windows through a temporary CDP socket on loopback. This is
-// not a physical-device or signed-release test. Windows uses a temporary per-user install; macOS uses its packaged
-// ZIP/app directory; Linux's unpacked directory is supplementary evidence, not a shipping target.
+// not a physical-device or signed-release test. macOS uses its packaged universal app; Windows runs the same build's
+// unpacked app so it cannot replace a production-identity install. Linux is supplementary, not a shipping target.
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -42,7 +42,7 @@ async function until(label, probe, timeout = 30000) {
   const deadline = Date.now() + timeout;
   let last;
   for (;;) {
-    try { last = await probe(); if (last) return last; } catch (error) { last = String(error); }
+    try { last = await probe(); if (last) return last; } catch (error) { if (error?.fatal) throw error; last = String(error); }
     if (Date.now() > deadline) throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
     await sleep(100);
   }
@@ -60,8 +60,16 @@ function run(command, args, { seconds = 300, env = process.env, quiet = false } 
     child.once("close", code => { clearTimeout(timer); owned.delete(child); done({ code, text }); });
   });
 }
+function childExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+function exited(child, message) {
+  const error = new Error(`${message}: ${JSON.stringify({ code: child.exitCode, signal: child.signalCode })}`);
+  error.fatal = true;
+  return error;
+}
 function stop(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  if (!child || childExited(child)) return;
   try {
     if (platform === "win32") spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
     else process.kill(-child.pid, "SIGKILL");
@@ -86,16 +94,21 @@ async function startHub() {
   let text = "";
   child.stdout.on("data", data => { text = (text + data).slice(-16000); });
   child.stderr.on("data", data => { text = (text + data).slice(-16000); });
-  await until("synthetic hub health", async () => (await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(1000) })).ok, 90000);
+  child.once("error", error => { text += `\n${error}\n`; });
+  await until("synthetic hub health", async () => {
+    if (childExited(child)) throw exited(child, `synthetic hub exited before ready:\n${text}`);
+    return (await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(1000) })).ok;
+  }, 90000);
   return { port, token, text: () => text };
 }
 async function build() {
   need("compile the production app", (await run(npm, ["--prefix", "desktop", "run", "build"], { quiet: true })).code === 0);
+  if (platform === "darwin" && process.env.PERSONA_DESKTOP_TEST_PACKAGE) return;
   if (!existsSync(join(root, "web", "dist", "index.html"))) {
     need("install the web client for the local hub", (await run(npm, ["--prefix", "web", "ci"], { seconds: 900, quiet: true })).code === 0);
     need("build the web client for the local hub", (await run(npm, ["--prefix", "web", "run", "build"], { seconds: 1200, quiet: true })).code === 0);
   }
-  const target = platform === "win32" ? ["--win", "nsis", "--x64"] : platform === "darwin" ? ["--mac", "--universal"] : ["--linux", "dir", "--x64"];
+  const target = platform === "win32" ? ["--win", "nsis", "dir", "--x64"] : platform === "darwin" ? ["--mac", "--universal"] : ["--linux", "dir", "--x64"];
   const result = await run(process.execPath, [join(desktop, "node_modules", "electron-builder", "cli.js"), "--projectDir", desktop, "--config", process.env.PERSONA_DESKTOP_TEST_BUILD_CONFIG ?? "electron-builder.unsigned.yml", ...target, "--publish", "never"], {
     cwd: root, seconds: 1500,
     env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.desktop", CSC_IDENTITY_AUTO_DISCOVERY: "false" },
@@ -103,21 +116,21 @@ async function build() {
   need("build the ordinary unsigned production package", result.code === 0, result.code);
 }
 async function executable() {
+  const supplied = process.env.PERSONA_DESKTOP_TEST_PACKAGE;
+  if (supplied && platform === "linux") throw new Error("The explicit package input is supported for macOS and Windows");
   if (platform === "win32") {
-    const installer = (await readdir(join(desktop, "release"))).find(name => /^Persona-.*-win-x64\.exe$/.test(name));
-    if (!installer) throw new Error("no Windows NSIS installer");
-    const installed = join(work, "installed");
-    const install = await run(join(desktop, "release", installer), ["/S", `/D=${installed}`], { seconds: 600 });
-    const file = join(installed, "Persona.exe");
-    need("temporary per-user NSIS install", install.code === 0 && existsSync(file), install.code);
-    return { file, installed };
+    // Run the exact app files packaged by this build, not the production-identity NSIS installer. Installing that
+    // would replace an existing per-user installation on a persistent runner. The isolated-AppId update test owns
+    // NSIS install/update acceptance; this gate covers first-run loading and the setup/Link/hub path.
+    return { file: join(desktop, "release", "win-unpacked", "Persona.exe"), installed: undefined };
   }
   if (platform === "darwin") {
-    const archive = (await readdir(join(desktop, "release"))).find(name => /^Persona-.*-mac-universal\.zip$/.test(name));
-    if (!archive) throw new Error("no macOS ZIP package");
+    const candidates = supplied ? [resolve(supplied)] : (await readdir(join(desktop, "release"))).filter(name => /^Persona-.*-mac-universal\.zip$/.test(name)).map(name => join(desktop, "release", name));
+    if (candidates.length !== 1) throw new Error(`expected one macOS universal ZIP, got ${candidates.length}`);
+    const archive = candidates[0];
     const installed = join(work, "installed");
     await mkdir(installed);
-    need("unpack the macOS ZIP", (await run("ditto", ["-x", "-k", join(desktop, "release", archive), installed])).code === 0);
+    need("unpack the macOS ZIP", (await run("ditto", ["-x", "-k", archive, installed])).code === 0);
     const file = join(installed, "Persona.app", "Contents", "MacOS", "Persona");
     need("ad-hoc signature only, no certificate", (await run("codesign", ["--force", "--deep", "--sign", "-", join(installed, "Persona.app")])).code === 0);
     return { file, installed };
@@ -135,19 +148,16 @@ async function fuseCheck(file) {
   need("the packaged fuses retain the security boundary", Object.values(actual).every(Boolean), actual);
 }
 async function packageCheck(file) {
-  const archive = platform === "darwin" ? join(file, "..", "Resources", "app.asar") : platform === "win32" ? join(file, "..", "resources", "app.asar") : join(desktop, "release", "linux-unpacked", "resources", "app.asar");
-  const files = asar.listPackage(archive);
+  const archive = platform === "darwin" ? join(file, "..", "..", "Resources", "app.asar") : platform === "win32" ? join(file, "..", "resources", "app.asar") : join(desktop, "release", "linux-unpacked", "resources", "app.asar");
+  const files = asar.listPackage(archive).map(name => name.replaceAll("\\", "/"));
   need("only the three public resources enter the setup directory", ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].every(name => files.includes(name)) && !files.some(name => name.startsWith("/dist/setup/") && !["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"].includes(name)));
   need("no test driver or privileged preload enters the public resource directory", !files.some(name => name.includes("first-run")) && !files.includes("/dist/setup/setup-preload.cjs") && files.includes("/dist/setup-preload.cjs"));
 }
-async function launch(file, profile, home, linkStub) {
+async function launch(file, profile, home) {
   const debugPort = await freePort();
   const env = { ...process.env, HOME: home, USERPROFILE: home, PERSONA_DESKTOP_DISABLE_UPDATE: "1" };
-  if (platform === "win32" && linkStub) {
-    // NODE_OPTIONS belongs only to this synthetic CLI process; the packaged app's fuse ignores it.
-    env.NODE_OPTIONS = `--require ${JSON.stringify(linkStub)}`;
-  }
-  for (const name of Object.keys(env)) if (name === "PERSONA_HUB_URL" || name.startsWith("PERSONA_DESKTOP_E2E") || name === "PERSONA_DESKTOP_SMOKE" || (name === "ELECTRON_RUN_AS_NODE" && !linkStub)) delete env[name];
+  for (const name of Object.keys(env)) if (name === "PERSONA_HUB_URL" || name.startsWith("PERSONA_DESKTOP_E2E") || name === "PERSONA_DESKTOP_SMOKE" || name === "ELECTRON_RUN_AS_NODE" || name === "NODE_OPTIONS") delete env[name];
+  need("the packaged app has no Node runtime overrides", !env.ELECTRON_RUN_AS_NODE && !env.NODE_OPTIONS);
   const args = [`--user-data-dir=${profile}`, `--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${debugPort}`];
   if (platform === "linux") args.unshift("--no-sandbox", "--disable-gpu");
   const child = spawn(file, args, { cwd: work, env, stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32" });
@@ -156,7 +166,11 @@ async function launch(file, profile, home, linkStub) {
   child.stdout.on("data", keep);
   child.stderr.on("data", keep);
   child.once("close", () => owned.delete(child));
-  await until("the app's own temporary CDP socket", () => existsSync(join(profile, "DevToolsActivePort")), 30000);
+  child.once("error", error => { log += `${error}\n`; });
+  await until("the app's own temporary CDP socket", async () => {
+    if (childExited(child)) throw exited(child, `packaged app exited before first run:\n${log}`);
+    return existsSync(join(profile, "DevToolsActivePort"));
+  }, 30000);
   await sleep(200); // Let the just-announced target finish attaching before querying it.
   const client = new DesktopCDP(profile, output);
   await client.connect();
@@ -181,8 +195,8 @@ async function absentScenario(file) {
   await setup.evaluate("document.querySelector('details').open = true; document.querySelector('#pair').scrollIntoView({block:'center'}); true");
   await screenshot(setup, "01-setup-no-link");
   await until("the absent Link guidance is laid out", async () => {
-    const state = await setup.evaluate("({open:document.querySelector('details').open, height:document.querySelector('#link-install').getBoundingClientRect().height, disabled:document.querySelector('#link-install').disabled})");
-    return state?.open === true && state.height > 0 && state.disabled === true;
+    const layout = await setup.evaluate("({open:document.querySelector('details').open, height:document.querySelector('#link-install').getBoundingClientRect().height, disabled:document.querySelector('#link-install').disabled})");
+    return layout?.open === true && layout.height > 0 && layout.disabled === true;
   });
   need("the production preload initialized the setup page", await setup.evaluate("typeof window.desktopSetup === 'object' && typeof window.require === 'undefined' && typeof window.process === 'undefined' && document.querySelector('#hub').value === ''"));
   need("Link is optional and absent, not silently installed", await setup.evaluate("document.querySelector('#link-reconnect').disabled && document.querySelector('#pair-link').disabled && document.querySelector('#pair button').disabled && document.querySelector('#node-install').hidden && !document.querySelector('#link-install').hidden && document.querySelector('#link-install').disabled"));
@@ -200,11 +214,6 @@ async function pairedScenario(file) {
   await mkdir(bin, { recursive: true });
   const record = join(work, "link-commands.jsonl");
   const fake = `const fs = require("node:fs");
-process.exitCode = 0; // A preloaded CLI must not inherit Electron's implicit missing-main failure.
-if (process.env.PERSONA_DESKTOP_TEST_LINK) {
-  // An explicit main stub gives this fixture ordinary Node argv semantics on Windows; no shell or PATH substitution.
-  process.exit();
-}
 const argumentsForLink = process.argv.slice(2);
 let input = "";
 process.stdin.on("data", chunk => input += chunk);
@@ -217,16 +226,22 @@ process.stdin.on("end", () => {
   } else { process.exitCode = 2; }
 });
 `;
-  // Without -e, Electron's Node stub runs its built-in bootstrap, which honors this test-only entry variable.
+  // The native Windows fixture logs argv/stdin; no runtime overrides are needed on either side.
   const fakeFile = join(work, "fake-link.cjs");
   await writeFile(fakeFile, fake, { mode: 0o700 });
   if (platform !== "win32") {
     await writeFile(join(bin, "persona-link"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeFile)} "$@"\n`, { mode: 0o700 });
     await chmod(join(bin, "persona-link"), 0o700);
   } else {
-    await copyFile(process.execPath, join(bin, "persona-link.exe"));
+    const exe = join(bin, "persona-link.exe");
+    const compiler = join(process.env.WINDIR ?? "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
+    const fixture = join(desktop, "test", "fixtures", "fake-persona-link.cs");
+    const compiled = await run(compiler, ["/nologo", "/target:exe", `/out:${exe}`, fixture], { seconds: 120, quiet: true });
+    need("compile the native Windows synthetic Link", compiled.code === 0, compiled.text);
+    const probe = await run(exe, ["status", "--json"], { env: { ...process.env, PERSONA_TEST_LINK_LOG: record }, quiet: true });
+    need("the synthetic Link answers status before app launch", probe.code === 0 && JSON.parse(probe.text).machine === "Example computer", probe.text);
   }
-  const { child, client } = await launch(file, profile, home, platform === "win32" ? fakeFile : undefined);
+  const { child, client } = await launch(file, profile, home);
   clients.push(client);
   const setup = await client.pageFor("setup with the separately installed test Link", target => target.url === "persona-setup://app/setup.html");
   await until("redacted Link state", () => setup.evaluate("document.querySelector('#link-state')?.textContent.includes('connected') && !document.querySelector('#pair-link').disabled"));
@@ -276,10 +291,6 @@ async function cleanup() {
   await sleep(owned.size ? 2000 : 0);
   await gateway?.close().catch(() => {});
   for (const client of clients) client.close();
-  if (platform === "win32" && work) {
-    const uninstaller = join(work, "installed", "Uninstall Persona.exe");
-    if (existsSync(uninstaller)) await run(uninstaller, ["/S", `_?=${join(work, "installed")}`], { seconds: 300, quiet: true }).catch(() => undefined);
-  }
   if (work) await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
 }
 const timeout = setTimeout(() => { failure = "overall test timeout"; for (const child of owned) stop(child); }, 20 * 60 * 1000);
@@ -294,4 +305,4 @@ await writeFile(join(output, "result.json"), `${clean(report)}\n`, "utf8");
 await writeFile(join(output, "electron.log"), clean(log), "utf8");
 await writeFile(join(output, "hub.log"), clean(hub?.text() ?? ""), "utf8");
 console.log(`Desktop packaged first-run (${platform}/${process.arch}): ${failure ? `FAIL (${failure})` : "PASS"}; evidence ${output}`);
-process.exitCode = failure ? 1 : 0;
+process.exitCode = failure || steps.length === 0 || steps.some(step => !step.ok) ? 1 : 0;

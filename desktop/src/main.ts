@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { BrowserWindow, app, dialog, screen, shell, powerMonitor, Notification } from "electron";
+import { BrowserWindow, app, dialog, screen, shell, powerMonitor, Notification, protocol } from "electron";
 import { parseDeepLink, parseHubAddress, externalBrowserURL, inHub } from "./urls.js";
 import type { HubAddress } from "./urls.js";
 import { appPairingURL } from "./pairing.js";
@@ -16,10 +16,12 @@ import { hubPartition } from "./sessions.js";
 import { installSmokeCapture } from "./smoke.js";
 import { installAutoUpdate } from "./updater.js";
 import { desktopPresence } from "./presence.js";
-import { installSetupProtocol } from "./setup-protocol.js";
+import { installSetupProtocol, SETUP_SCHEME } from "./setup-protocol.js";
 import { SETUP_URL } from "./setup-resources.js";
 
 installSmokeCapture();
+// Register the scheme before any ready callback. Its file handler is installed with the app's other ready-time setup.
+protocol.registerSchemesAsPrivileged([{ scheme: SETUP_SCHEME, privileges: { standard: true, secure: true } }]);
 
 let mainWindow: BrowserWindow | undefined;
 let hub: HubAddress | undefined;

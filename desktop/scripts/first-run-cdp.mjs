@@ -24,6 +24,7 @@ export class DesktopCDP {
       if (message.id) {
         const waiter = this.#pending.get(message.id);
         if (waiter) {
+          clearTimeout(waiter.timer);
           this.#pending.delete(message.id);
           if (message.error) waiter.reject(new Error(JSON.stringify(message.error)));
           else waiter.resolve(message.result);
@@ -39,9 +40,12 @@ export class DesktopCDP {
       if (message.method === "Log.entryAdded" && message.params.entry.level === "error") this.#consoleErrors.push(message.params.entry);
       if (message.method === "Network.loadingFailed") this.#failedRequests.push(message.params);
     });
+    this.#socket.addEventListener("close", () => this.#failPending(new Error("The packaged app's CDP socket closed")));
+    this.#socket.addEventListener("error", () => this.#failPending(new Error("The packaged app's CDP socket failed")));
     await new Promise((resolve, reject) => {
-      this.#socket.addEventListener("open", resolve, { once: true });
-      this.#socket.addEventListener("error", reject, { once: true });
+      const timer = setTimeout(() => reject(new Error("Timed out connecting to the packaged app")), 10000);
+      this.#socket.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
+      this.#socket.addEventListener("error", error => { clearTimeout(timer); reject(error); }, { once: true });
     });
     await this.call("Target.setDiscoverTargets", { discover: true });
     for (const target of (await this.call("Target.getTargets")).targetInfos.filter(t => t.type === "page")) {
@@ -52,10 +56,19 @@ export class DesktopCDP {
     }
   }
 
+  #failPending(error) {
+    for (const waiter of this.#pending.values()) { clearTimeout(waiter.timer); waiter.reject(error); }
+    this.#pending.clear();
+  }
+
   call(method, params = {}, sessionId) {
     const id = ++this.#id;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new Error(`CDP ${method} timed out after 15 seconds`));
+      }, 15000);
+      this.#pending.set(id, { resolve, reject, timer });
       this.#socket.send(JSON.stringify({ id, sessionId, method, params }));
     });
   }
@@ -114,5 +127,7 @@ export class DesktopCDP {
     return { consoleErrors: errors, failedRequests: this.#failedRequests.map(value => ({ errorText: value.errorText, type: value.type })), pages: [...this.#pages.values()].map(({ url, title }) => ({ url, title })) };
   }
 
-  close() { this.#socket.close(); }
+  close() {
+    if (this.#socket.readyState === WebSocket.OPEN || this.#socket.readyState === WebSocket.CONNECTING) this.#socket.close();
+  }
 }
