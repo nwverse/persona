@@ -29,8 +29,7 @@ import { ConversationRowMenu } from "./ConversationMenu";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
-import { refresh, refreshTodos, useStore } from "../lib/store";
-import { unreachable } from "../lib/shell";
+import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
 import { conversationTitle } from "./assistant/conversations";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
@@ -59,7 +58,8 @@ import { clipsOverflow, glideBox, glideStyle, sameBox, type GlideBox, type Span 
 import { AGENTS_FOLD, onGrouping, pagedAgentList } from "../lib/sidebar-api";
 import { jumpHint, useBindings } from "../lib/shortcuts";
 import { markAllSeenLabel, stateCount } from "../lib/state-labels";
-import { ListError, PagedSessionList, type PagedQuickFilters } from "./agents/PagedSessionList";
+import { PagedSessionList, type PagedQuickFilters } from "./agents/PagedSessionList";
+import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { runtimeActiveAt, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
 import { SESSIONS_CATALOG_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
@@ -552,21 +552,13 @@ type AgentsBlockProps = { workspaceActions?: WorkspaceTreeActions; reg: RegFn; h
  *  status for now, saying why with Retry (TodosUnread); a later read that answers brings it back. */
 const useTodosUnread = () => useStore((s) => s.todosError !== null && s.todos.length === 0);
 
+/** A failed read of the Agents list, the complete one's or the paged one's (audit item 4): the same words either way. */
+const agentsReadFailed = (error: string) => t("sidebar.agents_read_failed", { error });
+
 /** By to-do while its to-dos cannot be read: why the list is by status instead, and Retry. */
 function TodosUnread() {
   const error = useStore((s) => s.todosError) ?? "";
   return <ListError text={t("sidebar.todos_read_failed", { error })} onRetry={() => void refreshTodos()} />;
-}
-
-/** Whether the hub has not been reached since this list was drawn and the socket has given up for now: the page's
- *  Offline (lib/shell.ts unreachable, App.tsx), which the list says too instead of loading for good (audit item 36). */
-function useHubUnreachable(): boolean {
-  const conn = useStore((s) => s.conn);
-  const loaded = useStore((s) => s.loaded);
-  const [away, setAway] = useState(false);
-  const offline = unreachable(away, conn, loaded);
-  if (offline !== away) setAway(offline);
-  return offline;
 }
 
 function AgentsBlock(props: AgentsBlockProps) {
@@ -574,8 +566,8 @@ function AgentsBlock(props: AgentsBlockProps) {
   const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
   const todosSupported = useStore((s) => s.todosSupported);
   const todosUnread = useTodosUnread();
-  // never reached since the page opened: the complete list's block says so (the paged one would only load), whatever
-  // features an earlier login left
+  // never reached since the page opened (the page's Offline, the same flag): the complete list's block says so (the
+  // paged one would only load), whatever features an earlier login left (audit item 36)
   const hubUnreachable = useHubUnreachable();
   const pins = useStore((s) => s.pins);
   const [stored, setGrouping] = useState(() => storedValue("persona.agentGrouping"));
@@ -593,6 +585,9 @@ function AgentsBlock(props: AgentsBlockProps) {
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
     setGrouping(g);
+    // By to-do while its to-dos cannot be read (shown by status): the tap reads them again, as the note's Retry does
+    const { todosError, todos } = getState();
+    if (g === "todo" && todosError !== null && todos.length === 0) void refreshTodos();
     props.hover(null);
   }, [props.hover]);
   // `shown !== "repo"` only tells TypeScript what pagedAgentList already rules out
@@ -738,7 +733,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     <HerdrNotices />
     <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
-      catalog={catalog} placeOf={runtimePlace}
+      catalog={catalog} placeOf={runtimePlace} failureText={agentsReadFailed}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s, within) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
@@ -795,8 +790,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     chooseGrouping(g);
   }, [chooseGrouping]);
   // a hub without todos shows by machine, a by-todo choice kept for when it has them; to-dos that cannot be read, by
-  // status until they can (TodosUnread says so)
-  const todosFailed = todosUnread && grouping === "todo" && todosSupported !== false;
+  // status until they can (TodosUnread says so). The chat list's rows are on no grouping and need no to-dos: it is
+  // drawn as it is, with no word about them
+  const todosFailed = !chatList && todosUnread && grouping === "todo" && todosSupported !== false;
   const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : todosFailed ? "state" : grouping;
   const availableGroupings = useGroupings();
   // "State first" / "Recently updated" (iOS AgentSort, G099): not under "By status", whose sections are the states already
@@ -853,14 +849,15 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     return buildAgentGroups(unpinned, machines, "state", mutes);
   }, [unpinned, machines, shownGrouping, mutes, todos]);
   // by todo waits for the first GET /todos: the socket pushes the sessions before it answers, and a tree drawn without
-  // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812)
-  const todosPending = shownGrouping === "todo" && !todosLoaded;
+  // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812); the chat list's
+  // rows are drawn at once
+  const todosPending = !chatList && shownGrouping === "todo" && !todosLoaded;
   // what the list says in place of its groups while it has none to show (audit items 4 and 36): the hub out of reach
   // since the page opened, the complete list's read failed (why, and Retry), or By to-do waiting for its to-dos; before,
   // the first two left "Loading…" or nothing at all under the controls for good. An older hub's rows come with the
   // socket's pushes, before GET /sessions answers, so they are drawn without waiting for it (#2812)
   const listNote = hubUnreachable ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.agents_offline")}</p>
-    : !loaded && listError ? <ListError text={t("sidebar.agents_read_failed", { error: listError })} onRetry={retryFullAgentSessions} />
+    : !loaded && listError ? <ListError text={agentsReadFailed(listError)} onRetry={retryFullAgentSessions} />
     : todosPending ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
     : null;
   // Only inputs the tree reads rebuild it; unchanged nodes keep their objects so their rows' memo holds.

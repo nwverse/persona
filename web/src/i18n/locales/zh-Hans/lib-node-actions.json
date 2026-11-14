@@ -34,7 +34,7 @@
   "split_down": "向下拆分",
   "run_agent_here": "在这里运行 Agent…",
   "copy_branch": "拷贝分支名",
-  "copy_path": "拷贝目录",
+  "copy_path": "拷贝目录路径",
   "copy_session_id": "拷贝会话 ID",
   "copy_workspace_id": "拷贝空间 ID",
   "copy_tab_id": "拷贝标签页 ID",

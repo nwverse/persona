@@ -11,7 +11,8 @@ import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
 import type { FilterCounts } from "../../lib/agent-filter";
-import { Button, cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { cx, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { ListError } from "../../ui/ListError";
 import { Icon } from "../../ui/icons";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { StatusMark } from "../../ui/StatusMark";
@@ -63,6 +64,9 @@ export interface PagedSessionListProps<T> {
    *  complete list does, with no value pill or search field of its own. A search lists its matches flat. `label` names
    *  the dimension. */
   grouping?: PagedGrouping;
+  /** The words a failed read of the list's rows or groups is said in, given its reason (the reason alone by default): the
+   *  sidebar's says it could not read the Agents list, as its complete list does. */
+  failureText?: (reason: string) => string;
 }
 
 export interface PagedGrouping {
@@ -96,10 +100,7 @@ const browseBy = (stored: string | null, personal: boolean): GroupDimension | ""
 /** A counts query in a stable key order, so the same scope reached through different filters compares equal. */
 const countsQuery = (filters: ListFilters) => filterQuery(filters);
 
-/** A list's read that failed: why, and Retry (the paged list's, the complete Agents list's in the sidebar, #6662). */
-export function ListError({ text, onRetry }: { text: string; onRetry: () => void }) {
-  return <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{text}</p><Button onClick={onRetry}>{t("sidebar.retry")}</Button></div>;
-}
+const sameText = (reason: string) => reason;
 
 export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement; p; p = p.parentElement) {
@@ -108,7 +109,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, catalog = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping, failureText = sameText }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -455,15 +456,15 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           {activeAt && !sections && <ActiveWindowMenu value={win} onChange={chooseWindow} />}
         </div>
       </div>
-      {/* not twice: drawn as groups, the groups' error with its Retry says it */}
-      {(facetError || scopeError) && !(sections && grouped.error) && <p role="alert" className="px-2 text-xs text-red">{facetError || scopeError}</p>}
+      {/* not twice: the list's own error with its Retry says it (its groups', or its rows') */}
+      {(facetError || scopeError) && !(sections ? grouped.error : page.error) && <p role="alert" className="px-2 text-xs text-red">{facetError || scopeError}</p>}
       {sections && <>
         {allGroups && allGroups.length > 0 && <Suspense fallback={loadingLine}>
           <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
             renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} />
         </Suspense>}
         {!allGroups && !grouped.error && loadingLine}
-        {grouped.error && <ListError text={grouped.error} onRetry={grouped.retry} />}
+        {grouped.error && <ListError text={failureText(grouped.error)} onRetry={grouped.retry} />}
         {allGroups && !allGroups.length && !grouped.error && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       </>}
       {!sections && <><div ref={container} data-virtual-sessions className="relative" style={{ height: totalSize }}>
@@ -478,7 +479,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
         })}
       </div>
       {page.loading && loadingLine}
-      {page.error && <ListError text={page.error} onRetry={() => void list.retry().catch(() => {})} />}
+      {page.error && <ListError text={failureText(page.error)} onRetry={() => void list.retry().catch(() => {})} />}
       {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       {hasMore && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}
