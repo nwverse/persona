@@ -124,9 +124,9 @@ public actor ScreenLinkSession {
 
     /// A new video stream's relay (the hub selected the subprotocol on …/screen/video/connect): its first message names
     /// the video channel; the channel as a byte stream of whole video messages.
-    public func attachVideo(_ relay: ScreenLinkTransport) async throws -> ScreenLinkChannelEnd {
+    public func attachVideo(_ relay: ScreenLinkTransport, first: Data = Data()) async throws -> ScreenLinkChannelEnd {
         guard !ended else { throw ScreenLinkError.closed }
-        let id = register(relay, relayFor: 0, kind: .relay, via: relayVia)
+        let id = register(relay, relayFor: 0, kind: .relay, via: relayVia, first: first)
         let ch = try await withCheckedThrowingContinuation { pendingVideo[id] = $0 }
         return ScreenLinkChannelEnd(session: self, channel: ch)
     }

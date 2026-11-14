@@ -218,3 +218,87 @@ final class ScreenLinkSessionTests: XCTestCase {
         XCTAssertTrue(chosen, "the direct route measured and chosen")
     }
 }
+
+/// A relay socket in a test: a pipe end that says which subprotocol the hub selected.
+final class FakeSocket: ScreenLinkSocket, @unchecked Sendable {
+    let end: PipeEnd
+    let subprotocol: String?
+    init(_ end: PipeEnd, subprotocol: String?) {
+        self.end = end
+        self.subprotocol = subprotocol
+    }
+    func send(_ data: Data) async throws { try await end.send(data) }
+    func receive() async throws -> Data { try await end.receive() }
+    func close() { end.close() }
+}
+
+final class ScreenLinkStreamsTests: XCTestCase {
+    /// Today's hub or node, or the web: no subprotocol selected, the stream is the relay's bytes unchanged.
+    func testWithoutTheSubprotocolTheStreamIsRaw() async throws {
+        let (phone, hub) = PipeEnd.pair()
+        let saw = SessionBox()
+        let stream = ScreenLinkRFBStream(socket: FakeSocket(phone, subprotocol: nil)) { saw.set($0) }
+        try await hub.send(Data("RFB 003.889\n".utf8))
+        let first = try await stream.receive()
+        XCTAssertEqual(first, Data("RFB 003.889\n".utf8))
+        try await stream.send(Data("RFB 003.008\n".utf8))
+        let up = try await hub.receive()
+        XCTAssertEqual(up, Data("RFB 003.008\n".utf8))
+        try await hub.send(Data([1, 2, 3]))
+        let next = try await stream.receive()
+        XCTAssertEqual(next, Data([1, 2, 3]))
+        XCTAssertNil(saw.get(), "no session")
+    }
+
+    /// The hub selected it: the stream is the session's RFB channel, and the video stream of the same pair joins it.
+    func testWithTheSubprotocolTheStreamsAreChannels() async throws {
+        let (phone, hub) = PipeEnd.pair()
+        let node = FakeNode(hub)
+        let saw = SessionBox()
+        let registry = ScreenLinkRegistry()
+        let stream = ScreenLinkRFBStream(socket: FakeSocket(phone, subprotocol: ScreenLinkWire.subprotocol)) {
+            saw.set($0)
+            registry.set($0, for: "K")
+        }
+        try await node.say(.paths(ScreenLinkPaths(token: "tok")))
+        try await node.say(.data(channel: 1, offset: 0, bytes: Data("RFB 003.889\n".utf8)))
+        let got = try await stream.receive()
+        XCTAssertEqual(got, Data("RFB 003.889\n".utf8))
+        XCTAssertNotNil(saw.get())
+        XCTAssertTrue(registry.session(for: "K") === saw.get())
+
+        let (phoneV, hubV) = PipeEnd.pair()
+        let vnode = FakeNode(hubV)
+        let video = ScreenLinkVideoStream(socket: FakeSocket(phoneV, subprotocol: ScreenLinkWire.subprotocol), session: registry.session(for: "K"))
+        try await vnode.say(.resumed([ScreenLinkOffset(2, 0)]))
+        let hello = ScreenVideoWire.frame(1, body: Data("{}".utf8))
+        try await vnode.say(.data(channel: 2, offset: 0, bytes: hello))
+        let v = try await video.receive()
+        XCTAssertEqual(v, hello)
+    }
+
+    func testTheProbePlan() {
+        var p = ProbePlan()
+        XCTAssertEqual(p.due(["a", "b"], now: 0), ["a", "b"])
+        XCTAssertEqual(p.due(["a", "b"], now: 1), [], "already open")
+        p.failed("a", now: 2)
+        XCTAssertEqual(p.due(["a"], now: 20), [])
+        XCTAssertEqual(p.due(["a"], now: 32), ["a"])
+        p.failed("a", now: 33)
+        XCTAssertEqual(p.due(["a"], now: 80), [], "the wait doubled to 60 s")
+        XCTAssertEqual(p.due(["a"], now: 93), ["a"])
+        for i in 0..<10 { p.failed("a", now: 100 + Double(i)) }
+        XCTAssertEqual(p.due(["a"], now: 400), [], "at most 5 min")
+        XCTAssertEqual(p.due(["a"], now: 410), ["a"])
+        p.failed("a", now: 411)
+        p.networkChanged()
+        XCTAssertEqual(p.due(["a"], now: 412), ["a"], "a network change tries again at once")
+    }
+}
+
+final class SessionBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var s: ScreenLinkSession?
+    func set(_ v: ScreenLinkSession) { lock.withLock { s = v } }
+    func get() -> ScreenLinkSession? { lock.withLock { s } }
+}
