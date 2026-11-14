@@ -828,10 +828,14 @@ One App for iPhone and iPad (`TARGETED_DEVICE_FAMILY` 1,2). Previously only 1, g
 
 ## Sidebar layout (#6332)
 
-Settings › Appearance › Navigation chooses how the app lays out Persona and the Agents (`NavigationLayout`, this device's
-own UserDefaults key `app.navigation`, applied at once, Settings staying on its page): **Separate**, the default and
-everything above unchanged (the Assistant | Agents switch on an iPhone, the Persona | Agents tabs on an iPad), or
-**Sidebar**, the web sidebar's structure in one column. The owner asked for it on 2026-11-13. On an iPhone (and at any
+Settings › Appearance › Sidebar chooses how the app lays out Persona and the Agents (`NavigationLayout`, this device's
+own UserDefaults key `app.navigation`, applied at once, Settings staying on its page): **Merged**, the web sidebar's
+structure in one column, or **Separate**, everything above unchanged (the Assistant | Agents switch on an iPhone, the
+Persona | Agents tabs on an iPad). The owner asked for it on 2026-11-13 (#6332, then named Navigation: Separate /
+Sidebar). With nothing picked (#4206; the owner's delegate picked "Merged where wide", 2026-11-14) it is Merged at
+regular width (the iPad, the open iPhone Duo) and Separate at compact width (an iPhone, the folded Duo), so folding the
+Duo goes from the column to the shell; a pick holds at every width (`NavigationLayout.effective`), and the page checks the
+one in effect. UI tests launch in Separate unless they name a layout (`launchPersona`). On an iPhone (and at any
 compact width: iPhone Duo closed, an iPad's narrow split) the column is the drawer that slides in from the left; at
 regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro keep their own navigation.
 
@@ -906,7 +910,7 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   `RootTabs` and the shell are drawn as before (pixel comparisons in #6332's PR).
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
   page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
-  would be, the setting switching both ways at once). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout; `-openAppearance navigation` opens
+  would be, the setting switching both ways at once, nothing picked: Separate). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
   the setting's page.
 
 ## Home-screen quick actions (#3199)

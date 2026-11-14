@@ -32,7 +32,7 @@ final class SidebarLayoutTests: XCTestCase {
         let layout = layoutPinned ? ["-app.navigation", "sidebar"] : []
         app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-holdChromeOpen", "YES"] + layout + extra
         app.launchEnvironment["PERSONA_UI_TEST_SESSION"] = "1" // the chat's title carries its session (`chat.title`'s value)
-        app.launchPinned()
+        app.launchPinned(navigation: layoutPinned)
     }
 
     @MainActor private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
@@ -101,6 +101,17 @@ final class SidebarLayoutTests: XCTestCase {
         main.tap()
         waitGone(title, "the Agent's chat stayed over the conversation")
         XCTAssertTrue(element("assistant-sidebar-button").waitForExistence(timeout: 10), "not on the conversation:\n\(app.debugDescription)")
+    }
+
+    /// With nothing picked an iPad starts in the Merged sidebar (#4206, "Merged where wide"), and Settings names it
+    /// so: Appearance › Sidebar says Merged.
+    @MainActor func testNothingPickedIsMergedOnTheIPad() {
+        launch(["-tab", "assistant", "-app.navigation", ""], layoutPinned: false)
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 20), "not the Merged sidebar:\n\(app.debugDescription)")
+        XCTAssertTrue(element("unified-sidebar").exists, "no one column")
+        let tabs = app.buttons.matching(NSPredicate(format: "label == 'Agents' OR label == 'Persona'")).allElementsBoundByIndex
+            .filter { $0.exists && $0.frame.maxY < element("sidebar-main").frame.minY - 20 }
+        XCTAssertTrue(tabs.isEmpty, "the tabs are there: \(tabs.map(\.label))")
     }
 
     /// The column's one search (#4206, the owner): Search at the foot opens it over the whole window, with Persona's chats

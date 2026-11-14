@@ -193701,6 +193701,75 @@
           }
         }
       }
+    },
+    "Sidebar [Appearance]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sidebar"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サイドバー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "侧边栏"
+          }
+        }
+      }
+    },
+    "Merged [Navigation Layout]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merged"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まとめる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并"
+          }
+        }
+      }
+    },
+    "Until you pick one: Merged where the sidebar fits beside the page (iPad, an open iPhone Duo), Separate on a phone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Until you pick one: Merged where the sidebar fits beside the page (iPad, an open iPhone Duo), Separate on a phone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選ぶまでは、サイドバーをページの横に置ける画面（iPad、開いた iPhone Duo）では「まとめる」、iPhone では「分ける」になります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没选之前：侧边栏放得下页面旁边的地方（iPad、展开的 iPhone Duo）用合并，手机上用分开。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

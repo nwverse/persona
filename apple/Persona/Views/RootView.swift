@@ -53,15 +53,17 @@ struct RootView: View {
     #endif
 
     #if os(iOS)
-    /// Settings › Appearance › Navigation (#6332): Separate (the default) or Sidebar.
-    @StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate
+    /// Settings › Appearance › Sidebar (#6332, #4206): Merged or Separate; empty, nothing picked (`NavigationLayout.effective`).
+    @StoredValue(NavigationLayout.key) private var navigation = ""
     #endif
 
     /// The Sidebar layout instead of the shell or the tabs (#6332): one root at every width, the drawer on a phone's
     /// width and the column beside the page at regular width (`ChatsView` under `\.unifiedSidebar`).
     private var usesSidebar: Bool {
         #if os(iOS)
-        navigation == .sidebar && NavigationLayout.offered
+        // Nothing picked: Merged where wide, the shell at compact width (#4206).
+        NavigationLayout.offered
+            && NavigationLayout.effective(picked: navigation, regular: !((heldWidthClass ?? widthClass) == .compact || flipped)) == .sidebar
         #else
         false
         #endif
