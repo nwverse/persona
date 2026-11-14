@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -157,22 +158,60 @@ class HomeChromeTest {
     @Test fun boardOneTrailingFitsEveryWidthAndFont() = homeControlsFit(AppStyle.Board, trailingActions = 1)
     @Test fun boardTwoTrailingFitEveryWidthAndFont() = homeControlsFit(AppStyle.Board, trailingActions = 2)
 
-    private fun homeControlsFit(style: AppStyle, trailingActions: Int) {
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-mdpi")
+    @Test fun glassOneTrailingTextScalesMatchMain() = homeControlsFit(AppStyle.Glass, 1, checkMainTextScale = true)
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-mdpi")
+    @Test fun glassTwoTrailingTextScalesMatchMain() = homeControlsFit(AppStyle.Glass, 2, checkMainTextScale = true)
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-mdpi")
+    @Test fun briefOneTrailingTextScalesMatchMain() = homeControlsFit(AppStyle.Brief, 1, checkMainTextScale = true)
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-mdpi")
+    @Test fun briefTwoTrailingTextScalesMatchMain() = homeControlsFit(AppStyle.Brief, 2, checkMainTextScale = true)
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-mdpi")
+    @Test fun boardOneTrailingTextScalesMatchMain() = homeControlsFit(AppStyle.Board, 1, checkMainTextScale = true)
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-mdpi")
+    @Test fun boardTwoTrailingTextScalesMatchMain() = homeControlsFit(AppStyle.Board, 2, checkMainTextScale = true)
+
+    private fun homeControlsFit(style: AppStyle, trailingActions: Int, checkMainTextScale: Boolean = false) {
         var width by mutableStateOf(200.dp)
         var fontScale by mutableStateOf(2f)
         var faceClicks = 0
         var newClicks = 0
         var optionClicks = 0
         val selections = mutableListOf<String>()
+        val items = listOf(
+            NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+            NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+        )
+        val expectedTextSizes = mutableMapOf<String, androidx.compose.ui.unit.TextUnit>()
         rule.setContent {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
                 PersonaTheme(style = style, reduceMotion = true) {
+                    if (checkMainTextScale) {
+                        val density = LocalDensity.current
+                        val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+                        val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
+                        if (style == AppStyle.Glass) {
+                            items.forEach { item ->
+                                val chosen = item.key == "agents"
+                                val base = PersonaTheme.type.body
+                                val labelStyle = base.copy(fontSize = base.fontSize * HomeTokens.shellTextStep,
+                                    fontWeight = if (chosen) androidx.compose.ui.text.font.FontWeight.SemiBold
+                                    else androidx.compose.ui.text.font.FontWeight.Normal)
+                                val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
+                                val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
+                                val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+                                expectedTextSizes[item.label] =
+                                    maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+                            }
+                        } else {
+                            val fontSize = (if (style == AppStyle.Brief) PersonaTheme.type.label else PersonaTheme.type.labelSmall).fontSize
+                            expectedTextSizes["Assistant"] = fontSize
+                            expectedTextSizes["Agents 2"] = fontSize
+                        }
+                    }
                     Box(Modifier.width(width).height(220.dp).testTag("pane")) {
                         HomeNavigation(
-                            items = listOf(
-                                NavItem("assistant", "Assistant", PhIcons.ChatCircle),
-                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
-                            ),
+                            items = items,
                             selected = "agents", onSelect = { selections += it },
                             leading = { JPersonaButton(PersonaState.Idle, "Sidebar", { faceClicks++ }) },
                             trailing = {
@@ -184,13 +223,17 @@ class HomeChromeTest {
                 }
             }
         }
-        for (w in listOf(200.dp, 280.dp, 320.dp, 360.dp, 400.dp)) for (scale in listOf(1f, 2f)) {
+        val widths = if (checkMainTextScale) listOf(320.dp, 360.dp, 411.dp) else listOf(200.dp, 280.dp, 320.dp, 360.dp, 400.dp)
+        val scales = if (checkMainTextScale) listOf(1.3f, 1.6f, 2f) else listOf(1f, 2f)
+        for (w in widths) for (scale in scales) {
             rule.runOnIdle { width = w; fontScale = scale }
             rule.waitForIdle()
             val case = "$style width=$w fontScale=$scale trailing=$trailingActions"
             val agentsLabel = if (style == AppStyle.Glass) "Agents" else "Agents 2"
-            assertTextNotEllipsized("Assistant", case)
-            assertTextNotEllipsized(agentsLabel, case)
+            if (checkMainTextScale || w >= 320.dp || scale == 1f) {
+                assertTextNotEllipsized("Assistant", case, expectedTextSizes["Assistant"])
+                assertTextNotEllipsized(agentsLabel, case, expectedTextSizes[agentsLabel])
+            }
             val pane = rule.onNodeWithTag("pane").getBoundsInRoot()
             val face = rule.onNodeWithContentDescription("Sidebar").getBoundsInRoot()
             val switcher = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
@@ -242,12 +285,13 @@ class HomeChromeTest {
         rule.onAllNodesWithText(text, useUnmergedTree = useUnmergedTree)
             .filter(SemanticsMatcher("placed in the top bar") { it.boundsInRoot.top > 0f }).onFirst()
 
-    private fun assertTextNotEllipsized(text: String, case: String) {
+    private fun assertTextNotEllipsized(text: String, case: String, expectedSize: androidx.compose.ui.unit.TextUnit? = null) {
         val layouts = mutableListOf<TextLayoutResult>()
         placedText(text, useUnmergedTree = true)
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         val result = layouts.single()
-        assertTrue("$text is ellipsized: $case", !result.isLineEllipsized(0))
+        assertTrue("$text is ellipsized: $case; expectedSize=$expectedSize actualSize=${result.layoutInput.style.fontSize} layoutWidth=${result.size.width}", !result.isLineEllipsized(0))
+        expectedSize?.let { assertEquals("$text font size differs from main: $case", it, result.layoutInput.style.fontSize) }
     }
 
     @Test fun glassWideSwitcherIsCenteredWithOneAndTwoTrailingActions() {

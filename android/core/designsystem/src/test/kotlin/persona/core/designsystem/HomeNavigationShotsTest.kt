@@ -96,36 +96,39 @@ class HomeNavigationShotsTest {
         var style by mutableStateOf(AppStyle.Glass)
         var paneWidth by mutableStateOf(320.dp)
         var trailingActions by mutableStateOf(1)
+        var fontScale by mutableFloatStateOf(1f)
         rule.setContent {
-            PersonaTheme(style = style, reduceMotion = true) {
-                Box(Modifier.width(paneWidth).height(220.dp).testTag("pane")) {
-                    HomeNavigation(
-                        items = listOf(
-                            NavItem("assistant", "Assistant", PhIcons.ChatCircle),
-                            NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
-                        ),
-                        selected = "agents", onSelect = {},
-                        leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
-                        trailing = {
-                            JIconButton(PhIcons.NotePencil, "New session", {})
-                            if (trailingActions == 2) JIconButton(PersonaIcons.moreMenu, "List options", {})
-                        },
-                    )
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
+                PersonaTheme(style = style, reduceMotion = true) {
+                    Box(Modifier.width(paneWidth).height(220.dp).testTag("pane")) {
+                        HomeNavigation(
+                            items = listOf(
+                                NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                            ),
+                            selected = "agents", onSelect = {},
+                            leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                            trailing = {
+                                JIconButton(PhIcons.NotePencil, "New session", {})
+                                if (trailingActions == 2) JIconButton(PersonaIcons.moreMenu, "List options", {})
+                            },
+                        )
+                    }
                 }
             }
         }
         val levels = listOf("home-level-centered-full", "home-level-centered-compact",
             "home-level-gap-full", "home-level-gap-compact", "home-level-stacked")
-        val rows = mutableListOf("style\ttrailing\twidth_dp\tlevel\tleft_dp\tright_dp")
-        for (s in AppStyle.entries) for (actions in 1..2) for (w in listOf(320, 360, 384, 393, 400, 411)) {
-            rule.runOnIdle { style = s; trailingActions = actions; paneWidth = w.dp }
+        val rows = mutableListOf("style\ttrailing\twidth_dp\tfont_scale\tlevel\tleft_dp\tright_dp")
+        for (s in AppStyle.entries) for (actions in 1..2) for (scale in listOf(1f, 1.45f, 2f)) for (w in listOf(320, 360, 384, 393, 400, 411)) {
+            rule.runOnIdle { style = s; trailingActions = actions; fontScale = scale; paneWidth = w.dp }
             rule.waitForIdle()
             val level = levels.firstOrNull { tag ->
                 rule.onAllNodesWithTag(tag).fetchSemanticsNodes().any { it.boundsInRoot.top > 0f }
-            } ?: error("no selected level for $s actions=$actions width=$w")
+            } ?: error("no selected level for $s actions=$actions width=$w scale=$scale")
             val bounds = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
-            rows += "${s.name.lowercase()}\t$actions\t$w\t$level\t${bounds.left.value}\t${bounds.right.value}"
+            rows += "${s.name.lowercase()}\t$actions\t$w\t$scale\t$level\t${bounds.left.value}\t${bounds.right.value}"
         }
-        File("build/home-navigation-layout-table.tsv").writeText(rows.joinToString("\n") + "\n")
+        File("build/home-navigation-layout-table-v2.tsv").writeText(rows.joinToString("\n") + "\n")
     }
 }

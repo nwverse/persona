@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -268,13 +267,13 @@ fun HomeNavigation(
     val density = androidx.compose.ui.platform.LocalDensity.current
     val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
     if (PersonaTheme.style != AppStyle.Glass) {
-        val switcher: @Composable () -> Unit = {
+        val switcher: @Composable (Boolean) -> Unit = { compact ->
             Box(Modifier.width(IntrinsicSize.Max)) {
                 JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
                     items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { index ->
                         val key = items[index].key
                         if (key == selected && onSelectedMenu != null) onSelectedMenu() else select(key)
-                    }, Modifier.testTag("home-switcher"))
+                    }, Modifier.testTag("home-switcher"), compact = compact)
             }
         }
         HomeNavigationLayout(
@@ -288,26 +287,16 @@ fun HomeNavigation(
             hasEndAccessory = false,
             leading = leading,
             trailing = trailing,
-            fullSwitcher = switcher,
-            compactSwitcher = {
-                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                    androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
-                    switcher()
-                }
-            },
-            stackedSwitcher = {
-                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                    androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
-                    switcher()
-                }
-            },
+            fullSwitcher = { switcher(false) },
+            compactSwitcher = { switcher(true) },
+            stackedSwitcher = { switcher(true) },
         )
         return
     }
     val choose: (NavItem) -> Unit = { item ->
         if (item.key == selected && onSelectedMenu != null) onSelectedMenu() else select(item.key)
     }
-    val segmentWidth = HomeTokens.segmentWidth * scale
+    val segmentWidth = HomeTokens.segmentWidth * scale + if (density.fontScale > 1f) Tokens.Space.s else 0.dp
     val waiting = items.lastOrNull()?.badge ?: 0
     HomeNavigationLayout(
         modifier = modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight),
@@ -321,22 +310,18 @@ fun HomeNavigation(
         leading = leading,
         trailing = trailing,
         fullSwitcher = {
-            GlassHomeSwitcher(items, selected, segmentWidth, scale, onClick = choose)
+            GlassHomeSwitcher(items, selected, segmentWidth, scale,
+                textWidth = HomeTokens.segmentWidth * scale, onClick = choose)
         },
         compactSwitcher = {
-            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
-                GlassHomeSwitcher(items, selected, HomeTokens.segmentWidth, scale = 1f, onClick = choose)
-            }
+            GlassHomeSwitcher(items, selected, segmentWidth, scale,
+                textWidth = HomeTokens.segmentWidth * scale, surfacePadding = Tokens.Space.xxs, badgeOffset = 0.dp, onClick = choose)
         },
         stackedSwitcher = { available ->
-            val compactScale = HomeTokens.shellTextStep
             val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
-                .coerceAtMost(HomeTokens.segmentWidth * compactScale)
-            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
-                androidx.compose.ui.unit.Density(density.density, fontScale = minOf(density.fontScale, 1f))) {
-                GlassHomeSwitcher(items, selected, fittedWidth, compactScale, onClick = choose)
-            }
+                .coerceAtLeast(0.dp)
+            GlassHomeSwitcher(items, selected, fittedWidth, scale,
+                textWidth = HomeTokens.segmentWidth * scale, onClick = choose)
         },
     )
 }
@@ -384,18 +369,19 @@ private fun HomeNavigationLayout(
             horizontal * 2 + leadingPlaceable.width + full.width + trailingPlaceable.width + gap * 2
         }
         val contentWidth = (width - horizontal * 2).coerceAtLeast(0)
-        fun fitsCentered(switcherWidth: Int): Boolean {
+        fun fitsCentered(switcherWidth: Int, overflow: Int): Boolean {
             if (!centerSwitcher) return false
             val left = (contentWidth - switcherWidth) / 2
             return left >= leadingPlaceable.width &&
-                left + switcherWidth + accessoryOverflow <= contentWidth - trailingPlaceable.width
+                left + switcherWidth + overflow <= contentWidth - trailingPlaceable.width
         }
-        fun fitsGap(switcherWidth: Int) =
-            leadingPlaceable.width + switcherWidth + accessoryOverflow + trailingPlaceable.width + gap * 2 <= contentWidth
-        val centeredFull = fitsCentered(full.width)
-        val centeredCompact = !centeredFull && fitsCentered(compact.width)
-        val gapFull = !centeredFull && !centeredCompact && fitsGap(full.width)
-        val gapCompact = !centeredFull && !centeredCompact && !gapFull && fitsGap(compact.width)
+        fun fitsGap(switcherWidth: Int, overflow: Int) =
+            leadingPlaceable.width + switcherWidth + overflow + trailingPlaceable.width + gap * 2 <= contentWidth
+        val compactAccessoryOverflow = 0
+        val centeredFull = fitsCentered(full.width, accessoryOverflow)
+        val centeredCompact = !centeredFull && fitsCentered(compact.width, compactAccessoryOverflow)
+        val gapFull = !centeredFull && !centeredCompact && fitsGap(full.width, accessoryOverflow)
+        val gapCompact = !centeredFull && !centeredCompact && !gapFull && fitsGap(compact.width, compactAccessoryOverflow)
         val inline = centeredFull || gapFull
         val compactInline = centeredCompact || gapCompact
         val centeredInline = centeredFull || centeredCompact
@@ -432,7 +418,8 @@ private fun HomeNavigationLayout(
             centeredInline -> horizontal + (contentWidth - switcher.width) / 2
             centerSwitcher -> {
                 val gapStart = horizontal + leadingPlaceable.width + gap
-                val gapWidth = contentWidth - leadingPlaceable.width - trailingPlaceable.width - gap * 2 - accessoryOverflow
+                val gapWidth = contentWidth - leadingPlaceable.width - trailingPlaceable.width - gap * 2 -
+                    (if (compactInline) compactAccessoryOverflow else accessoryOverflow)
                 gapStart + (gapWidth - switcher.width) / 2
             }
             else -> horizontal + leadingPlaceable.width + gap
@@ -451,6 +438,9 @@ private fun GlassHomeSwitcher(
     selected: String,
     segmentWidth: Dp,
     scale: Float,
+    textWidth: Dp = segmentWidth,
+    surfacePadding: Dp = Tokens.Space.xs,
+    badgeOffset: Dp = Tokens.Space.s,
     modifier: Modifier = Modifier,
     onClick: (NavItem) -> Unit,
 ) {
@@ -458,13 +448,13 @@ private fun GlassHomeSwitcher(
     val density = androidx.compose.ui.platform.LocalDensity.current
     val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
     Box(modifier) {
-        Row(Modifier.testTag("home-switcher").floatingSurface(CircleShape).padding(Tokens.Space.xs)) {
+        Row(Modifier.testTag("home-switcher").floatingSurface(CircleShape).padding(surfacePadding)) {
             items.forEach { item ->
                 val chosen = item.key == selected
                 val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
                     fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
                 val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
-                val available = with(density) { (segmentWidth - Tokens.Space.xxs).toPx().coerceAtLeast(1f) }
+                val available = with(density) { textWidth.toPx() }
                 val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
                 val fittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
                 Box(Modifier.width(segmentWidth).height(HomeTokens.segmentHeight * scale)
@@ -480,7 +470,7 @@ private fun GlassHomeSwitcher(
         }
         val waiting = items.lastOrNull()?.badge ?: 0
         if (waiting > 0) GlassHomeBadge(waiting,
-            Modifier.align(Alignment.TopEnd).offset(x = Tokens.Space.s, y = -Tokens.Space.xs))
+            Modifier.align(Alignment.TopEnd).offset(x = badgeOffset, y = -Tokens.Space.xs))
     }
 }
 
