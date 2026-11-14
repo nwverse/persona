@@ -89,7 +89,6 @@ func (h *Hub) updateClientApp(cred string, change func(assistantwire.ClientApp, 
 	a.pendingMu.Lock()
 	a.pending = append(a.pending, update)
 	a.pendingMu.Unlock()
-	h.startHelloWriters()
 	wakeHelloWriter(h.helloWrites.appsWake)
 }
 

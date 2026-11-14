@@ -262,21 +262,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	if err != nil {
 		return err
 	}
-	defer func() {
-		cancel()
-		budget.step(h, "hello writes", func(context.Context) error {
-			h.stopHelloWriters()
-			return nil
-		})
-		budget.step(h, "node connections", func(context.Context) error {
-			h.nodeWorkers.Wait()
-			return nil
-		})
-		if h.stopping.Load() {
-			budget.step(h, "hand over the event log", func(ctx context.Context) error { h.saveEventLog(ctx); return nil })
-		}
-		budget.step(h, "close database", database.CloseContext)
-	}()
+	defer h.closeDatabaseAfterWorkers(cancel, database.CloseContext)
 	h.store = database
 	h.startHelloWriters()
 	go func() {
@@ -339,6 +325,24 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	}
 	h.startMesh(ctx)
 	return h.serveHTTP(ctx)
+}
+
+// closeDatabaseAfterWorkers is runHub's real cleanup sequence. serveHTTP has already closed and joined app socket
+// handlers when this starts; accepted hello reports drain before the finite node workers and the database close.
+func (h *Hub) closeDatabaseAfterWorkers(cancel context.CancelFunc, closeDatabase func(context.Context) error) {
+	cancel()
+	h.shutdown.step(h, "hello writes", func(context.Context) error {
+		h.stopHelloWriters()
+		return nil
+	})
+	h.shutdown.step(h, "node connections", func(context.Context) error {
+		h.nodeWorkers.Wait()
+		return nil
+	})
+	if h.stopping.Load() {
+		h.shutdown.step(h, "hand over the event log", func(ctx context.Context) error { h.saveEventLog(ctx); return nil })
+	}
+	h.shutdown.step(h, "close database", closeDatabase)
 }
 
 func (h *Hub) logf(format string, args ...any) { h.logger.Printf(format, args...) }

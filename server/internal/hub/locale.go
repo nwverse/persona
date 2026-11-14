@@ -135,7 +135,6 @@ func (h *Hub) noteUserLang(key string, l i18n.Lang) {
 	g.pendingMu.Lock()
 	g.pending = append(g.pending, update)
 	g.pendingMu.Unlock()
-	h.startHelloWriters()
 	wakeHelloWriter(h.helloWrites.langsWake)
 }
 

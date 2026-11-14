@@ -21,7 +21,8 @@ const (
 // group; its queue applies reports in message order and coalesces everything waiting into one snapshot save. Phone
 // registrations additionally coalesce by device, so only the newest queued tool set for a device is written.
 type helloWriteWorkers struct {
-	once                           sync.Once
+	mu                             sync.Mutex
+	started, stopped               bool
 	cancel                         context.CancelFunc
 	appsWake, langsWake, toolsWake chan struct{}
 	appsSlot, langsSlot, toolsSlot chan struct{}
@@ -51,60 +52,63 @@ type phoneToolUpdates struct {
 
 func (h *Hub) startHelloWriters() {
 	w := &h.helloWrites
-	w.once.Do(func() {
-		// The hub stops these workers explicitly after its app connections are gone. Deriving their lifetime from
-		// deployCtx would strand reports read while shutdown is closing those connections.
-		ctx, cancel := context.WithCancel(context.Background())
-		w.cancel = cancel
-		w.appsWake, w.langsWake, w.toolsWake = make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 1)
-		w.appsSlot = make(chan struct{}, helloPendingLimit)
-		w.langsSlot = make(chan struct{}, helloPendingLimit)
-		w.toolsSlot = make(chan struct{}, helloPendingLimit)
-		h.apps.changed = make(chan struct{})
-		h.langs.changed = make(chan struct{})
-		h.phoneToolUpdates.changed = make(chan struct{})
-		start := func(wake <-chan struct{}, flush func() bool) {
-			w.workers.Add(1)
-			go func() {
-				defer w.workers.Done()
-				helloWriteLoop(ctx, wake, flush)
-			}()
-		}
-		start(w.appsWake, h.flushClientApps)
-		start(w.langsWake, h.flushUserLangs)
-		start(w.toolsWake, h.flushPhoneTools)
-	})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// A report that arrives after stop is not written; it either remains queued without a consumer or fails
+	// admission. The app sends its hello and registration again when it reconnects.
+	if w.started || w.stopped {
+		return
+	}
+	w.started = true
+	// The hub stops these workers explicitly after its app connections are gone. Deriving their lifetime from
+	// deployCtx would strand reports read while shutdown is closing those connections.
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancel = cancel
+	w.appsWake, w.langsWake, w.toolsWake = make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 1)
+	w.appsSlot = make(chan struct{}, helloPendingLimit)
+	w.langsSlot = make(chan struct{}, helloPendingLimit)
+	w.toolsSlot = make(chan struct{}, helloPendingLimit)
+	h.apps.changed = make(chan struct{})
+	h.langs.changed = make(chan struct{})
+	h.phoneToolUpdates.changed = make(chan struct{})
+	start := func(wake <-chan struct{}, flush func() bool) {
+		w.workers.Add(1)
+		go func() {
+			defer w.workers.Done()
+			helloWriteLoop(ctx, wake, flush)
+		}()
+	}
+	start(w.appsWake, h.flushClientApps)
+	start(w.langsWake, h.flushUserLangs)
+	start(w.toolsWake, h.flushPhoneTools)
 }
 
 func helloWriteLoop(ctx context.Context, wake <-chan struct{}, flush func() bool) {
-	for {
-		// Prefer cancellation over an already signaled wake. Reports behind an in-flight write therefore take the
-		// explicit drain path instead of happening to survive because select chose the wake case.
+	for ctx.Err() == nil {
+		// Checking cancellation before selecting prefers it over an already signaled wake; otherwise Go could
+		// randomly choose the wake and delay the transition to the drain.
 		select {
 		case <-ctx.Done():
-			// stopHelloWriters runs only after the app connections are gone. Store calls retain their own bounds;
-			// drain every report accepted before that point before joining the hub's other workers.
-			for flush() {
-			}
-			return
-		default:
-		}
-		select {
-		case <-ctx.Done():
-			for flush() {
-			}
-			return
 		case <-wake:
 			flush()
 		}
 	}
+	// stopHelloWriters runs only after the app connections are gone. Store calls retain their own bounds; this
+	// single drain covers every report accepted before that point before joining the hub's other workers.
+	for flush() {
+	}
 }
 
 func (h *Hub) stopHelloWriters() {
-	if h.helloWrites.cancel != nil {
-		h.helloWrites.cancel()
+	w := &h.helloWrites
+	w.mu.Lock()
+	w.stopped = true
+	cancel := w.cancel
+	w.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	h.helloWrites.workers.Wait()
+	w.workers.Wait()
 }
 
 // waitHelloWrites is the consumers' idle signal for tests. Production counts nothing per report: each generation
