@@ -195,6 +195,15 @@ nonisolated struct GitPRAnswer: Decodable, Sendable {
     var pr: GitPR?
 }
 
+/// What `git/branches` answers: the branches, and the remote's default branch by its name (`origin/HEAD`), nil when git
+/// doesn't know it or the node is older (#7014).
+nonisolated struct GitBranchList: Decodable, Sendable {
+    var branches: [GitBranch]
+    var defaultBranch: String?
+
+    enum CodingKeys: String, CodingKey { case branches, defaultBranch = "default" }
+}
+
 /// One stash (#7015). `oid` names it whatever the stack does since: a node without it gets no writes.
 nonisolated struct GitStashEntry: Decodable, Identifiable, Hashable, Sendable {
     var index: Int
@@ -319,10 +328,10 @@ extension APIClient {
     func gitPush(machine: String, cwd: String, setUpstream: Bool) async throws -> GitWriteResult {
         try await post(mp(machine) + "/git/push", body: GitPushRequest(cwd: cwd, setUpstream: setUpstream), timeout: 100)
     }
-    private struct BranchesResponse: Decodable { var branches: [GitBranch] }
-    /// The branches to switch to (#7015): local ones, then remote ones without a local one, newest first.
-    func gitBranches(machine: String, cwd: String) async throws -> [GitBranch] {
-        try await get(mp(machine) + "/git/branches", query: ["cwd": cwd], as: BranchesResponse.self).branches
+    /// The branches to switch to (#7015): local ones, then remote ones without a local one, newest first; and the remote's
+    /// default branch when git knows it (#7014).
+    func gitBranches(machine: String, cwd: String) async throws -> GitBranchList {
+        try await get(mp(machine) + "/git/branches", query: ["cwd": cwd], as: GitBranchList.self)
     }
     private struct GitSwitchRequest: Encodable { var cwd, branch: String; var create: Bool }
     /// Switches to branch, or makes it here with create. Uncommitted files the branch has differently are refused

@@ -154,7 +154,7 @@ final class GitWriteModel {
         var stage: (_ machine: String, _ cwd: String, _ paths: [String], _ unstage: Bool) async throws -> GitWriteResult
         var commit: (_ machine: String, _ cwd: String, _ message: String) async throws -> GitWriteResult
         var push: (_ machine: String, _ cwd: String, _ setUpstream: Bool) async throws -> GitWriteResult
-        var branches: (_ machine: String, _ cwd: String) async throws -> [GitBranch]
+        var branches: (_ machine: String, _ cwd: String) async throws -> GitBranchList
         var switchBranch: (_ machine: String, _ cwd: String, _ branch: String, _ create: Bool) async throws -> GitWriteResult
         var stash: (_ machine: String, _ cwd: String, _ op: GitStashOp) async throws -> GitWriteResult
 
@@ -172,7 +172,7 @@ final class GitWriteModel {
         init(stage: @escaping (String, String, [String], Bool) async throws -> GitWriteResult,
              commit: @escaping (String, String, String) async throws -> GitWriteResult,
              push: @escaping (String, String, Bool) async throws -> GitWriteResult,
-             branches: @escaping (String, String) async throws -> [GitBranch] = { _, _ in [] },
+             branches: @escaping (String, String) async throws -> GitBranchList = { _, _ in GitBranchList(branches: []) },
              switchBranch: @escaping (String, String, String, Bool) async throws -> GitWriteResult = { _, _, _, _ in throw CancellationError() },
              stash: @escaping (String, String, GitStashOp) async throws -> GitWriteResult = { _, _, _ in throw CancellationError() }) {
             self.stage = stage

@@ -408,8 +408,8 @@ struct GitPRCreateSheet: View {
     let status: GitStatus
     @Bindable var pr: GitPRModel
     let deps: GitPRModel.Deps
-    /// The branches it could go into.
-    let branches: () async throws -> [GitBranch]
+    /// The branches it could go into, and the default one's name when git knows it.
+    let branches: () async throws -> GitBranchList
     /// Shows the new pull request's page.
     let opened: () -> Void
 
@@ -418,10 +418,12 @@ struct GitPRCreateSheet: View {
     @State private var base = ""
     @State private var draft = false
     @State private var bases: [String] = []
+    /// The remote's default branch by name (origin/HEAD); nil: unknown, said as "the default branch".
+    @State private var defaultBranch: String?
     @State private var asking = false
 
     init(machineID: String, cwd: String, status: GitStatus, pr: GitPRModel, deps: GitPRModel.Deps,
-         branches: @escaping () async throws -> [GitBranch], opened: @escaping () -> Void) {
+         branches: @escaping () async throws -> GitBranchList, opened: @escaping () -> Void) {
         self.machineID = machineID
         self.cwd = cwd
         self.status = status
@@ -445,9 +447,10 @@ struct GitPRCreateSheet: View {
                 }
                 Section {
                     Picker(selection: $base) {
-                        Text("The Default Branch").tag("")
+                        Text(defaultBranch.map { String(localized: "\($0) (Default)") } ?? String(localized: "The Default Branch")).tag("")
                         ForEach(bases, id: \.self) { Text($0).tag($0) }
                     } label: { Text("Into") }
+                        .accessibilityIdentifier("git.pr.into")
                     Toggle("Open as Draft", isOn: $draft)
                 } footer: {
                     Text(GitPRModel.pushedAll(status) ? String(localized: "The title starts as the last commit's subject.")
@@ -477,9 +480,7 @@ struct GitPRCreateSheet: View {
                 Button { Task { await go() } } label: { Text("Open Pull Request").lineLimit(1) }
                     .accessibilityIdentifier("git.pr.create.confirm")
             } message: {
-                let into = base.isEmpty ? String(localized: "the default branch") : base
-                Text(draft ? String(localized: "A draft pull request from \(status.branch ?? "") into \(into) is opened on GitHub; everyone who can see the repository sees it.")
-                     : String(localized: "A pull request from \(status.branch ?? "") into \(into) is opened on GitHub; everyone who can see the repository sees it."))
+                Text(confirmation)
             }
             .gitRefusalAlert($pr.refusal)
             .task { await loadBases() }
@@ -487,9 +488,23 @@ struct GitPRCreateSheet: View {
         .interactiveDismissDisabled(pr.busy != nil)
     }
 
+    /// Where it goes, by name when it is known; "the default branch" has its own sentence, so it reads as words.
+    private var into: String? { base.isEmpty ? defaultBranch : base }
+
+    private var confirmation: String {
+        let from = status.branch ?? ""
+        switch (into, draft) {
+        case (let name?, true): return String(localized: "A draft pull request from \(from) into \(name) is opened on GitHub; everyone who can see the repository sees it.")
+        case (let name?, false): return String(localized: "A pull request from \(from) into \(name) is opened on GitHub; everyone who can see the repository sees it.")
+        case (nil, true): return String(localized: "A draft pull request from \(from) into the default branch is opened on GitHub; everyone who can see the repository sees it.")
+        case (nil, false): return String(localized: "A pull request from \(from) into the default branch is opened on GitHub; everyone who can see the repository sees it.")
+        }
+    }
+
     private func go() async {
         asking = false
-        guard await pr.create(title: title, body: text, base: base, draft: draft, machine: machineID, cwd: cwd, deps: deps)?.pr != nil else {
+        // the branch shown is the one asked for: a default known by name goes by that name
+        guard await pr.create(title: title, body: text, base: into, draft: draft, machine: machineID, cwd: cwd, deps: deps)?.pr != nil else {
             if pr.refusal != nil { Haptics.error() }
             return
         }
@@ -501,10 +516,11 @@ struct GitPRCreateSheet: View {
     /// The other branches by the name GitHub knows them by, without the current one.
     private func loadBases() async {
         guard let list = try? await branches() else { return }
+        defaultBranch = list.defaultBranch
         var seen = Set<String>(), out: [String] = []
-        for b in list where b.current != true {
+        for b in list.branches where b.current != true {
             let name = b.switchName
-            if name != status.branch, seen.insert(name).inserted { out.append(name) }
+            if name != status.branch, name != list.defaultBranch, seen.insert(name).inserted { out.append(name) }
         }
         bases = out
     }

@@ -266,9 +266,12 @@ final class GitWriteUITests: XCTestCase {
         try shot(app, "19-pr-none")
         create.tap()
         XCTAssertTrue(app.textFields["git.pr.title"].waitForExistence(timeout: 10), app.debugDescription)
+        // the default branch by its name (origin/HEAD, the mock's main)
+        let into = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "main（默认）", "main（默认）")).firstMatch
+        XCTAssertTrue(into.waitForExistence(timeout: 10), app.debugDescription)
         try shot(app, "20-pr-create")
         tapSettled(app.buttons["git.pr.open.go"])
-        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "能看到这个仓库的人都看得到")).firstMatch
+        let ask = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "从 widget-hourly 合进 main 的拉取请求")).firstMatch
         XCTAssertTrue(ask.waitForExistence(timeout: 10), app.debugDescription)
         try shot(app, "21-pr-create-ask")
         tapSettled(dialogButton(app, "git.pr.create.confirm", "创建拉取请求"))

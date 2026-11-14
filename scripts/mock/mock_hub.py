@@ -19454,7 +19454,8 @@ def git_branches():
     return {"branches": [{"name": n, "remote": r, "current": n == GIT_W["branch"], "hash": "a1b2c3d",
                           "subject": MOCK_COMMITS[i % len(MOCK_COMMITS)]["subject"], "date": ago(hours=3 * i + 1)}
                          for i, (n, r) in enumerate(GIT_W["branches"])
-                         if not (r and (n.split("/", 1)[1], False) in GIT_W["branches"])]}  # as the node: a remote one with a local one of its name is left out
+                         if not (r and (n.split("/", 1)[1], False) in GIT_W["branches"])],  # as the node: a remote one with a local one of its name is left out
+            "default": "main"}  # origin/HEAD (#7014)
 
 
 def git_write(h, p, body):

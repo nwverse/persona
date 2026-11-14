@@ -730,6 +730,29 @@
       },
       "extractionState" : "manual"
     },
+    "%@ (Default)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (Default)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@（デフォルト）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@（默认）"
+          }
+        }
+      }
+    },
     "%@ (Recommended)" : {
       "localizations" : {
         "en" : {
@@ -13953,6 +13976,29 @@
         }
       }
     },
+    "A draft pull request from %@ into the default branch is opened on GitHub; everyone who can see the repository sees it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A draft pull request from %1$@ into the default branch is opened on GitHub; everyone who can see the repository sees it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub に %1$@ からデフォルトブランチへの下書きプルリクエストを作成します。リポジトリを見られる人は全員見られます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会在 GitHub 上创建从 %1$@ 合进默认分支的草稿拉取请求，能看到这个仓库的人都看得到。"
+          }
+        }
+      }
+    },
     "A draft: mark it ready for review on GitHub before merging" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14496,6 +14542,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "会在 GitHub 上创建从 %1$@ 合进 %2$@ 的拉取请求，能看到这个仓库的人都看得到。"
+          }
+        }
+      }
+    },
+    "A pull request from %@ into the default branch is opened on GitHub; everyone who can see the repository sees it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A pull request from %1$@ into the default branch is opened on GitHub; everyone who can see the repository sees it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub に %1$@ からデフォルトブランチへのプルリクエストを作成します。リポジトリを見られる人は全員見られます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会在 GitHub 上创建从 %1$@ 合进默认分支的拉取请求，能看到这个仓库的人都看得到。"
           }
         }
       }
@@ -193722,29 +193791,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开启"
-          }
-        }
-      }
-    },
-    "the default branch" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "the default branch"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "デフォルトブランチ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "默认分支"
           }
         }
       }
