@@ -167,7 +167,7 @@ func TestLegacySideQueuedReviewRehomesToMain(t *testing.T) {
 	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "legacy-side-review", Detail: "legacy-review-marker-5732", At: time.Now()}
 	s.signal(g)
 	reserveUndelivered(t, s, g) // the old digest reserved dedup and took the signal out of memory before queue admission
-	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued legacy review", At: g.At},
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued legacy review for " + todo.ID, At: g.At},
 		[]superviseSignal{g}, g.At, time.Time{}) {
 		t.Fatal("the legacy side did not accept its queued review")
 	}
@@ -410,6 +410,12 @@ func (h *blockedAssistantDrain) text(session string) string {
 	return strings.Join(h.texts[session], "\n")
 }
 
+func (h *blockedAssistantDrain) count(session string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.texts[session])
+}
+
 // A restart drops supervise.queued while the persisted relay queue survives. Even when the old side has already started
 // draining its head, rehoming must replay that head's structured review for main rather than waiting for another restart.
 func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
@@ -426,7 +432,7 @@ func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
 	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "legacy-draining-review", Detail: "legacy-draining-marker-5732", At: time.Now()}
 	s.signal(g)
 	reserveUndelivered(t, s, g)
-	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued legacy review", At: g.At},
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued legacy review for " + todo.ID, At: g.At},
 		[]superviseSignal{g}, g.At, time.Time{}) {
 		t.Fatal("the legacy side did not accept its queued review")
 	}
@@ -465,6 +471,16 @@ func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
 	})
 	if got := strings.Count(h.text("conv1"), "legacy-draining-marker-5732"); got != 1 {
 		t.Fatalf("main received the replayed marker %d times, want exactly one", got)
+	}
+	// The detached head stays behind a failed old-side send. Another restart must not reinterpret it as legacy text.
+	before := h.count("conv1")
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	simulateSupervisionRestart(t, s)
+	s.rehomeSupervisedTodos(ctx)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	s.sendDigest(ctx)
+	if got := h.count("conv1"); got != before {
+		t.Fatalf("the detached head generated another main turn after restart: before %d, after %d", before, got)
 	}
 	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
 		t.Fatalf("main could not accept the review replayed during the old side's drain: %v", err)
@@ -515,6 +531,15 @@ func TestLegacySideDrainingTextNoticeRehomesAfterRestart(t *testing.T) {
 	waitFor(t, "the pre-structured draining notice replayed to main", func() bool {
 		return strings.Contains(h.text("conv1"), todo.ID)
 	})
+	before := h.count("conv1")
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	simulateSupervisionRestart(t, s)
+	s.rehomeSupervisedTodos(ctx)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Hour}
+	s.sendDigest(ctx)
+	if got := h.count("conv1"); got != before {
+		t.Fatalf("the text fallback repeated after its head was detached: before %d, after %d", before, got)
+	}
 	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
 		t.Fatalf("main could not accept the pre-structured notice's task: %v", err)
 	}

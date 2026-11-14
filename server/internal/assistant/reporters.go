@@ -321,7 +321,7 @@ func (s *Service) dropQueuedSupervisionTasksAtomic(conversation string, ids map[
 		}
 		target := false
 		var remaining []superviseSignal
-		structured := m.Signals != nil && len(*m.Signals) > 0
+		structured := m.Signals != nil
 		if structured {
 			for _, g := range *m.Signals {
 				if ids[g.Todo] {
@@ -356,15 +356,17 @@ func (s *Service) dropQueuedSupervisionTasksAtomic(conversation string, ids map[
 			}
 		}
 		if i == 0 && r.draining[conversation] {
-			// The send owns this head's text until it finishes. Keep the message, but detach replayed structured
-			// signals so a later restore cannot mistake the old queue for main's durable-delivery acknowledgment.
-			// Other tasks in a mixed digest stay with this delivery only; a pre-structured head uses the text fallback.
-			if target && structured {
-				if len(remaining) == 0 {
-					m.Signals = nil
-				} else {
-					m.Signals = &remaining
+			// The send owns this head's text until it finishes. Keep the message, but mark replayed signals as detached
+			// so a later restore cannot mistake the old queue for main's durable-delivery acknowledgment. Other tasks
+			// in a mixed structured digest stay with this delivery only; a pre-structured head uses the text fallback.
+			if target {
+				// An empty, non-nil list is the durable detached marker: it prevents the next restart from
+				// treating the retained text as an unreconciled legacy message and replaying it again.
+				detached := []superviseSignal{}
+				if structured {
+					detached = append(detached, remaining...)
 				}
+				m.Signals = &detached
 				changed = true
 			}
 			kept = append(kept, m)

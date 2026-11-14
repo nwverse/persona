@@ -146,7 +146,7 @@ func (s *Service) rehomeMainQueuedSignals(ctx context.Context, main string, todo
 			if msg.Tool != superviseTool {
 				continue
 			}
-			if msg.Signals != nil && len(*msg.Signals) > 0 {
+			if msg.Signals != nil {
 				for _, g := range *msg.Signals {
 					if mainTasks[g.Todo] {
 						if byConversation[conversation] == nil {
