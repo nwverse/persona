@@ -348,18 +348,20 @@ class Watcher:
             scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
             checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
                     cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
-            pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
-            updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
-            self.state.put(repo, number, updated_head, evidence_key=updated_key,
-                           repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
             if pr.get("isCrossRepository"):
-                new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
+                new_number = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
+                self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                               outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
                 self.comment(repo, number, "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
             else:
+                pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
+                updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
+                self.state.put(repo, number, updated_head, evidence_key=updated_key,
+                               repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
                 self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
             return False
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                       outcome="repairing", failure=str(error))
+                       outcome="repairing", repair_rounds=rounds + 1, failure=str(error))
         latest = pr_snapshot(repo, number)
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
             self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
@@ -559,6 +561,7 @@ class Watcher:
                                outcome="retry" if attempts < 3 else "failed",
                                review_attempts=attempts,
                                repair_attempts=attempts,
+                               repair_rounds=int(old.get("repair_rounds", 0)),
                                retry_after=time.time() + 300, failure=str(error))
                 return
             # A missing semantic answer never becomes approval. Verification
