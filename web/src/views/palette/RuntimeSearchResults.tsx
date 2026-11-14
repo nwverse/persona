@@ -39,9 +39,15 @@ export function RuntimeSearchNotice({ search, onReturnFocus }: { search: ReturnT
   }, []);
   useLayoutEffect(() => {
     const previous = pendingFocus.current;
-    if (previous && !previous.isConnected) {
+    if (previous && !previous.isConnected && !search.loading && !search.loadingMore) {
       pendingFocus.current = null;
-      if (document.activeElement === document.body) onReturnFocus?.();
+      if (document.activeElement === document.body) {
+        // An expired cursor replaces More with Search again. Keep focus beside that explanation, rather than
+        // returning to the combobox and scrolling the selected first result over the error.
+        const retry = controls.current?.querySelector<HTMLButtonElement>('[data-testid="runtime-search-retry"]');
+        if ((search.error || search.moreError) && retry && !retry.disabled) retry.focus({ preventScroll: true });
+        else onReturnFocus?.();
+      }
     }
   });
   const run = (action: () => void) => {
@@ -54,7 +60,7 @@ export function RuntimeSearchNotice({ search, onReturnFocus }: { search: ReturnT
     {search.loading && <p role="status">{t("runtime-search.searching")}</p>}
     {(search.error || search.moreError) && <div className="flex flex-wrap items-center gap-2">
       <p role="alert" className="min-w-0 flex-1 break-words text-red">{search.error || search.moreError}</p>
-      {search.supported && search.retryable && <Button size="sm" disabled={search.loading || search.loadingMore} onClick={() => run(search.retry)}>{t(search.expired ? "runtime-search.search_again" : "runtime-search.retry")}</Button>}
+      {search.supported && search.retryable && <Button testId="runtime-search-retry" size="sm" disabled={search.loading || search.loadingMore} onClick={() => run(search.retry)}>{t(search.expired ? "runtime-search.search_again" : "runtime-search.retry")}</Button>}
     </div>}
     {!search.loading && !search.error && search.loaded && search.supported && search.enabled && <p role="status">{t("runtime-search.loaded_count", { count: search.hits.length, total: search.total })}</p>}
     {search.hasMore && !search.expired && !search.fallback && <Button size="sm" busy={search.loadingMore} disabled={search.loading || search.loadingMore} onClick={() => run(search.more)}>{t("runtime-search.more")}</Button>}

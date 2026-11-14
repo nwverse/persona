@@ -223,6 +223,7 @@ async function failures(browser) {
     x.fail("needle", 80, 409); await x.status().getByRole("button", { name: words.more, exact: true }).click(); await x.status().getByText(words.expired, { exact: true }).waitFor();
     await x.row("Needle remote workspace 78").waitFor();
     assert.equal(await x.status().getByRole("button", { name: words.more, exact: true }).count(), 0);
+    assert(await x.status().getByRole("button", { name: words.search_again, exact: true }).evaluate((el) => el === document.activeElement), "Cursor expiry transfers focus to Search again without hiding the explanation");
     await errorInView(); await x.status().scrollIntoViewIfNeeded(); await x.shot("expired");
     x.fail("needle", 80, undefined); await x.status().getByRole("button", { name: words.search_again, exact: true }).click(); await x.loaded(40, 85);
     assert.equal(x.run.searches.at(-1).offset, 0, "Expired cursor starts a new explicit query baseline");

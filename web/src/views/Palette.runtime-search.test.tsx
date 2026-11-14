@@ -262,6 +262,22 @@ describe("server-backed runtime search in the palette", () => {
     expect(document.activeElement).toBe(target);
   });
 
+  it("focuses Search again beside the error when an expired cursor replaces More", async () => {
+    reply = async (url) => url.searchParams.has("cursor") ? json({ code: "cursor_expired", error: "Expired cursor" }, 409)
+      : json(page([{ session: agent("first"), score: 105 }], { total: 2, has_more: true, next_cursor: "next" }));
+    await search(); key("ArrowDown");
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView"); scroll.mockClear();
+    act(() => { button("more").focus(); button("more").click(); }); await flush();
+    expect(button("more")).toBeUndefined();
+    expect(document.activeElement).toBe(button("search_again"));
+    expect(document.body.textContent).toContain(t("runtime-search.expired"));
+    expect(scroll).not.toHaveBeenCalled(); scroll.mockRestore();
+    reply = async () => json(page([{ session: agent("renewed"), score: 105 }]));
+    act(() => button("search_again").click()); await flush();
+    expect(document.activeElement).toBe(field());
+    expect(options()[0].textContent).toContain("renewed");
+  });
+
   it("never starts runtime search for an empty query, command mode, or a closed palette", async () => {
     await search(""); await search(">new"); await search("needle", false);
     expect(reads()).toHaveLength(0);
