@@ -96,6 +96,11 @@ const browseBy = (stored: string | null, personal: boolean): GroupDimension | ""
 /** A counts query in a stable key order, so the same scope reached through different filters compares equal. */
 const countsQuery = (filters: ListFilters) => filterQuery(filters);
 
+/** A list's read that failed: why, and Retry (the paged list's, the complete Agents list's in the sidebar, #6662). */
+export function ListError({ text, onRetry }: { text: string; onRetry: () => void }) {
+  return <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{text}</p><Button onClick={onRetry}>{t("sidebar.retry")}</Button></div>;
+}
+
 export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement; p; p = p.parentElement) {
     if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
@@ -155,6 +160,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
   const [facets, setFacets] = useState<ListCounts | null>(null);
   const [facetError, setFacetError] = useState("");
+  // Retry on a failed scoped facets read: read it again now
+  const [facetAttempt, setFacetAttempt] = useState(0);
   const [scopeCounts, setScopeCounts] = useState<ListCounts | null>(null);
   const [scopeError, setScopeError] = useState("");
   const scopeQuery = useMemo(() => {
@@ -197,7 +204,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     read();
     const off = onHubEvent(event, read);
     return () => { live = false; controller.abort(); off(); };
-  }, [countsPath, event, facetScoped, facetsFromList, facetQuery]);
+  }, [countsPath, event, facetScoped, facetsFromList, facetQuery, facetAttempt]);
   useEffect(() => {
     // Keep the last counts while a refresh or a new scope is loading, including a root rebaseline.
     if (scopeQuery !== "counts=1") return;
@@ -238,7 +245,14 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // group itself. Their counts follow the state tab, so a group's number is the number of rows it lists.
   const groupScope: ListFilters = useMemo(() => ({ ...facetFilters, ...chip }), [facetFilters, chip]);
   const scopeNeeds = scopeCounts?.state?.needs_you;
-  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos });
+  // the facets' own read when the groups are drawn from them: its failure is theirs (audit item 4: the root list's read
+  // failing left the sections on "Loading…" for good)
+  const facetsFailure = facetScoped ? facetError : rootPage.error ?? "";
+  const retryFacets = useCallback(() => {
+    if (facetScoped) setFacetAttempt((n) => n + 1);
+    else void root.retry().catch(() => {});
+  }, [facetScoped, root]);
+  const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, facetsError: facetsFailure, retryFacets, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos });
   // "Recently updated" as the complete list orders its computers and spaces (lib/agent-sort.ts): by their newest session,
   // as far as the root's newest page tells (the hub reads no group's time); the ones it has none of keep their order
   // after them, and the sessions on no space stay last. Its to-dos keep the To-dos page's order there too.
@@ -441,14 +455,15 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           {activeAt && !sections && <ActiveWindowMenu value={win} onChange={chooseWindow} />}
         </div>
       </div>
-      {(facetError || scopeError) && <p role="alert" className="px-2 text-xs text-red">{facetError || scopeError}</p>}
+      {/* not twice: drawn as groups, the groups' error with its Retry says it */}
+      {(facetError || scopeError) && !(sections && grouped.error) && <p role="alert" className="px-2 text-xs text-red">{facetError || scopeError}</p>}
       {sections && <>
         {allGroups && allGroups.length > 0 && <Suspense fallback={loadingLine}>
           <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
             renderRow={renderRow} groupName={groupName} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} />
         </Suspense>}
         {!allGroups && !grouped.error && loadingLine}
-        {grouped.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{grouped.error}</p><Button onClick={grouped.retry}>{t("sidebar.retry")}</Button></div>}
+        {grouped.error && <ListError text={grouped.error} onRetry={grouped.retry} />}
         {allGroups && !allGroups.length && !grouped.error && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       </>}
       {!sections && <><div ref={container} data-virtual-sessions className="relative" style={{ height: totalSize }}>
@@ -463,7 +478,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
         })}
       </div>
       {page.loading && loadingLine}
-      {page.error && <div className="px-2 py-2"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
+      {page.error && <ListError text={page.error} onRetry={() => void list.retry().catch(() => {})} />}
       {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       {hasMore && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}
