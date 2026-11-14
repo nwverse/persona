@@ -64,3 +64,42 @@ export function nestUnderParents<T>(rows: readonly T[], key: (row: T) => string,
   }
   return { rows: out, nested, lead };
 }
+
+/** A row and the side sessions drawn under it (none for most rows): one group of `nestUnderParents`'s rows. */
+export interface SideGroup<T> {
+  top: T;
+  nested: readonly T[];
+}
+
+/** `nesting`'s rows as their groups, in order: each top row with the rows nested under it (#7755, whose "Side sessions
+ *  (N)" row folds them). Every row is in exactly one group. */
+export function sideGroups<T>(nesting: Nested<T>): SideGroup<T>[] {
+  const out: { top: T; nested: T[] }[] = [];
+  for (const row of nesting.rows) {
+    const last = out[out.length - 1];
+    if (last && nesting.nested.has(row)) last.nested.push(row);
+    else out.push({ top: row, nested: [] });
+  }
+  return out;
+}
+
+/** How many groups hold the first `rows` rows: a group is never split (`lead` places it), so a count of rows that ends
+ *  one group (the Earlier split's) ends on a group's end. */
+export function groupsHolding<T>(groups: readonly SideGroup<T>[], rows: number): number {
+  let n = 0;
+  for (let i = 0; i < groups.length; i++) {
+    if (n >= rows) return i;
+    n += 1 + groups[i]!.nested.length;
+  }
+  return groups.length;
+}
+
+/** Of a group's side sessions, the ones drawn while its fold is `folded`: all of them open; folded, only those that need
+ *  the user, which stay rows of their own (docs/design/DESIGN_SYSTEM.md 3.4). Folding hides rows, never sessions. */
+export function shownSideSessions<T>(nested: readonly T[], folded: boolean, needsYou: (row: T) => boolean): readonly T[] {
+  return folded ? nested.filter(needsYou) : nested;
+}
+
+/** The key a parent's "Side sessions (N)" fold is kept under (`fold:<key>`, lib/use-folded.ts): the parent's identity in
+ *  the paged list's terms (runtimeIdentity), so the paged and the complete list share it. */
+export const sideFoldKey = (parent: string) => `side-sessions:${parent}`;

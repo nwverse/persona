@@ -10,11 +10,12 @@ import { filterQuery, PAGE_SIZE, SessionList, type ListFilters } from "../../lib
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
 import { onHubEvent } from "../../lib/store";
 import { useFolded } from "../../lib/use-folded";
-import { nestUnderParents } from "../../lib/side-sessions";
+import { nestUnderParents, sideGroups } from "../../lib/side-sessions";
 import { Button } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
+import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 import { GroupCount, NeedsCount, Section, ShowMoreRow } from "../SidebarSection";
+import { SideSessionGroup } from "../SideSessionRows";
 
 /** How a section's own list is read: the collection the groups are of, as the list above them reads it. */
 export interface GroupedSource<T> {
@@ -27,6 +28,10 @@ export interface GroupedSource<T> {
   roots: boolean;
   /** The list's own parentOf (#5935): a section draws a side session under its parent as the flat list does. */
   parentOf?: (row: T) => string | undefined;
+  /** The list's own needsYou: a side session that needs the user stays a row under its folded parent (#7755). */
+  needsYou?: (row: T) => boolean;
+  /** The list's open row: a parent's side sessions open for it. */
+  isOpen?: (row: T) => boolean;
 }
 
 export interface GroupedSessionsProps<T> {
@@ -46,6 +51,8 @@ export interface GroupedSessionsProps<T> {
    *  it they keep out of it, as an expanded one reads its sessions. */
   foldScope?: string;
 }
+
+const never = () => false;
 
 export function GroupedSessions<T>({ groups, dimension, kind, scope, source, renderRow, groupName, machineName, open, foldScope }: GroupedSessionsProps<T>) {
   const [all, setAll] = useState(false);
@@ -85,7 +92,7 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
         </>}>
         {!folded && <>
           {dimension === "project" && <GroupPlaces group={group} machineName={machineName} />}
-          <GroupRows group={group} dimension={dimension} scope={scope} source={source} renderRow={renderRow} />
+          <GroupRows group={group} dimension={dimension} scope={scope} source={source} renderRow={renderRow} foldScope={foldScope} />
         </>}
       </Section>
     </div>
@@ -118,10 +125,10 @@ function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName:
 }
 
 /** An open section's sessions: the list's own rows, the newest first. A few at first, then a page at a time. */
-function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
-  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
+function GroupRows<T>({ group, dimension, scope, source, renderRow, foldScope }: {
+  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode; foldScope?: string;
 }) {
-  const { path, identity, compare, removeIdentity, event, summary, roots, parentOf } = source;
+  const { path, identity, compare, removeIdentity, event, summary, roots, parentOf, needsYou, isOpen } = source;
   // rows only: the section's numbers are the ones its heading already has
   const list = useMemo(() => new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: false }),
     [path, identity, compare, removeIdentity, summary, roots]);
@@ -139,15 +146,17 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
   const shown = page.rows.length > limit ? page.rows.slice(0, limit) : page.rows;
   // a session started from another one shown here comes under it, a level in (#5935), as in the flat list
   const nesting = useMemo(() => parentOf ? nestUnderParents(shown, identity, parentOf) : null, [shown, identity, parentOf]);
-  const rows = nesting?.rows ?? shown;
+  // each parent with its side sessions under their "Side sessions (N)" fold (#7755)
+  const groups = useMemo(() => nesting ? sideGroups(nesting) : shown.map((top) => ({ top, nested: [] as T[] })), [nesting, shown]);
   const more = () => {
     if (page.rows.length <= limit) void list.more().catch(() => {});
     setLimit(limit + PAGE_SIZE);
   };
   return <>
-    {rows.map((row) => <div key={identity(row)} data-session-row="">
-      {nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row, dimension, group)}</div> : renderRow(row, dimension, group)}
-    </div>)}
+    {groups.map(({ top, nested }) => !nested.length ? <div key={identity(top)} data-session-row="">{renderRow(top, dimension, group)}</div> : (
+      <SideSessionGroup key={identity(top)} top={top} nested={nested} identity={identity} needsYou={needsYou ?? never} holds={Boolean(isOpen && nested.some(isOpen))} scope={foldScope}
+        render={(row, inner) => <div data-session-row="">{inner ? <div data-nested-session>{renderRow(row, dimension, group)}</div> : renderRow(row, dimension, group)}</div>} />
+    ))}
     {page.loading && !page.loaded && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
     {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}

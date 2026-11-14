@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nestUnderParents } from "./side-sessions";
+import { groupsHolding, nestUnderParents, shownSideSessions, sideFoldKey, sideGroups } from "./side-sessions";
 
 type Row = { id: string; parent?: string };
 const r = (id: string, parent?: string): Row => ({ id, parent });
@@ -55,5 +55,37 @@ describe("nestUnderParents", () => {
     const out = nestUnderParents(rows, key, parentKey);
     expect([...ids(out.rows)].sort()).toEqual([...ids(rows)].sort());
     expect(ids(out.rows)).toEqual(["p", "s1", "s2", "y", "x", "w"]);
+  });
+});
+
+describe("side session groups and their fold (#7755)", () => {
+  const rows = [r("s1", "p"), r("q"), r("s2", "p"), r("p"), r("z")];
+  const groups = sideGroups(nestUnderParents(rows, key, parentKey));
+
+  it("gives each top row with the rows nested under it, every row once", () => {
+    expect(groups.map((g) => [key(g.top), ids(g.nested)])).toEqual([["p", ["s1", "s2"]], ["q", []], ["z", []]]);
+    expect(groups.flatMap((g) => [g.top, ...g.nested]).length).toBe(rows.length);
+    // nothing nested: one group per row, in the list's order
+    expect(sideGroups(nestUnderParents([r("a"), r("b")], key, parentKey)).map((g) => [key(g.top), g.nested.length])).toEqual([["a", 0], ["b", 0]]);
+  });
+
+  it("counts the groups that hold a list's first rows, never splitting one", () => {
+    expect(groupsHolding(groups, 0)).toBe(0);
+    expect(groupsHolding(groups, 3)).toBe(1); // p and its two side sessions
+    expect(groupsHolding(groups, 4)).toBe(2);
+    expect(groupsHolding(groups, 5)).toBe(3);
+    expect(groupsHolding(groups, 9)).toBe(3);
+  });
+
+  it("folded, keeps only the side sessions that need the user; open, all of them", () => {
+    const nested = [r("a"), r("b"), r("c")];
+    const needs = (x: Row) => x.id === "b";
+    expect(ids(shownSideSessions(nested, false, needs))).toEqual(["a", "b", "c"]);
+    expect(ids(shownSideSessions(nested, true, needs))).toEqual(["b"]);
+    expect(shownSideSessions(nested, true, () => false)).toEqual([]);
+  });
+
+  it("keeps a fold per parent", () => {
+    expect(sideFoldKey('["mac","p"]')).toBe('side-sessions:["mac","p"]');
   });
 });

@@ -39,14 +39,15 @@ export function setAllFolded(folded: boolean, scope?: string) {
 }
 
 /** The Agents list menu's "Collapse all" / "Expand all" (#3027, the app's foldAll): every group of the Agents block. Opening also
- *  opens the spaces and tab groups folded by hand that are not drawn now (another grouping, inside a folded group), so
- *  switching to them later finds them open too (Android #2792). */
+ *  opens the spaces, tab groups and "Side sessions (N)" folds (#7755) folded by hand that are not drawn now (another
+ *  grouping, inside a folded group, the other of the two lists), so switching to them later finds them open too
+ *  (Android #2792). */
 export function setAgentsFolded(folded: boolean, store: Pick<Storage, "length" | "key" | "getItem" | "setItem"> = localStorage) {
   if (!folded) {
     const keys: string[] = [];
     for (let i = 0; i < store.length; i++) {
       const k = store.key(i);
-      if (k && /^fold:(space|tree):/.test(k) && store.getItem(k) === "1") keys.push(k);
+      if (k && /^fold:(space|tree|side-sessions):/.test(k) && store.getItem(k) === "1") keys.push(k);
     }
     keys.forEach((k) => store.setItem(k, "0"));
   }

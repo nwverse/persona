@@ -6,7 +6,7 @@ import { api, errorText } from "../../lib/api";
 import { onHubEvent } from "../../lib/store";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
-import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
+import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
 import type { AgentState } from "../../lib/types";
@@ -20,10 +20,11 @@ import { shortPath } from "../../lib/format";
 import { removeStoredValue, storedValue, storeValue } from "../../lib/compatibility";
 import { ACTIVE_WINDOWS, activeWindow, splitByActivity, windowStart, type ActiveWindow } from "../../lib/session-activity";
 import { useFolded } from "../../lib/use-folded";
-import { nestUnderParents } from "../../lib/side-sessions";
+import { groupsHolding, nestUnderParents, sideGroups } from "../../lib/side-sessions";
 import { sameValue } from "../../lib/stable-lines";
 import { lazyPage } from "../../lib/lazy-page";
 import { NeedsCount, ShowMoreRow } from "../SidebarSection";
+import { SideSessionGroup, SideSessionsOpen } from "../SideSessionRows";
 import type { GroupedSessionsProps, GroupedSource } from "./GroupedSessions";
 import { useSessionGroups } from "./use-session-groups";
 
@@ -101,6 +102,7 @@ const browseBy = (stored: string | null, personal: boolean): GroupDimension | ""
 const countsQuery = (filters: ListFilters) => filterQuery(filters);
 
 const sameText = (reason: string) => reason;
+const never = () => false;
 
 export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement; p; p = p.parentElement) {
@@ -279,6 +281,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // recent member was. Only the order changes: the rows, the total and every count stay the server's.
   const nesting = useMemo(() => parentOf ? nestUnderParents(page.rows, identity, parentOf) : null, [page.rows, identity, parentOf]);
   const rows = nesting?.rows ?? page.rows;
+  // each parent and its side sessions are one item of the list, under their "Side sessions (N)" fold (#7755)
+  const sideRows = useMemo(() => nesting?.nested.size ? sideGroups(nesting) : null, [nesting]);
   // a group is as recent as its most recent member, so Earlier never splits one
   const groupActiveAt = useMemo(() => activeAt && nesting ? (row: T) => activeAt(nesting.lead.get(row) ?? row) : activeAt, [activeAt, nesting]);
 
@@ -304,9 +308,13 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // folded, the list stops at its header: no further pages are read until it opens
   const foldedAway = Boolean(earlier && folded);
   const hasMore = page.hasMore && !foldedAway;
-  const itemCount = sections ? 0 : (foldedAway ? earlier!.recent : rows.length) + (earlier ? 1 : 0);
-  // the Earlier header sits between the recent rows and the earlier ones; null is the header
-  const rowAt = (i: number): T | null => !earlier ? rows[i] : i === earlier.recent ? null : rows[i > earlier.recent ? i - 1 : i];
+  // the list's items: its rows, or with side sessions its groups (a group is never split, so Earlier starts after one)
+  const entries = sideRows?.length ?? rows.length;
+  const recent = earlier ? (sideRows ? groupsHolding(sideRows, earlier.recent) : earlier.recent) : 0;
+  const itemCount = sections ? 0 : (foldedAway ? recent : entries) + (earlier ? 1 : 0);
+  // the Earlier header sits between the recent items and the earlier ones; null is the header
+  const entryAt = (i: number): number | null => !earlier ? i : i === recent ? null : i > recent ? i - 1 : i;
+  const topAt = (e: number): T => sideRows ? sideRows[e]!.top : rows[e]!;
 
   const container = useRef<HTMLDivElement>(null);
   const [margin, setMargin] = useState(0);
@@ -315,7 +323,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     count: itemCount,
     getScrollElement,
     estimateSize: () => SESSION_LIST_METRICS.estimate,
-    getItemKey: (i) => { const row = rowAt(i); return row === null ? EARLIER_KEY : identity(row); },
+    getItemKey: (i) => { const e = entryAt(i); return e === null ? EARLIER_KEY : identity(topAt(e)); },
     overscan: SESSION_LIST_METRICS.overscan,
     scrollMargin: margin,
   });
@@ -388,8 +396,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   };
   const chooseGroup = (key: string) => setPicked(key ? groups.find((g) => g.key === key) ?? null : null);
   // an open section reads the collection as the list above it does
-  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf }),
-    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf]);
+  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf, needsYou, isOpen }),
+    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf, needsYou, isOpen]);
   const openRow = sections && isOpen && placeOf ? rootPage.rows.find(isOpen) : undefined;
   const autoMore = useRef(0);
   useEffect(() => {
@@ -404,6 +412,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const openPlace = useMemo(() => openRow && placeOf ? placeOf(openRow) : undefined, [openRow, placeOf]);
   const shownTotal = sections ? grouped.total : page.total;
   const states = personal ? ["unread", "idle"] : ["needs_you", "working", "unread", "idle", "offline", "unknown"];
+  // a search or a filter on the list opens every "Side sessions (N)" fold in it (#7755); the botmux switch is no query
+  const searching = Boolean(q || provider) || Object.keys(chip).length > 0;
   const loadingLine = <p role="status" className="px-2 py-2 text-xs text-ink-3">{t("sidebar.loading")}</p>;
   const searchField = <SearchField value={query} onChange={setQuery} placeholder={t("paged-agents.search")} />;
   const stateChips = (
@@ -424,6 +434,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     </div>
   );
   return (
+    <SideSessionsOpen.Provider value={searching}>
     <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={page.rows.length} data-has-more={page.hasMore}>
       {/* under the caller's title row its bar sits where the complete list's does: no padding of this list's above it */}
       <div className={cx("space-y-2 px-1 pb-2", !grouping && "pt-2")}>
@@ -469,11 +480,14 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       </>}
       {!sections && <><div ref={container} data-virtual-sessions className="relative" style={{ height: totalSize }}>
         {virtual.getVirtualItems().map((item) => {
-          const row = rowAt(item.index);
+          const e = entryAt(item.index);
+          const group = e === null || !sideRows?.[e]?.nested.length ? null : sideRows[e]!;
           return (
-            <div key={item.key} ref={virtual.measureElement} data-index={item.index} {...(row === null ? { "data-earlier": "" } : { "data-session-row": "" })} className="absolute top-0 left-0 w-full" style={{ transform: `translateY(${item.start - margin}px)` }}>
-              {row === null ? <EarlierHeader count={earlier!.earlier} needs={earlier!.earlierNeedsYou} window={win} folded={folded} onToggle={toggleEarlier} />
-                : nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row)}</div> : renderRow(row)}
+            <div key={item.key} ref={virtual.measureElement} data-index={item.index} {...(e === null ? { "data-earlier": "" } : group ? { "data-side-group": "" } : { "data-session-row": "" })} className="absolute top-0 left-0 w-full" style={{ transform: `translateY(${item.start - margin}px)` }}>
+              {e === null ? <EarlierHeader count={earlier!.earlier} needs={earlier!.earlierNeedsYou} window={win} folded={folded} onToggle={toggleEarlier} />
+                : group ? <SideSessionGroup top={group.top} nested={group.nested} identity={identity} needsYou={needsYou ?? never} holds={Boolean(isOpen && group.nested.some(isOpen))} scope={grouping?.foldScope}
+                  render={(row, nested) => <div data-session-row="">{nested ? <div data-nested-session>{renderRow(row)}</div> : renderRow(row)}</div>} />
+                : renderRow(topAt(e))}
             </div>
           );
         })}
@@ -484,6 +498,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {hasMore && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}
     </div>
+    </SideSessionsOpen.Provider>
   );
 }
 

@@ -15,7 +15,7 @@ export const SESSION_LIST_STYLE = {
   personalTitle: "min-w-0 flex-1 truncate text-[13px] text-ink",
   personalBadge: "rounded-full bg-accent px-1.5 text-[10.5px] font-semibold text-white tabular-nums",
   pinButton: "flex size-6 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover",
-  // a session drawn under the one that started it (#5935): a level in, with a line down its side, as the sidebar tree's
-  // spawned agents (SidebarTree's TreeAgentRows); consecutive ones join into one line
+  // the sessions drawn under the one that started them (#5935), with their "Side sessions (N)" fold (#7755): one block a
+  // level in, with one line down its side, as the sidebar tree's spawned agents (SidebarTree's TreeAgentRows)
   nestedRow: "ml-2 border-l border-line pl-3",
 } as const;
