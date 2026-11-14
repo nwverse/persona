@@ -251,6 +251,11 @@ final class AppModel {
         }
     }
 
+    /// `selectedTab` without watching it, as `sessionsNow`: for values worked out where a view is built, not drawn
+    /// (`ShellView`'s initial state is evaluated in `RootView`'s body, which then followed the tab and built the shell's
+    /// tree again on every switch, #5438).
+    var selectedTabNow: AppTab { _selectedTab }
+
     /// The iPhone's shell while it is on screen (`ShellState`): it takes every new tab as it is set.
     @ObservationIgnored weak var tabRouter: (any TabRouter)?
 

@@ -168,7 +168,9 @@ struct ChatView: View {
     /// The plan sheet (`PlanSheet`), and whether the newest plan's line is on screen (if not, its pill shows).
     @State private var planOpen = Self.debugPlanSheet
     @State private var planLineShown = false
-    @Environment(\.dismiss) private var dismissChat
+    /// The page's dismiss action, read by `DismissReader` and kept unobserved: `@Environment(\.dismiss)` on this view
+    /// changed each time the shell's page went behind or came back, and drew the whole chat again (#5438).
+    @State private var dismissChat = DismissHolder()
     /// Hosted by a page about something else (a task's sheet, `HostedChat`): its header is the page's only one.
     @Environment(\.hostedChat) private var host
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
@@ -344,6 +346,7 @@ struct ChatView: View {
         #endif
         let _ = actions.set(handlers)
         chatLifecycle
+            .background { DismissReader(holder: dismissChat) }
     }
 
     private var chatSurface: some View {
@@ -4021,10 +4024,10 @@ struct ChatView: View {
 
     private func back() {
         #if os(macOS)
-        if pane == .git || pane == .files { withAnimation(Theme.Motion.standard) { pane = .chat } } else if let host { host.leave() } else { dismissChat() }
+        if pane == .git || pane == .files { withAnimation(Theme.Motion.standard) { pane = .chat } } else if let host { host.leave() } else { dismissChat.action?() }
         #else
         if pane != .chat { withAnimation(Theme.Motion.standard) { pane = .chat } } else if let host { host.leave() }
-        else if backShowsList, let showList { showList.show() } else { dismissChat() }
+        else if backShowsList, let showList { showList.show() } else { dismissChat.action?() }
         #endif
     }
 
@@ -7925,3 +7928,22 @@ nonisolated struct ChatRowsShown: Encodable, Equatable {
     var storedRow: Bool
 }
 #endif
+
+/// A page's dismiss action for code that runs later (a back button's handler). SwiftUI hands out a new `DismissAction`
+/// whenever the presentation around the view changes; a big view that declares `@Environment(\.dismiss)` is drawn again
+/// each time. `DismissReader` declares it instead and keeps the latest here, unobserved (docs/apple/performance.md P5).
+@MainActor final class DismissHolder {
+    var action: DismissAction?
+}
+
+struct DismissReader: View {
+    let holder: DismissHolder
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let _ = holder.action = dismiss
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
