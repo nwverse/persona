@@ -183,12 +183,26 @@ func (s *Service) retryOwnerWaits(ctx context.Context) {
 	}
 }
 
-// deliverOwnerWait serializes a push with its durable receipt. A repeated judgment can arrive while the first push is
-// in flight: rechecking the current wait under ownerPushMu keeps that race from producing a second notification.
+// deliverOwnerWait claims one todo/work push while it and its durable receipt are in flight. The claim lock covers
+// only the map: an uninterruptible hub writer or a receipt waiting on the ledger cannot block another task (#5732).
 func (s *Service) deliverOwnerWait(ctx context.Context, t Todo, work time.Time, reason string) {
 	b := &s.supervise
+	key := t.ID + "\x00" + work.UTC().Format(time.RFC3339Nano)
 	b.ownerPushMu.Lock()
-	defer b.ownerPushMu.Unlock()
+	if b.ownerPushes == nil {
+		b.ownerPushes = map[string]struct{}{}
+	}
+	if _, flying := b.ownerPushes[key]; flying {
+		b.ownerPushMu.Unlock()
+		return
+	}
+	b.ownerPushes[key] = struct{}{}
+	b.ownerPushMu.Unlock()
+	defer func() {
+		b.ownerPushMu.Lock()
+		delete(b.ownerPushes, key)
+		b.ownerPushMu.Unlock()
+	}()
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.Supervision == nil || current.Supervision.Waits == nil || current.Supervision.State != reviewNeedsUser ||
 		!current.Supervision.Waits.Work.Equal(work) || !current.Supervision.Waits.PushPending || current.Supervision.Waits.NotifiedAt != nil {

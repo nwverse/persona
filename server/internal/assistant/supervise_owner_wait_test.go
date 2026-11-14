@@ -193,29 +193,33 @@ type stalledOwnerPushHub struct {
 
 func (h *stalledOwnerPushHub) NotifyRequest(ctx context.Context, p NotifyRequest) error {
 	h.entered <- p.Notification.ID
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-h.release:
-		return nil
-	}
+	<-h.release // like rpc.Peer.writeContext's ongoing Write, this cannot be interrupted by ctx
+	return nil
 }
 
-// One hub call that never answers must not hold every later task's push behind the global dedup lock (#5732).
-func TestOwnerPushTimeoutReleasesOtherTasks(t *testing.T) {
+// One hub writer that cannot be interrupted must not hold every later task's push behind global dedup state (#5732).
+func TestOwnerPushStalledWriterDoesNotBlockOtherTasks(t *testing.T) {
 	s, f := newQuietService(t)
 	hub := &stalledOwnerPushHub{fakeHub: f, entered: make(chan string, 2), release: make(chan struct{})}
-	s.hub = hub
-	old := ownerPushTimeout
-	ownerPushTimeout = 25 * time.Millisecond
-	t.Cleanup(func() { ownerPushTimeout = old })
+	setHub(s, hub)
+	released := false
+	defer func() {
+		if !released {
+			close(hub.release)
+		}
+	}()
 	for _, id := range []string{"first-stalled", "second-waiting"} {
 		putTodo(s, Todo{ID: id, Title: id, Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1"}})
 	}
 	work := time.Now().UTC()
 	s.noteOwnerWait(context.Background(), todoNow(s, "first-stalled"), work, "first")
-	if id := <-hub.entered; !strings.Contains(id, "first-stalled") {
-		t.Fatalf("first stalled push = %q", id)
+	select {
+	case id := <-hub.entered:
+		if !strings.Contains(id, "first-stalled") {
+			t.Fatalf("first stalled push = %q", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the first push did not reach the stalled writer")
 	}
 	s.noteOwnerWait(context.Background(), todoNow(s, "second-waiting"), work.Add(time.Second), "second")
 	select {
@@ -223,11 +227,52 @@ func TestOwnerPushTimeoutReleasesOtherTasks(t *testing.T) {
 		if !strings.Contains(id, "second-waiting") {
 			t.Fatalf("second push = %q", id)
 		}
-	case <-time.After(100 * time.Millisecond):
-		close(hub.release)
-		t.Fatal("the second task stayed blocked behind the stalled hub call")
+	case <-time.After(time.Second):
+		t.Fatal("the second task stayed blocked behind the uninterruptible writer")
 	}
 	close(hub.release)
+	released = true
+	waitFor(t, "both owner-push receipts after the writer resumes", func() bool {
+		for _, id := range []string{"first-stalled", "second-waiting"} {
+			w := todoNow(s, id).Supervision.Waits
+			if w == nil || w.PushPending || w.NotifiedAt == nil {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// A delivered push whose receipt waits behind another supervision write must not stop a different task's push (#5732).
+func TestOwnerPushReceiptWriteDoesNotBlockOtherTasks(t *testing.T) {
+	s, f := newQuietService(t)
+	work := time.Now().UTC()
+	for _, id := range []string{"first-receipt-stalled", "second-receipt-independent"} {
+		putTodo(s, Todo{ID: id, Title: id, Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1", State: reviewNeedsUser,
+			Waits: &OwnerWait{Work: work, At: work, Reason: id, PushPending: true}}})
+	}
+	s.supervise.writeMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			s.supervise.writeMu.Unlock()
+		}
+	}()
+	s.startOwnerWaitDelivery(context.Background(), todoNow(s, "first-receipt-stalled"), work, "first")
+	waitFor(t, "the first push before its stalled receipt", func() bool { return len(f.pushed()) == 1 })
+	s.startOwnerWaitDelivery(context.Background(), todoNow(s, "second-receipt-independent"), work, "second")
+	waitFor(t, "the second push while the first receipt is stalled", func() bool { return len(f.pushed()) == 2 })
+	s.supervise.writeMu.Unlock()
+	locked = false
+	waitFor(t, "both receipts after the supervision write resumes", func() bool {
+		for _, id := range []string{"first-receipt-stalled", "second-receipt-independent"} {
+			w := todoNow(s, id).Supervision.Waits
+			if w == nil || w.PushPending || w.NotifiedAt == nil {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 // The explicit owner-action safety net still becomes the visible wait and one push when the model itself failed.

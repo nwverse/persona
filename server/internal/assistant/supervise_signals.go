@@ -131,9 +131,10 @@ func (g superviseSignal) immediate() bool { return g.Kind == sigFailed }
 
 type superviseBook struct {
 	mu            sync.Mutex
-	writeMu       sync.Mutex // one ledger write at a time (updateSupervision)
-	ownerPushMu   sync.Mutex // one owner-wait push and its delivered receipt at a time
-	dedupMu       sync.Mutex // serializes digest reservations and delivery
+	writeMu       sync.Mutex          // one ledger write at a time (updateSupervision)
+	ownerPushMu   sync.Mutex          // ownerPushes only; never held across RPC, todo or database calls
+	ownerPushes   map[string]struct{} // todo + work currently being pushed and receipted
+	dedupMu       sync.Mutex          // serializes digest reservations and delivery
 	dedup         map[string]superviseFingerprint
 	pending       map[string]superviseSignal   // by todo|kind
 	pendingLoadMu sync.Mutex                   // one durable pending restoration at a time
