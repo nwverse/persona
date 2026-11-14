@@ -78,9 +78,12 @@ func TestToolsListRetriesUntilTheNodeIsUp(t *testing.T) {
 	}
 }
 
+// An assistant's tools load up front unless the manager deferred them (#7317): those wait behind ToolSearch.
 func TestToolsListAssistantToolsAreAlwaysLoaded(t *testing.T) {
 	t.Setenv("PERSONA_ASSISTANT", "1")
-	fakeNode(t, func(int) ([]byte, error) { return []byte(`{"tools":[{"name":"ask_user","description":"ask"}]}`), nil })
+	fakeNode(t, func(int) ([]byte, error) {
+		return []byte(`{"tools":[{"name":"ask_user","description":"ask"},{"name":"inbox_move","description":"move","defer_loading":true}]}`), nil
+	})
 	res, rerr := handle(context.Background(), "test", listRequest())
 	if rerr != nil {
 		t.Fatal(rerr)
@@ -89,6 +92,9 @@ func TestToolsListAssistantToolsAreAlwaysLoaded(t *testing.T) {
 	meta, ok := tools[0]["_meta"].(map[string]any)
 	if !ok || meta["anthropic/alwaysLoad"] != true {
 		t.Fatalf("assistant tool lacks alwaysLoad metadata: %+v", tools[0])
+	}
+	if _, present := tools[1]["_meta"]; present || tools[1]["name"] != "inbox_move" {
+		t.Fatalf("a deferred assistant tool is still marked alwaysLoad: %+v", tools[1])
 	}
 }
 

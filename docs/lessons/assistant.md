@@ -398,7 +398,7 @@ user's language in process text too.
 
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 
-Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. `personad mcp` now marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1`, and the assistant no longer disables ToolSearch globally. Keep other servers on Claude Code's normal deferred loading. A regression test checks both the metadata and the process environment.
+Setting `ENABLE_TOOL_SEARCH=false` for Persona's assistant also forced every claude.ai connector's tools into each request (one connector alone was hundreds of tools and most of the context), causing repeated compaction. Never set it to false. `personad mcp` marks only Persona tools with `_meta: {"anthropic/alwaysLoad": true}` when `PERSONA_ASSISTANT=1` (since #7317 only those the manager did not defer), and other servers keep Claude Code's normal deferred loading. The assistant's processes carry `ENABLE_TOOL_SEARCH=true` instead (#7317, below), which keeps that deferral. A regression test checks both the metadata and the process environment.
 ## A leader writes to an owner who has seen nothing else (#5842)
 
 Leaders spend most of their turns with the main chat, other leaders, scheduled runs and supervision messages (on one
@@ -418,6 +418,22 @@ request lists the deferred tools by name but nothing can load them (the transcri
 `toolSearchAbsent: true`), so the user's own MCP servers and claude.ai connectors were unusable from the assistant.
 Measured on Claude Code 2.1.321 with a 256-tool connector: with `--tools Bash,Read` the connector's tools were
 unreachable; with `ToolSearch` added the model loaded one on request, and the first request stayed ~15K tokens.
+
+## Persona's rarely used tools wait behind ToolSearch, and so do held-off conversations' (#7317)
+
+Marking every Persona tool `alwaysLoad` sent 96 full tool schemas with every request, about 49K tokens (Claude's
+tokenizer), while in 30 days of one install's assistant conversations 20 of them made 95% of the Persona calls and 51
+were never called. The manager now defers all but the tools called at least 5 times in that window (`coreTools` in
+`assistant/tool_loading.go`, pinned by `TestCoreToolsPinned`); a new tool is deferred until it is added there. A new
+conversation's request is about 22.5K tokens smaller (measured). A guest conversation is never deferred: its
+`--tools ""` has no `ToolSearch` to load one with. A deferred tool the model calls by name before loading it fails;
+`assistant.load_all_tools` puts every tool back up front from each conversation's next process start.
+
+Claude Code also holds tool search off for a conversation that once ran without `ToolSearch` ("Tool search disabled:
+this conversation has run without ToolSearch, and stays so until it is compacted or cleared"), so conversations started
+before #5839 sent every tool, other servers' too, until their next compaction: about 8.7K tokens more per request on
+Claude Code 2.1.322. Any non-empty `ENABLE_TOOL_SEARCH` lifts the hold-off; the assistant sets exactly `true`, which
+keeps the default deferral (`false` is #5838).
 
 ## A leader's split must be somewhere the owner can see (#5846)
 
