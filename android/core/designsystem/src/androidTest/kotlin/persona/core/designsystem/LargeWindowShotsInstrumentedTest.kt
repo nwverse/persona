@@ -23,6 +23,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -48,6 +49,8 @@ class LargeWindowShotsInstrumentedTest {
     @Test fun pointerMenuFromARealSecondaryButtonLight() = pointerMenu(dark = false)
 
     @Test fun pointerMenuFromARealSecondaryButtonDark() = pointerMenu(dark = true)
+
+    @Test fun rightToLeftPointerMenuFromARealSecondaryButtonLight() = pointerMenu(dark = false, rtl = true)
 
     private fun settingsCardAndHelpLayers(dark: Boolean) {
         run {
@@ -82,10 +85,12 @@ class LargeWindowShotsInstrumentedTest {
         }
     }
 
-    private fun pointerMenu(dark: Boolean) {
+    private fun pointerMenu(dark: Boolean, rtl: Boolean = false) {
         run {
             var anchor by mutableStateOf<Offset?>(null)
             rule.setContent {
+              CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides
+                  if (rtl) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true) {
                     Box(Modifier.fillMaxSize().onSecondaryClickAt { anchor = it }.testTag("target")) {
                         Text("Message text; secondary-click anywhere", Modifier.testTag("label"), color = PersonaTheme.palette.ink)
@@ -95,13 +100,25 @@ class LargeWindowShotsInstrumentedTest {
                         }
                     }
                 }
+              }
             }
             rule.waitForIdle()
             val bounds = rule.onNodeWithTagBounds("target")
-            secondaryClick(bounds.first + bounds.third * 0.62f, bounds.second + bounds.fourth * 0.55f)
+            // RTL: click at the physical right edge and low in the window, so the menu has to flip left and up.
+            val xFraction = if (rtl) 0.97f else 0.62f
+            val yFraction = if (rtl) 0.93f else 0.55f
+            secondaryClick(bounds.first + bounds.third * xFraction, bounds.second + bounds.fourth * yFraction)
             rule.waitForIdle()
             Thread.sleep(600)
-            capture("pointer-menu", dark, "Pointer menu opened by a real secondary mouse button at the click point")
+            if (rtl) {
+                val menu = rule.onNodeWithText("Delete").fetchSemanticsNode()
+                val window = rule.onNodeWithTagBounds("target")
+                val right = menu.positionOnScreen.x + menu.size.width
+                val bottom = menu.positionOnScreen.y + menu.size.height
+                check(menu.positionOnScreen.x >= window.first && right <= window.first + window.third) { "menu crosses the physical window sides: x=${menu.positionOnScreen.x} right=$right" }
+                check(bottom <= window.second + window.fourth) { "menu crosses the bottom: $bottom" }
+            }
+            capture(if (rtl) "pointer-menu-rtl" else "pointer-menu", dark, "Pointer menu opened by a real secondary mouse button at the click point" + if (rtl) ", right-to-left layout, near the physical right and bottom edges" else "")
         }
     }
 

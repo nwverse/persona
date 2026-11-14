@@ -20,6 +20,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -91,6 +92,7 @@ class ComposerDropInstrumentedTest {
         description: ClipDescription,
         data: ClipData,
         expectHighlight: Boolean = true,
+        onHighlighted: () -> Unit = {},
     ): Boolean {
         val center = rule.onNodeWithTag("composer-drop-target").fetchSemanticsNode().boundsInRoot.center
         val location = IntArray(2)
@@ -114,6 +116,7 @@ class ComposerDropInstrumentedTest {
             rule.onNodeWithTag("composer-drop-target").assert(SemanticsMatcher.expectValue(
                 SemanticsProperties.StateDescription, rule.activity.getString(R.string.chat_composer_drop_target)))
         }
+        onHighlighted()
         sendTouch(downTime, MotionEvent.ACTION_UP, x, y)
         instrumentation.waitForIdleSync()
         return true
@@ -159,6 +162,34 @@ class ComposerDropInstrumentedTest {
         assertTrue(state.attachments.isEmpty())
         rule.waitUntil(timeoutMillis = 5_000) { owned.all { !readable(rule.activity, it) } }
         assertEquals(2, service.snapshot().size)
+    }
+
+    /** Whole-screen captures of the real window while a real system drag hovers, uploads and finishes (drop-states-*.png). */
+    @Test fun dropStatesAreCapturedOnTheRealWindow() {
+        val state = ChatComposerState()
+        val service = RecordingComposerService().apply { gate = CompletableDeferred() }
+        show(state, service)
+        val description = ClipDescription("files", arrayOf("application/octet-stream"))
+        val data = ClipData(description,
+            ClipData.Item(source("capture-one.txt", "one"))).apply { addItem(ClipData.Item(source("capture-two.txt", "two"))) }
+        assertTrue(drop(description, data, onHighlighted = { Thread.sleep(400); capture("01-drag-hovering-the-composer") }))
+        rule.waitUntil(timeoutMillis = 10_000) { service.snapshot().isNotEmpty() && state.attachments.size == 2 }
+        Thread.sleep(400)
+        capture("02-files-imported-and-uploading")
+        service.gate!!.complete(Unit)
+        rule.waitUntil(timeoutMillis = 10_000) { state.attachments.all { it.path != null } }
+        rule.waitUntil(timeoutMillis = 10_000) {
+            rule.onAllNodesWithText("Uploading", substring = true, ignoreCase = true).fetchSemanticsNodes().isEmpty()
+        }
+        Thread.sleep(400)
+        capture("03-uploads-finished")
+        assertEquals(2, service.snapshot().size)
+    }
+
+    private fun capture(name: String) {
+        val folder = File(instrumentation.targetContext.getExternalFilesDir(null), "drop-shots").apply { mkdirs() }
+        val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot()) { "no screenshot" }
+        File(folder, "$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
 
     @Test fun failedUploadUsesTheExistingRetryRowWithoutAnotherImport() {
