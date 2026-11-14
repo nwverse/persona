@@ -42,7 +42,8 @@ def result_summary(result):
 def run_check(name, argv, worktree, timeout, environ=None):
     result = run(argv, cwd=worktree, timeout=timeout, environ=environ)
     return {"name": name, "command": argv, "ok": result.returncode == 0,
-            "summary": "" if result.returncode == 0 else result_summary(result)}
+            "summary": "" if result.returncode == 0 else result_summary(result),
+            "stdout": result.stdout, "stderr": result.stderr}
 
 
 def load_paths(worktree):
@@ -159,7 +160,7 @@ def persona_checks(worktree, pr, timeout, config):
         if selected.get(lane):
             commands.append(("CI " + lane, ["bash", "scripts/ci/" + lane + ".sh"]))
     if selected.get("apple"):
-        non_ui = test_or_fix(pr, names) or non_ui_apple_change(worktree, base, head, names)
+        non_ui = non_ui_apple_change(worktree, base, head, names)
         if non_ui:
             # Explicit maintainer policy for backend-only Apple PRs on a Linux
             # host. This does not claim an Apple build or UI acceptance.
@@ -260,10 +261,15 @@ def verify(repo, pr, worktree, config, environ=None):
     else:
         raise WatchError("unknown verification profile")
     results = []
+    failures = []
     for name, argv in commands:
         result = run_check(name, argv, worktree, timeout, environ)
         results.append(result)
         if not result["ok"]:
-            raise VerificationError("%s failed:\n%s" % (name, result["summary"]), command=argv,
-                                    output=result.stdout + "\n" + result.stderr)
+            failures.append(VerificationError("%s failed:\n%s" % (name, result["summary"]), command=argv,
+                                              output=result["stdout"] + "\n" + result["stderr"]))
+    if failures:
+        raise VerificationError("\n\n".join(str(failure) for failure in failures),
+                                output="\n\n".join(failure.output for failure in failures),
+                                command=failures[0].command)
     return results

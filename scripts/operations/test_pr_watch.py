@@ -279,7 +279,7 @@ class WatcherTests(unittest.TestCase):
     def test_verification_failure_uses_bounded_repair(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
-                patch.object(pr_watch, "verify", side_effect=pr_watch_common.WatchError("real test failed")), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("real test failed")), \
                 patch.object(self.watcher, "repair_verification", return_value=False) as repair:
             self.watcher.process("example/one", 7)
         repair.assert_called_once()
@@ -306,7 +306,7 @@ class WatcherTests(unittest.TestCase):
     def test_base_failure_continues_to_exact_head_merge(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
-                patch.object(pr_watch, "verify", side_effect=pr_watch_common.WatchError("--- FAIL: TestBase")), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("--- FAIL: TestBase")), \
                 patch.object(self.watcher, "repair_verification", return_value="base_failure"), \
                 patch.object(self.watcher, "merge", return_value=True) as merge:
             self.watcher.process("example/one", 7)
@@ -359,7 +359,58 @@ class WatcherTests(unittest.TestCase):
                 pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure")
         self.assertIn("Refs #6", created.call_args.args[0][-1])
 
-    def test_verification_does_not_import_pr_selector_or_receive_gh_credentials(self):
+    def test_repair_budget_survives_new_head(self):
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="old", repair_rounds=2)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(head=SHA_B)), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 2)
+
+    def test_repair_exhausted_is_terminal_without_repeated_comments(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key, outcome="repair_exhausted")
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "comment") as comment:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_not_called()
+        comment.assert_not_called()
+
+    def test_dry_run_never_pushes_or_comments_repairs(self):
+        self.watcher.dry_run = True
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING")), \
+                patch.object(pr_watch_repair, "update_branch_with_main") as update, \
+                patch.object(self.watcher, "comment") as comment:
+            self.watcher.process("example/one", 7)
+        update.assert_not_called()
+        comment.assert_not_called()
+
+    def test_all_lanes_finish_before_reporting_failure(self):
+        config = {"profile": "commands", "commands": [["false"], ["true"]]}
+        with patch.object(pr_watch_verify, "run_check", side_effect=[
+                {"name": "one", "command": ["false"], "ok": False, "summary": "bad", "stdout": "bad", "stderr": ""},
+                {"name": "two", "command": ["true"], "ok": True, "summary": "", "stdout": "", "stderr": ""}]) as check:
+            with self.assertRaises(pr_watch_common.VerificationError):
+                pr_watch_verify.verify("example/one", pr(), ".", config)
+        self.assertEqual(check.call_count, 2)
+
+    def test_repair_worker_has_no_github_credentials(self):
+        with patch.dict(os.environ, {"GH_TOKEN": "not-for-worker", "PR_WATCH_WEBHOOK_SECRET": "not-for-worker",
+                                     "ANTHROPIC_API_KEY": "model-only"}), \
+                patch.object(pr_watch_repair.shutil, "which", return_value="/usr/bin/bwrap"), \
+                patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as worker_run, \
+                patch.object(pr_watch_repair, "checked", side_effect=["", "diff"]):
+            pr_watch_repair.repair_with_model("example/one", pr(), self.root, "failure", {})
+        env = worker_run.call_args.kwargs["environ"]
+        self.assertNotIn("GH_TOKEN", env)
+        self.assertNotIn("PR_WATCH_WEBHOOK_SECRET", env)
+        self.assertIn("ANTHROPIC_API_KEY", env)
+
+
         with patch.object(pr_watch_verify, "checked", return_value="scripts/ci/paths.py\n"), \
                 patch.object(pr_watch_verify, "load_paths") as selector, \
                 patch.dict(os.environ, {"GH_TOKEN": "not-for-builds", "HOME": "/maintainer-home",
@@ -399,7 +450,7 @@ class WatcherTests(unittest.TestCase):
     def test_verification_failure_is_not_an_infrastructure_retry(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(title="feat: an example")), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
-                patch.object(pr_watch, "verify", side_effect=pr_watch_common.WatchError("real test failed")), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("real test failed")), \
                 patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("real test failed")):
             self.watcher.process("example/one", 7)
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "failed")

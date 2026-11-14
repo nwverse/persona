@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pr_watch_common import WatchError, atomic_json, bounded, checked, fingerprint, gh_json, pr_snapshot, repository, run, SHA, verification_env
 from pr_watch_merge import linked_issue, merge as generic_merge
 import pr_watch_merge
+import pr_watch_common
 import pr_watch_repair
 from pr_watch_review import review as semantic_review
 from pr_watch_verify import verify
@@ -336,7 +337,7 @@ class Watcher:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
             if pr.get("isCrossRepository"):
-                new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error))
+                new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
                 self.comment(repo, number, "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
             else:
                 self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
@@ -348,7 +349,7 @@ class Watcher:
             self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
             return False
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
-        new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error))
+        new_number = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
         self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
             self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
@@ -384,10 +385,13 @@ class Watcher:
         old = self.state.get(repo, number)
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
-            old = {}
+            previous = old
+            old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
-        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "repair_exhausted", "passed_with_base_failures"):
+        if old.get("head") == head and old.get("outcome") == "repair_exhausted":
+            return
+        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
             if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":
                 return
             # A dry run keeps semantic/test evidence but has no external side
@@ -402,7 +406,7 @@ class Watcher:
                 self.state.put(repo, number, head, evidence_key=evidence_key, failure_posted=True)
                 return
         if not self.mergeable(pr):
-            if pr["mergeable"] == "CONFLICTING" and not pr.get("isCrossRepository"):
+            if pr["mergeable"] == "CONFLICTING" and not pr.get("isCrossRepository") and not self.dry_run:
                 worktree = None
                 try:
                     rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
@@ -442,7 +446,8 @@ class Watcher:
             current = self.state.get(repo, number)
             if current.get("evidence_key") != evidence_key or current.get("format") != FORMAT_VERSION:
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                         base=pr["baseRefOid"], format=FORMAT_VERSION, outcome="reviewing")
+                                         base=pr["baseRefOid"], format=FORMAT_VERSION, outcome="reviewing",
+                                         repair_rounds=int(old.get("repair_rounds", 0)))
             if current.get("semantic") != "passed" and current.get("semantic") != "findings":
                 self.phase(key, "independent semantic review")
                 findings = semantic_review(repo, pr, str(worktree), self.config["reviewer"])
@@ -465,7 +470,9 @@ class Watcher:
                 phase = "verification"
                 try:
                     results = verify(repo, pr, str(worktree), config["verify"], environ=verification_env())
-                except WatchError as error:
+                except pr_watch_common.VerificationError as error:
+                    if self.dry_run:
+                        raise
                     repaired = self.repair_verification(config, pr, worktree, error)
                     if repaired != "base_failure":
                         return
