@@ -245,6 +245,8 @@ class InboxDataOwner @Inject constructor(
         override suspend fun setDone(itemId: String, done: Boolean) = use { it.inbox.setDone(itemId, done) }
         override suspend fun item(itemId: String) = use { it.inbox.item(itemId) }
         override suspend fun setDone(items: List<persona.core.contracts.api.InboxDoneTarget>, done: Boolean) = use { it.inbox.setDone(items, done) }
+        override suspend fun doneHistory(manager: String?, cursor: persona.feature.inbox.InboxDoneCursor?) = use { it.inbox.doneHistory(manager, cursor) }
+        override suspend fun doneDays(manager: String?, zone: java.time.ZoneId) = use { it.inbox.doneDays(manager, zone) }
         override suspend fun bulk(items: List<persona.core.contracts.api.InboxDoneTarget>, action: persona.core.contracts.api.InboxBulkAction) = use { it.inbox.bulk(items, action) }
         override suspend fun readDraft(target: ReplyTarget) = use { it.inbox.readDraft(target) }
         override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) = use { it.inbox.saveDraft(target, draft) }
