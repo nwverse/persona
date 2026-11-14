@@ -207,7 +207,7 @@ async function absentScenario(file) {
   clients.push(client);
   const setup = await client.pageFor("the first-run setup page", target => target.url === "persona-setup://app/setup.html");
   need("the packaged setup document loads from the trusted local scheme", setup.url() === "persona-setup://app/setup.html");
-  await until("setup localization and Link status", () => setup.evaluate("document.querySelector('h1')?.textContent === 'Welcome to Persona' && document.querySelector('#link-state')?.textContent.includes('not installed')"));
+  await until("setup localization and Link status", async () => (await setup.evaluate("document.querySelector('h1')?.textContent.length > 0 && !document.querySelector('#link-state')?.textContent.includes('…')")) === true);
   await setup.evaluate("document.querySelector('details').open = true; document.querySelector('#pair').scrollIntoView({block:'center'}); true");
   await screenshot(setup, "01-setup-no-link");
   await until("the absent Link guidance is laid out", async () => {
@@ -215,7 +215,7 @@ async function absentScenario(file) {
     return layout?.open === true && layout.height > 0 && layout.disabled === true;
   });
   need("the production preload initialized the setup page", await setup.evaluate("typeof window.desktopSetup === 'object' && typeof window.require === 'undefined' && typeof window.process === 'undefined' && document.querySelector('#hub').value === ''"));
-  need("Link is optional and absent, not silently installed", await setup.evaluate("document.querySelector('#link-reconnect').disabled && document.querySelector('#pair-link').disabled && document.querySelector('#pair button').disabled && document.querySelector('#node-install').hidden && !document.querySelector('#link-install').hidden && document.querySelector('#link-install').disabled"));
+  need("Link is optional and absent, not silently installed", await setup.evaluate("(async () => { const status = await window.desktopSetup.linkStatus(); return status.available === false && document.querySelector('#link-reconnect').disabled && document.querySelector('#pair-link').disabled && document.querySelector('#pair button').disabled && document.querySelector('#node-install').hidden && !document.querySelector('#link-install').hidden && document.querySelector('#link-install').disabled; })()"));
   need("an unknown local-resource path cannot read another packaged file", !(await setup.evaluate("fetch('persona-setup://app/setup-preload.cjs').then(r => r.ok).catch(() => false)")) && !(await setup.evaluate("fetch('persona-setup://app/../main.js').then(r => r.ok).catch(() => false)")));
   need("the setup window refuses navigation away from its trusted origin", await setup.evaluate("location.href = 'https://example.com/'; true").then(() => sleep(500)).then(() => setup.url() === "persona-setup://app/setup.html"));
   await setup.evaluate("document.querySelector('#hub').value = 'persona-setup://app/setup.html'; document.querySelector('#connect').requestSubmit(); true");

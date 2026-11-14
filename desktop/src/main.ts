@@ -79,7 +79,11 @@ function secureHubWindow(window: BrowserWindow): void {
 }
 
 async function showMain(): Promise<void> {
-  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return; }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    if (hub) await mainWindow.loadURL(hub.url.href);
+    return;
+  }
   const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
   const current = new BrowserWindow({
     ...DEFAULT_WINDOW,
