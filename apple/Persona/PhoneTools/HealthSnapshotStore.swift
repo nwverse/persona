@@ -79,7 +79,7 @@ nonisolated protocol HealthSnapshotStoring: Sendable {
     func markRefreshed(at date: Date) async
 }
 
-nonisolated actor HealthSnapshotStore: HealthSnapshotStoring {
+actor HealthSnapshotStore: HealthSnapshotStoring {
     static let shared = HealthSnapshotStore()
 
     /// Foreground refreshes are cheap (a handful of collection queries) but must
