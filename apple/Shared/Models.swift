@@ -263,6 +263,38 @@ nonisolated struct DetectedEngine: Codable, Hashable, Identifiable, Sendable {
     var note: String?
 }
 
+/// What a Mac can do for the live-screen hardware video channel (#3954, docs/extensions/computer-use.md "Live screen
+/// video"): the capture-and-encode helper Persona Screen is present (`version` > 0), which codecs it can encode, and
+/// whether Screen Recording is granted for it. Absent from a Mac without the helper or from an older node, so the app
+/// simply keeps showing RFB. `advertised` is the test the Picture / Quality switcher uses: the node offers the channel
+/// at all, so there is a control worth showing.
+nonisolated struct MachineScreenVideo: Codable, Hashable, Sendable {
+    /// The wire protocol version the helper speaks; 0 or absent means no video.
+    var version = 0
+    /// The codecs the helper can encode, in preference order ("hevc", "h264").
+    var codecs: [String] = []
+    /// Screen Recording for Persona Screen: granted | missing | unknown. Missing keeps the phone on RFB.
+    var permission: String? = nil
+
+    enum CodingKeys: String, CodingKey { case version, codecs, permission }
+
+    init(version: Int = 0, codecs: [String] = [], permission: String? = nil) {
+        self.version = version
+        self.codecs = codecs
+        self.permission = permission
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 0
+        codecs = (try? c.decodeIfPresent([String].self, forKey: .codecs)) ?? []
+        permission = try c.decodeIfPresent(String.self, forKey: .permission)
+    }
+
+    /// The node offers the video channel at all: the Picture / Quality switcher appears only then (#3954).
+    var advertised: Bool { version > 0 }
+}
+
 /// A Mac the assistant may operate through Cua Driver (the hub's plugin cua, docs/extensions/computer-use.md). `enabled`: the user
 /// turned it on for this machine; the rest is what its node found when last asked, and only for an enabled one.
 nonisolated struct MachineComputer: Codable, Hashable, Sendable {
@@ -290,10 +322,12 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
     var chatgpt = false
     /// The Mac's displays as arranged in its System Settings, read with `screenSharing` (empty from an older node).
     var displays: [MachineDisplay] = []
+    /// The live-screen hardware video channel this Mac can carry (#3954); nil from a Mac without the helper or an older node.
+    var screenVideo: MachineScreenVideo? = nil
 
     enum CodingKeys: String, CodingKey {
         case enabled, installed, version, daemon, accessibility, desktop, ready, note, job, backend, chatgpt, displays
-        case screenRecording = "screen_recording", screenSharing = "screen_sharing", noAutoLock = "no_auto_lock"
+        case screenRecording = "screen_recording", screenSharing = "screen_sharing", noAutoLock = "no_auto_lock", screenVideo = "screen_video"
     }
 
     init(enabled: Bool = false, installed: Bool = false, version: String? = nil, daemon: Bool = false, accessibility: String? = nil,
@@ -331,6 +365,8 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
         chatgpt = try c.decodeIfPresent(Bool.self, forKey: .chatgpt) ?? false
         // An unreadable list only costs the display choice, not the machine.
         displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
+        // An unreadable channel only costs the video switcher, not the machine (the page stays on RFB).
+        screenVideo = (try? c.decodeIfPresent(MachineScreenVideo.self, forKey: .screenVideo)) ?? nil
     }
 
     /// The node has said how it is (a never-asked one has neither a verdict nor a note).
@@ -359,10 +395,12 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
     var job: ComputerJob? = nil
     /// As `MachineComputer.displays`.
     var displays: [MachineDisplay] = []
+    /// As `MachineComputer.screenVideo` (#3954): a Mac the plugin ego is on for shares the same live screen and helper.
+    var screenVideo: MachineScreenVideo? = nil
 
     enum CodingKeys: String, CodingKey {
         case enabled, installed, version, imported, analytics, ready, note, job, displays
-        case setUp = "set_up", screenSharing = "screen_sharing"
+        case setUp = "set_up", screenSharing = "screen_sharing", screenVideo = "screen_video"
     }
 
     init(enabled: Bool = false, installed: Bool = false, version: String? = nil, setUp: Bool = false, imported: Bool = false,
@@ -392,6 +430,7 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
         screenSharing = try c.decodeIfPresent(Bool.self, forKey: .screenSharing) ?? false
         job = try? c.decodeIfPresent(ComputerJob.self, forKey: .job)
         displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
+        screenVideo = (try? c.decodeIfPresent(MachineScreenVideo.self, forKey: .screenVideo)) ?? nil
     }
 
     /// The node has said how it is.
@@ -901,8 +940,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var pendingInteractions: Int
     /// Changes whenever the transcript does: the app pulls sessions whose rev it has not synced (`AgentSync`).
     var rev: Int64?
-    /// The next message Claude Code proposes after a turn (grey in its input box on the computer), until it works again.
+    /// The next message Claude Code or the hub proposes after a turn, until it works again. A risky one is fill-in only.
     var suggestion: String?
+    /// Whether the suggestion needs review before sending. Missing, null or malformed values are safe (not risky).
+    var suggestionRisky: Bool = false
     /// Persona is still opening its tab and starting claude: messages sent now go in once it is ready.
     var starting: Bool? = nil
     /// A Codex opened with no first message: it runs in its terminal with no thread yet, so this row's id is the
@@ -1160,7 +1201,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              assistantSpace = "space",
              spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
-             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
+             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion, suggestionRisky = "suggestion_risky",
              starting, awaitingFirstMessage = "awaiting_first_message", startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", turnErrorResetsAt = "turn_error_resets_at", turnErrorResumes = "turn_error_resumes", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
@@ -1259,6 +1300,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         pendingInteractions = try c.decodeIfPresent(Int.self, forKey: .pendingInteractions) ?? 0
         rev = try c.decodeIfPresent(Int64.self, forKey: .rev)
         suggestion = try c.decodeIfPresent(String.self, forKey: .suggestion)
+        suggestionRisky = (try? c.decodeIfPresent(Bool.self, forKey: .suggestionRisky)).flatMap { $0 } ?? false
         starting = try c.decodeIfPresent(Bool.self, forKey: .starting)
         awaitingFirstMessage = try c.decodeIfPresent(Bool.self, forKey: .awaitingFirstMessage)
         startError = try c.decodeIfPresent(String.self, forKey: .startError)
@@ -2105,10 +2147,10 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var modelRefusal: ModelRefusal? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source, outcome
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome
         case modelRefusal = "model_refusal"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
-             clientMsgID = "client_msg_id"
+             clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
     }
 
     /// The text without the line the hub adds where it cut it (the app offers the whole text itself).
@@ -2178,6 +2220,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var toolName: String?
     var toolUseID: String?
     var questions: [Question]?
+    /// Whether this question's runtime can release its waiter without an answer (`cancel` on Resolution).
+    var canCancel: Bool?
     var plan: String?
     var toolInput: JSONValue?
     var summary: String?
@@ -2258,7 +2302,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
-        case suggestion
+        case suggestion, canCancel = "can_cancel"
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",
@@ -2325,6 +2369,8 @@ nonisolated struct Resolution: Codable, Sendable, Equatable {
     var keys: [String]?
     var text: String?
     var dismiss: Bool?
+    /// Close a question whose interaction advertised `can_cancel`, without sending an answer or another action.
+    var cancel: Bool?
     /// Keys before `text` (`keys` go after it): pick "Type something." by its number, then type.
     var preKeys: [String]?
     /// A screen dialog's option (Interaction.dialog): the node works out its keys, after checking the dialog is unchanged.
@@ -2342,11 +2388,12 @@ nonisolated struct Resolution: Codable, Sendable, Equatable {
     var content: [String: JSONValue]?
 
     enum CodingKeys: String, CodingKey {
-        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, option, options, values, reason, action, content
+        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, cancel, option, options, values, reason, action, content
         case preKeys = "pre_keys", answeredBy = "answered_by"
     }
 
     static let dismissed = Resolution(dismiss: true)
+    static let cancelled = Resolution(cancel: true)
 }
 
 /// One device's push settings, kept by the hub per device (Settings › Notifications). The timings come back from the hub's

@@ -15,6 +15,7 @@ import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSna
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
+import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { stateOf } from "./format";
@@ -440,6 +441,7 @@ export const LARK_FEATURE = "lark";
 export const SESSION_LIVE_FEATURE = "session_live";
 /** The hub answers a client's {"type":"ping","id"} with a pong carrying the id (docs/protocol/protocol.md). */
 export const APP_PING_FEATURE = "app_ping";
+export const DESKTOP_UNREGISTER_FEATURE = "desktop_unregister";
 
 export function larkOn(s: Pick<State, "features"> = state): boolean {
   return hubHas(s.features, LARK_FEATURE, true);
@@ -584,7 +586,8 @@ export function connect() {
     socketOpenedAt = Date.now(); // a direction tree read since then serves this hello (lib/direction-tree.ts)
     // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
     // and what it can render: MCP forms and links come only to a socket that says so
-    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
+    // device_id: this browser's (lib/device-id.ts), so the hub pushes nothing to it while a page is open (#7459)
+    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
     retry = 0;
     fastTries = 0;
     lastMessage = Date.now();
@@ -738,7 +741,7 @@ export function onHello(f: () => void): () => void {
 }
 
 // The assistant's live updates about the page itself rather than one conversation: only the shown manager's count.
-const PAGE_EVENTS = new Set(["assistant_schedule"]);
+const PAGE_EVENTS = new Set(["assistant_schedule", "assistant_saved_prompts"]);
 
 function onMessage(msg: Record<string, unknown>) {
   cursor = msg.type === "hello" ? afterHello(cursor, msg) : afterEvent(cursor, msg);
