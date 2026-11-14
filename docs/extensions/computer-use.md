@@ -657,8 +657,17 @@ iPhone's side comes next.
   candidate `RouteEligibility` allows on that interface (`NWParameters.requiredInterface`, TLS 1.3 with the ALPN, the
   certificate accepted only by its SHA-256 from `paths`) as `ProbePlan` says (at once, then 30 s doubling to 5 min after a
   failure, again at once when the phone's networks change), and hands what connects to the session, which pings and
-  measures every route and runs the policy once a second. In this stage the picture and input stay on the relay; the
-  choice is only logged (category `screen-link`, route kinds and reasons, never addresses).
+  measures every route (the one in use every second, the others every two) and runs the policy once a second.
+- **Moving** (still only with `-showScreenRoutes`): when the policy picks another route, every live channel moves
+  there (to its own relay for the relay): `use` with what the phone has of each, and nothing more goes out on it until
+  the node's `resumed` says what the node has; each side then sends on from there, so RFB loses and repeats nothing,
+  and a stale video backlog is dropped for a keyframe on the node's side. A direct route that fails, or stays silent for
+  1.5 s with a ping out, puts the channels back on their relays at once (the node does the same on its side). A relay
+  that drops while a direct route carries the session doesn't end it: the session asks the app to open the relay again
+  (`attach=1`), which attaches with the token and is the channel's relay again, so the hub keeps the last word. A new
+  video stream joins the route in use. Each move is a `PathChange` (the stream's first route is one too, `start`):
+  `ScreenVideoLink` sends `update.path` to Persona Screen, keeps it as `route` and calls `onPathChange`, the quality
+  tiers' hook (#6396). Logs (category `screen-link`) carry route kinds and reasons, never addresses.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
