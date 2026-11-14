@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-// The main chat's runtime line (docs/assistant/assistant.md "Main conversation execution on the web"): it says where the
-// main chat runs when the hub reports it, in the product's own name for it ("主对话"), and nothing at all when nothing is
-// known (an older hub without the view, a failed read), never "运行信息未上报" (audit item 80).
+// The main chat's runtime line (docs/assistant/assistant.md "Main conversation execution on the web"): on the Assistant
+// screen it says only the main chat's state in plain words, in the product's own name for it ("主对话 · 运行中"), never
+// where or with what it runs (Settings keeps that), and nothing at all when nothing is known (an older hub without the
+// view, a failed read), never "运行信息未上报" (audit item 80).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,11 +54,12 @@ describe("the main chat's runtime line", () => {
     expect(line()).toBeNull();
   });
 
-  it("names the main chat as the rest of the app does when it is known", async () => {
-    hub.answer = () => Promise.resolve({ session_id: "main-1", state: "running", source: "native", harness: "claude", location: { host: "example-host" } });
+  it("names the main chat as the rest of the app does, with its state in plain words and no engineering details", async () => {
+    hub.answer = () => Promise.resolve({ session_id: "main-1", state: "running", source: "native", harness: "claude", location: { host: "example-host", container: "example-box" } });
     await draw();
-    expect(line()?.getAttribute("aria-label")).toBe("主对话 · 运行中 · example-host · Claude Code");
+    expect(line()?.getAttribute("aria-label")).toBe("主对话 · 运行中");
     expect(host.textContent).not.toContain("主会话");
     expect(host.textContent).not.toContain("未上报");
+    expect(host.textContent).not.toMatch(/Claude Code|example-host|example-box|容器/);
   });
 });
