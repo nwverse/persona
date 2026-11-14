@@ -15312,6 +15312,73 @@ LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
 # An answer long enough to be drawn in parts (#4970, `AnswerParts`: 95 lines, three parts): a long press on its middle
 # part lifts, copies and selects all of it (#5221). Its first and last sentences are in its first and last parts.
 LIFT_SPLIT = "a1f3c2d4-0000-4000-8000-0000000c1e0e"
+# Rows of every kind one under another in a working Agent's chat (#6645): a long answer drawn in parts, your message,
+# a folded run of tools, a short answer, a message another session sent (folded, 「From …」), a plan, more answers. A
+# long press on the top or the bottom of each lifts that one, never its neighbour.
+LIFT_ROWS = "a1f3c2d4-0000-4000-8000-0000000c1e10"
+
+
+def lift_rows():
+    # Synthetic text: a shop app's images moving to new storage while another session rebuilds its search index.
+    batches = "\n".join(f"{n}. 第 {n} 批：{what}，这一批没搬完就不开始下一批，进度记在迁移记录里。" for n, what in enumerate(
+        ["评论里的晒图，先搬最近一年的", "已下架商品的图片", "客服聊天里发过的图片", "活动页的大图和视频封面"], 1))
+    moved = "\n".join(f"  - {w}" for w in ["商品图 18 万张，校验和全部一致。", "用户头像 4 万张，旧地址都已经跳转到新地址。",
+                                            "首页轮播和广告位的图片换成了新地址。", "复制脚本改成可以断点续传，命令是 `make copy-images`。"])
+    parts = "\n\n".join(f"### {n}. {name}\n\n{name}已经处理好：{what}改动集中在一个分支上，每个提交都写明了原因，出问题时可以单独撤回。"
+                        "切换前后各抽查了一千张图，尺寸、格式和校验和都一致，抽查清单放在迁移记录里，想看随时可以翻。切换那天晚上我一直盯着告警，没有新增报错。\n\n"
+                        f"{name}目前没有需要你拍板的地方；有一个命名我还在犹豫，先沿用了旧的写法，等全部搬完再统一改。"
+                        for n, (name, what) in enumerate([("缩略图", "三种尺寸都按新规则重新生成了，"),
+                                                          ("原图", "原图按上传日期分批复制，"),
+                                                          ("旧链接", "旧地址统一跳到新地址，外面收藏的链接不会断，"),
+                                                          ("缓存", "新地址缓存七天，换图时连文件名一起换，"),
+                                                          ("费用", "按上个月的流量估算，存储和流量费用大约降三成，"),
+                                                          ("监控", "复制失败和跳转出错都会进告警，"),
+                                                          ("开关", "读新地址还是旧地址由一个开关决定，"),
+                                                          ("客户端", "App 和网页都只认后端给的地址，不用发新版，"),
+                                                          ("手册", "运维手册和出错时的处理步骤都改好了，")], 1))
+    long = ("## 图片搬家的进度\n\n" + parts + "\n\n"
+            "- **已经搬完的：**\n" + moved + "\n"
+            "- **抽查结果：** 随机抽了 3000 张，缩略图、原图和跳转全部正常。夜里有一批复制任务在高峰时偶尔超时，"
+            "重试一次就过了，和图片本身无关。\n"
+            "- **剩下的批次按顺序搬，哪一批出错就停：**\n" + "\n".join("  " + s for s in batches.split("\n")) + "\n"
+            "- **时间：** 剩下大约 26 万张，按现在的速度要四个晚上，周五前能搬完。\n"
+            "- **视频：** 这次没动，留到下一轮。\n\n"
+            "**旧存储桶要你来决定：** 搬完以后我建议旧桶先只读保留一个月，再整个删掉；删桶要账号管理员的权限，我这边做不了。"
+            "删之前我会再核对一遍新旧两边的文件数，也会把本机的临时目录清掉。\n\n"
+            "每搬完一批我会在这里说一声。")
+    peer = ("The search index rebuild is ready: branch search-v2, commit 9c1d07ab, worktree ~/code/shop-app-wt/search-v2, "
+            "built on today's main. Product, review and help-center search all pass their tests; queries with very long "
+            "filters are still slower than before on my side, and I have not found out why in about 20 tries. The old index keeps running next to it, so going back is one setting.")
+    r = [it("user", "text", 60, text="图片搬得怎么样了？整理一下进度"),
+         it("assistant", "text", 58, text=long),
+         it("user", "text", 40, text="先停掉夜里的自动搬运")]
+    for n in range(6):
+        r += tool("Bash", {"command": f"scripts/copy-images.sh --batch {n + 1} --dry-run", "description": f"试跑第 {n + 1} 批"}, "ok",
+                  39 - n * 0.2)
+    r += [it("assistant", "text", 37, text="I've paused the nightly copy job. It was in the middle of batch 5, so I let the current file "
+                                           "finish and stopped there; nothing is half-written.\n\nWhen you turn it back on, it goes "
+                                           "in this order:\n\n1. Finish batch 5, the review photos from the last year, and check "
+                                           "every checksum.\n2. Copy the images of products no longer for sale, then switch their "
+                                           "links.\n3. Copy the support chat images and the campaign banners.\n\nI'll post here "
+                                           "after each batch."),
+          it("user", "text", 30, text=peer, **{"from": "shop-app-search"})]
+    r += tool("Read", {"file_path": "/Users/me/code/shop-app/docs/search.md"}, "# Search", 29)
+    r += [it("assistant", "text", 28, text="The search session has finished the index rebuild. Product, review and help-center search "
+                                           "are all ready on their branch.\n\nThe image move still runs at night, so I'm not switching "
+                                           "anything yet. Please decide here first: if you want the new index, once the images are "
+                                           "moved I'll merge their branch into main, rebuild the index once on a copy of the "
+                                           "production data, and switch search over in a quiet hour. One thing is still open on "
+                                           "their side: queries with very long filters are slower than before, and nobody knows why "
+                                           "yet. I'll measure that myself before switching.\n\nReply \"go ahead\" or \"wait\"."),
+          it("user", "text", 20, text="列个上线步骤给我看看")]
+    r += tool("ExitPlanMode", {"plan": "## 上线新索引\n\n1. 图片搬完以后把搜索分支合进 main\n2. 用一份生产数据的副本重建一次索引\n"
+                                       "3. 量一下筛选条件很长的查询，慢得多就先不切\n4. 挑凌晨人最少的时候切换，旧索引留三天"},
+              "User has approved your plan.", 19)
+    r += [it("user", "text", 12, text="为什么夜里的搬运任务报磁盘满了\n\n/tmp/shop-app/copy-images-20261102-031500.log")]
+    r += tool("Grep", {"pattern": "tmpdir", "path": "/Users/me/code/shop-app/jobs"}, "jobs/copy.go:88", 11)
+    r += [it("assistant", "text", 10, text="Found the cause: the copy job writes every image to a temporary folder first and never "
+                                           "cleans it up, so the disk fills after a few batches. Fixing that now.")]
+    return r
 
 
 def lift_split_answer():
@@ -15411,6 +15478,9 @@ def mock_message_lift():
     SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
     ITEMS[LIFT_SPLIT] = [it("user", "text", 6, text="把这次数据迁移的安排整理成一份总结"), it("assistant", "text", 4, text=lift_split_answer())]
     SESSIONS.append(sess("macbook", LIFT_SPLIT, "迁移总结", repo, "done", "done", "shop-app", 17, "lift", 6, 4, "以上是这次迁移的全部总结，有问题随时找我。"))
+    ITEMS[LIFT_ROWS] = lift_rows()
+    SESSIONS.append(sess("macbook", LIFT_ROWS, "图片搬家", repo, "working", "working", "shop-app", 17, "lift", 7, 1,
+                         "Found the cause: the temporary folder is never cleaned up."))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
