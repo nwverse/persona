@@ -56,7 +56,8 @@ final class InboxSourceCollapsedTests: XCTestCase {
     @MainActor func testMailDetailReportsSeenOnlyAfterViewOriginal() throws {
         let messageURL = try XCTUnwrap(URL(string: hub + "/api/v1/mail/messages/\(Self.mailAccount)/\(Self.mailUID)?mailbox=INBOX"))
         let messageData = try Data(contentsOf: messageURL)
-        let message = try XCTUnwrap(JSONSerialization.jsonObject(with: messageData) as? [String: Any])
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: messageData) as? [String: Any])
+        let message = try XCTUnwrap(response["message"] as? [String: Any])
         guard let text = message["text"] as? String, text.contains("议程见附件，有问题随时说") else {
             throw XCTSkip("requires the default mock fixture without MOCK_INBOX_EVENTS or MOCK_MAIL; MOCK_MAIL=1 replaces mail UID 501's body")
         }
