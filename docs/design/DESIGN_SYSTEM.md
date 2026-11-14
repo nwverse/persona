@@ -2391,6 +2391,74 @@ the flat Key points / Decisions lists made them read every line (principle 2).
   alone in its row and a long speaker name, with every topic card and line checked for running past its box; and the
   legacy baseline).
 
+### The summary card (#6563)
+
+Minutes that carry an overview (`docs/assistant/meeting-minutes.md`, "Summary card (#6563)") show it in the Summary
+instead of the four cards; minutes without one, or whose overview has no bullet left after the contract's cleaning, keep
+the four cards pixel for pixel. Which layout is settled in `RecordingMinutesCards.summary` (`Summary.overview`), never
+while drawing. Who it serves: everyone who opens a meeting to see where it landed (principle 2): the headline and the
+conclusions first, the details by topic, the transcript one tap away.
+
+- **Order** (`RecordingMinutesOverview`, `apple/Persona/Recording/RecordingMinutesOverview.swift`): the summary card, the
+  topic cards under their group headings, Action Items, Open Questions, then the AI note. Points and decisions get no
+  cards of their own. Every card is a section of the page's List as the four cards are (`minutesCard()`), never a
+  `.surface`. One column on every iPhone; iPad and landscape grids come later.
+- **Summary card**: the headline in `Theme.Font.title` (a VoiceOver heading; the minutes' title when there is none and
+  it differs from the recording's), when · where and the attendees only where the page's header
+  (`RecordingMeetingFacts`) does not say them (`RecordingMinutesCards.Shown`; the line's icon `Theme.Icon.calendarEvent`
+  with a time, `Theme.Icon.place` for the place alone, as the header's), then the **Core Conclusions** box: an inset
+  well on `Theme.aiTint` (`Theme.Radius.control`, `Theme.Space.m` padding), headed by `Theme.Icon.conclusions`
+  (lightbulb) in `Theme.ai` and its title in `Theme.Font.secondaryStrong`, primary (the AI color as words is under 4.5:1
+  on the tint), read as a heading; each conclusion its words with the bold places, its photo and its time as a compact
+  `Chip` with primary words on `Theme.aiTint` (`MinutesConclusions.chip`: the AI color as words falls under 4.5:1 on the
+  well, the accent's chip under 3:1), with no disclosure. Updating, a failed rewrite, an expired transcript and
+  **Regenerate** follow, as in the four cards' header.
+- **Group heading**: the section header of a group's first topic card, a dot (`Theme.Icon.dot`, `Theme.Font.heading`,
+  small) in the group's tint and its name in `Theme.Font.heading`, primary, as written (no text case); it wraps. None
+  for the one untitled group.
+- **Topic card**: its icon (`RecordingMinutesCards.symbol`, a `Theme.Icon.topic…` per `icon`, `topicGeneral` for any
+  other value) in the group's tint on a soft tile of it (`Theme.softTint`, `Theme.Size.wellS`, `Theme.Radius.control`)
+  and its title in `Theme.Font.heading`, the heading VoiceOver reads (the tile is hidden from it), side by side; at the
+  accessibility sizes the tile goes above the title, which then starts at the card's edge
+  (`MinutesTopicCard.tileAbove`). Then its bullets as the four cards' items (`MinutesItemRow`: the words in
+  `Theme.Font.body` with the `strong` places in bold through `RecordingMinutes.bolded`, never Markdown; the photo; the
+  time chip; the disclosure and its lines), each after its mark in a column of `Theme.Size.markM`: a point's dot (`•`,
+  `Theme.Font.bodyStrong`) or a decision's `Theme.Icon.decided` (`Theme.Font.body`, small) in the group's tint, both
+  hidden from VoiceOver. A point's speaker or the word **Decision** (`Theme.Font.captionStrong`) goes under the words,
+  so nothing rides on the glyph or the color. The first `Theme.Recording.topicBulletsShown` (4) show; **Show N More** /
+  **Show Less** (`Theme.Font.captionStrong`, the accent, one line, a 44 pt height) opens the rest in place on
+  `Theme.Motion.reveal` / `conceal` (at once with Reduce Motion); VoiceOver hears "Show N more in <topic>".
+- **Tints**: `Theme.Hue.minutesGroups` (blue, teal, pink, slate), by the group's place (`Theme.Recording.topicTints`),
+  never chosen by the model, never a state's color (red, orange, green, yellow) or the AI's. `StyleSpecTests` holds
+  every tint at 3:1 or better on every style's card and on its own tile, and on the conclusions box the lightbulb at
+  3:1 and every word at 4.5:1, a conclusion's time on its chip included, in light and dark.
+- **Action Items** keep Add to To-Dos, Added and Add All. An added action whose to-do the app holds (`TodoStore`) starts
+  with that to-do's done circle (`MinutesTodoCircle`: `Theme.Icon.unchecked` / `successFilled` in `Theme.Font.heading`,
+  `Theme.positive` when done, a 44 pt column, hit at least 44 pt tall through `tapTargetOutset` without a taller row),
+  which shows and ticks it as the To-dos list does (5.6): the list's `TodoTriageLogic.checksAsOpen` with its triage, so
+  a failed start still waiting on the owner reads open and a tick closes it. VoiceOver hears a switch named by its
+  action ("Done: <action>"). A suggestion never shows a box; the column is there once an action is added (empty until
+  the app reads its to-do), decided from the prepared items, and only the circle reads the store (P5).
+- **AI note**: the last section's footer, `Theme.Icon.ai` in `Theme.ai` and "AI-generated from the recording. Check
+  anything important." in `Theme.Font.caption`, secondary: the same words as the hub's Markdown. Only in this layout.
+- **Copy and Share** send the hub's `markdown` in this layout (`RecordingMinutes.shareText`); the four cards keep the
+  phone's own text.
+- **By the width that is there** (`MinutesItemLayout`, 1.2): an item's time and disclosure sit beside its words' first
+  line while the words keep `Theme.Recording.itemWordsColumn` (7) times their line's height of width; else the words go
+  across the item and who said it (or Decision), the time and the disclosure share the line under them, as the
+  contract's sketch draws a bullet. The words are reading content and grow to AX5 while the interface stops at
+  xxxLarge (#6813), so their room decides, with no accessibility-size branch. Conclusions, bullets, and the Action Items'
+  and Open Questions' items in this layout all follow it; the four cards' items keep theirs. The headline and the
+  titles are interface text; group headings wrap. VoiceOver headings, in order: the headline, Core Conclusions, each
+  group, each topic, Action Items, Open Questions.
+- Identifiers: `minutes-card-summary`, `minutes-headline`, `minutes-conclusions`, `minutes-conclusion`,
+  `minutes-group-<g>`, `minutes-topic-<g>-<t>`, `minutes-point`, `minutes-decision`, `minutes-topic-more`,
+  `minutes-topic-less`, `minutes-todo-open`, `minutes-todo-done`, `minutes-ai-note`; the items' own (`minutes-time`,
+  `minutes-item-context`, `minutes-item-lines`, `minutes-photo`) and the Action Items' and Open Questions' cards
+  (`minutes-card-actions`, `minutes-card-open`) keep their names. UI tests: `MinutesOverviewUITests` (the mock's
+  `shape: overview`, `malformed` and `legacy`; light and dark, the default and the largest text size) beside
+  `MinutesCardsUITests` (the four cards' baseline under `legacy`).
+
 ## File page (#5827)
 
 Who it serves: people working with their computers' files from the phone or the browser (an Agent's Files tab, a computer's Files). Where it lives and what it does: docs/apple/ios.md "File page", docs/web/web.md "Side panels".
