@@ -273,7 +273,26 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // status sections, the to-do names, the quick filters' hub keys, the quiet Load more line, the ⋯'s sorts ordering its
 // sections) adds 318 B to ja, measured in one environment against main at eeac9a579 (ja 479,359 B to 479,677 B; en
 // 475,650 B to 475,958 B, zh-Hans 476,635 B to 476,959 B). The budget moves by these 318 B on top of #6563's.
-export const FIRST_SCREEN_BUDGET = 479_809;
+// #6770's Electron bridge adds 135 B to ja (479,944 B; en 476,225 B, zh-Hans 477,226 B): fixed native notification/badge
+// calls, authenticated register/unregister presence, and clearing notifications on sign-out. The browser has no desktop
+// chunk or eager import. The existing 31 B room covers the hub's small build-environment difference.
+// #6589: the Agents list's Filter on its title row with its count, the chips with the query ⌘K put on the list (its text
+// reopens ⌘K) and the small store the palette sets it through, the paged list's search taken from it in place of its
+// own field, the phone page's search button: ja 480,189 B against 479,848 B on main at d916689d8, +341 B (en 476,485 B
+// against 476,155 B, zh-Hans 477,467 B against 477,133 B; the lists' fields and their strings went; ⌘K's matcher,
+// lib/agent-search.ts, and its Filter's menu load on intent, not here; the idle tier, 43,106 B with ⌘K's Filter button
+// against 41,966 B, stays under its ceiling). main's 96 B of room stay.
+// The Filter menu reads, toggles and drops the search parser's operator aliases (host, repo, status, after and
+// pin), so a valid alias can be switched off instead of duplicated (#7339). Measured: en 476,598 B, ja 480,302 B,
+// zh-Hans 477,580 B. The budget moves by the same 17 B.
+// #7329: saved prompts in every composer's "/" list and "Save as Prompt…" on your own messages add 192 B to ja, measured
+// in one environment against main at ec4c0513f9 (ja 480,302 B to 480,494 B; en 476,598 B to 476,803 B, zh-Hans
+// 477,580 B to 477,783 B; the same code measured +110 B on aa5e1ec43e): the small store the composers read their rows
+// from (lib/saved-prompt-rows.ts) and the Composer's use of it, the page event, the menu item and its words, and the
+// settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
+// own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
+// 192 B on top of #7339's.
+export const FIRST_SCREEN_BUDGET = 480_494;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
