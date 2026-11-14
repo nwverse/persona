@@ -49,6 +49,25 @@ try {
       await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
       await task.waitFor(); assert.equal(await task.inputValue(), "{yyyy}{mmdd}/task-{task-id}-{task-slug}", "settings persisted through reload");
       await group.getByText("Preview options", { exact: true }).click();
+      if (width === 1440) {
+        const [computerBox, layoutBox, previewBox] = await Promise.all([
+          group.getByLabel("Preview on computer", { exact: true }).boundingBox(),
+          group.getByLabel("Folder layout", { exact: true }).boundingBox(),
+          group.getByRole("button", { name: "Preview naming", exact: true }).boundingBox(),
+        ]);
+        assert(computerBox && layoutBox && previewBox, "preview controls are visible");
+        assert.equal(previewBox.height, computerBox.height, "preview action matches the select height");
+        assert(Math.abs(previewBox.y + previewBox.height - (computerBox.y + computerBox.height)) <= 1, "preview action aligns with the selects");
+        assert(previewBox.x >= layoutBox.x + layoutBox.width, "preview action follows the layout select");
+      }
+      if (width === 390) {
+        const [layoutBox, previewBox] = await Promise.all([
+          group.getByLabel("Folder layout", { exact: true }).boundingBox(),
+          group.getByRole("button", { name: "Preview naming", exact: true }).boundingBox(),
+        ]);
+        assert(previewBox && layoutBox && previewBox.y >= layoutBox.y + layoutBox.height, "preview action stacks below the selects on phones");
+        assert(previewBox.width >= layoutBox.width - 1, "preview action spans the narrow form");
+      }
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.locator("[data-naming-root]").waitFor();
       assert.match(await group.locator("[data-naming-root]").innerText(), /^\/home\/example\/workspace\/\d{8}\/task-todo_example-example-task$/);
@@ -63,11 +82,9 @@ try {
       assert.equal(await group.locator("[data-naming-branch]").innerText(), "persona/todo_example", "the root branch is labeled");
       assert.equal(rootLayout.split(rootPath).length - 1, 1, "the root path appears once");
       assert(!rootLayout.split("\n").some((line) => line.trim() === "."), "no standalone dot");
-      assert(!rootLayout.includes("UTC · UTC"), "the timezone is not duplicated");
-      assert.equal(await group.locator("[aria-live] details").getAttribute("open"), null, "routine details stay folded");
-      await group.locator("[aria-live] details summary").click();
-      assert(await group.getByText("Names only. Availability", { exact: false }).isVisible(), "details keep the preview's limits");
-      await group.locator("[aria-live] details summary").click();
+      assert.equal(await group.locator("[aria-live] details").count(), 0, "no routine details disclosure");
+      assert(!rootLayout.includes("Names only"), "no routine disclaimer");
+      assert(!rootLayout.includes("UTC"), "no routine timestamp or time zone");
       await group.scrollIntoViewIfNeeded();
       assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "no horizontal overflow");
       await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `settings-${scheme}-${width}.jpg`) });
@@ -100,11 +117,11 @@ try {
         await group.getByText("Preview options", { exact: true }).click();
         await group.getByRole("button", { name: "Preview naming", exact: true }).click();
         await group.locator("[data-naming-root]").waitFor();
-        await group.locator("[data-naming-root]").scrollIntoViewIfNeeded();
         assert.equal(await group.locator("[data-naming-repo]").count(), 2, "the enlarged preview lists both repositories");
         assert((await group.locator("[data-naming-root]").innerText()).length > 0, "the enlarged preview shows the root path");
+        assert.equal(await group.locator("[aria-live] details").count(), 0, "the enlarged preview has no routine details");
         assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "settings preview fits at 200% text");
-        await page.screenshot({ path: join(shots, `large-text-${scheme}-${width}.png`) });
+        await group.locator("details").first().screenshot({ path: join(shots, `large-text-${scheme}-${width}.png`) });
       }
 
       // Direct API state is supplied by the real fixture, not browser interception.
@@ -144,10 +161,8 @@ try {
       if (width === 390) await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
       assert(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth), "task editor fits at enlarged text");
       if (width === 390) {
-        await editor.getByRole("button", { name: "Workspace naming", exact: true }).scrollIntoViewIfNeeded();
-        await page.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-controls.jpg`) });
-        await editor.locator("[data-naming-root]").scrollIntoViewIfNeeded();
-        await page.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-preview.jpg`) });
+        await editor.locator("details").first().screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-options.jpg`) });
+        await editor.locator("[aria-live]").screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-preview.jpg`) });
       } else await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}.jpg`) });
       await context.close();
       console.log(`PASS workspace naming ${scheme} ${width}px: real settings/override reload, blank defaults, clear-save fallback, task fallback, root/container preview, invalid draft, overflow`);

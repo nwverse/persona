@@ -43,8 +43,6 @@ export function WorkspaceNamingPreview({ result, loading, error }: { result?: Pr
   const repositories = plan?.repositories ?? [];
   const rootRepo = repositories.find((repo) => repo.relative_path === ".");
   const nested = repositories.filter((repo) => repo.relative_path !== ".");
-  // planned_at is UTC; the assistant's zone matters only when it is not UTC, so it is not repeated as "UTC · UTC".
-  const timezone = plan?.source.timezone && !/^(UTC|Etc\/UTC)$/i.test(plan.source.timezone) ? plan.source.timezone : "";
   return <div aria-live="polite" className="min-w-0 space-y-2 text-label text-ink-2">
     {loading && <Loading label={t("workspace-naming.previewing")} />}
     {error && <p role="alert" className="text-red">{error}</p>}
@@ -72,13 +70,6 @@ export function WorkspaceNamingPreview({ result, loading, error }: { result?: Pr
                 </li>)}</ul></>}
           </div>}
         </div>
-        <details className="text-label text-ink-3">
-          <summary className="min-h-11 cursor-pointer py-1.5">{t("workspace-naming.preview_details")}</summary>
-          <div className="space-y-1 pb-1">
-            <p><time dateTime={plan.source.planned_at}>{plan.source.planned_at.slice(0, 16).replace("T", " ")} UTC</time>{timezone && <> · {t("workspace-naming.timezone")}: {timezone}</>}</p>
-            <p className="leading-relaxed">{t("workspace-naming.metadata_only")}</p>
-          </div>
-        </details>
       </>}
     </>}
   </div>;
@@ -169,23 +160,27 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
         </div>
         <details className="min-w-0 border-t border-line text-label text-ink-2">
           <summary className="min-h-11 cursor-pointer py-3">{t("workspace-naming.preview_options")}</summary>
-          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-            <label className="block min-w-0 text-label text-ink-2">{t("workspace-naming.computer")}
-              <select aria-label={t("workspace-naming.computer")} className={`${settingsInputClass} mt-2 min-h-11`} value={machine} onChange={(e) => { invalidate(); setMachine(e.target.value); }}>
-                <option value="">{t("workspace-naming.choose_computer")}</option>{machines.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-              </select>
-            </label>
-            <label className="block text-label text-ink-2">{t("workspace-naming.layout")}
-              <select aria-label={t("workspace-naming.layout")} className={`${settingsInputClass} mt-2 min-h-11`} value={layout} onChange={(e) => { invalidate(); setLayout(e.target.value as RepositoryLayout); }}>
-                <option value="container">{t("workspace-naming.container")}</option><option value="root">{t("workspace-naming.root")}</option>
-              </select>
-            </label>
+          <div className="min-w-0 space-y-2">
+            {todoId && <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+              {repositories.map((repo) => <label key={repo.repo_id} className="flex items-center gap-2 text-label text-ink-2 pointer-coarse:min-h-11">
+                <input type="checkbox" checked={selected.includes(repo.repo_id)} onChange={(e) => { invalidate(); setSelected(e.target.checked ? [...selected, repo.repo_id] : selected.filter((id) => id !== repo.repo_id)); }} />{repo.source_snapshot.identity.path}
+              </label>)}
+            </div>}
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end">
+              <label className="block min-w-0 text-label text-ink-2 sm:flex-1">{t("workspace-naming.computer")}
+                <select aria-label={t("workspace-naming.computer")} className={`${settingsInputClass} mt-1 min-w-0 pointer-coarse:min-h-11`} value={machine} onChange={(e) => { invalidate(); setMachine(e.target.value); }}>
+                  <option value="">{t("workspace-naming.choose_computer")}</option>{machines.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                </select>
+              </label>
+              <label className="block min-w-0 text-label text-ink-2 sm:flex-1">{t("workspace-naming.layout")}
+                <select aria-label={t("workspace-naming.layout")} className={`${settingsInputClass} mt-1 min-w-0 pointer-coarse:min-h-11`} value={layout} onChange={(e) => { invalidate(); setLayout(e.target.value as RepositoryLayout); }}>
+                  <option value="container">{t("workspace-naming.container")}</option><option value="root">{t("workspace-naming.root")}</option>
+                </select>
+              </label>
+              <Button tone="secondary" busy={previewBusy} disabled={!machine} className="w-full pointer-coarse:min-h-11 sm:w-auto" onClick={() => void preview()}>{t("workspace-naming.preview")}</Button>
+            </div>
+            <WorkspaceNamingPreview result={result} loading={previewBusy} />
           </div>
-          {todoId && repositories.map((repo) => <label key={repo.repo_id} className="flex min-h-11 items-center gap-2 text-label text-ink-2">
-            <input type="checkbox" checked={selected.includes(repo.repo_id)} onChange={(e) => { invalidate(); setSelected(e.target.checked ? [...selected, repo.repo_id] : selected.filter((id) => id !== repo.repo_id)); }} />{repo.source_snapshot.identity.path}
-          </label>)}
-          <Button tone="secondary" busy={previewBusy} disabled={!machine} onClick={() => void preview()}>{t("workspace-naming.preview")}</Button>
-          <div className="mt-3"><WorkspaceNamingPreview result={result} loading={previewBusy} /></div>
         </details>
       </>}
       {error && <><p role="alert" className="text-label text-red">{error}</p>{loaded && supported && <Button tone="quiet" disabled={busy} onClick={() => { invalidate(); void load(true); }}>{t("workspace-naming.reload")}</Button>}</>}

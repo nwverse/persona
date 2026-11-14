@@ -1516,8 +1516,10 @@ There are no inheritance status labels or reset buttons. Preview options remain
 folded until requested. The preview result shows the task folder once and then
 either the root repository's labeled branch or each container repository's
 folder-to-branch mapping, never the internal `.` path and never the same absolute
-path twice. Planning time, time zone and the names-only limit sit in a small
-details disclosure below the result. A failed save retains its draft; reloading
+path twice. The computer and layout selectors and the preview action form one
+compact row, stacked full-width on phones; a task's repository choices sit above
+that row, and the result carries no routine planning time, time zone or
+disclaimer text. A failed save retains its draft; reloading
 updates the saved baseline without replacing local edits.
 Changing a field, computer or assistant retires earlier previews. The panel
 changes no creation mode and starts nothing. This is a secondary settings

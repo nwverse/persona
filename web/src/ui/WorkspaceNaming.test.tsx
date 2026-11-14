@@ -138,7 +138,7 @@ const named = (layout: "root" | "container", repositories: Array<[string, string
 });
 const showPreview = (result: Preview) => act(async () => root.render(<WorkspaceNamingPreview result={result} />));
 
-it("shows the root once with a labeled branch and no standalone dot", async () => {
+it("shows the root once with a labeled branch and no routine metadata", async () => {
   await showPreview(named("root", [["web", ".", "persona/todo_example"]], "Asia/Shanghai"));
   const text = document.body.textContent ?? "";
   expect(document.querySelector("[data-naming-root]")?.textContent).toBe(rootPath);
@@ -146,11 +146,11 @@ it("shows the root once with a labeled branch and no standalone dot", async () =
   expect(document.querySelector("[data-naming-repo]")).toBeNull();
   expect(document.querySelector("[data-naming-branch]")?.textContent).toBe("persona/todo_example");
   expect(document.querySelector("dl")).toBeNull();
-  expect(text).not.toContain("UTC · UTC");
-  expect(text).toContain("Time zone: Asia/Shanghai");
-  const details = document.querySelector("details")!;
-  expect(details.open).toBe(false);
-  expect(details.textContent).toContain("Names only");
+  expect(document.querySelector("details")).toBeNull();
+  expect(text).toContain("Example preview");
+  expect(text).not.toContain("Names only");
+  expect(text).not.toContain("UTC");
+  expect(text).not.toContain("Asia/Shanghai");
 });
 
 it("maps repository folders to branches without repeating the root or absolute paths", async () => {
