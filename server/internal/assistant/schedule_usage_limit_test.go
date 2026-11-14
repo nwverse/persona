@@ -62,6 +62,20 @@ func retried(h *Service) bool {
 	return slices.ContainsFunc(sc.runs, func(r ScheduleRun) bool { return r.RefID == "p" && r.Retried })
 }
 
+// notRetried waits for the run's own decision not to retry (the line it logs: logs must be h.logf, set before the run),
+// then checks nothing was sent again; a fixed wait would only guess when the decision comes.
+func notRetried(t *testing.T, n *fakeHub, h *Service, logs *logBuffer, why string) {
+	t.Helper()
+	waitFor(t, "the run decides not to retry", func() bool {
+		return slices.ContainsFunc(strings.Split(logs.String(), "\n"), func(l string) bool {
+			return strings.Contains(l, why) && strings.HasSuffix(l, ": not retried")
+		})
+	})
+	if n.sent() != 1 || retried(h) {
+		t.Fatalf("retried: %d sends", n.sent())
+	}
+}
+
 // The retry waits for the reset the conversation's words give, not runRetryDelay.
 func TestUsageLimitScheduledRunIsRetriedAfterTheReset(t *testing.T) {
 	n := newFakeHub().withMachine()
@@ -89,16 +103,15 @@ func TestUsageLimitScheduledRunIsRetriedAfterTheReset(t *testing.T) {
 func TestUsageLimitScheduledRunThatResumesByItselfIsNotRetried(t *testing.T) {
 	n := newFakeHub().withMachine()
 	h := newStorelessService(t, n)
+	logs := &logBuffer{}
+	h.logf = logs.logf
 	h.runRetry = 50 * time.Millisecond
 	h.sched.limitWait = func(time.Time, time.Time) time.Duration { return 50 * time.Millisecond }
 	reset := time.Now().Add(time.Hour)
 	limitRun(t, n, h, func(c *proto.Session) {
 		c.TurnError, c.TurnErrorKind, c.TurnErrorResetsAt, c.TurnErrorResumes = limitText, proto.TurnErrorUsageLimit, &reset, true
 	})
-	time.Sleep(500 * time.Millisecond)
-	if n.sent() != 1 || retried(h) {
-		t.Fatalf("retried: %d sends", n.sent())
-	}
+	notRetried(t, n, h, logs, "goes on by itself once the usage limit resets")
 }
 
 // Without a stand-in, the retry goes a minute or so after the reset, and from now when the reset is already past.
@@ -119,6 +132,8 @@ func TestLimitRetryWait(t *testing.T) {
 func TestUsageLimitScheduledRunThatWentOnIsNotRetried(t *testing.T) {
 	n := newFakeHub().withMachine()
 	h := newStorelessService(t, n)
+	logs := &logBuffer{}
+	h.logf = logs.logf
 	h.runRetry = time.Hour
 	h.sched.limitWait = func(time.Time, time.Time) time.Duration {
 		n.mu.Lock()
@@ -130,10 +145,7 @@ func TestUsageLimitScheduledRunThatWentOnIsNotRetried(t *testing.T) {
 		return 50 * time.Millisecond
 	}
 	limitRun(t, n, h, func(c *proto.Session) { c.UpdatedAt = time.Time{} })
-	time.Sleep(500 * time.Millisecond)
-	if n.sent() != 1 || retried(h) {
-		t.Fatalf("retried: %d sends", n.sent())
-	}
+	notRetried(t, n, h, logs, "went on after the usage limit")
 }
 
 // The error text remains usable when the session record is temporarily unavailable. A later manual turn must still
@@ -141,6 +153,8 @@ func TestUsageLimitScheduledRunThatWentOnIsNotRetried(t *testing.T) {
 func TestUsageLimitScheduledRunThatWentOnAfterMissingSessionIsNotRetried(t *testing.T) {
 	n := newFakeHub().withMachine()
 	h := newStorelessService(t, n)
+	logs := &logBuffer{}
+	h.logf = logs.logf
 	h.runRetry = time.Hour
 	hide := false // guarded by n.mu: node answers run under that lock
 	n.answerNode(DeviceSessionItems, func(machine string, params json.RawMessage) (any, error) {
@@ -179,8 +193,5 @@ func TestUsageLimitScheduledRunThatWentOnAfterMissingSessionIsNotRetried(t *test
 		return 50 * time.Millisecond
 	}
 	limitRun(t, n, h, func(c *proto.Session) { c.UpdatedAt = time.Now().Add(-time.Minute) })
-	time.Sleep(500 * time.Millisecond)
-	if n.sent() != 1 || retried(h) {
-		t.Fatalf("retried: %d sends", n.sent())
-	}
+	notRetried(t, n, h, logs, "went on after the usage limit")
 }
