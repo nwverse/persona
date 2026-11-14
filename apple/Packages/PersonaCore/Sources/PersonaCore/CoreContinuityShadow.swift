@@ -33,7 +33,7 @@ public final class CoreContinuityShadow: @unchecked Sendable {
         client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changedChat: { chat, version in
             changes.values.withLock { $0.append((chat, version)) }
         }, run: { effect in
-            effects.values.withLock { $0.append(effect) }
+            effects.effects.withLock { $0.append(effect) }
         }))
     }
 
@@ -41,8 +41,8 @@ public final class CoreContinuityShadow: @unchecked Sendable {
     public func drain() throws -> ChatPatch { try client.drain(chat: chat) }
     public func flush() throws { try client.flush() }
     public func wakeChatIDs() -> [String] { changes.values.withLock { $0.map(\.0) } }
-    public func effectsSnapshot() -> [Effect] { effects.values.withLock { $0 } }
-    public func drainEffects() -> [Effect] { effects.values.withLock { current in
+    public func effectsSnapshot() -> [Effect] { effects.effects.withLock { $0 } }
+    public func drainEffects() -> [Effect] { effects.effects.withLock { current in
         defer { current.removeAll() }
         return current
     } }
