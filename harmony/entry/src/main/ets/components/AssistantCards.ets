@@ -3,7 +3,7 @@ import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironm
 import { nativeSheetInset } from '../platform/NativeInsets';
 import { AssistantViewCard } from './AssistantViewCard';
 import { assistantCardResource } from '../models/AssistantCardLinks';
-import { ComposeListItemV2, ContentItemV2, OperateItemV2, OperateCheckV2 } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, OperateItemV2, OperateCheckV2, LengthMetrics } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { AssistantFeedModel, PlanEditTask } from '../models/AssistantFeed';
 import { ResourceRow, Wire } from '../models/Wire';
@@ -212,13 +212,13 @@ export struct AssistantCards {
     Column({ space: Tokens.gap }) {
       Text((index + 1).toString() + '. ' + Wire.text(task, 'title', tr('assistant_feed_task')))
         .fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
-      Row({ space: Tokens.gap }) {
+      Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
         if (Wire.text(task, 'machine')) Text(this.machineLabel(Wire.text(task, 'machine')))
-          .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-        if (Wire.text(task, 'cwd')) Text(Wire.text(task, 'cwd')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
-        if (Wire.bool(task, 'readonly')) Text(tr('read_only')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+          .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).constraintSize({ maxWidth: '100%' })
+        if (Wire.text(task, 'cwd')) Text(Wire.text(task, 'cwd')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).constraintSize({ maxWidth: '100%' })
+        if (Wire.bool(task, 'readonly')) Text(tr('read_only')).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).constraintSize({ maxWidth: '100%' })
         else if (Wire.text(task, 'permission')) Text(tr('assistant_feed_permission_' + Wire.text(task, 'permission')))
-          .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary'))
+          .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).constraintSize({ maxWidth: '100%' })
       }.width('100%')
       if (Wire.text(task, 'why')) Text(Wire.text(task, 'why')).fontSize(Tokens.meta)
         .fontColor($r('sys.color.font_secondary')).width('100%')

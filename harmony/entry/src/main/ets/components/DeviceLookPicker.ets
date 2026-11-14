@@ -1,3 +1,4 @@
+import { LengthMetrics } from '@kit.ArkUI';
 import { DeviceLook, DeviceLookAvatar } from '../models/DeviceLook';
 import { Colors } from '../design/Colors';
 import { ButtonStyles } from '../design/Controls';
@@ -45,11 +46,11 @@ export struct DeviceLookPicker {
         }.onClick(() => this.selectAvatar(avatar.optionKey())).id('device-look-avatar-' + avatar.optionKey())
       }, (avatar: DeviceLookAvatar) => avatar.optionKey())
       ListItem() {
-        Row({ space: Tokens.inset }) {
-          Text(tr('device_look_accent_heading')).fontSize(Tokens.body).layoutWeight(1)
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.inset), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('device_look_accent_heading')).fontSize(Tokens.body).flexShrink(0).constraintSize({ maxWidth: '100%' })
           Select(this.accentChoices()).selected(this.accentIndex()).value(this.accentLabel(this.model.accentId)).enabled(this.active && this.model.ready)
             .onSelect((index: number) => { const id = this.model.accentOptions()[index]; if (this.active && id) this.onAccentSelected(id); })
-            .id('device-look-accent')
+            .constraintSize({ maxWidth: '100%' }).id('device-look-accent')
         }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset })
       }
       if (this.model.busy || !this.model.ready) ListItem() { LoadingProgress().width(Tokens.touch).height(Tokens.touch) }

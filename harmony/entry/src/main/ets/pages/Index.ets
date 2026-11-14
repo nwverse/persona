@@ -155,7 +155,7 @@ struct Index {
       Row() {
       if (this.peerUsesSelect(main)) {
         Select([{ value: tr('persona') }, { value: tr('agents') }]).selected(this.peer()).value(tr(this.peer() === 1 ? 'agents' : 'persona'))
-          .font({ size: String(Tokens.body * Math.min(this.environment.fontScale, Tokens.chromeFontMaxScale)) + 'vp' }).width('100%').constraintSize({ maxWidth: this.wide() ? Tokens.headerWideSegment : Tokens.headerSegment }).onSelect((index: number) => this.selectPeer(index)).id('shell.peer')
+          .font({ size: String(Tokens.body * Math.min(this.environment.fontScale, Tokens.chromeFontMaxScale)) + 'vp' }).width('100%').onSelect((index: number) => this.selectPeer(index)).id('shell.peer')
       } else {
         CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([{ text: tr('persona') }, { text: tr('agents') }]),
           selectedIndex: this.peer(), $selectedIndex: (index: number) => this.selectPeer(index),

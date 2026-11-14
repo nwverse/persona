@@ -1,3 +1,4 @@
+import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
 import { common } from '@kit.AbilityKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
@@ -182,6 +183,7 @@ export struct InboxWorkspacePage {
   @Event onOpen: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onHandoff: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
+  @Local environment: NativeEnvironment = nativeEnvironment;
   @Local workspace: InboxWorkspace = new InboxWorkspace();
   @Local itemRowBindings: BoundRow<ResourceRow>[] = [];
   private rowBindingOwner: Object | undefined;
@@ -431,15 +433,25 @@ export struct InboxWorkspacePage {
     finally { this.mediaBusy = false; }
   }
 
+  @Builder inboxSearch(weighted: boolean) {
+    Search({ value: this.workspace.search, placeholder: tr('search') })
+      .onChange((value: string) => this.workspace.search = value).width('100%').layoutWeight(weighted ? 1 : 0)
+  }
+  @Builder inboxActions() {
+    Button(tr('refresh')).attributeModifier(ButtonStyles.quiet).enabled(!this.workspace.loading)
+      .onClick(() => this.refreshList())
+    Button(tr('compose')).attributeModifier(ButtonStyles.quiet).onClick(() => this.openMailCompose())
+  }
   @Builder inboxList() {
     Column({ space: Tokens.gap }) {
-      Row({ space: Tokens.gap }) {
-        Search({ value: this.workspace.search, placeholder: tr('search') })
-          .onChange((value: string) => this.workspace.search = value).layoutWeight(1)
-        Button(tr('refresh')).attributeModifier(ButtonStyles.quiet).enabled(!this.workspace.loading)
-          .onClick(() => this.refreshList()).height(Tokens.touch)
-        Button(tr('compose')).attributeModifier(ButtonStyles.quiet).onClick(() => this.openMailCompose()).height(Tokens.touch)
-      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap })
+      if (this.environment.fontScale >= 1.5) Column({ space: Tokens.gap }) {
+        this.inboxSearch(false)
+        Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) { this.inboxActions() }.width('100%')
+      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap }).width('100%')
+      else Row({ space: Tokens.gap }) {
+        this.inboxSearch(true)
+        this.inboxActions()
+      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap }).width('100%')
       Row({ space: Tokens.gap }) {
         Select(this.optionList(this.workspace.sourceOptions.map((value: string) => this.sourceLabel(value))))
           .selected(this.sourceIndex()).value(this.sourceLabel(this.workspace.sourceFilter)).onSelect((index: number) => this.workspace.sourceFilter = this.workspace.sourceOptions[index]).layoutWeight(1)
