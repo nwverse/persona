@@ -872,6 +872,8 @@ nonisolated enum Theme {
         static let loudInk = 1.0
         /// After stop or send, how long the recognizer may take for its last words before the bar settles for what it has.
         static let finalWait: Duration = .milliseconds(1200)
+        /// The composer's row under the bar leaves the accessibility tree this long after the bar opens, past its spring.
+        static let treeAfter: Duration = .milliseconds(450)
         /// The bar's haptic generator is prepared this long after the bar opens, past the first frames of its spring.
         static let warmAfter: Duration = .milliseconds(500)
         /// ■ / ↑: a spinner on the button once the last words have taken this long.

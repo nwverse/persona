@@ -50,6 +50,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @State private var hold = ComposerHold()
     /// The mic tapped: the capsule is the dictation bar (`DictationBar`).
     @State private var dictationBar = DictationBarModel()
+    /// The composer's row under the bar has left the accessibility tree (`Theme.DictationBar.treeAfter` after it opened).
+    @State private var rowOutOfTree = false
     @State private var plusFrame: CGRect = .zero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The draft's height at its full width, and a line's height at the current Dynamic Type size.
@@ -255,11 +257,12 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         }
         #if os(iOS)
         // Under the bar the one-line composer stays in place, so the capsule keeps its size and the field its text. Out
-        // of the accessibility tree, children and all: hiding the row alone left the text view UIKit draws in it.
+        // of the accessibility tree, children and all (hiding the row alone left the text view UIKit draws in it), once
+        // the bar's spring has run: rebuilding the tree on the tap's frame made it the longest one of the bar opening.
         .opacity(barOn ? 0 : 1)
         .allowsHitTesting(!barOn)
-        .accessibilityElement(children: barOn ? .ignore : .contain)
-        .accessibilityHidden(barOn)
+        .accessibilityElement(children: rowOutOfTree ? .ignore : .contain)
+        .accessibilityHidden(rowOutOfTree)
         #endif
         #if os(iOS)
         DictationBar(model: dictationBar, meter: dictation.meter,
@@ -326,6 +329,14 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         }
         #if os(iOS)
         .task { dictationBar.warm() }
+        .task(id: barOn) {
+            guard barOn else {
+                rowOutOfTree = false
+                return
+            }
+            try? await Task.sleep(for: Theme.DictationBar.treeAfter)
+            if !Task.isCancelled, barOn { rowOutOfTree = true }
+        }
         .onChange(of: dictation.isListening) { _, on in
             if !on { dictationBar.listeningEnded(dictation, text: $text, reduceMotion: reduceMotion) }
         }
