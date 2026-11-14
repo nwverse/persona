@@ -1,0 +1,101 @@
+{
+  "id": "chat-link-reopen",
+  "description": "An ordinary web link reopens at its own URL with no earlier page history; a forwarded port keeps its reload semantics. Needs a local HTTP server and a device, so the runner only launches the chat; the scenes below are driven by hand.",
+  "requires": {
+    "fields": []
+  },
+  "steps": [
+    {
+      "step": "launch",
+      "session": "chat",
+      "conversationKind": "agent"
+    }
+  ],
+  "automatedCoverage": "None: launching the chat proves nothing about page history, cookies or request counts. JVM coverage is ChatWebViewPoolTest and ChatLinkReopenTest, which use Robolectric shadows and do not run a real renderer.",
+  "localServer": {
+    "description": "Serve from the host machine and reach it from the device over a non-loopback address (adb reverse would make it a loopback port link). Count every request per path.",
+    "pages": {
+      "/a": "Page A with a link to /b and a visible request counter",
+      "/b": "Page B with a link back to /a",
+      "/login": "Sets a long-lived cookie named session and redirects to /a",
+      "/whoami": "Echoes whether the session cookie arrived"
+    }
+  },
+  "manualScenes": [
+    {
+      "id": "reopen-after-in-page-navigation",
+      "route": "assistant",
+      "style": "glass",
+      "appearance": ["light", "dark"],
+      "steps": [
+        "Send a message containing the /a link and tap it",
+        "Tap the link to /b inside the page",
+        "Close the card, then tap the same message link again",
+        "Repeat the close and reopen three times"
+      ],
+      "expect": "Every reopen shows /a with the card's Back going straight to close (no page history). The server sees one /a request per opening and no request to /b after the first visit. No second renderer piles up: the process lists at most four WebView renderers."
+    },
+    {
+      "id": "first-open-uses-preload",
+      "route": "assistant",
+      "style": "glass",
+      "appearance": ["light"],
+      "steps": [
+        "Receive an Agent reply containing the /a link and wait for the list to stop scrolling",
+        "Tap the link"
+      ],
+      "expect": "The page is already loaded when the card rises. The server saw the /a request before the tap, not after."
+    },
+    {
+      "id": "cookie-and-cache-survive-reopen",
+      "route": "assistant",
+      "style": "glass",
+      "appearance": ["light", "dark"],
+      "steps": [
+        "Open /login, then close the card",
+        "Open /whoami and read the answer",
+        "Close, reopen /whoami, and watch the server log"
+      ],
+      "expect": "/whoami reports the cookie after every reopen: a new renderer shares the cookie store. The log shows no cache or cookie wipe side effects (a cached sub-resource is not fetched again)."
+    },
+    {
+      "id": "peek-back-and-selection",
+      "route": "assistant",
+      "style": "glass",
+      "appearance": ["light", "dark"],
+      "orientation": ["portrait", "landscape"],
+      "steps": [
+        "Open /a, go to /b, shrink the card to Peek and expand it again",
+        "Press Back twice",
+        "Select text on a page and use AI edit, then Use as context"
+      ],
+      "expect": "Peek does not reload the page. The first Back returns to /a, the second closes the card. The selection actions carry the same context content as before."
+    },
+    {
+      "id": "port-dev-server-keeps-forget-reload",
+      "route": "agents",
+      "style": "glass",
+      "appearance": ["light"],
+      "steps": [
+        "Run a dev server on the computer and tap its localhost link in an Agent reply",
+        "Change a served file, close the card and tap the link again",
+        "With the card open, edit a file that triggers hot reload",
+        "Stop the server and tap the link"
+      ],
+      "expect": "The reopened port shows the new content. Hot reload keeps working while the card is open. The phone's own loopback receives no request before the tap. A stopped server reports the 404 notice as before."
+    },
+    {
+      "id": "native-lark-and-renderer-recovery",
+      "route": "assistant",
+      "style": "glass",
+      "appearance": ["light"],
+      "device": "medium tablet",
+      "steps": [
+        "Open a Feishu document link with the Lark extension on: the native reader shows, no page is loaded",
+        "Choose Open as web page, close and reopen",
+        "Kill the page's renderer process from adb on a web link and tap Reload"
+      ],
+      "expect": "The reader shows without a WebView until switched; after the switch a closed page reopens fresh. A killed renderer shows the quit notice and Reload builds a new view. Not verifiable on a device if the renderer cannot be killed safely: report it as not verified on device."
+    }
+  ]
+}

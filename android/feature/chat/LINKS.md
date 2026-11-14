@@ -33,3 +33,11 @@
 `ChatLinksTest` 覆盖中文链接边界、Markdown 保护、和 iOS 逐字对照的标签与默认文字、读回旧格式、预加载的新鲜度和主机、协议分类、`persona://` 解析（含拒绝 pair / open）、外跳确认文案和 intent 目标的拒绝规则。
 
 网页登录状态来自 WebView，不注入 hub 凭据。限制内嵌登录的 OAuth 站点需用户从菜单打开浏览器，尚未接 Custom Tabs。选中菜单的实际顺序、渲染进程崩溃后的恢复要在真机 / 模拟器上确认（Chromium 每个版本填菜单的方式可能不同）；跨 iframe 的选区、性能未实测。
+
+## Reopening a link (ordinary pages and forwarded ports)
+
+- An ordinary http(s) link serves one opening. When the card releases its view (closed, replaced by another link, or left), `ChatWebViewPool.release` destroys that view and at once preloads a fresh one for the link's original URL. The next tap gets a view that never showed anything: the link's own URL, no in-page history, no earlier title, failure or progress. Capacity stays at four, and a loopback address is destroyed without a replacement.
+- A forwarded port keeps its own rule: the host calls `forget(local address)` before opening, a view on screen reloads in place, one kept aside is destroyed, and a port is never preloaded onto the phone's own loopback. Such a view is released without being destroyed, so hot reload on an open card is untouched.
+- Release looks the view up by identity. A second release of the same view (the card's effect and `AndroidView.onRelease` both call it), a late release after trimming or a renderer loss, and a release of a view the pool no longer holds do nothing, so they never destroy the replacement. The card's effect depends on the view only: a change of text selection actions updates the view in place instead of releasing it.
+- What is shared is data, not pages: the cookie store and the disk cache belong to the WebView package and outlive every renderer, so a login stays. The pool never clears cookies, the cache or history globally; destroying a view only ends its own renderer.
+- Tests: `ChatWebViewPoolTest` (pool rules with a recording view factory, and cookie, disk cache and shared settings checks), `ChatLinkReopenTest` (the real host: reopen, Peek and Back, unchanged callbacks, renderer retry, native Feishu pages). They use Robolectric shadows; a real renderer, shared cookies across processes and request counts are checked on a device with `scripts/app/android_adaptive_scenes/chat-link-reopen.json`.
