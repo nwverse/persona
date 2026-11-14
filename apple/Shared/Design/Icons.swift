@@ -635,6 +635,10 @@ extension Theme {
         static let standingAuthorization = "shield.lefthalf.filled.badge.checkmark"
         /// Taking such a go-ahead back (Revoke).
         static let revoke = "xmark.shield"
+        /// An idle Agent Persona started is stopped after a while, its terminal kept (Agent Follow-Up, #7005).
+        static let stopIdle = "powersleep"
+        /// Persona fixes unhelpful session names (Agent Follow-Up, #7005).
+        static let autoName = "character.textbox"
         /// A plan the assistant handed the user (the plan card).
         static let taskPlan = "list.clipboard"
         /// Saying something straight to a task (Message, and Message “xx”).
