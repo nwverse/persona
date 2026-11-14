@@ -176,12 +176,23 @@ final class InboxCollapsedSourceTests: XCTestCase {
         requireHittable(element("inbox.more"), "the Inbox list after Back")
     }
 
-    /// The dedicated hub: `PERSONA_INBOX_HUB` must name a mock started with `MOCK_MANAGERS=0` (no roster), whose Inbox
-    /// lists both items — the default mock files the second one under another assistant the Inbox leaves out.
+    /// The dedicated hub: `PERSONA_INBOX_HUB` must name a second mock started with `MOCK_MANAGERS=0` (a hub from before
+    /// the roster, whose Inbox lists every item — the default mock files the second one under another assistant the
+    /// Inbox leaves out). Anything else skips this one case; the other three keep running on the default hub.
     private func singleAssistantHub() throws -> String {
         guard let inboxHub = ProcessInfo.processInfo.environment["PERSONA_INBOX_HUB"] else {
             throw XCTSkip("needs a second scripts/mock/mock_hub.py with MOCK_MANAGERS=0 (TEST_RUNNER_PERSONA_INBOX_HUB): "
                           + "the default mock's second item is another assistant's")
+        }
+        // Its own hub, not this one under another name (a trailing slash, another spelling of the host).
+        guard Self.origin(inboxHub) != Self.origin(hub) else {
+            throw XCTSkip("TEST_RUNNER_PERSONA_INBOX_HUB names the default hub: the reused-column case needs a second one")
+        }
+        // Before the roster there is no /api/v1/managers at all (404). A one-row roster (MOCK_MANAGERS=1) answers 200,
+        // and that hub still files and filters items by assistant.
+        let roster = status(try XCTUnwrap(URL(string: inboxHub + "/api/v1/managers")))
+        guard roster == 404 else {
+            throw XCTSkip("the hub at TEST_RUNNER_PERSONA_INBOX_HUB has a manager roster (status \(roster)): start it with MOCK_MANAGERS=0")
         }
         let data = try Data(contentsOf: try XCTUnwrap(URL(string: inboxHub + "/api/v1/inbox")))
         let items = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["items"] as? [[String: Any]] ?? []
@@ -191,6 +202,25 @@ final class InboxCollapsedSourceTests: XCTestCase {
                           + "start it with MOCK_MANAGERS=0")
         }
         return inboxHub
+    }
+
+    /// A hub's scheme, host and port: the same mock at `…:18983` and `…:18983/` is one hub, not two.
+    static func origin(_ raw: String) -> String {
+        guard let u = URL(string: raw) else { return raw }
+        return "\(u.scheme ?? "")://\(u.host ?? ""):\(u.port ?? -1)"
+    }
+
+    /// A GET's answer, as the mock gives it, waited for off the test's thread.
+    private func status(_ url: URL) -> Int {
+        let answered = expectation(description: "GET " + url.path)
+        var code = -1
+        URLSession.shared.dataTask(with: url) { _, response, _ in
+            code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 10)
+        XCTAssertGreaterThanOrEqual(code, 0, "no answer from \(url)")
+        return code
     }
 
     @MainActor private func openDetail(_ item: String) {
