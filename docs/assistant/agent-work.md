@@ -48,6 +48,25 @@ name. A meaningful original title starts with an observation baseline when perio
 Changing the maximum does not erase the ledger. A native or app rename stops automatic naming permanently
 for that session; app/API rename intent is persisted before contacting the node, even when its reply is uncertain.
 
+**Named on request (#7432).** `POST /api/v1/sessions/{mid}/{sid}/autoname` is the same model call asked for by the
+user from an Agent's menu (**Auto Rename**), for one session, answered with the new title
+(`docs/protocol/protocol.md`, "Naming an Agent on request"). It shares the dialogue, prompt and validity check with
+the background pass (`agentNameFromModel`) and skips the background's guards, because the request is the user's own
+wish: the change limit, the placeholder test, the automatic-naming switch, and the protection of custom titles.
+The ledger record is marked `requested` and is no longer `manual`. Such a name also stands over a native custom
+title or a title of unknown provenance, and its row is published with `title_source: "auto"`; it holds until the
+native title changes, or until the user renames the session by hand, exactly as an automatic name does. The
+background's change count is left as it is (a request neither spends nor resets it), its failure count and
+cooldown are cleared by a successful request, and a failed request records nothing. Requests for one session
+share one model call. Persona's own conversations are refused.
+
+The assistant-only `agent_autoname` tool is a narrow second entry to that same request, for an explicitly requested
+name in a Persona conversation. It accepts only an exact machine and full session id, never a URL, credential or
+arbitrary request. The usual assistant-source check applies, so a task Agent cannot call it. Every invocation asks
+for phone confirmation before the model call, including when the title was hand-written; declining or leaving the
+card unanswered changes nothing. The result is the same title or coded refusal in a text JSON object. The assistant
+tool is not a client dependency: iOS and other clients use the HTTP endpoint above (`agent_naming_tool.go`).
+
 Cost controls: list events coalesce into one worker, dispatching at most one candidate per 30-second pass.
 Queue-local one-shot wakes drain existing matches even without another list event, then stop; they do not
 install a timer on any node. A successful check that keeps the name advances its interval baseline without
