@@ -293,6 +293,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
 // own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
 // 192 B on top of #7339's.
+// #7418: the budget stays where #7329 left it and the first screen gives back about 8.5 KB in each language, so the
+// next changes have room again (measured in one environment against main at 18c04172d0: ja 480,414 B to 471,488 B; en
+// 476,723 B to 468,260 B, zh-Hans 477,703 B to 469,117 B). The startup catalog takes just the keys the first screen
+// reads of a namespace it reads a few of (src/i18n/startup-keys.ts: settings, todos, settings-managers, machines and
+// five more), five namespaces no first-screen code names left it, and Tailwind no longer scans test files and e2e
+// scripts (styles.css). Every build prints the room left (firstScreenRoom); when it runs low, take bytes off the
+// first screen before raising this.
 export const FIRST_SCREEN_BUDGET = 480_494;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
