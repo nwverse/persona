@@ -108,8 +108,8 @@ gateway without it answers 404 after two requests that cannot succeed. Gateway-s
 `system/model_refusal_no_fallback` row and a synthetic `stop_reason: "refusal"` reply. Keep both endings tested: the
 no-fallback one must stay a safeguards refusal for the assistant's recovery whether the reply carries
 `isApiErrorMessage`, an error code or neither, and must not become `model_fallback_unavailable` (no fallback row); the
-fallback 404 must stay `model_fallback_unavailable`, the user's, for Anthropic's own API, unmanaged launchers and
-providers that turn the switch back on.
+fallback 404 must stay `model_fallback_unavailable`, the user's, for every start that keeps the switch: Anthropic's own
+API, unmanaged launchers, providers from before #2455 and providers that turn the switch back on.
 
 ## Subagent peer reports are nonterminal tool output (#3378)
 

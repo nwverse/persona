@@ -883,7 +883,7 @@ failure rather than a configuration error.
   sentence naming the model by its short name ("The upstream refused this request, so it switched to Sonnet 5.5"); the
   models as recorded, the category, the explanation, the refusal's own words and the error since sit under a closed
   Details (#5202, web and iOS). Agents conversations show everything.
-- No configuration is required. Claude Code's own session-scoped fallback and the headless assistant's bounded recovery in [Headless assistant](#headless-assistant-chat-tab) are separate mechanisms. The latter handles a final safeguards / 429 / 5xx turn error without rewriting the request; it never replays this section's `model_fallback_unavailable` 404 and does not change Claude Code's own fallback policy. A gateway-shaped managed provider turns that fallback off at launch instead ([Refusal fallback behind a gateway](#refusal-fallback-behind-a-gateway-7319)), so there the refusal itself ends the turn and the recovery takes it; this section's fallback rows and 404s come from Anthropic's own API, plain `claude`, shell launchers and providers that turn the switch back on.
+- No configuration is required. Claude Code's own session-scoped fallback and the headless assistant's bounded recovery in [Headless assistant](#headless-assistant-chat-tab) are separate mechanisms. The latter handles a final safeguards / 429 / 5xx turn error without rewriting the request; it never replays this section's `model_fallback_unavailable` 404 and does not change Claude Code's own fallback policy. A gateway-shaped managed provider turns that fallback off at launch instead ([Refusal fallback behind a gateway](#refusal-fallback-behind-a-gateway-7319)), so there the refusal itself ends the turn and the recovery takes it. This section's fallback rows still come from every start that keeps the switch: Anthropic's own API, where the fallback model exists, and plain `claude`, shell launchers, providers from before #2455 and providers that turn the switch back on, where a gateway without that model still answers 404.
 
 Client follow-up remains necessary for dedicated cards, an always-visible notice, an actual-model/Fell Back marker,
 explicit recovery buttons, and suppressing the old error cards' Retry/Continue or model-settings buttons. Clients may
@@ -947,9 +947,17 @@ Old clients show notice's Chinese text. Synthetic text without `API Error:` pref
 Old web / Android task cards ignore `turn_error_kind` and still show Interrupted + Continue; this needs client updates.
 Hub `continueTask` does not reject cause refusal: the user's explicit Continue is their decision, but new clients offer no such button.
 
-### Default policy (decision pending)
+### Default policy (decided behind a gateway, pending elsewhere)
 
-`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK` is read only from process environment, not `--settings` env (tested in issue). Three options:
+Claude Code 2.1.322 reads `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK` from `process.env` each time it checks, and it copies
+each settings source's `env` (`--settings` and the user's `settings.json` included) into `process.env`, so a value in
+either place turns the fallback off. Persona sets it in both places, so a version that reads only the process
+environment sees it too.
+
+#7319 settled the default for gateway-shaped managed providers whose Base URL is not Anthropic's own API: they launch
+with the fallback off (option B), and `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=` (empty) in the provider's environment
+turns it back on ([Refusal fallback behind a gateway](#refusal-fallback-behind-a-gateway-7319)). Every other start keeps
+Claude Code's default, and the options below are still open for those:
 
 - **A. Keep Claude Code's default automatic fallback, only make it visible.** No launch changes; answers continue, but users may not know a weaker model is now used for the session—the Fell Back badge addresses this.
 - **B. Disable automatic fallback for all Persona-started Claude.** Block stops work; user chooses rephrase, model change, or abandonment. With increasing refusals, stops and stalled tasks become noticeably more frequent.
