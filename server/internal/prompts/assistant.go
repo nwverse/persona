@@ -913,6 +913,39 @@ type TaskDone struct {
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
 
+// DispatchEval is the instruction half of the main-chat dispatch behaviour check (assistant/dispatch_eval,
+// assistant/dispatch_eval_test.go, docs/assistant/prompts.md "Main-chat dispatch checks"): what the assistant would
+// do with one user message — cost tier, start path, splitting, asking instead of guessing.
+type DispatchEval struct {
+	Owner string
+}
+
+// DispatchEvalMachine is one online computer in a dispatch behaviour-check case, with what inference may use.
+type DispatchEvalMachine struct {
+	ID   string
+	Note string
+}
+
+// DispatchEvalProject is one knowledge-base project mapping in a dispatch behaviour-check case.
+type DispatchEvalProject struct {
+	Name string
+	Dir  string
+}
+
+// DispatchEvalInput is the world and the user message of one dispatch behaviour-check case
+// (assistant/dispatch_eval_input).
+type DispatchEvalInput struct {
+	Machines []DispatchEvalMachine
+	Projects []DispatchEvalProject
+	Message  string
+}
+
+func RenderDispatchEval(d DispatchEval) string { return render("assistant/dispatch_eval", d) }
+
+func RenderDispatchEvalInput(in DispatchEvalInput) string {
+	return render("assistant/dispatch_eval_input", in)
+}
+
 // RenderTaskDelivery is the delivery standard a task's agent is handed after its prompt (assistant/task_delivery,
 // docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got. closeout: the
 // closeout's form follows in the same prompt (agents/closeout_brief), so the line goes before that block, not last.
