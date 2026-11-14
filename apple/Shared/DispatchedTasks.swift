@@ -13,6 +13,40 @@ nonisolated enum DispatchedTasks {
         var error: String? = nil
         /// The conversation the card is in: its failed receipt, if any, says why a task did not start.
         var conversation: String? = nil
+        /// The Agent this card opens. Empty while the card still stands for the task.
+        var machineID: String? = nil
+        var sessionID: String? = nil
+        /// The Agent row's title, used until the session has one of its own.
+        var agentTitle: String? = nil
+    }
+
+    /// Agents linked within this of the first belong to the same hand-off. A later one is its own card (the web's
+    /// `SAME_HANDOFF_MS`, #5096).
+    static let sameHandoff: TimeInterval = 120
+
+    /// One card per Agent this hand-off started (#5110). No Agent yet: the one task card, which says it is starting,
+    /// why it did not, or that it closed.
+    static func cards(of entry: Entry, todo: TodoItem?) -> [Entry] {
+        let started = (todo?.agents ?? []).filter { ($0.startError ?? "").isEmpty && !$0.sessionID.isEmpty }
+        let shown = handoffAgents(started)
+        guard let todo, !shown.isEmpty else { return [entry] }
+        return shown.map { agent in
+            var card = entry
+            card.id = "\(agent.machineID)/\(agent.sessionID)"
+            card.todoID = todo.id
+            card.machineID = agent.machineID
+            card.sessionID = agent.sessionID
+            card.agentTitle = agent.title
+            return card
+        }
+    }
+
+    /// The Agents of one hand-off: those linked within [sameHandoff] of the first. One with no time counts as earliest.
+    static func handoffAgents(_ started: [TodoItem.Agent]) -> [TodoItem.Agent] {
+        guard !started.isEmpty else { return [] }
+        let at = { (agent: TodoItem.Agent) in agent.linkedAt ?? .distantPast }
+        let first = started.map(at).min() ?? .distantPast
+        return started.filter { at($0).timeIntervalSince(first) <= sameHandoff }
     }
 
     /// The task detail's actual session selection. A requested target must still belong to this task; neither a

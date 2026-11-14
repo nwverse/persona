@@ -86,6 +86,42 @@ struct DispatchedTasksTests {
         #expect(DispatchedTasks.entries(for: routed, plans: [:], titleOf: { _ in nil }, fallback: "Task") == nil)
     }
 
+    private func agent(_ session: String, at: Date, error: String? = nil) -> TodoItem.Agent {
+        TodoItem.Agent(machineID: "computer", sessionID: session, title: "Layout \(session)", cwd: nil, agent: nil,
+                       startError: error, releasedAt: nil, linkedAt: at, source: nil, via: nil)
+    }
+
+    @Test func oneAgentIsOneCardThatOpensThatAgent() {
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+        let todo = TodoItem(id: "t", title: "Task", agents: [agent("agent", at: at)])
+        let cards = DispatchedTasks.cards(of: .init(id: "todo:t", todoID: "t", title: "Task", wake: "created", conversation: "main"), todo: todo)
+        #expect(cards.count == 1)
+        #expect(cards[0].id == "computer/agent")
+        #expect(cards[0].machineID == "computer")
+        #expect(cards[0].sessionID == "agent")
+        #expect(cards[0].agentTitle == "Layout agent")
+        #expect(cards[0].wake == "created")
+        #expect(cards[0].todoID == "t")
+    }
+
+    @Test func agentsLinkedTogetherAreEachACardAndALaterOneIsNot() {
+        let first = Date(timeIntervalSince1970: 1_700_000_000)
+        let todo = TodoItem(id: "t", title: "Task", agents: [
+            agent("a", at: first),
+            agent("b", at: first.addingTimeInterval(60)),
+            agent("later", at: first.addingTimeInterval(180)),
+        ])
+        let cards = DispatchedTasks.cards(of: .init(id: "todo:t", todoID: "t", title: "Task"), todo: todo)
+        #expect(cards.map(\.sessionID) == ["a", "b"])
+    }
+
+    @Test func anAgentThatDidNotStartLeavesTheTaskCard() {
+        let todo = TodoItem(id: "t", title: "Task", agents: [agent("a", at: .now, error: "offline")])
+        let entry = DispatchedTasks.Entry(id: "todo:t", todoID: "t", title: "Task", error: "offline")
+        #expect(DispatchedTasks.cards(of: entry, todo: todo) == [entry])
+        #expect(DispatchedTasks.cards(of: entry, todo: nil) == [entry])
+    }
+
     @Test func decisionsAndDismissedPlansKeepTheirNormalCards() {
         for state in [TaskPlan.State.open, .dismissed, .unknown] {
             let p = plan([task("Proposed")], state: state)

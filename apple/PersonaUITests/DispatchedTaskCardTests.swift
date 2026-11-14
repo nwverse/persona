@@ -86,7 +86,7 @@ final class DispatchedTaskCardTests: XCTestCase {
         let app = launch()
         let one = link(app, "todo_task_widget")
         // one card: the title, how the Agent came to it, when it last moved and its state, in one element
-        XCTAssertTrue(one.label.contains("修小组件横屏崩溃"), one.label)
+        XCTAssertTrue(one.label.contains("给天气 App 加主屏幕小组件"), one.label)
         XCTAssertFalse(one.label.contains("派出"), "the old \"Dispatched\" line is back: \(one.label)")
         try shot(app, "one")
         one.tap()
