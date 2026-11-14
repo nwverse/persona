@@ -166,6 +166,19 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
+		p := &s.deploy
+		p.mu.Lock()
+		last := p.seen[t.ID]
+		if last.statusPR == t.PRURL && now.Sub(last.statusAt) < deployRecheck {
+			p.mu.Unlock()
+			continue
+		}
+		if p.seen == nil || len(p.seen) > 2000 {
+			p.seen = map[string]prSeen{}
+		}
+		last.statusPR, last.statusAt = t.PRURL, now
+		p.seen[t.ID] = last // failures are attempts too, not fresh evidence
+		p.mu.Unlock()
 		number, _ := strconv.Atoi(m[2])
 		status, err := f.PRStatus(ctx, m[1], number)
 		if err != nil {

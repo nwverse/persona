@@ -86,6 +86,8 @@ type deployProbe struct {
 type prSeen struct {
 	hub, state string
 	at         time.Time
+	statusPR   string
+	statusAt   time.Time
 }
 
 type deployCached struct {
@@ -459,7 +461,9 @@ func (s *Service) sweepPRs(ctx context.Context, now time.Time, hub string, watch
 		if p.seen == nil || len(p.seen) > 2000 {
 			p.seen = map[string]prSeen{}
 		}
-		p.seen[t.ID] = prSeen{hub: hub, state: r.State, at: now}
+		seen := p.seen[t.ID]
+		seen.hub, seen.state, seen.at = hub, r.State, now
+		p.seen[t.ID] = seen
 		p.mu.Unlock()
 		switch r.State {
 		case deployIn:

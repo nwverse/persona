@@ -153,6 +153,10 @@ func TestPRStatusFailurePreservesLastObservation(t *testing.T) {
 	if got.PRStatus == nil || *got.PRStatus != before || got.Supervision.State == reviewPending {
 		t.Fatalf("failure replaced facts or triggered acceptance: %+v", got)
 	}
+	s.sweepPRStatuses(ctx, now.Add(deployRecheck+time.Minute))
+	if f.statusCalls != 2 {
+		t.Fatalf("an outage bypassed the polling interval: %d calls", f.statusCalls)
+	}
 }
 
 func TestPRStatusDoesNotWakeAnUnrelatedLaterPark(t *testing.T) {
