@@ -29,6 +29,7 @@ type clientAppUpdate struct {
 type userLangUpdate struct {
 	key  string
 	lang i18n.Lang
+	at   time.Time
 }
 
 // phoneToolUpdates has its own lock: phoneToolsMu covers the store write and must never be taken by the read loop.

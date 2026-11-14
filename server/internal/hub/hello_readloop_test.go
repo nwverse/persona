@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -15,8 +17,9 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// helloStore can hold the loads and writes behind client_hello and register_phone. Every wait also honors the caller's
-// context, so a broken test cannot leave a goroutine behind after its timeout.
+// helloStore can hold the loads and writes behind client_hello and register_phone. Its gates stay closed until the
+// test releases them, even when a store operation's context expires: the operation deadline must never race the
+// response assertion. Test cleanup releases any handler still blocked after a failure.
 type helloStore struct {
 	*settingsStore
 	loadStarted    chan string
@@ -63,11 +66,8 @@ func (s *helloStore) Setting(ctx context.Context, key string, out any) (bool, er
 		case s.loadStarted <- key:
 		default:
 		}
-		select {
-		case <-s.loadRelease:
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
+		// Do not honor the operation deadline here: it must not expire at the same instant as the response assertion.
+		<-s.loadRelease
 	}
 	if key == clientAppsSetting && s.failAppsLoad.CompareAndSwap(true, false) {
 		return false, errors.New("client apps load failed")
@@ -83,11 +83,7 @@ func (s *helloStore) PutSetting(ctx context.Context, key string, value any) erro
 	case s.putStarted <- key:
 	default:
 	}
-	select {
-	case <-s.putRelease:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	<-s.putRelease
 	if err := s.settingsStore.PutSetting(ctx, key, value); err != nil {
 		return err
 	}
@@ -109,11 +105,7 @@ func (s *helloStore) ReplacePhoneTools(ctx context.Context, registration db.Phon
 	// Only the older write waits. If a broken implementation runs the newer write concurrently, it can finish and
 	// the older one then gets its chance to overwrite it: the final-state assertions catch that ordering bug.
 	if call == 1 {
-		select {
-		case <-s.toolsRelease:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		<-s.toolsRelease
 	}
 	s.stateMu.Lock()
 	s.registrations = append(s.registrations, registration)
@@ -444,6 +436,44 @@ func TestLocaleBurstPreservesCrossDeviceOrder(t *testing.T) {
 	if saved["dev_a"].Locale != i18n.En || saved["dev_b"].Locale != i18n.ZhHans {
 		t.Fatalf("the final device locales are wrong: %+v", saved)
 	}
+	var savedUser string
+	store.savedSetting(t, userLocaleSetting, &savedUser)
+	if savedUser != string(i18n.En) {
+		t.Fatalf("the persisted user locale is %q, want en", savedUser)
+	}
+}
+
+// Delayed persistence must keep the receipt time, not stamp every report with the consumer's time and change which
+// device history is pruned. The older changed device is the one that falls out of this full snapshot.
+func TestLocaleBatchUsesReceiptTimesForPruning(t *testing.T) {
+	h := newTestHub(t)
+	store := newHelloStore()
+	store.release()
+	h.store = store
+	base := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	stored := make(map[string]deviceLocale, deviceLocalesMax)
+	stored["dev_a"] = deviceLocale{Locale: i18n.En, At: base}
+	for i := 1; i < deviceLocalesMax; i++ {
+		stored[fmt.Sprintf("dev_%02d", i)] = deviceLocale{Locale: i18n.En, At: base.Add(time.Duration(i+1) * time.Second)}
+	}
+	raw, _ := json.Marshal(stored)
+	store.vals[deviceLocalesSetting] = raw
+	store.vals[userLocaleSetting] = []byte(`"en"`)
+	h.writeUserLangs([]userLangUpdate{
+		{key: "dev_a", lang: i18n.Ja, at: base.Add(time.Second)},
+		{key: "dev_b", lang: i18n.Ja, at: base.Add(100 * time.Second)},
+	})
+	var saved map[string]deviceLocale
+	store.savedSetting(t, deviceLocalesSetting, &saved)
+	if len(saved) != deviceLocalesMax {
+		t.Fatalf("saved %d device locales, want %d", len(saved), deviceLocalesMax)
+	}
+	if _, kept := saved["dev_a"]; kept {
+		t.Fatal("consumer-side timestamps kept the oldest report instead of pruning it")
+	}
+	if saved["dev_b"].At != base.Add(100*time.Second) || saved["dev_01"].Locale != i18n.En {
+		t.Fatalf("the batch did not preserve receipt times and newer history: %+v", saved)
+	}
 }
 
 // Two replacements arrive behind an older in-flight write. Only the newest pending set is written afterwards, and
@@ -519,6 +549,47 @@ func TestRegisterPhoneNewestSnapshotWins(t *testing.T) {
 	}
 }
 
+// Replacing A's pending registration must move it behind B: the surviving messages are B1, A2, not A2, B1.
+func TestRegisterPhoneCoalescingKeepsLatestMessageOrder(t *testing.T) {
+	h := newTestHub(t)
+	store := newHelloStore()
+	h.store = store
+	t.Cleanup(store.release)
+	seed := &client{hub: h, device: "dev_seed", role: roleFull, out: make(chan []byte, 16)}
+	h.onClientMessage(context.Background(), seed, []byte(`{"type":"register_phone","device_id":"seed","tools":[{"name":"phone_device_info"}]}`))
+	select {
+	case <-store.toolsStarted:
+	case <-time.After(readLoopLimit):
+		t.Fatal("the seed phone-tool write did not start")
+	}
+	a := &client{hub: h, device: "dev_a", role: roleFull, out: make(chan []byte, 16)}
+	b := &client{hub: h, device: "dev_b", role: roleFull, out: make(chan []byte, 16)}
+	for _, report := range []struct {
+		c   *client
+		raw string
+	}{
+		{a, `{"type":"register_phone","device_id":"a","tools":[{"name":"phone_contacts"}]}`},
+		{b, `{"type":"register_phone","device_id":"b","tools":[{"name":"phone_contacts"}]}`},
+		{a, `{"type":"register_phone","device_id":"a","tools":[{"name":"phone_contacts"},{"name":"phone_reminders_list"}]}`},
+	} {
+		h.onClientMessage(context.Background(), report.c, []byte(report.raw))
+	}
+	store.release()
+	waitHelloWrites(t, h)
+	registrations := store.savedRegistrations()
+	if len(registrations) != 3 {
+		t.Fatalf("got %d registrations, want seed plus the two surviving snapshots: %+v", len(registrations), registrations)
+	}
+	for i, want := range []string{"seed", "b", "a"} {
+		if registrations[i].DeviceID != want {
+			t.Fatalf("registration order = %+v, want seed, b, a", registrations)
+		}
+	}
+	if got := registrations[2].Tools; len(got) != 2 || got[1].Name != "phone_reminders_list" {
+		t.Fatalf("the last registration is not A's newest snapshot: %+v", got)
+	}
+}
+
 func TestHelloSettingsLifecycle(t *testing.T) {
 	t.Run("connection language precedes persistence", func(t *testing.T) {
 		h := newTestHub(t)
@@ -553,45 +624,55 @@ func TestHelloSettingsLifecycle(t *testing.T) {
 	})
 
 	t.Run("shutdown drains the last saves", func(t *testing.T) {
-		h := newTestHub(t)
-		store := newHelloStore()
-		h.store = store
-		t.Cleanup(store.release)
-		phone := &client{hub: h, device: "dev_phone", role: roleFull, out: make(chan []byte, 16)}
-		h.onClientHello(phone, []byte(`{"platform":"ios","version":"1.0","locale":"en"}`))
-		h.onClientMessage(context.Background(), phone, []byte(`{"type":"register_phone","device_id":"phone","tools":[{"name":"phone_contacts"}]}`))
-		select {
-		case <-store.putStarted:
-		case <-time.After(readLoopLimit):
-			t.Fatal("the final setting save did not start")
-		}
-		select {
-		case <-store.toolsStarted:
-		case <-time.After(readLoopLimit):
-			t.Fatal("the final phone-tool save did not start")
-		}
-
-		h.helloWrites.cancel() // the hub's deploy context is canceled before nodeWorkers is joined
-		joined := make(chan struct{})
-		go func() {
-			h.nodeWorkers.Wait()
-			close(joined)
-		}()
-		select {
-		case <-joined:
-			t.Fatal("the worker join returned while the last saves were still held")
-		case <-time.After(50 * time.Millisecond):
-		}
-		store.release()
-		waitHelloLoop(t, joined, "the worker join after release")
-		waitHelloWrites(t, h)
-		for _, key := range []string{clientAppsSetting, deviceLocalesSetting, userLocaleSetting} {
-			if got := store.putCount(key); got != 1 {
-				t.Fatalf("shutdown saved %s %d times, want its last snapshot once", key, got)
+		synctest.Test(t, func(t *testing.T) {
+			deployCtx, cancelDeploy := context.WithCancel(context.Background())
+			t.Cleanup(cancelDeploy)
+			h := newTestHubWithDeployCtx(t, deployCtx)
+			// The language update's unrelated assistant debounce has no bus connection in this fixture; do not leave its
+			// timer inside the synctest bubble after the worker assertions finish.
+			h.assistantOf(assistantwire.AssistantID).updating.Store(true)
+			store := newHelloStore()
+			h.store = store
+			t.Cleanup(store.release)
+			phone := &client{hub: h, device: "dev_phone", role: roleFull, out: make(chan []byte, 16)}
+			h.onClientHello(phone, []byte(`{"platform":"ios","version":"1.0","locale":"en"}`))
+			h.onClientMessage(context.Background(), phone, []byte(`{"type":"register_phone","device_id":"phone","tools":[{"name":"phone_contacts"}]}`))
+			select {
+			case <-store.putStarted:
+			case <-time.After(readLoopLimit):
+				t.Fatal("the final setting save did not start")
 			}
-		}
-		if got := store.savedRegistrations(); len(got) != 1 {
-			t.Fatalf("shutdown lost the last phone-tool registration: %+v", got)
-		}
+			select {
+			case <-store.toolsStarted:
+			case <-time.After(readLoopLimit):
+				t.Fatal("the final phone-tool save did not start")
+			}
+
+			// Production cancels deployCtx before joining nodeWorkers. Settle every goroutine instead of using a
+			// wall-clock negative assertion: a join that does not include these workers is observably closed here.
+			cancelDeploy()
+			joined := make(chan struct{})
+			go func() {
+				h.nodeWorkers.Wait()
+				close(joined)
+			}()
+			synctest.Wait()
+			select {
+			case <-joined:
+				t.Fatal("the worker join returned while the last saves were still held")
+			default:
+			}
+			store.release()
+			waitHelloLoop(t, joined, "the worker join after release")
+			waitHelloWrites(t, h)
+			for _, key := range []string{clientAppsSetting, deviceLocalesSetting, userLocaleSetting} {
+				if got := store.putCount(key); got != 1 {
+					t.Fatalf("shutdown saved %s %d times, want its last snapshot once", key, got)
+				}
+			}
+			if got := store.savedRegistrations(); len(got) != 1 {
+				t.Fatalf("shutdown lost the last phone-tool registration: %+v", got)
+			}
+		})
 	})
 }

@@ -244,11 +244,16 @@ func removeTestClient(h *Hub, c *client) {
 // newTestHub builds a Hub with no machines, no clients and push disabled, so interaction logic can be exercised offline.
 func newTestHub(t *testing.T) *Hub {
 	t.Helper()
+	return newTestHubWithDeployCtx(t, context.Background())
+}
+
+func newTestHubWithDeployCtx(t *testing.T, deployCtx context.Context) *Hub {
+	t.Helper()
 	cfg := defaultConfig()
 	cfg.Machines = nil
 	cfg.dir = shortTempDir(t)
 	h := &Hub{
-		deployCtx: context.Background(), cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
+		deployCtx: deployCtx, cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
 		byID: map[string]*Machine{}, clients: map[*client]struct{}{},
 		calls: map[string]chan proto.ToolResult{},
 		push:  newPusher(cfg.dir, nil, func(string, ...any) {}),

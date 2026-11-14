@@ -135,6 +135,7 @@ func TestClientAppVersionInAssistantContext(t *testing.T) {
 	h := snapshotHub(t, false)
 	phone := &client{out: make(chan []byte, 16), role: roleFull, hub: h, device: "dev_phone"}
 	h.onClientHello(phone, []byte(`{"type":"client_hello","platform":"ios-app","version":"1.4.0+52","os":{"name":"iOS","version":"26.1"}}`))
+	waitHelloWrites(t, h)
 	raw, _ := json.Marshal(map[string]string{"session_id": "side-session"})
 	res, err := nodeAsks(context.Background(), h.byID["server"], "assistant.context", raw)
 	if err != nil {

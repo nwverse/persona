@@ -120,7 +120,7 @@ func (h *Hub) noteUserLang(key string, l i18n.Lang) {
 	if !i18n.Valid(l) {
 		return
 	}
-	update := userLangUpdate{key: key, lang: l}
+	update := userLangUpdate{key: key, lang: l, at: time.Now().UTC().Truncate(time.Second)}
 	if h.store == nil {
 		h.writeUserLangs([]userLangUpdate{update})
 		return
@@ -173,7 +173,7 @@ func (h *Hub) writeUserLangsLoaded(ctx context.Context, batch []userLangUpdate) 
 			prev, known = g.byDevice[key]
 			same = known && prev.Locale == l
 			if !same {
-				g.byDevice[key] = deviceLocale{Locale: l, At: time.Now().UTC().Truncate(time.Second)}
+				g.byDevice[key] = deviceLocale{Locale: l, At: update.at}
 				pruneDeviceLocales(g.byDevice)
 				deviceDirty = true
 			}

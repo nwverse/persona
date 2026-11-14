@@ -398,9 +398,16 @@ func (h *Hub) setPhoneTools(registration db.PhoneToolRegistration) {
 	if q.pending == nil {
 		q.pending = map[string]db.PhoneToolRegistration{}
 	}
-	if _, queued := q.pending[registration.DeviceID]; !queued {
-		q.order = append(q.order, registration.DeviceID)
+	if _, queued := q.pending[registration.DeviceID]; queued {
+		// The surviving replacement belongs at its own latest message position, not the device's first queued position.
+		for i, id := range q.order {
+			if id == registration.DeviceID {
+				q.order = append(q.order[:i], q.order[i+1:]...)
+				break
+			}
+		}
 	}
+	q.order = append(q.order, registration.DeviceID)
 	q.pending[registration.DeviceID] = registration
 	q.reports++
 	q.mu.Unlock()
