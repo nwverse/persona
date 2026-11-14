@@ -292,7 +292,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // settings tab's name and line. The list, its reads, its words, the editor and the settings page are chunks of their
 // own, loaded the first time a box has the focus, the menu item is picked or the page opens. The budget moves by these
 // 192 B on top of #7339's.
-export const FIRST_SCREEN_BUDGET = 480_494;
+// #7375: Export Conversation… in a chat's ⋯ adds 61 B to ja, measured in one environment against main at 6602a9ef3a (ja
+// 480,494 B to 480,555 B; en 476,803 B to 476,857 B, zh-Hans 477,783 B to 477,838 B): the menu item, its word and the
+// import of its dialog. Reading the conversation, the Markdown and the dialog's words are a chunk of their own
+// (views/chat/ExportDialog.tsx, lib/chat-export.ts). The budget moves by these 61 B.
+export const FIRST_SCREEN_BUDGET = 480_555;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
