@@ -321,7 +321,7 @@ class Watcher:
             self.comment(repo, number, "Automatic verification repair stopped after two rounds.\n\n```text\n%s\n```" %
                          bounded(str(error), 12000))
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                           outcome="repair_exhausted", failure=str(error))
+                           outcome="repair_exhausted", repair_exhausted=True, failure=str(error))
             return False
         comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), getattr(error, "output", "") or str(error),
                                                              git_root=config["checkout"], command=getattr(error, "command", None),
@@ -331,7 +331,7 @@ class Watcher:
             self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
                          bounded(str(error), 6000))
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                           base_failures=comparison, verification="base_failure", checks=old.get("checks", []),
+                           base_failures=comparison, verification="base_failure", checks=getattr(error, "checks", []),
                            outcome="passed_with_base_failures", failure=str(error))
             return "base_failure"
         updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
@@ -390,10 +390,11 @@ class Watcher:
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
             previous = old
-            old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
+            old = {"repair_rounds": int(previous.get("repair_rounds", 0)),
+                   "repair_exhausted": bool(previous.get("repair_exhausted"))}
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
-        if old.get("head") == head and old.get("outcome") == "repair_exhausted":
+        if old.get("head") == head and old.get("repair_exhausted"):
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
             if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":
@@ -483,6 +484,10 @@ class Watcher:
                     if repaired != "base_failure":
                         return
                     current = self.state.get(repo, number)
+                    base_evidence = current.get("base_failures")
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             verification="base_failure", checks=error.checks,
+                                             base_failures=base_evidence)
                 else:
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                              verification="passed", checks=results)

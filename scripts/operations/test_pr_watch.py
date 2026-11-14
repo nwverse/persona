@@ -319,9 +319,11 @@ class WatcherTests(unittest.TestCase):
             def fake_checked(argv, **kwargs):
                 calls.append(argv)
                 if argv[:2] == ["git", "rev-parse"]:
-                    return SHA_B + "\n"
+                    return (SHA_BASE if "FETCH_HEAD" in argv else SHA_B) + "\n"
                 if argv[:3] == ["git", "diff", "--name-only"]:
                     return "repair.py\0"
+                if argv[:4] == ["git", "diff", "--cached", "--name-only"]:
+                    return ""
                 if argv[:3] == ["git", "diff", "--cached"]:
                     return "repair.py | 1 +\n"
                 return ""
@@ -331,7 +333,7 @@ class WatcherTests(unittest.TestCase):
             with patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
                     patch.object(pr_watch_repair, "verify", side_effect=fake_verify), \
                     patch.object(pr_watch_repair, "checked", side_effect=fake_checked):
-                pr_watch_repair.commit_and_push_repair("example/one", pr(), directory, SHA_BASE, "failure")
+                pr_watch_repair.commit_and_push_repair("example/one", pr(), directory, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]})
         self.assertIn(SHA_B, calls)
         commit_index = next(index for index, argv in enumerate(calls) if isinstance(argv, list) and "commit" in argv)
         push_index = next(index for index, argv in enumerate(calls) if isinstance(argv, list) and "push" in argv)
@@ -350,13 +352,13 @@ class WatcherTests(unittest.TestCase):
             root = Path(directory)
             def fake_checked(argv, **kwargs):
                 if argv[:2] == ["git", "rev-parse"]:
-                    return SHA_B + "\n"
+                    return (SHA_BASE if "FETCH_HEAD" in argv else SHA_B) + "\n"
                 return ""
             with patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
                     patch.object(pr_watch_repair, "verify", return_value=[]), \
                     patch.object(pr_watch_repair, "checked", side_effect=fake_checked), \
                     patch.object(pr_watch_repair, "gh_json", return_value={"number": 9}) as created:
-                pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure")
+                pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]})
         self.assertIn("Refs #6", created.call_args.args[0][-1])
 
     def test_every_failed_lane_must_reproduce_on_main(self):
@@ -382,7 +384,7 @@ class WatcherTests(unittest.TestCase):
 
     def test_repair_exhausted_is_terminal_without_repeated_comments(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
-        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key, outcome="repair_exhausted")
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key, repair_exhausted=True)
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review") as review, \
                 patch.object(pr_watch, "verify") as verify, \
@@ -415,7 +417,7 @@ class WatcherTests(unittest.TestCase):
                                      "ANTHROPIC_API_KEY": "model-only"}), \
                 patch.object(pr_watch_repair.shutil, "which", return_value="/usr/bin/bwrap"), \
                 patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as worker_run, \
-                patch.object(pr_watch_repair, "checked", side_effect=["", "diff"]):
+                patch.object(pr_watch_repair, "checked", side_effect=["", "", "diff"]):
             pr_watch_repair.repair_with_model("example/one", pr(), self.root, "failure", {})
         env = worker_run.call_args.kwargs["environ"]
         self.assertNotIn("GH_TOKEN", env)
