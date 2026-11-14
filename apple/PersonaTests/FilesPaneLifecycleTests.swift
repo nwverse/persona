@@ -34,7 +34,7 @@ struct FilesPaneLifecycleTests {
     }
 
     /// A window of its own in the test host's scene, so the page can present the alert and the system's Save to Files.
-    @MainActor private final class Shown {
+    @MainActor private final class FilesPaneTestWindow {
         let window: UIWindow
 
         init(_ root: some View) {
@@ -133,7 +133,7 @@ struct FilesPaneLifecycleTests {
     @Test func sceneChangesOnlyPausePolling() async throws {
         let flags = Flags(), hub = makeHub(flags), model = AppModel(), transfers = FolderTransfers(), host = Host()
         model.apiForTests = hub.client
-        let shown = Shown(Root(host: host, model: model, transfers: transfers))
+        let shown = FilesPaneTestWindow(Root(host: host, model: model, transfers: transfers))
         defer {
             for item in transfers.items { transfers.cancel(item.id) }
             shown.close()
@@ -179,7 +179,7 @@ struct FilesPaneLifecycleTests {
     @Test func sceneChangesLeaveAQuestionForTheUser() async throws {
         let flags = Flags(), hub = makeHub(flags), model = AppModel(), transfers = FolderTransfers(), host = Host()
         model.apiForTests = hub.client
-        let shown = Shown(Root(host: host, model: model, transfers: transfers))
+        let shown = FilesPaneTestWindow(Root(host: host, model: model, transfers: transfers))
         defer {
             for item in transfers.items { transfers.cancel(item.id) }
             shown.close()
@@ -225,7 +225,7 @@ struct FilesPaneLifecycleTests {
     @Test func questionsFromTwoTransfersAreShownInTurn() async throws {
         let flags = Flags(), hub = makeHub(flags), model = AppModel(), transfers = FolderTransfers(), host = Host()
         model.apiForTests = hub.client
-        let shown = Shown(Root(host: host, model: model, transfers: transfers))
+        let shown = FilesPaneTestWindow(Root(host: host, model: model, transfers: transfers))
         defer {
             for item in transfers.items { transfers.cancel(item.id) }
             shown.close()
