@@ -570,6 +570,12 @@ hidden otherwise); until then every client shows RFB. The web, the Mac app and A
     1×15). Every tier keeps at least a pixel per point, so text stays readable. Each band is 0.02–0.08 bits per pixel per
     frame, the ceiling at the phone's cap; a tier whose floor is above the cap is left out, and ones that come out the
     same on a display merge. On `screenbench` the floor keeps scrolling text at SSIM ≥ 0.98 against what was encoded.
+    The band is per codec (`TierLadder.bitsFactor`): H.264's factor is 1, the same as HEVC's, until the bench measures
+    it (#6558: a browser without HEVC gets H.264).
+  - **Shared with the browser** (#6558): `spec/fixtures/screen-tiers` holds the ladder's and the signals' scenarios
+    (input and expected output, one per file), which `TierFixtureTests` writes from these Swift types
+    (`PERSONA_WRITE_TIER_FIXTURES=1`) and otherwise checks unchanged. The browser's port (`web/src/screen/tiers/`)
+    replays them, so a change on either side fails both until they agree. The policy's scenarios follow.
   - **Signals** (the phone's, from the frames): queueing above the 10 s floor of the one-way delay (p50 / p95 over
     0.5 s, rising or falling over 1 s), the rate the link carried while busy (frames queued behind one another: their
     bytes over their arrival gaps, so quiet stretches don't read as a slow link), bursts of large frames, late frames,
