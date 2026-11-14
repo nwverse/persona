@@ -56,10 +56,118 @@ class TodoTriageTest {
 
     private val lookup = lookupOf(
         session("ask", "needs_you"), session("run", "working"), session("unseen", "unread"),
+        session("starting", "idle").copy(starting = true),
         session("idle", "idle", 2), session("old", "idle", 100),
     )
 
     private fun at(td: Todo, restoredAt: Long = 0) = td.triage(lookup, now, restoredAt, zone)
+
+    private fun Todo.withKind(kind: String) = copy(kind = kind)
+
+    @Test
+    fun r1ConcernKeepsFailedStartWaitingAndRunningRules() {
+        val failed = at(todo("failed", startError = "no launcher").withKind("concern"))
+        assertEquals(TriageSection.Waiting to TriageRule.FailedStart, failed.section to failed.rule)
+        val asking = at(todo("asking", agents = listOf(agent("ask"))).withKind("concern"))
+        assertEquals(TriageSection.Waiting to TriageRule.AgentAsks, asking.section to asking.rule)
+        val deciding = at(todo("deciding", supervision = Supervision(supervisor = "c", state = "needs_user")).withKind("concern"))
+        assertEquals(TriageSection.Waiting to TriageRule.OwnerDecides, deciding.section to deciding.rule)
+        val running = at(todo("running", updated = 400, agents = listOf(agent("run"))).withKind("concern"))
+        assertEquals(TriageSection.Working to TriageRule.AgentRunning, running.section to running.rule)
+        val starting = at(todo("starting", updated = 400, agents = listOf(agent("starting"))).withKind("concern"))
+        assertEquals(TriageSection.Working to TriageRule.AgentRunning, starting.section to starting.rule)
+    }
+
+    @Test
+    fun r2ConcernFailedStartAfter48HoursIsOtherOpenNotDone() {
+        val t = at(todo("failed", updated = 100, startError = "no launcher").withKind("concern"))
+        assertEquals(TriageSection.Other to TriageRule.Rest, t.section to t.rule)
+        val ordinary = at(todo("ordinary", updated = 100, startError = "no launcher"))
+        assertEquals(TriageSection.Done to TriageRule.FailedStart, ordinary.section to ordinary.rule)
+    }
+
+    @Test
+    fun r3ConcernNeverUsesAcceptedOrDeployed() {
+        val accepted = at(todo("accepted", agents = listOf(agent("idle")), supervision = acceptedReopened()).withKind("concern"))
+        assertEquals(TriageSection.Other to TriageRule.Rest, accepted.section to accepted.rule)
+        val deployed = at(todo("deployed", delivery = TodoDelivery(state = "live", at = hoursAgo(2))).withKind("concern"))
+        assertEquals(TriageSection.Other to TriageRule.Rest, deployed.section to deployed.rule)
+    }
+
+    @Test
+    fun r4ConcernKeepsFinishedUnseenAndOpenPrRules() {
+        val unseen = at(todo("unseen", agents = listOf(agent("unseen"))).withKind("concern"))
+        assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, unseen.section to unseen.rule)
+        val pr = at(todo("pr", updated = 300, agents = listOf(agent("old")), delivery = TodoDelivery(state = "pr")).withKind("concern"))
+        assertEquals(TriageSection.Pr to TriageRule.PrOpen, pr.section to pr.rule)
+    }
+
+    @Test
+    fun r5ConcernFinishedTurnSeenByTheOwnerStaysOtherOpen() {
+        val td = todo("seen", agents = listOf(agent("unseen"))).copy(seenAt = minutesAgo(30)).withKind("concern")
+        val t = at(td)
+        assertEquals(TriageSection.Other to TriageRule.Rest, t.section to t.rule)
+        assertTrue(td.countsAsOpen(t))
+    }
+
+    @Test
+    fun r6ConcernIsNeverShelvedHoweverLongItIsQuiet() {
+        val t = at(todo("quiet", updated = 100, agents = listOf(agent("old"))).withKind("concern"))
+        assertEquals(TriageSection.Other to TriageRule.Rest, t.section to t.rule)
+    }
+
+    @Test
+    fun r7ConcernWithNoEarlierSignalIsOtherOpen() {
+        val t = at(todo("open", origin = null).withKind("concern"))
+        assertEquals(TriageSection.Other to TriageRule.Rest, t.section to t.rule)
+    }
+
+    @Test
+    fun closedConcernIsJustFinishedForADayThenDone() {
+        val fresh = at(todo("fresh", doneAt = hoursAgo(3)).withKind("concern"))
+        assertEquals(TriageSection.JustDone to TriageRule.Closed, fresh.section to fresh.rule)
+        val old = at(todo("old", doneAt = hoursAgo(30), updated = 30).withKind("concern"))
+        assertEquals(TriageSection.Done to TriageRule.Closed, old.section to old.rule)
+    }
+
+    @Test
+    fun unknownTodoKindKeepsTheOrdinaryRules() {
+        val t = at(todo("unknown", updated = 100, agents = listOf(agent("old"))).withKind("future-kind"))
+        assertEquals(TriageSection.Shelved to TriageRule.Stale, t.section to t.rule)
+    }
+
+    @Test
+    fun rowsOpenConcernAndRelatedOpenTaskStaySeparate() {
+        val list = listOf(
+            todo("concern", title = "Morning answer", planId = "p1").withKind("concern"),
+            todo("task", title = "Morning work", planId = "p1"),
+        )
+        val r = triageTodos(list, groupLookup, now, zone = zone)
+        assertEquals(2, r.rows(TriageSection.Other).size)
+        assertEquals(listOf("concern", "task"), r.rows(TriageSection.Other).map { it.lead.id }.sorted())
+        assertTrue(r.rows(TriageSection.Other).all { it.members.size == 1 })
+    }
+
+    @Test
+    fun rowsTwoRelatedOpenConcernsStaySeparate() {
+        val list = listOf(
+            todo("concern-a", title = "Same concern", planId = "p1").withKind("concern"),
+            todo("concern-b", title = "Same concern", planId = "p1").withKind("concern"),
+        )
+        val r = triageTodos(list, groupLookup, now, zone = zone)
+        assertEquals(2, r.rows(TriageSection.Other).size)
+        assertTrue(r.rows(TriageSection.Other).all { it.members.size == 1 })
+    }
+
+    @Test
+    fun rowsClosedConcernGroupsAsToday() {
+        val list = listOf(
+            todo("concern", title = "Morning answer", doneAt = hoursAgo(2), planId = "p1").withKind("concern"),
+            todo("task", title = "Morning work", doneAt = hoursAgo(3), planId = "p1"),
+        )
+        val r = triageTodos(list, groupLookup, now, zone = zone)
+        assertEquals(listOf(listOf("concern", "task")), r.rows(TriageSection.JustDone).map { g -> g.members.map(Todo::id) })
+    }
 
     @Test
     fun anAgentAskingIsWaitingWhateverElseHolds() {
