@@ -60,6 +60,13 @@ background's change count is left as it is (a request neither spends nor resets 
 cooldown are cleared by a successful request, and a failed request records nothing. Requests for one session
 share one model call. Persona's own conversations are refused.
 
+The assistant-only `agent_autoname` tool is a narrow second entry to that same request, for an explicitly requested
+name in a Persona conversation. It accepts only an exact machine and full session id, never a URL, credential or
+arbitrary request. The usual assistant-source check applies, so a task Agent cannot call it. Every invocation asks
+for phone confirmation before the model call, including when the title was hand-written; declining or leaving the
+card unanswered changes nothing. The result is the same title or coded refusal in a text JSON object. The assistant
+tool is not a client dependency: iOS and other clients use the HTTP endpoint above (`agent_naming_tool.go`).
+
 Cost controls: list events coalesce into one worker, dispatching at most one candidate per 30-second pass.
 Queue-local one-shot wakes drain existing matches even without another list event, then stop; they do not
 install a timer on any node. A successful check that keeps the name advances its interval baseline without

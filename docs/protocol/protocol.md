@@ -183,6 +183,14 @@ Claude custom-title records remain protected even outside the quick metadata tai
 reliable title provenance remain ineligible. Settings and the naming ledger belong to the manager; see
 `docs/assistant/agent-work.md` ("Automatic session names (#4812)").
 
+The assistant-only `agent_autoname` MCP tool is a separate, narrow caller of the same manager operation, for a
+Persona conversation acting on the user's explicit request. It takes exactly `{"machine":"<machine id or name>",
+"session_id":"<full session id>"}` and rejects other fields, prefixes, ordinary coding-Agent callers and Persona's
+own conversations. A phone permission card confirms the write on every invocation; declining or not answering makes
+no model call and changes no title. The text result is a JSON object with the same success fields, or
+`{"ok":false,"code":"<the applicable code above>","retryable":true|false,"error":"<localized sentence>"}`. It has
+no URL, header or token parameters and grants no standing permission. iOS uses the HTTP endpoint, not this tool.
+
 ### Health check and feature flags
 
 `GET /api/v1/health` needs no authentication. Public sources get only:
