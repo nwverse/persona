@@ -10,8 +10,8 @@ import (
 )
 
 // Tests the package's own tests do not cover for A-8 (a direct chat's fallback-new messages joining the conversation's
-// latest event): the model branch is untouched, an event being handled keeps its words, ordinary fallback appends in a
-// group still keep the tier, a fallback name the hub never offered is refused, and the rule floor takes the highest
+// latest event): the model branch is untouched, an event being handled keeps its words, an ordinary group fallback append can raise
+// but never lower the tier, a fallback name the hub never offered is refused, and the rule floor takes the highest
 // rewritten entry and the fallback-new default when an entry carries no tier.
 
 // Only a fallback plan is rewritten: an event the model opens in a direct chat stays its own event.
