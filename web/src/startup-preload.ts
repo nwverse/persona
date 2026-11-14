@@ -299,7 +299,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // import of its dialog. Reading the conversation, the Markdown and the dialog's words are a chunk of their own
 // (views/chat/ExportDialog.tsx, lib/chat-export.ts). That main measured 17 B over the 480,545 B budget in this
 // environment before the change; the budget moves to what this change measured, 480,639 B.
-export const FIRST_SCREEN_BUDGET = 480_639;
+// #7459: Web Push adds 90 B to ja, measured in one environment against main at 85cfde464d (ja 480,639 B to 480,729 B;
+// en 476,941 B to 477,031 B, zh-Hans 477,922 B to 478,012 B): the client_hello's device_id (lib/device-id.ts, moved out of
+// lib/notify.ts), the switch that says Web Push is on here (lib/web-push-flag.ts) and the two imports of lib/web-push.ts,
+// which is a chunk of its own with Settings' group.
+export const FIRST_SCREEN_BUDGET = 480_729;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
