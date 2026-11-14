@@ -8399,6 +8399,76 @@
         }
       }
     },
+    "%lld machines have an issue" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machine has an issue"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machines have an issue"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンに異常があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器异常"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "%lld machines offline" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machine offline"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld machines offline"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台がオフライン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器离线"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld machines running high" : {
       "localizations" : {
         "en" : {
@@ -127926,6 +127996,41 @@
       },
       "extractionState" : "manual"
     },
+    "Running on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Running on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Running on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで実行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %1$lld 台机器上运行"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Running the tests: 128 of 160 pass so far. [Layout sample]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -141719,6 +141824,41 @@
       },
       "extractionState" : "manual"
     },
+    "Starting on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Starting on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Starting on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで起動中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在 %1$lld 台机器上启动"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Starting tasks [Agent Follow-Up]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -143508,6 +143648,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "停在「%1$@」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Stopped on %lld machines" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stopped on %1$lld machine"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Stopped on %1$lld machines"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld台のマシンで停止中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 台机器已停止"
           }
         }
       },
