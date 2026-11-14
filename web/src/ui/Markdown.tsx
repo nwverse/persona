@@ -463,7 +463,8 @@ function CodeBlock({ children, lang = "" }: { children: React.ReactNode; lang?: 
 // own 24px, not the 44px touch pad: it sits on a cell, and that pad would take the tap meant for a corner link.
 // It never covers header words (audit item 77): the last header cell keeps room for it (styles.css), and it sits on a
 // cap the header row's height and color, so a wide table's header words scrolled under it fade out at the edge
-// instead of running under the button. The cap shows with the button.
+// instead of running under the button. The cap shows with the button: on hover and on keyboard focus, not on any focus
+// (a button keeps the focus after a click, and the cap would stay over the header with the button taking no clicks).
 // The first placement is the ResizeObserver's first report (after layout, before paint), not a read in the effect: that
 // read laid out every table's exchange when a long chat opened, the ones skipped off screen too (#2905). A table in a
 // skipped exchange is placed when the exchange is drawn; the button only shows on hover, so it is there before it is seen.
@@ -501,7 +502,7 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
       <span
         ref={capRef}
         data-table-copy
-        className="pointer-events-none absolute top-0 right-0 flex h-9 w-9 items-center justify-end rounded-tr-card bg-linear-to-r from-transparent to-inset to-40% pr-1.5 opacity-0 transition-opacity duration-150 group-hover/table:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+        className="pointer-events-none absolute top-0 right-0 flex h-9 w-9 items-center justify-end rounded-tr-card bg-linear-to-r from-transparent to-inset to-40% pr-1.5 opacity-0 transition-opacity duration-150 group-hover/table:opacity-100 has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
       >
         <button
           type="button"

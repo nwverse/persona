@@ -75,15 +75,19 @@ describe("the pill's states", () => {
   });
 
   it("narrow, a name drops its bracketed qualifier instead of being cut; the tooltip keeps it all (audit item 50)", () => {
-    expect(pillShortName("Opus 5.5 (1M context)")).toBe("Opus 5.5");
     expect(pillShortName("Default (recommended)")).toBe("Default");
-    expect(pillShortName("Sonnet 4.5 [1m]")).toBe("Sonnet 4.5");
+    expect(pillShortName("GPT-5 (beta)")).toBe("GPT-5");
     expect(pillShortName("Opus 5.5")).toBe("Opus 5.5");
     expect(pillShortName("(beta)")).toBe("(beta)");
+    // a context size names another model: it stays, short, so the 1M model never reads as the standard one
+    expect(pillShortName("Opus 5.5 (1M context)")).toBe("Opus 5.5 1M");
+    expect(pillShortName("Sonnet 4.5 [1m]")).toBe("Sonnet 4.5 1M");
+    expect(pillShortName("Sonnet 4.5（200k 上下文）")).toBe("Sonnet 4.5 200K");
+    expect(pillShortName("Sonnet 4.5 [1m]")).not.toBe(pillShortName("Sonnet 4.5"));
     const html = markup(<ModelPill current={{ ...opus, model: "Opus 5.5 (1M context)" }} onOpen={() => {}} />);
     const full = /<span title="Opus 5.5 \(1M context\)" class="([^"]*)">Opus 5.5 \(1M context\)<\/span>/.exec(html)![1];
     expect(full).toContain("@max-[600px]/composer:hidden");
-    const short = /<span title="Opus 5.5 \(1M context\)" data-pill-short="true" class="([^"]*)">Opus 5.5<\/span>/.exec(html)![1];
+    const short = /<span title="Opus 5.5 \(1M context\)" data-pill-short="true" class="([^"]*)">Opus 5.5 1M<\/span>/.exec(html)![1];
     expect(short).toMatch(/(^| )hidden( |$)/);
     expect(short).toContain("@max-[600px]/composer:block");
     expect(short).toContain("@max-[420px]/composer:hidden");

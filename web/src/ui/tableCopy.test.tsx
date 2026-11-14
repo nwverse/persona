@@ -91,11 +91,13 @@ describe("Markdown table copy button", () => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const button = doc.querySelector("button");
     expect(button?.getAttribute("aria-label")).toBe("拷贝表格");
-    // it shows with the cap it sits on (audit item 77): on hover, and while the button has the keyboard's focus
+    // it shows with the cap it sits on (audit item 77): on hover, and while the button has the keyboard's focus, not
+    // after a click (a clicked button keeps the focus, and the cap would stay over the header taking no clicks)
     const cap = button?.closest("[data-table-copy]");
     expect(cap?.className).toContain("opacity-0");
     expect(cap?.className).toContain("group-hover/table:opacity-100");
-    expect(cap?.className).toContain("focus-within:opacity-100");
+    expect(cap?.className).toContain("has-[:focus-visible]:opacity-100");
+    expect(cap?.className).not.toContain("focus-within");
     expect(button?.className).toContain("focus-visible:pointer-events-auto");
     expect(doc.querySelector("table button")).toBeNull();
   });

@@ -2,7 +2,8 @@
 // docs/web/web.md "Model pill and model panel", docs/design/DESIGN_SYSTEM.md 3.1): at the right of the composer's bottom
 // row, before voice / Stop / Send, `[provider][model][engine][effort][Fast][⌄]`. It opens the unified model panel above
 // it (ui/model-panel/ModelPanel.tsx), and so does `/model` Enter in the composer. The composer card is a container: under
-// 600 px the pill takes the width its words need (the name at most 108 px, without a bracketed qualifier) and gives way
+// 600 px the pill takes the width its words need (the name at most 108 px, a bracketed qualifier left out but for a
+// context size, `pillShortName`) and gives way
 // only when the row is short, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
 // provider's tile and the chevron (64 px). An agent that can switch neither its model nor its effort gets the same
 // words as a label, not a button. A Persona chat (and the new-chat page) has `AssistantModelPill` (#5033): the same pill
@@ -40,10 +41,16 @@ export function pillEffort(id: string): string {
 // the composer card's widths (Composer.tsx `@container/composer`): narrow < 600, dense < 520, ultra < 420
 const ULTRA_HIDDEN = "@max-[420px]/composer:hidden";
 
-/** The name where the pill is narrow: without a trailing qualifier in brackets ("Sonnet 4.5 (1M context)" →
- *  "Sonnet 4.5", "Default (recommended)" → "Default"); the tooltip and the accessible name keep the whole name. */
+/** The name where the pill is narrow: a trailing qualifier in brackets left out ("Default (recommended)" → "Default",
+ *  "GPT-5 (beta)" → "GPT-5"), except a context size, which names another model and stays as a short mark, as the chat's
+ *  model names have it ("Opus 5.5 (1M context)" and "Opus 5.5 [1m]" → "Opus 5.5 1M"). The tooltip and the accessible
+ *  name keep the whole name. */
 export function pillShortName(name: string): string {
-  return name.replace(/\s*[(（[][^()（）[\]]*[)）\]]\s*$/u, "").trim() || name;
+  const m = /^(.*?)\s*[(（[]([^()（）[\]]*)[)）\]]\s*$/u.exec(name);
+  const base = m?.[1].trim();
+  if (!m || !base) return name;
+  const size = /^(\d+(?:\.\d+)?)\s*([km])(?:\s*(?:context|ctx|tokens?|上下文|コンテキスト))?$/iu.exec(m[2].trim());
+  return size ? `${base} ${size[1]}${size[2].toUpperCase()}` : base;
 }
 
 export function ModelPill({
@@ -106,7 +113,8 @@ export function ModelPill({
       {/* the name gives way first (a far larger shrink than the effort's): narrow, the effort truncates only once the
           name has no room left */}
       <span title={name} className={cx("min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:max-w-[108px]", short !== name && "@max-[600px]/composer:hidden", ULTRA_HIDDEN)}>{name}</span>
-      {/* narrow, a name without its bracketed qualifier (the tooltip keeps all of it): the 108 px would cut it there */}
+      {/* narrow, the name without its bracketed qualifier, a context size kept short (the tooltip keeps all of it): the
+          108 px would cut it there */}
       {short !== name && (
         <span title={name} data-pill-short className={cx("hidden min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:block @max-[600px]/composer:max-w-[108px]", ULTRA_HIDDEN)}>{short}</span>
       )}
