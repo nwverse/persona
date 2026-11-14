@@ -276,7 +276,7 @@ class Watcher:
             body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
                     "Some failed checks were independently reproduced on clean main and are not attributed to this PR. They are not claimed as passing tests:\n\n```text\n%s\n```\n\n"
                     "Checks that actually passed:\n%s") % (
-                pr["headRefOid"][:9], bounded(base_failures.get("reason", "Base-owned failures") if isinstance(base_failures, dict) else base_failures, 4000),
+                pr["headRefOid"][:9], bounded(json.dumps(base_failures, ensure_ascii=False) if isinstance(base_failures, dict) else str(base_failures), 6000),
                 "\n".join("- `%s`" % r["name"] for r in results if r.get("ok")) or "- No additional successful lanes")
         else:
             body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"

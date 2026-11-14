@@ -310,6 +310,9 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if pr.get("isCrossRepository"):
         existing = gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number"]) or []
         if existing:
+            latest = pr_snapshot(repo, existing[0]["number"])
+            if latest["headRefOid"] != head:
+                raise WatchError("continuation PR has an older or different head; repair it in a fresh branch")
             return existing[0]["number"]
         if run(["git", "ls-remote", "--exit-code", "origin", "refs/heads/" + branch], cwd=worktree, timeout=60).returncode != 0:
             checked(["git", "push", "origin", "HEAD:refs/heads/" + branch], cwd=worktree, timeout=180)
