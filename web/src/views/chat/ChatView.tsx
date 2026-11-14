@@ -1611,7 +1611,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
   const failureNote = Boolean(session && !assistant && showsFailureNote(session, { retried }));
   // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model; the
-  // main conversation's setup gate would only open its missing step, as it does for the refused-send card's Send again
+  // main conversation's setup gate would only open its missing step, as it does for every send while it holds (`deliver`)
   const canRetry =
     lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE && !gate.blocked;
   // The model error the chat stopped on (cindy's ErrorBanner, #5313): its last line, over the composer with Retry and ✕,
@@ -1820,6 +1820,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       {!embedded && <Header
         session={session}
         title={title}
+        direction={directionName !== undefined && !isMain && !notFound}
         machineName={machineName}
         assistant={assistant}
         main={isMain}
@@ -2292,6 +2293,7 @@ export const Header = memo(function Header({
   actions,
   team,
   panel: chrome,
+  direction = false,
 }: {
   session?: Session;
   title: string;
@@ -2299,6 +2301,9 @@ export const Header = memo(function Header({
   assistant?: boolean;
   /** The assistant's main conversation: no "Rename". */
   main?: boolean;
+  /** A leader conversation, its title its direction's name: no in-place rename of that title (it would rename the
+   *  conversation's own title, which the header does not show); ⋯ Rename does that, as the sidebar row's does. */
+  direction?: boolean;
   siblings: Session[];
   onToggleSidebar?: () => void;
   onInterrupt: () => void;
@@ -2496,7 +2501,7 @@ export const Header = memo(function Header({
           <TitleEditor session={session} title={title} onDone={() => setEditing(false)} />
         ) : (
           <h1
-            onDoubleClick={canRename && !chrome?.title ? () => setEditing(true) : undefined}
+            onDoubleClick={canRename && !chrome?.title && !direction ? () => setEditing(true) : undefined}
             title={chrome?.title ? [chrome.title, chrome.sub].filter(Boolean).join(" · ") : title}
             data-chat-title
             className="min-w-0 cursor-default truncate text-[14px] font-medium text-ink select-none"
