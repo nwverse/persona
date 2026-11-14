@@ -25,8 +25,9 @@ nonisolated final class RFBWebSocket: RFBTransport, @unchecked Sendable {
     /// Another of the hub's binary relays the same way: the live screen's video channel (`…/screen/video/connect`, #3954).
     /// - Parameter protocols: WebSocket subprotocols to offer (the live screen's session, #6398); `subprotocol` says
     ///   which the hub selected once the socket is open.
-    init(api: APIClient, path: String, pair: String?, protocols: [String] = []) {
-        var req = URLRequest(url: Self.url(api.url(path), pair: pair))
+    /// - Parameter attach: rejoin the live screen session of `pair` (#6398) instead of opening a new stream.
+    init(api: APIClient, path: String, pair: String?, protocols: [String] = [], attach: Bool = false) {
+        var req = URLRequest(url: Self.url(api.url(path), pair: pair, attach: attach))
         if !protocols.isEmpty { req.setValue(protocols.joined(separator: ", "), forHTTPHeaderField: "Sec-WebSocket-Protocol") }
         api.config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
@@ -38,11 +39,12 @@ nonisolated final class RFBWebSocket: RFBTransport, @unchecked Sendable {
     }
 
     /// The WebSocket URL for the hub's `http(s)` one, with `pair` when there is one.
-    static func url(_ http: URL, pair: String?) -> URL {
+    static func url(_ http: URL, pair: String?, attach: Bool = false) -> URL {
         var comps = URLComponents(url: http, resolvingAgainstBaseURL: false)!
         comps.scheme = comps.scheme == "https" ? "wss" : "ws"
         if let pair, !pair.isEmpty {
             comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "pair", value: pair)]
+                + (attach ? [URLQueryItem(name: "attach", value: "1")] : [])
         }
         return comps.url!
     }
@@ -385,9 +387,20 @@ nonisolated final class RFBClient: @unchecked Sendable {
         let generator = try await reader.bytes(2)
         let length = try await reader.u16()
         let prime = try await reader.bytes(length), serverKey = try await reader.bytes(length)
-        let c = try await sign()
-        let r = try RFBAuth.ard(generator: generator, prime: prime, serverKey: serverKey, account: c.account, password: c.password)
-        try await transport.send(r.sealed + r.publicKey)
+        // The key exchange needs no account or password: worked out while the form waits for them, so Connect sends at
+        // once (#7809: a 4096-bit prime took a Debug build 48 s after Connect).
+        let exchange = Task.detached(priority: .userInitiated) {
+            try RFBAuth.exchange(generator: generator, prime: prime, serverKey: serverKey)
+        }
+        let c: Credentials
+        do {
+            c = try await sign()
+        } catch {
+            exchange.cancel()
+            throw error
+        }
+        let k = try await exchange.value
+        try await transport.send(try RFBAuth.seal(account: c.account, password: c.password, key: k.key) + k.publicKey)
     }
 
     private func veNCrypt() async throws {

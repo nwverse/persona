@@ -44,18 +44,52 @@ import kotlinx.serialization.json.contentOrNull
 /** What an extension is called and says in the settings. */
 internal object ExtensionText {
     /** Running or idle until something needs it (stopped) is all one to the user: it is on. */
-    fun state(res: Resources, p: HubExtension): String = when (p.status) {
-        "running", "stopped" -> res.getString(R.string.settings_ext_state_on)
-        "starting" -> res.getString(R.string.settings_ext_state_starting)
-        "needs_setup" -> res.getString(R.string.settings_ext_state_needs_setup)
-        "disabled" -> res.getString(R.string.settings_ext_state_off)
-        "incompatible" -> res.getString(R.string.settings_ext_state_incompatible)
-        "error" -> res.getString(R.string.settings_ext_state_error)
-        else -> res.getString(R.string.settings_ext_state_unknown)
+    fun state(res: Resources, p: HubExtension): String =
+        nodeStatusNote(res, p) ?: when (p.status) {
+            "running", "stopped" -> res.getString(R.string.settings_ext_state_on)
+            "starting" -> res.getString(R.string.settings_ext_state_starting)
+            "needs_setup" -> res.getString(R.string.settings_ext_state_needs_setup)
+            "disabled" -> res.getString(R.string.settings_ext_state_off)
+            "incompatible" -> res.getString(R.string.settings_ext_state_incompatible)
+            "error" -> res.getString(R.string.settings_ext_state_error)
+            else -> res.getString(R.string.settings_ext_state_unknown)
+        }
+
+    /**
+     * One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
+     * with the abnormal or offline count when there is one. Null without a node summary, so the hub-process wording stands.
+     * The hub ships node_status only while the aggregate drives status, so each headline count is non-zero.
+     */
+    fun nodeStatusNote(res: Resources, p: HubExtension): String? {
+        val s = p.nodeStatus ?: return null
+        if (s.total == 0) return null
+        fun q(plural: Int, count: Int) = res.getQuantityString(plural, count, count)
+        fun offline() = if (s.offline > 0) " · " + q(R.plurals.settings_ext_node_offline, s.offline) else ""
+        return when (p.status) {
+            "running" -> buildList {
+                add(q(R.plurals.settings_ext_node_running, s.running))
+                if (s.abnormal > 0) add(q(R.plurals.settings_ext_node_abnormal, s.abnormal))
+                if (s.offline > 0) add(q(R.plurals.settings_ext_node_offline, s.offline))
+            }.joinToString(" · ")
+            "error" -> buildList {
+                add(q(R.plurals.settings_ext_node_abnormal, s.abnormal))
+                if (s.offline > 0) add(q(R.plurals.settings_ext_node_offline, s.offline))
+            }.joinToString(" · ")
+            "starting" -> q(R.plurals.settings_ext_node_starting, s.starting) + offline()
+            "stopped" ->
+                // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+                if (s.stopped == 0 && s.offline > 0) {
+                    q(R.plurals.settings_ext_node_offline, s.offline)
+                } else {
+                    q(R.plurals.settings_ext_node_stopped, s.stopped) + offline()
+                }
+            else -> null
+        }
     }
 
     /** Whether an enabled extension's program runs right now (the detail page's small print); null for any other state. */
     fun runNote(res: Resources, p: HubExtension): String? = when {
+        p.nodeStatus != null -> null // the node status line already says where it runs
         p.kind == "extension_pack" -> res.getString(R.string.settings_ext_run_pack)
         p.status == "running" -> res.getString(R.string.settings_ext_run_running)
         p.status == "stopped" -> res.getString(R.string.settings_ext_run_idle)
@@ -420,12 +454,23 @@ internal class ExtensionListModel(private val api: ExtensionManagement, private 
     private val mutable = MutableStateFlow(ExtensionListState())
     val state = mutable.asStateFlow()
 
+    /** Identity distinguishes every push, even when it repeats the same auth. */
+    private class AuthPush(val auth: ExtensionAuth)
+    private val authPushes = MutableStateFlow<Map<Pair<String, String>, AuthPush>>(emptyMap())
+
     suspend fun load() {
         if (state.value.loading) return
+        val authAtStart = authPushes.value
         mutable.update { it.copy(loading = true) }
         try {
             val listing = api.listing()
-            mutable.update { it.copy(extensions = listing.extensions, markets = listing.markets, error = null) }
+            mutable.update {
+                val pushes = authPushes.value
+                it.copy(extensions = listing.extensions.map { extension ->
+                    val key = extension.id to ExtensionOwners.of(extension.manager)
+                    pushes[key]?.takeIf { push -> push !== authAtStart[key] }?.let { push -> extension.copy(auth = push.auth) } ?: extension
+                }, markets = listing.markets, error = null)
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { mutable.update { it.copy(error = res.getString(R.string.settings_ext_load_failed, failureReasonText(error).resolve(res))) } }
         finally { mutable.update { it.copy(loading = false) } }
@@ -433,6 +478,7 @@ internal class ExtensionListModel(private val api: ExtensionManagement, private 
 
     /** Follows the hub's `extension_auth` pushes while the list is open: each changes its own manager's copy (#1834). */
     suspend fun watchAuth() = api.authUpdates.collect { event ->
+        authPushes.update { it + ((event.extension to pushManager(event.manager)) to AuthPush(event.auth)) }
         mutable.update { s ->
             s.copy(extensions = s.extensions?.map {
                 if (it.id == event.extension && ExtensionOwners.of(it.manager) == pushManager(event.manager)) it.copy(auth = event.auth) else it
