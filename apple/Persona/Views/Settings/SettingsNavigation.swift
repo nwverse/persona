@@ -6,7 +6,7 @@ extension SettingsPage {
         case .models, .agents, .assistant, .claude, .codex, .modelConfiguration, .triage, .standingAuthorizations, .agentFollowUp,
              .connectors, .plugins, .channels,
              .mail, .feishuBot, .sent, .skills,
-             .knowledgeSelection, .pluginMarket, .marketExtension, .pluginMarkets, .inboxSources, .sourcesGraph, .computers:
+             .knowledgeSelection, .pluginMarket, .marketExtension, .pluginMarkets, .inboxSources, .inboxFolders, .sourcesGraph, .computers:
             true
         case .connector(_, let manager), .plugin(_, let manager), .pluginPage(_, _, _, let manager), .channel(_, let manager),
              .subscriptions(_, let manager), .feishu(let manager):
@@ -107,6 +107,8 @@ enum SettingsCatalog {
         #endif
         #if os(iOS)
         rows += [
+            .init(id: "inbox-folders", title: String(localized: "Inbox Folders"), symbol: Theme.Icon.inboxFolder, group: .assistant,
+                  page: .inboxFolders, aliases: String(localized: "settings.search.inbox_folders")),
             .init(id: "knowledgeSelection", title: String(localized: "Knowledge Selection"), symbol: Theme.Icon.knowledge, group: .assistant, page: .knowledgeSelection,
                   aliases: String(localized: "settings.search.knowledge")),
             .init(id: "meetings", title: String(localized: "Meetings"), symbol: Theme.Icon.meeting, group: .assistant, page: .meetings,

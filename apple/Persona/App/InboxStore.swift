@@ -123,6 +123,8 @@ final class InboxStore {
     /// read again for the one shown now, as when the list first came.
     func scopeChanged() {
         historyEpoch += 1
+        folderEpoch += 1
+        loadFolderSettings()
         history = []
         historyMore = true
         historyNext = nil
@@ -202,9 +204,55 @@ final class InboxStore {
         }
     }
 
+    // MARK: Folders (#2463)
+
+    /// The current assistant's folder settings (docs/assistant/inbox.md "Folders"), kept on disk so the list paints with
+    /// its folders at once; nil until read, and from a hub without folders. Folders show only while automatic filing is
+    /// on: off, the Inbox is as it was before folders.
+    private(set) var folderSettings: InboxFolderSettings? = StateCache.load(InboxStore.folderStateName, as: InboxFolderSettings.self)
+    private static let folderStateName = "inbox-folders"
+    /// Moves when another assistant becomes current or Demo Mode starts or ends: a read of the one before doesn't land.
+    @ObservationIgnored private var folderEpoch = 0
+    /// The settings were read of the hub this run: the first list of a run reads them too (a page may never show).
+    @ObservationIgnored private var folderRead = false
+    @ObservationIgnored private var folderLoading = false
+
+    /// Whether the Inbox shows its folder bar, the rows' folders and Move to Folder….
+    var foldersShown: Bool { folderSettings?.enabled == true }
+
+    /// Whom the folder settings are read of and written to: the current assistant, as Done's history.
+    var folderOwner: APIClient? { historyOwner?.api }
+
+    /// Reads the folder settings (the Inbox page shows, the list is pulled). A hub without them (404 / 405) has folders
+    /// off; offline, what was read before stays.
+    func loadFolderSettings() {
+        guard let api = folderOwner else { return }
+        let epoch = folderEpoch
+        folderLoading = true
+        Task {
+            defer { folderLoading = false }
+            do {
+                let s = try await api.inboxFolders().settings
+                if epoch == folderEpoch { folderRead = true; folderSettingsRead(s) }
+            } catch let e as APIError where e.status == 404 || e.status == 405 {
+                if epoch == folderEpoch { folderRead = true; folderSettingsRead(nil) }
+            } catch {}
+        }
+    }
+
+    /// The settings as the hub answered them (a read, or Settings › Inbox Folders saving them).
+    func folderSettingsRead(_ settings: InboxFolderSettings?) {
+        guard settings != folderSettings else { return }
+        folderSettings = settings
+        StateCache.save(Self.folderStateName, settings)
+    }
+
     /// Entering or leaving Demo Mode: the other side's items must not show for a moment.
     func forget() {
         historyEpoch += 1
+        folderEpoch += 1
+        folderRead = false
+        folderSettingsRead(nil)
         cursor = nil
         items = []
         history = []
@@ -228,6 +276,7 @@ final class InboxStore {
 
     /// Pulls the list (bursts of `inbox` events collapse into one request).
     func reload() {
+        if !folderRead && !folderLoading { loadFolderSettings() }
         guard reloading == nil else { return }
         reloading = Task {
             defer { reloading = nil }
