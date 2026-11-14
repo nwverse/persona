@@ -54,11 +54,10 @@ jobs:
           cache-dependency-path: server/go.sum
       - name: Desktop checks
         run: scripts/ci/desktop.sh
-      - name: Build web for the desktop smoke hub
-        run: npm --prefix web ci && npm --prefix web run build
+      - name: Install the web app the smoke serves
+        run: npm --prefix web ci
       - name: macOS Electron smoke
         env:
-          MOCK_WEB: web/dist
           PERSONA_DESKTOP_SMOKE: desktop/release/smoke
         run: npm --prefix desktop run build && node desktop/scripts/smoke-with-hub.mjs
       - name: Build universal macOS packages
@@ -108,13 +107,12 @@ jobs:
       - name: Desktop checks
         shell: bash
         run: scripts/ci/desktop.sh
-      - name: Build web for the desktop smoke hub
+      - name: Install the web app the smoke serves
         shell: bash
-        run: npm --prefix web ci && npm --prefix web run build
+        run: npm --prefix web ci
       - name: Windows Electron smoke
         shell: bash
         env:
-          MOCK_WEB: web/dist
           PERSONA_DESKTOP_SMOKE: desktop/release/smoke
         run: npm --prefix desktop run build && node desktop/scripts/smoke-with-hub.mjs
       - name: Build Windows NSIS
