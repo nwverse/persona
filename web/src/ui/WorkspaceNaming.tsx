@@ -9,30 +9,31 @@ import { settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Loading } from "./atoms";
 import { useRepositoryRequestContext } from "./TaskRepositoryBindingsEditor";
 
-/** Controlled editor: clearing a field is invalid; Use inherited explicitly removes an override. */
-export function WorkspaceRulesEditor({ value, inherited, disabled, diagnostics = [], onChange }: {
-  value: WorkspaceRules; inherited: WorkspaceRules; disabled?: boolean; diagnostics?: NamingDiagnostic[]; onChange: (value: WorkspaceRules) => void;
+/** An empty field removes its override; placeholders describe the current fallback without materializing it. */
+export function WorkspaceRulesEditor({ value, inherited, defaultSource = "system", disabled, diagnostics = [], onChange }: {
+  value: WorkspaceRules; inherited: WorkspaceRules; defaultSource?: "system" | "assistant";
+  disabled?: boolean; diagnostics?: NamingDiagnostic[]; onChange: (value: WorkspaceRules) => void;
 }) {
   const id = useId();
-  return <div className="space-y-2">
+  return <div className="space-y-3">
     {RULE_FIELDS.map((field) => {
       const error = diagnostics.find((d) => d.field === field && d.severity === "error");
-      return <div key={field} className="grid min-w-0 grid-cols-1 items-center gap-x-3 gap-y-1 sm:grid-cols-3">
-        <label htmlFor={`${id}-${field}`} className="text-label text-ink">{t(`workspace-naming.${field}`)}</label>
-        <input id={`${id}-${field}`} className={`${settingsInputClass} min-w-0 font-mono text-label pointer-coarse:min-h-11`} spellCheck={false} disabled={disabled}
-          value={value[field] ?? inherited[field] ?? ""} onChange={(e) => onChange({ ...value, [field]: e.target.value })}
-          aria-invalid={value[field] === "" || !!error} aria-describedby={`${id}-${field}-status${error ? ` ${id}-${field}-error` : ""}`} />
-        <div className="flex min-w-0 items-center justify-between gap-2 sm:justify-end">
-          <span id={`${id}-${field}-status`} className="text-meta text-ink-3">{t(value[field] === undefined ? "workspace-naming.inherited" : "workspace-naming.overridden")}</span>
-          <Button tone="quiet" size="sm" disabled={disabled || value[field] === undefined} onClick={() => { const next = { ...value }; delete next[field]; onChange(next); }}>{t("workspace-naming.inherit")}<span className="sr-only"> {t(`workspace-naming.${field}`)}</span></Button>
+      const placeholder = t(`workspace-naming.default_${defaultSource}`, { value: inherited[field] ?? "" });
+      return <div key={field} className="grid min-w-0 grid-cols-1 items-baseline gap-2 sm:grid-cols-3">
+        <label htmlFor={`${id}-${field}`} className="text-label font-medium text-ink">{t(`workspace-naming.${field}`)}</label>
+        <div className="min-w-0 space-y-1 sm:col-span-2">
+          <input id={`${id}-${field}`} className={`${settingsInputClass} min-w-0 font-mono pointer-coarse:min-h-11`} spellCheck={false} disabled={disabled}
+            value={value[field] ?? ""} placeholder={placeholder} onChange={(e) => {
+              const next = { ...value };
+              if (e.target.value === "") delete next[field]; else next[field] = e.target.value;
+              onChange(next);
+            }} aria-invalid={!!error} aria-describedby={`${id}-${field}-help ${id}-${field}-default${error ? ` ${id}-${field}-error` : ""}`} />
+          <span id={`${id}-${field}-default`} className="sr-only">{placeholder}</span>
+          <p id={`${id}-${field}-help`} className="break-words text-label leading-relaxed text-ink-3">{t(`workspace-naming.help_${field}`)}</p>
+          {error && <p id={`${id}-${field}-error`} role="alert" className="break-words text-label text-red">{t(`workspace-naming.${error.code}`, { field: t(`workspace-naming.${field}`) })}</p>}
         </div>
-        {error && <p id={`${id}-${field}-error`} role="alert" className="break-words text-meta text-red col-span-full">{t(`workspace-naming.${error.code}`, { field: t(`workspace-naming.${field}`) })}</p>}
       </div>;
     })}
-    <details className="text-meta text-ink-3">
-      <summary className="cursor-pointer py-2 pointer-coarse:min-h-11">{t("workspace-naming.template_help")}</summary>
-      <dl className="space-y-2 pb-2">{RULE_FIELDS.map((field) => <div key={field}><dt className="font-medium text-ink-2">{t(`workspace-naming.${field}`)}</dt><dd className="break-words">{t(`workspace-naming.help_${field}`)}</dd></div>)}</dl>
-    </details>
   </div>;
 }
 
@@ -136,11 +137,10 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
       {busy && !loaded && <Loading />}
       {loaded && !supported && <p className="text-label text-ink-2">{t("workspace-naming.unsupported")}</p>}
       {loaded && supported && <>
-        <WorkspaceRulesEditor value={draft} inherited={inherited} disabled={busy} diagnostics={result?.diagnostics} onChange={(value) => { invalidate(); setDraft(value); }} />
-        <div className="flex flex-wrap items-center gap-2">
-          <Button tone="primary" busy={busy} disabled={sameRules(draft, saved) || RULE_FIELDS.some((field) => draft[field] === "")} onClick={() => void save()}>{t("common.save")}</Button>
-          <Button tone="quiet" disabled={busy} onClick={() => { invalidate(); setDraft({}); }}>{t("workspace-naming.reset")}</Button>
+        <WorkspaceRulesEditor value={draft} inherited={inherited} defaultSource={todoId ? "assistant" : "system"} disabled={busy} diagnostics={result?.diagnostics} onChange={(value) => { invalidate(); setDraft(value); }} />
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           {!sameRules(draft, saved) && <span className="text-meta text-ink-3">{t("workspace-naming.unsaved")}</span>}
+          <Button tone="primary" busy={busy} disabled={sameRules(draft, saved)} onClick={() => void save()}>{t("common.save")}</Button>
         </div>
         <details className="min-w-0 border-t border-line text-label text-ink-2">
           <summary className="min-h-11 cursor-pointer py-3">{t("workspace-naming.preview_options")}</summary>

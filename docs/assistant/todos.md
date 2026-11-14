@@ -938,8 +938,12 @@ People configuring coding tasks can open **Workspace naming** inside Assistant
 settings’ **Starting tasks** group after choosing **New workspaces**.
 The entry waits for the matching assistant’s confirmed preference; other, missing
 or unknown preferences hide it without deleting saved rules. A to-do’s details
-keep an independent naming entry. Template help and preview options open only on
-request, and the editor uses compact desktop rows that stack on narrow screens.
+keep an independent naming entry. Template help appears beneath each field by
+default; preview options open on request. Labels and fields form compact desktop
+rows and stack on narrow screens. Unset inputs are blank, with localized
+placeholders showing the system default (Assistant settings) or the effective
+Assistant default (task overrides). Clearing and saving removes that override;
+there are no inheritance status labels or reset buttons.
 It applies only to explicitly selected backend preparation. It does not change Engine creation, legacy `new`, `existing`
 or `none`, existing preferences, task progress or cleanup.
 
@@ -947,7 +951,9 @@ The fields are `base_directory` (default `{home}/workspace`),
 `task_directory_template` (`task-{task-id}`), and `branch_template`
 (`persona/{task-id}`). Each field inherits task override → Assistant → product
 default. Omitted patch fields preserve saved values; `null` removes an override;
-empty strings are invalid. Assistant writes still require the explicit manager.
+empty strings are invalid on the wire. The Web editor converts a cleared field
+to a null patch and uses the same fallback in preview and after reload. Assistant
+writes still require the explicit manager.
 Task overrides have their own CAS revision, independent of legacy Todo edits.
 
 Folder templates support `{task-id}`, `{task-slug}`, `{yyyy}` and `{mmdd}`.

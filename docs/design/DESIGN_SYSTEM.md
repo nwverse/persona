@@ -1506,11 +1506,14 @@ Starting tasks group, directly after the workspace preference. It appears only
 for a confirmed matching assistant with `prefer-new`; missing or unknown values
 keep it hidden. Hiding never clears saved rules. Todo details retain their own
 independent advanced entry. Both reuse `Button` and the standard settings input.
-The editor aligns fields in compact rows on desktop and stacks them on phones;
-template guidance and preview options open separately on request. It
-serves people configuring coding tasks; ordinary tasks need no new fields.
-Three labeled template fields show inherited values, with explicit **Use
-inherited**, **Save** and **Restore inheritance** controls. Preview uses the
+The editor pairs each label with a wide input and small, always-visible template
+guidance; labels stack above inputs on phones. It serves people configuring
+coding tasks; ordinary tasks need no new fields. Unset fields stay empty and
+show their system default in a placeholder; Todo overrides show the effective
+Assistant default instead. Clearing a field and saving removes that override
+using the existing null patch, without saving a fallback as a custom value.
+There are no inheritance status labels or reset buttons. Preview options remain
+folded until requested. Preview uses the
 selected computer and layout, labels examples, wraps full paths and explains
 that availability and source commits are checked later. A failed save retains
 its draft; reloading updates the saved baseline without replacing local edits.

@@ -7,10 +7,6 @@
   "help_base_directory": "{home} は選んだコンピュータのホームフォルダです。絶対パスも使用できます。",
   "help_task_directory_template": "フィールド：{task-id}、{task-slug}、{yyyy}、{mmdd}。相対サブフォルダを使用できます。",
   "help_branch_template": "{repo}、{base-branch}、{branch} も使用できます。ブランチのフィールドには開始ブランチの指定が必要です。",
-  "inherit": "継承値を使う",
-  "inherited": "継承中",
-  "overridden": "上書き",
-  "reset": "継承に戻す",
   "unsaved": "未保存の変更",
   "computer": "プレビューするコンピュータ",
   "choose_computer": "コンピュータを選択",
@@ -27,7 +23,7 @@
   "preview_failed": "このコンピュータでプレビューできませんでした。接続とバージョンを確認して再試行してください。",
   "unsupported": "バックエンドの命名設定にはサーバーの更新が必要です。",
   "template_invalid": "{field} の構文を確認してください。",
-  "field_empty": "{field} を入力するか、継承値を使用してください。",
+  "field_empty": "{field} に有効な値を入力するか、空欄で既定値を使用してください。",
   "field_not_allowed": "{field} で使えないフィールドがあります。",
   "field_unavailable": "{field} に必要な値がありません。開始ブランチを指定するか、テンプレートを変更してください。",
   "unknown_field": "{field} に不明なフィールドがあります。",
@@ -49,6 +45,7 @@
   "fragment_normalized": "開始ブランチ名を安全な1つの要素に変換しました。",
   "node_unavailable": "コンピュータがオフラインか、命名プレビューに未対応です。接続とバージョンを確認してください。",
   "check_fields": "表示されたフィールドを確認して再試行してください。下書きは保持されています。",
-  "template_help": "テンプレートの説明",
-  "preview_options": "プレビュー設定"
+  "preview_options": "プレビュー設定",
+  "default_system": "システムの既定値: {value}",
+  "default_assistant": "アシスタントの既定値: {value}"
 }

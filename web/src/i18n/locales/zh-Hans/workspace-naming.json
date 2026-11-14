@@ -7,10 +7,6 @@
   "help_base_directory": "使用 {home} 表示所选电脑的主目录，也可填写绝对路径。",
   "help_task_directory_template": "可用字段：{task-id}、{task-slug}、{yyyy}、{mmdd}。支持相对子目录。",
   "help_branch_template": "还支持 {repo}、{base-branch} 和 {branch}。分支字段需要显式指定起始分支。",
-  "inherit": "使用继承值",
-  "inherited": "已继承",
-  "overridden": "覆盖值",
-  "reset": "恢复继承",
   "unsaved": "有未保存更改",
   "computer": "预览电脑",
   "choose_computer": "选择电脑",
@@ -27,7 +23,7 @@
   "preview_failed": "无法在这台电脑上预览命名。请检查连接和版本后重试。",
   "unsupported": "请更新服务端以设置后端工作区命名。",
   "template_invalid": "请检查{field}的语法。",
-  "field_empty": "请填写{field}，或使用继承值。",
+  "field_empty": "请填写有效的{field}，或留空使用默认值。",
   "field_not_allowed": "{field}中使用了不适用的模板字段。",
   "field_unavailable": "{field}缺少所需值。请显式指定起始分支或更改模板。",
   "unknown_field": "{field}含有未知模板字段。",
@@ -49,6 +45,7 @@
   "fragment_normalized": "起始分支名称在生成命名时已规范化为一个安全片段。",
   "node_unavailable": "所选电脑离线或不支持命名预览，请检查连接和版本。",
   "check_fields": "请检查标出的字段后重试，草稿已保留。",
-  "template_help": "模板说明",
-  "preview_options": "预览选项"
+  "preview_options": "预览选项",
+  "default_system": "系统默认：{value}",
+  "default_assistant": "助手默认：{value}"
 }

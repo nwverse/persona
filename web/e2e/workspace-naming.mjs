@@ -20,6 +20,9 @@ try {
       await context.addInitScript(({ scheme }) => { localStorage.setItem("persona.token", "synthetic-naming-token"); localStorage.setItem("persona.theme", scheme); localStorage.setItem("persona.language", "en"); }, { scheme });
       await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
       const page = await context.newPage(); activePage = page; page.on("pageerror", (error) => errors.push(error.message));
+      const fixtureHeaders = { "X-Persona-Manager": "assistant", Authorization: "Bearer synthetic-naming-token" };
+      const cleared = await context.request.put(origin + "/api/v1/assistant", { headers: fixtureHeaders, data: { task_workspace_preference: "prefer-existing", workspace_rules: { base_directory: null, task_directory_template: null, branch_template: null } } });
+      assert(cleared.ok(), "reset only this isolated fixture's naming rules");
       await page.goto(origin + "/settings?tab=persona");
       const preference = page.getByLabel("When dispatching tasks, prefer", { exact: true });
       await preference.selectOption("prefer-new");
@@ -34,10 +37,14 @@ try {
       await trigger.focus(); await page.keyboard.press("Enter");
       const task = group.getByLabel("Task folder template", { exact: true });
       await task.waitFor();
+      assert.equal(await task.inputValue(), "", "unset default is an empty input");
+      assert.equal(await task.getAttribute("placeholder"), "System default: task-{task-id}");
+      assert(await group.getByText("Fields: {task-id}, {task-slug}, {yyyy}, {mmdd}. Relative subfolders are allowed.", { exact: true }).isVisible(), "help is visible without disclosure");
+      assert.equal(await group.getByRole("button", { name: /inherited|inheritance/i }).count(), 0, "no reset controls");
       await dispatch.screenshot({ path: join(shots, `expanded-${scheme}-${width}.png`) });
       await task.fill("{yyyy}{mmdd}/task-{task-id}-{task-slug}");
-      if (await group.getByRole("button", { name: "Save", exact: true }).isEnabled()) await group.getByRole("button", { name: "Save", exact: true }).click();
-      await page.waitForFunction(() => [...document.querySelectorAll('[data-settings-group="workspace-naming"] button')].some((b) => b.textContent.trim() === "Save" && b.disabled));
+      await group.getByRole("button", { name: "Save", exact: true }).click();
+      await page.waitForFunction(() => !document.body.textContent.includes("Unsaved changes") && [...document.querySelectorAll('[data-settings-group="workspace-naming"] button')].some((b) => b.textContent.trim() === "Save" && b.disabled && b.getAttribute("aria-busy") !== "true"));
       await page.reload();
       await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
       await task.waitFor(); assert.equal(await task.inputValue(), "{yyyy}{mmdd}/task-{task-id}-{task-slug}", "settings persisted through reload");
@@ -52,6 +59,19 @@ try {
       await group.scrollIntoViewIfNeeded();
       assert(await group.evaluate((el) => el.scrollWidth <= el.clientWidth), "no horizontal overflow");
       await group.screenshot({ type: "jpeg", quality: 80, path: join(shots, `settings-${scheme}-${width}.jpg`) });
+      await task.fill("");
+      await group.getByRole("button", { name: "Preview naming", exact: true }).click();
+      await group.locator("[data-naming-root]").waitFor();
+      assert.equal(await group.locator("[data-naming-root]").innerText(), "/home/example/workspace/task-todo_example", "blank draft previews the system fallback");
+      await group.getByRole("button", { name: "Save", exact: true }).click();
+      await page.waitForFunction(() => !document.body.textContent.includes("Unsaved changes"));
+      await page.reload(); await group.getByRole("button", { name: "Workspace naming", exact: true }).click();
+      await task.waitFor(); assert.equal(await task.inputValue(), "", "cleared override reloads as blank");
+      assert.equal(await task.getAttribute("placeholder"), "System default: task-{task-id}");
+      await task.fill("{yyyy}{mmdd}/task-{task-id}-{task-slug}");
+      await group.getByRole("button", { name: "Save", exact: true }).click();
+      await page.waitForFunction(() => !document.body.textContent.includes("Unsaved changes"));
+      await group.getByText("Preview options", { exact: true }).click();
       await task.fill("../unsafe");
       await group.getByRole("button", { name: "Preview naming", exact: true }).click();
       await group.getByRole("alert").first().waitFor();
@@ -74,10 +94,13 @@ try {
       await page.goto(origin + "/todos?id=" + encodeURIComponent(todo.id));
       await page.getByRole("button", { name: "Workspace naming", exact: true }).click();
       const field = page.getByLabel("Task branch template", { exact: true }); await field.waitFor();
+      const taskFolder = page.getByLabel("Task folder template", { exact: true });
+      assert.equal(await taskFolder.inputValue(), "", "task fallback stays empty");
+      assert.equal(await taskFolder.getAttribute("placeholder"), "Assistant default: {yyyy}{mmdd}/task-{task-id}-{task-slug}");
       await field.fill("custom/{task-id}/{repo}");
       // Scope to the advanced editor so unrelated Todo buttons cannot save instead.
       const editor = page.getByRole("button", { name: "Workspace naming", exact: true }).locator("..");
-      if (await editor.getByRole("button", { name: "Save", exact: true }).isEnabled()) await editor.getByRole("button", { name: "Save", exact: true }).click();
+      await editor.getByRole("button", { name: "Save", exact: true }).click();
       await page.waitForFunction(() => [...document.querySelectorAll("input")].some((el) => el.value === "custom/{task-id}/{repo}" && !document.body.textContent.includes("Unsaved changes")));
       await page.reload(); await page.getByRole("button", { name: "Workspace naming", exact: true }).click();
       await field.waitFor(); assert.equal(await field.inputValue(), "custom/{task-id}/{repo}", "task override persisted");
@@ -85,6 +108,16 @@ try {
       await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
       await editor.locator("[data-naming-root]").waitFor();
       assert.equal(await editor.locator("[aria-live] dl").count(), 2, "both repository names previewed");
+      await field.fill("");
+      await editor.getByRole("button", { name: "Save", exact: true }).click();
+      await page.waitForFunction(() => !document.body.textContent.includes("Unsaved changes"));
+      await page.reload(); await page.getByRole("button", { name: "Workspace naming", exact: true }).click();
+      await field.waitFor(); assert.equal(await field.inputValue(), "", "cleared task override reloads blank");
+      assert.equal(await field.getAttribute("placeholder"), "Assistant default: persona/{task-id}");
+      await editor.getByText("Preview options", { exact: true }).click();
+      await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
+      await editor.locator("[data-naming-root]").waitFor();
+      for (const branch of await editor.locator("[aria-live] dl dd:last-child").allTextContents()) assert.equal(branch, `persona/${todo.id}`, "cleared task branch previews assistant fallback");
       if (width === 390) await page.evaluate(() => document.documentElement.style.setProperty("--text-scale", "2"));
       assert(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth), "task editor fits at enlarged text");
       if (width === 390) {
@@ -94,7 +127,7 @@ try {
         await page.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-preview.jpg`) });
       } else await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}.jpg`) });
       await context.close();
-      console.log(`PASS workspace naming ${scheme} ${width}px: real settings/override reload, root/container preview, invalid draft, overflow`);
+      console.log(`PASS workspace naming ${scheme} ${width}px: real settings/override reload, blank defaults, clear-save fallback, task fallback, root/container preview, invalid draft, overflow`);
     }
   }
   assert.deepEqual(errors, [], "no browser page errors");
