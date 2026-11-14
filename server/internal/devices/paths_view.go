@@ -70,9 +70,9 @@ var (
 	pingMissLimit = 2
 )
 
-// pingAnswered counts a ping sent on peer: one that ran out of time without an answer is a miss, anything else (an
-// answer, an error the node answered with) clears the count; a connection already gone (closed, offline) is the run
-// loop's to replace and counts neither way. pingMissLimit misses in a row on the same connection close it.
+// pingAnswered counts a ping sent on peer: one written that ran out of time without an answer is a miss, anything
+// else (an answer, an error the node answered with) clears the count; a connection already gone (closed, offline), a
+// ping that could not be written in time, and one during a resident node's handover count neither way. pingMissLimit misses in a row on the same connection close it.
 func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	if peer == nil {
 		return
@@ -80,7 +80,9 @@ func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	var re *rpc.Error
 	gone := errors.Is(err, rpc.ErrClosed) || errors.Is(err, rpc.ErrSuspended) || errors.Is(err, errOffline) || errors.Is(err, context.Canceled)
 	missed := errors.Is(err, context.DeadlineExceeded) || errors.As(err, &re) && re.Code == "" && re.Message == context.DeadlineExceeded.Error()
-	if gone && !missed {
+	// Not a sign of a dead link: a ping that never got on the wire (a long write ahead of it on a slow but working
+	// link), or one made while a resident node hands over to its next process (calls wait for the new connection).
+	if gone && !missed || errors.Is(err, rpc.ErrNotWritten) || m.expectedReload() {
 		return
 	}
 	m.mu.Lock()

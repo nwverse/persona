@@ -2,7 +2,9 @@ package devices
 
 import (
 	"context"
+	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +66,14 @@ func TestPingMissesCountInARowOnOneConnection(t *testing.T) {
 	m.pingAnswered(peer, &rpc.Error{Code: "busy", Message: "busy"})
 	m.pingAnswered(peer, context.DeadlineExceeded)
 	m.pingAnswered(peer, rpc.ErrDropped) // gone: neither a miss nor an answer
+	m.pingAnswered(peer, notWritten(t))  // never on the wire (a long write ahead): neither
+	m.mu.Lock()
+	m.reloadUntil = time.Now().Add(time.Minute) // a resident node handing over: calls wait for the new connection
+	m.mu.Unlock()
+	m.pingAnswered(peer, context.DeadlineExceeded)
+	m.mu.Lock()
+	m.reloadUntil = time.Time{}
+	m.mu.Unlock()
 	if !open() {
 		t.Fatal("closed although no two misses were in a row")
 	}
@@ -88,4 +98,33 @@ func TestPingMissesCountInARowOnOneConnection(t *testing.T) {
 		t.Fatal("closed a connection the machine no longer uses")
 	default:
 	}
+}
+
+// notWritten is what a ping that waited for the writer and gave up answers.
+func notWritten(t *testing.T) error {
+	t.Helper()
+	w := &stuckWriter{in: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(w.release) })
+	p := rpc.New("h", w)
+	go func() { _ = p.Call(context.Background(), "file.upload", nil, nil) }()
+	<-w.in // the upload holds the writer, its write stuck
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := p.Call(ctx, "ping", nil, nil)
+	if !errors.Is(err, rpc.ErrNotWritten) {
+		t.Fatalf("ping behind a stuck write: %v", err)
+	}
+	return err
+}
+
+// stuckWriter's first write says so on in and blocks until release.
+type stuckWriter struct {
+	in, release chan struct{}
+	once        sync.Once
+}
+
+func (w *stuckWriter) Write(b []byte) (int, error) {
+	w.once.Do(func() { close(w.in) })
+	<-w.release
+	return len(b), nil
 }
