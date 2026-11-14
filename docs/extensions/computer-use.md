@@ -42,15 +42,15 @@ Turning off the extension or a machine removes the tools and entry points; Cua D
 
 When LCU's runtime actually touches an App (and a website origin when Chrome is open), it asks the client through MCP `elicitation/create`: allow once, allow for this session, always allow, deny; high-risk actions carry its own warning, and websites offer allow or deny. Official adapters hand these to Claude, Codex and Pi's own interfaces.
 
-Persona doesn't register those adapters. The node handles this elicitation itself as the MCP client, and the hub's `computer.elicit` turns it into the **existing** phone and web approval cards (the same `permission` cards used by Ask Before First Operating an App and Confirm on Phone Before Acting; `question` when there are more options):
+Persona doesn't register those adapters. The node handles this elicitation itself as the MCP client, and the hub's `computer.elicit` turns it into the **existing** phone and web approval cards (the same `permission` cards used by Ask Before First Operating an App and Confirm on Phone Before Acting; `question` when there are more options). For an MCP call that opted into wait updates, the existing `computer.call` and `computer.elicit` requests carry only the node's opaque UUID `call_id`, and only when the target node advertises `mcp_wait_v1`. The manager keeps the live call's originating machine and wait state, so the nested card joins that same reporter even when the tool operates another computer; no machine-routing field crosses either request. An unknown or malformed id gets no reporter. An older target receives no id: the manager reports `unknown` (`Still waiting`) for that delegated RPC, then restores the previous state rather than implying that the target can correlate its approval:
 
 | Runtime request | Card |
 | --- | --- |
 | Allow once only, or also one of "this session" / "always" | Permission card: Allow / Always Allow (text specifies this session or permanently) / Deny |
-| Both "this session" and "always" | Question card: Allow once, allow for this session, always allow, deny. A permission card only has one Always Allow and can't represent two durations |
+| Both "this session" and "always" | Question card: Allow once, allow for this session, always allow, deny. A permission card only has one Always Allow and can't represent two durations; the wait kind is still `approval` |
 | Website origin, form without fields | Permission card: Allow / Deny. Doesn't invent "always allow" when the runtime didn't offer it |
 | Open a URL | Permission card includes the URL, allow or deny |
-| One enum field | Question card, with the enum values plus deny |
+| One enum field | Question card, with the enum values plus deny; the wait kind is `answer` |
 | Simple fields to fill in | Permission card input fields (phone can fill them; the web card can't, so missing required values never count as approval) |
 | Unknown structure | Still a card; even tapping Allow returns cancellation, never pretends consent |
 
