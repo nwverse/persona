@@ -334,7 +334,8 @@ async function hubChangeScenario() {
     await until("second hub login item is still available", () => page(`window.personaDesktop.getLaunchAtLogin().then(state => typeof state.enabled === 'boolean')`));
     await page("window.personaDesktop.setLaunchAtLogin(false)");
     const presence = await page("window.personaDesktop.desktopPresence()");
-    if (!presence.active) throw new Error(`the second hub's bridge has stale presence: ${JSON.stringify(presence)}`);
+    const windowState = { visible: win.isVisible(), focused: win.isFocused(), enabled: win.isEnabled(), loading: win.webContents.isLoading(), url: win.webContents.getURL() };
+    if (!presence.active) throw new Error(`the second hub's bridge has stale presence: ${JSON.stringify({presence, permission, loginItemState, windowState})}`);
     app.emit("second-instance", {}, [`persona://pair?url=${encodeURIComponent(otherHub.href)}&token=${encodeURIComponent(otherToken)}`]);
     await until("second hub signed in", signedIn);
     if (!win.webContents.session.storagePath) throw new Error("the replacement window has no persisted origin-isolated session");
