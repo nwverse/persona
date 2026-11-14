@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -110,34 +111,97 @@ func TestListsMissingTheCacheTogetherAskTheSourceOnce(t *testing.T) {
 	}
 }
 
-// The caller whose ask the others joined goes away: they ask again themselves, not answer with its cancellation.
-func TestAJoinedListAsksAgainWhenItsAskerGoesAway(t *testing.T) {
-	g := newGatedSource("grokbot")
-	s := NewService(&memKV{m: map[string][]byte{}}, nil, nil, g)
-	first, cancel := context.WithCancel(context.Background())
-	firstErr := make(chan error, 1)
-	go func() { _, err := s.Sessions(first, "grokbot", ""); firstErr <- err }()
-	waitStarted(t, g)
+// expiringCtx is a context whose deadline passes when the test says so, so a deadline is not a race with the joins.
+type expiringCtx struct {
+	context.Context
+	done chan struct{}
+}
 
-	type result struct {
-		list []Session
-		err  error
+func newExpiringCtx() *expiringCtx {
+	return &expiringCtx{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *expiringCtx) Done() <-chan struct{} { return c.done }
+func (c *expiringCtx) expire()               { close(c.done) }
+func (c *expiringCtx) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
 	}
-	second := make(chan result, 1)
-	go func() { l, err := s.Sessions(context.Background(), "grokbot", ""); second <- result{l, err} }()
+}
+
+// The caller whose ask the others joined goes away, cancelled or past its deadline: they ask again themselves, not
+// answer with its cancellation or timeout.
+func TestAJoinedListAsksAgainWhenItsAskerGoesAway(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		asker func() (context.Context, func())
+	}{
+		{"cancelled", func() (context.Context, func()) { return context.WithCancel(context.Background()) }},
+		{"deadline", func() (context.Context, func()) { c := newExpiringCtx(); return c, c.expire }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGatedSource("grokbot")
+			s := NewService(&memKV{m: map[string][]byte{}}, nil, nil, g)
+			first, end := tc.asker()
+			firstErr := make(chan error, 1)
+			go func() { _, err := s.Sessions(first, "grokbot", ""); firstErr <- err }()
+			waitStarted(t, g)
+
+			type result struct {
+				list []Session
+				err  error
+			}
+			second := make(chan result, 1)
+			go func() { l, err := s.Sessions(context.Background(), "grokbot", ""); second <- result{l, err} }()
+			waitWaiters(t, s, "grokbot", 1)
+			end()
+			if err := <-firstErr; err == nil {
+				t.Fatal("the caller that went away got an answer")
+			}
+			waitStarted(t, g) // the one left asks again
+			close(g.release)
+			r := <-second
+			if r.err != nil || len(r.list) != 1 {
+				t.Fatalf("the caller left waiting: %v %v", r.list, r.err)
+			}
+			if n := g.calls.Load(); n != 2 {
+				t.Fatalf("asked %d times, want 2", n)
+			}
+		})
+	}
+}
+
+// timingOutSource fails its ask with its own timeout once released, while the asker is still there.
+type timingOutSource struct{ *gatedSource }
+
+func (g timingOutSource) Sessions(ctx context.Context) ([]Session, error) {
+	if _, err := g.gatedSource.Sessions(ctx); err != nil {
+		return nil, err
+	}
+	return nil, context.DeadlineExceeded
+}
+
+// The source itself times out while its asker is still there: that failure is shared, not asked again by each waiter.
+func TestAJoinedListSharesTheSourcesOwnTimeout(t *testing.T) {
+	g := timingOutSource{newGatedSource("grokbot")}
+	s := NewService(&memKV{m: map[string][]byte{}}, nil, nil, g)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { _, err := s.Sessions(context.Background(), "grokbot", ""); errs <- err }()
+	}
+	waitStarted(t, g.gatedSource)
 	waitWaiters(t, s, "grokbot", 1)
-	cancel()
-	if err := <-firstErr; err == nil {
-		t.Fatal("the caller that went away got an answer")
-	}
-	waitStarted(t, g) // the one left asks again
 	close(g.release)
-	r := <-second
-	if r.err != nil || len(r.list) != 1 {
-		t.Fatalf("the caller left waiting: %v %v", r.list, r.err)
+	for i := 0; i < 2; i++ {
+		if err := <-errs; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("caller %d: %v, want the source's timeout", i, err)
+		}
 	}
-	if n := g.calls.Load(); n != 2 {
-		t.Fatalf("asked %d times, want 2", n)
+	if n := g.calls.Load(); n != 1 {
+		t.Fatalf("asked %d times, want once", n)
 	}
 }
 

@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"errors"
 	"sync"
 )
 
@@ -14,6 +13,9 @@ type listFlight struct {
 	list    []Session
 	err     error
 	waiters int // callers who joined it rather than asking; guarded by listFlights.mu
+	// askerGone is whether the asker's own context had ended (cancelled or past its deadline) when the ask failed:
+	// that failure is the asker's, not the source's, so it is not handed to those waiting.
+	askerGone bool
 }
 
 // listFlights are the asks under way, keyed by source and cache generation: an ask that began before an invalidate
@@ -53,8 +55,9 @@ func (fs *listFlights) land(source string, gen int, f *listFlight) {
 }
 
 // listShared is src's session list from the cache, or from one ask shared with whoever else misses it now. The ask
-// runs under the context of the caller who made it; when that caller went away, those waiting ask again themselves
-// rather than answer with someone else's cancellation.
+// runs under the context of the caller who made it; when that caller went away (cancelled, or its deadline passed),
+// those waiting ask again themselves rather than answer with someone else's cancellation or timeout. A failure of the
+// source itself, its own timeout included, is shared: asking again would only fail again.
 func (s *Service) listShared(ctx context.Context, src Source) ([]Session, error) {
 	name := src.Name()
 	for {
@@ -65,6 +68,7 @@ func (s *Service) listShared(ctx context.Context, src Source) ([]Session, error)
 		f, lead := s.flights.join(name, gen)
 		if lead {
 			f.list, f.err = s.listNow(ctx, src, gen)
+			f.askerGone = f.err != nil && ctx.Err() != nil
 			s.flights.land(name, gen, f)
 			return f.list, f.err
 		}
@@ -73,7 +77,7 @@ func (s *Service) listShared(ctx context.Context, src Source) ([]Session, error)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		if errors.Is(f.err, context.Canceled) && ctx.Err() == nil {
+		if f.askerGone && ctx.Err() == nil {
 			continue // the one asking went away, not the source
 		}
 		return f.list, f.err
