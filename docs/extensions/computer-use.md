@@ -118,11 +118,29 @@ The assistant's two tools (descriptions in `server/internal/prompts/mcp/computer
   - With the **same** session name, tokens work across calls: read the Clear token once, click it in the next `call`, and Calculator resets.
   - Named sessions expire after 5 minutes idle.
   - So line numbers from `computer_state` can be used in later `computer_run` calls.
+- **A session that ended (#7590)**: once Cua Driver ends a session, it refuses every later call under that label
+  ("session has ended; … Call start_session …") until `start_session` starts it again. It ends one after 5 minutes idle,
+  and when the user presses Stop on the bar it shows on the Mac's screen ("You're in control / Return to agent / Stop").
+  The error is the same for both, `get_session` on it is refused too, and Cua Driver keeps no reason (0.38.0, measured).
+  The manager tells them apart by its own record of the label (`extmgr/computer_session.go`, in memory):
+  | Found ended | Taken for | What happens |
+  | --- | --- | --- |
+  | Used under 5 minutes ago | The user's Stop (it cannot have idled out) | Nothing runs. The model is told the user stopped it on that Mac, not to call again in this turn, and to ask the user with a sentence in their language (`hub-computer.session_stopped`). Retries keep getting that answer |
+  | After that, the owner spoke in the conversation (a message, or an answer to its question; the assistant's `ownerHeard`) | Their go-ahead | `start_session` under the same label, then the call once more |
+  | Used 5 minutes ago or more, or never used by a manager that has run that long | Idled out | `start_session`, then the call once more, silently |
+  | Never used, by a manager that started under 5 minutes ago and has not heard the owner since | Cannot tell | Treated as the user's Stop |
+  - The manager's own label (`persona-apps`, its look at the apps and windows for the protected-app checks) and the
+    node's (`persona-gate`, `cua_gate.go`) only read: no cursor, no bar, nothing for the user to stop. They always start
+    again (the node does its own), or every check would fail as unreadable and every run would be refused.
+  - What it can miss: a Stop after the label's last use, when the manager restarted in between and its next call
+    comes 5 minutes or more after that restart with no word from the owner since. That call is taken for an
+    idled-out session.
+  - The node takes `start_session` only for the call's own label and with no other arguments.
 - **Why not keep a `cua-driver mcp` child resident on the node**: a session name already preserves tokens. One `call` per invocation is stateless: node restarts, hub redeployments and two concurrent chats don't affect it. It costs one extra process per call (tens of milliseconds), negligible next to Cua Driver operations (about 0.3 seconds per click, 1.3 seconds to find a window).
 
 **Arguments and tools**:
 - Arguments go to `cua-driver call` through stdin: no length limit, and absent from process listings.
-- The node accepts only 7 tools: `get_desktop_state`, `get_accessibility_tree`, `get_window_state`, `list_apps`, `list_windows`, `run_script`, `run_steps`. Cua Driver settings, updates, extensions and clipboard don't go through this path.
+- The node accepts only 8 tools: `get_desktop_state`, `get_accessibility_tree`, `get_window_state`, `list_apps`, `list_windows`, `run_script`, `run_steps`, and `start_session` for the call's own label (a session that ended, above). Cua Driver settings, updates, extensions and clipboard don't go through this path.
 
 **If the daemon isn't running**: the node first runs `open -g -b com.trycua.driver`, opening CuaDriver.app in the background through LaunchServices with no window. Measured: starts within 1 second, retaining permissions, then the call proceeds.
 
@@ -634,7 +652,11 @@ behind `webVideo.plays` in `web/src/screen/video.ts`).
   Mac hasn't allowed video yet (`permission` missing, so no stream is opened).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
-  and decode are all known (a helper before `timing` gives the phone's numbers only). Over VNC it shows RFB's bitrate
+  and decode are all known (a helper before `timing` gives the phone's numbers only). With quality tiers (#6396) a Tier
+  line shows the Quality choice, the scale and frame rate ("Auto · 1.5× · 60 fps", `ScreenTierText`) and why it last
+  changed in plain words with how long ago (picked for this connection, the connection slowed down or is steady, the
+  network changed, the iPhone is warm or saving power or couldn't keep up, you changed Quality); the resolution is the
+  encoder's after an in-place change (`encoding`), not `hello`'s. Over VNC it shows RFB's bitrate
   and frame rate and, on a line of its own, **Round trip to the hub** (#6558): while the overlay is shown and the app is
   in front, the page pings the app's own connection to that Mac's hub every 2 s (`LiveConnection.roundTrip`, the
   heartbeat's kind of ping) and shows the median of the last 5 from the last 20 s (`HubRoundTrips`). It is the same leg
@@ -860,16 +882,23 @@ Flags used:
   - Any step without an app, a `launch_app` step naming no app, computed app names in a script (`getApp` or `launch`), or a script naming no app makes identification incomplete: ask every time for the whole call, without Always Allow.
     A `getApp` / `launch` occurrence the literal reader cannot parse counts the same way: space or a comment before the call's parentheses (`getApp ("Terminal")`), a computed callee (`cua["getApp"]`, a saved function), or an argument that is not a plain string. The completeness check compares every occurrence of the callee's name with the parsed literal calls, so an unreadable one cannot be missed.
 - **Always ask, never offer Always Allow**: terminals (Terminal, iTerm2, Warp, Ghostty, etc.), System Settings, Keychain Access, password managers (Passwords, 1Password, Bitwarden, etc.), Persona, identified by bundle id or name (Chinese/English).
-- **Never operated** (#4336, `computer_protected.go`): System Settings and the system's permission and authorization prompts (`com.apple.UserNotificationCenter`, `com.apple.SecurityAgent`, `com.apple.LocalAuthentication.UIAgent`, and older systems' Accessibility alert). macOS's privacy permissions are meant to be answered by a person; one Allow on a card that said "operate System Settings" would otherwise let an Agent turn any of them on. Reading them (`computer_state`) is still asked about every time; acting is refused before any card, whatever App approval or Confirm on Phone say:
-  - a `computer_run` that names one (a step's or the call's `app`, a `launch_app`, a literal `cua.getApp` / `cua.launch`), by bundle id or by name in English, Chinese or Japanese, names resolved through Cua `list_apps` first;
-  - a script whose apps can't all be read (they were asked about every time before): it could open one under a computed name. The model is told to name them literally;
-  - on Cua Driver, any `computer_run` while one has a window on the screen (`list_windows`, each window's pid matched to its bundle id through `list_apps`, so System Settings counts in any language; the prompts by their process names): an element token, a pid or a step naming no app could still reach it. When the windows can't be read, nothing is done;
-  - steps naming no app (they act on whatever has the focus) run one `run_steps` call at a time, the screen checked before each, so a prompt that an earlier step brought up stops the rest. The answer lists each step's own answer (`one_by_one`);
+- **Never operated** (#4336, #7560, `computer_protected.go`): System Settings and the system's permission and authorization prompts (`com.apple.UserNotificationCenter`, `com.apple.SecurityAgent`, `com.apple.LocalAuthentication.UIAgent`, and older systems' Accessibility alert). macOS's privacy permissions are meant to be answered by a person; one Allow on a card that said "operate System Settings" would otherwise let an Agent turn any of them on. Reading them (`computer_state`) is still asked about every time. Acting is decided by one check, `protectedapps.Look.Check` (`server/internal/protectedapps/check.go`), before any card and again after one, whatever App approval or Confirm on Phone say. It refuses only what could reach one of them; having System Settings open does not stop other apps:
+  - **Named or aimed at, always**: a `computer_run` that names one (a step's or the call's `app`, a `launch_app`, a literal `cua.getApp` / `cua.launch`), by bundle id or by name in English, Chinese or Japanese (names resolved through Cua `list_apps` first), or aims at one's pid, window id or window title.
+  - **A prompt on the screen stops everything**: while a permission or password prompt has a window on the screen, every acting call is refused. Prompts are modal and float on top, and #4349 found the Screen Recording prompt takes synthetic clicks.
+  - **While System Settings has a window** (each window of `list_windows` matched to its bundle id through `list_apps`, so it counts in any language), a call is refused only when it could reach it:
+    - **element tokens**: a token carries its own pid, so it is traced to its window by reading each of System Settings' windows with `since: <the token's snapshot id>`. `other_window` means another window's token, which goes. Its own token, or one that can't be traced, is refused, minimized windows included. Only System Settings' windows are read, never the one the call is for, because a read replaces a window's current snapshot and would make the caller's tokens stale;
+    - **points** (a click, drag, scroll or pointer move at `x, y`): refused where System Settings' window can be the topmost one, by `z_index`, or by its bounds when the order isn't known. The pixels map back by a screenshot scale the call doesn't carry (up to 2 on a Retina display at full size, below 1 for a capped image). So every place they can land is checked: from the window's origin plus half the point, out along the same line to the window's edge;
+    - **keys**: keys aimed at an app (a pid, a window, an element token, a named app, or a step's inherited window) are judged by that app. Keys with no target are refused only while System Settings is the frontmost app (`list_apps` `active`);
+    - **scripts** don't run while System Settings is on the screen, because what a script will click can't be checked beforehand. Steps can be used instead;
+    - **anything that can't be placed** (a pixel point in no known window, a tool whose target isn't known) is refused. Browser page tools, the clipboard and the agent cursor go.
+  - **Not checked**: windows that can't be read stop the call ("could not be read", nothing done). A script whose apps can't all be read is refused (they were asked about every time before): it could open one under a computed name. The model is told to name them literally.
+  - Steps naming no app (they act on whatever has the focus) run one `run_steps` call at a time, each checked just before it runs, so a prompt that an earlier step brought up stops the rest. The answer lists each step's own answer (`one_by_one`).
   - LCU: a native-app question about one of them is declined without a card (`lcuconfirm.NativeApp`). App-less steps already fail there.
-  The model is told the user does it themselves, on the Mac or through the live screen, and not to retry; the hub log says `refused: protected app <id>` and nothing else of the call.
-  - **The Agents' own Cua Driver** (#4349, `server/internal/node/cua_gate.go`): in the sessions Persona starts on a Mac, a PreToolUse hook on Cua Driver's MCP tools (`mcp__<server>__<tool>`, any server name with "cua" in it) and on Bash commands that run `cua-driver call` applies the same rules on the computer, at once, with no card. The rules and their wording live in `server/internal/protectedapps`, shared with the manager. Reads pass without a look. A call is denied when it names a protected app, aims at one's pid, or acts while one has a window on the screen. A script whose apps can't be read is denied, and so is a `cua-driver call` whose arguments aren't in the command, or one the gate can't follow (a heredoc, a subshell). `cua-driver` counts only where it is the program run (after variable assignments, `env` / `sudo` and the like, or inside `sh -c`), so a `grep` or a commit message that mentions it is no call.
+  Each refusal tells the model which case applies and what can still be done: only the protected app is off limits, for example "System Settings is on top where this would click; act by `element_token`, or ask the user to move it out of the way or close it". When an app is named or aimed at, the model is told the user does that themselves, on the Mac or through the live screen, and not to retry. The hub log says which rule refused it and the app's name, and nothing else of the call.
+  - **The Agents' own Cua Driver** (#4349, `server/internal/node/cua_gate.go`): in the sessions Persona starts on a Mac, a PreToolUse hook on Cua Driver's MCP tools (`mcp__<server>__<tool>`, any server name with "cua" in it) and on Bash commands that run `cua-driver call` applies the same check on the computer, at once, with no card. Reads pass without a look. A script whose apps can't be read is denied, and so is a `cua-driver call` whose arguments aren't in the command, or one the gate can't follow (a heredoc, a subshell). `cua-driver` counts only where it is the program run (after variable assignments, `env` / `sudo` and the like, or inside `sh -c`), so a `grep` or a commit message that mentions it is no call.
   - **Not covered**:
     - what a script does with a window it finds once it is running;
+    - a window that comes up partway through steps that each name their app: those run as one batch, checked before it starts (steps naming no app are checked one by one);
     - the sessions the user starts themselves (Persona's global hooks only report, `docs/integrations/claude-integration.md` "Global report-only hooks");
     - Codex Agents' own MCP tools;
     - any other program a shell can use to drive the screen.
