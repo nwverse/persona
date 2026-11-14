@@ -40,6 +40,11 @@ type agentNameRecord struct {
 	Failures    int       `json:"failures,omitempty"`
 	LastFailure string    `json:"last_failure,omitempty"`
 	NextAttempt time.Time `json:"next_attempt,omitempty"`
+	// DisplayName is a presentation-only override; DisplayFallback is the effective title it hid, retained so an
+	// archived row can restore it after the override is cleared. Neither changes native/automatic naming state.
+	DisplayName     string   `json:"display_name,omitempty"`
+	DisplayFallback string   `json:"display_fallback,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
 }
 
 type agentNamingBook struct {
@@ -490,21 +495,51 @@ func (s *Service) agentNameDialogue(ctx context.Context, machine, id string) (st
 	return first, strings.Join(lines, "\n"), nil
 }
 
-func (s *Service) agentDisplayName(machine string, c proto.Session) string {
-	if c.Assistant || c.TitleManual || c.TitleSource.String() == "manual" {
-		return ""
+type agentPresentation struct {
+	title, displayName, fallback string
+	tags                         []string
+}
+
+func (s *Service) agentPresentation(machine string, c proto.Session) agentPresentation {
+	if c.Assistant {
+		return agentPresentation{}
 	}
 	b := &s.agentNames
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.agentNamesLocked(context.Background()) {
-		return ""
+		return agentPresentation{}
 	}
 	r := b.display[[2]string{machine, c.SessionID}]
-	if !r.Manual && (!knownAgentTitle(c) || !sameAgentNamingTitle(r.RawTitle, c)) {
-		return ""
+	out := agentPresentation{displayName: r.DisplayName, fallback: r.DisplayFallback, tags: append([]string(nil), r.Tags...)}
+	if r.DisplayName != "" {
+		out.title = r.DisplayName
+		return out
 	}
-	return r.Title
+	if c.TitleManual || c.TitleSource.String() == "manual" {
+		return out
+	}
+	if !r.Manual && (!knownAgentTitle(c) || !sameAgentNamingTitle(r.RawTitle, c)) {
+		return out
+	}
+	out.title = r.Title
+	return out
+}
+
+func (s *Service) agentDisplayName(machine string, c proto.Session) string {
+	return s.agentPresentation(machine, c).title
+}
+
+// decorateAgentPresentation applies the current display-only record. Archived-only rows also restore the title a
+// cleared override hid; live rows already have their current automatic/native title from the node.
+func (s *Service) decorateAgentPresentation(machine string, c *proto.Session, archived bool) {
+	p := s.agentPresentation(machine, *c)
+	if p.title != "" {
+		c.Title = p.title
+	} else if archived && p.displayName == "" && p.fallback != "" {
+		c.Title = p.fallback
+	}
+	c.SetPresentation(p.displayName, p.tags)
 }
 
 // Manual intent is recorded before contacting the node. A refused/uncertain rename

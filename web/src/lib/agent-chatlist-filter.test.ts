@@ -91,6 +91,21 @@ describe("session metadata extractors & facet building", () => {
     ]);
   });
 
+  it("builds case-insensitive tag facets and applies OR tags with AND dimensions", () => {
+    const list = [
+      mkSession("s1", { machine_id: "gcp", tags: ["Release", "review"] }),
+      mkSession("s2", { machine_id: "mac", tags: ["review"] }),
+      mkSession("s3", { machine_id: "gcp", tags: ["other"] }),
+    ];
+    const facets = buildAgentFacets(list, machines, baseCtx.pins);
+    expect(facets.tags?.map((tag) => [tag.id, tag.count])).toEqual([["review", 2], ["other", 1], ["release", 1]]);
+    const tagged = applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, tags: ["RELEASE", "other"] }, baseCtx, facets);
+    expect(tagged.sessions.map((s) => s.session_id)).toEqual(["s1", "s3"]);
+    const scoped = applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, tags: ["review"], machines: ["mac"] }, baseCtx, facets);
+    expect(scoped.sessions.map((s) => s.session_id)).toEqual(["s2"]);
+    expect(hasActiveDimensionFilters({ ...DEFAULT_DIMENSION_FILTERS, tags: ["review"] })).toBe(true);
+  });
+
   it("toggles facet values with Orca All/multi-select collapse semantics", () => {
     const all = ["claude", "codex"];
     const step1 = toggleFacetValue([], "claude", all);

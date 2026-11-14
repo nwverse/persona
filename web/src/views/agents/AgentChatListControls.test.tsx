@@ -45,6 +45,7 @@ const sessions: Session[] = [
     model: "claude-opus-5-5",
     updated_at: "2026-11-09T11:30:00Z",
     last_text: "Updated composable filter bar and chat-list rows.",
+    tags: ["release"],
   },
   {
     machine_id: "mac",
@@ -59,6 +60,7 @@ const sessions: Session[] = [
     updated_at: "2026-11-09T11:00:00Z",
     asks: "Should we retry after 5 seconds?",
     turn_error: "Socket closed unexpectedly",
+    tags: ["review"],
   },
 ];
 
@@ -232,6 +234,32 @@ describe("Agents list Filter menu (#4397) on the title row, the search in ⌘K (
     expect(rows()).toEqual(["s2"]);
     await act(async () => host.querySelector<HTMLButtonElement>('[data-chip="query"] button[aria-label]')!.click());
     expect(rows()).toEqual(["s2", "s1"]);
+  });
+
+  it("keeps pinned and computer groups while selecting multiple tags, and hides empty groups", async () => {
+    seed();
+    localStorage.setItem("persona.agentGrouping", "machine");
+    await act(async () => {
+      root.render(<AgentsList route={{ name: "agent-list" }} onNewAgent={() => {}} />);
+    });
+    const row = (title: string) => [...host.querySelectorAll("a")].filter((a) => a.textContent?.includes(title));
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="agent-tag-filter-button"]')!.click();
+    });
+    await chooseRow("review");
+    expect(row("Fix WebSocket Reconnect")).toHaveLength(1);
+    expect(row("Implement Agents Tab Filter Bar")).toHaveLength(0);
+    expect(host.textContent).not.toContain("Cloud Dev");
+    expect(host.textContent).toContain(t("sidebar.pinned_section"));
+
+    await chooseRow("release");
+    expect(getAgentListFilters().tags).toEqual(["review", "release"]);
+    expect(row("Fix WebSocket Reconnect")).toHaveLength(1);
+    expect(row("Implement Agents Tab Filter Bar")).toHaveLength(1);
+    expect(host.textContent).toContain("Cloud Dev");
+    expect(host.textContent).toContain(t("sidebar.pinned_section"));
+    expect(host.querySelector('[data-chip="tags:review"]')).not.toBeNull();
+    expect(host.querySelector('[data-chip="tags:release"]')).not.toBeNull();
   });
 
   it("opens the block folded under its title when ⌘K puts words on the list", async () => {

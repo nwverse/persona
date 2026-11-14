@@ -132,7 +132,7 @@ func TestPersonalAgentHideRoutes(t *testing.T) {
 func TestPersonalAgentRejectsRuntimeOnlyFilters(t *testing.T) {
 	_, hd, _ := agentsHub(t)
 	for _, query := range []string{"pane_source=terminal", "pane_source=unknown&counts=1", "pane_source=desktop&summary=1", "pane_source=", "pane_source=terminal&pane_source=feishu",
-		"todo=todo_a", "todo=none&counts=1", "todo=none&with_counts=1", "exclude_pane_source=feishu"} { // to-dos and origins are the runtime list's (#6662)
+		"todo=todo_a", "todo=none&counts=1", "todo=none&with_counts=1", "exclude_pane_source=feishu", "tag=review", "tag=review&counts=1"} { // to-dos, origins and presentation tags are the runtime list's (#6662, #7527)
 		code, body := do(t, hd, "GET", "/api/v1/agents/sessions?"+query, "")
 		if code != 400 || body["code"] != "invalid_query" {
 			t.Fatalf("%s: %d %v", query, code, body)

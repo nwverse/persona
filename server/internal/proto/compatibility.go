@@ -18,12 +18,17 @@ type sessionJSON Session
 type sessionWire struct {
 	*sessionJSON
 	*SessionHierarchy
+	*SessionPresentation
 	LegacyStarted bool `json:"started_by_jarvis"`
 }
 
 // wireOf is s as sent (sessionWire).
 func wireOf(s *sessionJSON) *sessionWire {
-	return &sessionWire{sessionJSON: s, SessionHierarchy: s.Hierarchy, LegacyStarted: s.StartedByPersona}
+	var presentation *SessionPresentation
+	if s.Hierarchy != nil {
+		presentation = s.Hierarchy.Presentation
+	}
+	return &sessionWire{sessionJSON: s, SessionHierarchy: s.Hierarchy, SessionPresentation: presentation, LegacyStarted: s.StartedByPersona}
 }
 
 // legacyStartedMember is sessionWire's legacy key as appendSession (session_wire.go) writes it: the literal stays in
@@ -82,6 +87,7 @@ func writesRawAsIs(o jsonv2.Options) bool {
 type sessionWireIn struct {
 	*sessionJSON
 	*SessionHierarchy
+	*SessionPresentation
 	LegacyStarted  startedKey `json:"started_by_jarvis"`
 	CurrentStarted startedKey `json:"started_by_persona"`
 }
@@ -116,12 +122,20 @@ func (s *Session) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	if s.Hierarchy != nil {
 		h := s.hierarchy() // decoded into a copy: the one s holds is shared with its other copies
 		in.SessionHierarchy = &h
+		in.SessionPresentation = h.Presentation
 	}
 	if err := jsonv2.UnmarshalDecode(dec, &in, json.DefaultOptionsV1()); err != nil {
 		*s = was
 		return err
 	}
-	if s.Hierarchy = in.SessionHierarchy; s.Hierarchy != nil && s.Hierarchy.empty() {
+	s.Hierarchy = in.SessionHierarchy
+	if in.SessionPresentation != nil {
+		if s.Hierarchy == nil {
+			s.Hierarchy = &SessionHierarchy{}
+		}
+		s.Hierarchy.Presentation = in.SessionPresentation
+	}
+	if s.Hierarchy != nil && s.Hierarchy.empty() {
 		s.Hierarchy = nil
 	}
 	key := in.LegacyStarted

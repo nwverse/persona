@@ -117,6 +117,25 @@ class PagedSessionsMockTests(unittest.TestCase):
         self.assertEqual((status, body["code"]), (409, "revision_expired"))
         self.assertLessEqual(len(hub.LIST_JOURNAL), hub.LIST_JOURNAL_SIZE)
 
+    def test_presentation_tags_filter_pages_counts_and_search(self):
+        sessions = hub.SESSIONS
+        saved = [dict(s) for s in sessions]
+        self.addCleanup(lambda: sessions.__setitem__(slice(None), saved))
+        self.addCleanup(hub.PRESENTATION.clear)
+        first = sessions[0]
+        hub.PRESENTATION[hub.LIST_TUPLE(first)] = {"default_title": first["title"], "display_name": "Named task", "tags": ["Review", "release"]}
+        row = hub.decorated_session(first)
+        self.assertEqual((row["title"], row["display_name"], row["tags"]), ("Named task", "Named task", ["Review", "release"]))
+        page = self.read(summary=1, limit=200, tag="review")
+        self.assertIn(first["session_id"], [s["session_id"] for s in page["sessions"]])
+        counts = self.read(counts=1, tag="review")
+        self.assertEqual(counts["tags"].get("Review"), 1)
+        self.assertGreaterEqual(self.read(counts=1, q="review")["total"], 1)
+        hub.PRESENTATION[hub.LIST_TUPLE(first)]["display_name"] = ""
+        restored = hub.decorated_session(first)
+        self.assertEqual(restored["title"], first["title"])
+        self.assertNotIn("display_name", restored)
+
     def test_strict_summary_rows_drop_chat_arrays_like_the_hub(self):
         run = {"task_id": "w", "name": "audit", "running": True, "phases": ["A", "B"], "phase_index": 2, "agents": [{"id": "a"}]}
         row = hub.summary_row({"session_id": "s", "workflows": [run], "background": [{"id": "w", "kind": "workflow"},

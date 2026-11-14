@@ -1,0 +1,16 @@
+{
+  "title": "名前とタグを編集",
+  "display_name": "表示名",
+  "name_placeholder": "デフォルトのタイトルを使用",
+  "name_hint": "Persona にのみ表示されます。{max} 文字以内で入力するか、空欄にするとデフォルトのタイトルに戻ります。",
+  "title_context": "hub の現在のタイトル：{title}",
+  "title_context_custom": "hub の現在のタイトル：{title}。カスタム名を使用中は、デフォルトのタイトルではなくカスタム名が表示されている場合があります。",
+  "tags": "タグ",
+  "tags_placeholder": "例：調査、個人",
+  "tags_hint": "カンマまたは改行で区切ります。タグは {maxTags} 個まで、各 {maxChars} 文字以内で追加できます。",
+  "add_tags": "タグを追加",
+  "remove_tag": "タグ「{tag}」を削除",
+  "tag_too_long": "各タグは {max} 文字以内にしてください。",
+  "too_many_tags": "タグは {max} 個まで追加できます。",
+  "save_failed": "保存できませんでした：{error}"
+}

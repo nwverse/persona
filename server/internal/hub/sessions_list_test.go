@@ -394,14 +394,15 @@ func fullIndexItems(mid string, list []proto.Session, encoded []sentSession) []s
 		}
 		foldedWaiting := row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0
 		var fold *sessionlist.Fold // none: no hierarchy or to-do, shown with its own state and background wait
-		if f := (sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: foldedWaiting}); f != (sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}) {
+		if f := (sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: foldedWaiting, Tags: sessionlist.CanonicalTags(row.Tags())}); !reflect.DeepEqual(f, sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}) {
 			fold = &f
 		}
+		search := append([]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}, row.Tags()...)
 		items = append(items, sessionlist.Item{
 			ID: string(id), Machine: mid, Project: cmp.Or(row.RepoRoot, row.WorkspaceCwd, row.Cwd), Group: cmp.Or(row.SpaceID, row.WorkspaceID),
 			PaneSource: sessionorigin.Of(row), State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind,
 			Provider: row.Agent, UpdatedAt: row.UpdatedAt, Fold: fold,
-			SearchText: strings.Join([]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}, "\n"),
+			SearchText: strings.Join(search, "\n"),
 			Summary:    json.RawMessage(summary),
 			Full: runtimeListFields(full[row.SessionID], struct {
 				PaneSource string `json:"pane_source"`
@@ -483,6 +484,9 @@ func TestIndexRowReuseMatchesFullPath(t *testing.T) {
 		},
 		func(r *proto.Session, n int) { // open to-do: none, one id, another (#6662)
 			r.Todo = []*proto.TodoRef{nil, {ID: "todo_a"}, {ID: "todo_b"}}[n%3]
+		},
+		func(r *proto.Session, n int) {
+			r.SetPresentation(cycle(n, "", "Custom title", ""), []string{cycle(n, "", "Review", "release")})
 		},
 		func(r *proto.Session, n int) { r.Rev++ },
 		func(r *proto.Session, n int) { r.Archived = n%2 == 0 }, // hidden from the lists while archived

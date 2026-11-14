@@ -16,6 +16,7 @@
   "filter_project": "Project",
   "filter_model": "Model",
   "filter_machine": "Machine",
+  "filter_tags": "Tags",
   "filter_pinned": "Pinned",
   "reset_filters": "Reset",
   "chat_list_view": "Chat list",

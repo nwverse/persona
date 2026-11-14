@@ -73,6 +73,18 @@ Every change above is done on Glass, Brief and Board keep working (decision 8), 
 - With phase 3 F7: the groupings and the git and worktree actions Android lacks, and the workspace catalog iOS reads a worktree's branch, Detached HEAD and offline state from (A7).
 - Kept as they are: the "N more idle" row puts its caret after the words, where iOS puts its icon first (A8); By Status's pill draws a board of columns, since no generated glyph draws iOS's two dots (A4); iOS's search scopes and evidence snippets are not ported (A10); the computer's projects page draws the sessions the phone has loaded, where iOS reads every session it has (A11).
 
+### Presentation names and tags (#7527, native follow-up #7615)
+
+#7527 delivers the hub's presentation API and the complete Web/Electron workflow. A custom display name is projected
+into the effective `title`, so existing native clients show it without a decoder change; additive `display_name` and
+`tags` remain backward-compatible with older decoders. The native editor and tag filter are deliberately not in that
+PR. Apple filters `AgentListProjection` and Android filters `AgentListSettings` plus its paged repository projection:
+their quick-filter, Needs You, catalog and fold counts are independent of the Web's, and paging only the loaded rows
+would silently drop matches. They also need their own localization, optimistic reconciliation, light/dark screenshots
+and Apple Agents-list performance evidence, which cannot be supplied by the Web build. #7615 tracks those changes:
+decode the additive fields, add the row-menu editor, filter before each existing projection (complete fallback on an
+older hub), and keep Pinned / computer / project groups and their counts intact. No local-only tag storage is allowed.
+
 ### Already decided by the spec: which assistant's computers show
 
 `docs/assistant/managers.md` ("Clients", "Pages"): Agents shows the current assistant's sessions only. Android does this, and iOS does too since #5587 (2026-11-12, #4698); before that iOS showed every assistant's computers, which is why the same mock data gave iOS "Needs you 2, Terminal 8" and Android "Needs you 1, Terminal 3".

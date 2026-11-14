@@ -126,6 +126,24 @@ describe("SessionList baseline, filters and structural sharing", () => {
     expect(requestParams()[1]).toEqual({ q: "different", summary: "1", limit: "50" });
   });
 
+  it("encodes repeated tag filters as a canonical set and applies confirmed edits to bounded views", async () => {
+    const query = filterQuery({ state: "working", tag: [" Review ", "release", "REVIEW"] });
+    expect(params(`/?${query}`).getAll("tag")).toEqual(["release", "review"]);
+    expect(params(`/?${query}`).get("state")).toBe("working");
+
+    const plain = make();
+    const tagged = make();
+    await plain.setFilters({});
+    await tagged.setFilters({ tag: ["review"] });
+    const matches = (filters: ListFilters, value: Row) => !filters.tag?.length || filters.tag.includes(value.title);
+    SessionList.present("/sessions", row("0", 20_000, "release"), matches);
+    expect(ids(plain)).toContain("0");
+    expect(ids(tagged)).not.toContain("0");
+    SessionList.present("/sessions", row("0", 20_000, "review"), matches);
+    expect(ids(tagged)).toContain("0");
+    await tick();
+  });
+
   it("retains unchanged row, nested value, array and counts objects across deltas", async () => {
     const original = { ...row("a", 2), detail: { value: "same" } };
     pages.mockResolvedValueOnce(page([original, row("b", 1)]));

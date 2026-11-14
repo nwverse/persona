@@ -181,8 +181,8 @@ export function externalLink(s?: Pick<Session, "external_url">): string | undefi
   }
 }
 
-export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
-  return s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
+export function sessionTitle(s: Pick<Session, "title" | "cwd" | "display_name">): string {
+  return s.display_name?.trim() || s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
 }
 
 // A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other

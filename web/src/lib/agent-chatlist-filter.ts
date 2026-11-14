@@ -28,6 +28,7 @@ export interface AgentDimensionFilters {
   projects: string[];
   models: string[];
   machines: string[];
+  tags?: string[];
   pinnedOnly: boolean;
   since?: SinceWindow;
   searchAsCode: boolean;
@@ -41,6 +42,7 @@ export const DEFAULT_DIMENSION_FILTERS: AgentDimensionFilters = {
   projects: [],
   models: [],
   machines: [],
+  tags: [],
   pinnedOnly: false,
   searchAsCode: false,
 };
@@ -56,11 +58,12 @@ export interface AgentFacetCounts {
   projects: FacetOption[];
   models: FacetOption[];
   machines: FacetOption[];
+  tags?: FacetOption[];
   pinned: number;
 }
 
 /** No facet values: a filter's chips then name its values by their ids. */
-export const NO_FACETS: AgentFacetCounts = { harnesses: [], projects: [], models: [], machines: [], pinned: 0 };
+export const NO_FACETS: AgentFacetCounts = { harnesses: [], projects: [], models: [], machines: [], tags: [], pinned: 0 };
 
 export interface ParsedSearchQuery {
   text: string;
@@ -171,12 +174,28 @@ export function toggleFacetValue(current: readonly string[], value: string, allV
   return next;
 }
 
+/** Convert the hub's tag count map to the same case-insensitive facet options the complete list builds locally. */
+export function tagFacetsFromCounts(counts: Record<string, number> | undefined): FacetOption[] {
+  const tags = new Map<string, { label: string; count: number }>();
+  for (const [raw, count] of Object.entries(counts ?? {})) {
+    const label = raw.trim();
+    const id = label.toLowerCase();
+    if (!id) continue;
+    const existing = tags.get(id);
+    if (existing) existing.count += count;
+    else tags.set(id, { label, count });
+  }
+  return [...tags.entries()].map(([id, value]) => ({ id, label: value.label, count: value.count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
 /** Extract available facet options with session counts. */
 export function buildAgentFacets(sessions: readonly Session[], machines: readonly Machine[], pins: AgentPins): AgentFacetCounts {
   const harnessMap = new Map<string, { label: string; count: number }>();
   const projectMap = new Map<string, { label: string; count: number }>();
   const modelMap = new Map<string, { label: string; count: number }>();
   const machineMap = new Map<string, { label: string; count: number }>();
+  const tagMap = new Map<string, { label: string; count: number }>();
   let pinned = 0;
 
   for (const s of sessions) {
@@ -210,6 +229,17 @@ export function buildAgentFacets(sessions: readonly Session[], machines: readonl
       if (mc) mc.count++;
       else machineMap.set(mid, { label: mname, count: 1 });
     }
+
+    const seenTags = new Set<string>();
+    for (const raw of s.tags ?? []) {
+      const label = raw.trim();
+      const id = label.toLowerCase();
+      if (!id || seenTags.has(id)) continue;
+      seenTags.add(id);
+      const tag = tagMap.get(id);
+      if (tag) tag.count++;
+      else tagMap.set(id, { label, count: 1 });
+    }
   }
 
   const toSorted = (map: Map<string, { label: string; count: number }>): FacetOption[] =>
@@ -222,6 +252,7 @@ export function buildAgentFacets(sessions: readonly Session[], machines: readonl
     projects: toSorted(projectMap),
     models: toSorted(modelMap),
     machines: toSorted(machineMap),
+    tags: toSorted(tagMap),
     pinned,
   };
 }
@@ -504,14 +535,24 @@ export function compileSearchAsCode(
     });
   }
 
-  // 5. Pinned intent
+  // 5. Tags: OR within this facet, AND with every other dimension
+  const tagTargets = (filters.tags ?? []).map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+  if (tagTargets.length > 0) {
+    clauses.push(tagTargets.length === 1 ? `s.tags.includes(${JSON.stringify(tagTargets[0])})` : `${JSON.stringify(tagTargets)}.some(tag => s.tags.includes(tag))`);
+    predicates.push((s) => {
+      const tags = new Set((s.tags ?? []).map((tag) => tag.trim().toLowerCase()));
+      return tagTargets.some((tag) => tags.has(tag));
+    });
+  }
+
+  // 6. Pinned intent
   const wantPinned = filters.pinnedOnly || parsed.pinned === true || (nl && /(?:置顶|pinned)/i.test(lowQ));
   if (wantPinned) {
     clauses.push("s.isPinned");
     predicates.push((s, ctx) => isPinned(s, ctx.pins));
   }
 
-  // 6. Error / blocked intent
+  // 7. Error / blocked intent
   const wantErrors =
     filters.scope === "errors" ||
     parsed.hasErrors === true ||
@@ -521,7 +562,7 @@ export function compileSearchAsCode(
     predicates.push((s, ctx) => sessionHasError(s, ctx.interactions));
   }
 
-  // 7. State intent
+  // 8. State intent
   const stateTargets = new Set<AgentState>(parsed.states);
   if (nl && /(?:工作中|正在跑|运行中|running|working)/i.test(lowQ)) stateTargets.add("working");
   if (nl && /(?:需要你|等待审批|待确认|needs_you|waiting for you)/i.test(lowQ)) stateTargets.add("needs_you");
@@ -532,7 +573,7 @@ export function compileSearchAsCode(
     predicates.push((s) => list.includes(stateOf(s)));
   }
 
-  // 8. Time window intent (`since:24h` or natural language "最近两天" / "今天" / "本周")
+  // 9. Time window intent (`since:24h` or natural language "最近两天" / "今天" / "本周")
   let sinceWindow: SinceWindow | undefined = filters.since ?? parsed.since;
   if (!sinceWindow && nl) {
     if (/(?:最近一天|今天|24小时|24h|最近两天|两天内|48h|yesterday|today)/i.test(lowQ)) sinceWindow = "24h";
@@ -548,7 +589,7 @@ export function compileSearchAsCode(
     });
   }
 
-  // 9. Remaining free-text keywords (excluding tokens already absorbed into structured clauses when in Search-as-Code mode)
+  // 10. Remaining free-text keywords (excluding tokens already absorbed into structured clauses when in Search-as-Code mode)
   // i18n-ignore
   const cjkStopWords = ["置顶", "报错", "错误", "失败", "阻塞", "异常", "工作中", "正在跑", "运行中", "需要你", "未读", "最近一天", "今天", "最近两天", "两天内", "最近一周", "本周"];
   const absorbedWords = new Set<string>([
@@ -635,6 +676,7 @@ export function hasActiveDimensionFilters(f: AgentDimensionFilters): boolean {
       f.projects.length > 0 ||
       f.models.length > 0 ||
       f.machines.length > 0 ||
+      (f.tags?.length ?? 0) > 0 ||
       f.pinnedOnly ||
       f.since ||
       f.searchAsCode ||

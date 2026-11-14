@@ -238,6 +238,10 @@ export interface Session {
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
   manager?: string;
   title: string;
+  /** Presentation-only override from the manager; blank/absent follows the automatic/native title. */
+  display_name?: string;
+  /** User labels persisted by the manager and synchronized with the session row. */
+  tags?: string[];
   cwd: string;
   status: string;
   starting?: boolean;

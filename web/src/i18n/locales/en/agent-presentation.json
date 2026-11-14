@@ -1,0 +1,16 @@
+{
+  "title": "Edit name and tags",
+  "display_name": "Display name",
+  "name_placeholder": "Use the default title",
+  "name_hint": "Shown only in Persona. Use up to {max} characters, or leave it blank to restore the default title.",
+  "title_context": "Current hub title: {title}",
+  "title_context_custom": "Current hub title: {title}. With a custom name active, this may be the custom name rather than the default title.",
+  "tags": "Tags",
+  "tags_placeholder": "e.g. research, personal",
+  "tags_hint": "Separate with commas or newlines. Add up to {maxTags} tags, {maxChars} characters each.",
+  "add_tags": "Add tags",
+  "remove_tag": "Remove tag {tag}",
+  "tag_too_long": "Keep each tag to {max} characters or fewer.",
+  "too_many_tags": "Add no more than {max} tags.",
+  "save_failed": "Couldn’t save changes: {error}"
+}

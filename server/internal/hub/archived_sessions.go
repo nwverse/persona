@@ -15,6 +15,7 @@ import (
 const (
 	featureAgentSessionArchives     = assistantwire.CapabilityAgentSessionArchives
 	featureAgentSessionArchiveClose = assistantwire.CapabilityAgentSessionArchiveClose
+	featureAgentPresentation        = assistantwire.CapabilityAgentPresentation
 )
 
 // Archive state belongs to managers. The hub only gates a rolling upgrade,
@@ -69,6 +70,21 @@ func (h *Hub) agentSessionArchiveFeatures() []string {
 		return []string{featureAgentSessionArchives, featureAgentSessionArchiveClose}
 	}
 	return []string{featureAgentSessionArchives}
+}
+
+func (h *Hub) agentPresentationFeatures() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ids := h.archiveManagers(ctx)
+	if len(ids) == 0 {
+		return nil
+	}
+	for _, id := range ids {
+		if h.archiveManagerHas(id, assistantwire.CapabilityAgentPresentation) != http.StatusOK {
+			return nil
+		}
+	}
+	return []string{featureAgentPresentation}
 }
 
 func (h *Hub) archiveManagerReady(w http.ResponseWriter, id string) bool {

@@ -1,0 +1,9 @@
+{
+  "forbidden": "This device cannot change an agent's display name or tags",
+  "invalid_name": "Use a single-line display name of at most 120 characters",
+  "invalid_tags": "Each tag must be a single non-empty line of at most 32 characters",
+  "too_many_tags": "An agent can have at most 12 tags",
+  "empty_update": "Provide a display name or tags to update",
+  "unavailable": "The agent presentation settings could not be read. Please try again",
+  "storage": "Could not save the agent presentation. Please try again"
+}
