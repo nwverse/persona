@@ -32,4 +32,6 @@ interface HubPreferencesTransport {
     suspend fun putPins(value: HubPreferenceSet)
     suspend fun putMutes(value: HubPreferenceSet)
     suspend fun seen(session: SessionKey)
+    /** The user's own Mark as read (#7356): the only seen the hub records while Manual mark as read is on. */
+    suspend fun markRead(session: SessionKey) = seen(session)
 }

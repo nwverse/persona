@@ -285,7 +285,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // The Filter menu reads, toggles and drops the search parser's operator aliases (host, repo, status, after and
 // pin), so a valid alias can be switched off instead of duplicated (#7339). Measured: en 476,598 B, ja 480,302 B,
 // zh-Hans 477,580 B. The budget moves by the same 17 B.
-export const FIRST_SCREEN_BUDGET = 480_302;
+// Manual mark as read (#7356): the store stops marking what is opened while the hub's switch is on and keeps which seen
+// marks were the user's own (lib/manual-read.ts, the flag the store and the chat read), the chat header's Mark as read
+// and the rows' menu items, with their strings: ja 480,678 B against 480,302 B on main at d02c74ac1, +376 B (en
+// 476,999 B against 476,598 B, zh-Hans 477,977 B against 477,580 B). The switch's hub sync (lib/read-setting.ts) loads
+// after the hello, not here. The budget moves by the same 376 B.
+export const FIRST_SCREEN_BUDGET = 480_678;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

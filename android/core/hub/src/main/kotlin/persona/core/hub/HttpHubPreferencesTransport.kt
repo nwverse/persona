@@ -35,4 +35,7 @@ class HttpHubPreferencesTransport(
     override suspend fun seen(session: SessionKey) {
         request("POST", listOf("sessions", session.machineId, session.sessionId, "seen"), "{}")
     }
+    override suspend fun markRead(session: SessionKey) {
+        request("POST", listOf("sessions", session.machineId, session.sessionId, "seen"), """{"manual":true}""")
+    }
 }

@@ -59,7 +59,8 @@ class HubPreferencesRepository(
             state.copy(mutes = next)
         }, { transport.putMutes(it.mutes) })
     override suspend fun markSeen(session: SessionKey, version: String) = change(
-        { it.copy(seen = it.seen + (session.path to version)) }, { transport.seen(session) })
+        // the Agents list's Mark as read and Mark all as read: the user's own, so it counts in manual mode (#7356)
+        { it.copy(seen = it.seen + (session.path to version)) }, { transport.markRead(session) })
 
     private suspend fun change(update: (HubPreferencesSnapshot) -> HubPreferencesSnapshot,
         send: suspend (HubPreferencesSnapshot) -> Unit) = lock.withLock {

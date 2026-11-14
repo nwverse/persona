@@ -129,6 +129,7 @@
   "link-contextchips",
   "machines",
   "main-runtime",
+  "mark-read",
   "node-health",
   "notify",
   "pageboundary",

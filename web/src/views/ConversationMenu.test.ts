@@ -130,3 +130,23 @@ describe("a Persona conversation's sidebar menu (iOS AssistantSidebar)", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("Mark as read on a conversation's row (#7356)", () => {
+  it("is offered only for an Unread conversation while Manual mark as read is on, and marks it as the user's", async () => {
+    const { setManualReadLocal } = await import("../lib/manual-read");
+    const read: string[] = [];
+    const { d } = deps({ markRead: (s) => void read.push(s.session_id) });
+    const keys = (s: Session) => conversationMenuItems(s, { main: false }, d).map((i) => i.key);
+    expect(keys(conv({ state: "unread", status: "done" }))).not.toContain("mark-read");
+    setManualReadLocal(true);
+    try {
+      expect(keys(conv({ state: "idle", status: "done" }))).not.toContain("mark-read");
+      const items = conversationMenuItems(conv({ state: "unread", status: "done" }), { main: true }, d);
+      expect(items[0].key).toBe("mark-read");
+      void items[0].onSelect?.();
+      expect(read).toEqual(["c1"]);
+    } finally {
+      setManualReadLocal(false);
+    }
+  });
+});

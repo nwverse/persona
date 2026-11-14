@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Agent tools and automation retain their existing routes for saved links and launch arguments.
 struct SettingsAgentView: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         SettingsForm {
             Section {
@@ -23,10 +25,32 @@ struct SettingsAgentView: View {
             } footer: {
                 Text("Agent tools and automation for this assistant's computers.")
             }
+            readSection
         }
         .themedGroupedPage()
         .detailTitle(String(localized: "Agent"))
         .navigationBarTitleDisplayMode(.inline)
+        .task { await model.refreshReadSettings() }
+    }
+
+    /// Manual mark as read (#7356): the hub's switch, the same on every device; off unless turned on.
+    private var readSection: some View {
+        let state = model.readSettingsState
+        return Section {
+            Toggle(isOn: Binding(get: { model.manualRead }, set: { on in Task { await model.setManualRead(on) } })) {
+                Text("Manual Mark as Read").lineLimit(1)
+            }
+            .disabled(state.map { !$0.supported || !$0.canWrite } ?? true)
+            .accessibilityIdentifier("settings-manual-read")
+        } footer: {
+            if state?.supported == false {
+                Text("This hub doesn't support it yet. Update the hub to use it.")
+            } else if state?.canWrite == false {
+                Text("A read-only device can't change this.")
+            } else {
+                Text("Opening a conversation or an Agent no longer clears Unread; use Mark as Read in the chat's More menu or the row's menu. Off by default. Saved on the hub, so every device matches.")
+            }
+        }
     }
 }
 

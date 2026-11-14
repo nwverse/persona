@@ -31,6 +31,8 @@ export interface SeenMark {
   route: "socket" | "http";
   /** The hub answered the HTTP request: nothing more to send, only the list to wait for. */
   answered: boolean;
+  /** The user's Mark as read, not a chat being looked at: only these count while Manual mark as read is on (#7356). */
+  manual?: boolean;
 }
 
 /** By the agent's runtimeIdentity (lib/runtime-list.ts). */

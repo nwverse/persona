@@ -4,8 +4,9 @@
 // All of it is the hub's (the same calls as "All chats"): 设为常驻 makes the chat a leader (#4331,
 // POST …/directions/{id}/make), 取消常驻 ends it (…/end; the tasks it handed out keep their supervisor).
 import { api, enc, errorText, sessionPath } from "../lib/api";
-import { sessionTitle } from "../lib/format";
-import { refreshAssistant } from "../lib/store";
+import { sessionTitle, stateOf } from "../lib/format";
+import { manualRead } from "../lib/manual-read";
+import { markRead, refreshAssistant } from "../lib/store";
 import type { Session } from "../lib/types";
 import { copyText, Menu, toast, type MenuItem, type ToastAction } from "../ui/atoms";
 import type { MenuAt } from "../ui/menu-model";
@@ -22,6 +23,8 @@ export interface ConversationMenuDeps {
   lead: (s: Session, on: boolean) => Promise<unknown>;
   copy: (text: string) => unknown;
   notify: (text: string, tone: "ok" | "error", action?: ToastAction) => void;
+  /** The user's Mark as read (#7356); the store's when not given. */
+  markRead?: (s: Session) => void;
 }
 
 export const conversationMenuDeps: ConversationMenuDeps = {
@@ -102,7 +105,11 @@ export function conversationArchiveItem(s: Session, deps: ConversationMenuDeps =
  *  listed and running: no 设为常驻, Rename, Archive or End. */
 export function conversationMenuItems(s: Session, o: { main: boolean; leader?: boolean; builtIn?: boolean }, deps: ConversationMenuDeps = conversationMenuDeps): MenuItem[] {
   const copy: MenuItem = { key: "copy", label: t("conversation-menu.copy_id"), icon: "copy", accel: "c", onSelect: () => void deps.copy(s.session_id) };
-  if (o.builtIn) return [copy];
+  // Manual mark as read (#7356): an Unread conversation is read from its row, as from its chat's header
+  const read: MenuItem[] = manualRead() && stateOf(s) === "unread"
+    ? [{ key: "mark-read", label: t("mark-read.action"), icon: "check", onSelect: () => (deps.markRead ?? ((x: Session) => markRead(x.machine_id, x.session_id)))(s) }]
+    : [];
+  if (o.builtIn) return [...read, copy];
   const own: MenuItem[] = o.main
     ? []
     : [
@@ -126,6 +133,7 @@ export function conversationMenuItems(s: Session, o: { main: boolean; leader?: b
         conversationArchiveItem(s, deps),
       ];
   return [
+    ...read,
     ...own,
     copy,
     ...(conversationLive(s)

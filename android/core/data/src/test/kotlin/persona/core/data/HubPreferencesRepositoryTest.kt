@@ -63,4 +63,20 @@ class HubPreferencesRepositoryTest {
         assertEquals(original, disk.restore<HubPreferencesSnapshot>("preferences")!!.pins)
         runCurrent()
     }
+
+    @Test fun markSeenIsTheUsersOwnMarkAsRead() = runTest {
+        val sent = mutableListOf<String>()
+        val transport = object : HubPreferencesTransport {
+            override suspend fun pins() = HubPreferenceSet()
+            override suspend fun mutes() = HubPreferenceSet()
+            override suspend fun putPins(value: HubPreferenceSet) = Unit
+            override suspend fun putMutes(value: HubPreferenceSet) = Unit
+            override suspend fun seen(session: SessionKey) { sent += "seen:${session.sessionId}" }
+            override suspend fun markRead(session: SessionKey) { sent += "read:${session.sessionId}" }
+        }
+        val repository = HubPreferencesRepository(transport, backgroundScope)
+        repository.markSeen(SessionKey("machine", "s1"), "v1")
+        assertEquals(listOf("read:s1"), sent)
+        assertEquals("v1", repository.preferences.value.seen["machine/s1"])
+    }
 }
