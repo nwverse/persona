@@ -118,6 +118,7 @@ export function seenCanFile(todo: Todo): boolean {
 export function triage(todo: Todo, lookup: SessionLookup | undefined, now: number, restoredAt = 0, superseded = false): Triage {
   const last = lastActivity(todo, lookup, restoredAt);
   const status: TodoStatus = todoStatus(todo, lookup);
+  const review = reviewState(todo);
   // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
   // Explicit closure and acceptance are already Done; Seen does not move them through awaiting review.
   const seenAt = ms(todo.seen_at);
@@ -132,18 +133,18 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     return at(now - last < SHELVE_AFTER_MS ? "waiting" : "done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
-  if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
+  if (!todo.done_at && (review === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at("done", "closed");
   // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
-  if (reviewState(todo) === "parked") {
+  if (review === "parked") {
     const until = ms(todo.supervision?.parked?.until);
     return at(until && until <= now ? "other" : "parked", "parked");
   }
   if (acceptanceStands(todo)) return at("done", "accepted");
   // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old or seen (#5732).
   if (todo.delivery?.state === "live") return at("just_done", "finished_unseen");
-  const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
+  const finished = status === "unread" || review === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   const acceptanceRequired = !seenCanFile(todo);
   if (finished && (!seen(last) || acceptanceRequired)) return at("just_done", "finished_unseen");
   if (openPR(todo)) return at("pr", "pr_open");
