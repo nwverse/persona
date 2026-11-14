@@ -107,10 +107,7 @@ TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-t
 Xcode 26.0.1, XcodeGen and rsync. Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
 Android also needs NDK `29.0.14206865` and the pinned Rust `aarch64-linux-android` / `x86_64-linux-android` targets to package
 `:core:rustcore-android` (its setup, ABI/size report and owned-device fixture replay: `android/core/rustcore-android/README.md`).
-The unsigned Mac app/notification-extension build keeps shipping entitlements. Before the ad-hoc signed offline Mac test invocation,
-`scripts/ci/apple_entitlements.py` removes only profile-authorized push, time-sensitive notification and shared Keychain permissions from
-the disposable source snapshot. The sandbox, other permissions and project hardened-runtime settings remain unchanged; the checked-in
-project and release entitlements are not edited. A valid ad-hoc signature carrying restricted permissions can still be rejected before `main`.
+The retired native-Mac offline-test entitlement preparation was removed with that target. iOS keeps its shipping entitlements and local ad-hoc test signing; no legacy profile-stripping helper is run.
 On Apple failure, collect the simulator UDID log, boot command/status log, installed runtime metadata, `xcrun simctl list --json`, available
 disk space, and any xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
 `apple-<lane>-diagnostics-<run id>-<attempt>` artifacts for seven days. Source/configuration files, keys and result-bundle symlink targets
@@ -307,6 +304,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Agent chat work is collapsed to one line by default; `-openAllWork YES` expands it. `-tab` has no chat tab and stays on the last tab:
   uninstall/reinstall to photograph the chat tab (the fresh-install default).
 - Home greeting follows the simulator's actual time ("Good evening"); status-bar time should be current too, not fixed at 9:41.
+- For the shared Inbox showcase, start the mock with `MOCK_INBOX_SHOWCASE=1` and launch with `SIMCTL_CHILD_TZ=UTC xcrun simctl launch … -showClockAt 2026-01-01T12:00:00Z` (DEBUG only) to pin the Inbox display clock to the fixture's `now_clock`.
 - Dark: `xcrun simctl ui $SIM appearance dark`.
 - `MOCK_TOPBAR=1|3|long`: sub-Agents of the weather-widget session for the chat header's status line (`docs/archive/apple/plan-chat-topbar.md`): `1` one running and one ended (`-openAgent tb1` reads it, with a conversation); `3` three running (`tb3` newest); `long` a sub-Agent title of about 40 characters and a very long tab name (truncation). Add `-holdChromeOpen YES` so the header does not fold before the screenshot.
 - An agent's edits as diffs (#2915, the chat's `DiffView` in `docs/apple/ios.md`): `MOCK_EDIT_DIFF=1` adds MacBook's "Rain hours and the dry threshold" (`macbook/a1f3c2d4-0000-4000-8000-0000000c2915`), one turn with an Edit that changes a word in two lines of a block, a MultiEdit of two pieces, a Write and an Edit of a 56-line switch whose unchanged middle folds (Show All 58 Lines), so the BeautifulUI style's chips read "Edit 4 files +20 −6" over four changed files.
@@ -1234,7 +1232,7 @@ Video `simctl io recordVideo`, extract `scripts/diag/stream-scroll/vidpick.swift
 Screenshots/probes aren't enough for streaming stability (probes read SwiftUI positions one beat off screen, docs/lessons/ios.md); record simulator and measure frames.
 `SIM=<udid> OUT=/tmp/stream-shots scripts/diag/stream-scroll/run-ios.sh [cases…]` starts mock per case, records video, retrieves `-scrollTrace`;
 `scripts/diag/stream-scroll/analyze.sh /tmp/stream-shots` measures displacement/backward jumps/large one-frame changes (reply disappears), plus last-row/input distance in following cases;
-`vidpick.swift` extracts timestamps. Cases: long streaming follow, clear→final message, history during stream, ↓, upward drag during stream, running turn, working Agents. Mac: docs/apple/mac.md ("Scroll experiments").
+`vidpick.swift` extracts timestamps. Cases: long streaming follow, clear→final message, history during stream, ↓, upward drag during stream, running turn, working Agents. Historical native Mac scroll experiments: docs/archive/apple/mac.md ("Scroll experiments").
 
 ## Jank measurement (dropped frames)
 

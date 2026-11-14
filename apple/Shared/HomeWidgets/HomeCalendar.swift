@@ -189,15 +189,17 @@ nonisolated struct HomeCalendarStore: Sendable {
     /// Redraws the Calendar widgets (the system does after a widget's button too; from the app it must be asked).
     @MainActor static func reload() { WidgetCenter.shared.reloadTimelines(ofKind: HomeKind.today.widgetKind) }
 
-    @concurrent func read() async -> HomeCalendarState {
+    /// The state as last written; a fresh one when there is none. Named apart from the many `read`s, so the isolation
+    /// lint can tell its callers (#7252): the widget reads it off the main actor (`HomeTimeline.calendarState`).
+    func savedState() -> HomeCalendarState {
         guard let url = root?.appending(path: Self.fileName), let data = try? Data(contentsOf: url),
               let state = try? JSONDecoder().decode(HomeCalendarState.self, from: data) else { return HomeCalendarState() }
         return state
     }
 
-    @concurrent func update(_ change: @Sendable (inout HomeCalendarState) -> Void) async {
+    func update(_ change: (inout HomeCalendarState) -> Void) {
         guard let root else { return }
-        var state = await read()
+        var state = savedState()
         change(&state)
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

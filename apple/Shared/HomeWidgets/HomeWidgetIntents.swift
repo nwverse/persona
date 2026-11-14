@@ -41,10 +41,11 @@ struct ShowCalendarViewIntent: AppIntent {
         self.view = view.rawValue
     }
 
-    nonisolated func perform() async throws -> some IntentResult {
+    /// Off the main actor: it writes the widget's state file (#7252).
+    @concurrent nonisolated func perform() async throws -> some IntentResult {
         let slot = slot
         if let view = HomeCalendarView(rawValue: view) {
-            await HomeCalendarStore.shared.update { $0.show(view, in: slot) }
+            HomeCalendarStore.shared.update { $0.show(view, in: slot) }
         }
         await HomeCalendarStore.reload()
         return .result()
@@ -66,9 +67,10 @@ struct PickCalendarDayIntent: AppIntent {
         self.day = day
     }
 
-    nonisolated func perform() async throws -> some IntentResult {
+    /// Off the main actor: it writes the widget's state file (#7252).
+    @concurrent nonisolated func perform() async throws -> some IntentResult {
         let slot = slot, day = day, now = Date.now
-        await HomeCalendarStore.shared.update { $0.pick(day, in: slot, at: now) }
+        HomeCalendarStore.shared.update { $0.pick(day, in: slot, at: now) }
         await HomeCalendarStore.reload()
         return .result()
     }

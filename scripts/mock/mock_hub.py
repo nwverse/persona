@@ -2388,6 +2388,11 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
+                    # Start what the owner asked for right away (#2559), on by default; the workspace a dispatched task
+                    # prefers (#3659); fixing unhelpful session names (#4965): on, at most once, no regular updates.
+                    # Left out with MOCK_LEGACY_HUB (Agent Follow-Up, #7005).
+                    "start_requested_tasks": True, "task_workspace_preference": "prefer-existing",
+                    "agent_auto_naming": True, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
@@ -2417,7 +2422,10 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
+                   agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
+                   agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -2854,6 +2862,13 @@ if MOCK_LEADERS:
          "origin": MOCK_LEADERS[0], "created_at": ago(hours=3), "updated_at": ago(hours=3), "spaces": [], "agents": [],
          "supervision": _lead_supervision(MOCK_LEADERS[0])},
     ])
+# MOCK_TODO_PROJECTS=1: to-dos filed under the example knowledge-base projects (#2581, #7077): two under 天气 App, two
+# under 照片同步脚本, one under the blog; the rest in none.
+if os.environ.get("MOCK_TODO_PROJECTS") == "1":
+    for _t in TODOS_INIT:
+        _p = {"todo_weather": "weather-app", "todo_review": "weather-app", "todo_photos": "photo-sync", "todo_nas": "photo-sync",
+              "todo_blog": "blog"}.get(_t["id"])
+        if _p: _t["project"] = _p
 TODOS = copy.deepcopy(TODOS_INIT)
 
 _DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}
@@ -3391,6 +3406,7 @@ KB = {
 }
 KB_TAGS = {"projects": ["iOS", "前端", "个人"]}
 KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
+KB_TRASH = {}  # deleted projects by trash id (DELETE /api/v1/kb/projects/{id}, POST /api/v1/kb-trash/{id}/restore)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
 # tombstones (a later PUT gets 410). GET /mock/recordings reads both back. MOCK_RECORDINGS_DOWN=1: 503 (the hub away).
 RECORDINGS = {}
@@ -10243,7 +10259,15 @@ def node_action(h, p, body):
     elif area == "tabs" and verb == "close":
         CLOSED_TABS.add(body.get("tab_id"))
     elif area == "tabs" and verb == "rename":
-        TAB_NAMES[body.get("tab_id")] = body.get("label")
+        # A name that is a refusal's word is refused as the hub relays it (#6996; as "taken" refuses a worktree): "offline"
+        # (503 node_unreachable), "unsupported" (an engine without rename) and "closed" (the tab gone), the node's words as 502
+        label = str(body.get("label", ""))
+        if label == "offline":
+            return h.send_json({"error": "machine %s is offline" % mid, "code": "node_unreachable", "retryable": True, "delivered": "none"}, 503)
+        if label in ("unsupported", "closed"):
+            words = "unsupported: orca cannot do this" if label == "unsupported" else "tab %s is not running" % body.get("tab_id")
+            return h.send_json({"error": words, "code": "internal"}, 502)
+        TAB_NAMES[body.get("tab_id")] = label
     elif area == "panes" and verb == "split":
         n = len(SPLIT_PANES.setdefault(mid, [])) + 20
         src = body.get("pane", "w1:p2")
@@ -12279,16 +12303,40 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
+# MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
+# (MOCK_INBOX_TODO=time: with a time, so All Day is off).
+if os.environ.get("MOCK_INBOX_TODO"):
+    _td = next((x for x in INBOX if x["id"] == "mail:acc1:t4:504"), None)
+    if _td is not None:
+        _due = (NOW + timedelta(days=2)).astimezone()
+        _td["suggestion"] = {"version": 1, "kind": "todo", "text": "确认设计评审改到周二下午", "at": ago(minutes=2),
+                             "due": _due.replace(hour=15, minute=0, second=0, microsecond=0).isoformat() if os.environ["MOCK_INBOX_TODO"] == "time" else _due.strftime("%Y-%m-%d")}
+        _td["status"] = "action"
+
+
 # MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
 # side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
 # fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
-# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
+# now_clock themselves. Its sessions and their example computer join the ordinary session and machine lists with the
+# same row fields as the mock's other rows, so the timeline and Agents list can show the Agent's live state. This takes
+# precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                   "spec", "fixtures", "inbox", "showcase.json")
     with open(_showcase_path, encoding="utf-8") as _f:
-        INBOX[:] = json.load(_f)["items"]
+        _showcase = json.load(_f)
+    INBOX[:] = _showcase["items"]
+    MACHINES.append({"id": "m1", "name": "示例电脑", "kind": "ssh", "icon": "desktop", "ssh_host": "example-computer", "online": True,
+                     "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user",
+                     "herdr_version": "0.9.5", "claude_version": "2.1.320", "last_seen": ago()})
+    for _i, _row in enumerate(_showcase.get("sessions", [])):
+        _state = _row["state"]
+        _status = {"working": "working", "needs_you": "blocked", "unread": "done", "offline": "offline"}.get(_state, "idle")
+        _session = sess(_row["machine_id"], _row["session_id"], _row["title"], _row.get("cwd", ""),
+                        _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
+        _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
+        SESSIONS.append(_session)
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -12323,6 +12371,68 @@ if MOCK_HANDOFF_CARD:
     if MOCK_TASKS:
         TASK_FEED.setdefault(ASK1, []).append({"id": "feed_handoff", "conversation": ASK1, "at": ago(minutes=0.4), "kind": "inbox_suggestion",
                                                "ref": _hid, "body": _hcard})
+
+
+# Merge and Add to to-dos (#6480): POST /api/v1/inbox/merge, /merge/undo, /todo, /todo/undo as the hub answers them. A merge takes the
+# newest row as the survivor and hides the others (kept in MERGED for Undo); a to-do files its row as done_by=todo with a todo link.
+# What each asked for is kept at /mock/inbox_actions.
+INBOX_ACTIONS = []
+MERGED = {}
+
+
+def inbox_merge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge"))
+    ids = [t.get("id") for t in body.get("items") or []]
+    rows = [x for x in INBOX if x["id"] in ids and not x.get("done_at")]
+    if len(ids) < 2: return {"error": "请至少选两行再合并", "code": "bad_request"}, 400
+    if len(rows) < 2: return {"error": "没有可合并的内容", "code": "merge_none"}, 409
+    rows.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    top, rest = rows[0], rows[1:]
+    top["merged_from"] = [{"id": x["id"], "source": x["source"], "account_name": x.get("account_name"), "title": x.get("title")} for x in rest]
+    top["count"] = sum(x.get("count", 1) for x in rows)
+    MERGED[top["id"]] = rest
+    for x in rest: INBOX.remove(x)
+    _chain_add(top, "merged", "由 %d 行合并" % len(rows))
+    return {"item": dict({k: v for k, v in top.items() if k != "context"}, version=inbox_version(top)), "members": [x["id"] for x in rest], "undo": {"id": top["id"]}}, 200
+
+
+def inbox_unmerge(body):
+    INBOX_ACTIONS.append(dict(body, route="merge/undo"))
+    top = next((x for x in INBOX if x["id"] == body.get("id")), None)
+    if top is None or top["id"] not in MERGED: return {"error": "没有可拆开的合并", "code": "bad_request"}, 400
+    rest = MERGED.pop(top["id"])
+    INBOX.extend(rest)
+    top.pop("merged_from", None)
+    top["count"] = max(1, top.get("count", 1) - sum(x.get("count", 1) for x in rest))
+    return {"changed": [top] + rest}, 200
+
+
+def inbox_todo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo"))
+    out = {"changed": [], "unchanged": [], "skipped": [], "failed": [], "todos": [], "undo": {"items": []}}
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is None: out["skipped"].append({"id": t.get("id"), "reason": "missing"}); continue
+        if x.get("done_at"): out["unchanged"].append(x["id"]); continue
+        if t.get("version") and t["version"] != inbox_version(x): out["skipped"].append({"id": x["id"], "reason": "changed"}); continue
+        todo_id = "todo-%s-%d" % (x["id"], len(INBOX_ACTIONS))
+        x["done_at"], x["done_by"] = ago(minutes=0), "todo"
+        _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": todo_id})
+        out["changed"].append(dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)))
+        out["todos"].append({"item": {"id": x["id"]}, "todo": {"id": todo_id, "title": t.get("title") or x.get("title")}})
+        out["undo"]["items"].append({"id": x["id"], "todo_id": todo_id})
+    return out, 200
+
+
+def inbox_todo_undo(body):
+    INBOX_ACTIONS.append(dict(body, route="todo/undo"))
+    changed = []
+    for t in body.get("items") or []:
+        x = next((x for x in INBOX if x["id"] == t.get("id")), None)
+        if x is not None and x.get("done_by") == "todo":
+            x.pop("done_at", None), x.pop("done_by", None)
+            changed.append(x)
+    return {"changed": changed}, 200
 
 
 def _chain_add(x, kind, text, **more):
@@ -12368,6 +12478,10 @@ def inbox_suggestion(iid, body):
         elif s["kind"] == "agent":
             _chain_add(x, "agent", "开了子会话：" + text[:40], link={"type": "session", "machine_id": "m1", "session_id": "s-mock-agent"})
             h.update(state="agent", since=ago()); x["status"] = "working"
+        elif s["kind"] == "todo":  # Add to to-dos (#6480): the row is filed with a link to the to-do
+            INBOX_ACTIONS.append({"route": "suggestion", "text": body.get("text"), "due": body.get("due")})
+            _chain_add(x, "done", "已转成待办", link={"type": "todo", "id": "todo-" + x["id"]})
+            x["done_at"], x["done_by"] = ago(), "todo"
         else:  # a conclusion: Got it files it (the chain says so)
             _chain_add(x, "done", "你标了已处理")
             x["done_at"], x["done_by"] = ago(), "user"
@@ -15237,6 +15351,73 @@ LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
 # An answer long enough to be drawn in parts (#4970, `AnswerParts`: 95 lines, three parts): a long press on its middle
 # part lifts, copies and selects all of it (#5221). Its first and last sentences are in its first and last parts.
 LIFT_SPLIT = "a1f3c2d4-0000-4000-8000-0000000c1e0e"
+# Rows of every kind one under another in a working Agent's chat (#6645): a long answer drawn in parts, your message,
+# a folded run of tools, a short answer, a message another session sent (folded, 「From …」), a plan, more answers. A
+# long press on the top or the bottom of each lifts that one, never its neighbour.
+LIFT_ROWS = "a1f3c2d4-0000-4000-8000-0000000c1e10"
+
+
+def lift_rows():
+    # Synthetic text: a shop app's images moving to new storage while another session rebuilds its search index.
+    batches = "\n".join(f"{n}. 第 {n} 批：{what}，这一批没搬完就不开始下一批，进度记在迁移记录里。" for n, what in enumerate(
+        ["评论里的晒图，先搬最近一年的", "已下架商品的图片", "客服聊天里发过的图片", "活动页的大图和视频封面"], 1))
+    moved = "\n".join(f"  - {w}" for w in ["商品图 18 万张，校验和全部一致。", "用户头像 4 万张，旧地址都已经跳转到新地址。",
+                                            "首页轮播和广告位的图片换成了新地址。", "复制脚本改成可以断点续传，命令是 `make copy-images`。"])
+    parts = "\n\n".join(f"### {n}. {name}\n\n{name}已经处理好：{what}改动集中在一个分支上，每个提交都写明了原因，出问题时可以单独撤回。"
+                        "切换前后各抽查了一千张图，尺寸、格式和校验和都一致，抽查清单放在迁移记录里，想看随时可以翻。切换那天晚上我一直盯着告警，没有新增报错。\n\n"
+                        f"{name}目前没有需要你拍板的地方；有一个命名我还在犹豫，先沿用了旧的写法，等全部搬完再统一改。"
+                        for n, (name, what) in enumerate([("缩略图", "三种尺寸都按新规则重新生成了，"),
+                                                          ("原图", "原图按上传日期分批复制，"),
+                                                          ("旧链接", "旧地址统一跳到新地址，外面收藏的链接不会断，"),
+                                                          ("缓存", "新地址缓存七天，换图时连文件名一起换，"),
+                                                          ("费用", "按上个月的流量估算，存储和流量费用大约降三成，"),
+                                                          ("监控", "复制失败和跳转出错都会进告警，"),
+                                                          ("开关", "读新地址还是旧地址由一个开关决定，"),
+                                                          ("客户端", "App 和网页都只认后端给的地址，不用发新版，"),
+                                                          ("手册", "运维手册和出错时的处理步骤都改好了，")], 1))
+    long = ("## 图片搬家的进度\n\n" + parts + "\n\n"
+            "- **已经搬完的：**\n" + moved + "\n"
+            "- **抽查结果：** 随机抽了 3000 张，缩略图、原图和跳转全部正常。夜里有一批复制任务在高峰时偶尔超时，"
+            "重试一次就过了，和图片本身无关。\n"
+            "- **剩下的批次按顺序搬，哪一批出错就停：**\n" + "\n".join("  " + s for s in batches.split("\n")) + "\n"
+            "- **时间：** 剩下大约 26 万张，按现在的速度要四个晚上，周五前能搬完。\n"
+            "- **视频：** 这次没动，留到下一轮。\n\n"
+            "**旧存储桶要你来决定：** 搬完以后我建议旧桶先只读保留一个月，再整个删掉；删桶要账号管理员的权限，我这边做不了。"
+            "删之前我会再核对一遍新旧两边的文件数，也会把本机的临时目录清掉。\n\n"
+            "每搬完一批我会在这里说一声。")
+    peer = ("The search index rebuild is ready: branch search-v2, commit 9c1d07ab, worktree ~/code/shop-app-wt/search-v2, "
+            "built on today's main. Product, review and help-center search all pass their tests; queries with very long "
+            "filters are still slower than before on my side, and I have not found out why in about 20 tries. The old index keeps running next to it, so going back is one setting.")
+    r = [it("user", "text", 60, text="图片搬得怎么样了？整理一下进度"),
+         it("assistant", "text", 58, text=long),
+         it("user", "text", 40, text="先停掉夜里的自动搬运")]
+    for n in range(6):
+        r += tool("Bash", {"command": f"scripts/copy-images.sh --batch {n + 1} --dry-run", "description": f"试跑第 {n + 1} 批"}, "ok",
+                  39 - n * 0.2)
+    r += [it("assistant", "text", 37, text="I've paused the nightly copy job. It was in the middle of batch 5, so I let the current file "
+                                           "finish and stopped there; nothing is half-written.\n\nWhen you turn it back on, it goes "
+                                           "in this order:\n\n1. Finish batch 5, the review photos from the last year, and check "
+                                           "every checksum.\n2. Copy the images of products no longer for sale, then switch their "
+                                           "links.\n3. Copy the support chat images and the campaign banners.\n\nI'll post here "
+                                           "after each batch."),
+          it("user", "text", 30, text=peer, **{"from": "shop-app-search"})]
+    r += tool("Read", {"file_path": "/Users/me/code/shop-app/docs/search.md"}, "# Search", 29)
+    r += [it("assistant", "text", 28, text="The search session has finished the index rebuild. Product, review and help-center search "
+                                           "are all ready on their branch.\n\nThe image move still runs at night, so I'm not switching "
+                                           "anything yet. Please decide here first: if you want the new index, once the images are "
+                                           "moved I'll merge their branch into main, rebuild the index once on a copy of the "
+                                           "production data, and switch search over in a quiet hour. One thing is still open on "
+                                           "their side: queries with very long filters are slower than before, and nobody knows why "
+                                           "yet. I'll measure that myself before switching.\n\nReply \"go ahead\" or \"wait\"."),
+          it("user", "text", 20, text="列个上线步骤给我看看")]
+    r += tool("ExitPlanMode", {"plan": "## 上线新索引\n\n1. 图片搬完以后把搜索分支合进 main\n2. 用一份生产数据的副本重建一次索引\n"
+                                       "3. 量一下筛选条件很长的查询，慢得多就先不切\n4. 挑凌晨人最少的时候切换，旧索引留三天"},
+              "User has approved your plan.", 19)
+    r += [it("user", "text", 12, text="为什么夜里的搬运任务报磁盘满了\n\n/tmp/shop-app/copy-images-20261102-031500.log")]
+    r += tool("Grep", {"pattern": "tmpdir", "path": "/Users/me/code/shop-app/jobs"}, "jobs/copy.go:88", 11)
+    r += [it("assistant", "text", 10, text="Found the cause: the copy job writes every image to a temporary folder first and never "
+                                           "cleans it up, so the disk fills after a few batches. Fixing that now.")]
+    return r
 
 
 def lift_split_answer():
@@ -15336,6 +15517,9 @@ def mock_message_lift():
     SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
     ITEMS[LIFT_SPLIT] = [it("user", "text", 6, text="把这次数据迁移的安排整理成一份总结"), it("assistant", "text", 4, text=lift_split_answer())]
     SESSIONS.append(sess("macbook", LIFT_SPLIT, "迁移总结", repo, "done", "done", "shop-app", 17, "lift", 6, 4, "以上是这次迁移的全部总结，有问题随时找我。"))
+    ITEMS[LIFT_ROWS] = lift_rows()
+    SESSIONS.append(sess("macbook", LIFT_ROWS, "图片搬家", repo, "working", "working", "shop-app", 17, "lift", 7, 1,
+                         "Found the cause: the temporary folder is never cleaned up."))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
@@ -18662,18 +18846,20 @@ _PLAIN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
 _PLAIN_QUOTE = re.compile(r"^[ \t]{0,3}>[ \t]?")
 _PLAIN_LIST = re.compile(r"^[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?")
 _PLAIN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~<])")
-_PLAIN_INLINE = [
+_PLAIN_LINKS = [
     (re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\([^)\n]*\)"), r"\1"),
     (re.compile(r"\[([^\]\n]+)\]\[[^\]\n]*\]"), r"\1"),
     (re.compile(r"<((?:https?|mailto):[^> \t\n]+)>"), r"\1"),
-    (re.compile(r"\*\*([^ \t\n*]|[^ \t\n*][^\n]*?[^ \t\n*])\*\*"), r"\1"),
+]
+_PLAIN_EMPHASIS = [
     (re.compile(r"(^|[^0-9A-Za-z_])__([^ \t\n_]|[^ \t\n_][^\n]*?[^ \t\n_])__($|[^0-9A-Za-z_])"), r"\1\2\3"),
     (re.compile(r"~~([^~\n]+?)~~"), r"\1"),
     (re.compile(r"\*([^ \t\n*]|[^ \t\n*][^*\n]*?[^ \t\n*])\*"), r"\1"),
     (re.compile(r"(^|[^0-9A-Za-z_])_([^ \t\n_]|[^ \t\n_][^_\n]*?[^ \t\n_])_($|[^0-9A-Za-z_])"), r"\1\2\3"),
 ]
 _PLAIN_ESCAPED = 0xE000
+_PLAIN_CODE = 0xF0000  # a line's i-th code span while the markup around it goes (searchCode, #7195)
 
 
 def search_plain(md):
@@ -18731,29 +18917,85 @@ def search_code_span(s):
 
 
 def search_marks(s):
-    for r, w in _PLAIN_INLINE:
+    for r, w in _PLAIN_LINKS:
+        s = r.sub(w, s)
+    s = search_strong(s)
+    for r, w in _PLAIN_EMPHASIS:
         s = r.sub(w, s)
         if w.endswith("\\3"):
             s = r.sub(w, s)
     return s
 
 
+def _plain_space(c):
+    return c in " \t"
+
+
+def _plain_operand(c):
+    return c.isascii() and c.isalnum()
+
+
+def search_strong(s):
+    """A line without `**` (searchStrong, #7195): a run not after a space closes the nearest open one, one not before a
+    space opens; a pair loses two stars on its inner side each; a run left alone goes, unless it reads as `2 ** 3` or
+    `a**b`."""
+    if "**" not in s:
+        return s
+    runs, i = [], 0  # [at, end, cut_from, cut_to, paired]
+    while i < len(s):
+        if s[i] != "*":
+            i += 1
+            continue
+        j = i
+        while j < len(s) and s[j] == "*":
+            j += 1
+        if j - i >= 2:
+            runs.append([i, j, i, j, False])
+        i = j
+    opened = []
+    for k, r in enumerate(runs):
+        before = r[0] > 0 and not _plain_space(s[r[0] - 1])
+        after = r[1] < len(s) and not _plain_space(s[r[1]])
+        if before and opened:
+            o = runs[opened.pop()]
+            o[2], o[3], o[4] = o[1] - 2, o[1], True
+            r[2], r[3], r[4] = r[0], r[0] + 2, True
+            continue
+        if after:
+            opened.append(k)
+    out, frm = [], 0
+    for at, end, cut_from, cut_to, paired in runs:
+        if not paired and at > 0 and end < len(s) and (
+                _plain_space(s[at - 1]) and _plain_space(s[end]) or _plain_operand(s[at - 1]) and _plain_operand(s[end])):
+            continue  # an expression: it stays
+        out.append(s[frm:cut_from])
+        frm = cut_to
+    out.append(s[frm:])
+    return "".join(out)
+
+
 def search_inline(line):
     line = _PLAIN_ESCAPE.sub(lambda m: chr(_PLAIN_ESCAPED + ord(m.group(1))), line)
-    out = []
+    code, out = [], []
     while line:
         span = search_code_span(line)
         if not span:
-            out.append(search_marks(line))
+            out.append(line)
             break
         at, n, end = span
-        out.append(search_marks(line[:at]))
-        code = line[at + n:end]
-        if len(code) >= 2 and code[0] == " " and code[-1] == " " and code.strip(" "):
-            code = code[1:-1]
-        out.append(code)
+        out.append(line[:at])
+        c = line[at + n:end]
+        if len(c) >= 2 and c[0] == " " and c[-1] == " " and c.strip(" "):
+            c = c[1:-1]
+        out.append(chr(_PLAIN_CODE + len(code)))
+        code.append(c)
         line = line[end + n:]
-    return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in "".join(out))
+
+    def unescape(s):
+        return "".join(chr(ord(c) - _PLAIN_ESCAPED) if _PLAIN_ESCAPED <= ord(c) < _PLAIN_ESCAPED + 128 else c for c in s)
+
+    return "".join(unescape(code[ord(c) - _PLAIN_CODE]) if 0 <= ord(c) - _PLAIN_CODE < len(code) else unescape(c)
+                   for c in search_marks("".join(out)))
 
 
 def search_fold(s):
@@ -23325,6 +23567,7 @@ VOICE_VOICES = {
 MOCK_HELP = [
     "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_TODO_PROJECTS=1  To-dos filed under the example knowledge-base projects (#7077: the detail's Project, Group By › Project)",
     "MOCK_KB_CORRECTIONS=1  Knowledge base: the lists links are held in, so links can be removed, and confirmed facts on one person (#6997)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
@@ -24054,6 +24297,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
+            TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
@@ -24179,6 +24423,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/kb_updates": return self.send_json({"updates": KB_UPDATES})
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
+        if p == "/mock/inbox_actions": return self.send_json({"requests": INBOX_ACTIONS})
         if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
             PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"fail": PREFS_FAIL[0]})
@@ -25434,6 +25679,26 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
             return self.send_json(out_machine(machine))
+        if self.command == "DELETE" and re.fullmatch(r"/api/v1/kb/projects/[^/]+", p):  # soft delete (#4412, kb/project_trash.go)
+            if MEETING_MODE["kb_read_only"]: return self.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
+            slug = unquote(p.rsplit("/", 1)[1])
+            e = next((e for e in KB["projects"] if e["id"] == slug), None)
+            if e is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            KB["projects"].remove(e)
+            tid = time.strftime("%Y%m%d%H%M%S") + "-%d" % (len(KB_TRASH) + 1)
+            KB_TRASH[tid] = {"entry": e, "detail": KB_DETAIL.pop(("projects", slug), None)}
+            return self.send_json({"id": tid, "kind": "projects", "slug": slug, "name": e["name"],
+                                   "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        if self.command == "POST" and re.fullmatch(r"/api/v1/kb-trash/[^/]+/restore", p):  # the project back, unless taken (409)
+            tid = unquote(p.split("/")[4])
+            t = KB_TRASH.get(tid)
+            if t is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            if any(e["id"] == t["entry"]["id"] for e in KB["projects"]):
+                return self.send_json({"error": "a project with this slug exists", "code": "conflict"}, 409)
+            KB_TRASH.pop(tid)
+            KB["projects"].append(t["entry"])
+            if t["detail"] is not None: KB_DETAIL[("projects", t["entry"]["id"])] = t["detail"]
+            return self.send_json({"id": tid, "kind": "projects", "slug": t["entry"]["id"], "name": t["entry"]["name"]})
         if self.command == "PUT" and p.startswith("/api/v1/kb/"):  # "Tagging": kept over the automatic tagging
             if os.environ.get("MOCK_KB_SAVE_FAIL") == "1": return self.send_json({"error": "知识库暂时写不进去"}, 502)
             kind, eid = p.split("/")[4:6]
@@ -25733,6 +25998,14 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "inbox"})
                 except Exception: pass
             return self.send_json(res)
+        if p in ("/api/v1/inbox/merge", "/api/v1/inbox/merge/undo", "/api/v1/inbox/todo", "/api/v1/inbox/todo/undo") and self.command == "POST":
+            body = json.loads(self.last_body or b"{}")
+            res, code = {"/api/v1/inbox/merge": inbox_merge, "/api/v1/inbox/merge/undo": inbox_unmerge, "/api/v1/inbox/todo": inbox_todo,
+                         "/api/v1/inbox/todo/undo": inbox_todo_undo}[p](body)
+            for send, _ in list(LIVE):
+                try: send({"type": "inbox"})
+                except Exception: pass
+            return self.send_json(res, code)
         if p == "/api/v1/inbox/mutes" and self.command == "POST":
             body = json.loads(self.last_body or b"{}")
             other = other_manager(self)
@@ -26072,6 +26345,22 @@ class H(BaseHTTPRequestHandler):
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
                     return self.send_json({"error": "archive_closed_days must be 0–3650"}, 400)
                 ASSISTANT_CONFIG["archive_closed_days"] = days
+            # As the hub's profile_write.go: checked before anything changes; the session-name settings only from a
+            # request that names its manager (#4965).
+            naming = [k for k in ("agent_auto_naming", "agent_auto_naming_max", "agent_auto_naming_interval_hours") if k in body]
+            if naming and not self.headers.get("X-Persona-Manager"):
+                return self.send_json({"error": "Name the assistant this setting is for.", "code": "manager_required"}, 400)
+            for key, (low, high) in (("agent_auto_naming_max", (1, 1000)), ("agent_auto_naming_interval_hours", (0, 8760))):
+                if key in body and (type(body[key]) is not int or not low <= body[key] <= high):
+                    return self.send_json({"error": "%s must be %d–%d" % (key, low, high)}, 400)
+            if "task_workspace_preference" in body and body["task_workspace_preference"] not in ("prefer-existing", "prefer-new"):
+                return self.send_json({"error": "task_workspace_preference must be prefer-existing or prefer-new"}, 400)
+            for key in ("start_requested_tasks", "agent_auto_naming"):
+                if isinstance(body.get(key), bool):
+                    ASSISTANT_CONFIG[key] = body[key]
+            for key in ("agent_auto_naming_max", "agent_auto_naming_interval_hours", "task_workspace_preference"):
+                if key in body:
+                    ASSISTANT_CONFIG[key] = body[key]
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):

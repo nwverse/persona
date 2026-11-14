@@ -10,7 +10,8 @@ enum HomeTimeline {
     static let placeholder = HomeEntry(date: .now, snapshot: HomeSnapshot(paired: true))
 
     /// `edit` applies the widget's Edit Widget choices before the Smart Stack's score, which counts only what it shows.
-    /// The Calendar widget also takes what its switch and a tapped day left for its size and View (`calendar`).
+    /// The Calendar widget also takes what its switch and a tapped day left for its size and View (`calendar`, read off
+    /// the main actor by its provider: `calendarState`).
     static func entry(_ kind: HomeKind, family: WidgetFamily, at date: Date, snapshot: HomeSnapshot?, calendar: HomeCalendarState? = nil,
                       edit: (inout HomeEntry) -> Void) -> HomeEntry {
         var e = HomeEntry(date: date, snapshot: snapshot ?? HomeSnapshot(), pictures: HomeFaces.load())
@@ -25,9 +26,9 @@ enum HomeTimeline {
 
     /// Now; when the snapshot turns stale, so old numbers step back without a reload; for the Calendar widget also
     /// midnight (the date and the grids move on) and when a picked day goes back to today. At most four entries.
-    static func timeline(_ kind: HomeKind, family: WidgetFamily, edit: (inout HomeEntry) -> Void) async -> Timeline<HomeEntry> {
+    static func timeline(_ kind: HomeKind, family: WidgetFamily, calendar: HomeCalendarState? = nil,
+                         edit: (inout HomeEntry) -> Void) -> Timeline<HomeEntry> {
         let snapshot = HomeSnapshotStore.shared.read()
-        let calendar = kind == .today ? await HomeCalendarStore.shared.read() : nil
         let now = Date.now
         let first = entry(kind, family: family, at: now, snapshot: snapshot, calendar: calendar, edit: edit)
         var dates: Set<Date> = []
@@ -42,6 +43,12 @@ enum HomeTimeline {
         let later = dates.sorted().map { entry(kind, family: family, at: $0, snapshot: snapshot, calendar: calendar, edit: edit) }
         return Timeline(entries: [first] + later, policy: .never)
     }
+
+    /// The Calendar widget's saved switch and picked days (`Widgets/calendar.json` in the App Group), read off the main
+    /// actor (#7252, `docs/apple/performance.md` P1); nil for the other kinds.
+    @concurrent nonisolated static func calendarState(_ kind: HomeKind) async -> HomeCalendarState? {
+        kind == .today ? HomeCalendarStore.shared.savedState() : nil
+    }
 }
 
 /// A widget with nothing to edit.
@@ -51,14 +58,11 @@ struct HomeProvider: TimelineProvider {
     func placeholder(in context: Context) -> HomeEntry { HomeTimeline.placeholder }
 
     func getSnapshot(in context: Context, completion: @escaping (HomeEntry) -> Void) {
-        Task {
-            let calendar = kind == .today ? await HomeCalendarStore.shared.read() : nil
-            completion(HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read(), calendar: calendar) { _ in })
-        }
+        completion(HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read()) { _ in })
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<HomeEntry>) -> Void) {
-        Task { completion(await HomeTimeline.timeline(kind, family: context.family) { _ in }) }
+        completion(HomeTimeline.timeline(kind, family: context.family) { _ in })
     }
 }
 
@@ -69,12 +73,15 @@ struct HomeEditProvider<Intent: HomeWidgetEdit>: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> HomeEntry { HomeTimeline.placeholder }
 
     func snapshot(for configuration: Intent, in context: Context) async -> HomeEntry {
-        let calendar = kind == .today ? await HomeCalendarStore.shared.read() : nil
-        return HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read(), calendar: calendar) { configuration.apply(to: &$0) }
+        let calendar = await HomeTimeline.calendarState(kind)
+        return HomeTimeline.entry(kind, family: context.family, at: .now, snapshot: HomeSnapshotStore.shared.read(), calendar: calendar) {
+            configuration.apply(to: &$0)
+        }
     }
 
     func timeline(for configuration: Intent, in context: Context) async -> Timeline<HomeEntry> {
-        await HomeTimeline.timeline(kind, family: context.family) { configuration.apply(to: &$0) }
+        let calendar = await HomeTimeline.calendarState(kind)
+        return HomeTimeline.timeline(kind, family: context.family, calendar: calendar) { configuration.apply(to: &$0) }
     }
 }
 
