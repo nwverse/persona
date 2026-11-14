@@ -113,5 +113,6 @@
   "brief_dropped_plain": "➖ {criterion}（已去掉）",
   "brief_more": "……另有 {n} 条",
   "brief_also_done": "另外做了：{list}",
-  "brief_also_sep": "；"
+  "brief_also_sep": "；",
+  "delivery_verification_unavailable": "任务 {task} 暂不能验收：交付状态暂时无法验证，{pr}（{reason}）。这不代表任务没有完成。请保持当前状态，待验证服务恢复后再次检查；不要仅因无法验证就要求重新合并、部署、搁置或取消。"
 }
