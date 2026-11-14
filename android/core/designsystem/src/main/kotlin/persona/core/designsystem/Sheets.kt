@@ -77,6 +77,8 @@ fun JSheet(
     clearContainer: Boolean = false,
     /** The page-sized Settings frame already draws the window scrim; do not blend a second one over it. */
     clearScrim: Boolean = false,
+    /** Marks an intentional blank-tap focus clear, distinct from a presentation-driven focus transfer. */
+    onClearFocus: () -> Unit = {},
     showDragHandle: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -110,7 +112,7 @@ fun JSheet(
         ) {
         Column(Modifier.fillMaxWidth().hardwareShortcutDismiss({
             if (canDismiss) onDismiss() else blocked?.invoke()
-        }, shortcutHelpOwner).dismissKeyboardOnBlankTap()
+        }, shortcutHelpOwner).dismissKeyboardOnBlankTap(onClearFocus)
             // Content that grows once the sheet is open ("Session info" after it loads) would stay where the opening left the
             // sheet, its rest below the screen and out of reach: settle the sheet again at its new height.
             .onSizeChanged {

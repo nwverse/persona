@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
@@ -36,13 +37,23 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
+/** Focus state shared with the outer sheet's explicit blank-tap clear signal. */
+internal class SettingsFocusRestoration {
+    var restoreChildFocus by mutableStateOf(false)
+    var hasFocus by mutableStateOf(false)
+    fun clearFocus() { restoreChildFocus = false }
+    fun shouldRestoreFocus(): Boolean = restoreChildFocus && !hasFocus
+}
+
 /** A centered page above the shell, with the same opaque surface and dismiss behavior as a settings sheet. */
 @Composable
 fun JPageSizedSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    val restoration = remember { SettingsFocusRestoration() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         HardwareShortcutHost(Modifier.fillMaxSize(), requestFocusWhenLarge = false) {
-            Box(Modifier.fillMaxSize().hardwareShortcutDismiss(onDismiss)) {
-                JSettingsPresentationFrame(SettingsPresentation.PageSized, onDismiss, content)
+            Box(Modifier.fillMaxSize().hardwareShortcutDismiss(onDismiss)
+                .dismissKeyboardOnBlankTap { restoration.clearFocus() }) {
+                JSettingsPresentationFrame(SettingsPresentation.PageSized, onDismiss, restoration, content)
             }
         }
     }
@@ -56,6 +67,7 @@ fun JPageSizedSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Un
 internal fun JSettingsPresentationFrame(
     presentation: SettingsPresentation,
     onDismiss: () -> Unit,
+    restoration: SettingsFocusRestoration,
     content: @Composable () -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -65,9 +77,8 @@ internal fun JSettingsPresentationFrame(
     val duration = if (PersonaTheme.reduceMotion) Tokens.Motion.reduced else PersonaTheme.motion.standard
     val focus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
-    var restoreChildFocus by remember { mutableStateOf(false) }
     LaunchedEffect(pageSized) {
-        if (restoreChildFocus) {
+        if (restoration.shouldRestoreFocus()) {
             runCatching { focus.requestFocus() }
             focusManager.moveFocus(FocusDirection.Enter)
         }
@@ -96,7 +107,11 @@ internal fun JSettingsPresentationFrame(
                             .background(container)
                         else Modifier,
                     )
-                    .onFocusChanged { if (it.hasFocus && !it.isFocused) restoreChildFocus = true }
+                    .onFocusChanged {
+                        restoration.hasFocus = it.hasFocus
+                        if (it.hasFocus && !it.isFocused) restoration.restoreChildFocus = true
+                    }
+                    .focusRestorer()
                     .focusRequester(focus)
                     .focusTarget(),
             ) {

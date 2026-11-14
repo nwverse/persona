@@ -28,6 +28,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -129,5 +130,42 @@ class PageSizedSettingsSheetTest {
         rule.onNodeWithTag("settings-draft").assertTextEquals("edited")
         rule.onNodeWithTag("settings-draft").assertIsFocused()
         assertTrue(stack == originalStack)
+    }
+
+    @Test fun clearedOrAlreadyFocusedSettingsDoNotRequestFocus() {
+        val restoration = SettingsFocusRestoration().apply {
+            restoreChildFocus = true
+            hasFocus = false
+            clearFocus()
+        }
+        assertFalse(restoration.shouldRestoreFocus())
+        restoration.restoreChildFocus = true
+        restoration.hasFocus = true
+        assertFalse(restoration.shouldRestoreFocus())
+    }
+
+    @Test fun presentationChangesReturnToThePreviouslyFocusedSecondField() {
+        var large by mutableStateOf(true)
+        rule.setContent {
+            CompositionLocalProvider(LocalLargeWindowInput provides large) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    JSettingsSheet(onDismiss = {}) {
+                        val second = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { runCatching { second.requestFocus() } }
+                        Column {
+                            BasicTextField("first", {}, Modifier.testTag("first-settings-field"))
+                            BasicTextField("second", {}, Modifier.testTag("second-settings-field").focusRequester(second))
+                        }
+                    }
+                }
+            }
+        }
+        rule.onNodeWithTag("second-settings-field").assertIsFocused()
+        large = false
+        rule.waitForIdle()
+        rule.onNodeWithTag("second-settings-field").assertIsFocused()
+        large = true
+        rule.waitForIdle()
+        rule.onNodeWithTag("second-settings-field").assertIsFocused()
     }
 }

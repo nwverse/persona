@@ -39,6 +39,7 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
         }
     }
     val presentation = settingsPresentation(LocalLargeWindowInput.current)
+    val restoration = remember { SettingsFocusRestoration() }
     HardwareShortcutHost(Modifier.fillMaxSize(), requestFocusWhenLarge = false) {
         JSheet(
             onDismiss,
@@ -47,9 +48,10 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
             bottomPadding = 0.dp,
             clearContainer = presentation == SettingsPresentation.PageSized,
             clearScrim = presentation == SettingsPresentation.PageSized,
+            onClearFocus = { restoration.clearFocus() },
             showDragHandle = false,
         ) {
-            JSettingsPresentationFrame(presentation, onDismiss) { settingsContent() }
+            JSettingsPresentationFrame(presentation, onDismiss, restoration) { settingsContent() }
         }
     }
 }
