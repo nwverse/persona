@@ -18503,6 +18503,9 @@ if os.environ.get("MOCK_ASSISTANT_REPLAY"):
         _all = json.load(_f)["items"]
     ITEMS[ASK1] = [x for x in _all if x["seq"] <= int(_upto)]
     REPLAY["left"] = [x for x in _all if x["seq"] > int(_upto)]
+    # The recorded items are the whole conversation: with MOCK_TASKS its made-up feed (a brief card) stayed at the newest
+    # end, under everything replayed. The dock's capsules come from the task list, not the feed, and stay (#7382).
+    TASK_FEED[ASK1] = []
     ASSISTANT[0].update(state="working", status="working", state_since=ago(minutes=3), updated_at=ago())
 
 
