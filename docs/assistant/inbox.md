@@ -177,8 +177,11 @@ a summary up to 40 characters, and a short reason:
   already answered or closed (or answered by the owner), and Persona's own Lark bot pushes and cards ("要你批准", "在问你",
   "请验收", "任务进展" and the like, which the app handles). When unsure, the question is whether someone waits on the owner or
   the owner's own work slips; it used to be "choose action", and direct chats and @me defaulted to action.
+  A real person's direct message stays Needs you by default, even without a question, unless it is plainly small talk.
   Grouping (`group.md`) also spells out what the batch's `（@了我）` / `（@所有人）` markers mean: without them a group message
-  did not @ the owner, and a name @'d in the text is someone else. The user's own rules are unchanged and still come last and win.
+  did not @ the owner, and a name @'d in the text is someone else; and its input names the other side of a direct chat in
+  the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
+  The user's own rules are unchanged and still come last and win.
 - **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
   records the one the model sorted it under (`triage_rev`, kept, not listed). Each triage pass also takes up to 24 open Needs you
   items sorted under an older revision (newest activity first), skipping those a conversation handles, a suggestion waits on, a
