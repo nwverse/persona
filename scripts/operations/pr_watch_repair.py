@@ -77,8 +77,14 @@ def failed_go_tests(worktree, text):
 def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=None, command=None, failures=None, environ=None):
     """Rerun every failed lane independently before calling anything base-owned."""
     if failures:
-        evidence = [main_failure_comparison(repo, pr, worktree, item["output"], timeout=timeout,
-                                            git_root=git_root, command=item["command"], environ=environ) for item in failures]
+        evidence = []
+        for item in failures:
+            try:
+                result = main_failure_comparison(repo, pr, worktree, item["output"], timeout=timeout,
+                                                 git_root=git_root, command=item["command"], environ=environ)
+            except WatchError as error:
+                result = {"reproduced": False, "reason": str(error), "command": item["command"]}
+            evidence.append(result)
         return {"reproduced": all(item.get("reproduced") for item in evidence), "lanes": evidence,
                 "reason": "Every failed lane must reproduce on clean main."}
     if command:
@@ -142,7 +148,8 @@ def merge_base_in_isolation(pr, worktree, base):
         raise WatchError("main moved while preparing the repair")
     if run(["git", "merge-base", "--is-ancestor", base, pr["headRefOid"]], cwd=worktree).returncode == 0:
         return False
-    identity = ["-c", "user.name=chyroc", "-c", "user.email=chyroc@users.noreply.github.com"]
+    identity = ["-c", "user.name=" + checked(["git", "config", "user.name"], cwd=worktree).strip(),
+                "-c", "user.email=" + checked(["git", "config", "user.email"], cwd=worktree).strip()]
     result = run(["git"] + identity + ["merge", "--no-ff", "--no-edit", base], cwd=worktree, timeout=180)
     if result.returncode:
         raise WatchError("cannot merge current main automatically: " + bounded(result.stderr or result.stdout, 2000))
@@ -274,7 +281,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     elif not changed:
         raise WatchError("automatic repair produced no tracked file change")
     if checked(["git", "diff", "--name-only"], cwd=worktree).strip():
-        raise WatchError("repair worker left pre-staged changes outside its explicit repair diff")
+        raise WatchError("repair worker left unstaged changes outside its explicit repair diff")
     checked(["git", "add", "--"] + changed, cwd=worktree)
     message = "fix: repair automated verification failure\n\n"
     issues = linked_issue(pr.get("body", ""), repo)
@@ -289,7 +296,8 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
                 environ={key: value for key, value in os.environ.items()
                          if key in ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
                                     "PERSONA_CONFIG", "JARVIS_CONFIG")} | {"PERSONA_PRIVACY_ROOT": str(worktree)})
-        identity = ["-c", "user.name=chyroc", "-c", "user.email=chyroc@users.noreply.github.com"]
+        identity = ["-c", "user.name=" + checked(["git", "config", "user.name"], cwd=worktree).strip(),
+                "-c", "user.email=" + checked(["git", "config", "user.email"], cwd=worktree).strip()]
         if checked(["git", "diff", "--cached", "--stat"], cwd=worktree).strip():
             checked(["git"] + identity + ["commit", "-F", str(message_path)], cwd=worktree)
     finally:

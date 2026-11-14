@@ -367,9 +367,14 @@ class Watcher:
                                repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
                 self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
             return False
+        latest = pr_snapshot(repo, number)
+        if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="head_moved", repair_rounds=rounds, failure=str(error))
+            self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
+            return False
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                        outcome="repairing", repair_rounds=rounds + 1, failure=str(error))
-        latest = pr_snapshot(repo, number)
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            outcome="head_moved", repair_rounds=rounds, failure=str(error))
@@ -431,7 +436,9 @@ class Watcher:
                              bounded(old.get("failure", ""), 6000))
             old = dict(old, outcome="passed_with_base_failures")
             self.state.put(repo, number, head, evidence_key=evidence_key,
-                           outcome="passed_with_base_failures", review_posted=True)
+                           outcome="passed_with_base_failures", review_posted=True,
+                           verification=old.get("verification"), checks=old.get("checks", []),
+                           base_failures=old.get("base_failures"))
         if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
