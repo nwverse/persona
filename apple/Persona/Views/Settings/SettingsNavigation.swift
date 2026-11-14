@@ -115,6 +115,8 @@ enum SettingsCatalog {
                   aliases: String(localized: "settings.search.layout")),
             .init(id: "health", title: String(localized: "Health"), symbol: Theme.Icon.health, group: .device, page: .health,
                   aliases: String(localized: "settings.search.health")),
+            .init(id: "live-screen", title: String(localized: "Live Screen"), symbol: Theme.Icon.screen, group: .device, page: .liveScreen,
+                  aliases: String(localized: "settings.search.live_screen")),
             .init(id: "phoneData", title: ConnectorText.device, symbol: Theme.Icon.thisDevice, group: .device, page: .phoneData,
                   aliases: String(localized: "settings.search.phoneData"))
         ]
@@ -126,7 +128,15 @@ enum SettingsCatalog {
 
     static func search(_ query: String) -> [SettingsEntry] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return entries.filter { $0.matches(query) }
+        return entries.filter { $0.matches(query) && shown($0) }
+    }
+
+    /// A page that only shows while it has something to set (Live Screen) isn't found by search either.
+    private static func shown(_ e: SettingsEntry) -> Bool {
+        #if os(iOS)
+        if e.page == .liveScreen { return LiveScreenSettingsView.isShown }
+        #endif
+        return true
     }
 }
 

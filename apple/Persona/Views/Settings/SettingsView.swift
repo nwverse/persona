@@ -193,6 +193,11 @@ struct SettingsView: View {
                 settingsLink(.appearance, "Appearance & Display", Theme.Icon.style, id: "settings-appearance")
                 settingsLink(.language, "Language & Dictation", Theme.Icon.language, id: "settings-language", value: AppLanguage.settingsSummary)
                 settingsLink(.notifications, "Notifications", Theme.Icon.notifications, id: "settings-notifications")
+                #if os(iOS)
+                if LiveScreenSettingsView.isShown { // the live screen's own preferences (#6398, #6396)
+                    settingsLink(.liveScreen, "Live Screen", Theme.Icon.screen, id: "settings-live-screen")
+                }
+                #endif
                 settingsLink(.translation, "Translation", Theme.Icon.translate, id: "settings-translation", value: translationSummary)
                 settingsLink(.storage, "Storage", Theme.Icon.storage, id: "settings-storage", value: storage?.storageText ?? "")
                 #if os(iOS)
@@ -357,6 +362,11 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorBot") { p.append(SettingsPage.feishuBot) }
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
+        else if d.bool(forKey: "openLiveScreenSettings") { // Settings › Live Screen (#6398)
+            #if os(iOS)
+            p.append(SettingsPage.liveScreen)
+            #endif
+        }
         else if d.bool(forKey: "openMeetingSettings") { // Settings › Meetings (#2981)
             #if os(iOS)
             p.append(SettingsPage.meetings)
@@ -398,6 +408,8 @@ enum SettingsPage: Hashable {
     case health
     /// Settings › Meetings (#2981): Persona's default role in a recorded meeting.
     case meetings
+    /// Settings › Live Screen (#6398, #6396): how this phone shows a computer's screen (its route, its quality).
+    case liveScreen
     #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Connectors › the chat connector; `manager`: whose (Messages' Settings names the default's, whose
@@ -538,6 +550,7 @@ private struct SettingsDestinations: ViewModifier {
         #if os(iOS)
         case .health: WorkoutReportSettingsView()
         case .meetings: MeetingSettingsView()
+        case .liveScreen: LiveScreenSettingsView()
         #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
