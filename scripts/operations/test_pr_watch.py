@@ -320,6 +320,8 @@ class WatcherTests(unittest.TestCase):
                 calls.append(argv)
                 if argv[:2] == ["git", "rev-parse"]:
                     return SHA_B + "\n"
+                if argv[:3] == ["git", "diff", "--name-only"]:
+                    return "repair.py\0"
                 if argv[:3] == ["git", "diff", "--cached"]:
                     return "repair.py | 1 +\n"
                 return ""
@@ -339,6 +341,9 @@ class WatcherTests(unittest.TestCase):
         comparison = pr_watch_repair.main_failure_comparison("example/one", pr(), ".", "CI server failed")
         self.assertFalse(comparison["reproduced"])
         self.assertEqual(pr_watch_repair.failed_test_names("--- PASS: TestGood\n--- FAIL: TestBad/case\n"), ["TestBad"])
+        pr_output = "--- FAIL: TestBase\n--- FAIL: TestPR\nAssertionError: PR defect"
+        base_output = "--- FAIL: TestBase\nAssertionError: base defect"
+        self.assertNotEqual(pr_watch_repair.failure_test_ids(pr_output), pr_watch_repair.failure_test_ids(base_output))
 
     def test_continuation_pr_links_original_issue(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -412,16 +417,18 @@ class WatcherTests(unittest.TestCase):
             self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
         self.assertEqual(self.comments, [])
 
-    def test_conflicting_pr_waits_without_worker_or_requeue(self):
+    def test_conflicting_pr_enters_bounded_base_repair(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch_repair, "update_branch_with_main", return_value=False) as update, \
                 patch.object(pr_watch, "semantic_review") as review:
             self.watcher.process("example/one", 7)
         review.assert_not_called()
+        update.assert_called_once()
         with patch.object(pr_watch, "gh_json", return_value=[{"number": 7, "headRefOid": SHA_A, "isDraft": False,
                                                                "baseRefName": "main", "mergeable": "CONFLICTING"}]), \
                 patch.object(self.watcher, "enqueue") as enqueue:
             self.watcher.discover()
-        enqueue.assert_not_called()
+        enqueue.assert_called_once()
 
     def test_failure_summary_retains_actual_errors(self):
         result = subprocess.CompletedProcess([], 1, "PASS earlier lane\n" + "\n".join("ordinary" for _ in range(200)) +

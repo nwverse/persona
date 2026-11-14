@@ -115,9 +115,10 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
 
 class VerificationError(WatchError):
     """A completed failed check with enough information for a base comparison."""
-    def __init__(self, message, command=None):
+    def __init__(self, message, command=None, output=""):
         super().__init__(message)
         self.command = command
+        self.output = output
 
 
 def test_or_fix(pr, names):

@@ -264,5 +264,6 @@ def verify(repo, pr, worktree, config, environ=None):
         result = run_check(name, argv, worktree, timeout, environ)
         results.append(result)
         if not result["ok"]:
-            raise VerificationError("%s failed:\n%s" % (name, result["summary"]), command=argv)
+            raise VerificationError("%s failed:\n%s" % (name, result["summary"]), command=argv,
+                                    output=result.stdout + "\n" + result.stderr)
     return results

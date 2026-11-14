@@ -168,8 +168,6 @@ class Watcher:
                         raise WatchError("invalid PR discovery entry")
                     if item.get("isDraft") or item.get("baseRefName") != config["base"]:
                         continue
-                    if item.get("mergeable") == "CONFLICTING":
-                        continue
                     if not isinstance(item.get("headRefOid"), str) or not SHA.fullmatch(item["headRefOid"]):
                         raise WatchError("PR discovery entry has no valid head SHA")
                     self.enqueue(repo, item["number"], item["headRefOid"], "poll")
@@ -324,7 +322,7 @@ class Watcher:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            outcome="repair_exhausted", failure=str(error))
             return False
-        comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), str(error),
+        comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), getattr(error, "output", "") or str(error),
                                                              git_root=config["checkout"], command=getattr(error, "command", None))
         if comparison.get("reproduced"):
             self.log("%s#%s failure also reproduces on clean main; continue the remaining gates" % (repo, number))
