@@ -1508,6 +1508,44 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
 - **Browser sign-ins** (#1304, `machines/BrowserLogins.tsx`, `lib/cookies.ts`): when the ego extension is on and this Mac's ego lite has completed initial setup, the machine page lists signed-in websites in ego (count, latest expiry, no contents). Clear per website or all; import cookies.txt / JSON (parsed in the page, select websites, then forward via hub directly to that Mac without hub storage), see `docs/plans/plan-ego-browser.md`.
 - **Links**: see Links open inside the page below.
 
+### Saved Agent searches (#7753)
+
+People who repeatedly use the same Agent filters can save the query from Search chats (⌘K). **Save search** names
+the current nonempty search; **Saved searches** opens its management dialog. On empty input, up to five saved
+shortcuts appear after recently opened chats, preserving the previous-chat shortcut. Applying one fills the palette
+query and keeps the palette open. It never sends a message, starts an Agent, runs a command or opens a session by
+itself. Query definitions are saved, not result snapshots: `since:24h` is evaluated again when used.
+
+The existing search implementation decides what applying a query can find. This feature is independent of the
+all-indexed runtime search proposal (#7624): a hub with that capability uses it, while an older search keeps its
+existing loaded-session scope. Saving a query does not claim that the result set is complete or include archived
+sessions that the active search cannot read.
+
+A single lazy dialog replaces the palette while managing saved searches. It supports add, edit, move up/down,
+delete and **Undo deletion**. Returning restores the query that was being edited in the palette. Read-only
+connections can view and apply entries; they cannot change them. The collection holds at most 50 entries; names
+contain 1–64 Unicode characters and are unique ignoring case, queries at most 1,024 UTF-8 bytes. Empty queries,
+control characters and command-mode input beginning with `>` are rejected.
+
+The hub's default manager persists this collection in Postgres setting `agents.saved_searches`; selecting a
+different Assistant in the sidebar does not choose another collection. Reads and writes capture the manager ID
+and credential generation. A default-manager or sign-in change retires old requests, drafts and Undo. An open
+palette or management dialog follows `saved_agent_searches` events from its owner and re-reads after reconnect;
+closed views do not poll or keep event subscriptions alive. No browser-local storage pretends to be synchronized
+persistence. An older manager or a store without compare-and-swap support shows an update notice.
+
+Every mutation presents the collection revision. The manager validates the entire action and commits it through
+the existing Settings compare-and-swap, then publishes one revision-only event. A conflicting browser cannot
+overwrite another edit silently. An editor keeps its draft when a newer version arrives; the latest saved values
+are shown for review, and replacing them requires an explicit action. Failed reordering/deletion restores the last
+confirmed list. Undo restores the deleted entry's identity, original query and position only while its successful
+delete revision remains current; a newer write retires Undo or makes its server version check fail.
+
+The API is described in [the protocol](../protocol/protocol.md#saved-agent-searches). Real Postgres tests exercise
+concurrent first writes and updates, restarts, empty-list revision retention and failures. The synthetic browser
+runner `web/e2e/saved-agent-searches.mjs` verifies two-browser synchronization, query application, editor conflicts,
+ordering, Undo, permissions, owner isolation, keyboard transitions and localized layouts.
+
 ### Keyboard shortcuts and the command palette (#2330)
 
 Key bindings follow Moshi's (`src/lib/shortcuts.ts` is the registry: id, Chinese name, default key, scope; in the App, `useShortcuts` (`src/lib/use-shortcuts.ts`) registers what each one does and attaches the single keydown listener).
