@@ -581,18 +581,36 @@ func (s *Service) workEvent(machine, session, kind string, detail map[string]any
 	e := db.WorkEvent{At: time.Now().UTC(), MachineID: machine, SessionID: session, Kind: kind, Detail: detail}
 	st := s.workDB()
 	if st == nil {
-		s.work.mu.Lock()
-		s.work.testEvents = append(s.work.testEvents, e)
-		s.work.mu.Unlock()
+		s.rememberWorkEvent(e)
 		return
 	}
-	s.startWorkEventWrite(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := st.AddWorkEvent(ctx, e); err != nil {
-			s.logf("work: event: %v", err)
-		}
-	})
+	s.startWorkEventWrite(func() { s.writeWorkEvent(st, e) })
+}
+
+// workEventNow finishes the final write of an operation already counted by startWorkEventWrite. It must not be used to
+// bypass that helper's scheduling gate for a new operation.
+func (s *Service) workEventNow(machine, session, kind string, detail map[string]any) {
+	e := db.WorkEvent{At: time.Now().UTC(), MachineID: machine, SessionID: session, Kind: kind, Detail: detail}
+	st := s.workDB()
+	if st == nil {
+		s.rememberWorkEvent(e)
+		return
+	}
+	s.writeWorkEvent(st, e)
+}
+
+func (s *Service) rememberWorkEvent(e db.WorkEvent) {
+	s.work.mu.Lock()
+	s.work.testEvents = append(s.work.testEvents, e)
+	s.work.mu.Unlock()
+}
+
+func (s *Service) writeWorkEvent(st workStore, e db.WorkEvent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := st.AddWorkEvent(ctx, e); err != nil {
+		s.logf("work: event: %v", err)
+	}
 }
 
 // workEntry is a copy of a session's stored work state.

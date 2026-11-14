@@ -93,6 +93,27 @@ func (s *delayedBackgroundStore) AddWorkEvent(ctx context.Context, e db.WorkEven
 	return s.DB.AddWorkEvent(ctx, e)
 }
 
+// acceptedSendStore pauses an accepted send record while it reads the conversation roles. The test can then stop new
+// scheduling before releasing the record, proving that the rest of that accepted operation still writes its event.
+type acceptedSendStore struct {
+	*db.DB
+	rolesStarted chan struct{}
+	releaseRoles chan struct{}
+	startedOnce  sync.Once
+}
+
+func (s *acceptedSendStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if key == settingsKey {
+		s.startedOnce.Do(func() { close(s.rolesStarted) })
+		select {
+		case <-s.releaseRoles:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	return s.DB.Setting(ctx, key, out)
+}
+
 // A database-backed fleet fixture must drain the service work it started before the test's database closes. Each case
 // returns immediately: cleanup, not a sleep or an assertion inside the case, is what has to finish the background work.
 func TestFleetDatabaseFixtureDrainsBackgroundWork(t *testing.T) {
@@ -117,5 +138,32 @@ func TestFleetDatabaseFixtureDrainsBackgroundWork(t *testing.T) {
 	t.Run("work_events_after_stop", func(t *testing.T) {
 		ft := newFleetTestOn(t, newDelayedBackgroundStore(t))
 		time.AfterFunc(50*time.Millisecond, func() { ft.s.workEvent("mac", "s1", "turn_finished", nil) })
+	})
+
+	t.Run("accepted_send_after_stop", func(t *testing.T) {
+		ctx := context.Background()
+		database := taskRecoveryDatabase(t)
+		if err := database.PutSetting(ctx, settingsKey, Settings{Leaders: []string{"s1"}}); err != nil {
+			t.Fatal(err)
+		}
+		st := &acceptedSendStore{DB: database, rolesStarted: make(chan struct{}), releaseRoles: make(chan struct{})}
+		ft := newFleetTestOn(t, st)
+		ft.s.northStarOn.Store(true)
+		ft.s.recordSendAsync("mac", "s1", "resume", originManager, false, outcomeOK, "", "")
+		select {
+		case <-st.rolesStarted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("accepted send did not reach its role lookup")
+		}
+		ft.cancel()
+		close(st.releaseRoles)
+		waitFleetBackground(t, "accepted send", &ft.s.work.eventWrites)
+		events, err := database.WorkEventsBetween(ctx, time.Now().Add(-time.Minute), time.Now().Add(time.Minute), []string{sendEvent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("accepted send events after stop = %d, want 1", len(events))
+		}
 	})
 }

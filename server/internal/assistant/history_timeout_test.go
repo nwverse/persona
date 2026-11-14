@@ -64,7 +64,7 @@ func newFleetTestOn(t *testing.T, st Store) *fleetTest {
 	s := New(Options{Hub: f, Store: func() Store { return st }, Logf: t.Logf, Devices: d})
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.running.Store(&runCtx)
-	ft := &fleetTest{t: t, s: s, d: d, f: f}
+	ft := &fleetTest{t: t, s: s, d: d, f: f, cancel: cancel}
 	t.Cleanup(func() { drainFleetBackground(t, ft.s, cancel) })
 	return ft
 }
