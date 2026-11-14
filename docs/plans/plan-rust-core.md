@@ -51,7 +51,7 @@ fixtures first, then each implementation.
   possible later and needs its own issue.
 - **The Go hub** keeps its implementations (`attention`, `triage`, `fold-changes`, the continuity corpus) and keeps
   replaying the fixtures.
-- **The frozen Mac app** links the core only where shared Swift code requires it, to keep building (`docs/apple/mac.md`).
+- **The retired native Mac app** is removed with its target; it does not acquire a new core binding. The Electron desktop keeps its existing web implementation and is not a new Rust binding target (#6770).
 - **Persona Link and the watch.**
 
 ### The iOS reference
@@ -331,6 +331,13 @@ Phase 1 (#6871) lands in several PRs.
     not a claim that the original failure is waived or that physical arm64 meets a budget. There is no evidence-backed
     production codec/allocation/synchronization correction from these emulator runs; those implementations and
     continuity behavior remain unchanged. Physical arm64 / 16 KiB measurements remain required.
+  - **Android string decode and failing-report capture, after #7274.** Kotlin's generated `BinaryDeserializer` now
+    decodes a bounds-checked string range directly, retaining strict UTF-8 validation and cursor behavior while avoiding
+    its temporary `ByteArray`. Typegen owns the change and checks an independent Rust/bincode golden plus malformed,
+    truncated, trailing and excessive-length inputs. No wire type, runtime queue/lock, registry lease or original
+    benchmark span/budget changed. The runner preserves the real nonzero JUnit output before enforcing its failure;
+    the physical arm64 / 16 KiB cells remain **blocked: no physical device** by the maintainer's 2026-11-14 decision,
+    not passes. Raw emulator A/B evidence and its limits belong in the linked PR, not a claim of device acceptance.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
     The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.

@@ -5560,6 +5560,29 @@
       },
       "extractionState" : "manual"
     },
+    "%lld / %lld items · " : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld items · "
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld 項目 · "
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld 项 · "
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld / %lld viewed" : {
       "localizations" : {
         "en" : {
@@ -14498,6 +14521,29 @@
       },
       "extractionState" : "manual"
     },
+    "A whole number from %lld to %lld." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A whole number from %1$lld to %2$lld."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld〜%2$lld の整数を入力してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "填 %1$lld 到 %2$lld 之间的整数。"
+          }
+        }
+      }
+    },
     "AI Draft Reply" : {
       "localizations" : {
         "en" : {
@@ -14819,6 +14865,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "AI-generated from the recording. Check anything important." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI-generated from the recording. Check anything important."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由 AI 根据录音生成，重要内容请核对。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音から AI が作成しました。重要な内容は確認してください。"
+          }
+        }
+      }
     },
     "API Key" : {
       "shouldTranslate" : true,
@@ -17848,6 +17917,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Agent Follow-Up" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent Follow-Up"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントのフォロー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 跟进"
+          }
+        }
+      }
     },
     "Agent Session" : {
       "localizations" : {
@@ -23389,6 +23481,29 @@
       },
       "extractionState" : "manual"
     },
+    "Archive After How Many Days?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive After How Many Days?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何日後にアーカイブしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "闲置多少天后归档？"
+          }
+        }
+      }
+    },
     "Archive Chat" : {
       "localizations" : {
         "en" : {
@@ -23411,6 +23526,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Archive Closed Sessions After" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive Closed Sessions After"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "閉じたセッションをアーカイブ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭的会话多久后归档"
+          }
+        }
+      }
     },
     "Archive.zip" : {
       "extractionState" : "manual",
@@ -27759,6 +27897,29 @@
         }
       }
     },
+    "Both off by default. While the first is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first. The second also follows up Agents started outside the main chat, and uses extra model calls." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Both off by default. While the first is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first. The second also follows up Agents started outside the main chat, and uses extra model calls."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どちらも既定でオフです。1 つ目がオフのあいだは、Persona が任せたタスクをバックグラウンド監督がフォローし、メインチャットはあなたへの返信を優先します。2 つ目はメインチャット以外から開始したエージェントもフォローし、モデルの呼び出しが増えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两项默认都关闭。第一项关着时，Persona 派出的任务由后台督办跟进，主对话优先回复你。第二项让不是从主对话派出的 Agent 也有人跟进，会多花一些模型调用。"
+          }
+        }
+      }
+    },
     "Both versions have the same text; the change may be in formatting, images, or layout. Open each one with the buttons below." : {
       "localizations" : {
         "en" : {
@@ -29015,6 +29176,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "按规则"
+          }
+        }
+      }
+    },
+    "By default an idle Agent stops after 12 hours and keeps its terminal, and a closed session with no open task moves to Archived after 3 idle days." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "By default an idle Agent stops after 12 hours and keeps its terminal, and a closed session with no open task moves to Archived after 3 idle days."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既定では、12 時間アイドル状態のエージェントは停止し、ターミナルは残ります。閉じていて未完了のタスクがないセッションは、3 日間アイドルが続くと「アーカイブ済み」に移ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认闲置 12 小时的 Agent 会停止，终端保留；已关闭、身上没有未完成任务的会话闲置 3 天后移到「已归档」。"
           }
         }
       }
@@ -31662,6 +31846,50 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Cancel compression of %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel compression of %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ の圧縮をキャンセル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消压缩 %@"
+          }
+        }
+      }
+    },
+    "Cancel copy of %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel copy of %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のコピーをキャンセル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消复制 %@"
+          }
+        }
+      }
     },
     "Cancel download of %@" : {
       "localizations" : {
@@ -39488,6 +39716,29 @@
       },
       "extractionState" : "manual"
     },
+    "Compressing on the computer…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compressing on the computer…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータで圧縮中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在电脑上压缩…"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Computer" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -43771,6 +44022,29 @@
       },
       "extractionState" : "manual"
     },
+    "Copying on the computer…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copying on the computer…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータでコピー中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在电脑上复制…"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Coral" : {
       "localizations" : {
         "en" : {
@@ -43793,6 +44067,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Core Conclusions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Core Conclusions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "核心结论"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主な結論"
+          }
+        }
+      }
     },
     "Cores" : {
       "localizations" : {
@@ -45561,6 +45858,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Couldn't load [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't load"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载"
+          }
+        }
+      }
     },
     "Couldn't load [Connector Thread Models 153e20]" : {
       "localizations" : {
@@ -47672,6 +47992,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没保存：%1$@"
+          }
+        }
+      }
+    },
+    "Couldn't save: %@ [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存できませんでした：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能保存：%1$@"
           }
         }
       }
@@ -49813,6 +50156,29 @@
       },
       "extractionState" : "manual"
     },
+    "Custom… [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Custom…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カスタム…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义…"
+          }
+        }
+      }
+    },
     "Cut short here. The whole message is in its conversation." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -50362,6 +50728,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "待拍板"
+          }
+        }
+      }
+    },
+    "Decision [Minutes Overview]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Decision"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "决定"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "決定"
           }
         }
       }
@@ -55832,6 +56221,29 @@
         }
       }
     },
+    "Done: %@ [Minutes To-Do]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了：%1$@"
+          }
+        }
+      }
+    },
     "Double-click %@" : {
       "localizations" : {
         "en" : {
@@ -60071,6 +60483,29 @@
       },
       "extractionState" : "manual"
     },
+    "Existing Workspaces" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Existing Workspaces"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既存のワークスペース"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已有工作区"
+          }
+        }
+      }
+    },
     "Exit Demo Mode" : {
       "localizations" : {
         "en" : {
@@ -62973,6 +63408,29 @@
       },
       "extractionState" : "manual"
     },
+    "Fix Unhelpful Session Names" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fix Unhelpful Session Names"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分かりにくいセッション名を修正"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修正不好用的会话名字"
+          }
+        }
+      }
+    },
     "Fix it" : {
       "localizations" : {
         "en" : {
@@ -63478,6 +63936,29 @@
         }
       }
     },
+    "Follow Up Every Agent Persona Starts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow Up Every Agent Persona Starts"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が開始したすべてのエージェントをフォロー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 开的每个 Agent 都有人跟进"
+          }
+        }
+      }
+    },
     "Follow the Rules" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -63520,6 +64001,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "待跟进"
+          }
+        }
+      }
+    },
+    "Follow-up [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow-up"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォロー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟进"
           }
         }
       }
@@ -68717,6 +69221,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "How Many Name Changes?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How Many Name Changes?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前の変更は何回までにしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个会话最多改名几次？"
+          }
+        }
+      }
     },
     "How did I sleep this week?" : {
       "localizations" : {
@@ -87411,6 +87938,29 @@
       },
       "extractionState" : "manual"
     },
+    "Name Changes per Session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name Changes per Session"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションごとの名前変更"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个会话最多改名几次"
+          }
+        }
+      }
+    },
     "Name Recordings After Calendar Meetings" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -88491,6 +89041,52 @@
       },
       "extractionState" : "manual"
     },
+    "Never [Agent Follow-Up archive]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Never"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブしない"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不归档"
+          }
+        }
+      }
+    },
+    "Never [Agent Follow-Up stop]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Never"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止しない"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不停止"
+          }
+        }
+      }
+    },
     "Never ask" : {
       "comment" : "Codex approval policy",
       "localizations" : {
@@ -89387,6 +89983,29 @@
       },
       "extractionState" : "manual"
     },
+    "New Tasks Prefer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Tasks Prefer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タスクで優先する場所"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派任务时优先用"
+          }
+        }
+      }
+    },
     "New Terminal" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -89616,6 +90235,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "New Workspaces" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Workspaces"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいワークスペース"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建工作区"
+          }
+        }
+      }
     },
     "New Worktree" : {
       "localizations" : {
@@ -101138,6 +101780,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "On by default: only clearly unusable names are fixed, once per session, with your information sorting model. Names you set are never replaced. Regular updates come only after new output and count toward the limit." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On by default: only clearly unusable names are fixed, once per session, with your information sorting model. Names you set are never replaced. Regular updates come only after new output and count toward the limit."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既定でオン：明らかに使えない名前だけを、セッションごとに 1 回、情報整理モデルで修正します。自分で付けた名前は置き換えません。定期的な更新は新しい出力があったときだけ行われ、回数に含まれます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认开启：只修正明显没法用的名字，每个会话一次，用你选的信息分拣模型；你自己起的名字不会被换掉。定期更新只在有新输出时进行，也算进次数。"
+          }
+        }
+      }
+    },
+    "On by default: what you ask for in a chat starts at once; tasks Persona thinks of itself still wait for Start. Read-only tasks never get a new workspace, and a busy folder gets its own copy." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On by default: what you ask for in a chat starts at once; tasks Persona thinks of itself still wait for Start. Read-only tasks never get a new workspace, and a busy folder gets its own copy."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既定でオン：チャットで頼んだことはすぐに始まり、Persona が自分で考えたタスクは「開始」を待ちます。読み取り専用のタスクは新しいワークスペースを作らず、使用中のフォルダでは別のコピーを使います。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认开启：你在对话里让 Persona 做的事会直接开始；Persona 自己想到的任务仍等你点「开始」。只读任务不新建工作区，目录正被占用时另开一份。"
+          }
+        }
+      }
     },
     "On demand" : {
       "extractionState" : "manual",
@@ -115258,6 +115946,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Raise Name Changes per Session above 1 so regular updates can rename a session." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Raise Name Changes per Session above 1 so regular updates can rename a session."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定期的に名前を更新するには、「セッションごとの名前変更」を 2 回以上にしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要定期更新，请把「每个会话最多改名几次」调到 1 次以上。"
+          }
+        }
+      }
     },
     "Ran" : {
       "localizations" : {
@@ -131966,6 +132677,29 @@
       },
       "extractionState" : "manual"
     },
+    "Session names [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session names"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション名"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话名字"
+          }
+        }
+      }
+    },
     "Session note" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -133185,6 +133919,29 @@
         }
       }
     },
+    "Show %lld More" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show %lld More"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开其余 %lld 条"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残り %lld 件を表示"
+          }
+        }
+      }
+    },
     "Show %lld idle agents" : {
       "localizations" : {
         "en" : {
@@ -133219,6 +133976,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Show %lld more in %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show %1$lld more in %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开“%2$@”的其余 %1$lld 条"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%2$@」の残り %1$lld 件を表示"
+          }
+        }
+      }
     },
     "Show Agents (%lld)" : {
       "localizations" : {
@@ -134364,6 +135144,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在转写中查看 %1$@ 处"
+          }
+        }
+      }
+    },
+    "Show less of %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show less of %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起“%1$@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」を閉じる"
           }
         }
       }
@@ -138147,6 +138950,29 @@
       },
       "extractionState" : "manual"
     },
+    "Start What I Ask Right Away" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start What I Ask Right Away"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会話で頼んだタスクはすぐ開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我在对话里说过的，直接开始"
+          }
+        }
+      }
+    },
     "Start Your First Session" : {
       "localizations" : {
         "en" : {
@@ -139074,6 +139900,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Starting tasks [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting tasks"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タスクの開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "派任务"
+          }
+        }
+      }
     },
     "Starting the agent" : {
       "localizations" : {
@@ -140087,6 +140936,29 @@
       },
       "extractionState" : "manual"
     },
+    "Stop After How Many Hours?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop After How Many Hours?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何時間後に停止しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "闲置多少小时后停止？"
+          }
+        }
+      }
+    },
     "Stop Dictation" : {
       "localizations" : {
         "en" : {
@@ -140109,6 +140981,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Stop Idle Agents After" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop Idle Agents After"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アイドル状態のエージェントを停止"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 闲置多久后停止"
+          }
+        }
+      }
     },
     "Stop Loop" : {
       "localizations" : {
@@ -161221,6 +162116,29 @@
         }
       }
     },
+    "Tidying up [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tidying up"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "後片付け"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收尾"
+          }
+        }
+      }
+    },
     "Tier" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -167125,6 +168043,29 @@
       },
       "extractionState" : "manual"
     },
+    "Unlimited [Agent Follow-Up]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlimited"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無制限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不限"
+          }
+        }
+      }
+    },
     "Unlink" : {
       "localizations" : {
         "en" : {
@@ -168298,6 +169239,52 @@
       },
       "extractionState" : "manual"
     },
+    "Update Every" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Every"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新間隔"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新间隔"
+          }
+        }
+      }
+    },
+    "Update Every How Many Hours?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Every How Many Hours?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何時間ごとに更新しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每隔多少小时更新？"
+          }
+        }
+      }
+    },
     "Update History" : {
       "localizations" : {
         "en" : {
@@ -168389,6 +169376,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Update Names Regularly" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Names Regularly"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前を定期的に更新"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定期更新名字"
+          }
+        }
+      }
     },
     "Update Now" : {
       "localizations" : {
@@ -177035,29 +178045,6 @@
       },
       "extractionState" : "manual"
     },
-    "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭时，Persona 派出的任务由后台督办跟进，主对话优先回复你。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "オフのあいだは、Persona が任せたタスクをバックグラウンド監督がフォローし、メインチャットはあなたへの返信を優先します。"
-          }
-        }
-      }
-    },
     "While you're using a computer with Persona Link, this iPhone stops sending “Needs you” notifications and Persona Link shows them there. “Agent done” and reminders you asked Persona to set still come to this iPhone. Lock each of these computers or quit Persona Link on it, and this iPhone sends “Needs you” again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -184430,6 +185417,29 @@
         }
       }
     },
+    "settings.search.agent_follow_up" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "agent follow-up supervise supervisor idle stop archive closed sessions names rename workspace start tasks"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェント フォロー 監督 アイドル 停止 アーカイブ セッション 名前 ワークスペース タスク 開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 跟进 督办 闲置 停止 归档 会话 名字 改名 工作区 派任务 开始"
+          }
+        }
+      }
+    },
     "settings.search.agents" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -185909,6 +186919,29 @@
         }
       }
     },
+    "workspace.chooseStart" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Workspace"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ワークスペースを選択"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择工作区"
+          }
+        }
+      }
+    },
     "workspace.history" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -185951,6 +186984,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在所选工作树中打开新的会话标签。"
+          }
+        }
+      }
+    },
+    "workspace.kind.folder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Folder"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フォルダ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹"
+          }
+        }
+      }
+    },
+    "workspace.kind.main" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Main checkout"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインのチェックアウト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主检出"
+          }
+        }
+      }
+    },
+    "workspace.kind.worktree" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Worktree"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ワークツリー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作树"
           }
         }
       }
@@ -186043,6 +187145,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这里还没有会话，可以在此工作树新建。"
+          }
+        }
+      }
+    },
+    "workspace.otherGroup" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other Workspaces"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その他のワークスペース"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他工作区"
           }
         }
       }
@@ -186181,6 +187306,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新工作树使用此工作树的仓库和当前提交。"
+          }
+        }
+      }
+    },
+    "workspace.start" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ワークスペース"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区"
           }
         }
       }
@@ -189996,6 +191144,213 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "期限の日"
+          }
+        }
+      }
+    },
+    "Conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "处理对话"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "処理の会話"
+          }
+        }
+      }
+    },
+    "This link isn't possible. Choose something else." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This link isn't possible. Choose something else."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个关联不成立，请选择其他内容。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この関連付けはできません。別の項目を選択してください。"
+          }
+        }
+      }
+    },
+    "tomorrow [Inbox Now]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tomorrow"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "明日"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "明天"
+          }
+        }
+      }
+    },
+    "None [Todo Project]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不归类"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "なし"
+          }
+        }
+      }
+    },
+    "Unsorted [Todo Project]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unsorted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未归类"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未分類"
+          }
+        }
+      }
+    },
+    "Delete This Project?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete This Project?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这个项目？"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このプロジェクトを削除しますか？"
+          }
+        }
+      }
+    },
+    "“%@” leaves the lists, search and the assistant's context. Its chats, people and documents stay; they just stop naming it. You can undo this right after." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@” leaves the lists, search and the assistant's context. Its chats, people and documents stay; they just stop naming it. You can undo this right after."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」会从列表、搜索和助手的上下文里移除。它关联的聊天、人和文档都还在，只是不再关联它。删除后可以马上撤销。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」は一覧、検索、アシスタントのコンテキストから外れます。関連するチャット、人、ドキュメントは残り、関連付けだけが外れます。削除直後なら元に戻せます。"
+          }
+        }
+      }
+    },
+    "Couldn't delete: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't delete: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除失败：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除できませんでした：%1$@"
+          }
+        }
+      }
+    },
+    "Couldn't restore “%@”: a newer project has the same name." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't restore “%1$@”: a newer project has the same name."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法恢复「%1$@」：已经有一个同名的新项目。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」を元に戻せません：同じ名前の新しいプロジェクトがあります。"
           }
         }
       }

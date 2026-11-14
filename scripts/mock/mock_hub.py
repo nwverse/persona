@@ -2388,6 +2388,11 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "main_supervises_own_tasks": False,
                     # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
                     "idle_close_hours": 12,
+                    # Start what the owner asked for right away (#2559), on by default; the workspace a dispatched task
+                    # prefers (#3659); fixing unhelpful session names (#4965): on, at most once, no regular updates.
+                    # Left out with MOCK_LEGACY_HUB (Agent Follow-Up, #7005).
+                    "start_requested_tasks": True, "task_workspace_preference": "prefer-existing",
+                    "agent_auto_naming": True, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
@@ -2417,7 +2422,10 @@ def assistant_state(space="", archived=False):
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
-                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"])
+                   main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
+                   agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
+                   agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"])
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -2854,6 +2862,13 @@ if MOCK_LEADERS:
          "origin": MOCK_LEADERS[0], "created_at": ago(hours=3), "updated_at": ago(hours=3), "spaces": [], "agents": [],
          "supervision": _lead_supervision(MOCK_LEADERS[0])},
     ])
+# MOCK_TODO_PROJECTS=1: to-dos filed under the example knowledge-base projects (#2581, #7077): two under 天气 App, two
+# under 照片同步脚本, one under the blog; the rest in none.
+if os.environ.get("MOCK_TODO_PROJECTS") == "1":
+    for _t in TODOS_INIT:
+        _p = {"todo_weather": "weather-app", "todo_review": "weather-app", "todo_photos": "photo-sync", "todo_nas": "photo-sync",
+              "todo_blog": "blog"}.get(_t["id"])
+        if _p: _t["project"] = _p
 TODOS = copy.deepcopy(TODOS_INIT)
 
 _DIRECTION_STATE_ORDER = {"needs_you": 0, "review": 1, "stuck": 2, "working": 3, "planned": 4}
@@ -3391,6 +3406,7 @@ KB = {
 }
 KB_TAGS = {"projects": ["iOS", "前端", "个人"]}
 KB_UPDATES = []  # what "Tagging" saved (read back at /mock/kb_updates)
+KB_TRASH = {}  # deleted projects by trash id (DELETE /api/v1/kb/projects/{id}, POST /api/v1/kb-trash/{id}/restore)
 # Recordings synced from the phone (docs/protocol/protocol.md "Recording sync", #3235): uuid → the last body PUT; deleted ids are
 # tombstones (a later PUT gets 410). GET /mock/recordings reads both back. MOCK_RECORDINGS_DOWN=1: 503 (the hub away).
 RECORDINGS = {}
@@ -12277,10 +12293,6 @@ if MOCK_INBOX_EVENTS:
             if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
-# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
-# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
-# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
-# now_clock themselves. This takes precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 # MOCK_INBOX_TODO=1: a to-do suggestion (#6480) on the mail "Can we move the design review?": title, and a due day two days on
 # (MOCK_INBOX_TODO=time: with a time, so All Day is off).
 if os.environ.get("MOCK_INBOX_TODO"):
@@ -12292,12 +12304,29 @@ if os.environ.get("MOCK_INBOX_TODO"):
         _td["status"] = "action"
 
 
+# MOCK_INBOX_SHOWCASE=1: run `MOCK_INBOX_SHOWCASE=1 python3 scripts/mock/mock_hub.py` to serve the shared
+# side-by-side screenshot scenario from spec/fixtures/inbox/showcase.json. The list and item details keep the
+# fixture's items exactly as written, including their timestamps; clients fix their clocks to the fixture's
+# now_clock themselves. Its sessions and their example computer join the ordinary session and machine lists with the
+# same row fields as the mock's other rows, so the timeline and Agents list can show the Agent's live state. This takes
+# precedence over MOCK_INBOX_EVENTS and leaves every other switch unchanged.
 MOCK_INBOX_SHOWCASE = os.environ.get("MOCK_INBOX_SHOWCASE") == "1"
 if MOCK_INBOX_SHOWCASE:
     _showcase_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                   "spec", "fixtures", "inbox", "showcase.json")
     with open(_showcase_path, encoding="utf-8") as _f:
-        INBOX[:] = json.load(_f)["items"]
+        _showcase = json.load(_f)
+    INBOX[:] = _showcase["items"]
+    MACHINES.append({"id": "m1", "name": "示例电脑", "kind": "ssh", "icon": "desktop", "ssh_host": "example-computer", "online": True,
+                     "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user",
+                     "herdr_version": "0.9.5", "claude_version": "2.1.320", "last_seen": ago()})
+    for _i, _row in enumerate(_showcase.get("sessions", [])):
+        _state = _row["state"]
+        _status = {"working": "working", "needs_you": "blocked", "unread": "done", "offline": "offline"}.get(_state, "idle")
+        _session = sess(_row["machine_id"], _row["session_id"], _row["title"], _row.get("cwd", ""),
+                        _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
+        _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
+        SESSIONS.append(_session)
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -15312,6 +15341,73 @@ LIFT_ASK_KEY = "b2e4d6f8-0000-4000-8000-0000000c1e0c"
 # An answer long enough to be drawn in parts (#4970, `AnswerParts`: 95 lines, three parts): a long press on its middle
 # part lifts, copies and selects all of it (#5221). Its first and last sentences are in its first and last parts.
 LIFT_SPLIT = "a1f3c2d4-0000-4000-8000-0000000c1e0e"
+# Rows of every kind one under another in a working Agent's chat (#6645): a long answer drawn in parts, your message,
+# a folded run of tools, a short answer, a message another session sent (folded, 「From …」), a plan, more answers. A
+# long press on the top or the bottom of each lifts that one, never its neighbour.
+LIFT_ROWS = "a1f3c2d4-0000-4000-8000-0000000c1e10"
+
+
+def lift_rows():
+    # Synthetic text: a shop app's images moving to new storage while another session rebuilds its search index.
+    batches = "\n".join(f"{n}. 第 {n} 批：{what}，这一批没搬完就不开始下一批，进度记在迁移记录里。" for n, what in enumerate(
+        ["评论里的晒图，先搬最近一年的", "已下架商品的图片", "客服聊天里发过的图片", "活动页的大图和视频封面"], 1))
+    moved = "\n".join(f"  - {w}" for w in ["商品图 18 万张，校验和全部一致。", "用户头像 4 万张，旧地址都已经跳转到新地址。",
+                                            "首页轮播和广告位的图片换成了新地址。", "复制脚本改成可以断点续传，命令是 `make copy-images`。"])
+    parts = "\n\n".join(f"### {n}. {name}\n\n{name}已经处理好：{what}改动集中在一个分支上，每个提交都写明了原因，出问题时可以单独撤回。"
+                        "切换前后各抽查了一千张图，尺寸、格式和校验和都一致，抽查清单放在迁移记录里，想看随时可以翻。切换那天晚上我一直盯着告警，没有新增报错。\n\n"
+                        f"{name}目前没有需要你拍板的地方；有一个命名我还在犹豫，先沿用了旧的写法，等全部搬完再统一改。"
+                        for n, (name, what) in enumerate([("缩略图", "三种尺寸都按新规则重新生成了，"),
+                                                          ("原图", "原图按上传日期分批复制，"),
+                                                          ("旧链接", "旧地址统一跳到新地址，外面收藏的链接不会断，"),
+                                                          ("缓存", "新地址缓存七天，换图时连文件名一起换，"),
+                                                          ("费用", "按上个月的流量估算，存储和流量费用大约降三成，"),
+                                                          ("监控", "复制失败和跳转出错都会进告警，"),
+                                                          ("开关", "读新地址还是旧地址由一个开关决定，"),
+                                                          ("客户端", "App 和网页都只认后端给的地址，不用发新版，"),
+                                                          ("手册", "运维手册和出错时的处理步骤都改好了，")], 1))
+    long = ("## 图片搬家的进度\n\n" + parts + "\n\n"
+            "- **已经搬完的：**\n" + moved + "\n"
+            "- **抽查结果：** 随机抽了 3000 张，缩略图、原图和跳转全部正常。夜里有一批复制任务在高峰时偶尔超时，"
+            "重试一次就过了，和图片本身无关。\n"
+            "- **剩下的批次按顺序搬，哪一批出错就停：**\n" + "\n".join("  " + s for s in batches.split("\n")) + "\n"
+            "- **时间：** 剩下大约 26 万张，按现在的速度要四个晚上，周五前能搬完。\n"
+            "- **视频：** 这次没动，留到下一轮。\n\n"
+            "**旧存储桶要你来决定：** 搬完以后我建议旧桶先只读保留一个月，再整个删掉；删桶要账号管理员的权限，我这边做不了。"
+            "删之前我会再核对一遍新旧两边的文件数，也会把本机的临时目录清掉。\n\n"
+            "每搬完一批我会在这里说一声。")
+    peer = ("The search index rebuild is ready: branch search-v2, commit 9c1d07ab, worktree ~/code/shop-app-wt/search-v2, "
+            "built on today's main. Product, review and help-center search all pass their tests; queries with very long "
+            "filters are still slower than before on my side, and I have not found out why in about 20 tries. The old index keeps running next to it, so going back is one setting.")
+    r = [it("user", "text", 60, text="图片搬得怎么样了？整理一下进度"),
+         it("assistant", "text", 58, text=long),
+         it("user", "text", 40, text="先停掉夜里的自动搬运")]
+    for n in range(6):
+        r += tool("Bash", {"command": f"scripts/copy-images.sh --batch {n + 1} --dry-run", "description": f"试跑第 {n + 1} 批"}, "ok",
+                  39 - n * 0.2)
+    r += [it("assistant", "text", 37, text="I've paused the nightly copy job. It was in the middle of batch 5, so I let the current file "
+                                           "finish and stopped there; nothing is half-written.\n\nWhen you turn it back on, it goes "
+                                           "in this order:\n\n1. Finish batch 5, the review photos from the last year, and check "
+                                           "every checksum.\n2. Copy the images of products no longer for sale, then switch their "
+                                           "links.\n3. Copy the support chat images and the campaign banners.\n\nI'll post here "
+                                           "after each batch."),
+          it("user", "text", 30, text=peer, **{"from": "shop-app-search"})]
+    r += tool("Read", {"file_path": "/Users/me/code/shop-app/docs/search.md"}, "# Search", 29)
+    r += [it("assistant", "text", 28, text="The search session has finished the index rebuild. Product, review and help-center search "
+                                           "are all ready on their branch.\n\nThe image move still runs at night, so I'm not switching "
+                                           "anything yet. Please decide here first: if you want the new index, once the images are "
+                                           "moved I'll merge their branch into main, rebuild the index once on a copy of the "
+                                           "production data, and switch search over in a quiet hour. One thing is still open on "
+                                           "their side: queries with very long filters are slower than before, and nobody knows why "
+                                           "yet. I'll measure that myself before switching.\n\nReply \"go ahead\" or \"wait\"."),
+          it("user", "text", 20, text="列个上线步骤给我看看")]
+    r += tool("ExitPlanMode", {"plan": "## 上线新索引\n\n1. 图片搬完以后把搜索分支合进 main\n2. 用一份生产数据的副本重建一次索引\n"
+                                       "3. 量一下筛选条件很长的查询，慢得多就先不切\n4. 挑凌晨人最少的时候切换，旧索引留三天"},
+              "User has approved your plan.", 19)
+    r += [it("user", "text", 12, text="为什么夜里的搬运任务报磁盘满了\n\n/tmp/shop-app/copy-images-20261102-031500.log")]
+    r += tool("Grep", {"pattern": "tmpdir", "path": "/Users/me/code/shop-app/jobs"}, "jobs/copy.go:88", 11)
+    r += [it("assistant", "text", 10, text="Found the cause: the copy job writes every image to a temporary folder first and never "
+                                           "cleans it up, so the disk fills after a few batches. Fixing that now.")]
+    return r
 
 
 def lift_split_answer():
@@ -15411,6 +15507,9 @@ def mock_message_lift():
     SESSIONS.append(sess("macbook", LIFT_MIX, "定时核对", repo, "done", "done", "shop-app", 17, "lift", 3, 7, "下一次核对在整点之后五分钟。"))
     ITEMS[LIFT_SPLIT] = [it("user", "text", 6, text="把这次数据迁移的安排整理成一份总结"), it("assistant", "text", 4, text=lift_split_answer())]
     SESSIONS.append(sess("macbook", LIFT_SPLIT, "迁移总结", repo, "done", "done", "shop-app", 17, "lift", 6, 4, "以上是这次迁移的全部总结，有问题随时找我。"))
+    ITEMS[LIFT_ROWS] = lift_rows()
+    SESSIONS.append(sess("macbook", LIFT_ROWS, "图片搬家", repo, "working", "working", "shop-app", 17, "lift", 7, 1,
+                         "Found the cause: the temporary folder is never cleaned up."))
 
 
 if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
@@ -23082,6 +23181,8 @@ def markets_route(handler, p, body):
 FILE_OPS = bool(os.environ.get("MOCK_FILE_OPS"))
 FILE_TRASH = {}  # trash id -> (tree key, {key: value} of everything moved)
 FILE_OPS_LOG = []  # what the browser asked (a test reads it from the module)
+FILE_OPERATIONS = {}  # operation id -> synthetic copy / zip progress for the transfer bars
+FILE_OPERATION_DELAY = float(os.environ.get("MOCK_FILE_OP_DELAY", "0"))
 _features_without_file_ops = features
 
 
@@ -23102,10 +23203,10 @@ def file_ops_key(mid, path, cwd):
     return home, rel, None
 
 
-def file_ops_free(dir_rel, name, conflict):
+def file_ops_free(dir_rel, name, conflict, reserved=()):
     """The name `name` takes in folder `dir_rel` (a tree key ending in / or ""): itself, or "name 2.extension" to keep both;
     None when it is taken and nothing was said."""
-    taken = lambda n: dir_rel + n in MOCK_TREE or dir_rel + n + "/" in MOCK_TREE
+    taken = lambda n: dir_rel + n in MOCK_TREE or dir_rel + n + "/" in MOCK_TREE or dir_rel + n in reserved or dir_rel + n + "/" in reserved
     if not taken(name) or conflict == "replace": return name
     if conflict != "keep": return None
     stem, dot, ext = name.rpartition(".")
@@ -23114,6 +23215,65 @@ def file_ops_free(dir_rel, name, conflict):
         n = "%s %d%s%s" % (stem, i, dot, ext)
         if not taken(n): return n
     return None
+
+
+def file_operation_start(req, kind):
+    """Register a synthetic remote operation; even a quick one can be read after its POST answers."""
+    oid = req.get("operation_id")
+    if not oid: return None
+    total = max(1, len(req.get("paths", [])))
+    op = {"id": oid, "kind": kind, "state": "running", "files_done": 0, "files_total": total,
+          "bytes_done": 0, "bytes_total": total * 100}
+    FILE_OPERATIONS[oid] = op
+    return op
+
+
+def file_operation_disconnected(h):
+    """The original POST's client went away, as a cancelled hub request disconnects the node."""
+    import select, socket
+    try:
+        if not select.select([h.connection], [], [], 0)[0]: return False
+        return h.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except (ValueError, TypeError, BlockingIOError):
+        return False  # an SSLSocket cannot peek with these flags
+    except OSError:
+        return True
+
+
+def file_operation_wait(h, op):
+    """Hold a synthetic operation open while its GET route reports progress; false after Cancel."""
+    if op is None: return True
+    if not FILE_OPERATION_DELAY:
+        op.update(state="done", files_done=op["files_total"], bytes_done=op["bytes_total"])
+        return True
+    started = time.monotonic()
+    while True:
+        if file_operation_disconnected(h):
+            op["state"] = "cancelled"
+            return False
+        elapsed = time.monotonic() - started
+        fraction = min(1.0, elapsed / FILE_OPERATION_DELAY)
+        op["files_done"] = min(op["files_total"], int(op["files_total"] * fraction))
+        op["bytes_done"] = min(op["bytes_total"], int(op["bytes_total"] * fraction))
+        if fraction >= 1:
+            op.update(state="done", files_done=op["files_total"], bytes_done=op["bytes_total"])
+            return True
+        time.sleep(0.05)
+
+
+def file_operation_route(h, p):
+    """GET a remote operation, or the synthetic states used by UI acceptance."""
+    if p == "/mock/file-operations" and FILE_OPS:
+        h.send_json({"operations": list(FILE_OPERATIONS.values())})
+        return True
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/operations/([^/]+)", p)
+    if not (FILE_OPS and m): return False
+    op = FILE_OPERATIONS.get(m.group(2))
+    if op is None:
+        h.send_json({"error": "file operation not found", "code": "not_found"}, 404)
+    else:
+        h.send_json(op)
+    return True
 
 
 def file_ops_dir(mid, d, cwd):
@@ -23269,14 +23429,21 @@ def file_make_route(h, p, body):
     if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
         home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
         if err: return h.send_json(*err) or True
-        copied = []
+        planned = []
+        reserved = set()
         for path in req.get("paths", []):
             _, rel, err = file_ops_key(mid, path, cwd)
             if err: return h.send_json(*err) or True
             if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
             name = rel.rpartition("/")[2]
-            final = file_ops_free(drel, name, req.get("conflict"))
+            final = file_ops_free(drel, name, req.get("conflict"), reserved)
             if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+            reserved.add(drel + final)
+            planned.append((path, rel, final))
+        operation = file_operation_start(req, op)
+        if not file_operation_wait(h, operation): return True  # Cancel disconnected the POST before anything was copied.
+        copied = []
+        for path, rel, final in planned:
             for k, v in list(MOCK_TREE.items()):
                 if k == rel or k == rel + "/" or k.startswith(rel + "/"): MOCK_TREE[drel + final + k[len(rel):]] = v
             copied.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
@@ -23298,10 +23465,14 @@ def file_make_route(h, p, body):
                     n += 1
     name = req.get("name") or "Archive.zip"
     if not name.lower().endswith(".zip"): name += ".zip"
+    home, drel, final = None, None, None
     if req.get("dir"):
         home, drel, err = file_ops_dir(mid, req["dir"], cwd)
         if err: return h.send_json(*err) or True
         final = file_ops_free(drel, name, "keep")
+    operation = file_operation_start(req, op)
+    if not file_operation_wait(h, operation): return True  # Cancel: no archive or temporary download is left behind.
+    if req.get("dir"):
         MOCK_TREE[drel + final] = ("application/zip", base64.b64encode(out.getvalue()).decode())
         fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
         return h.send_json({"path": home + "/" + drel + final, "name": final, "size": len(out.getvalue()), "files": n}) or True
@@ -23458,6 +23629,7 @@ VOICE_VOICES = {
 MOCK_HELP = [
     "MOCK_TURN_USAGE=1|multi|unpriced  What a finished exchange cost, after the reply's time: \"菜谱搜索按用时排序\" on Opus 5.5 (1), with a Sonnet 5.5 subagent (multi), or on Haiku 5.5 without a price (unpriced: its tokens); the main conversation's last exchange the same (#5426)",
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_TODO_PROJECTS=1  To-dos filed under the example knowledge-base projects (#7077: the detail's Project, Group By › Project)",
     "MOCK_KB_CORRECTIONS=1  Knowledge base: the lists links are held in, so links can be removed, and confirmed facts on one person (#6997)",
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
@@ -23886,6 +24058,7 @@ class H(BaseHTTPRequestHandler):
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
+        if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
@@ -25569,6 +25742,26 @@ class H(BaseHTTPRequestHandler):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
             return self.send_json(out_machine(machine))
+        if self.command == "DELETE" and re.fullmatch(r"/api/v1/kb/projects/[^/]+", p):  # soft delete (#4412, kb/project_trash.go)
+            if MEETING_MODE["kb_read_only"]: return self.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
+            slug = unquote(p.rsplit("/", 1)[1])
+            e = next((e for e in KB["projects"] if e["id"] == slug), None)
+            if e is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            KB["projects"].remove(e)
+            tid = time.strftime("%Y%m%d%H%M%S") + "-%d" % (len(KB_TRASH) + 1)
+            KB_TRASH[tid] = {"entry": e, "detail": KB_DETAIL.pop(("projects", slug), None)}
+            return self.send_json({"id": tid, "kind": "projects", "slug": slug, "name": e["name"],
+                                   "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        if self.command == "POST" and re.fullmatch(r"/api/v1/kb-trash/[^/]+/restore", p):  # the project back, unless taken (409)
+            tid = unquote(p.split("/")[4])
+            t = KB_TRASH.get(tid)
+            if t is None: return self.send_json({"error": "not found", "code": "not_found"}, 404)
+            if any(e["id"] == t["entry"]["id"] for e in KB["projects"]):
+                return self.send_json({"error": "a project with this slug exists", "code": "conflict"}, 409)
+            KB_TRASH.pop(tid)
+            KB["projects"].append(t["entry"])
+            if t["detail"] is not None: KB_DETAIL[("projects", t["entry"]["id"])] = t["detail"]
+            return self.send_json({"id": tid, "kind": "projects", "slug": t["entry"]["id"], "name": t["entry"]["name"]})
         if self.command == "PUT" and p.startswith("/api/v1/kb/"):  # "Tagging": kept over the automatic tagging
             if os.environ.get("MOCK_KB_SAVE_FAIL") == "1": return self.send_json({"error": "知识库暂时写不进去"}, 502)
             kind, eid = p.split("/")[4:6]
@@ -26215,6 +26408,22 @@ class H(BaseHTTPRequestHandler):
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
                     return self.send_json({"error": "archive_closed_days must be 0–3650"}, 400)
                 ASSISTANT_CONFIG["archive_closed_days"] = days
+            # As the hub's profile_write.go: checked before anything changes; the session-name settings only from a
+            # request that names its manager (#4965).
+            naming = [k for k in ("agent_auto_naming", "agent_auto_naming_max", "agent_auto_naming_interval_hours") if k in body]
+            if naming and not self.headers.get("X-Persona-Manager"):
+                return self.send_json({"error": "Name the assistant this setting is for.", "code": "manager_required"}, 400)
+            for key, (low, high) in (("agent_auto_naming_max", (1, 1000)), ("agent_auto_naming_interval_hours", (0, 8760))):
+                if key in body and (type(body[key]) is not int or not low <= body[key] <= high):
+                    return self.send_json({"error": "%s must be %d–%d" % (key, low, high)}, 400)
+            if "task_workspace_preference" in body and body["task_workspace_preference"] not in ("prefer-existing", "prefer-new"):
+                return self.send_json({"error": "task_workspace_preference must be prefer-existing or prefer-new"}, 400)
+            for key in ("start_requested_tasks", "agent_auto_naming"):
+                if isinstance(body.get(key), bool):
+                    ASSISTANT_CONFIG[key] = body[key]
+            for key in ("agent_auto_naming_max", "agent_auto_naming_interval_hours", "task_workspace_preference"):
+                if key in body:
+                    ASSISTANT_CONFIG[key] = body[key]
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if isinstance(body.get("inbox_signals"), bool):
