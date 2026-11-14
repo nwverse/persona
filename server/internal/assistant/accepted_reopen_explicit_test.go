@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -126,35 +125,11 @@ func acceptedByBackground(t *testing.T) (s *Service, f *fakeHub, accepted Todo, 
 	return s, f, accepted, bg
 }
 
-// sendHookHub is a fakeHub that runs onSend, once, when the manager calls session.send, before the node answers (what
-// happens on the agent's computer while the send is out), and afterList, once, after box's session list was read.
-type sendHookHub struct {
-	*fakeHub
-	mu                sync.Mutex
-	onSend, afterList func()
-}
-
-func (h *sendHookHub) take(hook *func()) func() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	fn := *hook
-	*hook = nil
-	return fn
-}
-
-func (h *sendHookHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
-	if p.Method == DeviceSessionSend {
-		if fn := h.take(&h.onSend); fn != nil {
-			fn()
-		}
-	}
-	out, err := h.fakeHub.DeviceCall(ctx, p)
-	if p.Method == DeviceSessionsList && p.Device == "box" {
-		if fn := h.take(&h.afterList); fn != nil {
-			fn()
-		}
-	}
-	return out, err
+// beforeSend has f run fn, once, when the manager next calls session.send, before the node answers.
+func beforeSend(f *fakeHub, fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.beforeSend = fn
 }
 
 // The background supervisor accepts the main conversation's plan-started task (its ledger keeps the main conversation
@@ -217,7 +192,7 @@ func TestMoreForAnAcceptedTaskSurvivesARestart(t *testing.T) {
 				f.mu.Unlock()
 			}
 			if c.meanwhile {
-				setHub(s, &sendHookHub{fakeHub: f, onSend: func() { longTurn(s, f, proto.StatusWorking, "") }})
+				beforeSend(f, func() { longTurn(s, f, proto.StatusWorking, "") })
 			}
 			if err := sendVia(t, s, c.via, "conv1", accepted.ID, "Please cover the landscape case too"); c.fails != (err != nil) {
 				t.Fatalf("the send: %v", err)
@@ -264,7 +239,7 @@ func TestATurnDuringASendWaitsForItsAnswer(t *testing.T) {
 					f.failSend = errors.New("the input box holds a draft; nothing was typed")
 					f.mu.Unlock()
 				}
-				setHub(s, &sendHookHub{fakeHub: f, onSend: func() {
+				beforeSend(f, func() {
 					longTurn(s, f, proto.StatusWorking, "")
 					if got := todoNow(s, accepted.ID); got.DoneAt == nil {
 						t.Errorf("reopened by a turn before the send's answer: %+v", got)
@@ -272,7 +247,7 @@ func TestATurnDuringASendWaitsForItsAnswer(t *testing.T) {
 					if outcome == "sent, ended first" {
 						longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
 					}
-				}})
+				})
 				err := sendVia(t, s, via, "conv1", accepted.ID, "Please cover the landscape case too")
 				if outcome == "failed" {
 					if err == nil {
@@ -343,7 +318,8 @@ func TestACardMessageReopensOnlyItsOwnTask(t *testing.T) {
 	putTodo(s, Todo{ID: "todo_b", Title: "Tidy the release notes", Origin: "conv1", CreatedAt: now, UpdatedAt: now,
 		Supervision: &Supervision{Supervisor: "conv1", State: reviewAccepted, Reviews: []TaskReview{{At: now, Verdict: reviewAccepted}}}})
 	var other Todo
-	setHub(s, &sendHookHub{fakeHub: f, afterList: func() { // the agents of the card's task were just read
+	f.mu.Lock()
+	f.afterList = map[string]func(){"box": func() { // the agents of the card's task were just read
 		if err := s.linkTodoAgent(ctx, "todo_b", "box", longAgent, "", "/code/app", "claude"); err != nil {
 			t.Errorf("hand the agent to the other task: %v", err)
 			return
@@ -352,7 +328,8 @@ func TestACardMessageReopensOnlyItsOwnTask(t *testing.T) {
 		s.applyTodoRow(ctx, "todo_b", db.TodoRow{ID: "todo_b", Title: "Tidy the release notes", Origin: "conv1", CreatedAt: now,
 			UpdatedAt: done, DoneAt: &done, DoneBy: db.DoneByReview}, nil)
 		other = todoNow(s, "todo_b")
-	}})
+	}}
+	f.mu.Unlock()
 	if _, err := s.routeToTask(ctx, "conv1", accepted.ID, "Please cover the landscape case too"); err != nil {
 		t.Fatalf("the card message: %v", err)
 	}

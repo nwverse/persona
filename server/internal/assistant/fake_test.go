@@ -36,6 +36,11 @@ type fakeHub struct {
 	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads     int                       // session.items reads since the hooks were set
 	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
+	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
+	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list was
+	// answered. No lock held.
+	beforeSend    func()
+	afterList     map[string]func()
 	hello         Hello
 	settings      *Settings
 	launcherList  []proto.Launcher                   // the nodes' launchers.list (nil: the list fails, so it can't be told)
@@ -212,8 +217,27 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			hook() // what happens while a card is being made: its "where" reads the machines
 		}
 	}
+	if p.Method == DeviceSessionSend {
+		f.mu.Lock()
+		hook := f.beforeSend
+		f.beforeSend = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+	}
 	if p.Method != DeviceSessionItems {
-		return f.deviceCall(ctx, p)
+		out, err := f.deviceCall(ctx, p)
+		if p.Method == DeviceSessionsList {
+			f.mu.Lock()
+			hook := f.afterList[p.Device]
+			delete(f.afterList, p.Device)
+			f.mu.Unlock()
+			if hook != nil {
+				hook()
+			}
+		}
+		return out, err
 	}
 	f.mu.Lock()
 	f.itemReads++
