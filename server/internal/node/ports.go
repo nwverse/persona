@@ -192,6 +192,10 @@ func (n *Node) scanPorts(ctx context.Context) (changed bool) {
 			kept[pane] = r
 		}
 	}
+	// Saved before the listener scan, which can still fail (lsof, the Windows table; never on Linux): kept is what
+	// this scan checked against the process table, every reusable root included, so a failed scan loses nothing and
+	// the panes asked for just now are not asked again next scan. A failed process listing returns above, with the
+	// cache untouched.
 	n.ports.roots = kept
 	var found map[string][]listener
 	if len(roots) > 0 {
