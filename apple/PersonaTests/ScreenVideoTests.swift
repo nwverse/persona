@@ -18,6 +18,19 @@ struct ScreenVideoTests {
         #expect(ScreenVideoBudget.of(expensive: false, constrained: false, lowPower: false, thermal: .critical).fps == 15)
     }
 
+    /// With quality tiers (#6396), mobile data follows the user's choice: Data Saver (the default) 1.5 Mbit/s at 1×,
+    /// Clearer 4; Low Data Mode is always Data Saver; Wi-Fi is unchanged. Without tiers, as before.
+    @Test func mobileDataFollowsTheChoiceWithTiers() {
+        func of(_ expensive: Bool, _ constrained: Bool, _ m: ScreenMobileData?) -> ScreenVideoBudget {
+            ScreenVideoBudget.of(expensive: expensive, constrained: constrained, lowPower: false, thermal: .nominal, mobileData: m)
+        }
+        #expect(of(true, false, .saver) == .init(maxKbps: 1_500, fps: 60, maxScale: 1))
+        #expect(of(true, false, .clearer) == .init(maxKbps: 4_000, fps: 60))
+        #expect(of(true, true, .clearer) == .init(maxKbps: 1_500, fps: 60, maxScale: 1), "Low Data Mode")
+        #expect(of(false, false, .saver) == .init(maxKbps: 12_000, fps: 60), "Wi-Fi: the choice is for mobile data only")
+        #expect(of(true, false, nil) == .init(maxKbps: 4_000, fps: 60), "no tiers: as before")
+    }
+
     @Test func theWaitDoublesToFiveMinutes() {
         var b = ScreenVideoBackoff()
         let waits = (0..<7).map { _ in b.take() }
@@ -244,12 +257,46 @@ struct ScreenVideoTests {
     }
 
     /// ⋯ › Quality needs this app's side of the tiers too (#6396): a release can pair a helper with tiers and an app
-    /// without them, and then nothing is offered. The iPhone's tier policy turns `appSupported` on.
+    /// without them, and then nothing is offered. This app has them.
     @Test func qualityAlsoWaitsForThisAppsTiers() {
-        #expect(!ScreenTiers.appSupported, "on with the iPhone's tier policy (#6396), not before")
-        #expect(!ScreenTiers.offered(helperHasTiers: true))
+        #expect(ScreenTiers.appSupported, "the iPhone's tier policy is in (#6396)")
+        #expect(ScreenTiers.offered(helperHasTiers: true))
+        #expect(!ScreenTiers.offered(helperHasTiers: true, appSupported: false))
         #expect(ScreenTiers.offered(helperHasTiers: true, appSupported: true))
         #expect(!ScreenTiers.offered(helperHasTiers: false, appSupported: true))
+    }
+
+    /// A helper with tiers (#6396): its hello starts the policy, whose first tier goes to the helper as an update
+    /// (scale, frame rate, band and target) and to the link as an event. An older helper gets no tier at all.
+    @Test func aHelperWithTiersGetsATier() async throws {
+        guard case var .hello(h) = try Self.messages()[0] else { Issue.record("the fixture starts with hello"); return }
+        h.features = ["tiers"]
+        h.points = [1512, 982]
+        h.pixels = [3024, 1964]
+        let rest = try Self.messages().dropFirst().prefix(3).flatMap { Array($0.framed()) }
+        let t = VideoScript([Array(ScreenVideoMessage.hello(h).framed()) + rest], holds: true)
+        let seen = Events()
+        let context = ScreenVideoTiers.Context(bias: .auto, budget: .init(maxKbps: 12_000, fps: 60), maxSize: 2868,
+                                               link: LinkStats(kind: .relay, via: .wifi), remembered: nil)
+        let s = ScreenVideoStream(transport: t, start: Self.start, tiers: ScreenVideoTiers(context)) { seen.add($0) }
+        s.run()
+        try await seen.until { $0.contains { $0.hasPrefix("tier") } }
+        #expect(seen.all.contains("tier 2268x1472@60 band 4006-12000 target 4006 start"), "\(seen.all)")
+        let updates = t.sent.filter { $0.count > 4 && $0[4] == ScreenVideoWire.Kind.update.rawValue }
+        var parser = ScreenVideoParser()
+        let raws = try updates.flatMap { try parser.push(Data($0)) }
+        let sent = try raws.map { try ScreenVideoMessage.decode(type: $0.type, body: $0.body) }
+        #expect(sent.contains(.update(UpdateMessage(fps: 60, maxKbps: 12_000, scale: 1.5, minKbps: 4_006, targetKbps: 4_006))))
+        s.close()
+
+        let old = VideoScript([try Self.prefix(messages: 4)], holds: true)
+        let quiet = Events()
+        let o = ScreenVideoStream(transport: old, start: Self.start, tiers: ScreenVideoTiers(context)) { quiet.add($0) }
+        o.run()
+        try await quiet.until { $0.contains { $0.hasPrefix("picture") } }
+        #expect(!quiet.all.contains { $0.hasPrefix("tier") })
+        #expect(!old.sent.contains { $0.count > 4 && $0[4] == ScreenVideoWire.Kind.update.rawValue }, "nothing new for an old helper")
+        o.close()
     }
 
     /// Retries that fail as the first drop did keep the same line: it never blinks off and on between them.
@@ -337,6 +384,8 @@ private final class Events: @unchecked Sendable {
         case let .paused(why): word = "paused \(why)"
         case .resumed: word = "resumed"
         case let .timing(t): word = "timing encode \(t.encodeMs ?? -1) network \(t.networkMs ?? -1)"
+        case let .tier(c):
+            word = "tier \(c.tier.width)x\(c.tier.height)@\(c.tier.fps) band \(c.tier.minKbps)-\(c.tier.maxKbps) target \(c.targetKbps) \(c.reason.rawValue)"
         case let .ended(why): word = "ended \(why)"
         }
         lock.withLock { events.append(word) }
