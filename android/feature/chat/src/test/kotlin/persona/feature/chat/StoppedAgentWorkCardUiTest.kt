@@ -46,10 +46,14 @@ class StoppedAgentWorkCardUiTest {
     @get:Rule val rule = createComposeRule()
     private val resources get() = ApplicationProvider.getApplicationContext<Context>().resources
     private val prompt = "The model service failed. What next?"
+    private val options = listOf(QuestionOption("Handled, continue"), QuestionOption("Leave it", action = "defer"))
     private val work = Interaction("work_1", kind = "question", toolName = "persona_triage", canCancel = true,
-        questions = listOf(Question(prompt, options = listOf(
-            QuestionOption("Handled, continue"), QuestionOption("Leave it", action = "defer"),
-        ))))
+        questions = listOf(Question(prompt, options = options)))
+    private val firstPrompt = "First decision?"
+    private val secondPrompt = "Second decision?"
+    private val multiWork = work.copy(id = "work_multi", questions = listOf(
+        Question(firstPrompt, options = options), Question(secondPrompt, options = options),
+    ))
     private val close = "Close question without answering"
 
     @Test fun deferIsTheOnlyAnswerEnabledAndResolves() {
@@ -123,6 +127,40 @@ class StoppedAgentWorkCardUiTest {
         rule.onNodeWithContentDescription(resources.getString(R.string.chat_card_discard_local)).assertIsEnabled().performClick()
         assertEquals(listOf("permission_1"), discarded)
         assertTrue(sent.isEmpty())
+    }
+
+    @Test fun stoppedWorkBlocksRetainedNonDeferAnswersUntilEveryAnswerIsDeferred() {
+        var blocked by mutableStateOf<String?>(null)
+        val sent = mutableListOf<Resolution>()
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                InteractionPanel(listOf(multiWork), null, 600.dp, null, emptySet(), { _, resolution -> sent += resolution },
+                    null, {}, blockedReason = blocked)
+            }
+        }
+        val previous = resources.getString(R.string.chat_question_previous)
+        val next = resources.getString(R.string.chat_question_next)
+        val submit = resources.getString(R.string.chat_question_submit)
+        // While the Agent runs, retain a message-sending answer on both pages (RequestEditor keeps this draft).
+        rule.onNodeWithText("1. Handled, continue").performClick()
+        rule.onNodeWithText("1. Handled, continue").performClick()
+        assertTrue(sent.isEmpty())
+        blocked = "The Agent has stopped"
+        rule.waitForIdle()
+        rule.onNodeWithText(previous).performClick()
+        rule.onNodeWithText("2. Leave it").assertIsEnabled().performClick()
+        assertTrue("A multi-question pick updates the draft without resolving", sent.isEmpty())
+        rule.onNodeWithText(submit).assertIsNotEnabled()
+        rule.onNodeWithText(previous).performClick()
+        // The old second-page Continue is still in the draft. Advance must validate that complete answer set too.
+        rule.onNodeWithText(next).performClick()
+        assertEquals("Advance must not submit a retained non-defer answer", emptyList<Resolution>(), sent)
+        rule.onNodeWithText(next).assertIsNotEnabled()
+        // Replacing the retained answer with defer makes the complete post-action answer set valid again.
+        rule.onNodeWithText("2. Leave it").performClick()
+        rule.onNodeWithText("2. Leave it").performClick()
+        rule.onNodeWithText(submit).assertIsEnabled().performClick()
+        assertEquals(listOf(Resolution(answers = mapOf(firstPrompt to "Leave it", secondPrompt to "Leave it"))), sent)
     }
 
     @Test fun stoppedWorkCardScreenshotsAcrossStyles() {

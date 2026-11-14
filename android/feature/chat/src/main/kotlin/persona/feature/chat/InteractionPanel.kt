@@ -215,12 +215,15 @@ internal fun InteractionForm(
         if (RequestExpiry.expired(interaction.expiresAt, Instant.now())) return
         if (stoppedWork && !interaction.stoppedWorkAnswerAllowed(action, value)) return
         val result = AnswerBuilder.build(interaction, action, value, context)
-        if (!result.allowed) return
+        if (!result.allowed || (stoppedWork && !interaction.stoppedWorkResultAllowed(result))) return
         if (result.resolution == null) update(result.draft)
         else { password = ""; fieldValues = emptyMap(); onAnswer(action, result.draft, planRead) }
     }
-    fun enabled(action: AnswerAction) = (!stoppedWork || interaction.stoppedWorkAnswerAllowed(action, draft)) &&
-        AnswerBuilder.build(interaction, action, draft, context).allowed
+    fun enabled(action: AnswerAction): Boolean {
+        if (stoppedWork && !interaction.stoppedWorkAnswerAllowed(action, draft)) return false
+        val result = AnswerBuilder.build(interaction, action, draft, context)
+        return result.allowed && (!stoppedWork || interaction.stoppedWorkResultAllowed(result))
+    }
     val questions = interaction.questions.orEmpty()
     val question = questions.getOrNull(draft.page)
     val fallback = remember(interaction.screen, secret) {
@@ -553,6 +556,21 @@ private fun Interaction.stoppedWorkAnswerAllowed(action: AnswerAction, draft: An
         AnswerAction.Advance -> questions.getOrNull(draft.page)?.let(::deferredPick) == true
         AnswerAction.Submit -> questions.isNotEmpty() && questions.all(::deferredPick)
         else -> false
+    }
+}
+
+/** Validate the actual post-action wire result, as Web's workCardLocalResolution does. In particular, Advance can
+ * resolve immediately when a retained draft completes every question; a defer on the current page is not enough. */
+private fun Interaction.stoppedWorkResultAllowed(result: AnswerResult): Boolean {
+    val resolution = result.resolution ?: return true
+    if (resolution == Resolution(dismiss = true)) return true
+    val answers = resolution.answers ?: return false
+    if (answers.isEmpty() || resolution != Resolution(answers = answers)) return false
+    val questions = questions.orEmpty()
+    return answers.all { (questionText, answer) ->
+        questions.firstOrNull { it.question == questionText }?.let { question ->
+            !question.multiSelect && question.options.any { it.label == answer && it.action == "defer" }
+        } == true
     }
 }
 
