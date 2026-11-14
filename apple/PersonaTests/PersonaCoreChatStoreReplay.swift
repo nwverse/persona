@@ -3,6 +3,8 @@ import PersonaCore
 import PersonaCoreTestSupport
 @testable import Persona
 
+private typealias ContinuityCase = PersonaCoreTestSupport.ContinuityCase
+private typealias ContinuityJSON = PersonaCoreTestSupport.ContinuityJSON
 private typealias ContinuityFixtureError = PersonaCoreTestSupport.ContinuityFixtureError
 
 /// Replays the shared JSON against the actual iOS `ChatStore`, not a second translation of the Rust reducer. The
