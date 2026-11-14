@@ -124,8 +124,8 @@ tint. State colors are the same in every style.
 ## Extensions and other targets
 
 The widgets, the Live Activity, the Share and Notification extensions do not compile `Theme`, so their few symbols are
-literals in their own files. The watch and the Mac compile `Shared/` and use `Theme.Icon`; the Mac's own names are in
-`apple/Mac/Design/MacTokens.swift` and point at `Theme.Icon`.
+literals in their own files. The watch compiles `Shared/` and uses `Theme.Icon`. The retired native Mac had its own names in a
+Mac-only token file and pointed them at `Theme.Icon`; that target no longer exists.
 
 ## Checks
 

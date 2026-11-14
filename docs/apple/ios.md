@@ -1539,7 +1539,7 @@ Windows shows the PowerShell line → countdown (the `ConnectDeviceText` algorit
   both setting `AppModel.addComputer`, presented by `.addComputerPresentation()` at the root; pages that are themselves sheets use `.addComputerSheet($request)` on themselves.
 - Lists and the Machines page: `trust == "pending"` comes first, labeled "Waiting for your confirmation"; online offers "It's my computer" / "No", offline offers "Delete" (buttons only with hub feature `machine_trust`); `error_code` gets Chinese text
   (`AddComputerText.machineProblem`), with the hub's raw message in Machines-page Details. New Agent (and handing a to-do to an Agent, starting one from mail / Knowledge, all through `NewChatView.offered`) excludes pending computers.
-- Screenshots: `-showAddComputer YES` (`add:<mac|linux|windows>:<name>` fills and submits; `<machine id>` opens confirmation for that machine; Mac uses the same arguments with `scripts/app/mac_shot.sh`); UI tests `AddComputerTests` (`docs/operations/testing.md` ("Readiness scenarios")).
+- Screenshots: `-showAddComputer YES` (`add:<mac|linux|windows>:<name>` fills and submits; `<machine id>` opens confirmation for that machine; iOS uses `scripts/app/sim.sh`, desktop uses the Electron smoke); UI tests `AddComputerTests` (`docs/operations/testing.md` ("Readiness scenarios")).
 
 ## Mac signed in (2026-11-01)
 
@@ -1554,7 +1554,7 @@ Persona Link computers: the app declares `desktops_link`, so a hub that tracks P
 - Banner: one Persona Link computer says "Using “<computer>”"; once there are more computers it says "Using N computers". A computer with both the Mac app and Persona Link counts once, so Persona Link on a Mac whose app is signed in keeps the Mac app's line. The match is by name, an approximation for the banner only: a Mac app entry has no machine id, so two Macs sharing a name count once and a Mac whose app and Persona Link use different names counts twice. Exact counts need a machine id on Mac app entries in the `desktops` contract. The line is short because it shares the row with "Phone muted".
 - Card: with any Persona Link entry listed, the title becomes "Computers in Use"; when every entry is Persona Link, the Phone muted footer says what Persona Link mutes and what brings "Needs you" back: locking that computer or quitting Persona Link, or with several computers, every one of them (`DesktopDevice.muteNote`). A Persona Link row shows "Persona Link · since <time>" (with the date when it isn't today), no Sign out; the first one has a footer on when it ends. A Mac running both the app and Persona Link shows both rows.
 
-Placed at the top of the Agents list rather than the shared top bar: a persistent line in the two pages' shared bar would cover content; a list-top row scrolls away, like WeChat. Mac registers as a desktop, not a phone (`docs/apple/mac.md` ("Mac is a desktop, not a phone")).
+Placed at the top of the Agents list rather than the shared top bar: a persistent line in the two pages' shared bar would cover content; a list-top row scrolls away, like WeChat. Mac registers as a desktop, not a phone (`docs/archive/apple/mac.md` ("Mac is a desktop, not a phone")).
 Screenshots: `-showDesktopSample YES` (fake one Mac with phone muting enabled; `link` for Persona Link on one computer, `links` on two, `both` for a Mac with the app and Persona Link plus a second computer with Persona Link), `-openDesktopSheet YES` opens the card.
 
 ## Tasks dispatched by the main chat notify only there (#1731)

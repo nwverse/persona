@@ -107,6 +107,7 @@ internal fun inboxLineStatus(record: InboxRecord): String {
         is EventMark.Failed -> mark.reason?.let { stringResource(R.string.inbox_handling_failed_reason, it) }
             ?: stringResource(R.string.inbox_handling_failed)
         is EventMark.Suggests -> stringResource(mark.kind)
+        is EventMark.Now -> mark.text
         null -> when (record.item.section) {
             "working" -> stringResource(R.string.inbox_section_working)
             InboxTier.Action.wire -> stringResource(R.string.inbox_bay_needs_you)
