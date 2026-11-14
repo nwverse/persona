@@ -696,6 +696,18 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(calls, ["enter", "priority", ("put", (0, 0, ("example/one", 7))), "exit"])
         self.assertEqual(lock.depth, 0)
 
+    def test_priority_queue_accepts_shutdown_sentinel_after_queued_work(self):
+        self.watcher.enqueue("example/one", 7, SHA_A, "poll")
+        self.watcher.tasks.put((2, -1, ("", 0)))
+        self.watcher.tasks.put((2, -1, ("", 0)))
+        workers = [threading.Thread(target=self.watcher.worker) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+        self.assertTrue(self.watcher.tasks.empty())
+
     def test_findings_and_exhausted_repairs_do_not_get_migration_priority(self):
         for outcome, fields in (("findings", {"semantic": "findings"}),
                                 ("repair_exhausted", {"repair_exhausted": True})):
