@@ -220,7 +220,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/notify":                              "body",    // machine_id, session_id: its manager's (ownsRef)
 		"GET /api/v1/push/intercepts":                      "manager", // only entries with its manager (lnRoutes, TestLnInterceptsHeldToManager)
 		"GET /api/v1/push/ln-mode":                         "own",     // the hub-wide switch state, no manager's data in the answer
-		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (lnRoutes, TestLnDailyStatsHeldToManager)
+		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (lnRoutes, TestPushDailyStatsHeldToManager)
 		"GET /api/v1/assistant":                            "manager",
 		"GET /api/v1/assistant/capabilities":               "manager",
 		"POST /api/v1/assistant/conversations":             "manager",

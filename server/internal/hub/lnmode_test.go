@@ -156,7 +156,7 @@ func TestLnModeP0AlwaysPushesAndSameKeyOnce(t *testing.T) {
 
 // After the 12-hour window the same key may push again.
 func TestLnModeDedupWindowExpires(t *testing.T) {
-	h, _ := lnHub(t)
+	h, f := lnHub(t)
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +173,7 @@ func TestLnModeDedupWindowExpires(t *testing.T) {
 	if *attempts != 2 {
 		t.Fatalf("got %d pushes across the 12-hour window, want 2", *attempts)
 	}
+	f.calls(t, 2) // let both APNs goroutines finish before the fake server closes
 }
 
 // P2 never alerts in ln mode; it is recorded as a silent intercept instead.
@@ -295,6 +296,7 @@ func TestLnInterceptsViewShape(t *testing.T) {
 // manager's; PUT /api/v1/push/ln-mode is refused to an extension token.
 func TestLnInterceptsHeldToManager(t *testing.T) {
 	h, _ := lnHub(t)
+	h.cfg = &Config{InterceptReaders: []string{"ext-held-reads"}}
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +325,7 @@ func TestLnInterceptsHeldToManager(t *testing.T) {
 	if all := read(nil); len(all) != 2 {
 		t.Fatalf("a full credential read %d entries, want 2", len(all))
 	}
-	ext := read(&principal{Role: roleExtension, Manager: "manager-b"})
+	ext := read(&principal{Role: roleExtension, Manager: "manager-b", Extension: "ext-held-reads"})
 	if len(ext) != 1 || ext[0].Manager != "manager-b" {
 		t.Fatalf("manager-b's extension read %+v, want only its own entry", ext)
 	}
@@ -339,7 +341,7 @@ func TestLnInterceptsHeldToManager(t *testing.T) {
 // Review fix: with the switch off a payload without aps (an extension's push_localized may send one) goes out as
 // before instead of panicking while the held-push text is read.
 func TestLnOffPayloadWithoutAPS(t *testing.T) {
-	h, _ := lnHub(t)
+	h, f := lnHub(t)
 	attempts := lnAttempts(h)
 	build := func(i18n.Lang) map[string]any { return map[string]any{"custom": "x"} }
 	h.push.sendFrom("manager-a", build, "", nil, quietNone, nil)
@@ -353,6 +355,7 @@ func TestLnOffPayloadWithoutAPS(t *testing.T) {
 	if *attempts != 1 || len(h.push.lnInterceptsView("", 0)) != 1 {
 		t.Fatalf("pushes %d, intercepts %d; want 1 and 1", *attempts, len(h.push.lnInterceptsView("", 0)))
 	}
+	f.calls(t, 1) // the off-mode push's APNs goroutine must finish before the fake server closes
 }
 
 // Review fix: same-minute P1 entries merge only within one manager, so one extension never reads another's titles.
@@ -394,7 +397,7 @@ func TestLnSamePRP1IsOneEntry(t *testing.T) {
 
 // Review fix: a decision rings once per round. The same round again is held; a new round (asked again) rings.
 func TestLnDecisionRoundsRingAgain(t *testing.T) {
-	h, _ := lnHub(t)
+	h, f := lnHub(t)
 	if err := h.push.setLnMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -407,6 +410,7 @@ func TestLnDecisionRoundsRingAgain(t *testing.T) {
 	if *attempts != 2 {
 		t.Fatalf("got %d decision pushes, want 2 (one per round)", *attempts)
 	}
+	f.calls(t, 2) // both decisions' APNs goroutines must finish before the fake server closes
 }
 
 // Review fix: two P0 pushes with one key at the same moment never both pass.

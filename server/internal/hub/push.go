@@ -118,7 +118,7 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		}
 		cancel()
 	}
-	p.loadLnState() // the ln switch and held pushes survive restarts (hub_settings), whether or not APNs is configured
+	p.loadLnState() // the grading switch and held pushes survive restarts (hub_settings), whether or not APNs is configured
 	b, err := os.ReadFile(filepath.Join(dir, "apns.json"))
 	if err != nil {
 		logf("push: no %s, pushing through each phone's relay (docs/operations/push-relay.md)", filepath.Join(dir, "apns.json"))
