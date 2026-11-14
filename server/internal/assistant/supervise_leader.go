@@ -139,7 +139,9 @@ func (s *Service) rehomeMainQueuedSignals(ctx context.Context, main string, todo
 	}
 	byConversation := map[string]map[string]bool{}
 	for conversation, queue := range r.st.Queue {
-		if conversation == main {
+		if conversation == main || s.isBackground(ctx, conversation) {
+			// An entry explicitly queued for the configured legacy background is intentional compatibility delivery,
+			// not an orphaned side signal left by the supervisor write.
 			continue
 		}
 		for _, msg := range queue {

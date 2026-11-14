@@ -195,6 +195,38 @@ func TestLegacySideQueuedReviewRehomesToMain(t *testing.T) {
 	}
 }
 
+// A queued notice explicitly addressed to the configured legacy background is intentional compatibility delivery,
+// not an orphaned side signal. Crash recovery must leave it there even though the ledger already names main (#5732).
+func TestLegacyBackgroundQueuedReviewStaysWithBackground(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
+		v.State = reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "intentional-background-review", Detail: "legacy-background-marker", At: time.Now()}
+	s.signal(g)
+	reserveUndelivered(t, s, g)
+	if !s.queueDigest("bg1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued background review for " + todo.ID, At: g.At},
+		[]superviseSignal{g}, g.At, time.Time{}) {
+		t.Fatal("the configured legacy background did not accept its intentional queue entry")
+	}
+
+	s.rehomeSupervisedTodos(context.Background())
+	if got := s.queuedFor("bg1"); got != 1 {
+		t.Fatalf("crash recovery removed the intentional legacy-background entry: queue=%d", got)
+	}
+	if got := s.queuedFor("conv1"); got != 0 {
+		t.Fatalf("the intentional background entry was duplicated to main: queue=%d", got)
+	}
+}
+
 // A newer durable stretch can share its id with an older signal still queued for the legacy side. Restart loading must
 // restore that outbox before replaying the queue, or the stale replay overwrites the only copy of the newer review.
 func TestRehomeRestoreKeepsNewerDurableReview(t *testing.T) {
