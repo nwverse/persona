@@ -2,6 +2,35 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## What a switch between the shell's pages redraws, and what a UI test adds to it (#5438)
+
+Both pages stay built, so a switch should only move them. Measured with `-perfCounts YES`, one switch ran the composer
+bar's body about 30 times, the Agents list's 3–4 times and the chat page's 2–3 times. Four causes, each a general trap:
+
+- **A window frame in `@State`.** `frame(in: .global)` changes on every frame a page slides. Kept in `@State` (the
+  composer's 「+」, for the panel it opens), it redraws its view on each of them, menus and text field included. Keep a
+  frame only an action reads in an unobserved object, or go by sizes that a slide leaves alone (the row's width, the
+  page's). A named coordinate space set on a `List` is not seen from its rows: they fall back to the window's.
+- **`@Environment(\.dismiss)` on a page.** SwiftUI makes a new `DismissAction` when the presentation around the view
+  changes, and a page going behind or coming back counts. Declare it in a small view that stores it (`DismissReader`).
+- **Observed values read for a side effect.** The Agents list read the app's tab, the strip's `moving` and the chat on
+  screen in its body to decide whether it is out of sight. A clear view in its background reads them now.
+- **An `@State` initial value that reads observed state.** It is evaluated in the parent's body, so the parent follows
+  it: `ShellView`'s read of the app's tab made `RootView` run on every switch.
+
+`let _ = Self._printChanges()` in a local build, with the app's console from `xcrun simctl launch --console-pty`, names
+what changed for each run of a body. It is only sometimes exact about which observed key path it was; the counts are.
+
+A list row has a view graph of its own, which works its size out again on each frame the row moves on screen. A
+`ViewThatFits` in a row measures every candidate each time: wrap the candidates in `MeasuredOnce`.
+
+**XCTest costs the app main-thread time.** `element.tap()` and every `waitForExistence` take an accessibility snapshot
+of the app on its main thread: 55–70 ms each with the `assistant` perf suite's data. In
+`PerfAssistantTests/testTabSwitchAssistantAgents` they were about three quarters of the main thread's busy time
+(`sample` during the test), and several of the test's hitches came while nothing moved. Measure an animation with the
+app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
+the tapping test for the tap's own path.
+
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
 A Debug build installed on an iPhone crashed every time it opened on Agents: `EXC_BAD_ACCESS` in the main thread's stack
