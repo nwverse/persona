@@ -30,6 +30,8 @@ READING_FILES = {
     "Views/Mail/MailViews.swift": "an email's body",
     "Views/Knowledge/KnowledgeView.swift": "a knowledge page's body",
     "Views/Knowledge/KBCorrections.swift": "an entry's confirmed facts, written by the user and read like its profile",
+    "Views/Knowledge/KBTopicViews.swift": "a topic's knowledge points, read like an entry's profile",
+    "Views/Knowledge/KnowledgeMapView.swift": "a node's text in the knowledge map's detail column",
     "Views/Todos/TodoDetailView.swift": "a to-do's notes, read and edited",
     "Recording/MeetingThreadView.swift": "a transcript's words in the meeting's thread",
     "Recording/RecordingDayView.swift": "a day's transcript lines",

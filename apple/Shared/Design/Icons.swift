@@ -181,6 +181,8 @@ extension Theme {
         static let gitPull = "arrow.down.to.line.compact"
         static let gitPush = "arrow.up.to.line.compact"
         static let gitFetch = "icloud.and.arrow.down"
+        /// Stashes in a session's Git tab (#7015): uncommitted changes put away for later.
+        static let gitStash = "cabinet"
         /// Split a terminal pane to the right / below (the node menu's Split Pane).
         static let splitRight = "rectangle.split.2x1"
         static let splitDown = "rectangle.split.1x2"
@@ -635,6 +637,10 @@ extension Theme {
         static let standingAuthorization = "shield.lefthalf.filled.badge.checkmark"
         /// Taking such a go-ahead back (Revoke).
         static let revoke = "xmark.shield"
+        /// An idle Agent Persona started is stopped after a while, its terminal kept (Agent Follow-Up, #7005).
+        static let stopIdle = "powersleep"
+        /// Persona fixes unhelpful session names (Agent Follow-Up, #7005).
+        static let autoName = "character.textbox"
         /// A plan the assistant handed the user (the plan card).
         static let taskPlan = "list.clipboard"
         /// Saying something straight to a task (Message, and Message “xx”).
@@ -683,6 +689,10 @@ extension Theme {
         static let search = "magnifyingglass"
         /// The knowledge base (~/.persona/data).
         static let knowledge = "books.vertical"
+        /// A knowledge-base topic (#7251): what Persona learned on one subject.
+        static let topic = "lightbulb.2"
+        /// The knowledge map (#7251): topics and projects as one outline.
+        static let knowledgeMap = "map"
         /// Health: the health space (docs/assistant/health.md), its entry and its conversations' mark.
         static let health = "heart"
         static let healthFilled = "heart.fill"
@@ -738,6 +748,24 @@ extension Theme {
         static let openQuestion = "questionmark.circle.dashed"
         /// A meeting's minutes as a whole (the watch's Meeting Minutes).
         static let minutes = "note.text"
+        /// The minutes' summary card (#6563): the Core Conclusions box's lightbulb, and a decision's mark in a topic card,
+        /// where a point has a dot.
+        static let conclusions = "lightbulb.max"
+        static let decided = "checkmark.seal.fill"
+        /// A topic card's icon by the hub's `icon` (`RecordingMinutesCards.symbol`); `general` for any other value.
+        static let topicProgress = "chart.bar.xaxis.ascending"
+        static let topicSchedule = "calendar.badge.checkmark"
+        static let topicRelease = "shippingbox"
+        static let topicPerformance = "speedometer"
+        static let topicMetrics = "chart.dots.scatter"
+        static let topicTooling = "screwdriver"
+        static let topicQuality = "ladybug"
+        static let topicDesign = "paintbrush.pointed"
+        static let topicPeople = people
+        static let topicCustomer = "person.bubble"
+        static let topicBudget = "banknote"
+        static let topicRisk = "flame"
+        static let topicGeneral = "circle.grid.2x2"
         /// A meeting's private mark (#3862, Private Meeting): its minutes are never used when Persona answers in later
         /// meetings. What stays private, as Health's note says it.
         static let privateMeeting = privacy
