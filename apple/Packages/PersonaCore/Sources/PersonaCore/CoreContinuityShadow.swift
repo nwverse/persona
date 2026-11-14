@@ -7,6 +7,10 @@ final class ChangeRecorder: @unchecked Sendable {
     let values = Mutex<[(String, UInt64)]>([])
 }
 
+private final class ShadowEffectRecorder: @unchecked Sendable {
+    let effects = Mutex<[Effect]>([])
+}
+
 public final class CoreContinuityShadow: @unchecked Sendable {
     public struct Mismatch: Error, Equatable, Sendable {
         public let domain: String
@@ -22,12 +26,12 @@ public final class CoreContinuityShadow: @unchecked Sendable {
     public let client: PersonaCoreClient
     public let chat: String
     private let changes: ChangeRecorder
-    private let effects: EffectRecorder
+    private let effects: ShadowEffectRecorder
 
     public init(chat: String) throws {
         self.chat = chat
         let changes = ChangeRecorder()
-        let effects = EffectRecorder()
+        let effects = ShadowEffectRecorder()
         self.changes = changes
         self.effects = effects
         client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changedChat: { chat, version in
