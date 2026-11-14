@@ -39,10 +39,17 @@ enum Message {
 }
 
 #[derive(Default)]
+struct Queue {
+    pending: u64,
+    stopping: bool,
+}
+
+#[derive(Default)]
 struct Shared {
     patches: Mutex<Patches>,
-    /// Actions queued and not yet applied, for `flush`.
-    pending: Mutex<u64>,
+    /// Pending accounting, the stop flag and action sends share one lock. An action accepted before shutdown is
+    /// processed before Stop; no later action can be accepted into an abandoned queue.
+    queue: Mutex<Queue>,
     idle: Condvar,
     /// Once-lock means ordinary dispatch/drain only read a null pointer; all instrumentation is opt-in.
     #[cfg(target_os = "android")]
@@ -66,7 +73,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct Runtime {
     sender: Sender<Message>,
     shared: Arc<Shared>,
-    worker: Option<JoinHandle<()>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    /// Registry-backed clients own shutdown explicitly; ordinary leased operations never take its JoinHandle.
+    join_on_drop: bool,
 }
 
 impl Runtime {
@@ -81,7 +90,8 @@ impl Runtime {
         Runtime {
             sender,
             shared,
-            worker: Some(worker),
+            worker: Mutex::new(Some(worker)),
+            join_on_drop: true,
         }
     }
 
@@ -89,21 +99,33 @@ impl Runtime {
     pub fn dispatch(&self, action: &[u8]) -> bool {
         #[cfg(target_os = "android")]
         let sent = if self.shared.diagnostics.get().is_some() {
-            let mut sent = Ok(());
+            let mut sent = Err(std::sync::mpsc::SendError(Message::Stop));
             diagnostics::measure_queue(&self.shared, || {
-                *diagnostics::timed_lock(&self.shared, &self.shared.pending, false) += 1;
+                let mut queue = diagnostics::timed_lock(&self.shared, &self.shared.queue, false);
+                if queue.stopping {
+                    return;
+                }
+                queue.pending += 1;
                 diagnostics::measure_send(&self.shared, || {
                     sent = self.sender.send(Message::Action(action.to_vec()));
                 });
             });
             sent
         } else {
-            *lock(&self.shared.pending) += 1;
+            let mut queue = lock(&self.shared.queue);
+            if queue.stopping {
+                return false;
+            }
+            queue.pending += 1;
             self.sender.send(Message::Action(action.to_vec()))
         };
         #[cfg(not(target_os = "android"))]
         let sent = {
-            *lock(&self.shared.pending) += 1;
+            let mut queue = lock(&self.shared.queue);
+            if queue.stopping {
+                return false;
+            }
+            queue.pending += 1;
             self.sender.send(Message::Action(action.to_vec()))
         };
         if sent.is_ok() {
@@ -155,20 +177,25 @@ impl Runtime {
     /// Waits until every queued action is applied, up to `timeout`. Zero checks once without waiting. For tests and
     /// shutdown; never on a main thread.
     pub fn flush(&self, timeout: Duration) -> bool {
-        let mut pending = lock(&self.shared.pending);
         if timeout.is_zero() {
-            return *pending == 0;
+            return self
+                .shared
+                .queue
+                .try_lock()
+                .map(|queue| queue.pending == 0)
+                .unwrap_or(false);
         }
         let deadline = Instant::now() + timeout;
-        while *pending > 0 {
+        let mut queue = lock(&self.shared.queue);
+        while queue.pending > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return false;
             }
-            pending = self
+            queue = self
                 .shared
                 .idle
-                .wait_timeout(pending, left)
+                .wait_timeout(queue, left)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
@@ -226,10 +253,46 @@ impl Runtime {
         self.shared.diagnostics.get_or_init(|| Arc::new(Diagnostics::default()));
     }
 
+    /// Requests worker shutdown and joins it outside any handle-registry lock. An ordinary operation must never call
+    /// this on its final lease: only the client's close/shutdown operation owns worker termination.
+    pub fn shutdown(&self) {
+        self.stop();
+        self.join_worker();
+    }
+
+    /// Mark that a client registry has already requested shutdown. Ordinary borrowed calls may finish their operation,
+    /// but only the close path may wait for the worker and release its host.
+    pub fn shutdown_requested(&self) -> bool {
+        lock(&self.shared.queue).stopping
+    }
+
+    fn join_worker(&self) {
+        let worker = self.worker.lock().unwrap_or_else(PoisonError::into_inner).take();
+        // Drop the mutex guard before joining: the host's release callback may reenter shutdown through a weak lease.
+        if let Some(worker) = worker
+            && worker.thread().id() != std::thread::current().id()
+        {
+            let _ = worker.join();
+        }
+    }
+
+    /// Registry handles own worker shutdown, independently of any ordinary lease's destruction.
+    pub fn set_explicit_shutdown(&mut self) {
+        self.join_on_drop = false;
+    }
+
+    fn stop(&self) {
+        let mut queue = lock(&self.shared.queue);
+        if !queue.stopping {
+            queue.stopping = true;
+            let _ = self.sender.send(Message::Stop);
+        }
+    }
+
     fn done(&self, count: u64) {
-        let mut pending = lock(&self.shared.pending);
-        *pending = pending.saturating_sub(count);
-        if *pending == 0 {
+        let mut queue = lock(&self.shared.queue);
+        queue.pending = queue.pending.saturating_sub(count);
+        if queue.pending == 0 {
             self.shared.idle.notify_all();
         }
     }
@@ -237,10 +300,13 @@ impl Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        let _ = self.sender.send(Message::Stop);
-        if let Some(worker) = self.worker.take() {
-            // The host's release callback runs on the worker. A final handle released there must not join itself.
-            if worker.thread().id() != std::thread::current().id() {
+        // A direct Runtime requests stop on drop. A registry close owns stopping explicitly, so an ordinary
+        // borrowed lease only releases its Arc and never changes queue state or joins the worker.
+        if self.join_on_drop {
+            self.stop();
+            if let Some(worker) = self.worker.get_mut().unwrap_or_else(PoisonError::into_inner).take()
+                && worker.thread().id() != std::thread::current().id()
+            {
                 let _ = worker.join();
             }
         }
@@ -278,9 +344,9 @@ impl Worker {
                 Ok(Message::Stop) | Err(_) => return,
                 Ok(Message::Action(bytes)) => {
                     self.guarded(|worker| worker.action(&bytes));
-                    let mut pending = lock(&self.shared.pending);
-                    *pending = pending.saturating_sub(1);
-                    if *pending == 0 {
+                    let mut queue = lock(&self.shared.queue);
+                    queue.pending = queue.pending.saturating_sub(1);
+                    if queue.pending == 0 {
                         self.shared.idle.notify_all();
                     }
                 }
@@ -615,7 +681,7 @@ mod tests {
             fn changed(&self, _version: u64) {}
             fn run(&self, _effect: &[u8]) {}
         }
-        let runtime = Runtime::new(Arc::new(NoopHost));
+        let runtime = Arc::new(Runtime::new(Arc::new(NoopHost)));
         assert!(runtime.flush(Duration::ZERO));
         let action = wire::encode(&Action::OpenChat {
             chat: "probe".into(),
@@ -626,12 +692,18 @@ mod tests {
         }
         assert!(!runtime.flush(Duration::ZERO));
         assert!(runtime.flush(Duration::from_secs(5)));
+        // A contended pending lock must not turn a zero-duration probe into an unbounded wait.
+        let guard = lock(&runtime.shared.queue);
+        assert!(!runtime.flush(Duration::ZERO));
+        drop(guard);
+        assert!(runtime.flush(Duration::ZERO));
+        runtime.shutdown();
     }
 
     #[test]
-    fn worker_release_does_not_join_itself() {
+    fn worker_host_release_runs_on_the_worker_without_joining_itself() {
         struct ReleaseHost {
-            runtime: Arc<Mutex<Option<Runtime>>>,
+            released: std::sync::mpsc::Sender<()>,
         }
         impl Host for ReleaseHost {
             fn changed(&self, _version: u64) {}
@@ -639,18 +711,19 @@ mod tests {
         }
         impl Drop for ReleaseHost {
             fn drop(&mut self) {
-                self.runtime.lock().unwrap().take();
+                let _ = self.released.send(());
             }
         }
-        let runtime = Arc::new(Mutex::new(None));
-        *runtime.lock().unwrap() = Some(Runtime::new(Arc::new(ReleaseHost {
-            runtime: runtime.clone(),
-        })));
-        let guard = runtime.lock().unwrap();
-        guard.as_ref().unwrap().dispatch(&wire::encode(&Action::OpenChat {
+        let (released, released_rx) = std::sync::mpsc::channel();
+        let runtime = Runtime::new(Arc::new(ReleaseHost { released }));
+        assert!(runtime.dispatch(&wire::encode(&Action::OpenChat {
             chat: "release".into(),
             snapshot: ChatSnapshot::default(),
-        }));
-        assert!(guard.as_ref().unwrap().flush(Duration::from_secs(5)));
+        })));
+        assert!(runtime.flush(Duration::from_secs(5)));
+        runtime.shutdown();
+        released_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker host release must complete without joining itself");
     }
 }

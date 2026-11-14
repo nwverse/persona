@@ -23181,6 +23181,8 @@ def markets_route(handler, p, body):
 FILE_OPS = bool(os.environ.get("MOCK_FILE_OPS"))
 FILE_TRASH = {}  # trash id -> (tree key, {key: value} of everything moved)
 FILE_OPS_LOG = []  # what the browser asked (a test reads it from the module)
+FILE_OPERATIONS = {}  # operation id -> synthetic copy / zip progress for the transfer bars
+FILE_OPERATION_DELAY = float(os.environ.get("MOCK_FILE_OP_DELAY", "0"))
 _features_without_file_ops = features
 
 
@@ -23201,10 +23203,10 @@ def file_ops_key(mid, path, cwd):
     return home, rel, None
 
 
-def file_ops_free(dir_rel, name, conflict):
+def file_ops_free(dir_rel, name, conflict, reserved=()):
     """The name `name` takes in folder `dir_rel` (a tree key ending in / or ""): itself, or "name 2.extension" to keep both;
     None when it is taken and nothing was said."""
-    taken = lambda n: dir_rel + n in MOCK_TREE or dir_rel + n + "/" in MOCK_TREE
+    taken = lambda n: dir_rel + n in MOCK_TREE or dir_rel + n + "/" in MOCK_TREE or dir_rel + n in reserved or dir_rel + n + "/" in reserved
     if not taken(name) or conflict == "replace": return name
     if conflict != "keep": return None
     stem, dot, ext = name.rpartition(".")
@@ -23213,6 +23215,65 @@ def file_ops_free(dir_rel, name, conflict):
         n = "%s %d%s%s" % (stem, i, dot, ext)
         if not taken(n): return n
     return None
+
+
+def file_operation_start(req, kind):
+    """Register a synthetic remote operation; even a quick one can be read after its POST answers."""
+    oid = req.get("operation_id")
+    if not oid: return None
+    total = max(1, len(req.get("paths", [])))
+    op = {"id": oid, "kind": kind, "state": "running", "files_done": 0, "files_total": total,
+          "bytes_done": 0, "bytes_total": total * 100}
+    FILE_OPERATIONS[oid] = op
+    return op
+
+
+def file_operation_disconnected(h):
+    """The original POST's client went away, as a cancelled hub request disconnects the node."""
+    import select, socket
+    try:
+        if not select.select([h.connection], [], [], 0)[0]: return False
+        return h.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except (ValueError, TypeError, BlockingIOError):
+        return False  # an SSLSocket cannot peek with these flags
+    except OSError:
+        return True
+
+
+def file_operation_wait(h, op):
+    """Hold a synthetic operation open while its GET route reports progress; false after Cancel."""
+    if op is None: return True
+    if not FILE_OPERATION_DELAY:
+        op.update(state="done", files_done=op["files_total"], bytes_done=op["bytes_total"])
+        return True
+    started = time.monotonic()
+    while True:
+        if file_operation_disconnected(h):
+            op["state"] = "cancelled"
+            return False
+        elapsed = time.monotonic() - started
+        fraction = min(1.0, elapsed / FILE_OPERATION_DELAY)
+        op["files_done"] = min(op["files_total"], int(op["files_total"] * fraction))
+        op["bytes_done"] = min(op["bytes_total"], int(op["bytes_total"] * fraction))
+        if fraction >= 1:
+            op.update(state="done", files_done=op["files_total"], bytes_done=op["bytes_total"])
+            return True
+        time.sleep(0.05)
+
+
+def file_operation_route(h, p):
+    """GET a remote operation, or the synthetic states used by UI acceptance."""
+    if p == "/mock/file-operations" and FILE_OPS:
+        h.send_json({"operations": list(FILE_OPERATIONS.values())})
+        return True
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/files/operations/([^/]+)", p)
+    if not (FILE_OPS and m): return False
+    op = FILE_OPERATIONS.get(m.group(2))
+    if op is None:
+        h.send_json({"error": "file operation not found", "code": "not_found"}, 404)
+    else:
+        h.send_json(op)
+    return True
 
 
 def file_ops_dir(mid, d, cwd):
@@ -23368,14 +23429,21 @@ def file_make_route(h, p, body):
     if op == "copy":  # #5830: the tree entries copied into dir, named as a move names them
         home, drel, err = file_ops_dir(mid, req.get("dir", ""), cwd)
         if err: return h.send_json(*err) or True
-        copied = []
+        planned = []
+        reserved = set()
         for path in req.get("paths", []):
             _, rel, err = file_ops_key(mid, path, cwd)
             if err: return h.send_json(*err) or True
             if not taken(rel): return h.send_json({"error": "不存在", "code": "not_found"}, 404) or True
             name = rel.rpartition("/")[2]
-            final = file_ops_free(drel, name, req.get("conflict"))
+            final = file_ops_free(drel, name, req.get("conflict"), reserved)
             if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
+            reserved.add(drel + final)
+            planned.append((path, rel, final))
+        operation = file_operation_start(req, op)
+        if not file_operation_wait(h, operation): return True  # Cancel disconnected the POST before anything was copied.
+        copied = []
+        for path, rel, final in planned:
             for k, v in list(MOCK_TREE.items()):
                 if k == rel or k == rel + "/" or k.startswith(rel + "/"): MOCK_TREE[drel + final + k[len(rel):]] = v
             copied.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
@@ -23397,10 +23465,14 @@ def file_make_route(h, p, body):
                     n += 1
     name = req.get("name") or "Archive.zip"
     if not name.lower().endswith(".zip"): name += ".zip"
+    home, drel, final = None, None, None
     if req.get("dir"):
         home, drel, err = file_ops_dir(mid, req["dir"], cwd)
         if err: return h.send_json(*err) or True
         final = file_ops_free(drel, name, "keep")
+    operation = file_operation_start(req, op)
+    if not file_operation_wait(h, operation): return True  # Cancel: no archive or temporary download is left behind.
+    if req.get("dir"):
         MOCK_TREE[drel + final] = ("application/zip", base64.b64encode(out.getvalue()).decode())
         fs_changed(mid, [(home + "/" + drel).rstrip("/")], True)
         return h.send_json({"path": home + "/" + drel + final, "name": final, "size": len(out.getvalue()), "files": n}) or True
@@ -23986,6 +24058,7 @@ class H(BaseHTTPRequestHandler):
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
+        if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
