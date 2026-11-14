@@ -417,7 +417,8 @@ class WatcherTests(unittest.TestCase):
                                      "ANTHROPIC_API_KEY": "model-only"}), \
                 patch.object(pr_watch_repair.shutil, "which", return_value="/usr/bin/bwrap"), \
                 patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as worker_run, \
-                patch.object(pr_watch_repair, "checked", side_effect=["", "", "diff"]):
+                patch.object(pr_watch_repair, "repair_repository_copy", return_value=self.root), \
+                patch.object(pr_watch_repair, "checked", side_effect=["", "", "diff", "patch", "", ""]):
             pr_watch_repair.repair_with_model("example/one", pr(), self.root, "failure", {})
         env = worker_run.call_args.kwargs["environ"]
         self.assertNotIn("GH_TOKEN", env)
