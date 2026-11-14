@@ -165,8 +165,11 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   // a chip or a folder narrows the list (the search alone says so in its own field)
   const chipsOn = Boolean(source || kind || folder);
   // "Clear filters" under a filtered list that shows nothing open: back to the whole Inbox (the chips are kept on this
-  // device, so a list left filtered last time opens filtered)
+  // device, so a list left filtered last time opens filtered). The button goes with the empty state, so the keyboard
+  // moves first to All, the chip that now says what the list shows (a button: no phone keyboard comes up for it).
+  const filtersBar = useRef<HTMLDivElement>(null);
   const clearFilters = () => {
+    filtersBar.current?.querySelector<HTMLButtonElement>("button")?.focus();
     setSource("");
     setKind("");
     setFolder("");
@@ -331,7 +334,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
         </label>
         {/* A phone: the chips in one row that scrolls sideways, Clean up all in the ⋯ menu at its end. */}
         <div className="mt-2.5 flex items-center gap-1.5">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 max-sm:-my-1 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:py-1 max-sm:scrollbar-none max-sm:[&>*]:shrink-0" role="toolbar" aria-label={t("inbox-inboxlist.filters")}>
+        <div ref={filtersBar} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 max-sm:-my-1 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:py-1 max-sm:scrollbar-none max-sm:[&>*]:shrink-0" role="toolbar" aria-label={t("inbox-inboxlist.filters")}>
           <Chip on={!source && !kind} onClick={() => { setSource(""); setKind(""); }}>{t("inbox-inboxlist.all")}</Chip>
           <Chip on={source === "feishu"} onClick={() => pickSource("feishu")}>{t("inbox-inboxlist.source_lark")}</Chip>
           {chips.map((a) => (
@@ -430,25 +433,17 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
             </div>
           </div>
         )}
-        {/* nothing open where the chips, a folder or the search point: say so and offer the way back, not the green "All
-            caught up" (the Inbox outside the filters may still hold plenty, audit item 15) */}
-        {ready && empty && !failed && !away && !unconnected && filtered && (
-          <div className="mt-10 flex flex-col items-center gap-2 text-center" data-inbox-filtered-empty>
-            <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
-              <Icon name={chipsOn ? "filter" : "search"} size={17} />
+        {/* nothing open: the green "All caught up", or, where the chips, a folder or the search point, a neutral mark that
+            says so and the way back (the Inbox outside the filters may still hold plenty, audit item 15); one block, so
+            both keep the same type */}
+        {ready && empty && !failed && !away && !unconnected && (
+          <div className="mt-10 flex flex-col items-center gap-2 text-center" data-inbox-filtered-empty={filtered ? "" : undefined}>
+            <span className={cx("flex size-10 items-center justify-center rounded-full", filtered ? "bg-field text-ink-3" : "bg-green-tint text-green")}>
+              {filtered ? <Icon name={chipsOn ? "filter" : "search"} size={17} /> : <Icon name="check" size={17} stroke={2.6} />}
             </span>
-            <p className="text-[13.5px] font-medium text-ink">{chipsOn ? t("inbox-inboxlist.empty_filtered") : t("inbox-inboxlist.empty_no_match")}</p>
-            <p className="max-w-80 text-[12.5px] text-ink-3">{chipsOn ? t("inbox-inboxlist.empty_filtered_hint") : t("inbox-inboxlist.empty_no_match_hint")}</p>
-            <Button tone="secondary" onClick={clearFilters} className="mt-2">{chipsOn ? t("inbox-inboxlist.clear_filters") : t("inbox-inboxlist.clear_search")}</Button>
-          </div>
-        )}
-        {ready && empty && !failed && !away && !unconnected && !filtered && (
-          <div className="mt-10 flex flex-col items-center gap-2 text-center">
-            <span className="flex size-10 items-center justify-center rounded-full bg-green-tint text-green">
-              <Icon name="check" size={17} stroke={2.6} />
-            </span>
-            <p className="text-[13.5px] font-medium text-ink">{t("inbox-inboxlist.empty_all_done")}</p>
-            <p className="text-[12.5px] text-ink-3">{t("inbox-inboxlist.empty_all_done_hint")}</p>
+            <p className="text-[13.5px] font-medium text-ink">{t(!filtered ? "inbox-inboxlist.empty_all_done" : chipsOn ? "inbox-inboxlist.empty_filtered" : "inbox-inboxlist.empty_no_match")}</p>
+            <p className={cx("text-[12.5px] text-ink-3", filtered && "max-w-80")}>{t(!filtered ? "inbox-inboxlist.empty_all_done_hint" : chipsOn ? "inbox-inboxlist.empty_filtered_hint" : "inbox-inboxlist.empty_no_match_hint")}</p>
+            {filtered && <Button tone="secondary" onClick={clearFilters} className="mt-2 touch-hit">{t(chipsOn ? "inbox-inboxlist.clear_filters" : "inbox-inboxlist.clear_search")}</Button>}
           </div>
         )}
 
@@ -562,12 +557,15 @@ const ROWS_STEP = 20;
  * A run of rows (a group's, or a section's without groups) that mounts in steps: the first ROWS_FIRST at once, then
  * ROWS_STEP more whenever the page is idle, until all are there. 300 FYI mails built every row, some 7,000 elements,
  * before the Inbox showed anything (a 170 ms task on a phone, audit item 34); the first screen now comes first and the rest
- * follow in short tasks. `keep`: the opened item, there from the start so the list can show it; `all`: every row at once,
- * for a returned view putting its scroll position back.
+ * follow in short tasks. `keep`: the opened item, there from the start so the list can show it, and kept once it is (the
+ * keyboard comes back to its row when the item closes, however soon); `all`: every row at once, for a returned view
+ * putting its scroll position back.
  */
 function Rows({ items, row, keep, all }: { items: InboxItem[]; row: (it: InboxItem) => React.ReactNode; keep: (it: InboxItem) => boolean; all: boolean }) {
   const [mounted, setMounted] = useState(() => (all ? items.length : ROWS_FIRST));
-  const n = Math.max(mounted, items.findIndex(keep) + 1);
+  const kept = items.findIndex(keep) + 1;
+  if (kept > mounted) setMounted(kept);
+  const n = Math.max(mounted, kept);
   useEffect(() => {
     if (n >= items.length) return;
     return whenIdle(() => setMounted(n + ROWS_STEP), 500);

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // The Inbox by keyboard. Audit item 71: Select and Done are one button, so the focus stays on it as it turns, and comes
 // back to it when selecting ends from elsewhere (Esc on a row's tick). Audit item 74: on a narrow page the opened item has
-// the list's place, so the focus that went with the row moves to the item; ‹, Esc or Back returns it to that row, and
-// Esc goes back only there (a wide page has the list beside the item).
+// the list's place, so the focus that went with the row moves to the item's title; ‹, Esc or Back returns it to that row,
+// or to the row now in its place when the item went to Done, and Esc goes back only there (a wide page has the list
+// beside the item, and is left alone).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,6 +56,14 @@ const button = (text: string) => [...host.querySelectorAll("button")].find((b) =
 const rowLink = (id: string) => host.querySelector<HTMLAnchorElement>(`[data-item="${id}"] > a`)!;
 const list = () => host.querySelector<HTMLElement>(`section[aria-label="${t("inbox-inbox.list")}"]`)!;
 const detail = () => host.querySelector<HTMLElement>(`section[aria-label="${t("inbox-inbox.detail")}"]`)!;
+const title = () => detail().querySelector<HTMLElement>("h2[data-item-title]")!;
+// Done in the opened item's header, which goes back to the list
+const headerDone = () => [...detail().querySelectorAll("button")].find((b) => b.textContent?.trim() === "已处理")!;
+const doneSection = () => host.querySelector<HTMLElement>('[data-section="done"]')!;
+// narrow: the opened item and the list take turns, and what is in the hidden one is not drawn
+const narrow = () => {
+  drawn = (el) => (location.pathname !== "/inbox" ? !list().contains(el) : !detail().contains(el));
+};
 const escape = (target: EventTarget = document.activeElement ?? window) =>
   act(() => { target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
 const popped = (go: () => void) =>
@@ -65,10 +74,11 @@ const popped = (go: () => void) =>
   });
 
 beforeEach(async () => {
-  calls.items = [item("a1"), item("a2")];
+  calls.items = [item("a1"), item("a2"), item("a3"), { ...item("d1"), done_at: new Date().toISOString(), done_by: "user" }];
   resetInboxForTests();
   vi.stubGlobal("CSS", { escape: (v: string) => v });
-  Element.prototype.scrollIntoView = vi.fn();
+  // as a browser that answers a scroll with a promise (an effect handing it back to React broke the page)
+  Element.prototype.scrollIntoView = vi.fn(() => Promise.resolve()) as unknown as Element["scrollIntoView"];
   drawn = () => true;
   Object.defineProperty(Element.prototype, "checkVisibility", { configurable: true, value(this: Element) { return drawn(this); } });
   history.pushState(null, "", "/inbox");
@@ -119,7 +129,9 @@ describe("the opened item and its row by keyboard on a narrow page (audit item 7
     act(() => link.focus());
     act(() => link.click());
     await render("a2");
-    expect(document.activeElement).toBe(detail());
+    // the item's title, which says what opened (a heading that takes the focus, with its ring)
+    expect(document.activeElement).toBe(title());
+    expect(title().textContent).toContain("chat a2");
 
     await popped(() => void escape());
     expect(location.pathname).toBe("/inbox");
@@ -142,6 +154,45 @@ describe("the opened item and its row by keyboard on a narrow page (audit item 7
     await escape(field);
     expect(location.pathname).toBe("/inbox/a1");
     field.remove();
+  });
+
+  // Done from the item files it under Done: its row there is a new one. The focus goes to the row now in its place, not
+  // after it into Done, and the list does not scroll there (with Done open, it jumped to the Done section)
+  it.each([["open"], ["folded"]])("after Done in the item's header, with Done %s, comes back to the row now in its place", async (fold) => {
+    if (fold === "open") {
+      await act(async () => doneSection().querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+      await flush();
+    }
+    narrow();
+    act(() => rowLink("a1").focus());
+    act(() => rowLink("a1").click());
+    await render("a1");
+    expect(document.activeElement).toBe(title());
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
+    act(() => headerDone().focus());
+    await popped(() => act(() => headerDone().click()));
+    await render();
+    expect(location.pathname).toBe("/inbox");
+    if (fold === "open") expect(doneSection().querySelector('[data-item="a1"]')).not.toBeNull();
+    expect(document.activeElement).toBe(rowLink("a2"));
+    const scrolled = vi.mocked(Element.prototype.scrollIntoView).mock.contexts as Element[];
+    expect(scrolled.filter((el) => doneSection().contains(el))).toEqual([]);
+  });
+
+  it("leaves a wide page's list alone after Done in the item's header, with Done open", async () => {
+    await act(async () => doneSection().querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+    await flush();
+    act(() => rowLink("a1").click());
+    await render("a1");
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
+    act(() => headerDone().focus());
+    await popped(() => act(() => headerDone().click()));
+    await render();
+    expect(doneSection().querySelector('[data-item="a1"]')).not.toBeNull();
+    // as before the narrow page's rule: nothing in Done takes the focus, and the list is not scrolled there
+    expect(doneSection().contains(document.activeElement)).toBe(false);
+    const scrolled = vi.mocked(Element.prototype.scrollIntoView).mock.contexts as Element[];
+    expect(scrolled.filter((el) => doneSection().contains(el))).toEqual([]);
   });
 
   it("keeps a focus still in sight: a wide page's row stays focused when it opens its item", async () => {

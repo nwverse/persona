@@ -73,6 +73,8 @@ try {
       await empty.getByRole("button", { name: "Clear filters" }).click();
       await p.locator("main [data-item]").first().waitFor();
       assert.equal(await empty.count(), 0);
+      // the button went with the empty state: the keyboard is on All, the chip that now says what the list shows
+      assert.equal(await active(p), "BUTTON||All");
       await context.close();
     }
     // audit item 84: a failed read says nothing about what is left, and its line has its own Retry
@@ -145,7 +147,9 @@ try {
       await p.keyboard.press("Enter");
       await p.waitForURL(/\/inbox\/lark/);
       await p.waitForTimeout(300);
-      assert.match(await active(p), /^SECTION\|Details\|/);
+      // the item's title, with its focus ring
+      assert.match(await active(p), /^H2\|\|/);
+      assert.equal(await p.evaluate(() => document.activeElement.matches(":focus-visible")), true, "the title shows its ring");
       await shot(p, `74-opened-390-${theme}`);
       await p.keyboard.press("Escape");
       await p.waitForURL(/\/inbox$/);
@@ -161,6 +165,42 @@ try {
       results[`74-${theme}`] = "focus follows";
       await context.close();
     }
+  }
+  // audit item 74, and what it must not do: Done in an opened item's header files the item under Done. With Done open the
+  // list jumped there after it; now it stays where it was, and on a narrow page the focus lands on the row now in the
+  // item's place (a wide page keeps the focus where it was before the narrow page's rule)
+  for (const [theme, width] of [["light", 1280], ["light", 390], ["dark", 1280], ["dark", 390]]) {
+    const { context, p } = await page(theme, { width, height: width > 400 ? 820 : 844 });
+    await p.goto(`${origin}/inbox`);
+    await p.waitForFunction(() => document.querySelectorAll("main [data-item]").length > 300, null, { timeout: 60_000 });
+    await p.locator('[data-section="done"] button[aria-expanded="false"]').first().click();
+    const open = p.locator('main [data-section]:not([data-section="done"]) [data-item]');
+    const [id, next] = await Promise.all([open.nth(120).getAttribute("data-item"), open.nth(121).getAttribute("data-item")]);
+    const link = p.locator(`main [data-item="${id}"] > a`);
+    await link.scrollIntoViewIfNeeded();
+    const scroller = p.locator("[data-inbox-list-scroll]");
+    const before = await scroller.evaluate((el) => el.scrollTop);
+    const done = p.locator('section[aria-label="Details"]').getByRole("button", { name: "Done", exact: true });
+    if (width > 400) {
+      await link.click();
+      await done.click();
+    } else {
+      await link.focus();
+      await p.keyboard.press("Enter");
+      await done.focus();
+      await p.keyboard.press("Enter");
+    }
+    await p.waitForURL(/\/inbox$/);
+    await p.locator(`[data-section="done"] [data-item="${id}"]`).waitFor();
+    await p.waitForTimeout(400);
+    const after = await scroller.evaluate((el) => el.scrollTop);
+    const at = await p.evaluate(() => ({ row: document.activeElement?.closest("[data-item]")?.getAttribute("data-item") ?? null, done: Boolean(document.activeElement?.closest('[data-section="done"]')) }));
+    assert.ok(Math.abs(after - before) < 100, `the list stays where it was at ${width}: ${before} → ${after}`);
+    assert.equal(at.done, false, `nothing in Done has the focus at ${width}`);
+    if (width < 400) assert.equal(at.row, next, "a narrow page: the focus is on the row now in the item's place");
+    results[`74-done-${width}-${theme}`] = { before, after, focus: at.row };
+    await shot(p, `74-done-${width}-${theme}`);
+    await context.close();
   }
   // audit item 34: a phone opening a long Inbox draws its first rows first, the rest after (CPU 4x)
   {

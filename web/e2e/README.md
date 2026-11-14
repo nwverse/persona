@@ -168,10 +168,12 @@ Run against an exclusively owned web server backed by the mock hub with the flag
 production build is what the timings mean). It uses only the mock's invented data and answers the read failure in the
 browser. In English, light and dark, at 1280 x 820 unless named: chips that leave nothing show the neutral filtered
 empty state with no green check and **Clean up all** without "Nothing to do", and **Clear filters** brings the rows
-back; a failed read has its own **Retry** and a Clean up all with no scope; the detail's small line has the time right
+back with the keyboard on the **All** chip; a failed read has its own **Retry** and a Clean up all with no scope; the detail's small line has the time right
 after its words, not at the line's end; **Edit** on a drafted reply puts the caret at the end of the text; Select and
 Done keep the keyboard on the one button, also after Esc on a row's tick; at 390 x 844 a row opened by keyboard moves
-the focus to the item, and Esc or the browser's Back returns it to that row. Last, a 390 x 844 touch phone at CPU 4x
+the focus to the item's title, with its focus ring, and Esc or the browser's Back returns it to that row. With Done
+open, **Done** in an opened item's header leaves the list where it was (it used to jump to the row filed under Done), at
+1280 and at 390, and at 390 the focus lands on the row now in the item's place. Last, a 390 x 844 touch phone at CPU 4x
 opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
 end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
 four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.

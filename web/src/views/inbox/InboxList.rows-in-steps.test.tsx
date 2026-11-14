@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Audit item 34: a long run of rows mounts in steps. 300 FYI mails built every row (some 7,000 elements) before the
 // Inbox showed anything; now the first rows come at once and the rest follow while the page is idle, until all are
-// there. The opened item is there from the start (the list keeps it in sight), and a returned view, which puts its
-// scroll position back, gets every row at once.
+// there. The opened item is there from the start (the list keeps it in sight) and stays, and a returned view, which puts
+// its scroll position back, gets every row at once.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,6 +85,17 @@ describe("a long list mounts in steps (audit item 34)", () => {
     expect(host.querySelector('[data-item="m090"]')).not.toBeNull();
     expect(rows()).toBe(91);
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  // the keyboard comes back to the opened item's row when it closes (audit item 74): closed before the next step, the
+  // row is still there to take it
+  it("keeps the opened item's row once it is there, when the item closes before the next step", async () => {
+    act(() => root.render(<InboxList selected={{ id: "m090" }} />));
+    await flush();
+    act(() => root.render(<InboxList />));
+    await flush();
+    expect(host.querySelector('[data-item="m090"]')).not.toBeNull();
+    expect(rows()).toBe(91);
   });
 
   it("draws every row at once for a returned view, which puts its scroll position back", async () => {

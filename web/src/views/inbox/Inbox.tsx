@@ -2,7 +2,7 @@
 // with the agents waiting on you at the head of "Needs you". Wide: the list (380px) and the opened item side by side;
 // narrow: the opened item takes the list's place, with a way back. "Select" (top right) picks several items to mark them
 // done at once (#2059).
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { TodoDialogHost } from "./InboxTodoDialog";
 import { useInbox, refreshInbox, loadRoutedItem, type InboxItem } from "../../lib/inbox";
 import { useScope } from "../../lib/current-assistant";
@@ -58,15 +58,10 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
   const selectButton = useRef<HTMLButtonElement>(null);
   useFocusWhenLost(picking, () => selectButton.current);
   // On a narrow page the opened item has the list's place (audit item 74): the focus that went with the row opening it
-  // moves to the item, and back to that row when ‹, Esc or the browser's Back returns to the list.
+  // moves to the item's title, and back to the list when ‹, Esc or the browser's Back returns there
   const listBox = useRef<HTMLElement>(null);
   const detailBox = useRef<HTMLElement>(null);
-  const opened = useRef(id ? { id, manager } : undefined);
-  useFocusWhenLost(id ?? "", () => {
-    const was = opened.current;
-    opened.current = id ? { id, manager } : undefined;
-    return id ? detailBox.current : was ? openedRow(listBox.current, was) : null;
-  }, true);
+  useNarrowItemFocus(id, manager, listBox, detailBox);
   // Esc there goes back to the list as ‹ does: not over a dialog or a menu, nor in a field (Esc is its own there), and not
   // on a wide page, where the list is beside the item
   useEffect(() => {
@@ -102,7 +97,7 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
         <section ref={listBox} aria-label={t("inbox-inbox.list")} className={cx("min-h-0 w-full flex-col @3xl:flex @3xl:w-[380px] @3xl:shrink-0 @3xl:border-r @3xl:border-line", id ? "hidden" : "flex")}>
           <InboxList key={view.revision} selected={item ?? (id ? { id, manager } : undefined)} picked={picked} onPicked={setPicked} />
         </section>
-        <section ref={detailBox} tabIndex={-1} aria-label={t("inbox-inbox.detail")} className={cx("min-h-0 min-w-0 flex-1 flex-col outline-none @3xl:flex", id ? "flex" : "hidden")}>
+        <section ref={detailBox} tabIndex={-1} aria-label={t("inbox-inbox.detail")} className={cx("min-h-0 min-w-0 flex-1 flex-col outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent @3xl:flex", id ? "flex" : "hidden")}>
           {id ? <InboxDetail item={item} loaded={loaded && !routing} /> : <DetailPlaceholder />}
         </section>
       </div>
@@ -121,27 +116,91 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
 
 /** When `key` changes and the focus was lost with what changed, it goes to `target()`. Lost: on the page's body (what
  *  had it was removed), or on something no longer drawn (hidden with its list; the browser moves such a focus to the
- *  body only at its next frame). A focus still in sight (a row beside the item on a wide page) stays. `reveal`: brought
- *  into sight in its own scroller, as the list shows the opened row. */
-function useFocusWhenLost(key: unknown, target: () => HTMLElement | null | undefined, reveal = false): void {
+ *  body only at its next frame). A focus still in sight stays. */
+function useFocusWhenLost(key: unknown, target: () => HTMLElement | null | undefined): void {
   const last = useRef(key);
   useLayoutEffect(() => {
     if (last.current === key) return;
     last.current = key;
-    const el = target();
-    const at = document.activeElement;
-    if (!el || (at instanceof HTMLElement && at !== document.body && shown(at))) return;
-    el.focus({ preventScroll: true });
-    // only one that took it: a row filed in a folded section (Done) can't, and the list stays where it was
-    if (reveal && document.activeElement === el) el.scrollIntoView?.({ block: "nearest" });
+    if (focusLost()) target()?.focus({ preventScroll: true });
   });
 }
 
-/** The row of the item `it` in the list, as its link (or its tick while selecting). */
-function openedRow(list: HTMLElement | null, it: { id: string; manager?: string }): HTMLElement | null {
+/** An opened item's address. */
+type Opened = { id: string; manager?: string };
+/** The row an item was opened from on a narrow page, and the rows after and before it then (each a `[data-item]`). */
+type From = { it: Opened; row: HTMLElement | null; after: HTMLElement[]; before: HTMLElement[] };
+
+/**
+ * The keyboard where the opened item takes the list's place (a narrow page, audit item 74). Opening one moves the focus,
+ * lost with the hidden list, to the item's title (the item's pane while it loads). Back on the list it returns to the
+ * row the item was opened from, if that row is still where it was: a row is a new element once it is filed elsewhere
+ * (Done from the item, another section or group), so the one noted is no longer in the page. Then the focus goes to the
+ * row now in its place (the next one, else the one before), and the list stays where it was instead of following the
+ * item into Done. A wide page, with the list beside the item, is left alone both ways.
+ */
+function useNarrowItemFocus(id: string | undefined, manager: string | undefined, listBox: RefObject<HTMLElement | null>, detailBox: RefObject<HTMLElement | null>): void {
+  const last = useRef<Opened | undefined>(id ? { id, manager } : undefined);
+  const from = useRef<From | undefined>(undefined);
+  useLayoutEffect(() => {
+    const was = last.current;
+    if (was?.id === id && (!id || was?.manager === manager)) return;
+    last.current = id ? { id, manager } : undefined;
+    const list = listBox.current;
+    if (id) {
+      // wide: the list is beside the item, and what had the focus is still in sight
+      if (shown(list)) {
+        from.current = undefined;
+        return;
+      }
+      // from the list (not from another item, which keeps the row the first was opened from)
+      if (!was) from.current = noteRow(list, { id, manager });
+      if (focusLost()) (detailBox.current?.querySelector<HTMLElement>("[data-item-title]") ?? detailBox.current)?.focus({ preventScroll: true });
+      return;
+    }
+    const noted = from.current;
+    from.current = undefined;
+    // wide: the item's pane stays beside the list, holding its placeholder
+    if (!was || shown(detailBox.current) || !focusLost()) return;
+    // the rows noted that are still in the page, then the item's row found again, unless it went to Done (an item that
+    // had no row under it, opened from elsewhere; a list drawn anew, as an in-Inbox Back to another item does)
+    const rows = [...(noted?.row ? [noted.row, ...noted.after, ...noted.before].filter((r) => r.isConnected) : []), unmovedRow(list, noted?.it ?? was)];
+    for (const row of rows) {
+      const el = row?.querySelector<HTMLElement>(":scope > a, :scope > [role=checkbox]");
+      el?.focus({ preventScroll: true });
+      // only one that took it: a row in a folded section can't (and not the scroll's own answer, which a browser may
+      // give as a promise: an effect returns nothing but its cleanup)
+      if (!el || document.activeElement !== el) continue;
+      el.scrollIntoView?.({ block: "nearest" });
+      return;
+    }
+  });
+}
+
+/** The row of the item `it` in the list (`[data-item]`). */
+function itemRow(list: HTMLElement | null, it: Opened): HTMLElement | null {
   const rows = [...(list?.querySelectorAll<HTMLElement>(`[data-item="${CSS.escape(it.id)}"]`) ?? [])];
-  const row = rows.find((el) => sameManager(el.dataset.manager, it.manager)) ?? rows[0];
-  return row?.querySelector<HTMLElement>(":scope > a, :scope > [role=checkbox]") ?? null;
+  return rows.find((el) => sameManager(el.dataset.manager, it.manager)) ?? rows[0] ?? null;
+}
+
+/** Where the item `it` is opened from: its row, and the three rows after and before it in the list. */
+function noteRow(list: HTMLElement | null, it: Opened): From {
+  const row = itemRow(list, it);
+  const rows = [...(list?.querySelectorAll<HTMLElement>("[data-item]") ?? [])];
+  const at = row ? rows.indexOf(row) : -1;
+  return { it, row, after: at < 0 ? [] : rows.slice(at + 1, at + 4), before: at < 0 ? [] : rows.slice(Math.max(0, at - 3), at).reverse() };
+}
+
+/** An item opened some other way (a link, a notification): its row, unless it has gone to Done meanwhile. */
+function unmovedRow(list: HTMLElement | null, it: Opened): HTMLElement | null {
+  const row = itemRow(list, it);
+  return row?.closest("[data-section]")?.getAttribute("data-section") === "done" ? null : row;
+}
+
+/** Whether the focus was lost: on the page's body, or on something no longer drawn. */
+function focusLost(): boolean {
+  const at = document.activeElement;
+  return !(at instanceof HTMLElement) || at === document.body || !shown(at);
 }
 
 /** Whether `el` is drawn (the list on a wide page, hidden while an opened item has its place on a narrow one; what is

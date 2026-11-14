@@ -95,8 +95,16 @@ describe("a list emptied by its filters (audit item 15)", () => {
     expect(cleanAll().textContent).toContain("飞书 · 邮件");
     expect(cleanAll().disabled).toBe(true);
 
-    await act(async () => button("清除筛选")!.click());
+    // a finger's 44 px around it, and the keyboard is not dropped when the button goes with the empty state: it lands on
+    // All, the chip that now says what the list shows
+    const clear = button("清除筛选")!;
+    expect(clear.className).toContain("touch-hit");
+    act(() => clear.focus());
+    await act(async () => clear.click());
     await flush();
+    expect(clear.isConnected).toBe(false);
+    expect(document.activeElement).toBe(button("全部"));
+    expect(document.activeElement?.getAttribute("aria-pressed")).toBe("true");
     expect(localStorage.getItem("inbox.source")).toBeNull();
     expect(localStorage.getItem("inbox.kind")).toBeNull();
     expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
@@ -113,9 +121,12 @@ describe("a list emptied by its filters (audit item 15)", () => {
     expect(host.querySelector(".bg-green-tint")).toBeNull();
     expect(cleanAll().textContent).not.toContain("没有未处理的");
 
-    await act(async () => button("清除搜索")!.click());
+    const clear = button("清除搜索")!;
+    act(() => clear.focus());
+    await act(async () => clear.click());
     await flush();
     expect(host.querySelector<HTMLInputElement>('input[aria-label="搜索收件箱"]')!.value).toBe("");
+    expect(document.activeElement).toBe(button("全部"));
     expect(rows()).toEqual(["l1", "m1"]);
   });
 
