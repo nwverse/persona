@@ -294,7 +294,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 192 B on top of #7339's.
 // A folded-search retry now clears its partial warning only after every requested fold has loaded; real failures and
 // budget caps still show it (#7389). Measured: en 476,854 B, ja 480,545 B, zh-Hans 477,834 B. The budget moves by 51 B.
-export const FIRST_SCREEN_BUDGET = 480_545;
+// The Agents list says why it has nothing to show (the web audit's Agents list states): a failed read of the complete
+// list, or of a list by group, says why with Retry; to-dos it cannot read list the Agents by status, saying so with
+// Retry; a hub out of reach is said in place of Loading… for good. With them, By to-do's group words (Unread, Not
+// running), one copy verb and ID per thing in the Agent menus and the archived Agents page's Back: +330 B to ja,
+// measured in one environment against main at 47973bbb8 (ja 480,562 B to 480,892 B; en 476,871 B to 477,180 B,
+// zh-Hans 477,851 B to 478,190 B; that environment measures main 17 B over its budget). The budget moves by these 330 B.
+export const FIRST_SCREEN_BUDGET = 480_875;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
