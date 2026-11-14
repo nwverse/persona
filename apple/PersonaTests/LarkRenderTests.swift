@@ -59,6 +59,56 @@ struct LarkRenderTests {
         if case .text(_, let s) = unsafe[0] { #expect(s.link == nil) }
     }
 
+    @Test func cardMarkdownRepeatedCallsKeepRunsAndStyles() {
+        var base = LarkRunStyle()
+        base.bold = true
+        base.underline = true
+        var firstLink = base
+        firstLink.link = URL(string: "https://example.com/a")
+        var secondLink = base
+        secondLink.link = URL(string: "https://example.com/b")
+        var colored = base
+        colored.color = LarkColor.text("red")
+        let input = "😀前<A data-id=\"1\" HREF=\"https://example.com/a\">链</A>中<a title=next HREF=https://example.com/b>次</a><FONT title=x COLOR=red>色</FONT><BR>后"
+        let expected: [LarkInline] = [
+            .text("😀前", base), .text("链", firstLink), .text("中", base), .text("次", secondLink),
+            .text("色", colored), .text("\n", base), .text("后", base),
+        ]
+        for _ in 0..<20 {
+            #expect(LarkFormat.cardMarkdown(input, style: base) == expected)
+        }
+    }
+
+    @Test func cardMarkdownPreservesUnicodeAndMalformedMarkup() {
+        var base = LarkRunStyle()
+        base.strike = true
+        var linked = base
+        linked.link = URL(string: "https://example.com/ok")
+        let input = "😀x<a href=\"https://example.com/ok\">ok</a>🧪<a href='https://bad.example'>broken"
+        let expected: [LarkInline] = [
+            .text("😀x", base), .text("ok", linked), .text("🧪<a href='https://bad.example'>broken", base),
+        ]
+        #expect(LarkFormat.cardMarkdown(input, style: base) == expected)
+        #expect(LarkFormat.cardMarkdown("<a title='x'>plain</a>", style: base) == [.text("plain", base)])
+    }
+
+    @Test func cardMarkdownThroughNestedCardNodes() {
+        let text = "前<font color=red>热</font><a href='https://example.com/nested'>链</a>"
+        let node = LarkCardNode(.object([
+            "tag": .string("markdown"),
+            "children": .array([.object([
+                "tag": .string("markdown_emphasis"),
+                "children": .array([.object(["tag": .string("plain_text"), "text": .string(text)])]),
+            ])]),
+        ]))
+        var style = LarkRunStyle()
+        style.italic = true
+        let expected = LarkFormat.cardMarkdown(text, style: style)
+        #expect(LarkCardRuns.runs(node, inMarkdown: true) == expected)
+        #expect(LarkCardRuns.runs(node, inMarkdown: true) == expected)
+        #expect(LarkCardRuns.runs(node, inMarkdown: false) == [.text(text, style)])
+    }
+
     @Test func lingoTermsUseUTF16Offsets() {
         let runs = LarkPartRenderer.lingoRuns("😀 联调好了", lingo: [.object(["start": .number(3), "end": .number(5)])], style: LarkRunStyle())
         let dotted = runs.compactMap { if case .text(let s, let st) = $0, st.dotted { s } else { nil } }
