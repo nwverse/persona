@@ -5,6 +5,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -200,6 +201,7 @@ class InboxSourceCollapsedTest {
         advancePastReadWindow()
 
         assertEquals(listOf(InboxEventRoute(record.item.id)), stack.toList())
+        rule.waitUntil(5_000) { rule.onAllNodesWithText(viewOriginal).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText(viewOriginal).assertExists()
         assertEquals("Returning to the collapsed detail mounted or read the source again", callsBeforeBack,
             sourceCallCounts(repository, transport))
