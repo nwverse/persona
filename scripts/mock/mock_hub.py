@@ -12290,12 +12290,12 @@ if MOCK_INBOX_SHOWCASE:
     with open(_showcase_path, encoding="utf-8") as _f:
         _showcase = json.load(_f)
     INBOX[:] = _showcase["items"]
-    MACHINES.append({"id": "m1", "name": "示例电脑", "kind": "local", "icon": "desktop", "online": True,
+    MACHINES.append({"id": "m1", "name": "示例电脑", "kind": "ssh", "icon": "desktop", "ssh_host": "example-computer", "online": True,
                      "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user",
                      "herdr_version": "0.9.5", "claude_version": "2.1.320", "last_seen": ago()})
     for _i, _row in enumerate(_showcase.get("sessions", [])):
         _state = _row["state"]
-        _status = {"working": "working", "needs_you": "blocked", "offline": "offline"}.get(_state, "idle")
+        _status = {"working": "working", "needs_you": "blocked", "unread": "done", "offline": "offline"}.get(_state, "idle")
         _session = sess(_row["machine_id"], _row["session_id"], _row["title"], _row.get("cwd", ""),
                         _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
         _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.

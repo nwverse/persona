@@ -109,14 +109,15 @@ class InboxShowcaseMockTests(unittest.TestCase):
                 )
                 for field, value in expected.items():
                     self.assertEqual(actual[field], value, field)
-                for field in ("status", "agent", "launcher", "model", "space_kind", "space_id", "slot_id", "pane_id", "last_text"):
+                for field in ("agent", "launcher", "model", "space_kind", "space_id", "slot_id", "pane_id", "last_text"):
                     self.assertIn(field, actual)
+                self.assertEqual(actual["status"], {"unread": "done", "idle": "idle"}[expected["state"]])
         self.assertEqual(next(row for row in listed if row["session_id"] == "s-agent")["state"], "unread")
 
     def test_showcase_machine_is_online_with_complete_fields(self):
         hub = self.serve(MOCK_INBOX_SHOWCASE="1")
         machine = next(row for row in hub.request("/api/v1/machines")["machines"] if row["id"] == "m1")
-        for field, value in {"name": "示例电脑", "kind": "local", "icon": "desktop", "online": True,
+        for field, value in {"name": "示例电脑", "kind": "ssh", "icon": "desktop", "ssh_host": "example-computer", "online": True,
                              "hostname": "example-computer", "os": "linux", "arch": "amd64", "home": "/home/user"}.items():
             self.assertEqual(machine[field], value, field)
 
