@@ -1555,6 +1555,12 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 - Separate HTTP requests were never ordered by the bus (the hub reads each body before calling, the manager runs each call in its own goroutine), so a side stream breaks no order anyone relied on: a flow that needs one request after another waits for the first's answer.
 - Prove a stall with a control: `TestLargeBodyDoesNotHoldUpTheBus` throttles the manager's reads and measures a small call during a large upload both ways (3 ms streamed, 2.5 s inline). Without the inline run failing its own bound, a too-fast test link would pass for a fix.
 
+## Rows nobody sees still cost every push (2026-11-14, #6836)
+
+- A machine's list told the hub carried a row for every archive record, kept without expiry, and the hub dropped all of them (`Hub.shown`) before anything reached an app. At 8,000 records and 200 live sessions, one session changing cost the manager 23 ms and 110 MB, the bus a 5.9 MB message, and the hub 4.4 ms and 27 MB. A list that is filtered at the far end grows with what it filters: send what the far end shows, and what it only looks up by id on its own, when it changes.
+- Before taking rows out of a list, find every reader that looks rows up in it: the hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them there. They keep finding them in a map beside the list; prove it by comparing each lookup and the apps' bytes against a hub given the whole list, and check the test fails without the fallback.
+- A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,

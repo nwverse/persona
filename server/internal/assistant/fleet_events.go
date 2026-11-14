@@ -195,7 +195,7 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleetStart(context.WithoutCancel(ctx))
 	defer s.boardFleetUp() // the pending cards are read: the board may have changed while the assistant was away
 	s.fleet.sentMu.Lock()
-	s.fleet.sent = nil
+	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
 	for _, m := range s.fleetMachines() {

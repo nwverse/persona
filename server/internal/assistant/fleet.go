@@ -75,6 +75,8 @@ type fleetBook struct {
 	sentMu sync.Mutex
 	sent   map[string]sentList
 	enc    bytes.Buffer
+	// archived is what was told of each machine's archived rows (fleet.archived, tellArchived), under sentMu.
+	archived map[string]archivedSent
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
