@@ -28,7 +28,7 @@ public struct NativeChatStoreContinuityReplay {
                 loadedOnce: initial.flag("loaded_once")
             )
             try shadow.dispatch(.openChat(chat: shadow.chat, snapshot: snapshot))
-            var list: [String] = []
+            var list: [(id: String, json: String)] = []
             try shadow.flush()
             func apply(_ patch: ChatPatch) throws {
                 for operation in patch.ops {
@@ -38,16 +38,24 @@ public struct NativeChatStoreContinuityReplay {
                             throw CoreContinuityShadow.Mismatch(rule: "patch-remove-index", inputShape: "out-of-bounds")
                         }
                         list.remove(at: Int(index))
-                    case let .insert(index: index, id: _, json: json):
+                    case let .insert(index: index, id: id, json: json):
                         guard index <= list.count else {
                             throw CoreContinuityShadow.Mismatch(rule: "patch-insert-index", inputShape: "out-of-bounds")
                         }
-                        list.insert(json, at: Int(index))
-                    case let .update(index: index, id: _, json: json):
+                        let object = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
+                        guard object["id"] == .string(id) else {
+                            throw CoreContinuityShadow.Mismatch(rule: "patch-insert-identity", inputShape: "id-json-mismatch")
+                        }
+                        list.insert((id, json), at: Int(index))
+                    case let .update(index: index, id: id, json: json):
                         guard index < list.count else {
                             throw CoreContinuityShadow.Mismatch(rule: "patch-update-index", inputShape: "out-of-bounds")
                         }
-                        list[Int(index)] = json
+                        let object = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
+                        guard object["id"] == .string(id), list[Int(index)].id == id else {
+                            throw CoreContinuityShadow.Mismatch(rule: "patch-update-identity", inputShape: "id-json-or-index-mismatch")
+                        }
+                        list[Int(index)] = (id, json)
                     }
                 }
             }
@@ -84,7 +92,8 @@ public struct NativeChatStoreContinuityReplay {
                     }
                 }
                 let expected = `case`.expected[index]
-                let actualItems = ContinuityJSON.array(try list.map { try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data($0.utf8))) })
+                let actualItems = ContinuityJSON.array(try list.map { try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data($0.json.utf8))) })
+                try shadowCheck(.array(list.map { .string($0.id) }) == expected["item_ids"], "item-ids", step: index)
                 try shadowCheck(.array(requests) == expected["actions"], "actions", step: index)
                 try shadowCheck(actualItems == expected["items"], "items", step: index)
                 try shadowCheck(.number(Double(patch.covered)) == expected["covered"], "covered", step: index)

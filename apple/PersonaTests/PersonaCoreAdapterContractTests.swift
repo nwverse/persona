@@ -5,7 +5,7 @@ import Testing
 @testable import Persona
 
 private actor AdapterItemResponses {
-    enum Failure: Error { case timeout, wrongRequest }
+    enum Failure: Error { case timeout, wrongRequest, cancelled }
     private var started = 0
     private var pending: [(query: [String: String], resume: CheckedContinuation<Data, Error>)] = []
 
@@ -15,9 +15,18 @@ private actor AdapterItemResponses {
         }
         started += 1
         let query = request.query
-        return try await withCheckedThrowingContinuation { resume in
-            pending.append((query, resume))
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { resume in
+                pending.append((query, resume))
+            }
+        } onCancel: {
+            Task { await cancel() }
         }
+    }
+
+    func cancel() {
+        for request in pending { request.resume.resume(throwing: Failure.cancelled) }
+        pending.removeAll()
     }
 
     func waitForRequests(_ expected: Int) async throws {
@@ -25,11 +34,13 @@ private actor AdapterItemResponses {
             if started == expected { return }
             try await Task.sleep(for: .milliseconds(10))
         }
+        await cancel()
         throw Failure.timeout
     }
 
     func releaseFold(_ seq: Int) throws {
         guard let index = pending.firstIndex(where: { $0.query["from_seq"] == String(seq) }) else {
+            Task { await cancel() }
             throw Failure.wrongRequest
         }
         let request = pending.remove(at: index)
@@ -37,12 +48,17 @@ private actor AdapterItemResponses {
         let items = (seq...through).map { id in
             ["id": "\(id)#0", "seq": id, "role": "assistant", "kind": "tool_use", "text": "Synthetic fold work"]
         }
-        request.resume.resume(returning: try JSONSerialization.data(withJSONObject: ["items": items, "more": false]))
+        do {
+            request.resume.resume(returning: try JSONSerialization.data(withJSONObject: ["items": items, "more": false]))
+        } catch {
+            Task { await cancel() }
+            throw error
+        }
     }
 }
 
 private actor AdapterReloadResponses {
-    enum Failure: Error { case timeout, wrongRequest }
+    enum Failure: Error { case timeout, wrongRequest, cancelled }
     private var started = 0
     private var pending: [CheckedContinuation<Data, Error>] = []
 
@@ -51,7 +67,16 @@ private actor AdapterReloadResponses {
             throw Failure.wrongRequest
         }
         started += 1
-        return try await withCheckedThrowingContinuation { pending.append($0) }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { pending.append($0) }
+        } onCancel: {
+            Task { await cancel() }
+        }
+    }
+
+    func cancel() {
+        for resume in pending { resume.resume(throwing: Failure.cancelled) }
+        pending.removeAll()
     }
 
     func waitForRequests(_ expected: Int) async throws {
@@ -59,17 +84,25 @@ private actor AdapterReloadResponses {
             if started == expected { return }
             try await Task.sleep(for: .milliseconds(10))
         }
+        await cancel()
         throw Failure.timeout
     }
 
     func release(_ index: Int, seq: Int) throws {
-        guard pending.indices.contains(index) else { throw Failure.wrongRequest }
+        guard pending.indices.contains(index) else {
+            Task { await cancel() }
+            throw Failure.wrongRequest
+        }
         let resume = pending.remove(at: index)
-        let data = try JSONSerialization.data(withJSONObject: [
-            "items": [["id": "\(seq)#0", "seq": seq, "role": "assistant", "kind": "text", "text": "Synthetic reload"]],
-            "history": "h", "to_seq": seq, "has_more": false,
-        ])
-        resume.resume(returning: data)
+        do {
+            resume.resume(returning: try JSONSerialization.data(withJSONObject: [
+                "items": [["id": "\(seq)#0", "seq": seq, "role": "assistant", "kind": "text", "text": "Synthetic reload"]],
+                "history": "h", "to_seq": seq, "has_more": false,
+            ]))
+        } catch {
+            Task { await cancel() }
+            throw error
+        }
     }
 }
 
@@ -90,11 +123,17 @@ struct PersonaCoreAdapterContractTests {
         return item
     }
 
-    private func foldModel() -> (AppModel, SessionKey, ChatStore, AdapterItemResponses) {
-        let model = AppModel()
+    private func testFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "adapter-contract-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    private func foldModel() throws -> (AppModel, SessionKey, ChatStore, AdapterItemResponses) {
+        let model = AppModel(stateFolder: try testFolder())
         model.linksUpForTests = false
         model.connectOnly(.demo)
-        let key = SessionKey(machineID: "fixture", sessionID: "adapter-concurrent-folds")
+        let key = SessionKey(machineID: "fixture", sessionID: "adapter-concurrent-folds-\(UUID())")
         let store = model.chat(key)
         let responses = AdapterItemResponses()
         var client = APIClient(config: ServerConfig(url: URL(string: "https://fake.invalid")!, token: "test-only"))
@@ -104,21 +143,22 @@ struct PersonaCoreAdapterContractTests {
     }
 
     @Test func independentFoldsCompleteInEitherOrderWithoutLosingWork() async throws {
-        let (model, key, store, responses) = foldModel()
+        let (model, key, store, responses) = try foldModel()
         store.merge([fold(2, through: 3), fold(5, through: 6)], backlog: true)
         async let first: Void = model.unfold(key, fold(2, through: 3))
         async let second: Void = model.unfold(key, fold(5, through: 6))
         try await responses.waitForRequests(2)
         try await responses.releaseFold(5)
+        try await second
         #expect(store.items.map(\.id) == ["fold:2#0", "5#0", "6#0"])
         try await responses.releaseFold(2)
-        _ = try await (first, second)
+        try await first
         #expect(store.items.map(\.seq) == [2, 3, 5, 6])
         #expect(store.items.allSatisfy { $0.kind != .fold })
     }
 
     @Test func repeatedOpenOfOneFoldSharesItsFetch() async throws {
-        let (model, key, store, responses) = foldModel()
+        let (model, key, store, responses) = try foldModel()
         let fold = fold(2, through: 3)
         store.merge([fold], backlog: true)
         async let first: Void = model.unfold(key, fold)
@@ -130,10 +170,10 @@ struct PersonaCoreAdapterContractTests {
     }
 
     @Test func overlappingReloadsPreserveNewerPushesAndFinishInResponseOrder() async throws {
-        let model = AppModel()
+        let model = AppModel(stateFolder: try testFolder())
         model.linksUpForTests = false
         model.connectOnly(.demo)
-        let key = SessionKey(machineID: "fixture", sessionID: "adapter-overlapping-reloads")
+        let key = SessionKey(machineID: "fixture", sessionID: "adapter-overlapping-reloads-\(UUID())")
         let store = model.chat(key)
         store.apply([item(1, kind: .text)], span: ItemSpan(history: "h", from: nil, to: 1), backlog: true, hasMore: false)
         let responses = AdapterReloadResponses()
@@ -157,8 +197,8 @@ struct PersonaCoreAdapterContractTests {
         #expect(store.covered == 3)
     }
 
-    @Test func subscriptionOwnersDoNotCancelEachOther() {
-        let model = AppModel()
+    @Test func subscriptionOwnersDoNotCancelEachOther() throws {
+        let model = AppModel(stateFolder: try testFolder())
         model.linksUpForTests = false
         let sent = Mutex<[String]>([])
         model.linkHooksForTests = (
@@ -172,7 +212,7 @@ struct PersonaCoreAdapterContractTests {
             }
         )
         model.connectOnly(.demo)
-        let key = SessionKey(machineID: "fixture", sessionID: "adapter-subscription-owners")
+        let key = SessionKey(machineID: "fixture", sessionID: "adapter-subscription-owners-\(UUID())")
         let first = UUID(), second = UUID()
         model.subscribe(key, by: first)
         model.subscribe(key, by: second)
