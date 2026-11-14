@@ -27,9 +27,10 @@ import persona.core.domain.inbox.InboxTier
 import persona.core.navigation.Navigator
 
 /**
- * An inbox event's page (inbox phase 1): the source-specific meta and "View original", the current state, the suggestion,
- * ✦ Summary, Recap, then the Handling chain (its three newest entries, all once expanded) and Related. Only items with
- * event fields open here ([inboxRowPage]). Record lookup and its loading / missing / failed states belong to the history package.
+ * An inbox item's detail: source-specific meta and "View original", the current state, the suggestion, ✦ Summary, Recap,
+ * then the Handling chain (its three newest entries, all once expanded) and Related. Items with event fields, and legacy
+ * chat/mail items whose originals must stay unmounted until an explicit source action, open here ([inboxRowPage]). Record
+ * lookup and its loading / missing / failed states belong to the history package.
  */
 @Composable
 fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, navigator: Navigator) {
