@@ -5,16 +5,19 @@ import PersonaWire
 /// `-showSideSessions <mode>` (DEBUG only, for screenshots; release.sh keeps the name out of Release): three sample side
 /// sessions under the session `-openSession` names (else the newest agent), as a hub that folds them would list them
 /// (#7944): one that asks a question (its card comes with it), one working, one stopped. `chip` (or `YES`) shows the
-/// chip; `sheet` opens the sheet too; `side` opens the first side's chat over its parent.
+/// chip; `sheet` opens the sheet too; `side` opens the first side's chat over its parent; `<machine>/<session>` hangs
+/// them under that session without opening it (the Agents list).
 enum SideSessionSamples {
     static var mode: String? { UserDefaults.standard.string(forKey: "showSideSessions") }
     private static let prefix = "sample-side-"
 
     static func isSample(_ key: SessionKey) -> Bool { key.sessionID.hasPrefix(prefix) }
 
-    /// The parent the samples go under, from the lists as they are (`-openSession`, else the newest running agent that is no subtask).
+    /// The parent the samples go under, from the lists as they are: the session the switch names
+    /// (`-showSideSessions <machine>/<session>`, for the Agents list), else `-openSession`'s, else the newest running agent
+    /// that is no subtask.
     static func parent(_ sessions: [Session]) -> Session? {
-        let named = UserDefaults.standard.string(forKey: "openSession")
+        let named = mode.flatMap { $0.contains("/") ? $0 : nil } ?? UserDefaults.standard.string(forKey: "openSession")
         if let named, let s = sessions.first(where: { $0.machineRef.path + "/" + $0.sessionID == named || "\($0.machineID)/\($0.sessionID)" == named }) {
             return s
         }

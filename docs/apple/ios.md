@@ -46,7 +46,8 @@ rows).
 - **Not yet**: the paged Recently Used window's "N agents" total is the hub's and still counts a side until the hub
   folds that count too; a search hit inside a side (`hit_session_id`) lands on the parent without the side.
 - Screenshots: `-openSession <machine>/<session> -showSideSessions chip|sheet|side` hangs three sample sides under that
-  session (one asking, one working, one stopped) and opens nothing, the sheet, or the first side.
+  session (one asking, one working, one stopped) and opens nothing, the sheet, or the first side;
+  `-showSideSessions <machine>/<session>` hangs them under that session and opens nothing (the Agents list).
 
 ## Agents recently used view
 
@@ -2558,7 +2559,7 @@ Check history rendering: `-loadAll YES` (load all history and scroll to the top)
 `-dropUsers YES` (hide that turn's user bubbles to fit its process rows and answer on one screen). `-openPane terminal|git|files` opens the chat page's terminal (from the bottom) / Git / Files;
 `-openNeedsRow plan:|task:|message:` (the Needs You tray with the first row of that kind opened in place; use with `-openAssistant`), `-openReceiptAll YES` (task receipts open on their whole summary), `-simulateTap <machine>/<session>` runs the notification-tap handler 4 seconds after launch; `-tab settings -openNotificationSettings YES` (Settings › Notifications; add `-openIslandSettings YES` for Dynamic Island); `-tab settings -openSentAsYou YES` (Settings › Sent as You, #5278); `-showFleetSample needsYou|working|done` (`-fleetDetails YES`, `-fleetIsland b|c|custom:<left>,<right>`) starts a Live Activity with fake data; `-showTestNotification permission|plan` shows a local notification matching an interaction push 3 seconds after backgrounding (UI tests use it to test buttons); `-openFilePath <path>` (open this file after opening the chat; `-openFileLine <line>` jumps to that line), `-showFilePerf YES` (write file-open timings and per-second frame rates to Caches/file-perf.log; `-showFileAutoScroll YES` scrolls the file at constant speed, `-showFileAutoScrollSpeed 1500` changes the speed); `-showMenu YES` opens the long-press action bar on the last reply (with `-showFromSeq`, that turn's reply); `-openWelcome YES` forgets pairing and exits demo mode at launch, stopping on the pairing page (`DemoModeTests`); `-openChangeAnswer YES` opens Change Answer on the first **Answered by the assistant** card (#544).
 
-`-showSideSessions chip|sheet|side` (with `-openSession`): sample side sessions under that session, and the sheet or the first side's page opened (#7944, "Side sessions" above).
+`-showSideSessions chip|sheet|side|<machine>/<session>` (with `-openSession` for the first three): sample side sessions under that session, and the sheet or the first side's page opened (#7944, "Side sessions" above).
 
 `-showVoiceOrbs YES`: without connecting to the hub or opening the microphone, show a sheet listing every phase of the voice orb (fake fluctuating volume) and two large orbs; combine with `-ui.style`, `-ui.scheme` for screenshots (#3506).
 
