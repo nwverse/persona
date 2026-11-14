@@ -233,8 +233,9 @@ fun ChatLinkHost(
                     }, onWebpage = { nativeWebpage = it }) { title, whole -> nativeTitle = title; nativeWhole = whole }
                 }
                 if (view != null) {
+                    // Only a committed composition activates the view; acquires from abandoned compositions stay evictable.
+                    SideEffect { view.picks = picks; pool.activate(view) }
                     // Only the view going away releases it: a change of picks must not destroy the page being shown.
-                    SideEffect { view.picks = picks }
                     DisposableEffect(view) {
                         view.onPick = picked
                         view.onExternal = { external = it }

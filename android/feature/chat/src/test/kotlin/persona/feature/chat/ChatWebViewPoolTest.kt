@@ -133,6 +133,7 @@ class ChatWebViewPoolTest {
     @Test fun releaseAndPreloadKeepTheViewCapAndNeverTrimTheActiveView() {
         val activeUrl = "https://example.invalid/active"
         val active = pool.acquire(activeUrl) as RecordingWebView
+        pool.activate(active)
         repeat(7) { index -> pool.preload("https://example.invalid/preload/$index") }
 
         assertTrue(created.count { it.destroyCalls == 0 } <= 4)
@@ -148,6 +149,7 @@ class ChatWebViewPoolTest {
     @Test fun activePortForgetReloadsWithoutCreatingOrPreloadingAnotherView() {
         pool.forget(dev)
         val shown = pool.acquire(dev) as RecordingWebView
+        pool.activate(shown)
         shown.loadProgress = 100
         val count = created.size
 
@@ -166,7 +168,9 @@ class ChatWebViewPoolTest {
     @Test fun inactivePortForgetCreatesFreshOnNextOpenAndKeepsNoCacheAcrossRelease() {
         pool.forget(dev)
         val shown = pool.acquire(dev) as RecordingWebView
-        pool.acquire("https://example.invalid/elsewhere")
+        pool.activate(shown)
+        val elsewhere = pool.acquire("https://example.invalid/elsewhere") as RecordingWebView
+        pool.activate(elsewhere)
 
         pool.forget(dev)
         assertEquals(1, shown.destroyCalls)
@@ -235,6 +239,7 @@ class ChatWebViewPoolTest {
     @Test fun openingAnotherLinkNeverTrimsAViewTheHostStillHolds() {
         val other = "https://example.invalid/other"
         val first = pool.acquire(link) as RecordingWebView
+        pool.activate(first)
         val preloads = (1..3).map { "https://example.invalid/preload/$it" }
         preloads.forEach { pool.preload(it) }
 
@@ -249,6 +254,7 @@ class ChatWebViewPoolTest {
         val warmLink = pool.existing(link) as RecordingWebView
         assertNotSame(first, warmLink)
         assertEquals(0, warmLink.destroyCalls)
+        pool.activate(second)
         pool.release(second)
 
         // Reopening the first link finds the warm replacement made when it was released; nothing new is created.
@@ -256,6 +262,27 @@ class ChatWebViewPoolTest {
         assertSame(warmLink, pool.acquire(link))
         assertEquals(count, created.size)
         assertEquals(0, warmLink.destroyCalls)
+    }
+
+    @Test fun uncommittedAcquisitionsStayBoundedAndNeverEvictTheCommittedPage() {
+        val committed = pool.acquire(link) as RecordingWebView
+        pool.activate(committed)
+        repeat(3) { index -> pool.preload("https://example.invalid/preload/$index") }
+
+        val uncommitted = (0 until 12).map { index ->
+            val candidate = pool.acquire("https://example.invalid/pending/$index") as RecordingWebView
+            assertEquals(0, committed.destroyCalls)
+            assertSame(committed, pool.existing(link))
+            assertTrue(created.count { it.destroyCalls == 0 } <= 4)
+            candidate
+        }
+
+        // Only the newest pending view is protected; earlier compositions may have been abandoned and become evictable again.
+        assertTrue(uncommitted.dropLast(1).any { it.destroyCalls == 1 })
+        assertEquals(0, uncommitted.last().destroyCalls)
+        pool.trimMemory()
+        assertEquals(0, committed.destroyCalls)
+        assertEquals(0, uncommitted.last().destroyCalls)
     }
 
     @Test fun theReplacementKeepsTheSamePageConfigurationAndTheStoreIsNeverCleared() {

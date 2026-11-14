@@ -1,6 +1,6 @@
 {
   "id": "chat-link-reopen",
-  "description": "An ordinary web link reopens at its own URL with no earlier page history; a forwarded port keeps its reload semantics. The runner only launches the chat; the reopen and cookie checks are driven by scripts/app/android_link_reopen_check.py against a local HTTP server, and the rest is by hand.",
+  "description": "An ordinary web link reopens at its own URL with no earlier page history; a forwarded port keeps its reload semantics. The runner only launches the chat; the reopen, cookie and shared-cache checks are driven by scripts/app/android_link_reopen_check.py against a local HTTP server, and the rest is by hand.",
   "requires": {
     "fields": []
   },
@@ -11,14 +11,16 @@
       "conversationKind": "agent"
     }
   ],
-  "automatedCoverage": "Runner: launching the chat proves nothing about page history. JVM: ChatWebViewPoolTest, ChatLinkReopenTest and ChatLinkWebSlotTest use Robolectric shadows (the WebView feature probes fixed to unsupported) and prove which view instance the pool hands out, destroys and creates, not what a real renderer keeps. Device helper: `android_link_reopen_check.py reopen` and `cookie` (see localServer) assert history.length, the load number of the page shown, request timestamps and whether the cookie arrives.",
+  "automatedCoverage": "Runner: launching the chat proves nothing about page history. JVM: ChatWebViewPoolTest, ChatLinkReopenTest and ChatLinkWebSlotTest use Robolectric shadows (the WebView feature probes fixed to unsupported) and prove which view instance the pool hands out, destroys and creates, not what a real renderer keeps. Device helper: `android_link_reopen_check.py reopen`, `cookie` and `cache` (see localServer) assert history.length, response sequence, request timestamps, preservation of the originally issued session and whether a unique cacheable script returns to the server.",
   "localServer": {
-    "description": "Run `python3 scripts/app/android_link_reopen_check.py serve` on the host; it binds this computer's outbound address (not loopback; adb reverse would make it a forwarded port) and logs every request as JSON with a sequence number, a timestamp and whether the session cookie came. Send each printed link (/a, /login, /whoami) as its own message in a conversation, then run `reopen` and `cookie` with the phone's serial, the printed base address and the log path.",
+    "description": "Run `python3 scripts/app/android_link_reopen_check.py serve` on the host; it binds this computer's outbound address (not loopback; adb reverse would make it a forwarded port) and starts a fresh request log. Use an Agent reply for /a when checking first-open preload. Send /login, /whoami and /cache as the user's own messages so the session echo cannot be preloaded before login and the first cache asset request is observable. Then run `reopen`, `cookie` and `cache` with the phone's serial, the printed base address and the log path.",
     "pages": {
       "/a": "Shows `page=a load=<request sequence> history=<history.length>` and a link to /b; never cached",
       "/b": "Same state line for page b, with a link back to /a",
-      "/login": "Sets the session cookie and redirects to /a",
-      "/whoami": "Shows whether the session cookie arrived"
+      "/login": "Issues one random session only on its first request, then redirects to /a; later release preloads cannot reissue or rotate it",
+      "/whoami": "Shows the exact session value, or missing, and the response sequence that produced it",
+      "/cache": "A no-store main document with one unique cacheable JavaScript subresource; the page shows its main response sequence after the script executes",
+      "/cache-asset.js": "Cache-Control public,max-age=3600; a new random query key per server run makes its first network request mandatory"
     }
   },
   "manualScenes": [
@@ -101,10 +103,24 @@
       ]
     },
     {
-      "id": "cookie-survives-reopen",
+      "id": "cookie-survives-release-and-preload",
       "command": "android_link_reopen_check.py cookie --serial <serial> --base <base> --log <log>",
       "asserts": [
-        "/whoami reports cookie=yes on two openings after /login, each in a new view"
+        "the server issues exactly one random session; subsequent /login release preloads do not issue another",
+        "two distinct /whoami responses produced after login both return the originally issued session",
+        "a response produced before login, a missing or replaced session, and two openings showing the same response all fail"
+      ]
+    },
+    {
+      "id": "shared-http-cache-survives-reopen",
+      "command": "android_link_reopen_check.py cache --serial <serial> --base <base> --log <log>",
+      "asserts": [
+        "the reopened no-store main document is a new logged response",
+        "the unique cacheable script executes on both openings but reaches the server only on the first load",
+        "a second script request fails the check"
+      ],
+      "reportedNotJudged": [
+        "whether the shared HTTP cache is resident in memory or persisted on disk; process-restart disk persistence is not asserted"
       ]
     }
   ],
@@ -112,6 +128,6 @@
     "How many WebView renderer processes exist (Chromium shares renderers by site, so the count does not follow the number of views).",
     "That the phone's own loopback received no request for a forwarded port (nothing counts requests there).",
     "How many requests one reopen makes: the preload happens when the card closes and the cache mode may answer a load without a request.",
-    "Whether the persisted cookie store and disk cache survive a reopen beyond what the cookie check shows."
+    "Whether the cookie store and HTTP cache survive an app process restart; the device checks cover release and preload within one process, not persistent storage across processes."
   ]
 }

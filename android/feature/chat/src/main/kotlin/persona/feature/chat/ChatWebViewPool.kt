@@ -36,12 +36,14 @@ internal class ChatWebViewPool(
     private val features: ChatWebFeatures = ChatWebFeatures.Platform,
     private val viewFactory: (Context) -> ChatSelectionWebView = { ChatSelectionWebView(it) },
 ) {
-    /** At most this many pages live (each is a renderer): the one on screen and up to three preloaded links. */
+    /** Steady state: the page on screen and up to three preloaded links. A pending acquisition can add one while it commits. */
     private val limit = 4
     private val pages = LinkedHashMap<String, ChatSelectionWebView>(limit, 0.75f, true)
     private var active: ChatSelectionWebView? = null
-    /** Views the host took with [acquire] and has not given back with [release]: still on its screen, so never evicted. */
+    /** Views whose host composition committed and has not released them: still on its screen, so never evicted. */
     private val held = mutableSetOf<ChatSelectionWebView>()
+    /** The latest acquisition not committed by [activate]. Earlier uncommitted acquisitions become evictable again. */
+    private var pending: ChatSelectionWebView? = null
     /** After [destroy] nothing is created or brought back: late calls from the host's own teardown do nothing. */
     private var closed = false
     private val speculative = mutableSetOf<String>()
@@ -63,18 +65,27 @@ internal class ChatWebViewPool(
         startup.await()
     }
 
-    /** The view for [url], or null once the pool is [destroy]ed. It stays [held] until [release]. */
+    /** The view for [url], or null once the pool is [destroy]ed. [activate] commits it to the host after composition succeeds. */
     fun acquire(url: String): ChatSelectionWebView? {
         if (closed) return null
         val view = pages[url] ?: create().also { pages[url] = it; if (url in noCache) it.settings.cacheMode = WebSettings.LOAD_NO_CACHE; it.loadUrl(url) }
+        // Only the newest uncommitted view needs protection. A composition abandoned before activate leaves no permanent held entry.
+        pending = view
+        if (speculative.remove(url)) view.loadUrl(url)
+        trim()
+        return view
+    }
+
+    /** A successful host composition owns [view] until [release]. An abandoned composition never calls this. */
+    fun activate(view: ChatSelectionWebView) {
+        if (closed || view.gone || pages.values.none { it === view }) return
+        if (pending === view) pending = null
         held += view
         active?.takeIf { it !== view }?.let { mute(it, true); it.onPause() }
         active = view
-        if (speculative.remove(url)) view.loadUrl(url)
         mute(view, false)
         view.onResume()
         trim()
-        return view
     }
 
     /**
@@ -87,7 +98,7 @@ internal class ChatWebViewPool(
         val view = pages[url] ?: return
         // The one on screen reloads in place; one kept aside goes, and the next acquire loads it anew.
         if (view === active) { view.settings.cacheMode = WebSettings.LOAD_NO_CACHE; if (view.loadProgress >= 100) view.reload() }
-        else { pages.remove(url); held -= view; (view.parent as? ViewGroup)?.removeView(view); view.destroy() }
+        else { pages.remove(url); held -= view; if (pending === view) pending = null; (view.parent as? ViewGroup)?.removeView(view); view.destroy() }
     }
 
     private val noCache = mutableSetOf<String>()
@@ -117,6 +128,7 @@ internal class ChatWebViewPool(
 
     fun release(view: ChatSelectionWebView) {
         held -= view
+        if (pending === view) pending = null
         if (closed) return
         val entry = pages.entries.firstOrNull { it.value === view } ?: return
         val url = entry.key
@@ -135,32 +147,30 @@ internal class ChatWebViewPool(
     }
 
     /**
-     * Over the cap the least recently used page goes, but never the one on screen nor one the host still holds (the page
-     * being replaced by a newly opened link is released only after that link's [acquire]). So the pool may exceed [limit]
-     * by the pages the host holds until they are released.
+     * Over the cap the least recently used page goes, but never the committed page nor the newest acquisition whose composition
+     * may still commit. Replacing [pending] makes an abandoned acquisition eligible here again, so repeated abandoned compositions
+     * cannot accumulate protected views.
      */
     private fun trim() {
         while (pages.size > limit) {
-            val entry = pages.entries.firstOrNull { it.value !== active && it.value !in held } ?: return
+            val entry = pages.entries.firstOrNull { it.value !== active && it.value !in held && it.value !== pending } ?: return
             pages.remove(entry.key)
             speculative.remove(entry.key)
             entry.value.destroy()
         }
     }
 
-    /**
-     * Memory is short (the app went to the background, or the system asks): every page not on screen goes. Each one
-     * is a live renderer; opening its link again loads it anew.
-     */
+    /** Memory pressure drops pages no host owns. Committed and newest pending views stay valid even while detached from their slot. */
     fun trimMemory() {
-        val drop = pages.entries.filter { it.value !== active && it.value.parent == null }
-        drop.forEach { (url, view) -> pages.remove(url); speculative.remove(url); held -= view; view.destroy() }
+        val drop = pages.entries.filter { it.value !== active && it.value !in held && it.value !== pending && it.value.parent == null }
+        drop.forEach { (url, view) -> pages.remove(url); speculative.remove(url); view.destroy() }
     }
 
     /** A renderer that crashed or was killed takes only its page with it: forgotten here, shown as gone, made anew on reopening. */
     private fun dropGone(view: ChatSelectionWebView) {
         pages.entries.firstOrNull { it.value === view }?.let { pages.remove(it.key); speculative.remove(it.key) }
         held -= view
+        if (pending === view) pending = null
         if (active === view) active = null
         view.gone = true
         view.onPick = null; view.onExternal = null
@@ -246,7 +256,7 @@ internal class ChatWebViewPool(
 
     fun pause() { pages.values.forEach { mute(it, true); it.onPause() } }
     fun resume() { active?.let { mute(it, false); it.onResume() } }
-    fun destroy() { closed = true; held.clear(); startup.complete(Unit); popups.forEach { it.destroy() }; popups.clear(); pages.values.forEach { (it.parent as? ViewGroup)?.removeView(it); it.destroy() }; pages.clear(); speculative.clear(); active = null; startupExecutor.shutdown() }
+    fun destroy() { closed = true; held.clear(); pending = null; startup.complete(Unit); popups.forEach { it.destroy() }; popups.clear(); pages.values.forEach { (it.parent as? ViewGroup)?.removeView(it); it.destroy() }; pages.clear(); speculative.clear(); active = null; startupExecutor.shutdown() }
 }
 
 /** The hosts that mean this phone itself (the same set as `PortLinks`, which also needs a port). */
