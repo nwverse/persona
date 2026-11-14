@@ -565,6 +565,37 @@ fn a_backlog_marks_the_chat_verified_and_a_gap_clears_it() {
 }
 
 #[test]
+fn a_successful_catch_up_restores_verified() {
+    // Android's `catchUp`: a gap clears verification, and the complete after page that closes it restores it,
+    // provided no live push overtook the covered point.
+    let host = Arc::new(Recorder::default());
+    let runtime = open(&host);
+    let latest = r#"{"items":[{"id":"a#0","seq":1,"role":"user","kind":"text"}],"has_more":false,"to_seq":1}"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Latest { body: latest.into() },
+    })));
+    drain(&runtime, &host);
+    // A push with a gap clears verification.
+    let pushed =
+        r#"{"type":"items","machine_id":"m1","session_id":"s1","items":[],"from_seq":4,"to_seq":5,"backlog":false}"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Frame { body: pushed.into() },
+    })));
+    let (patch, _) = drain(&runtime, &host);
+    assert!(!patch.verified, "a gap clears verification");
+    // The catch-up page that closes the gap restores it.
+    let after = r#"{"items":[{"id":"b#0","seq":2,"role":"user","kind":"text"},{"id":"c#0","seq":3,"role":"user","kind":"text"}],"from_seq":1,"to_seq":5}"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Newer { body: after.into() },
+    })));
+    let (patch, _) = drain(&runtime, &host);
+    assert!(patch.verified, "the completed catch-up restores verification");
+}
+
+#[test]
 fn a_hub_changed_input_starts_a_fill() {
     // iOS's `settle(.fill)`: a hub signalled change fetches after the covered point, without an extra re-read.
     let host = Arc::new(Recorder::default());

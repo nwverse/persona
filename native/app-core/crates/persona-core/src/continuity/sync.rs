@@ -165,7 +165,10 @@ impl Session {
         let covered_before = self.reducer.covered();
         let to_seq = batch.to_seq;
         let gap = self.reducer.apply(batch);
-        self.verified = gap == Gap::None && self.verified;
+        // Android's catch-up rule (`HubChatRepository.catchUp`): a complete answer with nothing past the covered
+        // point verifies the chat again, so a recovered fill restores what a gap cleared. An item beyond `covered`
+        // means a live push overtook the page, which is not yet whole.
+        self.verified = gap == Gap::None && !self.overtaken();
         self.fill_pages += 1;
         let progressed = self.reducer.covered() > covered_before || to_seq.is_some_and(|to| to > covered_before);
         // A late capped page whose range is already covered must not request the same position again.
@@ -199,8 +202,18 @@ impl Session {
     pub fn reload(&mut self, items: Vec<Item>, history: Option<String>, to_seq: Option<i64>, has_more: bool) -> Step {
         self.reducer.replace(items, history, to_seq, has_more);
         self.finish_fill();
-        self.verified = true;
+        // A reload that keeps later pushes is not yet whole: Android uses `!overtaken` and asks for another fill
+        // (`HubChatRepository.reload`), rather than marking the chat verified.
+        self.verified = !self.overtaken();
         Step::default()
+    }
+
+    /// Any item past the covered point: a live push overtook the page that was just applied.
+    fn overtaken(&self) -> bool {
+        self.reducer
+            .items()
+            .iter()
+            .any(|item| item.seq > self.reducer.covered())
     }
 
     pub fn reconnect(&mut self) -> Step {

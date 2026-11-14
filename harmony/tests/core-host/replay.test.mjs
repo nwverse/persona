@@ -141,7 +141,7 @@ function eventAction(event, chat) {
     case 'http_reload': return {kind: 'chat', chat, event: {kind: 'reloaded', items_json, history: event.history ?? null,
       to_seq: event.to_seq ?? null, has_more: event.has_more === true}};
     case 'http_older': return {kind: 'chat', chat, event: {kind: 'older', items_json, has_more: event.has_more === true}};
-    case 'http_range': return {kind: 'chat', chat, event: {kind: 'range', items_json, more: event.more === true}};
+    case 'http_range': return {kind: 'chat', chat, event: {kind: 'range', fold_id: null, items_json, more: event.more === true}};
     case 'reconnect': return {kind: 'chat', chat, event: {kind: 'reconnected'}};
     case 'load_older': return {kind: 'chat', chat, event: {kind: 'load_older'}};
     case 'open_fold': return {kind: 'chat', chat, event: {kind: 'open_fold', fold_id: event.fold_id ?? ''}};
