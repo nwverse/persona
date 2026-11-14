@@ -5,6 +5,17 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 - A native terminal Codex start must preserve a user's same-name `codex()` function (#4876), not just find the executable. `codex-start` used to bypass it, losing launcher environment while a normal terminal command worked; the assistant app-server fix (#3707) did not cover this path. Pass the launcher and prompt as positional arguments to the interactive shell, never interpolate them as shell code, and keep the shell inside the agent sandbox.
   Fake-launcher tests must isolate rc paths such as `ZDOTDIR`, not just `HOME`: an inherited rc directory can otherwise load the user's real startup file and change the fake executable or flags.
 
+## A saved task name can disappear without another model failure (#7337)
+
+Automatic naming had already succeeded for several instruction-titled sessions, but a terminal spinner's
+`Claude Code` label later became the first user message. Matching both presentations against a narrow
+instruction-prefix list hid the saved name, while the successful-change limit prevented another call.
+Check the shared session response against the persisted raw title and counter before blaming the model.
+Use proven `prompt` provenance for first-message copies and preserve the saved count across presentation
+changes. An unknown source from an old node stays unknown: a hub deployment cannot establish manual intent
+that the node did not report. Failure logs use only static reasons and session identifiers, never a provider
+error body that could echo private text or credentials.
+
 ## Supervised handoffs and runtime children (#5751)
 
 Codex sidecar parent/root metadata establishes display ancestry, not a to-do link. A standalone `create_thread` can
