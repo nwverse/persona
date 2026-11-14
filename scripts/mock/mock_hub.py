@@ -20308,6 +20308,13 @@ if os.environ.get("MOCK_SENT"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import sent_ledger_mock as _sent
 
+# MOCK_WEB_PUSH=1|failed (#7459, scripts/mock/web_push_mock.py): Settings › Notifications › When Persona is closed, the
+# routes of a browser's Web Push; without it they are an older hub's 404.
+_web_push = None
+if os.environ.get("MOCK_WEB_PUSH"):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import web_push_mock as _web_push
+
 
 def sessions_for_delta_app(obj, have):
     """A machine's whole list as an app on the delta protocol gets it (hub/sessions_push.go): the first one whole,
@@ -20489,7 +20496,9 @@ def zrle_rect(px, W, x, y, w, h, z):
 
 # MOCK_SCREEN_VIDEO=1|missing (#3954): MacBook's node offers the live screen's video channel (`screen_video`; =missing:
 # Screen Recording isn't granted for Persona Screen), and …/screen/video/connect?pair=… plays
-# scripts/mock/screen_video/fixture.bin (a made-up desktop; make_fixture.sh makes it again) round and round at 30 fps:
+# scripts/mock/screen_video/fixture.bin (HEVC) or fixture-h264.bin (a made-up desktop; make_fixture.sh makes them again),
+# picked as the helper picks its codec: the first of the `start`'s codecs there is a fixture for, else H.264 (#6558: a
+# browser without HEVC offers only H.264), round and round at 30 fps:
 # `hello`, `format`, then its frames, numbered on and stamped with this clock. Only for a pair a 5900 connection carried
 # (else 403, as the node's not_signed_in). GET /mock/screen-video says what the phone sent (`start`s, report count) and
 # how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?pause=locked
@@ -20499,19 +20508,27 @@ def zrle_rect(px, W, x, y, w, h, z):
 # to the phone's report on it.
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
                 "refuse": False}
-_SCREEN_VIDEO_FIXTURE = []
+_SCREEN_VIDEO_FIXTURE = {}
+_SCREEN_VIDEO_FILES = {"hevc": "fixture.bin", "h264": "fixture-h264.bin"}
 
 
-def screen_video_fixture():
-    """The fixture's messages as (type, body), read once."""
-    if not _SCREEN_VIDEO_FIXTURE:
-        data = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen_video", "fixture.bin"), "rb").read()
-        i = 0
+def screen_video_codec(offered):
+    """The codec the helper would pick (CapturePlan.codec): the first offered one with a fixture, else H.264."""
+    return next((c.lower() for c in offered or [] if c.lower() in _SCREEN_VIDEO_FILES), "h264")
+
+
+def screen_video_fixture(codec="hevc"):
+    """The fixture's messages for `codec` as (type, body), read once."""
+    if codec not in _SCREEN_VIDEO_FIXTURE:
+        name = _SCREEN_VIDEO_FILES[codec]
+        data = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen_video", name), "rb").read()
+        msgs, i = [], 0
         while i < len(data):
             n = struct.unpack(">I", data[i:i + 4])[0]
-            _SCREEN_VIDEO_FIXTURE.append((data[i + 4], data[i + 5:i + 4 + n]))
+            msgs.append((data[i + 4], data[i + 5:i + 4 + n]))
             i += 4 + n
-    return _SCREEN_VIDEO_FIXTURE
+        _SCREEN_VIDEO_FIXTURE[codec] = msgs
+    return _SCREEN_VIDEO_FIXTURE[codec]
 
 
 def screen_video_control(h, q):
@@ -20553,9 +20570,9 @@ def screen_video_connect(h, mid):
         ws(0x2, struct.pack(">IB", len(body) + 1, t) + body)
 
     def play():
-        msgs = screen_video_fixture()
-        hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
         if not st["started"].wait(10): st["open"] = False; return
+        msgs = screen_video_fixture(screen_video_codec(st.get("codecs")))
+        hello, fmt, frames = msgs[0], msgs[1], msgs[2:]
         number, i, restart = 0, 0, True
         second, count, size = time.monotonic(), 0, 0
         try:
@@ -20608,7 +20625,9 @@ def screen_video_connect(h, mid):
                 n = struct.unpack(">I", buf[:4])[0]
                 t, body, buf = buf[4], buf[5:4 + n], buf[4 + n:]
                 if t == 16:
-                    SCREEN_VIDEO["starts"].append(json.loads(body or b"{}"))
+                    start = json.loads(body or b"{}")
+                    SCREEN_VIDEO["starts"].append(start)
+                    st["codecs"] = start.get("codecs")
                     st["started"].set()
                 elif t == 17:
                     SCREEN_VIDEO["reports"] += 1
@@ -24159,6 +24178,7 @@ class H(BaseHTTPRequestHandler):
         if managers_route(self, "GET", p): return
         if file_operation_route(self, p): return
         if _sent and _sent.route(self, "GET", p, q): return
+        if _web_push and _web_push.route(self, "GET", p): return
         if providers_route(self, "GET", p, q, b""): return
         if MOCK_MESSAGING and p.startswith("/api/v1/messaging") and lark_messaging.route(self, "GET", p, q, b""): return
         if net_control(p, q): return self.send_json({"ok": True, **NET})
@@ -25226,6 +25246,7 @@ class H(BaseHTTPRequestHandler):
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
+        if _web_push and _web_push.route(self, self.command, p, self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
