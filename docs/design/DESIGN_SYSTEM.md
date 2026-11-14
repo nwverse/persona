@@ -1583,6 +1583,14 @@ follows these; the To-dos page is the reference (`web/src/views/Todos.tsx`, chec
 - **⌘↩ / Ctrl+↩ submits** a dialog or a box from its multi-line field, as the composer and New Agent do; Enter alone is
   a new line, and the Enter that ends an IME composition does neither.
 
+### 4.13 Keyboard and overlays (web)
+
+- Esc undoes one thing at a time, the innermost first: a search field with text clears it (`SearchField`; an empty one lets Esc go on), a menu's rename goes back to the menu, open with its Rename row highlighted and the focus on what opened it, a menu closes onto its button, and then the topmost overlay closes (`useEscapeClose`). A modal closes on Esc from anywhere inside it, not only from its first field, and gives the focus back to what opened it.
+- One modal from the keyboard at a time: the ⌘K palette and the ⌘/ shortcut help replace each other.
+- Tab stays inside a modal and reaches every control in it, including the ones after a scrolling body the browser lets the keyboard focus (`trapTabIn` in `web/src/ui/overlay.ts`).
+- A menu is as tall as the window allows and shows whole when the window can hold it, over its button if need be; only one taller than the window is cut, opening beside its button on a wide screen. A fade at a cut edge says there is more (`Menu`, `data-menu-more`), as the team panel's list does, and a row the keys move to past the cut scrolls into view.
+- A choice kept in the browser (appearance, theme color, text size, language) reaches every open tab: the others follow through the `storage` event. A language needs a reload, as in the tab that chose it, and that reload never lands on a draft or an open dialog or menu: it waits for a calm moment, as a new build's does, with a toast that offers it meanwhile.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
@@ -1596,6 +1604,7 @@ Calm, direct, second person, like a capable teammate. Contractions in English ("
 - One ellipsis character. Use it for actions that open another step and for in-progress states.
 - Complete sentences end in a period; labels and titles do not. Settings paths use the single angle quote.
 - Apostrophes and quotes: pick one style (Apple en is 94% straight apostrophes with curly quotes; DS-28).
+- A heading that holds a name (a space, a computer, a project, a pane) is drawn as written. The web's small-capital label style (`uppercase`) is for label headings only; on a name it rewrites what the user typed ("weather" as "WEATHER"). Web: `Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`.
 
 ### 5.3 Error-message structure
 
