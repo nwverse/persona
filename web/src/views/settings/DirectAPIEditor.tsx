@@ -113,7 +113,7 @@ export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, o
     setFailure(null);
     try {
       const result = await api<ProbeResult>("/launchers/test", {
-        method: "POST", json: { name, model, effort }, signal: controller.signal, timeout: 35_000,
+        method: "POST", json: { name, model, effort: effort || undefined }, signal: controller.signal, timeout: 35_000,
         headers: { [MANAGER_HEADER]: manager }, isAuthContextCurrent: current,
       });
       if (!current()) return;

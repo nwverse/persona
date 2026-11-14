@@ -128,6 +128,29 @@ afterEach(async () => {
   await initI18n("en");
 });
 
+it("leaves Use default to the saved connection instead of explicitly clearing its effort", async () => {
+  draft = { ...draft, effort: "" };
+  jsonFetch((call) => call.path.endsWith("/launchers/discover")
+    ? response({ models })
+    : response({ ok: true, ms: 12, effort: "high" }));
+  await act(async () => root.render(
+    <DirectAPIEditor
+      manager={manager}
+      purpose={{ ...purpose, id: "kb" }}
+      provider={currentProvider}
+      draft={draft}
+      disabled={false}
+      onChange={() => {}}
+    />,
+  ));
+  await flush();
+  await testProbe();
+  const probe = calls.find((call) => call.path.endsWith("/launchers/test"))!;
+  expect(probe.body).toEqual({ name: "gateway", model: "raw-a" });
+  expect(host.textContent).toContain(t("settings-modelconfiguration.api_test_ok", { ms: 12 }));
+  expect(draft.effort).toBe("");
+});
+
 describe("DirectAPIEditor", () => {
   it("discovers aliases but submits the raw model ID, requested effort and manager", async () => {
     await render();

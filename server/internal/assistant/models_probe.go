@@ -38,7 +38,8 @@ type probeInput struct {
 	APIKey  string  `json:"api_key"`
 	Headers *string `json:"headers"`
 	Model   string  `json:"model"`
-	Effort  string  `json:"effort"`
+	// Nil follows the saved default; an explicit empty string tests clearing it.
+	Effort *string `json:"effort"`
 	// Preset fills in the address and the model left empty (GET /api/v1/launchers/presets), so a key alone is tested.
 	Preset string `json:"preset"`
 	// ViaMachine: the computer the requests go through (models_via.go); nil keeps the stored one, "" this manager.
@@ -65,7 +66,7 @@ func launchAuth(auth string) string {
 
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
-	base, key, headers, model, proxy, noProxy, api, kind, via string
+	base, key, headers, model, effort, proxy, noProxy, api, kind, via string
 	// through sends the requests through via's node (models_via.go).
 	through http.RoundTripper
 	// auth is the credential header(s) the requests send (probeAuth*); send settles auto on the first request.
@@ -98,7 +99,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if err != nil {
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
-		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine}
+		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, effort: l.Effort, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine}
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
@@ -130,6 +131,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	}
 	if m := strings.TrimSpace(in.Model); m != "" {
 		t.model = m
+	}
+	if in.Effort != nil {
+		t.effort = strings.TrimSpace(*in.Effort)
 	}
 	if in.Preset != "" {
 		pr, ok := s.presetByID(ctx, in.Preset)
@@ -481,7 +485,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		path = "chat/completions"
 		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
 	}
-	if !ai.ApplyReasoningEffort(payload, t.api, t.model, in.Effort) {
+	if !ai.ApplyReasoningEffort(payload, t.api, t.model, t.effort) {
 		out["error"] = i18n.T(i18n.From(ctx), "assistant-models.err_effort_unsupported")
 		out["code"] = "unsupported_effort"
 		return out
@@ -532,7 +536,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		out["auth"] = t.auth // the header the gateway took
 	}
 	if out["ok"] == true {
-		out["effort"] = in.Effort
+		out["effort"] = t.effort
 	}
 	out["ms"] = int(time.Since(started).Milliseconds())
 	return out

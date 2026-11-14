@@ -96,6 +96,11 @@ as real API calls (`off` becomes Responses `none`, for example). A successful re
 `ms`, the elapsed provider request/response time in milliseconds. Unsupported effort cannot be reported as verified.
 Authentication, missing-model/endpoint, timeout, and other failures keep actionable details, with credentials redacted.
 
+Omitting effort (or sending `null`) tests the saved connection's default effort, which real API calls also inherit when
+their purpose has no effort override. An explicit string overrides that default; `""` tests clearing it in a provider
+draft. The purpose editor omits effort for **Use default**, while the provider wizard sends its draft value, including
+an explicit clear. Connection tests never inherit an unrelated purpose's effort.
+
 A test never saves the draft or changes purpose/provider defaults. Verification belongs only to that open draft:
 changing the connection, model, or effort invalidates it, including while a request is outstanding. Closing the editor
 discards it. Launcher execution health is a separate status; an API probe does not verify a launcher.
