@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import Persona
 
-/// Measures the real chain section, whose closed rows used all to be capped at two lines. The four-line plain reported
+/// Measures the real chain section, whose closed rows used all to be capped at two lines. The five-line plain reported
 /// cases are therefore red before that cap is lifted and green after it; the other kinds, links and message batches are
 /// controls whose heights must stay equal. Explicit newlines make the line counts independent of wrapping and fonts.
 @MainActor
@@ -15,8 +15,8 @@ struct InboxChainLayoutTests {
     func plainReportedDetailGrowsBeyondTwoLines(width: CGFloat) throws {
         let one = try height(entry(lines: 1, detail: Self.lines(1)), width: width)
         let referenceTwo = try uncappedTextHeight(lines: 2)
-        let referenceFour = try uncappedTextHeight(lines: 4)
-        #expect(referenceFour > referenceTwo, "the uncapped Text reference did not grow")
+        let referenceFive = try uncappedTextHeight(lines: 5)
+        #expect(referenceFive > referenceTwo, "the uncapped Text reference did not grow")
 
         let messageBatches: [(name: String, messages: [InboxItem.ChainEntry.Message]?)] = [
             ("nil", nil),
@@ -24,17 +24,17 @@ struct InboxChainLayoutTests {
         ]
         for batch in messageBatches {
             let two = try height(entry(lines: 2, detail: Self.lines(2), messages: batch.messages), width: width)
-            let four = try height(entry(lines: 4, detail: Self.lines(4), messages: batch.messages), width: width)
+            let five = try height(entry(lines: 5, detail: Self.lines(5), messages: batch.messages), width: width)
 
             // Sensitivity: this same measurement must distinguish even the two heights allowed by the old cap.
             #expect(two > one, "two lines did not grow beyond one with \(batch.name) messages at width \(width)")
-            #expect(four > two, "plain reported detail stayed capped with \(batch.name) messages at width \(width)")
+            #expect(five > two, "plain reported detail stayed capped with \(batch.name) messages at width \(width)")
 
-            // The rest of the row is unchanged, so its growth is exactly the uncapped Text's four-minus-two-line growth.
+            // The rest of the row is unchanged, so its growth is exactly the uncapped Text's five-minus-two-line growth.
             // Integral CGImage heights can round the row and reference by one pixel differently, not by a whole line.
-            let expectedFour = two + referenceFour - referenceTwo
-            #expect(abs(four - expectedFour) <= 1,
-                    "\(batch.name) messages: four-line height \(four), expected \(expectedFour) +/- 1 px at width \(width)")
+            let expectedFive = two + referenceFive - referenceTwo
+            #expect(abs(five - expectedFive) <= 1,
+                    "\(batch.name) messages: five-line height \(five), expected \(expectedFive) +/- 1 px at width \(width)")
         }
     }
 
@@ -97,6 +97,6 @@ struct InboxChainLayoutTests {
     }
 
     private static func lines(_ count: Int) -> String {
-        ["First line", "Second line", "Third line", "Fourth line"].prefix(count).joined(separator: "\n")
+        ["First line", "Second line", "Third line", "Fourth line", "Fifth line"].prefix(count).joined(separator: "\n")
     }
 }

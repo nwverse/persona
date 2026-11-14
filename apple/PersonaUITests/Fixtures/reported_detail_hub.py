@@ -42,11 +42,11 @@ def main():
             return {"id": identifier, "at": hub.ago(minutes=at), "kind": "reported", "via": "assistant",
                     "text": "Assistant says: " + identifier, "detail": detail, **fields}
 
-        short = "Short detail A.\nShort detail B."
-        long = "Long detail A.\nLong detail B.\nLong detail C.\nLong detail D."
-        control = "Plain control A.\nPlain control B.\nPlain control C.\nPlain control D."
-        linked = "Link control A.\nLink control B.\nLink control C.\nLink control D."
-        messages = "Chat control A.\nChat control B.\nChat control C.\nChat control D."
+        short = "A\nB"
+        long = "L\nM\nN\nO\nP"
+        control = "C\nD\nE\nF\nG"
+        linked = "Q\nR\nS\nT\nU"
+        messages = long
         item = {
             "id": "reported-detail-fixture",
             "source": "chat",
