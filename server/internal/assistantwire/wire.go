@@ -253,7 +253,7 @@ type Notification struct {
 	// Level is how urgent the push is for the hub's low-distraction (ln) mode: "P0", "P1" or "P2". "" lets the hub
 	// derive one from the kind. Hubs from before the field derive the level, so older and newer managers interoperate.
 	Level string `json:"level,omitempty"`
-	// RelatedKey links the push to what it is about (a to-do id, a PR URL, a subject): in ln mode the same key pushes
+	// RelatedKey links the push to what it is about (a to-do id, a PR URL, a subject): in low-distraction mode the same key pushes
 	// at most once in 12 hours, and same-minute P1 conclusion pushes with it merge into one intercepted entry.
 	RelatedKey string `json:"related_key,omitempty"`
 }
@@ -261,9 +261,13 @@ type Notification struct {
 // Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").
 const (
 	LevelP0 = "P0" // must interrupt: a decision or a card that needs the owner now
-	LevelP1 = "P1" // worth knowing: a conclusion, an explicit notify_user; held for the briefing in ln mode
-	LevelP2 = "P2" // background news: silent in ln mode
+	LevelP1 = "P1" // worth knowing: a conclusion, an explicit notify_user; held for the briefing in low-distraction mode
+	LevelP2 = "P2" // background news: silent in low-distraction mode
 )
+
+// QuietModeSettingKey is the hub_settings key of the low-distraction switch (a JSON bool, no row: off). The hub writes it
+// (its push settings route); the assistant reads it too, to keep what low-distraction mode holds back off its own channels.
+const QuietModeSettingKey = "hub.ln_mode"
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what
 // POST /api/v1/todos/{id}/accept takes, so an OK from an earlier round takes nothing) and the option it recommends.

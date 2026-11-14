@@ -247,6 +247,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		return
 	}
 	for _, r := range out {
+		r.Level = s.leaderReportLevel(ctx, r.Kind)
 		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
 	}
 	if len(stuckSigs) > 0 {

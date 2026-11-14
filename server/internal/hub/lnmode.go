@@ -168,6 +168,15 @@ func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 	key := strings.TrimSpace(policy.relatedKey)
 	in := pushIntercept{At: now.UTC(), Level: level, Title: policy.title, Body: policy.body, RelatedKey: key, Manager: policy.manager}
 	p.lnMu.Lock()
+	if level == assistantwire.LevelP0 {
+		// P0 is what the owner must do or decide themself: it always interrupts, before and whatever the 12-hour check
+		// says, so no earlier push with the same key can swallow it. Its key then keeps lower levels quiet for the window.
+		if key != "" {
+			p.noteKeyPushedLocked(key, now)
+		}
+		p.lnMu.Unlock()
+		return true, ""
+	}
 	if key != "" {
 		if last, seen := p.lnLastPush[key]; seen && now.Sub(last) < lnDedupWindow {
 			in.Reason = interceptReasonDedup
@@ -177,13 +186,6 @@ func (p *Pusher) applyLn(policy pushPolicy) (allow bool, reason string) {
 		}
 	}
 	switch level {
-	case assistantwire.LevelP0:
-		// P0 interrupts; its key then stays quiet for the window.
-		if key != "" {
-			p.noteKeyPushedLocked(key, now)
-		}
-		p.lnMu.Unlock()
-		return true, ""
 	case assistantwire.LevelP2:
 		in.Reason = interceptReasonP2
 		p.addInterceptLocked(in, false)
