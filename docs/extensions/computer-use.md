@@ -648,6 +648,17 @@ iPhone's side comes next.
   another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
   relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
   route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
+- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`, for now only in a DEBUG build launched with
+  `-showScreenRoutes`): the RFB and video relays offer the subprotocol beside `binary`; `ScreenLinkRFBStream` /
+  `ScreenLinkVideoStream` (`PersonaScreenKit`) read the first message, and when the hub selected the subprotocol the
+  stream is the session's channel (`ScreenLinkSession`, an actor holding the channels, the transports, the pings and
+  `PathPolicy`), else the same raw stream as before, so the RFB client and the video stream don't change. A session
+  starts a `ScreenLinkProber` (its own actor): it reads the phone's interfaces (`NWPathMonitor`, `getifaddrs`), dials each
+  candidate `RouteEligibility` allows on that interface (`NWParameters.requiredInterface`, TLS 1.3 with the ALPN, the
+  certificate accepted only by its SHA-256 from `paths`) as `ProbePlan` says (at once, then 30 s doubling to 5 min after a
+  failure, again at once when the phone's networks change), and hands what connects to the session, which pings and
+  measures every route and runs the policy once a second. In this stage the picture and input stay on the relay; the
+  choice is only logged (category `screen-link`, route kinds and reasons, never addresses).
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
