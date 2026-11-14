@@ -102,7 +102,7 @@ they do not replace the original Android benchmark, the 50 µs / 1 ms budgets, o
 ## Transport decoding
 
 `persona_core::transport` turns the bytes the host received into the values `continuity` takes (the plan's decision 2:
-JSON is decoded once, in Rust). It is pure decoding: no boundary action carries bytes yet, and no client calls it.
+JSON is decoded once, in Rust). `Action::WirePayload` carries the bytes (below); no production client sends them yet.
 
 | Function | Payload | iOS type it follows |
 | --- | --- | --- |
@@ -120,7 +120,10 @@ JSON is decoded once, in Rust). It is pure decoding: no boundary action carries 
   and the `items` events of `compatibility.json`), all of them accepted payloads, and rebuilds every payload step of
   the continuity corpus from bytes, comparing the step and the state with the hand-built batch. Of the 79 expected
   fields of those cases, 52 are values the decoder produced; 25 are item fields the core does not read, compared with
-  the item's kept JSON, and 2 are the frame's type.
+  the item's kept JSON, and 2 are the frame's type. The same 17 cases are replayed through the real JNI binding as
+  `Action.WirePayload` by Android's `TransportBindingFixtureTest` (`./gradlew :core:rustcore:test`, a host library),
+  which feeds each case's `input` exactly as the file holds it and compares every published item with its raw source
+  text; that is host evidence only, not a device or iOS run.
 - The refusal rules are tested by the crate's unit tests: every key a decoder reads, with every kind of wrong value.
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:

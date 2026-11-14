@@ -382,8 +382,8 @@ Phase 2 lands in several PRs.
     `http_latest` steps without `has_more` are not wire pages; the decoder refuses them, as iOS's `ItemsResponse`
     would. The refusal rules rest on the crate's unit tests, which try every key a decoder reads with every kind of
     wrong value.
-  - Not done: no boundary action carries bytes, the runtime and the three entry points are unchanged, and no client
-    uses the decoder. Each client still decodes natively.
+  - At the time of that PR no boundary action carried bytes; the follow-up below adds them. Each client still
+    decodes natively in production.
   - Not full parity: envelope keys only other events use and nested structs the core does not read are not
     checked, and whole numbers must be integer literals, the only spelling the hub writes
     (`native/app-core/README.md`, "Transport decoding").
