@@ -127,7 +127,7 @@ def test_or_fix(pr, names):
     """Maintainer policy: test/fix titles and test-only changes need no screenshots."""
     if re.match(r"^(?:test|fix)(?:\([^)]*\))?:\s+", pr.get("title", ""), re.I):
         return True
-    parts = {"test", "tests", "testdata", "fixtures", "__tests__", "e2e"}
+    TEST_PARTS = {"test", "tests", "testdata", "fixtures", "__tests__", "e2e"}
     def test_file(name):
         path = Path(name)
         parts = path.parts
@@ -135,7 +135,7 @@ def test_or_fix(pr, names):
             return True
         if path.name.endswith(("_test.go", "_test.py", ".test.ts", ".test.tsx", ".test.js", ".test.mjs")):
             return True
-        return any(part.lower() in parts and "test" in path.name.lower() for part in parts)
+        return any(part.lower() in TEST_PARTS and "test" in path.name.lower() for part in parts)
     return bool(names) and all(test_file(name) for name in names)
 
 

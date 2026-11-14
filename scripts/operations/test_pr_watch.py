@@ -376,7 +376,7 @@ class WatcherTests(unittest.TestCase):
                     patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
                     patch.object(pr_watch_repair, "gh_json", side_effect=[[], {"number": 9}]) as created:
                 pr_watch_repair.commit_and_push_repair("example/one", pr(isCrossRepository=True), root, SHA_BASE, "failure", {"profile": "commands", "commands": [["true"]]}, allow_merge_only=True)
-        self.assertIn("Refs #6", created.call_args_list[1].args[0][-1])
+        self.assertIn("Refs #6", created.call_args_list[1].kwargs["input_text"])
 
     def test_every_failed_lane_must_reproduce_on_main(self):
         failures = [{"command": ["test", "one"], "output": "--- FAIL: TestA\n"},

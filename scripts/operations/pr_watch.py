@@ -109,6 +109,20 @@ class State:
             return dict(item)
 
 
+def public_base_evidence(evidence):
+    """Keep failure identity and reason, never local paths or raw command output."""
+    if not isinstance(evidence, dict):
+        return str(evidence)
+    def clean(item):
+        if isinstance(item, dict):
+            return {key: clean(value) for key, value in item.items()
+                    if key in ("reproduced", "reason", "packages", "tests", "lanes")}
+        if isinstance(item, list):
+            return [clean(value) for value in item]
+        return str(item)
+    return json.dumps(clean(evidence), ensure_ascii=False)
+
+
 class Watcher:
     def __init__(self, config, dry_run=False, verbose=True):
         self.config = config
@@ -276,7 +290,7 @@ class Watcher:
             body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
                     "Some failed checks were independently reproduced on clean main and are not attributed to this PR. They are not claimed as passing tests:\n\n```text\n%s\n```\n\n"
                     "Checks that actually passed:\n%s") % (
-                pr["headRefOid"][:9], bounded(json.dumps(base_failures, ensure_ascii=False) if isinstance(base_failures, dict) else str(base_failures), 6000),
+                pr["headRefOid"][:9], bounded(public_base_evidence(base_failures), 6000),
                 "\n".join("- `%s`" % r["name"] for r in results if r.get("ok")) or "- No additional successful lanes")
         else:
             body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"

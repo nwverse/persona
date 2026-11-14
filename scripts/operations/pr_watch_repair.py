@@ -57,7 +57,6 @@ def failure_signature(text):
 def failure_test_ids(text):
     """Unittest/Go test identifiers, not generic words shared by other failures."""
     ids = set(re.findall(r"(?m)^--- FAIL: ([A-Za-z0-9_./-]+)", text or ""))
-    ids = {name.split("/")[0] for name in ids}
     ids.update(re.findall(r"(?m)^(?:FAIL|ERROR): ([A-Za-z0-9_./-]+)", text or ""))
     return ids
 
@@ -368,8 +367,9 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
         body = "Refs #%d\n\nContinuation of #%s with an automated verification repair.\n\nOriginal failure:\n```text\n%s\n```" % (
             issues[0], pr["number"], bounded(failure, 4000))
         owner = repo.split("/", 1)[0]
-        created = gh_json(["pr", "create", "--repo", repo, "--base", pr["baseRefName"], "--head", owner + ":" + branch,
-                           "--title", "fix: continue #%s verification repair" % pr["number"], "--body", body])
+        created = gh_json(["api", "repos/%s/pulls" % repo, "--method", "POST", "--input", "-"],
+                          input_text=json.dumps({"title": "fix: continue #%s verification repair" % pr["number"],
+                                                 "head": owner + ":" + branch, "base": pr["baseRefName"], "body": body}))
         actual = pr_snapshot(repo, created["number"])
         if actual["headRefOid"] != head:
             raise WatchError("continuation PR head does not match the verified repair")
