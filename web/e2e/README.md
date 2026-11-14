@@ -92,6 +92,16 @@ Run against an exclusively owned mock-backed web server. It checks the one group
 
 It reads the mock's own catalog and holds the page to it, in English at 1280 x 900 (light and dark), a 240 px sidebar and a 390 px touch phone: Browse by Computer draws one section per computer, the busiest first, the first three open on their newest six sessions and the counts adding up to the list's total; Project lists the catalog's projects in its order, the repository on two computers as one section with its remote and both directories and the sessions of both; the value pill's menu is as wide as its pill and names each computer under the project; a picked project is the one flat list of its sessions; Space names each computer's spaces, tells two of one name apart and ends with the sessions in no space; the chosen Browse by survives a reload; Recently updated is the flat list. With `--hub` it also drives 20 s of the mock's churn while the list is drawn by project and prints the mock's read counters by kind, failing when the groups were read more than once per 1.5 s or a complete list was read. Screenshots of each step go to the artifact directory. A three-minute watchdog ends the run with a timeout verdict. Browser and mock checks only: no real hub, node or Git repository is involved.
 
+## Machines and Overview at desktop widths (web audit items 3, 25, 30 and 76)
+
+```sh
+MOCK_SESSIONS_LIST=1 [MOCK_MANAGERS=1] PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/overview-machines-layout.mjs http://127.0.0.1:<web port> <artifact-directory> [--channel chrome]
+```
+
+Run against an exclusively owned mock-backed web server, once with `MOCK_MANAGERS=1` (one assistant) and once with the mock's default roster (several assistants); `MOCK_SESSIONS_MANY=300` adds a list longer than its first page. The runner reads the mock's own complete session list (every page, `roots=1`) and holds each Machines card to it: the agents that are not offline, without the assistant's conversations, on a hub that pushes no sessions. At 768, 1024, 1280 and 1920 px, light and dark, it checks every online card's count, a gap of at least 8 px between the card's state line and its versions, and that no metric value is cut (the text's own width against its box, since `scrollWidth` rounds away the half pixel Chrome already cuts with "…"), with the widest rate a card can show ("↓ 1023 MB/s", "↑ 1000 KB/s") answered for one computer in the browser, and that a card's metrics are one row or two columns, never three with one left alone (one row at 1280 and 1920 px). On Overview it answers an example extension's overview card in the browser (its place, list and view, with the UI-slot features added to the hub's hello) and checks that a lone card is the page's width at 1280 px and one of two columns at 1440, 1680 and 1920 px. Then it fails the list Overview counts from in the browser (the paged list's reads with one assistant, the complete list's with several) and checks that the summary says it couldn't read the agents, in the line's live region, with **Retry**, with no **All set** and no computer count; after the route is lifted, **Retry** brings the summary back, its counts outside the live region (left empty), and each online computer's count matches the mock's, or, while the paged list has more pages, no count. Nothing is written to the hub. It saves a screenshot of each page and size, prints one line per check, and ends with a verdict; it exits 1 on a failed check and 2 on its three-minute timeout.
+
 ## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
 
 ```sh
@@ -215,6 +225,46 @@ checked and sends nothing, that Auto is posted and shown at once, and that Full 
 asks first. It then checks that the session waits (`bypass_pending`, the chip still on the mode it runs in) until the
 mock's restart comes up in Full access. It prints one line per check and a verdict, and exits nonzero on a failure or
 its five-minute timeout.
+
+## Settings: hints, search, provider errors, disconnect, hubs and lists (web audit)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_CHANNELS=1 MOCK_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/settings-audit.mjs <loopback-web-origin> <artifact-directory>
+```
+
+Run against an exclusively owned mock-backed web server; a server proxying a real hub is refused (the runner checks the
+mock's health reply). Each check opens a fresh headless Chrome context signed in to the mock; requests to other origins
+are blocked, and a write that revokes a token or saves a provider is answered in the browser with an error and never
+reaches the mock. It checks, in light and dark:
+
+- General's setting sentences wrap instead of being cut at one line (1280 and a 390 phone), Translation's note keeps
+  its spacing above Agent preferences, and on a phone the language menu sits under its sentence; in English, Chinese
+  and Japanese nothing in General is cut off with an ellipsis on a 390 phone (audit item 17).
+- In English, Chinese and Japanese, typing a setting's name ("Language") in the settings search lists that setting
+  first, Enter scrolls to its row and lights it, and Esc clears the box; the settings of the other pages are found by
+  their labels (thinking effort, time zone, default permissions, quiet hours, continue after errors, secrets, device
+  tokens, revoke; in Chinese also the audit's own words, in English "timezone" and "effort"), Revoke is listed as
+  Revoke, and an agent's setting opens that agent's section (audit item 18); the hub's category reads "This hub" and
+  Models and Knowledge selection have different icons (audit item 66).
+- Next on an empty custom gateway focuses the first field with a problem, marks it invalid, and its note is inside
+  the dialog's visible area at 1280 x 600; every field that needs something says so, the others with a red edge;
+  nothing is saved (audit item 19).
+- Disconnect this browser asks first, saying pairing is needed again; Cancel revokes nothing and keeps the sign-in.
+  With the question's chunk refused (a redeploy), Disconnect from the account menu leaves the app drawn, says
+  reloading should fix it and revokes nothing (audit item 20).
+- Add hub refuses "not a url" and an escaped host under the field and keeps the list as it was, and still adds a real
+  address (audit item 67).
+- On a 390 phone a connector's page, Sent and an extension's page each draw one Back, the top bar's, which goes to the
+  category; so do the market's catalog, one of its extensions and the list of markets, whose Back goes to the catalog;
+  under the Lark bot's address the top bar's Back goes to Settings; a wide screen keeps the page's own Back (audit
+  item 64).
+- With the list beside an open extension or connector, the open row is the only one marked `aria-current`, its name is
+  whole and its state sits under it; a list on its own marks nothing (audit item 68).
+
+It prints one line per check and a final verdict, writes `results.json` and screenshots to the artifact directory, and
+exits nonzero on a failure or its five-minute timeout. Against a build from before these fixes nearly every check fails.
 
 ## The app shell's connection states, dead links and keyboard focus (web usability audit)
 
