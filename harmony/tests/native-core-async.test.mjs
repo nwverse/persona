@@ -66,62 +66,98 @@ registerHooks({
 
 globalThis.nativeCoreState = state;
 const wire = await import('../entry/src/main/ets/core/rustcore/Wire.ts');
-const { awaitDeliveredEffects, drainCore } = await import('../entry/src/ohosTest/ets/test/NativeCore.test.ets');
+const { Delivery, drainCore } = await import('../entry/src/ohosTest/ets/test/NativeCore.test.ets');
 
 function fetchEffect(chat = 'fixture') {
   return {kind: 'fetch', chat, request: {kind: 'fetch_latest', fold_work: false}};
 }
 
-function patchWithInsert(json) {
-  state.patch = wire.encodeChatPatch({version: 1, covered: 1, history: null, has_more: null,
+function setPatch(version) {
+  state.patch = wire.encodeChatPatch({version, covered: 1, history: null, has_more: null,
     loaded_once: true, verified: false, acked: null,
-    ops: [{kind: 'insert', index: 0, id: '1#0', json}]});
+    ops: [{kind: 'insert', index: 0, id: '1#0', json: '{"id":"1#0"}'}]});
 }
 
-test('effect delivery waits for a queued callback, not a synchronous effect array', {timeout: 1000}, async () => {
-  const effects = [];
+function wake(delivery, chat = 'fixture') {
+  setTimeout(() => { delivery.changedChat(chat, 1); }, 0);
+}
+
+test('effect delivery uses the later wake as its barrier, not a synchronous array', {timeout: 1000}, async () => {
+  const delivery = new Delivery();
+  setPatch(1);
+  const pending = drainCore(1, 'fixture', [], delivery, 'delayed effect', 200);
   let completed = false;
-  const pending = awaitDeliveredEffects(effects, 1, 'delayed effect', 200).then(() => { completed = true; });
-  setTimeout(() => { effects.push(fetchEffect()); }, 15);
-  assert.equal(completed, false, 'the wait must yield before its predicate is satisfied');
-  await pending;
-  assert.deepEqual(effects, [fetchEffect()]);
+  pending.then(() => { completed = true; });
+  setTimeout(() => {
+    delivery.effect(wire.encodeEffect(fetchEffect()));
+    delivery.changedChat('fixture', 1);
+  }, 15);
+  const patch = await pending;
+  assert.equal(patch.version, 1);
+  assert.equal(completed, true);
 });
 
-test('zero-effect steps yield to the event loop and reject stale callbacks', async () => {
-  const effects = [];
-  let delivered = false;
-  setTimeout(() => { delivered = true; }, 0);
-  await awaitDeliveredEffects(effects, 0, 'no effects', 25);
-  assert.equal(delivered, true, 'a zero-effect step must still yield before clearing the shared array');
-  await assert.rejects(awaitDeliveredEffects([fetchEffect()], 0, 'stale effect', 25), /unexpected extra or stale effects/);
-});
-
-test('missing effects fail within the supplied bound instead of passing an empty request comparison', async () => {
+test('a no-op step needs no effect and no five-second empty-array wait', {timeout: 1000}, async () => {
+  const delivery = new Delivery();
+  setPatch(0);
   const started = Date.now();
-  await assert.rejects(awaitDeliveredEffects([], 1, 'missing effect', 30), /expected 1 effects after flush, received 0/);
+  const patch = await drainCore(1, 'fixture', [], delivery, 'no effect', 200);
+  assert.equal(patch.version, 0);
+  assert.ok(Date.now() - started < 150);
+});
+
+test('a zero-effect step still waits for the wake that orders its callbacks', {timeout: 1000}, async () => {
+  const delivery = new Delivery();
+  setPatch(1);
+  const pending = delivery.drain(1, 'fixture', [], 'delayed wake', 200);
+  let completed = false;
+  pending.then(() => { completed = true; });
+  setTimeout(() => { wake(delivery); }, 30);
+  const step = await pending;
+  assert.deepEqual(step.effects, []);
+  assert.equal(completed, true);
+});
+
+test('a missing wake fails within its bound instead of draining silently', async () => {
+  const delivery = new Delivery();
+  setPatch(1);
+  const started = Date.now();
+  await assert.rejects(delivery.drain(1, 'fixture', [], 'missing wake', 30), /expected wake 1 for fixture, received 0/);
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 20 && elapsed < 1000, `bounded wait took ${elapsed}ms`);
 });
 
-test('drainCore flushes, waits for the action effects, then drains and applies its patch', {timeout: 1000}, async () => {
+test('a changed patch cannot be claimed by an old or other-chat wake', async () => {
+  const delivery = new Delivery();
+  setPatch(1);
+  const pending = delivery.drain(1, 'fixture', [], 'other-chat wake', 30);
+  setTimeout(() => { delivery.changedChat('other-chat', 1); }, 5);
+  await assert.rejects(pending, /expected wake 1 for fixture, received 1/);
+});
+
+test('drainCore flushes, drains, then waits for the action effects before applying', {timeout: 1000}, async () => {
   state.flushes = 0;
   state.drains = 0;
   state.effectsAtDrain = [];
-  const effects = state.effects = [];
+  const delivery = new Delivery();
   const list = [];
-  const json = '{"id":"1#0","text":"updated"}';
-  patchWithInsert(json);
-  const pending = drainCore(1, 'fixture', list, effects, 1, 'delayed drain');
+  setPatch(1);
+  const pending = drainCore(1, 'fixture', list, delivery, 'delayed drain');
   assert.equal(state.flushes, 1);
-  assert.equal(state.drains, 0, 'a synchronous drain would observe no queued NAPI effects');
-  setTimeout(() => { effects.push(fetchEffect()); }, 15);
-  const patch = await drainCore(1, 'fixture', list, effects, 1, 'already delivered');
-  const delayed = await pending;
-  assert.equal(state.flushes, 2);
-  assert.equal(state.drains, 2);
-  assert.deepEqual(state.effectsAtDrain, [1, 1]);
-  assert.equal(patch.ops[0].kind, 'insert');
-  assert.equal(delayed.ops[0].json, json);
-  assert.deepEqual(list, [json, json]);
+  assert.equal(state.drains, 1);
+  setTimeout(() => {
+    delivery.effect(wire.encodeEffect(fetchEffect()));
+    delivery.changedChat('fixture', 1);
+  }, 15);
+  await pending;
+  assert.equal(list.length, 1);
+  assert.deepEqual(delivery.effects, []);
+});
+
+test('per-step effects are removed from the shared queue rather than discarded by array replacement', async () => {
+  const delivery = new Delivery();
+  delivery.effect(wire.encodeEffect(fetchEffect()));
+  const first = delivery.effects.splice(0, delivery.effects.length);
+  assert.deepEqual(first, [fetchEffect()]);
+  assert.deepEqual(delivery.effects, []);
 });

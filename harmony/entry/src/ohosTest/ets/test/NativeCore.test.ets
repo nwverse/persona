@@ -17,6 +17,7 @@ interface FixtureEvent {
   more?: boolean;
   covered?: number;
   loaded_once?: boolean;
+  fold_id?: string;
 }
 interface FixtureCase {
   name: string;
@@ -95,52 +96,71 @@ function requestObject(request: Request): ExpectedRequest {
 const effectWaitMillis: number = 5000;
 const effectPollMillis: number = 10;
 
-export async function awaitDeliveredEffects(effects: Effect[], expectedCount: number, label: string,
-  timeoutMillis: number = effectWaitMillis): Promise<void> {
-  // Do not mistake the first event-loop turn for a delivery barrier: a different NAPI callback may still be
-  // queued ahead of the action's effects. Yield until the action's complete callback set has arrived. A zero-effect
-  // step uses the same bounded window to reject late or stale callbacks without weakening its action assertions.
-  await new Promise<void>((resolve: () => void) => setTimeout(resolve, 0));
-  const deadline: number = Date.now() + timeoutMillis;
-  while (Date.now() < deadline) {
-    if (effects.length === expectedCount && effectRequestCount(effects) === expectedCount) return;
-    if (effects.length > expectedCount || effectRequestCount(effects) > expectedCount) break;
-    await new Promise<void>((resolve: () => void) => setTimeout(resolve, effectPollMillis));
-  }
-  if (effects.length < expectedCount || effectRequestCount(effects) < expectedCount) {
-    throw new Error(label + ': expected ' + expectedCount + ' effects after flush, received ' + effects.length);
-  }
-  throw new Error(label + ': unexpected extra or stale effects: expected ' + expectedCount + ', received ' + effects.length);
+interface DrainedStep {
+  patch: ChatPatch;
+  effects: Effect[];
 }
 
-function effectRequestCount(effects: Effect[]): number {
-  let count: number = 0;
-  for (const effect of effects) { if (effect.kind === 'fetch') count++; }
-  return count;
+export class Delivery {
+  private effects: Effect[] = [];
+  private wakes: number = 0;
+  private wakeChats: (string | undefined)[] = [];
+  private deliveredWakes: number = 0;
+  private patchVersion: number = 0;
+
+  changed(_version: number): void { this.wakes++; }
+  changedChat(chat: string, _version: number): void { this.wakes++; this.wakeChats.push(chat); }
+  effect(bytes: Uint8Array): void { this.effects.push(decodeEffect(bytes)); }
+
+  // Runtime emits an action's effects before its targeted wake. Waiting for that wake establishes the delivery
+  // boundary for both effects and no-op changes; a fixed empty-array delay cannot provide this guarantee.
+  private async awaitWake(expectedWakes: number, chat: string, label: string, timeoutMillis: number): Promise<void> {
+    const deadline: number = Date.now() + timeoutMillis;
+    while ((this.wakes < expectedWakes || (expectedWakes > this.deliveredWakes && this.wakeChats.length < expectedWakes))
+      && Date.now() < deadline) {
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, effectPollMillis));
+    }
+    if (this.wakes !== expectedWakes
+      || (expectedWakes > this.deliveredWakes && this.wakeChats[expectedWakes - 1] !== chat)) {
+      throw new Error(label + ': expected wake ' + expectedWakes + ' for ' + chat + ', received ' + this.wakes);
+    }
+  }
+
+  async drain(handle: number, chat: string, list: string[], label: string,
+    timeoutMillis: number = effectWaitMillis): Promise<DrainedStep> {
+    const before: number = this.deliveredWakes;
+    expect(native.coreFlush(handle, 5000)).assertTrue();
+    const patch: ChatPatch = decodeChatPatch(native.coreDrain(handle, chat));
+    // No new patch means no wake belongs to this action. There must also be no queued effect to attribute to it.
+    const expectedWakes: number = before + (patch.version > this.patchVersion ? 1 : 0);
+    await this.awaitWake(expectedWakes, chat, label, timeoutMillis);
+    this.deliveredWakes = expectedWakes;
+    this.patchVersion = patch.version;
+    const effects: Effect[] = this.effects.splice(0, this.effects.length);
+    for (const op of patch.ops) {
+      if (op.kind === 'remove') list.splice(op.index, 1);
+      else if (op.kind === 'insert') list.splice(op.index, 0, op.json);
+      else list[op.index] = op.json;
+    }
+    return {patch, effects};
+  }
 }
 
-function openCore(effect: (bytes: Uint8Array) => void): number {
+export async function drainCore(handle: number, chat: string, list: string[], delivery: Delivery,
+  label: string, timeoutMillis: number = effectWaitMillis): Promise<ChatPatch> {
+  return (await delivery.drain(handle, chat, list, label, timeoutMillis)).patch;
+}
+
+function openCore(delivery: Delivery): number {
   // The Rust callback is ThreadsafeFunction<Buffer, ..., false>: one Uint8Array, not (null, Array<number>).
-  return native.coreCreate(native.coreConfig(), (_version: number): void => {},
-    (bytes: Uint8Array): void => { effect(bytes); });
+  return native.coreCreate(native.coreConfig(), (version: number): void => { delivery.changed(version); },
+    (bytes: Uint8Array): void => { delivery.effect(bytes); });
 }
 
-function openTargetedCore(effect: (bytes: Uint8Array) => void): number {
-  return native.coreCreateWithChat(native.coreConfig(), (_version: number): void => {},
-    (_chat: string, _version: number): void => {}, (bytes: Uint8Array): void => { effect(bytes); });
-}
-
-export async function drainCore(handle: number, chat: string, list: string[], effects: Effect[],
-  expectedCount: number, label: string): Promise<ChatPatch> {
-  expect(native.coreFlush(handle, 5000)).assertTrue();
-  await awaitDeliveredEffects(effects, expectedCount, label);
-  const patch: ChatPatch = decodeChatPatch(native.coreDrain(handle, chat));
-  for (const op of patch.ops) {
-    if (op.kind === 'remove') list.splice(op.index, 1);
-    else if (op.kind === 'insert') list.splice(op.index, 0, op.json);
-    else list[op.index] = op.json;
-  }
-  return patch;
+function openTargetedCore(delivery: Delivery): number {
+  return native.coreCreateWithChat(native.coreConfig(), (version: number): void => { delivery.changed(version); },
+    (chat: string, version: number): void => { delivery.changedChat(chat, version); },
+    (bytes: Uint8Array): void => { delivery.effect(bytes); });
 }
 
 export default function nativeCoreTests(): void {
@@ -153,8 +173,8 @@ export default function nativeCoreTests(): void {
       for (const file of files) {
         for (const fixture of file.document.cases) {
           cases++;
-          let effects: Effect[] = [];
-          const handle = openTargetedCore((bytes: Uint8Array): void => { effects.push(decodeEffect(bytes)); });
+          const delivery: Delivery = new Delivery();
+          const handle = openTargetedCore(delivery);
           try {
             const chat = 'fixture/continuity';
             const initial: ChatSnapshot = {items_json: JSON.stringify(fixture.input.initial.items || []),
@@ -162,22 +182,18 @@ export default function nativeCoreTests(): void {
               has_more: boolean(fixture.input.initial, 'has_more'), loaded_once: fixture.input.initial.loaded_once === true};
             expect(native.coreDispatch(handle, encodeAction({kind: 'open_chat', chat, snapshot: initial}))).assertTrue();
             const list: string[] = [];
-            const drain = async (expectedCount: number, label: string): Promise<ChatPatch> => {
-              return await drainCore(handle, chat, list, effects, expectedCount, label);
-            };
-            await drain(0, fixture.name + ' open');
-            effects = [];
+            await drainCore(handle, chat, list, delivery, fixture.name + ' open');
             for (let index = 0; index < fixture.input.events.length; index++) {
               const expected = fixture.expected[index];
               expect(native.coreDispatch(handle, encodeAction(eventAction(fixture.input.events[index], chat)))).assertTrue();
-              const patch: ChatPatch = await drain(expected.actions.length, fixture.name + ' step ' + index);
+              const step: DrainedStep = await delivery.drain(handle, chat, list, fixture.name + ' step ' + index);
+              const patch: ChatPatch = step.patch;
               const requests: ExpectedRequest[] = [];
-              for (const effect of effects) {
+              for (const effect of step.effects) {
                 if (effect.kind === 'rejected') throw new Error(fixture.name + ': ' + effect.reason);
                 expect(effect.chat).assertEqual(chat);
                 requests.push(requestObject(effect.request));
               }
-              effects = [];
               expect(JSON.stringify(list.map((json: string): Object => JSON.parse(json) as Object))).assertEqual(JSON.stringify(expected.items));
               expect(patch.covered).assertEqual(expected.covered);
               expect(patch.history).assertEqual(expected.history);
@@ -194,18 +210,18 @@ export default function nativeCoreTests(): void {
     });
     it('a_repeated_item_is_one_update_and_close_is_idempotent', 0, async (): Promise<void> => {
       const chat = 'update';
-      const effects: Effect[] = [];
-      const handle = openCore((bytes: Uint8Array): void => { effects.push(decodeEffect(bytes)); });
+      const delivery: Delivery = new Delivery();
+      const handle = openCore(delivery);
       const snapshot: ChatSnapshot = {items_json: '[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"old"}]',
         history: 'h', covered: 1, has_more: false, loaded_once: true};
       try {
         expect(native.coreDispatch(handle, encodeAction({kind: 'open_chat', chat, snapshot}))).assertTrue();
         const list: string[] = [];
-        await drainCore(handle, chat, list, effects, 0, 'open repeated item');
+        await drainCore(handle, chat, list, delivery, 'open repeated item');
         const batch: WireBatch = {items_json: '[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"newest"}]',
           history: 'h', from_seq: 0, to_seq: 1, backlog: false, has_more: null, more_after: false};
         expect(native.coreDispatch(handle, encodeAction({kind: 'chat', chat, event: {kind: 'pushed', batch}}))).assertTrue();
-        const patch: ChatPatch = await drainCore(handle, chat, list, effects, 0, 'update repeated item');
+        const patch: ChatPatch = await drainCore(handle, chat, list, delivery, 'update repeated item');
         expect(patch.ops.length).assertEqual(1);
         expect(patch.ops[0].kind).assertEqual('update');
         expect(patch.ops[0].index).assertEqual(0);

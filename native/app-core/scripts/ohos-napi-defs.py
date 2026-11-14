@@ -36,6 +36,16 @@ CALLBACK = re.compile(r"^\(\((.*)\) => (void|unknown)\)$")
 PARAM = re.compile(r"^([A-Za-z_$][\w$]*)(\??): (.+)$")
 HOST_CALLBACKS = {"changed", "changedChat", "effects"}
 TYPES = {"number", "string", "boolean", "Buffer", "void"}
+SIGNATURES = {
+    "coreCreate": [("config", "Uint8Array"), ("changed", "CoreHost['changed']"), ("effects", "CoreHost['run']")],
+    "coreCreateWithChat": [("config", "Uint8Array"), ("changed", "CoreHost['changed']"),
+                           ("changedChat", "NonNullable<CoreHost['changedChat']>"), ("effects", "CoreHost['run']")],
+    "coreDispatch": [("handle", "number"), ("action", "Uint8Array")],
+    "coreDrain": [("handle", "number"), ("chat", "string")],
+    "coreFlush": [("handle", "number"), ("timeoutMillis", "number")],
+    "coreClose": [("handle", "number")],
+    "coreConfig": [],
+}
 
 
 class DefinitionError(ValueError):
@@ -141,8 +151,13 @@ def generate(records):
         for parameter, kind in parameters:
             if parameter in HOST_CALLBACKS:
                 kind = host_parameter(parameter, kind)
-            arguments.append(f"{parameter}: {kind}")
-        lines.append(f"  {name}({', '.join(arguments)}): {ts_type(return_type)};")
+            arguments.append((parameter, kind))
+        if arguments != SIGNATURES[name]:
+            raise DefinitionError(f"{name} has an incomplete or changed positional parameter contract")
+        if return_type != ("void" if name == "coreClose" else "Buffer" if name in ("coreDrain", "coreConfig")
+                           else "number" if name.startswith("coreCreate") else "boolean"):
+            raise DefinitionError(f"{name} has the wrong return type")
+        lines.append(f"  {name}({', '.join(parameter + ': ' + kind for parameter, kind in arguments)}): {ts_type(return_type)};")
     return PREFIX + "\n".join(lines) + "\n" + SUFFIX
 
 

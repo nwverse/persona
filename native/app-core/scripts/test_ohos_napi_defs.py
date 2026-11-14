@@ -59,6 +59,15 @@ class OhosNapiDefinitionsTests(unittest.TestCase):
         with self.assertRaisesRegex(GENERATOR.DefinitionError, "unsupported callback parameter type"):
             GENERATOR.generate(changed)
 
+    def test_rejects_removed_required_callback_parameters(self):
+        for index, old in [(0, ", changed: ((arg: number) => void)"),
+                           (1, ", changedChat: ((arg0: string, arg1: number) => void)")]:
+            with self.subTest(index=index):
+                changed = records()
+                changed[index]["def"] = changed[index]["def"].replace(old, "")
+                with self.assertRaisesRegex(GENERATOR.DefinitionError, "incomplete or changed positional"):
+                    GENERATOR.generate(changed)
+
     def test_rejects_callback_return_and_missing_or_duplicate_exports(self):
         changed = records()
         changed[0]["def"] = changed[0]["def"].replace("=> void", "=> unknown")
