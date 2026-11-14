@@ -346,7 +346,8 @@ class WatcherTests(unittest.TestCase):
         self.assertLess(commit_index, calls.index(SHA_B))
         self.assertLess(calls.index(SHA_B), push_index)
     def test_main_comparison_requires_named_tests_and_packages(self):
-        comparison = pr_watch_repair.main_failure_comparison("example/one", pr(), ".", "CI server failed")
+        with patch.object(pr_watch_repair, "checked", return_value=""):
+            comparison = pr_watch_repair.main_failure_comparison("example/one", pr(), ".", "CI server failed")
         self.assertFalse(comparison["reproduced"])
         self.assertEqual(pr_watch_repair.failed_test_names("--- PASS: TestGood\n--- FAIL: TestBad/case\n"), ["TestBad"])
         pr_output = "--- FAIL: TestBase\n--- FAIL: TestPR\nAssertionError: PR defect"

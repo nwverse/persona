@@ -56,7 +56,8 @@ class RepairIntegrationTests(unittest.TestCase):
         return result.stdout.strip()
 
     def test_same_repository_base_update_pushes_ordinary_merge(self):
-        self.assertTrue(pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main))
+        updated = pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main)
+        pr_watch_repair.push_updated_head("example/one", self.pr, str(self.repo), updated)
         remote = self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0]
         self.assertEqual(remote, self.git("rev-parse", "HEAD"))
         parents = self.git("show", "-s", "--format=%P", "HEAD").split()

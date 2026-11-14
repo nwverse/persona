@@ -100,11 +100,15 @@ def main_failure_comparison(repo, pr, worktree, failure, timeout=600, git_root=N
         finally:
             run(["git", "worktree", "remove", "--force", str(base_worktree)], cwd=git_root or worktree, timeout=90)
     base_worktree = Path(str(worktree) + "-base-check")
+    changed_tests = checked(["git", "diff", "--name-only", "--no-renames", pr["baseRefOid"] + "..." + pr["headRefOid"],
+                             "--", "*_test.go", "*_test.py", "*.test.ts", "*.test.tsx"], cwd=worktree).splitlines()
+    if changed_tests:
+        return {"reproduced": False, "reason": "The PR changes test inputs, so a same-named main failure is not enough for base attribution."}
     names = failed_test_names(failure)
     grouped = failed_go_tests(worktree, failure)
     packages = sorted(grouped)
     if not names or not packages:
-        return {"reproduced": False, "reason": "No isolated Go failure was available for a clean-main comparison."}
+        return {"reproduced": False, "reason": "No package-qualified isolated Go failure was available for a clean-main comparison."}
     base_worktree = Path(str(worktree) + "-base-check")
     try:
         checked(["git", "worktree", "add", "--detach", str(base_worktree), pr["baseRefOid"]], cwd=git_root or worktree, timeout=180)
@@ -165,11 +169,17 @@ def update_branch_with_main(repo, pr, worktree, base):
             return None
         if not merge_base_in_isolation(pr, worktree, base):
             return None
+    return checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+
+
+def push_updated_head(repo, pr, worktree, updated_head):
+    """Publish an already verified merge without changing its exact tree."""
+    if checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip() != updated_head:
+        raise WatchError("verified merge head changed before publication")
     checked(["git", "fetch", "-q", "origin", "refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
     if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree).strip() != pr["headRefOid"]:
         raise WatchError("PR head moved before merging main; nothing was pushed")
     checked(["git", "push", "origin", "HEAD:refs/heads/" + pr["headRefName"]], cwd=worktree, timeout=180)
-    return checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
 
 
 def repair_worker_argv(argv, worktree, home=None):

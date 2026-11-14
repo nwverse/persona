@@ -343,6 +343,12 @@ class Watcher:
             return "base_failure"
         updated_head = pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"])
         if updated_head:
+            merged_pr = dict(pr, headRefOid=updated_head)
+            results = verify(repo, merged_pr, str(worktree), config["verify"], environ=verification_env())
+            scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
+            checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
+                    cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
+            pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
             updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
             self.state.put(repo, number, updated_head, evidence_key=updated_key,
                            repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
@@ -407,7 +413,7 @@ class Watcher:
             return
         if old.get("outcome") == "continuation":
             return
-        if old.get("repair_exhausted"):
+        if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
             if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":
@@ -437,6 +443,12 @@ class Watcher:
                     worktree = self.worktree(repo, number, pr)
                     if pr_watch_repair.update_branch_with_main(repo, pr, str(worktree), pr["baseRefOid"]):
                         updated_head = checked(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+                        merged_pr = dict(pr, headRefOid=updated_head)
+                        results = verify(repo, merged_pr, str(worktree), config["verify"], environ=verification_env())
+                        scanner = Path(__file__).resolve().parents[2] / "scripts" / "privacy_check.py"
+                        checked(["python3", "-I", str(scanner), "--range", pr["baseRefOid"] + ".." + updated_head],
+                                cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
+                        pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
                         updated_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + updated_head
                         self.state.put(repo, number, updated_head, evidence_key=updated_key,
                                        repair_rounds=rounds + 1, outcome="base_updated")
