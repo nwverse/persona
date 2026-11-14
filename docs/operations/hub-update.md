@@ -227,7 +227,7 @@ releases retain their separate publishing workflow.
 ## Current state (verified 2026-11-02)
 
 - Version: `personad version` is a string written in with `-X main.version`.
-  - `deploy.sh`, `publish.sh`: `git describe --always --dirty` plus a minute-resolution timestamp, like `v0.1.1-23-gabc1234-202611021530`;
+  - `deploy.sh`, `publish.sh`: `git describe --tags --match 'v[0-9]*' --always --dirty` plus a minute-resolution timestamp, like `v0.1.1-23-gabc1234-202611021530`. The nearest `vX.Y.Z` tag names it, a lightweight one too (a GitHub release's tag is one; plain `git describe` skipped v0.4.0, #7201), and `testflight/<build>` never does;
   - Docker image: built by CI when a `v*` tag is pushed; the version is the tag without `v`.
 - hub:
   - `GET /api/v1/health` returns `{ok, version, features}`; the WebSocket `hello` carries `server_version`;
