@@ -148,10 +148,15 @@ extension FrameStats {
     }
 }
 
-/// The streamed reply's visible length, written where it is drawn (`StreamingText`) and read once a frame by
-/// `FrameStats` (#6651): the frames where it grew are the reply's cadence as the reader sees it.
-@MainActor enum StreamCadence {
-    static var shown = 0
+/// The streamed reply's visible length, written where it is drawn (`RevealRenderer.draw`, #7287) and read once a frame
+/// by `FrameStats` (#6651): the frames where it grew are the reply's cadence as the reader sees it. DEBUG only; a draw
+/// may run off the main actor, and a torn read only misplaces one sample.
+enum StreamCadence {
+    nonisolated(unsafe) static var shown = 0
+
+    nonisolated static func drew(_ position: Double) {
+        if position.isFinite { shown = Int(position) }
+    }
 }
 
 #if os(iOS) || os(visionOS)

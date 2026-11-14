@@ -1140,21 +1140,19 @@ private struct StreamingMarkdown: View, Equatable {
     }
 }
 
-/// The block being written, laid out to the end of the line the reveal is in and drawn as far as it has come
-/// (`fraction`). The only view that reads the frames: a frame changes its text renderer (which still takes part in
-/// layout, #7135).
+/// The block being written, laid out to the end of the line the reveal is in and drawn as far as it has come. The
+/// renderer's `drawn` is animated (the clock sets a target a few times a second): SwiftUI moves it on at every frame
+/// while it renders, without a new renderer value, so the frames do not lay anything out (#7287).
 private struct RevealedTail: View {
     var tail: String
     var reveal: StreamRevealClock?
     @State private var ledger = RevealLedger()
 
     var body: some View {
-        let fraction = reveal?.fraction ?? 1
-        #if DEBUG
-        let _ = StreamCadence.shown = reveal?.shownLength ?? Int.max
-        #endif
         TailMarkdown(tail: tail).equatable()
-            .textRenderer(RevealRenderer(fraction: fraction, ledger: ledger, caret: StreamRepair.end(of: tail) == .text))
+            .textRenderer(RevealRenderer(drawn: reveal?.drawn ?? .infinity, blockStart: reveal?.blockStart ?? 0,
+                                         layoutEnd: reveal?.layoutEnd ?? 0, ledger: ledger,
+                                         caret: StreamRepair.end(of: tail) == .text))
             .onPreferenceChange(Text.LayoutKey.self) { [ledger] layouts in ledger.set(layouts.map(\.layout)) }
     }
 }
@@ -1214,12 +1212,26 @@ private final class RevealLedger: @unchecked Sendable {
 
 /// Draws a text up to the reveal: whole runs while they are in, then glyph by glyph, then a caret after the last drawn
 /// glyph when the block is prose (`StreamTail`'s own caret is at the block's end, drawn only once the reveal is there).
+/// `drawn` is where the reveal is in the reply (UTF-16), animated; the laid-out part of the block runs from `blockStart`
+/// to `layoutEnd`.
 private struct RevealRenderer: TextRenderer {
-    var fraction: Double
+    var drawn: Double
+    var blockStart: Int
+    var layoutEnd: Int
     var ledger: RevealLedger
     var caret: Bool
 
+    var animatableData: Double {
+        get { drawn }
+        set { drawn = newValue }
+    }
+
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        #if DEBUG
+        StreamCadence.drew(drawn)
+        #endif
+        let length = layoutEnd - blockStart
+        let fraction = length > 0 ? (drawn - Double(blockStart)) / Double(length) : 1
         guard fraction < 1 else {
             for line in layout { context.draw(line) }
             return
@@ -1253,27 +1265,27 @@ private struct RevealRenderer: TextRenderer {
     }
 }
 
-/// Drives `StreamReveal` with the display's frames: a display link runs only while received text waits to be shown
-/// (P9), at most 30 times a second, and stops when the view goes. It publishes what to lay out (`layoutEnd`, which
-/// changes when text arrives or the reveal reaches the next line) apart from how much of the last block to draw
-/// (`fraction`, which changes at every frame), so the frames redraw only the drawing (`RevealPlan`, #7287). On the Mac
-/// (frozen, docs/apple/mac.md) the text shows as it comes.
+/// Drives `StreamReveal` a few times a second and lets SwiftUI move the reveal between: every `step` it takes the
+/// reveal `step` ahead and animates the renderer's `drawn` there linearly (#7287). Each change of laid-out text or of a
+/// renderer value re-measured the chat (#7135); an animated value is moved on while rendering. What to lay out
+/// (`layoutEnd`, `blockStart`) is set without animation and changes when text arrives or the reveal reaches the next
+/// line. The timer runs only while received text waits to be shown (P9). On the Mac (frozen, docs/apple/mac.md) the text
+/// shows as it comes.
 @MainActor @Observable
 final class StreamRevealClock {
+    /// How far ahead each target is, and how often one is set.
+    static let step: TimeInterval = 0.2
     /// The UTF-16 length of the received text to lay out.
     private(set) var layoutEnd = 0
-    /// How much of the last laid-out block to draw, 0…1.
-    private(set) var fraction = 1.0
+    /// The UTF-16 start of the block the reveal is in.
+    private(set) var blockStart = 0
+    /// Where the reveal is (UTF-16 offset in the reply); animated between targets.
+    private(set) var drawn = Double.infinity
     @ObservationIgnored private var reveal: StreamReveal?
     /// `StreamChunks.blocks` and `lineEnds` of the received text.
     @ObservationIgnored private var blocks: [Range<Int>] = []
     @ObservationIgnored private var lineEnds: [Int] = []
-    #if os(iOS) || os(visionOS)
-    @ObservationIgnored private var link: CADisplayLink?
-    #endif
-
-    /// The UTF-16 length of what is shown (`StreamCadence`).
-    var shownLength: Int { reveal?.shown.utf16.count ?? 0 }
+    @ObservationIgnored private var timer: Timer?
 
     /// What of `text` to lay out. `text` is the newest the view was given; `receive` takes it in right after this
     /// redraw, so until then what was laid out stays (first time: all of it, drawn as `StreamReveal` starts it; a text
@@ -1292,74 +1304,73 @@ final class StreamRevealClock {
             lineEnds = StreamChunks.lineEnds(text)
         }
         #if os(iOS) || os(visionOS)
-        let now = CACurrentMediaTime()
-        if reveal == nil { reveal = StreamReveal(text) } else { reveal?.receive(text, at: now) }
-        publish()
+        let first = reveal == nil
+        if first { reveal = StreamReveal(text) } else { reveal?.receive(text, at: CACurrentMediaTime()) }
+        publish(animated: !first)
         if reveal?.caughtUp == false { start() }
         #else
         reveal = StreamReveal(text)
         reveal?.finish()
-        publish()
+        publish(animated: false)
         #endif
     }
 
     func finish() {
         reveal?.finish()
-        publish()
+        publish(animated: false)
         stop()
     }
 
     func stop() {
-        #if os(iOS) || os(visionOS)
-        link?.invalidate()
-        link = nil
-        #endif
+        timer?.invalidate()
+        timer = nil
     }
 
     /// Back on screen: what still waits goes on (a stream that paused meanwhile sends nothing to restart it).
     func resume() {
-        #if os(iOS) || os(visionOS)
         if reveal?.caughtUp == false { start() }
-        #endif
     }
 
-    /// Sets what changed, each only when it did: `layoutEnd` is read by the whole reply, `fraction` by its last block.
-    private func publish() {
+    /// The reveal `step` ahead of now: its line laid out at once, the drawing animated there over `step`.
+    private func publish(animated: Bool) {
         guard let reveal else { return }
-        let plan = RevealPlan.make(blocks: blocks, lineEnds: lineEnds, shown: reveal.shown.utf16.count)
-        if plan.layoutEnd != layoutEnd { layoutEnd = plan.layoutEnd }
-        if plan.fraction != fraction { fraction = plan.fraction }
-    }
-
-    #if os(iOS) || os(visionOS)
-    private func start() {
-        guard link == nil else { return }
-        // The link holds its target strongly: a weak hop, so a view gone without onDisappear frees this.
-        let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick(_:)))
-        // 30 a second (#7135). Each frame now only redraws the block being written (#7287).
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
-        link.add(to: .main, forMode: .common)
-        self.link = link
-    }
-
-    fileprivate func tick(_ link: CADisplayLink) {
-        guard var r = reveal else { return stop() }
-        let moved = r.advance(to: link.timestamp)
-        reveal = r
-        if moved { publish() }
-        if r.caughtUp { stop() }
-    }
-
-    private final class Tick: NSObject {
-        weak var clock: StreamRevealClock?
-        init(_ clock: StreamRevealClock) { self.clock = clock }
-        @objc func tick(_ link: CADisplayLink) {
-            MainActor.assumeIsolated {
-                if let clock { clock.tick(link) } else { link.invalidate() }
-            }
+        let shown = reveal.shown.utf16.count
+        let plan = RevealPlan.make(blocks: blocks, lineEnds: lineEnds, shown: shown)
+        var plain = Transaction()
+        plain.disablesAnimations = true
+        withTransaction(plain) {
+            if plan.layoutEnd != layoutEnd { layoutEnd = plan.layoutEnd }
+            if plan.blockStart != blockStart { blockStart = plan.blockStart }
+        }
+        let target = Double(shown)
+        guard target != drawn else { return }
+        if animated, drawn.isFinite, target.isFinite {
+            withAnimation(.linear(duration: Self.step)) { drawn = target }
+        } else {
+            withTransaction(plain) { drawn = target }
         }
     }
-    #endif
+
+    private func start() {
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: Self.step, repeats: true) { [weak self] t in
+            MainActor.assumeIsolated {
+                guard let self else { return t.invalidate() }
+                self.tick()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        tick()
+    }
+
+    private func tick() {
+        guard var r = reveal else { return stop() }
+        let moved = r.advance(to: CACurrentMediaTime() + Self.step, maxStep: Self.step * 1.5)
+        reveal = r
+        if moved { publish(animated: true) }
+        if r.caughtUp { stop() }
+    }
 }
 
 /// The block of a streaming reply still being written, as it is drawn (#2916): made whole for the moment
