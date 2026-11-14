@@ -321,7 +321,7 @@ fun HomeNavigation(
                 textWidth = HomeTokens.segmentWidth * scale, surfacePadding = Tokens.Space.xxs, badgeOffset = 0.dp, onClick = choose)
         },
         stackedSwitcher = { available ->
-            val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
+            val fittedWidth = (((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1)) + Tokens.Space.xs)
                 .coerceIn(0.dp, segmentWidth)
             GlassHomeSwitcher(items, selected, fittedWidth, scale,
                 textWidth = minOf(HomeTokens.segmentWidth * scale, fittedWidth),
@@ -464,12 +464,14 @@ private fun GlassHomeSwitcher(
                 val baseFittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
                 val fittedSize = if (narrowText) {
                     var candidate = baseFittedSize
-                    while (candidate.value > Tokens.Type.Label.size.value) {
-                        val result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                    var result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
+                    while (result.isLineEllipsized(0) && candidate.value > Tokens.Type.Label.size.value) {
+                        candidate = maxOf(Tokens.Type.Label.size.value, candidate.value * 0.95f).sp
+                        result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
-                        if (!result.isLineEllipsized(0)) break
-                        candidate = maxOf(Tokens.Type.Label.size.value, candidate.value * 0.95f).sp
                     }
                     candidate
                 } else baseFittedSize

@@ -228,7 +228,7 @@ class HomeChromeTest {
             }
         }
         val widths = if (checkMainTextScale) listOf(320.dp, 360.dp, 411.dp) else listOf(200.dp, 280.dp, 320.dp, 360.dp, 400.dp)
-        val scales = if (checkMainTextScale) listOf(1f, 1.3f, 1.6f, 2f) else listOf(1f, 2f)
+        val scales = if (checkMainTextScale) listOf(0.85f, 1f, 1.3f, 1.6f, 2f) else listOf(1f, 2f)
         for (w in widths) for (scale in scales) {
             rule.runOnIdle { width = w; fontScale = scale }
             rule.waitForIdle()
@@ -450,6 +450,46 @@ class HomeChromeTest {
     }
 
     @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-xhdpi")
+    @Test fun glass240Dp145KeepsMainFontSizeWithoutEllipsis() {
+        var expectedSize = 0f
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = 1.45f)) {
+                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                    val density = LocalDensity.current
+                    val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
+                    val base = PersonaTheme.type.body
+                    val labelStyle = base.copy(fontSize = base.fontSize * HomeTokens.shellTextStep)
+                    val measured = androidx.compose.ui.text.rememberTextMeasurer().measure("Assistant", style = labelStyle, maxLines = 1)
+                    val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
+                    val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+                    expectedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit) * density.fontScale
+                    Box(Modifier.width(240.dp).height(200.dp)) {
+                        HomeNavigation(
+                            items = listOf(
+                                NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+                                NavItem("agents", "Agents", PhIcons.Robot, badge = 2),
+                            ),
+                            selected = "agents", onSelect = {},
+                            leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {}) },
+                            trailing = {
+                                JIconButton(PhIcons.NotePencil, "New session", {})
+                                JIconButton(PersonaIcons.moreMenu, "List options", {})
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        val layouts = mutableListOf<TextLayoutResult>()
+        placedText("Assistant", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val result = layouts.single()
+        assertTrue("Assistant is ellipsized at 240dp / 1.45", !result.isLineEllipsized(0))
+        assertEquals("240dp / 1.45 shrank below main", expectedSize,
+            result.layoutInput.style.fontSize.value * result.layoutInput.density.fontScale, 0.001f)
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w500dp-h900dp-xhdpi")
     @Test fun narrowLabelEllipsisMatchesPublishedRevision() {
         var style by mutableStateOf(AppStyle.Glass)
         var width by mutableStateOf(200.dp)
@@ -478,7 +518,7 @@ class HomeChromeTest {
             rule.runOnIdle { style = s; width = w; fontScale = scale }
             rule.waitForIdle()
             val expected = when (s) {
-                AppStyle.Glass -> (scale == 2f && w <= 240.dp) to (w == 200.dp && scale == 2f)
+                AppStyle.Glass -> (scale == 2f && w <= 240.dp) to false
                 AppStyle.Brief -> false to ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f))
                 AppStyle.Board -> ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f)) to
                     ((w == 200.dp && scale >= 1.45f) || (w == 240.dp && scale == 2f))
