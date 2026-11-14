@@ -100,6 +100,35 @@ describe("RunningStatusView", () => {
     expect(html).not.toContain("全部停止");
   });
 
+  it("a working background command uses its own start, with the label, details and N more, never the turn's metrics", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-05T10:04:05Z"));
+    const html = render({ live: { verb: "Frosting", elapsed_s: 975, tokens_down: 22_800 }, working: true, startedAt: "2026-11-05T10:00:00Z", command: { what: "Build release", more: 2, since: "2026-11-05T10:01:00Z" } });
+    expect(html).toContain('data-running-background="command"');
+    expect(html).toContain("后台任务");
+    expect(html).toContain("Build release");
+    expect(html).toContain('data-running-command-separator="true"> · </span>');
+    expect(html).toContain("还有 2 个");
+    expect(html).toMatch(/data-running-elapsed[^>]*>3m 5s</);
+    expect(html).not.toContain("16m 15s");
+    expect(html).not.toContain("4m 5s");
+    expect(html).not.toContain("tok");
+    expect(html).not.toContain("data-running-speed");
+    expect(html).toContain("text-status-accent");
+    expect(html).not.toContain("text-status-waiting");
+  });
+
+  it("a background command with no listed detail, no start or an invalid start has no turn clock or tokens", () => {
+    for (const command of [{ what: "", more: 0 }, { what: "Build release", more: 0, since: "not a timestamp" }, { what: "Build release", more: 0, since: "0001-01-01T00:00:00Z" }]) {
+      const html = render({ live: { verb: "Frosting", elapsed_s: 975, tokens_down: 22_800 }, working: true, startedAt: "2026-11-05T10:00:00Z", command });
+      expect(html).toContain('data-running-background="command"');
+      expect(html).toContain("后台任务");
+      expect(html).not.toContain("data-running-elapsed");
+      expect(html).not.toContain("tok");
+      expect(html).not.toContain("Frosting");
+    }
+  });
+
   it("a background workflow says so first, before background subagents", () => {
     const html = render({ live: null, working: true, subtasks: true, background: { run: { task_id: "w", status: "running", running: true, agents_started: 3, agents_done: 1 }, more: 0, guessed: false } });
     expect(html).toContain('data-running-background="workflow"');
