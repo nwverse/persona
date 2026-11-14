@@ -1,5 +1,20 @@
 # Lessons: web UI and interactions
 
+## A paging hub pushes no sessions: a computer's Agents are not in `sessions[mid]` (web audit items 3 and 30)
+
+A connection that asked for `sessions_list` gets no `sessions` / `sessions_delta` pushes (docs/protocol/protocol.md
+"Bounded Agents lists"), so the store's `sessions[mid]` stays empty and `sessionSummaries` holds only the list's first
+page. The Machines cards and a computer's page read `sessions[mid]` and said "No agents running" / "Agent 0" for every
+computer. Read a computer's Agents the way the Agents list does (`useFullAgentSessions`, folded, without the assistant's
+conversations), and keep the older hub's pushed path working (the same hook returns the store's rows there). A count
+whose source has not been read yet, or failed, is unknown, not zero: `useFullAgentSessions().loaded` / `error` and
+`useAgentListStatus()` tell the page to say "Loading…" or "Couldn't load …" instead. Take that status from the same
+source as the count: with several assistants Overview counts from the complete list, and a status read from the paged
+list said "loaded" while the complete list was still on its way or had failed (`useScopedAgentListStatus`). A count of
+the first pages (`sessionSummaries`) is not a computer's count either while the list has more pages. Check with
+`MOCK_SESSIONS_LIST=1` and without it, with the default roster (several assistants) and `MOCK_MANAGERS=1`, and with
+`GET /api/v1/sessions` answering 500 in the browser.
+
 ## A date field's change fires per typed segment; a list hidden under a narrow detail drops the focus (web audit, 2026-11-14)
 
 - `<input type="date">`, `time` and `datetime-local` fire `input` (React's `onChange`) whenever the typed segments make
