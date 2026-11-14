@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use persona_core::Item;
 pub use persona_core::continuity::Request;
 
 /// How the core is set up. The continuity slice has no timers; reserved for later independently justified domains.
@@ -23,6 +24,13 @@ pub enum Action {
     Chat {
         chat: String,
         event: ChatEvent,
+    },
+    /// A hub payload as the transport received it: an HTTP page or a WebSocket frame, decoded once, in the core
+    /// (docs/plans/plan-rust-core.md, decision 2). `chat` routes it to the open chat; a `Payload::Frame` also
+    /// carries its own `machine_id` and `session_id`, checked against it.
+    WirePayload {
+        chat: String,
+        payload: Payload,
     },
     /// Continue a chat's immediate fill, without waiting on a timer.
     ContinueFill {
@@ -50,6 +58,28 @@ pub struct WireBatch {
     pub backlog: bool,
     pub has_more: Option<bool>,
     pub more_after: bool,
+}
+
+/// A hub payload exactly as the transport received it, routed by the client the way `Action::Chat` is routed: the
+/// variant says which request it answers (or that it is a pushed frame), so the core never guesses from the body's
+/// shape. Decoded once, in the core, on the worker (`persona_core::transport`); `dispatch` only queues the bytes.
+/// `body` is the response body or frame as received, a JSON document. As with `WireBatch.items_json`, it is a string
+/// because the protocol's payloads are UTF-8 JSON, which keeps the boundary free of a byte-buffer type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Payload {
+    /// The first page a chat is opened with, not an answer to `Request::FetchLatest` (`Session::received`).
+    Latest { body: String },
+    /// An answer to `Request::FetchAfter` (`Session::after`).
+    Newer { body: String },
+    /// An answer to `Request::FetchLatest` (`Session::reload`).
+    Reloaded { body: String },
+    /// An answer to `Request::FetchOlder` (`Session::older`).
+    Older { body: String },
+    /// An answer to `Request::FetchRange` (`Session::range`).
+    Range { body: String },
+    /// A WebSocket frame. A frame of another type is ignored, and one the decoder refuses is dropped, as iOS's
+    /// `ServerEvent.decode` returns nil for it; neither is an error.
+    Frame { body: String },
 }
 
 /// What happened to one chat.
