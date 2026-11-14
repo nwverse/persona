@@ -83,6 +83,21 @@ final class InboxReportedDetailUITests: XCTestCase {
         print("REPORTED-DETAIL \(layout) reported-messages open Text height=\(uncappedHeight)")
         XCTAssertEqual(try XCTUnwrap(longTextHeight), uncappedHeight, accuracy: 1,
                        "L/M/N/O/P must render within 1 point of the full five-line height of the expanded same-font reference; a four-line cap is one line shorter")
+        let summarize = app.buttons["handoff-chip-summarize"].firstMatch
+        XCTAssertTrue(summarize.exists, "the summarize chip is missing before the messages-open capture")
+        // The chip's top minus the bar's existing vertical padding bounds the whole chip-and-composer footer.
+        let barVerticalPadding: CGFloat = 8
+        var footerTop = summarize.frame.minY - barVerticalPadding
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists {
+            footerTop = min(footerTop, keyboard.frame.minY)
+        }
+        reveal(marker, in: app, above: footerTop)
+        sleep(1) // Let the existing slow scroll settle before the strict final-capture checks.
+        XCTAssertTrue(ready(uncapped, in: app, hittable: false, above: footerTop),
+                      "the uncapped L/M/N/O/P Text is not fully visible above the chip-and-composer footer:\n\(app.debugDescription)")
+        XCTAssertTrue(ready(marker, in: app, hittable: false, above: footerTop),
+                      "Expansion marker is not fully visible above the chip-and-composer footer:\n\(app.debugDescription)")
         shot(app, "messages-open")
     }
 
@@ -131,21 +146,28 @@ final class InboxReportedDetailUITests: XCTestCase {
     }
 
     /// Finds lazy rows above or below the viewport without relying on their accessibility text.
-    @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication, hittable: Bool = false) {
+    @MainActor private func reveal(_ element: XCUIElement, in app: XCUIApplication, hittable: Bool = false,
+                                   above bottom: CGFloat? = nil) {
         for upward in [true, false] {
             for _ in 0..<8 {
-                if ready(element, in: app, hittable: hittable) { return }
+                if ready(element, in: app, hittable: hittable, above: bottom) { return }
                 if upward { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
             }
         }
-        XCTAssertTrue(ready(element, in: app, hittable: hittable),
+        XCTAssertTrue(ready(element, in: app, hittable: hittable, above: bottom),
                       "row or control is not visible\(hittable ? " and usable" : ""):\n\(app.debugDescription)")
     }
 
-    @MainActor private func ready(_ element: XCUIElement, in app: XCUIApplication, hittable: Bool) -> Bool {
+    @MainActor private func ready(_ element: XCUIElement, in app: XCUIApplication, hittable: Bool,
+                                  above bottom: CGFloat? = nil) -> Bool {
         guard element.exists, element.frame.height > 0 else { return false }
-        let center = CGPoint(x: element.frame.midX, y: element.frame.midY)
-        return app.windows.firstMatch.frame.contains(center) && (!hittable || element.isHittable)
+        let frame = element.frame
+        let window = app.windows.firstMatch.frame
+        if let bottom {
+            return window.contains(frame) && frame.maxY <= bottom && (!hittable || element.isHittable)
+        }
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        return window.contains(center) && (!hittable || element.isHittable)
     }
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
