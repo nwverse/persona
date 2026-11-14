@@ -60,14 +60,16 @@ final class TodoPlanTests: XCTestCase {
     }
 
     /// Drags the list up until element is wholly inside it (a row under the bars above the list still reports hittable).
-    /// Slow and held at the end, so no fling carries it past the top.
+    /// Slow and held at the end, so no fling carries it past the top. Dragged by the list's margin at the leading edge,
+    /// outside the rows: from the middle the finger lands on whatever row is there, and a to-do row has swipe actions
+    /// and an "N related" button (#6783 hit the same with a date wheel).
     @MainActor private func scrollIntoView(_ element: XCUIElement, timeout: TimeInterval = 20) -> Bool {
         let list = app.collectionViews.firstMatch
         let deadline = Date.now.addingTimeInterval(timeout)
         while !(element.exists && list.frame.contains(element.frame)) {
             guard Date.now < deadline else { return false }
-            list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
-                .press(forDuration: 0.1, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)),
+            list.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.6))
+                .press(forDuration: 0.1, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.35)),
                        withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         return true
