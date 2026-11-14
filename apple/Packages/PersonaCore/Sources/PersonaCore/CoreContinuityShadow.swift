@@ -3,6 +3,10 @@ import Synchronization
 
 /// Test-only shadow of the iOS continuity adapter. It never selects the production implementation or carries message
 /// contents into diagnostics. The fixture harness supplies the same actions to native ChatStore and this shadow.
+final class ChangeRecorder: @unchecked Sendable {
+    let values = Mutex<[(String, UInt64)]>([])
+}
+
 public final class CoreContinuityShadow: @unchecked Sendable {
     public struct Mismatch: Error, Equatable, Sendable {
         public let domain: String
@@ -17,28 +21,28 @@ public final class CoreContinuityShadow: @unchecked Sendable {
 
     public let client: PersonaCoreClient
     public let chat: String
-    private let changes: Mutex<[(String, UInt64)]>
-    private let effects: Mutex<[Effect]>
+    private let changes: ChangeRecorder
+    private let effects: EffectRecorder
 
     public init(chat: String) throws {
         self.chat = chat
-        let changes = Mutex<[(String, UInt64)]>([])
-        let effects = Mutex<[Effect]>([])
+        let changes = ChangeRecorder()
+        let effects = EffectRecorder()
         self.changes = changes
         self.effects = effects
         client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changedChat: { chat, version in
-            changes.withLock { $0.append((chat, version)) }
+            changes.values.withLock { $0.append((chat, version)) }
         }, run: { effect in
-            effects.withLock { $0.append(effect) }
+            effects.values.withLock { $0.append(effect) }
         }))
     }
 
     public func dispatch(_ action: Action) throws { try client.dispatch(action) }
     public func drain() throws -> ChatPatch { try client.drain(chat: chat) }
     public func flush() throws { try client.flush() }
-    public func wakeChatIDs() -> [String] { changes.withLock { $0.map(\.0) } }
-    public func effectsSnapshot() -> [Effect] { effects.withLock { $0 } }
-    public func drainEffects() -> [Effect] { effects.withLock { current in
+    public func wakeChatIDs() -> [String] { changes.values.withLock { $0.map(\.0) } }
+    public func effectsSnapshot() -> [Effect] { effects.values.withLock { $0 } }
+    public func drainEffects() -> [Effect] { effects.values.withLock { current in
         defer { current.removeAll() }
         return current
     } }
