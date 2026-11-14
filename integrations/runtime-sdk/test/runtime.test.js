@@ -23,6 +23,90 @@ test('hello names the runtime and declares only the caps whose driver methods ex
   assert.throws(() => createRuntime(minimal(), {}), /runtime id/)
 })
 
+test('a list carries the transcripts the runtime names as its own though it does not list them', async (t) => {
+  const n = await startFakeNode(t)
+  let past = ['aaaaaaaa-0000-4000-8000-0000000000a1']
+  const rt = createRuntime(minimal({ unlistedTranscripts: async () => past }), { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5, refreshMs: 0 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await until('the list', () => n.last('runtime.sessions'))
+  assert.deepEqual(n.last('runtime.sessions'), { sessions: [{ session_id: 's1', status: 'idle' }], unlisted_transcripts: past })
+  past = []
+  rt.sessionsChanged()
+  await until('none any more: the list says so', () => n.all('runtime.sessions').length >= 2 && n.last('runtime.sessions').unlisted_transcripts?.length === 0)
+  // It cannot say now (its archive is being read again): the field is left out, and the node keeps what it was told.
+  past = undefined
+  rt.sessionsChanged()
+  await until('listed again', () => n.all('runtime.sessions').length >= 3)
+  assert.deepEqual(n.last('runtime.sessions').unlisted_transcripts, [], 'what it named last')
+  // One that has never said sends the rows alone.
+  const q = await startFakeNode(t)
+  const unsure = createRuntime(minimal({ unlistedTranscripts: () => undefined }), { runtime: 'toy', socketPath: q.path, retryMs: 20 })
+  t.after(() => unsure.stop())
+  unsure.start()
+  await until('its list', () => q.last('runtime.sessions'))
+  assert.deepEqual(q.last('runtime.sessions'), { sessions: [{ session_id: 's1', status: 'idle' }] })
+  // A runtime without the method sends the rows alone, as before.
+  const m = await startFakeNode(t)
+  const plain = createRuntime(minimal(), { runtime: 'toy', socketPath: m.path, retryMs: 20 })
+  t.after(() => plain.stop())
+  plain.start()
+  await until('its list', () => m.last('runtime.sessions'))
+  assert.deepEqual(m.last('runtime.sessions'), { sessions: [{ session_id: 's1', status: 'idle' }] })
+})
+
+test('a driver that cannot name its transcripts now still lists its sessions, with the ones it named last', async (t) => {
+  const n = await startFakeNode(t)
+  const past = ['aaaaaaaa-0000-4000-8000-0000000000a1']
+  let fail = false
+  const logs = []
+  const unlistedTranscripts = () => {
+    if (fail) throw new Error('boom')
+    return [...past, '', 7] // only ids go out
+  }
+  const rt = createRuntime(minimal({ unlistedTranscripts }), { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5, refreshMs: 0, log: (m) => logs.push(m) })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await until('the list', () => n.last('runtime.sessions'))
+  assert.deepEqual(n.last('runtime.sessions').unlisted_transcripts, past)
+  fail = true
+  rt.sessionsChanged()
+  await until('listed again', () => n.all('runtime.sessions').length >= 2)
+  assert.deepEqual(n.last('runtime.sessions'), { sessions: [{ session_id: 's1', status: 'idle' }], unlisted_transcripts: past })
+  assert.ok(logs.some((l) => /unlisted transcripts: boom/.test(l)), 'and the log says why')
+})
+
+test('a card for a session new in the list waits for that list, however long the driver takes to name its transcripts', async (t) => {
+  const n = await startFakeNode(t, { strict: true })
+  n.resolve = () => ({ allow: true })
+  let rows = [{ session_id: 's1', status: 'idle' }]
+  let naming = 0
+  let named = () => {}
+  const unlistedTranscripts = async () => {
+    if (++naming > 1) await new Promise((r) => { named = r }) // the second list on: as slow as the test says
+    return []
+  }
+  const rt = createRuntime(minimal({ listSessions: async () => rows, unlistedTranscripts }), { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5, refreshMs: 0 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await until('the first list', () => n.last('runtime.sessions'))
+  rows = [...rows, { session_id: 'new', status: 'working' }]
+  rt.sessionsChanged()
+  await until('the driver asked for its transcripts', () => naming === 2)
+  // The list with the new session is read but not sent yet: its card must not be sent now (the node refuses a card for
+  // a session it has not been told of).
+  const asking = rt.ask({ id: 'toy-new', kind: 'permission', session_id: 'new', tool_name: 'Bash', tool_input: {} })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(n.asked.length + n.refused.length, 0, 'held until the list is out')
+  const release = setInterval(() => named(), 5) // every list from here on
+  t.after(() => clearInterval(release))
+  assert.deepEqual(await asking, { allow: true })
+  assert.equal(n.refused.length, 0)
+})
+
 test('appended content goes out as continuous batches, and a gap says where it starts', async (t) => {
   const n = await startFakeNode(t)
   const rt = createRuntime(minimal({ cursor: async () => 10 }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
@@ -174,6 +258,29 @@ test('live text is throttled to the latest whole text, and ends empty', async (t
   assert.ok(!n.all('session.delta').some((d) => d.text.startsWith('ignored')), 'unwatched sessions get no deltas')
   rt.streamEnd('s1')
   await until('end', () => n.last('session.delta')?.text === '')
+})
+
+test('a stream ending after unwatch clears the published text and cancels its pending batch', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal(), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  rt.stream('s1', 'Previous reply.')
+  await until('the published reply', () => n.last('session.delta')?.text === 'Previous reply.')
+  rt.stream('s1', 'Previous reply. More text.')
+  await n.peer.call('session.unwatch', { session_id: 's1' })
+  rt.streamEnd('s1')
+  await until('the unwatched reply ends', () => n.last('session.delta')?.text === '', 2000)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(n.last('session.delta').text, '', 'the pending batch cannot restore the old text')
+  await n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  rt.stream('s1', 'Previous reply.')
+  await until('a new reply may repeat the earlier words', () => n.last('session.delta')?.text === 'Previous reply.')
+  rt.streamEnd('never-watched')
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.ok(n.all('session.delta').every((delta) => delta.session_id === 's1'))
 })
 
 test('live text flows again after stop() then start(): a text pending at stop does not hold the session silent', async (t) => {
@@ -450,6 +557,73 @@ test('archive: caps.archive only with both ways, calls reach the driver, one way
   await assert.rejects(half.peer.call('session.archive', { session_id: 's1' }), (err) => err.code === 'unsupported')
 })
 
+test('workspaces: caps.workspaces with createWorkspace and prepareWorkspace, the list on change and to every node, creation and its folder', async (t) => {
+  const n = await startFakeNode(t)
+  const got = []
+  const row = { workspace_id: 'ws-1', title: 'main', cwd: '/w/app', kind: 'checkout', branch: 'main', space_id: 'p1', space_name: 'app' }
+  const rt = createRuntime(minimal({
+    createWorkspace: async (p) => {
+      got.push(['create', p])
+      return { workspace: { workspace_id: 'ws-2', title: p.branch, cwd: `/w/trees/${p.name}`, kind: 'worktree', branch: p.branch, owned: true } }
+    },
+    prepareWorkspace: async (p) => {
+      got.push(['prepare', p])
+      return { checkouts: '/w/trees' }
+    },
+  }), { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5, refreshMs: 0 })
+  t.after(() => rt.stop())
+  rt.workspacesChanged([row]) // before any node: said once one is there
+  rt.start()
+  await n.ready
+  assert.equal(n.hello.caps.workspaces, true)
+  await until('the workspaces after hello', () => n.last('runtime.workspaces'))
+  assert.deepEqual(n.last('runtime.workspaces'), { workspaces: [row] })
+  assert.deepEqual(await n.peer.call('workspace.prepare', { cwd: '/w/app', repo_root: '/w/app' }), { checkouts: '/w/trees' })
+  const made = await n.peer.call('workspace.create', { cwd: '/w/app', workspace_id: 'ws-1', branch: 'feat', create_branch: true, base: 'main', name: 'feat', key: 'k1' })
+  assert.equal(made.workspace.cwd, '/w/trees/feat')
+  assert.deepEqual(got, [['prepare', { cwd: '/w/app', repo_root: '/w/app' }],
+    ['create', { cwd: '/w/app', workspace_id: 'ws-1', branch: 'feat', create_branch: true, base: 'main', name: 'feat', key: 'k1' }]])
+  rt.workspacesChanged([row, made.workspace])
+  await until('the new list', () => n.last('runtime.workspaces')?.workspaces.length === 2)
+  // Renaming and archiving are asked of the driver that has them, and refused as unsupported by one that has not.
+  await assert.rejects(n.peer.call('workspace.rename', { workspace_id: 'ws-2', title: 'x' }), (err) => err.code === 'unsupported')
+  await assert.rejects(n.peer.call('workspace.archive', { workspace_id: 'ws-2' }), (err) => err.code === 'unsupported')
+  const n2 = await startFakeNode(t)
+  const rt3 = createRuntime(minimal({
+    createWorkspace: async () => ({}),
+    prepareWorkspace: async () => ({ checkouts: '/w/trees' }),
+    renameWorkspace: async (p) => { got.push(['rename', p]); return p.space_id ? { space_name: p.title } : { workspace: { ...row, title: p.title } } },
+    archiveWorkspace: async (p) => { got.push(['archive', p]); return { archived_at: '2026-11-12T00:00:00.000Z' } },
+  }), { runtime: 'toy2', socketPath: n2.path, retryMs: 20 })
+  t.after(() => rt3.stop())
+  rt3.start()
+  await n2.ready
+  assert.equal((await n2.peer.call('workspace.rename', { workspace_id: 'ws-1', title: 'Main' })).workspace.title, 'Main')
+  assert.deepEqual(await n2.peer.call('workspace.rename', { space_id: 'p1', title: 'App' }), { space_name: 'App' })
+  assert.deepEqual(await n2.peer.call('workspace.archive', { workspace_id: 'ws-1' }), { archived_at: '2026-11-12T00:00:00.000Z' })
+  assert.deepEqual(got.slice(2), [['rename', { workspace_id: 'ws-1', title: 'Main' }], ['rename', { space_id: 'p1', title: 'App' }],
+    ['archive', { workspace_id: 'ws-1' }]])
+
+  // Without both nothing is declared, said or answered: the node asks where the worktrees go before each one it has
+  // made, so either alone could make none.
+  const renames = { renameWorkspace: async () => ({ space_name: 'x' }), archiveWorkspace: async () => ({}) }
+  for (const [name, half] of [['prepare-only', { prepareWorkspace: async () => ({ checkouts: '/x' }), ...renames }],
+    ['create-only', { createWorkspace: async () => ({ workspace: { workspace_id: 'ws-9', cwd: '/x/y' } }), ...renames }]]) {
+    const plain = await startFakeNode(t)
+    const rt2 = createRuntime(minimal(half), { runtime: name, socketPath: plain.path, retryMs: 20 })
+    t.after(() => rt2.stop())
+    rt2.workspacesChanged([row])
+    rt2.start()
+    await plain.ready
+    assert.equal(plain.hello.caps.workspaces, undefined, name)
+    await assert.rejects(plain.peer.call('workspace.create', { cwd: '/w/app' }), (err) => err.code === 'unsupported')
+    await assert.rejects(plain.peer.call('workspace.prepare', { cwd: '/w/app' }), (err) => err.code === 'unsupported')
+    await assert.rejects(plain.peer.call('workspace.rename', { space_id: 'p1', title: 'x' }), (err) => err.code === 'unsupported')
+    await assert.rejects(plain.peer.call('workspace.archive', { workspace_id: 'ws-1' }), (err) => err.code === 'unsupported')
+    assert.equal(plain.last('runtime.workspaces'), undefined, name)
+  }
+})
+
 test('a watch for a session the node reads from its transcript streams live text only', async (t) => {
   const n = await startFakeNode(t)
   let paged = 0
@@ -584,4 +758,42 @@ test('a card for a new session waits for a slow list already under way, then for
   assert.deepEqual(res, { allow: true })
   const card = order.findIndex((e) => e[0] === 'card')
   assert.ok(order.slice(0, card).some((e) => e[0] === 'list' && e[1].includes('new')), JSON.stringify(order))
+})
+
+
+test('native rewind is advertised and returns the driver result with a refreshed inventory', async (t) => {
+  const node = await startFakeNode(t)
+  let called
+  const result = { prompt: 'Example', restore: 'conversation', input_cleared: true, code_restored: false }
+  const rt = createRuntime(minimal({ listSessions: async () => [{ session_id: 's1', status: 'idle', rev: called ? 2 : 1 }], rewind: async (params) => { called = params; return result } }), { runtime: 'toy', socketPath: node.path, pushDelayMs: 5 })
+  t.after(() => rt.stop())
+  rt.start()
+  await node.ready
+  assert.equal(node.hello.caps.rewind, true)
+  await until('initial rewind inventory', () => node.last('runtime.sessions'))
+  const params = { session_id: 's1', prompt: 'Example', occurrence: 1, prompts_after: 0, restore: 'conversation' }
+  assert.deepEqual(await node.peer.call('session.rewind', params), result)
+  assert.deepEqual(called, params)
+  await until('inventory after rewind', () => node.all('runtime.sessions').length > 1)
+})
+
+test('seen is advertised only by a driver that has it, and reaches the driver (#6299)', async (t) => {
+  const node = await startFakeNode(t)
+  const seen = []
+  const rt = createRuntime(minimal({ listSessions: async () => [{ session_id: 's1', status: 'done', rev: 1 }], seen: async (params) => { seen.push(params) } }),
+    { runtime: 'toy', socketPath: node.path, pushDelayMs: 5 })
+  t.after(() => rt.stop())
+  rt.start()
+  await node.ready
+  assert.equal(node.hello.caps.seen, true)
+  assert.deepEqual(await node.peer.call('session.seen', { session_id: 's1' }), { ok: true })
+  assert.deepEqual(seen, [{ session_id: 's1' }])
+
+  const other = await startFakeNode(t)
+  const plain = createRuntime(minimal({}), { runtime: 'toy2', socketPath: other.path, pushDelayMs: 5 })
+  t.after(() => plain.stop())
+  plain.start()
+  await other.ready
+  assert.equal(other.hello.caps.seen, undefined, 'not said without the method')
+  await assert.rejects(other.peer.call('session.seen', { session_id: 's1' }), /unsupported/)
 })

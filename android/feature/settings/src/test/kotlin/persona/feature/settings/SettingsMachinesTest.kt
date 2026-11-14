@@ -230,45 +230,55 @@ class ModelConfigurationStateTest {
         assertEquals("未配置", purposeSubtitle(res, ModelPurpose("misc"), catalog))
     }
 
-    @Test fun larkModelModeIncludesPartialOverrides() {
-        val lark = agent.copy(id = "lark.agent", parent = "agent.new", inheritedFrom = "Agents")
-        assertEquals("跟随 Agents", larkModelMode(res, lark))
-        assertTrue(purposeSubtitle(res, lark.copy(status = "offline"), catalog).contains("跟随 Agents"))
-        for (override in listOf(ModelBinding("launcher.old"), ModelBinding(model = "custom"), ModelBinding(effort = "high"))) {
-            assertEquals("单独设置", larkModelMode(res, lark.copy(override = override)))
+    // The uses of Agents the hub lets the user set apart: Lark /agent and the AI twin.
+    private val agentsOverrides = listOf("lark.agent", "inbox.agent")
+
+    @Test fun agentsOverrideModeIncludesPartialOverrides() {
+        for (id in agentsOverrides) {
+            val child = agent.copy(id = id, parent = "agent.new", inheritedFrom = "Agents")
+            assertEquals("跟随 Agents", agentsOverrideMode(res, child))
+            assertTrue(purposeSubtitle(res, child.copy(status = "offline"), catalog).contains("跟随 Agents"))
+            for (override in listOf(ModelBinding("launcher.old"), ModelBinding(model = "custom"), ModelBinding(effort = "high"))) {
+                assertEquals("单独设置", agentsOverrideMode(res, child.copy(override = override)))
+            }
+            assertTrue(showsEffort(child, providers[2]))
+            // An older hub leaves it without fields: read-only, following Agents as any other use.
+            assertNull(agentsOverrideMode(res, child.copy(fields = emptyList())))
         }
-        assertNull(larkModelMode(res, agent))
-        assertTrue(showsEffort(lark, providers[2]))
+        assertNull(agentsOverrideMode(res, agent))
+        assertNull(agentsOverrideMode(res, triage.copy(id = "inbox.judge", parent = "inbox.triage", fields = listOf("provider", "model"))))
     }
 
-    @Test fun larkEditorSavesOwnRevisionAndRestoresFollowing() = runBlocking {
-        var saved = agent.copy(id = "lark.agent", parent = "agent.new", revision = 0)
-        val ids = mutableListOf<String>()
-        val revisions = mutableListOf<Long>()
-        val api = object : ModelConfiguration {
-            override suspend fun catalog() = catalog
-            override suspend fun purpose(id: String): ModelPurposeDetail {
-                ids += id
-                return ModelPurposeDetail(saved, providers)
+    @Test fun agentsOverrideEditorSavesOwnRevisionAndRestoresFollowing() = runBlocking {
+        for (purposeId in agentsOverrides) {
+            var saved = agent.copy(id = purposeId, parent = "agent.new", revision = 0)
+            val ids = mutableListOf<String>()
+            val revisions = mutableListOf<Long>()
+            val api = object : ModelConfiguration {
+                override suspend fun catalog() = catalog
+                override suspend fun purpose(id: String): ModelPurposeDetail {
+                    ids += id
+                    return ModelPurposeDetail(saved, providers)
+                }
+                override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?): ProviderModels? = null
+                override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft): ModelPurposeSave {
+                    assertEquals(purposeId, purpose.id)
+                    revisions += purpose.revision
+                    saved = purpose.copy(revision = purpose.revision + 1,
+                        override = ModelBinding(draft.provider, draft.model, draft.effort))
+                    return ModelPurposeSave.Saved(ModelPurposeDetail(saved, providers))
+                }
             }
-            override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?): ProviderModels? = null
-            override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft): ModelPurposeSave {
-                assertEquals("lark.agent", purpose.id)
-                revisions += purpose.revision
-                saved = purpose.copy(revision = purpose.revision + 1,
-                    override = ModelBinding(draft.provider, draft.model, draft.effort))
-                return ModelPurposeSave.Saved(ModelPurposeDetail(saved, providers))
-            }
+            val model = ModelPurposeModel(api, purposeId)
+            model.load()
+            model.edit(ModelConfigurationDraft(provider = "launcher.old", model = "custom", effort = "high"))
+            assertNotNull(model.save())
+            assertEquals("单独设置", agentsOverrideMode(res, requireNotNull(model.state.value.purpose)))
+            assertNotNull(model.save(restore = true))
+            assertEquals("跟随 Agents", agentsOverrideMode(res, requireNotNull(model.state.value.purpose)))
+            assertEquals(listOf(purposeId), ids)
+            assertEquals(listOf(0L, 1L), revisions)
         }
-        val model = ModelPurposeModel(api, "lark.agent")
-        model.load()
-        model.edit(ModelConfigurationDraft(provider = "launcher.old", model = "custom", effort = "high"))
-        assertNotNull(model.save())
-        assertEquals("单独设置", larkModelMode(res, requireNotNull(model.state.value.purpose)))
-        assertNotNull(model.save(restore = true))
-        assertEquals("跟随 Agents", larkModelMode(res, requireNotNull(model.state.value.purpose)))
-        assertEquals(listOf("lark.agent"), ids)
-        assertEquals(listOf(0L, 1L), revisions)
     }
 
     @Test fun providerChoicesMarkHiddenAndUnavailableReferences() {
@@ -374,5 +384,85 @@ class ModelConfigurationStateTest {
         })
         broken.load()
         assertEquals("读取失败：boom", broken.state.value.error?.resolve(res))
+    }
+
+    /** #5084: the hub's catalog leaves the background supervisor's use out, so the page asks for it by its id. */
+    @Test fun theBackgroundSupervisorsUseIsListedWhenTheHubHasIt() = runBlocking {
+        val supervise = ModelPurpose(BackgroundSupervisor.PURPOSE, "后台督办", "对话与 Agent", parent = "assistant",
+            effective = ModelBinding("launcher.claude", "model-chat"), inheritedFrom = "assistant")
+        var answer: (String) -> ModelPurposeDetail = { ModelPurposeDetail(supervise, providers) }
+        var listed = catalog
+        val asked = mutableListOf<String>()
+        val model = ModelCatalogModel(object : ModelConfiguration {
+            override suspend fun catalog() = listed
+            override suspend fun purpose(id: String): ModelPurposeDetail { asked += id; return answer(id) }
+            override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft): ModelPurposeSave = throw IllegalStateException()
+            override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?): ProviderModels? = null
+        })
+        fun ids() = model.state.value.catalog?.purposes?.map { it.id }
+        model.load()
+        // after the last use of its group, the hub's order otherwise
+        assertEquals(listOf("agent.new", "assistant", "assistant.supervise", "inbox.triage", "misc"), ids())
+        assertEquals(listOf("assistant.supervise"), asked)
+        assertEquals("claude，model-chat\n跟随 Persona 对话", purposeSubtitle(res, supervise, requireNotNull(model.state.value.catalog)))
+        // a hub without it (404), one that cannot answer, and an answer about another use: the catalog as it is
+        answer = { throw ModelPurposeNotFound("no such purpose") }
+        model.load()
+        assertEquals(catalog.purposes.map { it.id }, ids())
+        answer = { throw HubFailure(HubError.Server, "boom", 500) }
+        model.load()
+        assertEquals(catalog.purposes.map { it.id }, ids())
+        assertNull(model.state.value.error)
+        answer = { ModelPurposeDetail(agent, providers) }
+        model.load()
+        assertEquals(catalog.purposes.map { it.id }, ids())
+        // a hub that lists it itself is not asked, and it is not listed twice
+        asked.clear()
+        listed = catalog.copy(purposes = catalog.purposes + supervise)
+        model.load()
+        assertEquals(listOf("agent.new", "assistant", "inbox.triage", "misc", "assistant.supervise"), ids())
+        assertTrue(asked.isEmpty())
+        // a group no listed use is in: at the end
+        assertEquals(listOf("agent.new", "assistant", "inbox.triage", "misc", "assistant.supervise"),
+            modelPurposesWith(catalog.purposes, supervise.copy(group = "主对话")).map { it.id })
+    }
+
+    /**
+     * #5806: the hub lists the background supervisor's use last of the built-in ones. The page asks for nothing by id
+     * then, and the row is where it was against a hub from before: after the last use of its group.
+     */
+    @Test fun aListedBackgroundSupervisorKeepsItsRowAndIsNotAskedFor() {
+        val supervise = ModelPurpose(BackgroundSupervisor.PURPOSE, "后台督办", "对话与 Agent", parent = "assistant",
+            effective = ModelBinding("launcher.claude", "model-chat"), inheritedFrom = "assistant", description = "跟进没有负责人督办的任务。")
+        fun rows(listed: Boolean, asked: MutableList<String>) = runBlocking {
+            val model = ModelCatalogModel(object : ModelConfiguration {
+                override suspend fun catalog() = if (listed) catalog.copy(purposes = catalog.purposes + supervise) else catalog
+                override suspend fun purpose(id: String): ModelPurposeDetail { asked += id; return ModelPurposeDetail(supervise, providers) }
+                override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft): ModelPurposeSave = throw IllegalStateException()
+                override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?): ProviderModels? = null
+            })
+            model.load()
+            modelPurposeGroups(res, requireNotNull(model.state.value.catalog).purposes, providers, "").map { (group, uses) -> group to uses.map { it.id } }
+        }
+        val askedByNewHub = mutableListOf<String>()
+        val askedByOldHub = mutableListOf<String>()
+        val listed = rows(listed = true, askedByNewHub)
+        val fetched = rows(listed = false, askedByOldHub)
+        assertTrue(askedByNewHub.isEmpty())
+        assertEquals(listOf(BackgroundSupervisor.PURPOSE), askedByOldHub)
+        assertEquals(listOf("对话与 Agent" to listOf("agent.new", "assistant", "assistant.supervise"), "收件箱" to listOf("inbox.triage"),
+            "其他" to listOf("misc")), listed)
+        assertEquals(fetched, listed)
+    }
+
+    /** #5086: a purpose says what it is for under its name, before what is in effect; one without the sentence reads as before. */
+    @Test fun aRowLeadsWithWhatThePurposeIsFor() {
+        val described = agent.copy(description = "  新建的 Agent 用它。 ")
+        assertEquals("新建的 Agent 用它。\nclaude，model-chat\n跟随 Persona 对话", purposeSubtitle(res, described, catalog))
+        assertEquals(6, purposeSubtitleLines(described))
+        for (plain in listOf(agent, agent.copy(description = ""), agent.copy(description = "  "))) {
+            assertEquals("claude，model-chat\n跟随 Persona 对话", purposeSubtitle(res, plain, catalog))
+            assertEquals(3, purposeSubtitleLines(plain))
+        }
     }
 }

@@ -7,6 +7,7 @@ import {
   displayLines,
   draftPlaceholder,
   field,
+  loadedFrom,
   getFeedState,
   loadFeed,
   mergeInto,
@@ -76,6 +77,24 @@ describe("the assistant's feed among the chat's lines (docs/assistant/unified-en
     const ids = out.map((l) => l.id);
     expect(ids.filter((i) => i.startsWith("day-"))).toHaveLength(2);
     expect(ids.filter((i) => !i.startsWith("day-"))).toEqual(["s1", "feed-early", "s2", "feed-mid"]);
+  });
+
+  it("holds back feed items older than the loaded page until that page loads, so the newest page never reads as the start", () => {
+    // The main conversation shows its newest page; the feed holds the whole history. Days-old cards and their day lines
+    // used to stack on top of that page, as if the conversation began there with its messages gone.
+    const lines = [seg("s1", noon(1, 10)), seg("s2", noon(1, 30))];
+    const all = [feed("days-ago", noon(3)), feed("before-page", noon(1)), feed("in-page", noon(1, 20))];
+    const partial = displayLines(lines, all, Date.parse(ago(noon(1, 10))));
+    expect(partial.filter((l) => l.kind !== "day").map((l) => l.id)).toEqual(["s1", "feed-in-page", "s2"]);
+    expect(partial.filter((l) => l.kind === "day")).toHaveLength(1);
+    const complete = displayLines(lines, all);
+    expect(complete.filter((l) => l.kind !== "day").map((l) => l.id)).toEqual(["feed-days-ago", "feed-before-page", "s1", "feed-in-page", "s2"]);
+  });
+
+  it("dates the loaded page by its oldest item that has a time", () => {
+    const item = (seq: number, ts?: string) => ({ id: `i${seq}#0`, seq, role: "assistant", kind: "text", ts }) as Item;
+    expect(loadedFrom([item(1), item(2, "2026-11-11T07:58:14Z"), item(3, "2026-11-11T08:00:00Z")])).toBe(Date.parse("2026-11-11T07:58:14Z"));
+    expect(loadedFrom([item(1)])).toBeUndefined();
   });
 
   it("draws a reminder or an event the phone added after its exchange, not a read or a failure", () => {
@@ -197,6 +216,32 @@ describe("routing the next message to a task", () => {
     vi.stubGlobal("localStorage", { getItem: () => "test" });
     await refreshTodos();
   };
+
+  it("addresses the original decision round and refreshes its card after a chat answer", async () => {
+    await tasks("task-decision");
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ok())
+      .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ todos: [] }) });
+    vi.stubGlobal("fetch", fetcher);
+    setRoute("decision-chat", "task-decision", "2026-11-10T12:00:00.123456Z");
+    expect(await sendRouted("decision-chat", "Use the alternative, but keep the current limits.")).toBe(true);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({
+      todo_id: "task-decision", asked_at: "2026-11-10T12:00:00.123456Z",
+      text: "Use the alternative, but keep the current limits.",
+    });
+    expect(getFeedState().routes["decision-chat"]).toBeUndefined();
+    expect(fetcher.mock.calls.some(([url]) => url === "/api/v1/todos")).toBe(true);
+  });
+
+  it("keeps the decision round attached when its answer fails to send", async () => {
+    await tasks("task-decision");
+    const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 409, text: async () => JSON.stringify({ error: "offline" }) });
+    vi.stubGlobal("fetch", fetcher);
+    setRoute("decision-retry", "task-decision", "2026-11-10T12:00:00Z");
+    await expect(sendRouted("decision-retry", "Use the alternative.")).rejects.toThrow("offline");
+    expect(getFeedState().routes["decision-retry"]).toEqual({ todoId: "task-decision", askedAt: "2026-11-10T12:00:00Z" });
+    setRoute("decision-retry", null);
+  });
 
   it("keeps the route after a 503 so the retry still goes to the task", async () => {
     const fetcher = vi.fn()

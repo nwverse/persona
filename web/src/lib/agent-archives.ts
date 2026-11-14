@@ -2,11 +2,12 @@
 // archive takes a session out of the Agents list and keeps it under Archived, from where it is restored; its transcript
 // stays on its computer, and new activity brings it back by itself. "Archive and close" also closes the agent on its
 // computer (session.retire: its tab and process go, the next message resumes it). The manager decides; the rules here
-// only decide what the menus offer, and every refusal still comes back from the hub (409 agent_busy).
+// only decide what the menus offer, and every refusal still comes back from the hub (409 agent_busy). The menus offer
+// it as "Close…" (#7125, closeOffer), which closes a busy agent too after saying what that interrupts.
 import { useSyncExternalStore } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
-import { sessionTitle, stateOf } from "./format";
-import { dropSession, refresh, useStore } from "./store";
+import { sessionMenuActions, sessionTitle, stateOf } from "./format";
+import { dropSession, getState, refresh, upsertSession, useStore } from "./store";
 import { toast } from "../ui/atoms";
 import { t } from "../i18n";
 import type { Session } from "./types";
@@ -33,6 +34,16 @@ export function closeBusy(s: Session): boolean {
   return archiveBusy(s) || Boolean(s.loop) || (s.queued?.length ?? 0) > 0 || (s.ports?.length ?? 0) > 0;
 }
 
+/** What closing a busy agent would cut off, said in "Close…" (#7125): an answer it waits for, its work (queued
+ *  messages included), a /loop or a server it runs; undefined when it is not busy (closeBusy). */
+export type CloseBusyReason = "waiting" | "working" | "loop" | "server";
+export function closeBusyReason(s: Session): CloseBusyReason | undefined {
+  if (!closeBusy(s)) return undefined;
+  if (s.status === "blocked" || stateOf(s) === "needs_you" || (s.pending_interactions ?? 0) > 0) return "waiting";
+  if (archiveBusy(s) || (s.queued?.length ?? 0) > 0) return "working";
+  return s.loop ? "loop" : "server";
+}
+
 /** "ok": offered; "busy": shown disabled with why; "no": not offered. */
 export type ArchiveOffer = "ok" | "busy" | "no";
 
@@ -51,6 +62,19 @@ export function archiveOffers(s: Session, features: readonly string[]): { archiv
   return { archive, close: !closable ? "no" : closeBusy(s) ? "busy" : "ok" };
 }
 
+/** What "Close…" does (#7125), the one item that took the place of "Close agent…" and "Archive and close…":
+ *  "archive": archive and close (`archive?close=1`); "close": close only (`POST …/close`), for a busy agent (the hub
+ *  refuses to archive one) or one the hub cannot archive and close (an older hub, a runtime's session, a Codex session
+ *  Persona did not start); "busy": busy and its node offers no plain close, so shown disabled with why; "no": not
+ *  offered (offline, the assistant's, nothing to close it with). */
+export type CloseOffer = "archive" | "close" | "busy" | "no";
+export function closeOffer(s: Session, features: readonly string[]): CloseOffer {
+  const archived = archiveOffers(s, features).close;
+  if (archived === "ok") return "archive";
+  if (sessionMenuActions(s).includes("close")) return "close";
+  return archived === "busy" ? "busy" : "no";
+}
+
 /** Without archives on the hub, the old "Delete chat" stays (an older hub); with them, archive takes its place. */
 export function deleteInsteadOfArchive(features: readonly string[]): boolean {
   return !features.includes(AGENT_ARCHIVES_FEATURE);
@@ -66,8 +90,8 @@ export interface CloseResult {
 
 // ── the hub ──────────────────────────────────────────────
 
-export function archiveSession(s: Pick<Session, "machine_id" | "session_id">, close = false): Promise<{ ok: boolean; close?: CloseResult }> {
-  return api(`${sessionPath(s.machine_id, s.session_id)}/archive${close ? "?close=1" : ""}`, { method: "POST", json: {} });
+export function archiveSession(s: Pick<Session, "machine_id" | "session_id">, close = false, force = false): Promise<{ ok: boolean; close?: CloseResult }> {
+  return api(`${sessionPath(s.machine_id, s.session_id)}/archive${force ? "?force=1" : close ? "?close=1" : ""}`, { method: "POST", json: {} });
 }
 
 export function unarchiveSession(s: Pick<Session, "machine_id" | "session_id">): Promise<unknown> {
@@ -134,14 +158,17 @@ export interface ArchiveDeps {
   unarchive: (s: Session) => Promise<unknown>;
   /** Takes the row out of the lists at once (the hub's push follows). */
   drop: (s: Session) => void;
-  /** Re-reads the lists: after a refusal the row comes back. */
+  /** Puts back the removed snapshot after a refusal. */
+  restore: (s: Session) => void;
+  /** Reconciles with the hub after the local update. */
   refresh: () => Promise<unknown>;
   notify: (text: string, tone: "ok" | "error" | "info", action?: { label: string; run: () => void }) => void;
 }
 
 /** Archive (and close, with `close`): the row leaves at once; the toast says what happened and offers Undo; a refusal
- *  puts it back and says why. Resolves with what the close did (undefined for a plain archive or a refusal). */
-export async function archiveAgent(s: Session, close: boolean, deps: ArchiveDeps): Promise<{ ok: boolean; close?: CloseResult }> {
+ *  puts it back and says why. Resolves with what the close did (undefined for a plain archive or a refusal), and
+ *  `busy` when the hub refused because the agent is busy (409), which "Close…" then offers to close anyway. */
+export async function archiveAgent(s: Session, close: boolean, deps: ArchiveDeps): Promise<{ ok: boolean; close?: CloseResult; busy?: boolean }> {
   const title = sessionTitle(s);
   deps.drop(s);
   try {
@@ -155,8 +182,9 @@ export async function archiveAgent(s: Session, close: boolean, deps: ArchiveDeps
     else deps.notify(t("lib-agent-archives.archived_still_open", { title, reason: r.close.reason || r.close.detail || r.close.outcome }), "info", undo);
     return { ok: true, close: r.close };
   } catch (e) {
+    deps.restore(s);
     deps.notify(archiveErrorText(e, close), "error");
-    return { ok: false };
+    return e instanceof ApiError && e.status === 409 ? { ok: false, busy: true } : { ok: false };
   } finally {
     await deps.refresh().catch(() => {});
   }
@@ -184,6 +212,10 @@ export const appArchiveDeps: ArchiveDeps = {
   archive: (s, close) => archiveSession(s, close),
   unarchive: unarchiveSession,
   drop: (s) => dropSession(s.machine_id, s.session_id),
+  restore: (s) => {
+    // A newer socket row wins over the snapshot removed by this request.
+    if (!getState().sessions[s.machine_id]?.some(row => row.session_id === s.session_id)) upsertSession(s);
+  },
   refresh: () => refresh(),
   notify: (text, tone, action) => toast(text, tone, action),
 };

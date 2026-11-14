@@ -5,6 +5,7 @@ import { baseName, failureReason, sessionPreview, sessionTitle, stateOf } from "
 import { machineWithHub } from "./mesh";
 import { isPinned, type AgentPins } from "./pins";
 import { plainMarkdown } from "./plain-markdown";
+import { requestHome } from "./child-sessions";
 import type { AgentState, Interaction, Machine, Session } from "./types";
 
 export type SearchScope = "all" | "title" | "conversation" | "user" | "assistant" | "errors";
@@ -57,6 +58,9 @@ export interface AgentFacetCounts {
   machines: FacetOption[];
   pinned: number;
 }
+
+/** No facet values: a filter's chips then name its values by their ids. */
+export const NO_FACETS: AgentFacetCounts = { harnesses: [], projects: [], models: [], machines: [], pinned: 0 };
 
 export interface ParsedSearchQuery {
   text: string;
@@ -154,7 +158,8 @@ export function sessionHasError(s: Session, interactions: readonly Interaction[]
   if (s.work?.phase === "blocked") return true;
   const st = stateOf(s);
   if (st === "needs_you") return true;
-  return interactions.some((ix) => ix.machine_id === s.machine_id && ix.session_id === s.session_id);
+  // a child session's card is its parent's (#5120)
+  return interactions.some((ix) => ix.machine_id === s.machine_id && requestHome(ix) === s.session_id);
 }
 
 /** Toggle an item in a multi-select facet array (Orca All/multi-select semantics: empty array means All). */
@@ -323,7 +328,8 @@ export function matchesSearchScope(s: Session, terms: readonly string[], scope: 
   return terms.every((term) => joined.includes(term.toLowerCase()));
 }
 
-function scopeHaystacks(s: Session, scope: SearchScope, ctx: EvalContext): { role: EvidenceSnippet["role"]; text: string }[] {
+/** The texts a scope reads, each with whose words they are (⌘K's match reads Full text's too, lib/agent-search.ts). */
+export function scopeHaystacks(s: Session, scope: SearchScope, ctx: EvalContext): { role: EvidenceSnippet["role"]; text: string }[] {
   const title = sessionTitle(s);
   const userAsk = [s.asks, s.goal?.objective, s.todo?.title].filter(Boolean).join(" · ");
   const assistantProse = [proseOnlyText(s.last_text), proseOnlyText(s.work?.line)].filter(Boolean).join(" · ");
@@ -418,7 +424,10 @@ export function compileSearchAsCode(
   filters: AgentDimensionFilters,
   facets: AgentFacetCounts,
 ): SearchPlan {
-  if (activeProvider && !filters.customPlanCode) {
+  // Plain search (Search as Code off) never turns words into filters: only the explicit operators and the menu's choices
+  // filter, and every other word is matched as text, like iOS (#4397). The word lists and a provider apply only when on.
+  const nl = filters.searchAsCode;
+  if (nl && activeProvider && !filters.customPlanCode) {
     const extPlan = activeProvider.compile(rawQuery, facets);
     if (extPlan) return extPlan;
   }
@@ -431,7 +440,7 @@ export function compileSearchAsCode(
 
   // 1. Detect machines from filter pills, operators, or natural language mentions
   const machineTargets = new Set<string>([...filters.machines.map((m) => m.toLowerCase()), ...parsed.machines]);
-  for (const m of facets.machines) {
+  for (const m of nl ? facets.machines : []) {
     const mid = m.id.toLowerCase();
     const mlabel = m.label.toLowerCase();
     if (parsed.terms.some((w) => w.toLowerCase() === mid || w.toLowerCase() === mlabel)) {
@@ -450,7 +459,7 @@ export function compileSearchAsCode(
 
   // 2. Detect projects from filter pills, operators, or natural language mentions
   const projectTargets = new Set<string>([...filters.projects.map((p) => p.toLowerCase()), ...parsed.projects]);
-  for (const p of facets.projects) {
+  for (const p of nl ? facets.projects : []) {
     const pid = p.id.toLowerCase();
     if (pid.length >= 2 && parsed.terms.some((w) => w.toLowerCase() === pid)) {
       projectTargets.add(pid);
@@ -468,7 +477,7 @@ export function compileSearchAsCode(
 
   // 3. Detect harnesses from filter pills, operators, or natural language mentions
   const harnessTargets = new Set<string>([...filters.harnesses.map((h) => h.toLowerCase()), ...parsed.harnesses]);
-  for (const h of ["claude", "codex", "opencode", "pi", "gemini", "cursor", "trae"]) {
+  for (const h of nl ? ["claude", "codex", "opencode", "pi", "gemini", "cursor", "trae"] : []) {
     if (parsed.terms.some((w) => w.toLowerCase() === h)) harnessTargets.add(h);
   }
   if (harnessTargets.size > 0) {
@@ -483,7 +492,7 @@ export function compileSearchAsCode(
 
   // 4. Detect models from filter pills, operators, or natural language mentions
   const modelTargets = new Set<string>([...filters.models.map((m) => m.toLowerCase()), ...parsed.models]);
-  for (const m of ["opus", "sonnet", "haiku", "fable", "argon", "gpt-5", "o3"]) {
+  for (const m of nl ? ["opus", "sonnet", "haiku", "fable", "argon", "gpt-5", "o3"] : []) {
     if (parsed.terms.some((w) => w.toLowerCase().includes(m))) modelTargets.add(m);
   }
   if (modelTargets.size > 0) {
@@ -496,7 +505,7 @@ export function compileSearchAsCode(
   }
 
   // 5. Pinned intent
-  const wantPinned = filters.pinnedOnly || parsed.pinned === true || /(?:置顶|pinned)/i.test(lowQ);
+  const wantPinned = filters.pinnedOnly || parsed.pinned === true || (nl && /(?:置顶|pinned)/i.test(lowQ));
   if (wantPinned) {
     clauses.push("s.isPinned");
     predicates.push((s, ctx) => isPinned(s, ctx.pins));
@@ -506,7 +515,7 @@ export function compileSearchAsCode(
   const wantErrors =
     filters.scope === "errors" ||
     parsed.hasErrors === true ||
-    /(?:报错|错误|失败|阻塞|异常|error|errors|failed|failing|blocked|crash)/i.test(lowQ);
+    (nl && /(?:报错|错误|失败|阻塞|异常|error|errors|failed|failing|blocked|crash)/i.test(lowQ));
   if (wantErrors) {
     clauses.push("s.hasErrors");
     predicates.push((s, ctx) => sessionHasError(s, ctx.interactions));
@@ -514,9 +523,9 @@ export function compileSearchAsCode(
 
   // 7. State intent
   const stateTargets = new Set<AgentState>(parsed.states);
-  if (/(?:工作中|正在跑|运行中|running|working)/i.test(lowQ)) stateTargets.add("working");
-  if (/(?:需要你|等待审批|待确认|needs_you|waiting for you)/i.test(lowQ)) stateTargets.add("needs_you");
-  if (/(?:未读|unread)/i.test(lowQ)) stateTargets.add("unread");
+  if (nl && /(?:工作中|正在跑|运行中|running|working)/i.test(lowQ)) stateTargets.add("working");
+  if (nl && /(?:需要你|等待审批|待确认|needs_you|waiting for you)/i.test(lowQ)) stateTargets.add("needs_you");
+  if (nl && /(?:未读|unread)/i.test(lowQ)) stateTargets.add("unread");
   if (stateTargets.size > 0) {
     const list = [...stateTargets];
     clauses.push(list.length === 1 ? `s.state === ${JSON.stringify(list[0])}` : `${JSON.stringify(list)}.includes(s.state)`);
@@ -525,7 +534,7 @@ export function compileSearchAsCode(
 
   // 8. Time window intent (`since:24h` or natural language "最近两天" / "今天" / "本周")
   let sinceWindow: SinceWindow | undefined = filters.since ?? parsed.since;
-  if (!sinceWindow) {
+  if (!sinceWindow && nl) {
     if (/(?:最近一天|今天|24小时|24h|最近两天|两天内|48h|yesterday|today)/i.test(lowQ)) sinceWindow = "24h";
     else if (/(?:最近一周|本周|七天|7天|7d|past week)/i.test(lowQ)) sinceWindow = "7d";
     else if (/(?:最近一个月|30天|30d|past month)/i.test(lowQ)) sinceWindow = "30d";
@@ -572,10 +581,10 @@ export function compileSearchAsCode(
 
   const expr = clauses.length > 0 ? clauses.join(" && ") : "true";
   const defaultCode = `session.where(s => ${expr})`;
-  const finalCode = filters.customPlanCode?.trim() || defaultCode;
+  const finalCode = (nl && filters.customPlanCode?.trim()) || defaultCode;
 
   // If the user edited the Search Plan code directly, also honor custom `/regex/i.test(s.<field>)` or `s.<field> === "..."`
-  if (filters.customPlanCode?.trim() && filters.customPlanCode.trim() !== defaultCode) {
+  if (nl && filters.customPlanCode?.trim() && filters.customPlanCode.trim() !== defaultCode) {
     const custom = filters.customPlanCode.trim();
     predicates.push((s, ctx) => evaluateCustomPlanCode(custom, s, ctx));
   }

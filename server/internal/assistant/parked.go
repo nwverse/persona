@@ -168,7 +168,7 @@ func parkedAnswer(id string, p Parked, loc *time.Location) string {
 		again = "It cannot be parked again unless its agent works in between: next time, decide or close it."
 	}
 	return fmt.Sprintf("Task %s is parked until %s (waiting_on %s; parked %d time(s) in a row). It stays open; the user is not asked, and "+
-		"no stalled, idle, orphaned or overdue signal is raised for it meanwhile.%s At that time a 督办 message (parked_due) brings it "+
+		"no stalled, idle, orphaned or overdue signal is raised for it meanwhile.%s At that time a supervision message (parked_due) brings it "+
 		"back to you: decide, park it again with a new reason, or close it. Its agent starting a turn ends the parking (anything sent "+
 		"to it does that, so tell it what it needs before you park, not after). %s", id, p.Until.In(loc).Format(toolTimeLayout), p.WaitingOn,
 		p.Count, owner, again)

@@ -327,6 +327,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	if json.Unmarshal(req.Input, &in) != nil {
 		return nil, nil
 	}
+	defer n.hookFlights.enter(in.SessionID)() // its process waits on this call: not idle (model_restore.go)
 	if req.ReportOnly && !n.takesReport(in) {
 		return nil, nil // before the counters: a session the plugin reports for would count each prompt twice
 	}
@@ -414,7 +415,24 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		return elicitationOutput(ix, res), nil
 
+	case in.HookEventName == "PreToolUse" && cuaToolOf(in.ToolName) != "":
+		// An Agent's own Cua Driver: never System Settings or a permission prompt (cua_gate.go, #4349).
+		if why := cuaVerdict(ctx, cuaToolOf(in.ToolName), in.ToolInput); why != "" {
+			n.logf("refused %s for %s: protected app, or the screen not checked", in.ToolName, in.SessionID)
+			return preToolDecision("deny", why), nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "PreToolUse" && in.ToolName == "Bash":
+		var c struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(in.ToolInput, &c) == nil {
+			if why := cuaBashVerdict(ctx, c.Command); why != "" { // its cua-driver calls, the same way (cua_gate.go)
+				n.logf("refused a cua-driver call in Bash for %s: protected app, or not checked", in.SessionID)
+				return preToolDecision("deny", why), nil
+			}
+		}
 		if !n.isAssistantSession(in.SessionID) {
 			return nil, nil
 		}
@@ -567,6 +585,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 				"type": "addRules", "rules": []any{rule},
 				"behavior": "allow", "destination": "session",
 			}}
+		}
+		if !assistant { // Claude may not take it: its safety checks keep their dialog (allowwatch.go, #3752)
+			n.watchAllow(in.SessionID, n.allowPane(req, in.SessionID))
 		}
 		return permissionDecision(d), nil
 	}
@@ -844,7 +865,7 @@ func toolSummary(name string, input json.RawMessage) string {
 // agentToolNames): reporting to its supervisor, reading and noting the decisions of the todo it works on, binding
 // that todo to a chat thread, handing a subtask to another computer and reading it back (assistant/dispatch.go), and a
 // task leader's task_plan and task_review (assistant/task_leader.go).
-var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read", "task_plan", "task_review"}
+var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"}
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

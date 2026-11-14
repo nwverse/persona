@@ -69,8 +69,11 @@ type runtimeHello struct {
 		Interrupt bool `json:"interrupt"`
 		Rename    bool `json:"rename"`
 		Close     bool `json:"close"`
+		Rewind    bool `json:"rewind"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
 		Assistant bool `json:"assistant"`
+		// Execution reports the actual per-session execution environment via session.execution.
+		Execution bool `json:"execution"`
 		// Modes: the phone's permission mode and effort for its sessions go to it (session.modes).
 		Modes bool `json:"modes"`
 		// Model permits session.modes model changes. Models provides live launchers.models discovery.
@@ -85,12 +88,19 @@ type runtimeHello struct {
 		// (#3974): its permission cards that offer always get the node's key for the tool. A runtime that keeps its own
 		// rule (opencode's save rule, Paseo's suggestions) does not say it, so its grant is never widened to the tool.
 		KeepAlways bool `json:"keep_always"`
+		// Seen: session.seen goes to it when the user saw one of its sessions in Persona (#6299), for a runtime that
+		// keeps an unread mark of its own (Paseo's requiresAttention) to clear it there too.
+		Seen bool `json:"seen"`
 		// Archive: session.archive / session.unarchive go to it, for its own reversible archive (archive.go): a
 		// session the user archives in Persona is archived there too, and restored with it.
 		Archive bool `json:"archive"`
 		// Readonly: a session.start with permission_mode "plan" either starts in a read-only mode before its first
 		// prompt runs or is refused with readonly_unsupported; it never falls back to a writable provider (#3238).
 		Readonly bool `json:"readonly"`
+		// Workspaces: it keeps workspaces of its own, pushes them (runtime.workspaces) and makes worktrees as its
+		// workspaces (workspace.prepare, workspace.create): as the machine's engine, they are the catalog's and its
+		// worktrees are made by it (runtimeworkspaces.go).
+		Workspaces bool `json:"workspaces"`
 	} `json:"caps"`
 }
 
@@ -107,12 +117,18 @@ type runtimeConn struct {
 	sessions []proto.Session // its last runtime.sessions
 	watched  map[string]bool // sessions this connection was asked to watch
 	// What its list said beyond the rows the apps see: the terminal pane a session runs in (pane_id: the extension of a
-	// pi in a herdr pane, pi.go), how the terminal engine resumes one it lists offline (resume_argv), and the Claude
+	// pi in a herdr pane, pi.go), how the terminal engine resumes one it lists offline (resume_argv), the Claude
 	// session whose transcript holds a session's conversation (transcript: a runtime running Claude Code through its
-	// SDK, Paseo; runtimetranscript.go).
-	panes       map[string]string
-	resume      map[string][]string
-	transcripts map[string]string
+	// SDK, Paseo; runtimetranscript.go), and the Codex thread a session's conversation is (codex_thread: a runtime
+	// running Codex, Paseo; runtimecodex.go).
+	panes        map[string]string
+	resume       map[string][]string
+	transcripts  map[string]string
+	codexThreads map[string]string
+	// workspaces are its own workspaces, as its last runtime.workspaces said (caps.workspaces, runtimeworkspaces.go);
+	// workspacesSaid: it said them on this connection (a workspace missing from them is gone).
+	workspaces     []runtimeWorkspace
+	workspacesSaid bool
 	// daemon is its id in daemons.json when the node dialed it (daemons.go), "" for a runtime on the socket.
 	daemon string
 	// pid is the process at the other end of the runtime socket; 0 when not known (a daemon's link, the Orca bridge,
@@ -194,7 +210,7 @@ func runtimeWork(s *proto.Session) {
 		}
 		seen[a.ID] = true
 		a.SessionID = s.SessionID + "@" + a.ID
-		a.Description, a.LastText, a.Type = clip(a.Description), clip(a.LastText), clip(a.Type)
+		a.Description, a.LastText, a.Type, a.Model = clip(a.Description), clip(a.LastText), clip(a.Type), clip(a.Model)
 		subs = append(subs, a)
 	}
 	s.Subagents = subs

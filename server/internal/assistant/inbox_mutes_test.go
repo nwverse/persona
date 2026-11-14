@@ -19,7 +19,8 @@ func muteHub(t *testing.T) *inboxHub {
 	if err := h.inboxReady(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	waitNeedsYouIdle(t, h.Service) // fixture writes start after the initial asynchronous read finishes
+	waitNeedsYouIdle(t, h.Service)  // fixture writes start after the initial asynchronous read finishes
+	t.Cleanup(h.inbox.titling.Wait) // a merge titles its row in the background (inbox_merge_title.go)
 	return h
 }
 
@@ -42,6 +43,14 @@ func TestMutesOf(t *testing.T) {
 			{Key: connector.TagRepo, Value: "example-org/example-repo", Name: "example-org/example-repo"},
 			{Key: connector.TagBranch, Value: "main"}, {Key: connector.TagSender, Value: "alice", Name: "alice"}}}},
 			"[{repo example-org/example-repo example-org/example-repo} {sender alice alice}]"},
+		"larkcli chat and sender": {&InboxItem{Source: "larkcli", Connector: &InboxConnector{Tags: []connector.Tag{
+			{Key: connector.TagChat, Value: "oc_example_chat", Name: "Example Chat"},
+			{Key: connector.TagSender, Value: "ou_example_sender", Name: "Example Sender"}}}},
+			"[{chat oc_example_chat Example Chat} {sender ou_example_sender Example Sender}]"},
+		// a subscription's row (#5306): its sender, never the subscription itself (turning it off is that)
+		"subscription": {&InboxItem{Source: "sub_x", Connector: &InboxConnector{Tags: []connector.Tag{
+			{Key: "source", Value: "sub_x", Name: "Notices"}, {Key: connector.TagSender, Value: "office", Name: "Office"}}}},
+			"[{sender office Office}]"},
 	} {
 		if got := fmt.Sprint(mutesOf(c.it)); got != c.want && !(c.want == "[]" && got == "[]") {
 			t.Errorf("%s: %s, want %s", name, got, c.want)

@@ -12,7 +12,9 @@ import (
 // a hub restart or a reconnect replaces the connection, and with it the Node serving it (attach.go), but the assistant
 // processes go on — their turn, their background tasks and monitors — and the Node serving the next connection takes
 // them over: what they say from then on reaches the new hub, the answer being generated included. Without a resident
-// node (`node --stdio` serving the hub itself) the process ends with the connection, and so do they, as before.
+// node (`node --stdio` serving the hub itself) the process ends with the connection, and so do they: Serve returns
+// only once reapAssistants has stopped them and they have exited (stopAndWait), or they would go on without a node
+// beside the processes the next node starts for the same conversations (#4259).
 
 // liveAssistants is every headless assistant this process runs, whichever Node it reports to (AssistantsBusy).
 var liveAssistants sync.Map // *assistantProc -> struct{}
@@ -31,24 +33,36 @@ func AssistantsBusy() bool {
 	return busy
 }
 
-// keeperStopGrace is how long stopAll gives the kept conversations to end on SIGTERM before it kills their process
+// keeperStopGrace is how long stopAndWait gives conversations to end on SIGTERM before it kills their process
 // groups; keeperKillWait bounds the wait after that SIGKILL. Variables so tests can shorten them.
 var (
 	keeperStopGrace = 5 * time.Second
 	keeperKillWait  = 2 * time.Second
 )
 
-// stopAll ends what is kept: the resident node itself is ending. When it returns the process exits or execs a new
-// binary (nodecmd runResident), and the SIGKILL fallback stop() leaves to a goroutine goes with it, so a conversation
-// that ignores SIGTERM would go on orphaned, holding its gate and files. Nothing else will finish the job: it waits
-// for them, kills the process groups of those still running after keeperStopGrace, and waits for those too.
+// stopAll ends what is kept: the resident node itself is ending (stopAndWait).
 func (k *assistantKeeper) stopAll() {
 	k.mu.Lock()
 	kept := k.procs
 	k.procs = map[string]*assistantProc{}
 	k.mu.Unlock()
-	var running []*assistantProc
+	procs := make([]*assistantProc, 0, len(kept))
 	for _, p := range kept {
+		procs = append(procs, p)
+	}
+	if left := stopAndWait(procs); left > 0 {
+		log.Printf("node: %d kept conversations still running after SIGKILL", left)
+	}
+}
+
+// stopAndWait stops procs and returns once they have exited; the number still running after SIGKILL. Its caller's
+// process ends right after (a resident node exiting or exec'ing, nodecmd runResident; a node whose connection ended,
+// Serve), and the SIGKILL fallback stop() leaves to a goroutine goes with it, so a conversation that ignores SIGTERM
+// would go on orphaned, holding its gate and files. Nothing else will finish the job: it waits for them, kills the
+// process groups of those still running after keeperStopGrace, and waits for those too.
+func stopAndWait(procs []*assistantProc) int {
+	var running []*assistantProc
+	for _, p := range procs {
 		p.stop()
 		if p.cmd != nil && p.cmd.Process != nil && p.exited != nil { // never started: nothing to wait for
 			running = append(running, p)
@@ -58,9 +72,7 @@ func (k *assistantKeeper) stopAll() {
 	for _, p := range left {
 		_ = osproc.StopGroup(p.cmd.Process.Pid, true)
 	}
-	if left = waitExited(left, keeperKillWait); len(left) > 0 {
-		log.Printf("node: %d kept conversations still running after SIGKILL", len(left))
-	}
+	return len(waitExited(left, keeperKillWait))
 }
 
 // waitExited waits up to within for every process in procs to exit and returns the ones still running. exited closes
@@ -93,6 +105,7 @@ type assistantKeeper struct {
 	procs          map[string]*assistantProc
 	recoveryOwners map[string]*Node              // each session's previous Node, holding its recovery under that Node's mu
 	fallbacks      map[string]*assistantFallback // the conversations' holds on a fallback (assistant_fallback_hold.go)
+	unavailable    map[string]time.Time          // models a recovery found the gateway does not serve, by launcher
 	// gp is the process's gate proxy: the conversations kept hold their addresses at it (Node.gates, gateproxy.go).
 	gp *gateProxy
 }
@@ -122,19 +135,25 @@ func (k *assistantKeeper) keep(owner *Node, procs map[string]*assistantProc, rec
 	return stop
 }
 
-// keepFallbacks takes an ended connection's holds on a fallback for the next one: a hub restart does not move the
-// conversations back onto the model that refused them. The caller holds the owner's mu (the order keep takes them in).
-func (k *assistantKeeper) keepFallbacks(fallbacks map[string]*assistantFallback) {
-	if len(fallbacks) == 0 {
+// keepFallbacks takes an ended connection's holds on a fallback, and the models found unavailable, for the next one:
+// a hub restart does not move the conversations back onto a model that refused them or does not exist. The caller holds the owner's mu (the order keep takes them in).
+func (k *assistantKeeper) keepFallbacks(fallbacks map[string]*assistantFallback, unavailable map[string]time.Time) {
+	if len(fallbacks) == 0 && len(unavailable) == 0 {
 		return
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if k.fallbacks == nil {
+	if len(fallbacks) > 0 && k.fallbacks == nil {
 		k.fallbacks = map[string]*assistantFallback{}
 	}
 	for id, f := range fallbacks {
 		k.fallbacks[id] = f
+	}
+	if len(unavailable) > 0 && k.unavailable == nil {
+		k.unavailable = map[string]time.Time{}
+	}
+	for key, until := range unavailable {
+		k.unavailable[key] = until
 	}
 }
 
@@ -157,9 +176,19 @@ func (k *assistantKeeper) adopt(n *Node) []*assistantProc {
 	k.procs = map[string]*assistantProc{}
 	recoveryOwners := k.recoveryOwners
 	k.recoveryOwners = map[string]*Node{}
-	fallbacks := k.fallbacks
-	k.fallbacks = nil
+	fallbacks, unavailable := k.fallbacks, k.unavailable
+	k.fallbacks, k.unavailable = nil, nil
 	k.mu.Unlock()
+	if len(unavailable) > 0 {
+		n.mu.Lock()
+		if n.unavailable == nil {
+			n.unavailable = map[string]time.Time{}
+		}
+		for key, until := range unavailable {
+			n.unavailable[key] = until
+		}
+		n.mu.Unlock()
+	}
 	if len(fallbacks) > 0 {
 		n.mu.Lock()
 		if n.fallbacks == nil {
@@ -323,8 +352,8 @@ func (n *Node) handOverAssistants() {
 	}
 	n.mu.Lock()
 	stop := n.keeper.keep(n, n.procs, n.recoveries)
-	n.keeper.keepFallbacks(n.fallbacks)
-	n.fallbacks = nil
+	n.keeper.keepFallbacks(n.fallbacks, n.unavailable)
+	n.fallbacks, n.unavailable = nil, nil
 	n.procs = map[string]*assistantProc{}
 	n.akeys = map[string]*assistantProc{}
 	n.mu.Unlock()

@@ -131,7 +131,9 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 	}
 	isCodex := n.agentOf(launcher) == "codex"
 	configDir, codexHome := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CODEX_HOME")
-	if dir := n.claudeStartDir.Load(); dir != nil && *dir != "" {
+	if execution.ConfigDir != "" {
+		configDir = n.assistantConfigPath(execution.ConfigDir)
+	} else if dir := n.claudeStartDir.Load(); dir != nil && *dir != "" {
 		configDir = proto.ExpandHome(*dir, n.home)
 	}
 	if l, managed := n.managedLauncher(launcher); managed {
@@ -158,7 +160,7 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 			declare(0, codexCapacity(p.Args))
 			c.ownSettings = settingsArg(p.Args)
 			declare(settingsCompaction(c.ownSettings, cwd, n.home))
-			if dir := p.Env["CLAUDE_CONFIG_DIR"]; dir != "" {
+			if dir := p.Env["CLAUDE_CONFIG_DIR"]; dir != "" && execution.ConfigDir == "" {
 				configDir = dir
 			}
 			if dir := p.Env["CODEX_HOME"]; dir != "" {
@@ -290,7 +292,7 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 	s["env"] = env
 
 	// Keep the assistant's project/user instructions, data skills and auto-memory. Only the development workflows and
-	// providers it does not use are hidden; bundled-skill and per-skill switches leave the explicit Persona plugins alone.
+	// providers it does not use are hidden; bundled-skill and per-skill switches preserve explicitly enabled integrations.
 	env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] = "1"
 	plugins, _ := s["enabledPlugins"].(map[string]any)
 	if plugins == nil {

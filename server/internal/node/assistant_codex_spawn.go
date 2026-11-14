@@ -68,7 +68,8 @@ func codexShell(launcher string) string {
 function __persona_codex { builtin command codex "$@" app-server "${__persona_args[@]}"; }
 if [[ -n "${ZSH_VERSION-}" ]] && (( $+functions[codex] )); then
   # Keep a user-defined codex() launcher intact while routing its final command through the app-server wrapper.
-  functions -c "${${:-codex}}" __persona_user_codex
+  # Copy it through the functions table: functions -c needs zsh 5.8, and a subscript never expands aliases.
+  functions[__persona_user_codex]=$functions[codex]
   function codex { __persona_user_codex "$@"; }
 else
   function codex { __persona_codex "$@"; }
@@ -78,8 +79,17 @@ function command { if [[ "$1" == codex ]]; then shift; __persona_codex "$@"; els
 }
 
 func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options ...modelExecution) (*assistantProc, error) {
+	return n.spawnCodexWithMode(id, cwd, launcher, resume, spare, "", options...)
+}
+
+// codexAssistantCommand is the command that runs the Codex assistant's app-server with launcher in shell.
+func (n *Node) codexAssistantCommand(shell, launcher string, args []string) *exec.Cmd {
+	return exec.Command(shell, append([]string{"-ic", codexShell(n.launcherForScript(launcher)), "persona"}, args...)...)
+}
+
+func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, mode string, options ...modelExecution) (*assistantProc, error) {
 	execution := executionOption(options)
-	if err := execution.check(); err != nil {
+	if err := execution.check(launcher); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(cwd, 0o700); err != nil {
@@ -93,7 +103,7 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, "", execution)
 	args, personaMCPOnly := n.codexAssistantArgs(key, n.dir, compaction.codexLimit())
-	cmd := exec.Command(shell, append([]string{"-ic", codexShell(n.launcherCommand(launcher)), "persona"}, args...)...)
+	cmd := n.codexAssistantCommand(shell, launcher, args)
 	cmd.Dir = root
 	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process
@@ -104,7 +114,8 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 		}
 	}()
 	cmd.Env = identity.Environment(cmd.Env, gateEnv...)
-	cmd.SysProcAttr = osproc.GroupAttr()
+	cmd.SysProcAttr = osproc.SessionGroupAttr()
+	msysCmdLine(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -178,7 +189,7 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 
 	ctx, cancel := context.WithTimeout(context.Background(), codexStartTimeout)
 	defer cancel()
-	if err := c.start(ctx, id, root, resume); err != nil {
+	if err := c.start(ctx, id, root, resume, mode); err != nil {
 		p.stop()
 		return nil, fmt.Errorf("%s（codex app-server）没有启动起来: %w", launcher, err)
 	}

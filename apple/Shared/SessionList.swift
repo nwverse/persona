@@ -3,7 +3,10 @@ import Foundation
 /// The bounded list contract. Tokens are opaque and page cursors never stand in for delta checkpoints.
 nonisolated struct SessionListQuery: Hashable, Sendable {
     static let pageSize = 50
-    /// Client-only selection of the no-opt-in full collection; never sent as a made-up server filter.
+    /// The hub's largest page: a complete copy of a few hundred sessions is two requests.
+    static let completePageSize = 200
+    /// Client-only selection of the complete collection (the view groups, filters and sorts every row itself); never
+    /// sent as a made-up server filter. On a paging hub it is read as complete pages and then followed by `since`.
     var legacy = false
     var state: String = ""
     var machine: String = ""
@@ -12,11 +15,19 @@ nonisolated struct SessionListQuery: Hashable, Sendable {
     var source: String = ""
     var provider: String = ""
     var text: String = ""
+    /// One manager's sessions only (docs/protocol/protocol.md "One manager's sessions"): its id, sent only to a hub whose
+    /// hello has `sessions_manager` (`sessionsManagerFeature`); an older hub would ignore the key and answer with every
+    /// manager's, its totals and counts with them. Part of the query, so a list for another manager starts over: a
+    /// cursor is bound to its filters.
+    var manager: String = ""
+
+    static let sessionsManagerFeature = "sessions_manager"
 
     var parameters: [String: String] {
         var out = ["summary": "1", "limit": String(Self.pageSize)]
         for (key, value) in [("state", state), ("machine_id", machine), ("project", project), ("group", group),
-                             ("source", source), ("provider", provider), ("q", String(text.prefix(256)))] where !value.isEmpty {
+                             ("source", source), ("provider", provider), ("q", String(text.prefix(256))),
+                             ("manager", manager)] where !value.isEmpty {
             out[key] = value
         }
         return out
@@ -48,10 +59,16 @@ nonisolated struct SessionListCounts: Decodable, Equatable, Sendable {
 
 extension APIClient {
     func sessionListPage(_ query: SessionListQuery, cursor: String? = nil, since: String? = nil) async throws -> SessionListPage<Session> {
-        if query.legacy {
-            return SessionListPage(sessions: try await sessions(), remove: [], hasMore: nil, nextCursor: nil, revision: nil, total: nil)
-        }
         var parameters = query.parameters
+        if query.legacy {
+            // A paging hub pushes no rows, only a hint for each change. Reading the whole list again for every hint was
+            // hundreds of KB about once a second while agents worked (#3759): complete pages (no filters, the view
+            // applies its own) give a baseline with a revision that `since` then follows.
+            guard sessionList else {
+                return SessionListPage(sessions: try await sessions(), remove: [], hasMore: nil, nextCursor: nil, revision: nil, total: nil)
+            }
+            parameters = ["summary": "0", "limit": String(SessionListQuery.completePageSize)]
+        }
         if let cursor { parameters["cursor"] = cursor }
         if let since { parameters["since"] = since }
         let data = try await request("GET", "/api/v1/sessions", query: parameters)
@@ -93,6 +110,16 @@ extension APIClient {
             }
         }
         return nil
+    }
+
+    /// Every manager's sessions in Needs You as list rows, the newest first and at most 200 of them, from a hub with
+    /// bounded lists (`sessions_list`): what the assistant switcher's counts go by (`AppModel.readNeedsYou`).
+    func sessionsNeedingYou() async throws -> [Session] {
+        let data = try await request("GET", "/api/v1/sessions", query: ["state": AgentState.needsYou.rawValue, "summary": "1", "limit": "200"])
+        let page = try await Task.detached(priority: .utility) {
+            try JSON.decoder.decode(SessionListPage<Session>.self, from: data)
+        }.value
+        return stamp(page.sessions)
     }
 
     func sessionListCounts(_ query: SessionListQuery, personal: Bool = false) async throws -> SessionListCounts {

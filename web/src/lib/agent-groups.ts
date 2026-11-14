@@ -7,8 +7,10 @@ import { stateName } from "./state-labels";
 
 export type AgentGrouping = "repo" | "space" | "state" | "machine" | "todo";
 // "By to-do" leads and is the default for a browser that never picked one (#2812); a grouping picked before stays. The
-// sidebar shows them in this order as segments, and the switch-grouping shortcut goes round them in it. "By machine" is
-// herdr's own layout (machine → workspace → tab, lib/herdr-tree.ts). `short` is the segment's label, `label` the full name.
+// sidebar shows them in this order as segments, the paged list and the complete list alike (#6662), and the
+// switch-grouping shortcut goes round them in it. "By machine" is herdr's own layout (machine → workspace → tab,
+// lib/herdr-tree.ts). `short` is the segment's label, `label` the full name. "By pinned" (#4352) is gone (#6662): the
+// sidebar's 常驻 rows unfold to the same tree, so a picked one reads as By to-do.
 export const AGENT_GROUPINGS: { key: AgentGrouping; label: string; short: string }[] = [
   { key: "todo", label: t("lib-agent-groups.by_todo"), short: t("lib-agent-groups.seg_todo") },
   { key: "machine", label: t("lib-agent-groups.by_machine"), short: t("lib-agent-groups.seg_machine") },

@@ -13,7 +13,8 @@ The server's code ships as these programs (`server/cmd/`), all of one build (`ve
 - `persona-manager`: the managers alone, `internal/managercli`: `assistant` (the built-in one; a service of its own with `PERSONA_ASSISTANT_DEPLOY=service`, bound by `join --builtin`, [managers.md](../assistant/managers.md) ("The built-in manager as its own service")), `join`, `run`, `install`, `uninstall`, `status` (one made in the app; `persona-manager manager <command>` works too), `extension …`, `voice`, `tailcat-key`, and `node …`: this computer's node, when the manager runs it as itself. The manager starts the node as `persona-node` or `personad` of its build beside it, and as itself only when neither is there or with `PERSONA_SPLIT_PROGRAMS=0` (`devices.Machine.localNode`, under `persona-node` below).
 - `persona-node`: the device's program, `internal/nodecmd` alone. It takes the same commands and arguments and gives the same output and exit codes as `personad`, and links neither the hub, the manager nor the database (`cmd/persona-node/main_test.go` guards that on every platform it ships for). The node writes `<its own binary> hook` / `mcp` into the settings it manages, so either program serves what it wrote. The node of the hub's computer, which the manager starts, runs as the first program beside the manager's that is the same build (`version -v`): `persona-node`, then `personad`; else as the manager's program itself (`devices.Machine.localNode`). So a manager run as `persona-manager` starts `personad node --stdio`, and the hook and MCP entries the node writes keep naming `personad`. `PERSONA_SPLIT_PROGRAMS=0` in the manager's environment keeps the node on the manager's program. Nothing puts a `persona-node` on the hub's computer yet (a later change), and the hub's self-update does not swap one: one put there by hand of another build is passed over, with a line in the manager's log.
 - `persona-link` (directory alias `cmd/persona-link`): the connector, `docs/operations/link.md`.
-- `personad-wechat`: the WeChat bot, a built-in extension's program (`docs/extensions/wechat.md`).
+
+WeChat is supplied by the public marketplace extension `wechat`, not a server program (`docs/extensions/wechat.md`).
 
 The hub and the managers apart:
 
@@ -199,7 +200,7 @@ DSM pitfalls: full path `sudo /usr/local/bin/docker`, absent from noninteractive
 ```sh
 git worktree add --detach /tmp/persona-build <commit>
 (cd /tmp/persona-build/server && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags "$(cat build-tags.txt)" -trimpath \
-  -ldflags "-s -w -X main.version=$(git describe --always)-$(date +%Y%m%d%H%M)" -o /tmp/personad-linux-amd64 ./cmd/personad)
+  -ldflags "-s -w -X main.version=$(git describe --tags --match 'v[0-9]*' --always)-$(date +%Y%m%d%H%M)" -o /tmp/personad-linux-amd64 ./cmd/personad)
 git worktree remove /tmp/persona-build
 ssh <nas> 'umask 077; mkdir -p ~/.persona/bin && cat > ~/.persona/bin/personad.new && chmod 755 ~/.persona/bin/personad.new' < /tmp/personad-linux-amd64
 ```
@@ -494,7 +495,7 @@ Adding a migration:
 
 | File | Content |
 | --- | --- |
-| `hub.json` | listen, token, `public_url`, public (TLS / candidate addresses), security (trust / auth rate limits, [network.md](../operations/network.md#hubjson-网络配置)), name display name, admin access scope ([admin.md](../operations/admin.md)), `database_url`, machines; notify (notification timing, `docs/operations/config.md`); `assistant.external`, `persona_view`, `html_views` |
+| `hub.json` | listen, token, `public_url`, public (TLS / candidate addresses), security (trust / auth rate limits, [network.md](../operations/network.md#hubjson-网络配置)), name display name, admin access scope ([admin.md](../operations/admin.md)), `database_url`, machines; notify (notification timing, `docs/operations/config.md`); `assistant.external` |
 | `managers/assistant/manager.json` | The built-in manager's own sections (`docs/operations/config.md` ("manager.json")): `assistant.owner` / `notes` / `machine` / `launcher`, `ai`, `agents`, `inbox`, `kb`, `hook_timeout_minutes`, lark, `lark_gate`, `connector_gate`, github, imessage, google, microsoft, bots, extensions / plugins, `trusted_extension_markets`, usage, `sent_ledger_days`, `sent_recall_hours`; e.g. `google.client_id` (Gmail iOS OAuth client), `google.proxy` (Gmail HTTP proxy, e.g. http://127.0.0.1:<port>, `docs/extensions/mail.md`), `github.proxy` (all GitHub connector requests, same format) |
 | `tls/hub.key`, `tls/hub.crt` | Automatically managed ECDSA P-256 identity key / self-signed cert, directory 0700, files 0600, private key outside DB. Rotation requires device re-pairing |
 | `secret.key` | The hub's own 32-byte key (peer tokens, connector credentials). The built-in manager's key, which seals its secrets (mail, model providers, extensions), is in `managers/assistant/` with its `tailcat-hub.json` and `handles.key`: a copy of the hub's on an upgraded install until it rotates to its own after the move ([managers.md](../assistant/managers.md) ("The built-in manager's own files", "Its own secret.key")) |

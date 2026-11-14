@@ -1,6 +1,7 @@
-// What the sidebar's files share: the row and menu types, a row's key, the section heading and count, the badge and
-// dot colors, the pages hook and navigation. It imports none of them (Sidebar, SidebarRows, SidebarTree, SidebarRail).
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+// What the sidebar's files share: the row and menu types, a row's key, the section heading and count (SidebarSection,
+// passed on from here), the badge and dot colors, the pages hook and navigation. It imports none of them (Sidebar,
+// SidebarRows, SidebarTree, SidebarRail).
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../i18n";
 import { resolveTab } from "../lib/herdr-tree";
 import { useInboxBadge } from "../lib/inbox";
@@ -11,7 +12,7 @@ import { arrangePages, useSidebarPrefs } from "../lib/sidebar-pages";
 import { useExtensionSlot } from "../lib/extension-slots";
 import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
-import { href, navigate, type Route } from "../lib/router";
+import { href, inWorkView, navigate, type Route } from "../lib/router";
 import { useAgentSessions } from "../lib/sessions";
 import { scoped, useScope, useScopedCounts, useScopedTodos } from "../lib/current-assistant";
 import { triageTodos } from "../lib/todo-triage";
@@ -21,10 +22,12 @@ import { useLarkOn, useStore } from "../lib/store";
 import { connPhase } from "../lib/connection";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
 import type { Session } from "../lib/types";
-import { Collapse, cx, sidebarFoldMotion, type MenuItem } from "../ui/atoms";
-import { Icon, type IconName } from "../ui/icons";
+import type { MenuItem } from "../ui/atoms";
+import { agentsFoldAction, setAgentsFolded } from "../lib/sidebar-api";
+import { SESSION_LIST_STYLE } from "../ui/list-metrics";
+import { FoldAllButton } from "../ui/FoldAllButton";
+import type { IconName } from "../ui/icons";
 import type { MenuNode } from "../lib/node-actions";
-import { contextMenuProps } from "../ui/context-menu";
 import type { MenuAt } from "../ui/menu-model";
 
 /** The open row's own fill (#2283): it stays while the pointer is elsewhere in the list, a step darker than hover. */
@@ -39,7 +42,7 @@ export function useActiveKey(route: Route): string {
   const tabPath = route.name === "tab" ? href(route) : "";
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `route` is parsed anew each render; its path says it all
   const tabPane = useMemo(() => (route.name === "tab" ? resolveTab(all, route) : undefined), [all, tabPath]);
-  return route.name === "tab" ? (tabPane ? rowKey(tabPane) : "") : sidebarActiveKey(route, assistant?.main);
+  return inWorkView(route) ? "terminal" : route.name === "tab" ? (tabPane ? rowKey(tabPane) : "") : sidebarActiveKey(route, assistant?.main);
 }
 
 // One function for the component's life, so the rows given it skip a re-render (memo); a click still calls the
@@ -72,8 +75,6 @@ export function useNavPages() {
   const scope = useScope();
   const online = useStore((s) => scoped(s.machines, scope).filter((m) => m.online).length);
   const total = useStore((s) => scoped(s.machines, scope).length);
-  // "Terminal" (docs/integrations/terminal.md "Standalone terminal") is there where the hub can list panes
-  const terminalPanes = useStore((s) => s.features.includes("terminal_panes"));
   const assistant = useStore((s) => s.assistant);
   const todos = useScopedTodos();
   const todosSupported = useStore((s) => s.todosSupported);
@@ -103,7 +104,7 @@ export function useNavPages() {
     routines: { k: "routines", to: { name: "routines" }, icon: "clock", label: t("sidebar.nav_routines"), short: t("sidebar.nav_routines_short") },
     kb: { k: "kb", to: { name: "kb" }, icon: "book", label: t("sidebar.nav_kb"), short: t("sidebar.nav_kb_short") },
     machines: { k: "machines", to: { name: "machines" }, icon: "machine", label: t("sidebar.nav_machines"), short: t("sidebar.nav_machines_short"), hint: total ? `${online}/${total}` : undefined },
-    terminal: terminalPanes && { k: "terminal", to: { name: "terminal" }, icon: "terminal", label: t("sidebar.nav_terminal") },
+    terminal: { k: "terminal", to: { name: "terminal" }, icon: "terminal", label: t("work-entry.title"), short: t("work-entry.short") },
     settings: { k: "settings", to: { name: "settings" }, icon: "gear", label: t("sidebar.nav_settings") },
   };
   const all = NAV_PAGES.flatMap((k): NavPage[] => [
@@ -136,34 +137,41 @@ export function morePagesMenu(more: NavPage[], activeKey: string, onNavigate?: (
   ];
 }
 
-export function Section({ title, children, folded, onToggle, right, onMenu, first, hint }: { title: React.ReactNode; children: React.ReactNode; folded: boolean; onToggle: () => void; right?: React.ReactNode; onMenu?: (at: MenuAt, el: HTMLElement) => void; first?: boolean; hint?: string }) {
-  return (
-    <div className={first ? "mt-1" : "mt-3"}>
-      <div className="group/sec relative flex items-center gap-1 px-2 pb-1" {...(onMenu ? contextMenuProps(onMenu) : {})}>
-        <button type="button" aria-expanded={!folded} onClick={onToggle} title={hint} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
-          <span className="min-w-0 truncate">{title}</span>
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
-        </button>
-        {right}
-      </div>
-      {/* a group whose name does not say why its agents are here ("Not on a to-do", "Opened in the terminal") says it in one line, folded too */}
-      {hint && <p className="px-2 pb-1 text-[11px] leading-[1.45] text-ink-3">{hint}</p>}
-      <Collapse open={!folded} sidebarFold>
-        <div className="flex flex-col gap-px" inert={folded || undefined}>{children}</div>
-      </Collapse>
-    </div>
-  );
+export { GroupCount, Section, SidebarGroup } from "./SidebarSection";
+
+const FOLD_LABEL = { "open-block": "sidebar.open_all", "fold-groups": "sidebar.fold_all", "open-groups": "sidebar.open_all" } as const;
+
+/** The Agents title row's one fold control (#3222): it acts on the list under the controls, never on the grouping
+ *  tabs, quick filters, search or Filter. Its action follows the group headings on screen, folded by hand, by the
+ *  keyboard shortcut or by it, and the block's own fold under the Agents title (`block`, absent where the list cannot
+ *  fold), so a click always changes something; a list without groups shows no button (#6447, lib/sidebar-api.ts
+ *  `agentsFoldAction`). The row around it is its tooltip's box. */
+export function GroupFoldButton({ groups, onAction, block, flat }: { groups: React.RefObject<HTMLElement | null>; onAction: () => void; block?: { folded: boolean; toggle: () => void }; flat?: boolean }) {
+  const [seen, setSeen] = useState({ groups: 0, open: false });
+  useEffect(() => {
+    const root = groups.current;
+    if (!root) return;
+    const read = () => {
+      const shown = [...root.querySelectorAll<HTMLButtonElement>("[data-sidebar-group-heading] button[aria-expanded]")]
+        .filter((button) => !button.closest("[data-sidebar-agents-controls], [inert]"));
+      const open = shown.some((button) => button.getAttribute("aria-expanded") === "true");
+      setSeen((s) => (s.groups === shown.length && s.open === open ? s : { groups: shown.length, open }));
+    };
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(root, { attributes: true, attributeFilter: ["aria-expanded", "inert"], childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [groups]);
+  const action = agentsFoldAction({ blockFolded: Boolean(block?.folded), flat, groups: seen.groups, open: seen.open });
+  if (!action) return null;
+  const run = () => {
+    if (action === "open-block") block?.toggle();
+    setAgentsFolded(action === "fold-groups");
+    onAction();
+  };
+  return <FoldAllButton label={t(FOLD_LABEL[action])} expand={action !== "fold-groups"} onClick={run} className={SESSION_LIST_STYLE.foldButton} testId="agents-fold-all" />;
 }
 
-/** A group title's count with what it counts: a tooltip, and the same words for a screen reader. */
-export function GroupCount({ n, label, className }: { n: number; label: string; className?: string }) {
-  return (
-    <span title={label} className={cx("text-[10.5px] text-ink-3 tabular-nums", className)}>
-      <span aria-hidden>{n}</span>
-      <span className="sr-only">{label}</span>
-    </span>
-  );
-}
 
 export type RegFn = (k: string) => (el: HTMLElement | null) => void;
 /** An agent row's key in the sidebar (highlight, active): sidebarActiveKey's for a session. */

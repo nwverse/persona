@@ -10,19 +10,25 @@ import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
 import type { TaskBrief } from "./brief";
+import type { RuleSuggestion } from "./rule-suggestion";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
-import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
 import { closePanel, getPanel } from "./panel";
+import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
 import type { ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
+
+export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
+export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
 
 export interface PlanTask {
   title: string;
   prompt: string;
   machine: string;
   cwd: string;
+  workspace?: TaskWorkspace;
+  workspace_resolved?: TaskWorkspaceResolved;
   launcher?: string;
   model?: string;
   /** An Agent preset (#2225): a tier of the model profile in use, resolved when the task starts. */
@@ -48,9 +54,12 @@ export interface TaskPlan {
   tasks: PlanTask[];
   state: "open" | "started" | "dismissed";
   created_at?: string;
+  /** On an open plan: the rule the hub suggests once the owner started this kind of task three times (#4929,
+   *  lib/rule-suggestion.ts). Filled in where the plan is read, never stored with it; absent from an older hub. */
+  suggestion?: RuleSuggestion;
 }
 
-export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief";
+export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief" | "inbox_suggestion";
 
 export interface FeedItem {
   id: string;
@@ -151,6 +160,25 @@ export interface BriefBody {
   later_total: number;
   progress: { id: string; title: string; stage?: string; stage_kind?: Todo["stage_kind"] }[];
   progress_total: number;
+  /** The recommended-setup block (#5085), on the first briefing of a week when it names something: which mechanism
+   *  that is off would have removed how many of the last 7 days' asks or background rounds. The hub counted and worded
+   *  each line; nothing is turned on from here. A hub that does not know it leaves the list out. */
+  setup: BriefSetup[];
+}
+
+/** One mechanism of a `brief` item's `setup`: `text` is the whole line (count, cost, where it is turned on). */
+export interface BriefSetup {
+  id: string;
+  count: number;
+  text: string;
+}
+
+/** The settings page a recommended mechanism is turned on at, for those that have one in this app: Session triage, the
+ *  standing authorizations and the remembered kinds of task are on the assistant's own page; a lower tier for the
+ *  background supervisor (#5805) is its purpose's page of Model settings. */
+export function briefSetupPage(id: string): string | undefined {
+  if (id === "supervisor_tier") return "/settings?tab=models&purpose=assistant.supervise";
+  return ["triage_decide", "triage_auto_continue", "triage_wake", "standing_authorizations", "task_trust"].includes(id) ? "/settings?tab=persona" : undefined;
 }
 
 /** A `brief` item's body, every list a list (a hub that left one out, or an item that is not one, gives nothing to draw). */
@@ -180,6 +208,7 @@ export function briefBody(it: FeedItem): BriefBody | undefined {
     later_total: num(b.later_total, later.length),
     progress,
     progress_total: num(b.progress_total, progress.length),
+    setup: list<BriefSetup>(b.setup).filter((x) => x && typeof x.id === "string" && typeof x.text === "string" && x.text !== ""),
   };
 }
 
@@ -331,7 +360,7 @@ interface FeedState {
   plans: Record<string, TaskPlan>;
   taskCards: Record<string, TaskCardMetadata[]>;
   /** Conversation → the task the next message goes to ("Tell "xx""). */
-  routes: Record<string, string>;
+  routes: Record<string, string | { todoId: string; askedAt: string }>;
   busy: Record<string, boolean>;
   /** Message cards put off with "Later". */
   later: Record<string, boolean>;
@@ -521,7 +550,7 @@ onHubEvent("task_plan", (m) => {
 // ── actions ──
 
 /** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
-export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
+export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt" | "workspace"> & { ultracode: boolean };
 
 export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] as const;
 
@@ -536,12 +565,13 @@ export function planEditsOf(plan: TaskPlan, ultracode?: readonly boolean[]): Pla
     permission: t.permission || "default",
     prompt: t.prompt,
     ultracode: ultracode?.[i] ?? t.ultracode === true,
+    ...(t.workspace !== undefined ? { workspace: t.workspace } : {}),
   }));
 }
 
 /** Whether "Edit" changed anything since it opened with `before` (closing it then asks before throwing the changes away). */
 export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]): boolean {
-  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
+  return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => JSON.stringify(e[k] ?? "") !== JSON.stringify(before[i]?.[k] ?? "")));
 }
 
 /** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it
@@ -687,7 +717,7 @@ export async function removeTask(todo: Todo, ask: (message: string) => boolean =
   if ((todo.agents ?? []).length > 0 && !ask(t("lib-feed.remove_confirm", { title: todo.title }))) return false;
   await deleteTodo(todo.id);
   const routes = { ...st.routes };
-  for (const [c, id] of Object.entries(routes)) if (id === todo.id) delete routes[c];
+  for (const [c, route] of Object.entries(routes)) if (routeTodoId(route) === todo.id) delete routes[c];
   set({ routes });
   const panel = getPanel();
   if (panel?.kind === "task" && panel.todo === todo.id) closePanel();
@@ -695,16 +725,21 @@ export async function removeTask(todo: Todo, ask: (message: string) => boolean =
   return true;
 }
 
-export function setRoute(conversation: string, todoId: string | null) {
+export function routeTodoId(route: FeedState["routes"][string] | undefined): string | undefined {
+  return typeof route === "string" ? route : route?.todoId;
+}
+
+export function setRoute(conversation: string, todoId: string | null, askedAt?: string) {
   const routes = { ...st.routes };
-  if (todoId) routes[conversation] = todoId;
+  if (todoId) routes[conversation] = askedAt ? { todoId, askedAt } : todoId;
   else delete routes[conversation];
   set({ routes });
 }
 
 /** Sends text straight to the task the conversation is routed to; false when none (send it to Persona as usual). */
 export async function sendRouted(conversation: string, text: string): Promise<boolean> {
-  const todoId = st.routes[conversation];
+  const route = st.routes[conversation];
+  const todoId = routeTodoId(route);
   if (!todoId) return false;
   // A failed send keeps the route for the retry, so a task gone elsewhere (its chip no longer drawn) must not hold it.
   const { todos, todosLoaded } = getState();
@@ -712,9 +747,11 @@ export async function sendRouted(conversation: string, text: string): Promise<bo
     setRoute(conversation, null);
     return false;
   }
-  const res = await api<{ item: FeedItem }>(`/assistant/conversations/${enc(conversation)}/route`, { method: "POST", json: { todo_id: todoId, text } });
-  if (st.routes[conversation] === todoId) setRoute(conversation, null);
+  const askedAt = typeof route === "object" ? route.askedAt : undefined;
+  const res = await api<{ item: FeedItem }>(`/assistant/conversations/${enc(conversation)}/route`, { method: "POST", json: { todo_id: todoId, text, ...(askedAt ? { asked_at: askedAt } : {}) } });
+  if (st.routes[conversation] === route) setRoute(conversation, null);
   if (res.item) received([res.item]);
+  if (askedAt) void refreshTodos();
   return true;
 }
 
@@ -795,8 +832,8 @@ export async function undoDismissMessage(card: FeedItem, dismissalId: string): P
   }
 }
 
-export function later(itemId: string) {
-  set({ later: { ...st.later, [itemId]: true } });
+export function later(itemId: string, deferred = true) {
+  set({ later: { ...st.later, [itemId]: deferred } });
 }
 
 // ── the conversation's lines ──
@@ -855,11 +892,23 @@ export function quickResult(use: Item, result?: Item): QuickResult | undefined {
   }
 }
 
+/** When the oldest loaded transcript item happened (displayLines `from`); undefined when none says. */
+export function loadedFrom(items: Item[]): number | undefined {
+  for (const it of items) {
+    const at = Date.parse(it.ts ?? "");
+    if (!Number.isNaN(at)) return at;
+  }
+  return undefined;
+}
+
 /** The chat's lines with the feed among them (each item at the end of the exchange it happened in), each exchange's
- *  quick results after it, and a day line over the first line of each day. */
-export function displayLines(lines: ChatLine[], all: FeedItem[]): DisplayLine[] {
+ *  quick results after it, and a day line over the first line of each day. `from`: while older transcript pages are
+ *  not loaded yet, the time of the oldest loaded item. The feed always holds the whole history, so its older items would
+ *  stack on top of the newest page, with their day lines, and read as the conversation's start with its messages gone;
+ *  they wait for the page that covers them. */
+export function displayLines(lines: ChatLine[], all: FeedItem[], from?: number): DisplayLine[] {
   // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
-  const feed = shownFeed(all);
+  const feed = shownFeed(all).filter((it) => from === undefined || !(Date.parse(it.at) < from));
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {

@@ -40,6 +40,13 @@
   "push_asked": "只在它自己提醒时",
   "push_hint_every": "每次运行完都把回答推送到手机。",
   "push_hint_asked": "只有这次运行判断你需要知道、主动提醒你时才推送，没事就不打扰；出错、被打断照常推送。这种任务固定在它自己的对话里跑，你在那段对话里发的消息做完也不推送。",
+  "section_inbox": "跑完放进收件箱",
+  "inbox_off": "不放",
+  "inbox_worthy": "有值得看的才放",
+  "inbox_every": "每次都放",
+  "inbox_hint_off": "不会放进收件箱。",
+  "inbox_hint_worthy": "只有这次运行发现值得你看的事，才在收件箱里放一行，点开就是那段对话。",
+  "inbox_hint_every": "每次运行完都在收件箱里放一行，方便你跟进，点开就是那段对话。",
   "section_chat": "对话",
   "resume_chat": "接着原来的对话",
   "same_chat": "在同一个对话里运行",
@@ -72,5 +79,12 @@
   "model_config_assistant": "模型统一跟随「模型配置 › 主对话」",
   "until_label": "截止时间",
   "until_hint": "可选。到了这个时间，任务会自己关掉，并记一笔已跳过。留空则一直重复。",
-  "until_clear": "清除"
+  "until_clear": "清除",
+  "repeat_cron": "Cron",
+  "cron_label": "Cron 表达式",
+  "cron_hint": "分 时 日 月 周，按{zone}计算。日和周都写了时，满足其中一个就运行。",
+  "cron_hint_zone": "你的时区",
+  "cron_checking": "正在检查…",
+  "cron_next": "接下来的运行时间（{zone}）",
+  "cron_examples": "示例"
 }

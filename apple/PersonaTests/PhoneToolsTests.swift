@@ -89,6 +89,7 @@ struct PhoneToolsTests {
             "phone_contacts_update",
             "phone_maps_search_nearby",
             "phone_maps_navigate",
+            "phone_maps_route",
             "phone_alarms_list",
             "phone_alarm_create",
             "phone_timer_start",
@@ -299,6 +300,29 @@ struct PhoneToolsTests {
             } else {
                 #expect(!options.contains(.cumulativeSum), "\(metric) is discrete: summing it raises in HealthKit")
             }
+        }
+    }
+
+    @Test func nutritionAndRestingEnergyUseDailyTotalsAndTheirPublicUnits() throws {
+        let energy = HKQuantity(unit: .joule(), doubleValue: 418_400)
+        let nutrients = HKQuantity(unit: .gramUnit(with: .milli), doubleValue: 12_500)
+        let metrics: [(String, HKQuantityTypeIdentifier, HKQuantity, Double)] = [
+            ("dietary_energy", .dietaryEnergyConsumed, energy, 100),
+            ("protein", .dietaryProtein, nutrients, 12.5),
+            ("carbs", .dietaryCarbohydrates, nutrients, 12.5),
+            ("fat", .dietaryFatTotal, nutrients, 12.5),
+            ("resting_energy", .basalEnergyBurned, energy, 100),
+        ]
+        let summary = try #require(HealthTool.tools.first { $0.spec.name == "phone_health_summary" })
+        let advertised = try #require(summary.spec.inputSchema["properties"]?["metrics"]?["items"]?["enum"]?.array)
+        for (metric, identifier, sample, expected) in metrics {
+            let actualIdentifier = try #require(HealthTool.quantityIdentifiers[metric])
+            #expect(actualIdentifier == identifier)
+            let type = HKQuantityType(actualIdentifier)
+            #expect(advertised.contains(.string(metric)), "\(metric) must be callable through the hub")
+            #expect(HealthTool.readTypes.contains(type), "\(metric) needs read permission")
+            #expect(HealthTool.statisticsOptions(for: type, metric: metric) == .cumulativeSum)
+            #expect(abs(sample.doubleValue(for: HealthTool.quantityUnit(for: metric)) - expected) < 0.001)
         }
     }
 

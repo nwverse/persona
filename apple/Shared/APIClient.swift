@@ -57,11 +57,27 @@ nonisolated struct LocalRequest: Sendable {
     var method: String
     var path: String
     var query: [String: String]
+    /// Query items a name can repeat in (`site=a&site=b`), after `query`'s, in their order.
+    var repeated: [URLQueryItem] = []
     var body: Data?
     /// Operation semantics and anonymous caller diagnostics, matching the real request's headers.
     var headers: [String: String] = [:]
     /// The caller's bound on the real URL request, exposed to transport-level tests.
     var timeout: TimeInterval = 30
+    /// The real request keeps off cellular data and expensive networks (`URLRequest.keepOnWiFi`), exposed to
+    /// transport-level tests as `timeout` is.
+    var wifiOnly = false
+}
+
+nonisolated extension URLRequest {
+    /// **Hub transcription on Wi-Fi only** (#3862 phase 5): with `on`, the system itself refuses to send the request over
+    /// cellular data or a network marked expensive (a phone's hotspot), whatever the app last saw of the network; a path
+    /// that changes under it (Wi-Fi Assist on a weak Wi-Fi, Wi-Fi gone during a retry) fails the request instead.
+    mutating func keepOnWiFi(_ on: Bool) {
+        guard on else { return }
+        allowsCellularAccess = false
+        allowsExpensiveNetworkAccess = false
+    }
 }
 
 nonisolated struct APIError: LocalizedError, Sendable {
@@ -96,10 +112,10 @@ nonisolated struct APIError: LocalizedError, Sendable {
     /// Business codes precede status and free-form server wording. Raw fields remain available for diagnostics.
     var businessMessage: String? {
         switch code {
-        case "kb_disabled": String(localized: "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.")
+        case "kb_disabled": String(localized: "This assistant has turned off the knowledge base. Enable it in the assistant's configuration to use it.")
         case "kb_unavailable": String(localized: "The knowledge base isn't ready yet. Try again shortly.")
-        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings.")
-        case "assistant_offline": String(localized: "The manager is offline or restarting. Try again shortly.")
+        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the assistant's configuration before editing or syncing recordings.")
+        case "assistant_offline": String(localized: "The assistant is offline or restarting. Try again shortly.")
         case "node_unreachable":
             fields["delivered"] == "none"
                 ? String(localized: "This computer is offline: Persona Link isn't running, or the computer is asleep.")
@@ -177,6 +193,8 @@ nonisolated struct APIClient: Sendable {
     var personaNaming = false
     /// The hub's hello has `sessions_lookup`: one session's complete row can be asked for by machine and id.
     var sessionLookup = false
+    /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
+    var sessionList = false
     /// Execution surface is diagnostic only; authorization still uses the paired hub credential.
     var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
@@ -193,13 +211,13 @@ nonisolated struct APIClient: Sendable {
 
     /// Where a request goes: under the hub's address, through its SSH tunnel when the app routes it there
     /// (HubTransport). `direct`: the hub's own address all the same (the probe that asks whether it answers there).
-    func url(_ path: String, query: [String: String] = [:], direct: Bool = false) -> URL {
+    func url(_ path: String, query: [String: String] = [:], repeated: [URLQueryItem] = [], direct: Bool = false) -> URL {
         var comps = URLComponents(url: config.url, resolvingAgainstBaseURL: false)!
         var base = comps.percentEncodedPath
         if base.hasSuffix("/") { base.removeLast() }
         comps.percentEncodedPath = base + Self.encodedPath(path)
-        let items = query.filter { !$0.value.isEmpty }.map { URLQueryItem(name: $0.key, value: $0.value) }
-        if !items.isEmpty { comps.queryItems = items.sorted { $0.name < $1.name } }
+        let items = query.filter { !$0.value.isEmpty }.map { URLQueryItem(name: $0.key, value: $0.value) }.sorted { $0.name < $1.name } + repeated
+        if !items.isEmpty { comps.queryItems = items }
         return direct ? comps.url! : HubTransport.resolve(comps.url!, hub: config.url)
     }
 
@@ -236,6 +254,17 @@ nonisolated struct APIClient: Sendable {
         return c
     }
 
+    /// Freeze the current assistant for a settings page, including routes outside `/assistant`.
+    /// An explicit item manager takes precedence; the default still sends no manager header.
+    func currentAssistantSettings() -> APIClient { manager(managerID ?? shownManager) }
+
+    /// Whether two captured settings requests still belong to the same hub and assistant.
+    func sameSettingsScope(as other: APIClient?) -> Bool {
+        guard let other else { return false }
+        return config == other.config && group == other.group
+            && (managerID ?? shownManager) == (other.managerID ?? other.shownManager)
+    }
+
     /// This client for the Persona page while it shows manager `id` (nil or empty: the default's).
     func showing(_ id: String?) -> APIClient {
         var c = self
@@ -254,8 +283,19 @@ nonisolated struct APIClient: Sendable {
         return !(parts.count > 1 && parts[0] == "conversations")
     }
 
-    /// What a request to `path` carries besides the caller's own headers: the manager it names.
+    /// The recordings' part of the knowledge base (`/api/v1/kb/recordings…`: a recording's minutes, a day's recap, the
+    /// hub's list of them). This device syncs its recordings to the default manager whichever assistant is current
+    /// (`/api/v1/recordings` names none), so what was made of them is read there too.
+    nonisolated static func recordingsRoute(_ path: String) -> Bool {
+        let base = "/api/v1/kb/recordings"
+        return path == base || path.hasPrefix(base + "/") || path.hasPrefix(base + "?")
+    }
+
+    /// What a request to `path` carries besides the caller's own headers: the manager it names. None for the
+    /// recordings' part of the knowledge base, whichever manager this client is for (`recordingsRoute`): the knowledge
+    /// page's client names the current assistant on everything else.
     func routing(_ path: String, _ query: [String: String]) -> [String: String] {
+        if Self.recordingsRoute(path) { return [:] }
         let named = managerID ?? (Self.assistantRoute(path, query: query) ? shownManager : nil)
         return named.map { [Self.managerHeader: $0] } ?? [:]
     }
@@ -272,15 +312,17 @@ nonisolated struct APIClient: Sendable {
     /// `opID`: the write's op id (`X-Persona-Op-Id`, docs/protocol/protocol.md「操作回执」): the hub does it once however often
     /// it arrives. A repeat it cannot answer yet comes back `202 {"state":"pending" | "unknown"}`: thrown as an
     /// APIError with `OpReceipt.pendingCode` / `unknownCode`, so no caller takes it for done.
-    func request(_ method: String, _ path: String, query: [String: String] = [:], body: (any Encodable)? = nil,
-                 timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
+    /// `extraHeaders`: what this one request says besides (a hand-off card's approval declares its feature).
+    func request(_ method: String, _ path: String, query: [String: String] = [:], repeated: [URLQueryItem] = [], body: (any Encodable)? = nil,
+                 timeout: TimeInterval = 30, opID: UUID? = nil, extraHeaders: [String: String] = [:]) async throws -> Data {
         let query = larkScoped(path, query)
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
             .merging(routing(path, query)) { _, manager in manager }
+            .merging(extraHeaders) { _, extra in extra }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data: Data
             do {
-                data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
+                data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty }, repeated: repeated,
                                                      body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers, timeout: timeout))
             } catch var error as APIError {
                 error.requestPath = path
@@ -290,12 +332,13 @@ nonisolated struct APIClient: Sendable {
             return data
         }
         if config.isDemo { throw APIError(status: 503, message: String(localized: "Demo mode isn't available")) }
-        var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
+        var req = URLRequest(url: url(path, query: query, repeated: repeated), timeoutInterval: timeout)
         req.httpMethod = method
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
-        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        // The caller's own id when it names one (a page that shows it, to match the hub's log), else a new one.
+        let requestID = headers["X-Client-Request-Id"] ?? String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
         if let body {
@@ -355,6 +398,68 @@ nonisolated struct APIClient: Sendable {
         let http = resp as? HTTPURLResponse
         if http?.statusCode == 304 { return (nil, etag) }
         return (try checked(data, resp, requestID: requestID, path: path), http?.value(forHTTPHeaderField: "ETag"))
+    }
+
+    /// A request whose answer is read as it arrives (the realtime voice saying a text, `voiceSpeak`): the response once
+    /// its headers are in, then its bytes. A status outside 2xx throws as `request` does, with the body it came with.
+    /// Neither the fake transport nor Demo Mode streams: it throws there, and callers do what they do without it.
+    func streamed(_ method: String, _ path: String, body: (any Encodable)? = nil,
+                  timeout: TimeInterval = 30) async throws -> (HTTPURLResponse, URLSession.AsyncBytes) {
+        if transport != nil || config.isDemo { throw APIError(status: 501, message: "Streaming isn't available here") }
+        var req = URLRequest(url: url(path, query: [:]), timeoutInterval: timeout)
+        req.httpMethod = method
+        config.authorize(&req)
+        req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
+        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
+        for (name, value) in routing(path, [:]) { req.setValue(value, forHTTPHeaderField: name) }
+        if let body {
+            req.httpBody = try JSON.encoder.encode(AnyEncodable(body))
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (bytes, resp) = try await session.bytes(for: req, delegate: HubRedirects.shared)
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if !(200..<300).contains(http.statusCode) {
+            var data = Data()
+            for try await byte in bytes {
+                data.append(byte)
+                if data.count >= 16 << 10 { break }
+            }
+            _ = try checked(data, resp, requestID: requestID, path: path)
+        }
+        return (http, bytes)
+    }
+
+    /// `PUT` with `data` as an `application/octet-stream` body (a meeting's gap audio, #3862 phase 5: `PUT …/audio?at=`),
+    /// answered as `request` is. The fake transport gets the bytes as the body. `wifiOnly`: the system sends it over
+    /// neither cellular data nor an expensive network (**Hub transcription on Wi-Fi only**, `URLRequest.keepOnWiFi`).
+    func putBytes(_ path: String, query: [String: String] = [:], data: Data, timeout: TimeInterval = 120,
+                  wifiOnly: Bool = false) async throws -> Data {
+        let query = larkScoped(path, query)
+        if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
+        let headers = clientMetadata.headers.merging(routing(path, query)) { _, manager in manager }
+        if let transport {
+            do {
+                return try await transport(LocalRequest(method: "PUT", path: path, query: query, body: data, headers: headers, timeout: timeout,
+                                                        wifiOnly: wifiOnly))
+            } catch var error as APIError {
+                error.requestPath = path
+                throw error
+            }
+        }
+        var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
+        req.httpMethod = "PUT"
+        req.keepOnWiFi(wifiOnly)
+        config.authorize(&req)
+        req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let requestID = String(UUID().uuidString.prefix(8)).lowercased()
+        req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
+        for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
+        let (body, response) = try await session.upload(for: req, from: data, delegate: HubRedirects.shared)
+        return try checked(body, response, requestID: requestID, path: path)
     }
 
     /// A bounded, staged attachment sent from disk. The fake transport reads it only in tests.
@@ -461,8 +566,9 @@ nonisolated struct APIClient: Sendable {
     }
 
     @discardableResult
-    func post(_ path: String, body: (any Encodable)? = nil, timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
-        try await request("POST", path, body: body ?? [String: String](), timeout: timeout, opID: opID)
+    func post(_ path: String, body: (any Encodable)? = nil, timeout: TimeInterval = 30, opID: UUID? = nil,
+              extraHeaders: [String: String] = [:]) async throws -> Data {
+        try await request("POST", path, body: body ?? [String: String](), timeout: timeout, opID: opID, extraHeaders: extraHeaders)
     }
 
     func delete(_ path: String) async throws {
@@ -472,8 +578,22 @@ nonisolated struct APIClient: Sendable {
     // MARK: Endpoints
 
     struct MachinesResponse: Decodable { var machines: [Machine] }
-    /// A machine's launchers and what runs with none picked (`default`, #2455; nil from an older hub).
-    struct LaunchersResponse: Decodable, Sendable { var launchers: [Launcher]; var `default`: LauncherDefault? }
+    /// A machine's launchers and what runs with none picked (`default`, #2455; nil from an older hub). With
+    /// `purpose=assistant` (#5033) it also carries `unavailable`: launchers and providers that can't run the main chat.
+    struct LaunchersResponse: Decodable, Sendable {
+        var launchers: [Launcher]
+        var `default`: LauncherDefault?
+        var unavailable: [UnavailableLauncher]?
+    }
+
+    /// The body of PUT /api/v1/assistant/conversations/{id}/model (#5033): the pick kept for one conversation.
+    struct ConversationModelBody: Encodable, Sendable {
+        var launcher: String
+        var model: String?
+        var effort: String?
+        var machineID: String
+        enum CodingKeys: String, CodingKey { case launcher, model, effort, machineID = "machine_id" }
+    }
     nonisolated struct SessionsResponse: Decodable, Sendable { var sessions: [Session] }
     struct SessionResponse: Decodable { var session: Session }
     struct ItemsResponse: Decodable, Sendable {
@@ -627,10 +747,12 @@ nonisolated struct APIClient: Sendable {
         struct Body: Encodable { var cookies: [BrowserCookie] }
         return try JSON.decoder.decode(BrowserCookies.self, from: await request("POST", "/api/v1/machines/\(machine)/browser/cookies", body: Body(cookies: cookies), timeout: 150))
     }
-    /// Clears a site's sign-ins, or (nil) all of them.
-    func clearBrowserCookies(machine: String, site: String?) async throws -> BrowserCookies {
-        let query = site.map { ["site": $0] } ?? ["all": "1"]
-        return try JSON.decoder.decode(BrowserCookies.self, from: await request("DELETE", "/api/v1/machines/\(machine)/browser/cookies", query: query, timeout: 150))
+    /// Clears these sites' sign-ins in one call (`?site=a&site=b`), or (nil) all of them.
+    func clearBrowserCookies(machine: String, sites: [String]?) async throws -> BrowserCookies {
+        let path = "/api/v1/machines/\(machine)/browser/cookies"
+        guard let sites else { return try JSON.decoder.decode(BrowserCookies.self, from: await request("DELETE", path, query: ["all": "1"], timeout: 150)) }
+        let named = sites.map { URLQueryItem(name: "site", value: $0) }
+        return try JSON.decoder.decode(BrowserCookies.self, from: await request("DELETE", path, repeated: named, timeout: 150))
     }
 
     /// The group on what the hub returned (docs/protocol/multi-hub.md).
@@ -639,8 +761,20 @@ nonisolated struct APIClient: Sendable {
     func stamp(_ list: [Interaction]) -> [Interaction] { group.isEmpty ? list : list.map { var i = $0; i.group = group; return i } }
     func stamp(_ s: Session) -> Session { var s = s; s.group = group; return s }
     func stamp(_ k: SessionKey) -> SessionKey { var k = k; k.group = group; return k }
-    func launcherList(machine: String) async throws -> LaunchersResponse {
-        try await get("/api/v1/machines/\(machine)/launchers", as: LaunchersResponse.self)
+    func launcherList(machine: String, purpose: String? = nil) async throws -> LaunchersResponse {
+        try await get("/api/v1/machines/\(machine)/launchers",
+                      query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
+    }
+    /// Keeps a pick (launcher, optional model and effort) for one of the assistant's conversations (#5033): its next
+    /// messages run on it, on every device, until it is changed or follows the default again (`deleteConversationModel`).
+    func putConversationModel(machine: String, conversation: String, body: ConversationModelBody) async throws {
+        _ = try await request("PUT",
+                              "/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model",
+                              body: body)
+    }
+    /// The conversation follows Model configuration › Main chat again (DELETE …/conversations/{id}/model, #5033).
+    func deleteConversationModel(machine: String, conversation: String) async throws {
+        try await delete("/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model")
     }
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
     /// ask (a few seconds, kept 10 minutes); refresh asks it again.
@@ -754,7 +888,42 @@ nonisolated struct APIClient: Sendable {
         return stamp(try await post("/api/v1/sessions", body: body, timeout: req.async == true ? 20 : 110, as: SessionResponse.self).session)
     }
 
+    struct CodexTakeoverInfo: Decodable, Sendable {
+        var running: Bool
+        var canResume: Bool
+        var reason: String?
+        var token: String
+        var cwd: String
+        var transcriptPath: String
+        var continuationPrompt: String
+        enum CodingKeys: String, CodingKey {
+            case running, reason, token, cwd
+            case canResume = "can_resume", transcriptPath = "transcript_path", continuationPrompt = "continuation_prompt"
+        }
+    }
+
+    private func codexTakeoverPath(machine: String, session: String) -> String {
+        "/api/v1/machines/\(TodosLogic.pathComponent(machine))/codex/\(TodosLogic.pathComponent(session))/takeover"
+    }
+
+    func codexTakeoverInfo(machine: String, session: String) async throws -> CodexTakeoverInfo {
+        try await get(codexTakeoverPath(machine: machine, session: session))
+    }
+
+    func codexTakeover(machine: String, session: String, token: String, confirmStop: Bool) async throws -> Session {
+        struct Body: Encodable { var token: String; var confirmStop: Bool; enum CodingKeys: String, CodingKey { case token; case confirmStop = "confirm_stop" } }
+        return stamp(try await post(codexTakeoverPath(machine: machine, session: session), body: Body(token: token, confirmStop: confirmStop),
+                                   timeout: 110, as: SessionResponse.self).session)
+    }
+
     private func sp(_ k: SessionKey) -> String { "/api/v1/sessions/\(k.machineID)/\(k.sessionID)" }
+
+    /// Genuine user-input identities and full-history ordinals, without loading transcript bodies.
+    func userInputIndex(_ k: SessionKey) async throws -> ChatUserInputIndex {
+        let index = try await getDecodedOffMain(sp(k) + "/items", query: ["user_inputs": "1", "lazy_images": "1"], as: ChatUserInputIndex.self)
+        guard index.isValid else { throw APIError(status: 0, message: "incomplete user input index") }
+        return index
+    }
 
     /// A page of history going back `turns` whole exchanges (user prompt + answer) before beforeSeq (nil: the latest
     /// page, with no before_seq at all: an empty one reached runtimes as 0, which some refuse).
@@ -846,6 +1015,18 @@ nonisolated struct APIClient: Sendable {
         return try await Task.detached(priority: .utility) { try JSON.decoder.decode(NewerResponse.self, from: data) }.value
     }
 
+    /// How the app sent a message when it was not typed in the app itself (docs/protocol/protocol.md, `via`): such a
+    /// message never counts as the user's own words for a secret hand-off's Always rule.
+    enum MessageVia: String, Codable, Sendable {
+        /// Siri, Shortcuts or another App Intent ("Ask Persona", which runs on a locked phone too).
+        case intent
+        /// The share sheet.
+        case share
+        /// A card's button that writes the message for the user from what the app read (the Today card's Prep, with a
+        /// calendar event's title in it).
+        case card
+    }
+
     struct SendBody: Encodable {
         var text: String
         var images: [ImagePayload]?
@@ -854,19 +1035,30 @@ nonisolated struct APIClient: Sendable {
         var clientMsgID: String?
         var clearDraft: String?
         var todoID: String?
+        var via: MessageVia?
         enum CodingKeys: String, CodingKey {
-            case text, images, launcher, model, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
+            case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
     /// stays the same on a retry (the node types it once); clearDraft is the computer's draft the user agreed to
     /// clear first.
     /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「Operation receipts」).
+    /// via: how the app sent it when not typed in the app itself (Siri, the share sheet).
+    /// Returns whether the message waits behind a question on the computer (`waits_on_computer`, #5890): a Claude
+    /// outside Persona's terminals took it while a dialog only the computer can answer holds it. Only `sendPending`
+    /// (the composer and the outbox flush) tells the user; the other callers drop it.
+    @discardableResult
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
-              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, opID: UUID? = nil) async throws {
-        try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
-                                                           model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID),
-                       timeout: 100, opID: opID)
+              clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Bool {
+        let data = try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
+                                                                      model: model, clientMsgID: clientMsgID, clearDraft: clearDraft, todoID: todoID, via: via),
+                                  timeout: 100, opID: opID)
+        struct Answer: Decodable {
+            var waitsOnComputer: Bool?
+            enum CodingKeys: String, CodingKey { case waitsOnComputer = "waits_on_computer" }
+        }
+        return (try? JSON.decoder.decode(Answer.self, from: data))?.waitsOnComputer == true
     }
     func interrupt(_ k: SessionKey) async throws { try await post(sp(k) + "/interrupt") }
     func attach(_ k: SessionKey) async throws { try await post(sp(k) + "/attach") }
@@ -951,18 +1143,21 @@ nonisolated struct APIClient: Sendable {
         var command: String?
         /// One line that installs and pairs; only when the hub knows the site it was published from.
         var install: Install?
+        /// The manager the computer belongs to now (`add.manager`); nil from a hub before the field.
+        var manager: String?
         enum CodingKeys: String, CodingKey {
-            case token, machine, name, trust, added, command, install, expiresAt = "expires_at", pairLink = "pair_url"
+            case token, machine, name, trust, added, command, install, manager, expiresAt = "expires_at", pairLink = "pair_url"
         }
     }
 
     /// Adds a computer, waiting to be confirmed (`add`): `name` may be Chinese (40 characters at most), `os` is
-    /// mac / linux / windows (which instructions the app shows), `icon` laptop / desktop / server.
-    func computerCode(addNamed name: String, os: String, icon: String) async throws -> ComputerCode {
-        struct Add: Encodable { var name: String; var os: String; var icon: String }
+    /// mac / linux / windows (which instructions the app shows), `icon` laptop / desktop / server. `manager` is the assistant
+    /// the computer is for (its real id, the default's too); nil leaves it to the hub, as a hub before `add.manager` does.
+    func computerCode(addNamed name: String, os: String, icon: String, manager: String? = nil) async throws -> ComputerCode {
+        struct Add: Encodable { var name: String; var os: String; var icon: String; var manager: String? }
         struct Body: Encodable { var add: Add }
         return try JSON.decoder.decode(ComputerCode.self, from: try await request("POST", "/api/v1/auth/pair-codes",
-                                                                                  body: Body(add: Add(name: name, os: os, icon: icon))))
+                                                                                  body: Body(add: Add(name: name, os: os, icon: icon, manager: manager))))
     }
 
     /// A new code for a computer still waiting to be confirmed (`machine`); a confirmed one is 409 `not_pending`.
@@ -988,6 +1183,9 @@ nonisolated struct APIClient: Sendable {
         return try await get(sp(k) + "/screen", query: q)
     }
     func close(_ k: SessionKey) async throws { try await post(sp(k) + "/close") }
+    /// Closes a headless Persona conversation so its next start uses the configured model (#4489, docs/protocol/protocol.md
+    /// 「Going back to the configured model」). Claims nothing: the session's `model_restore` says it is pending.
+    func restoreModel(_ k: SessionKey) async throws { try await post(sp(k) + "/restore-model") }
     private struct ForkBody: Encodable { var at_item_id: String }
     private struct Forked: Decodable { var session_id: String }
     /// Branch to New Chat (#2137): a new session with the conversation up to the end of item's turn; its id.
@@ -1073,10 +1271,25 @@ nonisolated struct APIClient: Sendable {
     }
 
     struct QueueEdit: Encodable { var keep: [Int] }
-    struct QueueResponse: Decodable { var queue: [String] }
+    struct QueueResponse: Decodable {
+        var queue: [String]
+        /// Photos for each returned queue item; a Persona chat includes them so take-back can restore the composer.
+        /// An item without photos is `[]` (the node writes `null` for it, #5858).
+        var images: [[ImagePayload]]?
+
+        private enum CodingKeys: String, CodingKey { case queue, images }
+
+        /// A Persona chat's queue with photos on some messages only: the node answers `null` for a message without any,
+        /// and a strict `[[ImagePayload]]` turned the whole take-back into an error although the hub had done it.
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            queue = try c.decode([String].self, forKey: .queue)
+            images = try c.decodeIfPresent([[ImagePayload]?].self, forKey: .images)?.map { $0 ?? [] }
+        }
+    }
     /// Pulls the queued input back out of claude and re-queues the indexes in `keep`; returns what was queued.
-    func editQueue(_ k: SessionKey, keep: [Int]) async throws -> [String] {
-        try await post(sp(k) + "/queue", body: QueueEdit(keep: keep), as: QueueResponse.self).queue
+    func editQueue(_ k: SessionKey, keep: [Int]) async throws -> QueueResponse {
+        try await post(sp(k) + "/queue", body: QueueEdit(keep: keep), as: QueueResponse.self)
     }
 
     /// Gives the agent what waits in its queue now (#6088, Claude Code's own send-now: a command it runs moves to the
@@ -1095,6 +1308,9 @@ nonisolated struct APIClient: Sendable {
         /// What the assistant is told about the user (Settings › Assistant › About Me).
         var notes: String?
         var timezone: String?
+        /// The user picked `timezone` by hand (#1855, Android's Time zone without Match phone): devices then leave it. nil
+        /// from a hub that was never told, or one without picking.
+        var timezonePicked: Bool?
         /// The main conversation's session id (the Persona tab opens it); nil until there is one.
         var main: String?
         /// Notify Main-Chat Tasks Only in the Main Chat (#1731): tasks the main conversation starts are quiet (`TodoItem.quiet`). The
@@ -1111,11 +1327,68 @@ nonisolated struct APIClient: Sendable {
         /// conversations"), in the hub's order; nil when there are none or from an older hub. The sidebar shows them as
         /// the Directions group, under the names `assistantLeaders()` gives.
         var leaders: [String]?
+        /// The Main Chat Supervises Its Own Tasks (#4927, docs/assistant/unified-entry.md "Background supervisor"): the
+        /// value in effect. Off (the default) means the built-in background supervisor follows up the tasks no leader
+        /// supervises; nil from a hub without the background supervisor, which hides the switch.
+        var mainSupervisesOwnTasks: Bool?
+        /// Suggest the next message after replies in open chats (#4696). Off by default; nil from a hub without the
+        /// setting, which hides the switch.
+        var nextSuggestions: Bool?
+        /// The background supervisor's session id once the hub has made it (read-only); nil until then and from an
+        /// older hub.
+        var backgroundSupervisor: String?
+        /// Hub transcription (#3862 phase 5, docs/assistant/meeting-minutes.md「Choosing the mode」), all nil from a hub
+        /// without `meeting_transcription`: the mode a meeting starts with (`device` until changed, or `hub`), the names
+        /// and words the transcription should spell right (at most 200 of at most 40 characters), which contribution
+        /// transcribes (`""` the built-in voice extension's, else `<extension id>/<contribution id>`), and whether it
+        /// can now (read-only).
+        var meetingTranscriptionDefault: String?
+        var meetingGlossary: [String]?
+        var meetingTranscriptionExtension: String?
+        var meetingTranscriptionReady: Bool?
+        /// The manager that answered (its identity, the default's included): what a write that must name its manager
+        /// names (the session-name settings, #7005). nil from an older hub.
+        var manager: String?
+        // Settings › Assistant Profile › Agent Follow-Up (#7005; the web's Settings › Assistant, "Starting tasks" and
+        // "Agent follow-up"): each the value in effect, nil from a hub without it, which hides its row.
+        /// Start what the owner asked for in a chat right away (#2559). On by default.
+        var startRequestedTasks: Bool?
+        /// `prefer-existing` (the default) or `prefer-new`: the workspace a dispatched task prefers.
+        var taskWorkspacePreference: String?
+        /// Every Agent Persona starts gets a quiet, supervised task (#3617). Off by default.
+        var agentTasks: Bool?
+        /// Hours an idle Agent Persona started runs before it is stopped, its terminal kept (#4754): 0 is never, at
+        /// most 8760; 12 by default.
+        var idleCloseHours: Int?
+        /// Days a closed session with no open task stays listed before it archives itself (#3618): 0 is never, at most
+        /// 3650; 3 by default.
+        var archiveClosedDays: Int?
+        /// Fix unhelpful session names (#4965). On by default; with the two below.
+        var agentAutoNaming: Bool?
+        /// Successful automatic renames per session, 1–1000; 1 by default.
+        var agentAutoNamingMax: Int?
+        /// Hours between regular name updates after new output, 1–8760; 0 (the default) is off.
+        var agentAutoNamingIntervalHours: Int?
         enum CodingKeys: String, CodingKey {
-            case launcher, cwd, conversations, timezone, main, leaders
+            case launcher, cwd, conversations, timezone, main, leaders, manager
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case mainBackgroundFolded = "main_background_folded"
-            case meetingAttendanceDefault = "meeting_attendance_default"
+            case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
+            case mainSupervisesOwnTasks = "main_supervises_own_tasks", backgroundSupervisor = "background_supervisor"
+            case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
+            case meetingTranscriptionExtension = "meeting_transcription_extension"
+            case meetingTranscriptionReady = "meeting_transcription_ready"
+            case nextSuggestions = "next_suggestions"
+            case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
+            case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
+            case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
+        }
+
+        /// Whether conversation `id` is the built-in background supervisor (#5083): listed with the scheduled tasks'
+        /// conversations, never archived, ended or made a direction. Never the main conversation, as on the hub.
+        func isBackgroundSupervisor(_ id: String) -> Bool {
+            !id.isEmpty && id == backgroundSupervisor && id != main
         }
 
         /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
@@ -1129,11 +1402,20 @@ nonisolated struct APIClient: Sendable {
         var name: String?
         var ended: Bool?
     }
-    /// The directions' names by leader conversation id: the current ones with a name (ended ones left out).
-    func directionNames() async throws -> [String: String] {
+    /// Makes a conversation a direction (#4331, `POST /api/v1/assistant/directions/{id}/make`): its work is led from
+    /// there from now on.
+    func makeDirection(_ id: String) async throws {
+        _ = try await request("POST", "/api/v1/assistant/directions/\(id)/make", body: [String: String]())
+    }
+    /// Ends a direction (#4331, `POST /api/v1/assistant/directions/{id}/end`): its tasks keep their supervisor.
+    func endDirection(_ id: String) async throws {
+        _ = try await request("POST", "/api/v1/assistant/directions/\(id)/end")
+    }
+    /// The directions as `GET /api/v1/assistant/leaders` lists them: current ones only (#4331).
+    func leaders() async throws -> [LeaderInfo] {
         struct Body: Decodable { var leaders: [LeaderInfo]? }
         let body = try await get("/api/v1/assistant/leaders", as: Body.self)
-        return Self.directionNames(body.leaders ?? [])
+        return body.leaders ?? []
     }
     static func directionNames(_ list: [LeaderInfo]) -> [String: String] {
         var out: [String: String] = [:]
@@ -1141,6 +1423,16 @@ nonisolated struct APIClient: Sendable {
             if let name = l.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { out[l.id] = name }
         }
         return out
+    }
+    /// The direction tree (#4352, docs/protocol/protocol.md, `DirectionTree`): the directions with their open to-dos
+    /// and Agents, the secretary group last. nil from a hub before it (404): the caller keeps what `leaders()` gave it,
+    /// the sidebar keeps its flat rows and the lists offer no grouping by it.
+    func directionsTree() async throws -> DirectionTree? {
+        do {
+            return try await getDecodedOffMain("/api/v1/assistant/directions/tree", as: DirectionTree.self)
+        } catch let e as APIError where e.status == 404 {
+            return nil
+        }
     }
     /// `st` with its conversations stamped with the manager this client named: the hub relays another manager's answer as
     /// it came, without the `manager` its own lists put on each session. Nothing named: the default's, left as they came.
@@ -1174,18 +1466,48 @@ nonisolated struct APIClient: Sendable {
         var mainTasksQuiet: Bool?
         var mainBackgroundFolded: Bool?
         var meetingAttendanceDefault: String?
+        var mainSupervisesOwnTasks: Bool?
+        /// Hub transcription's settings (phase 5); `[]` clears the glossary. `meeting_transcription_ready` is read-only.
+        var meetingTranscriptionDefault: String?
+        var meetingGlossary: [String]?
+        var meetingTranscriptionExtension: String?
+        var nextSuggestions: Bool?
+        var startRequestedTasks: Bool?
+        var taskWorkspacePreference: String?
+        var agentTasks: Bool?
+        var idleCloseHours: Int?
+        var archiveClosedDays: Int?
+        var agentAutoNaming: Bool?
+        var agentAutoNamingMax: Int?
+        var agentAutoNamingIntervalHours: Int?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
-            case mainBackgroundFolded = "main_background_folded"
+            case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
+            case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
+            case meetingTranscriptionExtension = "meeting_transcription_extension"
+            case nextSuggestions = "next_suggestions"
+            case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
+            case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
+            case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
+            case agentAutoNamingIntervalHours = "agent_auto_naming_interval_hours"
         }
+    }
+    /// A sparse write of the assistant's settings: only the fields set are sent (Agent Follow-Up, #7005).
+    func setAssistant(_ body: AssistantConfigBody) async throws -> AssistantState {
+        owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant", body: body)))
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
                       mainTasksQuiet: Bool? = nil, mainBackgroundFolded: Bool? = nil,
-                      meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
+                      meetingAttendanceDefault: String? = nil, mainSupervisesOwnTasks: Bool? = nil,
+                      meetingTranscriptionDefault: String? = nil, meetingGlossary: [String]? = nil,
+                      meetingTranscriptionExtension: String? = nil, nextSuggestions: Bool? = nil) async throws -> AssistantState {
         owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
             body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet,
-                                      mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault))))
+                                      mainBackgroundFolded: mainBackgroundFolded, meetingAttendanceDefault: meetingAttendanceDefault,
+                                      mainSupervisesOwnTasks: mainSupervisesOwnTasks,
+                                      meetingTranscriptionDefault: meetingTranscriptionDefault, meetingGlossary: meetingGlossary,
+                                      meetingTranscriptionExtension: meetingTranscriptionExtension, nextSuggestions: nextSuggestions))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).
@@ -1215,11 +1537,11 @@ nonisolated struct APIClient: Sendable {
     // MARK: Assistant schedule, memory (docs/assistant/assistant.md)
 
     /// Something the assistant does on its own (docs/assistant/assistant.md「Scheduled tasks」): once (a follow-up it scheduled), every
-    /// day at a time (a morning briefing), or every N minutes (a patrol). Runs go into the conversation it came from, else into the
+    /// day at a time (a morning briefing), every N minutes (a patrol), or on a cron expression (hubs with task_cron). Runs go into the conversation it came from, else into the
     /// task's own one (the first run starts it, the next ones continue it), with its own launcher / permission mode /
     /// effort (nil = the assistant's defaults); pushed when done.
     struct ScheduledTask: Codable, Identifiable, Hashable, Sendable {
-        enum Repeat: String, Codable, Sendable, CaseIterable { case once, daily, interval }
+        enum Repeat: String, Codable, Sendable, CaseIterable { case once, daily, interval, cron }
         var id: String
         var title: String
         var prompt: String
@@ -1228,6 +1550,11 @@ nonisolated struct APIClient: Sendable {
         var time: String          // daily: "HH:MM" in the phone's time zone
         var weekdays: [Int]       // daily: 1 = Monday … 7 = Sunday; empty = every day
         var everyMinutes: Int     // interval
+        /// cron: "minute hour day-of-month month day-of-week" (or @daily…) in the user's time zone; sent back as it is, so the
+        /// hub keeps it (the app shows it, the web edits it).
+        var cron: String = ""
+        var cronText: String?     // read-only: the expression in words in the app's language, nil when the hub has none
+        var nextRuns: [Date] = [] // read-only: a cron task's next runs
         var enabled: Bool
         var machineID: String?
         var sessionID: String?    // the conversation it came from, runs go into it; nil = the task's own one
@@ -1241,6 +1568,10 @@ nonisolated struct APIClient: Sendable {
         /// "asked" only what a run sends with notify_user. Such a task always runs in its own conversation. Sent only when
         /// set: a hub keeps it when left out, and an older hub never gets it.
         var push: String?
+        /// When Done, Put It in the Inbox (hubs with the task_inbox feature, docs/assistant/assistant.md「Put it in the Inbox when done」): nil or ""
+        /// nothing, "worthy" a row only when a run finds something worth a look, "every" a row after every run. Independent of `push`.
+        /// Sent only when set: a hub keeps it when left out, and an older hub never gets it.
+        var inbox: String?
         var createdBy: String?    // "assistant": Persona set it up from a conversation
         var lastRun: Date?        // read-only, set by the hub
         var lastSessionID: String?
@@ -1248,18 +1579,22 @@ nonisolated struct APIClient: Sendable {
         var lastError: String?
         var nextRun: Date?
         enum CodingKeys: String, CodingKey {
-            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push
+            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox
             case repeats = "repeat", everyMinutes = "every_minutes", machineID = "machine_id", sessionID = "session_id"
             case permissionMode = "permission_mode", createdBy = "created_by"
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
             case lastStatus = "last_status", lastError = "last_error"
             case runMachineID = "run_machine_id", runSessionID = "run_session_id"
+            case cron, cronText = "cron_text", nextRuns = "next_runs"
         }
         /// Push When Done is Only Its Alerts: a run's answer is not pushed, only what it sends with notify_user.
         var pushesOnlyAsked: Bool { push == Self.pushAsked }
         static let pushAsked = "asked"
         /// The hub feature that says it takes `push`; without it the editor leaves the setting out.
         static let pushFeature = "task_push"
+        /// The hub feature that says it takes `inbox`; without it the editor leaves the setting out.
+        static let inboxFeature = "task_inbox"
+        static let inboxWorthy = "worthy", inboxEvery = "every"
         /// Where the next run goes when the task isn't continuing the conversation it came from.
         var ownConversation: SessionKey? {
             guard let m = runMachineID, let s = runSessionID else { return nil }
@@ -1282,11 +1617,15 @@ nonisolated struct APIClient: Sendable {
             time = text(.time) ?? "09:00"
             weekdays = try c.decodeIfPresent([Int].self, forKey: .weekdays) ?? []
             everyMinutes = try c.decodeIfPresent(Int.self, forKey: .everyMinutes) ?? 0
+            cron = text(.cron) ?? ""
+            cronText = text(.cronText)
+            nextRuns = ((try? c.decodeIfPresent([Date].self, forKey: .nextRuns)) ?? nil)?.compactMap(\.realDate) ?? []
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
             machineID = text(.machineID); sessionID = text(.sessionID)
             launcher = text(.launcher); permissionMode = text(.permissionMode); effort = text(.effort)
             createdBy = text(.createdBy)
             push = text(.push)
+            inbox = text(.inbox)
             lastRun = date(.lastRun); lastSessionID = text(.lastSessionID); lastStatus = text(.lastStatus); lastError = text(.lastError)
             nextRun = date(.nextRun)
             runMachineID = text(.runMachineID); runSessionID = text(.runSessionID)
@@ -1296,9 +1635,11 @@ nonisolated struct APIClient: Sendable {
             try c.encode(id, forKey: .id); try c.encode(title, forKey: .title); try c.encode(prompt, forKey: .prompt)
             try c.encode(repeats, forKey: .repeats); try c.encodeIfPresent(at, forKey: .at)
             try c.encode(time, forKey: .time); try c.encode(weekdays, forKey: .weekdays); try c.encode(everyMinutes, forKey: .everyMinutes)
+            if !cron.isEmpty { try c.encode(cron, forKey: .cron) } // only a cron task has one: an older hub never gets it
             try c.encode(enabled, forKey: .enabled); try c.encode(sessionID ?? "", forKey: .sessionID)
             try c.encode(permissionMode ?? "", forKey: .permissionMode)
             try c.encodeIfPresent(push, forKey: .push)
+            try c.encodeIfPresent(inbox, forKey: .inbox)
             if includesModelSettings {
                 try c.encode(launcher ?? "", forKey: .launcher)
                 try c.encode(effort ?? "", forKey: .effort)
@@ -1473,14 +1814,16 @@ nonisolated struct APIClient: Sendable {
         var main: Bool?
         /// "health": the conversation opens in the health space (docs/assistant/health.md); never with `main`.
         var space: String?
-        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space; case permissionMode = "permission_mode" }
+        var via: MessageVia?
+        enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space, via; case permissionMode = "permission_mode" }
     }
     /// `main`: the new conversation becomes the main one. `space`: the space it opens in (nil: the assistant's own).
+    /// `via`: how the app sent the prompt when not typed in the app itself (Siri, the share sheet).
     /// `opID`: the first message's op id (`AssistantStart`, hub feature `assistant_start_ops`): the hub starts it once.
     func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, permissionMode: String? = nil,
-                           effort: String? = nil, main: Bool = false, space: String? = nil, opID: UUID? = nil) async throws -> Session {
+                           effort: String? = nil, main: Bool = false, space: String? = nil, via: MessageVia? = nil, opID: UUID? = nil) async throws -> Session {
         let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
-                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space)
+                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space, via: via)
         // The health space is the default manager's (docs/assistant/health.md), whichever the Persona page shows.
         let api = space == nil ? self : showing(nil)
         var s = try JSON.decoder.decode(SessionResponse.self, from: try await api.post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session
@@ -1568,8 +1911,11 @@ nonisolated struct APIClient: Sendable {
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID()) async throws -> ResolveResult {
-        try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID))
+    /// `handoffCard`: a hand-off card's own approval, which says so (`SecretHandoff.feature`) on this request alone.
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false) async throws -> ResolveResult {
+        let headers = handoffCard ? ["X-Persona-Features": SecretHandoff.feature] : [:]
+        return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID,
+                                                                                 extraHeaders: headers))
     }
 
     /// One session's cards and how they ended (GET /api/v1/interactions/history), newest first; a row this app can't read
@@ -1683,6 +2029,20 @@ nonisolated struct APIClient: Sendable {
     /// The persona this device's Live Activity draws, alone (the PUT merges): the hub echoes it in the device's pushes.
     func setFleetLook(device: String, _ look: FleetLook) async throws {
         _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: FleetLookPut(look: look))
+    }
+    /// Today's tokens by the hour (`GET /api/v1/usage`'s `hourly`, #5721): 24 numbers from midnight; empty from an older
+    /// hub, which has no such field.
+    func usageHourly() async throws -> [Int] {
+        struct Body: Decodable {
+            struct Usage: Decodable { var hourly: [Int]? }
+            var usage: Usage
+        }
+        return try await get("/api/v1/usage", as: Body.self).usage.hourly ?? []
+    }
+    /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
+    /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.
+    func setHasWidgets(device: String, _ has: Bool) async throws {
+        _ = try await request("PUT", "/api/v1/devices/\(device)/prefs", body: WidgetsPut(widgets: has))
     }
     func setNotifyPrefs(device: String, _ prefs: NotifyPrefs) async throws -> NotifyPrefs {
         try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: prefs))

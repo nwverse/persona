@@ -63,6 +63,9 @@ struct AgentTally: Equatable {
 /// a build unlike the hub's with Redeploy. The machine list is live; the metrics refresh every 10 s while the page is
 /// on screen and the app is in front. A tap opens the machine.
 struct MachinesView: View {
+    var settingsScope = false
+    @State private var settingsContext: AssistantSettingsRequestScope?
+    @State private var settingsMachines: [Machine] = []
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var phase
     @Environment(\.tabIsActive) private var inFront
@@ -75,7 +78,8 @@ struct MachinesView: View {
 
     var body: some View {
         // Behind another section (the Mac keeps the page, `MacPageStack`): as they are now, not followed push by push.
-        let machines = model.machines(inFront: inFront)
+        // The current assistant's computers, where the hub has several assistants; Settings lists its own scope's.
+        let machines = settingsScope ? settingsMachines : model.scopedMachines(inFront: inFront)
         let agents = MachineDetailView.agentsByMachine(model, inFront: inFront)
         let tallies = Dictionary(machines.map { ($0.ref, AgentTally(agents[$0.ref] ?? [])) }, uniquingKeysWith: { a, _ in a })
         let alerts = Dictionary(machines.map { ($0.ref, alertLevel($0)) }, uniquingKeysWith: { a, _ in a })
@@ -141,6 +145,14 @@ struct MachinesView: View {
             }
         }
         .addComputerSheet($adding)
+        .task {
+            if settingsScope {
+                settingsContext = AssistantSettingsRequestScope(model)
+                updateSettingsMachines()
+            }
+        }
+        .onChange(of: model.machines) { if settingsScope { updateSettingsMachines() } }
+        .onChange(of: model.managerRoster) { if settingsScope { updateSettingsMachines() } }
         .refreshable {
             // The requests hit different endpoints and write separate state, so start them together: one slow
             // hub must not keep the others waiting (nor the refresh spinner).
@@ -176,6 +188,12 @@ struct MachinesView: View {
             await UsageWindowsStore.shared.poll(model)
         }
         #endif
+    }
+
+    private func updateSettingsMachines() {
+        guard var context = settingsContext else { return }
+        if context.group == model.hub?.group { context.roster = model.managerRoster }
+        settingsMachines = context.machines(model.machines)
     }
 
     /// The cards, what needs a look first.
@@ -245,8 +263,10 @@ struct MachinesView: View {
     private func loadMetrics() async {
         // Every group at once, and only those whose link is up: a hub out of reach held the others' numbers back by its
         // requests' 30 s every round (#4705). One that is not asked keeps its last numbers.
-        let apis = Dictionary(model.groupIDs.compactMap { g in model.api(g).map { (g, $0) } }, uniquingKeysWith: { a, _ in a })
-        let asked = HubFanOut.asked(model.groupIDs.filter { apis[$0] != nil }) { model.socket($0)?.looksConnected == true }
+        let context = settingsContext ?? AssistantSettingsRequestScope(model)
+        let groups = settingsScope ? [context.group] : model.groupIDs
+        let apis = Dictionary(groups.compactMap { g in model.api(g).map { (g, settingsScope ? $0.manager(context.manager) : $0) } }, uniquingKeysWith: { a, _ in a })
+        let asked = HubFanOut.asked(groups.filter { apis[$0] != nil }) { model.socket($0)?.looksConnected == true }
         await HubFanOut.run(asked, fetch: { g in try await apis[g]!.metricsOverview() }) { g, result in
             switch result {
             case .success(let fresh):
@@ -277,7 +297,6 @@ struct DotLabel: LabelStyle {
 /// One machine: on Machines with its numbers, and at the top of its page without them (the page has the charts).
 struct MachineCard: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     var machine: Machine
     /// Its agents counted; nil counts them here.
     var tally: AgentTally?
@@ -328,7 +347,7 @@ struct MachineCard: View {
                 .layoutPriority(1)
             } else if let manager = model.offlineManager(of: machine, group: machine.group) {
                 // Offline with its manager on a hub with several (#1919): the hub's words would blame the computer.
-                Text("Its manager “\(manager.name)” is offline. It comes back online once the manager is back.")
+                Text("Its assistant “\(manager.name)” is offline. It comes back online once the assistant is back.")
                     .font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(3)
                     .accessibilityIdentifier("machine.managerOffline")
             } else if let lines = AddComputerText.machineLines(machine) {
@@ -392,17 +411,10 @@ struct MachineCard: View {
         }
     }
 
-    /// Side by side; at the accessibility text sizes one under another, where four in a row left each a quarter of the
-    /// card and broke its title a character a line (#1659).
+    /// Four columns while every value fits its share whole, two by two when one does not.
     private func metricsRow(_ s: MetricSample?) -> some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.m) { metricCells(s) }
-            } else {
-                HStack(alignment: .top, spacing: Theme.Space.m) { metricCells(s) }
-            }
-        }
-        .accessibilityElement(children: .combine)
+        EqualColumns { metricCells(s) }
+            .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private func metricCells(_ s: MetricSample?) -> some View {
@@ -455,7 +467,6 @@ struct MachineCard: View {
 /// computer's share as a bar in shades of the text ink (the four kinds' colors are the charts').
 struct TodayTokensCard: View {
     var shares: [(name: String, usage: UsageCard)]
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let today = shares.reduce(UsageTokens()) { $0 + $1.usage.today }
@@ -463,17 +474,10 @@ struct TodayTokensCard: View {
         let ranked = shares.filter { $0.usage.today.total > 0 }.sorted { $0.usage.today.total > $1.usage.today.total }
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("Today's Tokens").font(Theme.Font.heading)
-            // Side by side; at the accessibility text sizes one under another, where a third of the card each cut them
-            // to a character (#1929).
-            let cells = Group {
+            EqualColumns {
                 cell(String(localized: "Total [Token Usage]"), TokenFormat.count(today.total))
                 cell(String(localized: "Now [Token Usage]"), TokenFormat.perMinute(perMinute))
                 cell(String(localized: "Cache Hit Rate"), today.hitRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
-            }
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.s) { cells }
-            } else {
-                HStack(alignment: .top, spacing: Theme.Space.m) { cells }
             }
             if today.total > 0 {
                 GeometryReader { g in
@@ -522,22 +526,13 @@ struct TodayTokensCard: View {
 /// Needs You / Working / Idle side by side, a dot and a count each; a state with none stays gray.
 struct AgentCounts: View {
     var tally: AgentTally
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        // Side by side; at the accessibility text sizes one under another, where three in a row kept a character of
-        // each state's word (#1929).
-        let items = Group {
+        // Side by side in equal shares; one under another when a word does not fit its share.
+        EqualColumns(spacing: Theme.Space.s, rowSpacing: Theme.Space.xs, fallbackColumns: 1) {
             item(tally.needsYou, StateName.needsYou.text, tone: StatusPalette.needsYou, ink: StatusPalette.needsYou.text)
             item(tally.working, StateName.working.text, tone: StatusPalette.working, ink: StatusPalette.working.text)
             item(tally.idle, String(localized: "Idle"), tone: StatusPalette.idle, ink: Color.primary)
-        }
-        Group {
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.xs) { items }
-            } else {
-                HStack(spacing: Theme.Space.s) { items }
-            }
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s)
@@ -549,7 +544,7 @@ struct AgentCounts: View {
             Circle().fill(n > 0 ? tone.dot : StatusPalette.offline.dot).scaledFrame(width: Theme.Size.dotS, height: Theme.Size.dotS)
             Text("\(n)").font(Theme.Font.bodyStrong.monospacedDigit()).foregroundStyle(n > 0 ? ink : Color.secondary)
                 .contentTransition(.numericText(value: Double(n)))
-            Text(label).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1)
+            Text(label).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1).fixedSize()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
@@ -568,7 +563,7 @@ struct MetricCell<Chart: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.xs) {
-                Text(title).font(Theme.Font.label).foregroundStyle(Color.secondary)
+                Text(title).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1).minimumScaleFactor(0.6)
                 if level > .normal {
                     ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.label).imageScale(.small).foregroundStyle(MetricColor.level(level))
                 }
@@ -578,6 +573,7 @@ struct MetricCell<Chart: View>: View {
             chart.scaledFrame(height: Theme.Size.wellS).padding(.top, Theme.Space.xxs)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .equalColumnShrink(0.7)
     }
 }
 

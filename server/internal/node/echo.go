@@ -271,6 +271,7 @@ func echoLines(items []proto.Item) []echoLine {
 
 var echoDropped = []*lazyre.Regexp{
 	transcript.ContextRe,
+	transcript.ViewErrorsRe, // the assistant's view feedback before the message
 	lazyre.New(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
 	lazyre.New(`(?s)<attached_images>.*?</attached_images>`),
 	lazyre.New(`<[\\/]*pasted_content[^>]*>`),
@@ -379,6 +380,17 @@ func (n *Node) sendEchoed(id, clientMsgID, text string, images int, after int, s
 		n.echoes.forget(id, clientMsgID)
 	}
 	return err
+}
+
+// expectFirstLine ties a new conversation's first message to its line once the conversation's id is known (a start
+// that did not name it): sent at at, after nothing, the hub told as after a send.
+func (n *Node) expectFirstLine(id, clientMsgID, text string, images int, at time.Time) {
+	if !n.echoes.expect(echoRecord{SessionID: id, ClientMsgID: clientMsgID, Text: text, Images: images, SentAt: at}) {
+		return
+	}
+	if cur, ok := n.echoes.record(id, clientMsgID); ok {
+		n.notifyEcho(cur)
+	}
 }
 
 func (n *Node) notifyEcho(r echoRecord) {

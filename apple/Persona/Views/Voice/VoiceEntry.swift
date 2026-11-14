@@ -20,7 +20,7 @@ extension VoiceSupport {
     /// its own conversations.
     static func label(_ session: Session?, model: AppModel) -> String {
         guard let session else { return "Claude" }
-        return session.assistant ? model.assistantDisplayName : session.agentLabel
+        return session.assistant ? model.persona.name : session.agentLabel
     }
 
     /// Starts a call bound to `key` where the page offers one; otherwise what to say about it.
@@ -46,7 +46,8 @@ extension VoiceSupport {
             model.settingsPath = NavigationPath([SettingsPage.plugins])
             model.selectedTab = .settings
         case .voiceExtension(let id):
-            model.settingsPath = NavigationPath([SettingsPage.plugins, SettingsPage.plugin(id)])
+            // The default assistant's copy, which calls talk to (`VoiceSupport` reads it naming none), whichever is current.
+            model.settingsPath = NavigationPath([SettingsPage.plugins, SettingsPage.plugin(id, manager: model.settingsRoute(nil))])
             model.selectedTab = .settings
         case .model:
             break
@@ -135,7 +136,8 @@ struct VoiceEndedStrip: View {
         } message: {
             Text(note.details ?? "")
         }
-        .modelConfigurationSheet(isPresented: $showModel, purposeID: "plugin." + call.extensionID)
+        // The default assistant's: calls talk to its voice extension.
+        .modelConfigurationSheet(isPresented: $showModel, purposeID: "plugin." + call.extensionID, owner: .defaultAssistant)
     }
 }
 

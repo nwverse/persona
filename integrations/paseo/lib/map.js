@@ -2,13 +2,25 @@
 // items, its providers → launchers, a permission request ↔ an interaction and its answer. No I/O: the bridge
 // (bridge.js) hands in what the daemon said; the tests feed recorded shapes.
 
-import { basename } from 'node:path'
+import { createHash } from 'node:crypto'
+import { basename, join } from 'node:path'
 import { appToolName, clipInput, interactionId, snippet, summaryOf } from '../../runtime-sdk/index.js'
 
 /** The runtime id: the engine's (proto.EnginePaseo), the space kind, the agent of sessions the apps do not know. */
 export const RUNTIME = 'paseo'
 /** The label keeping a session's id in Persona (sessions started or taken over from Persona). */
 export const SESSION_LABEL = 'persona.session'
+/** The label Paseo puts on an agent another agent created (its create_agent tool): the creating agent's id. */
+export const PARENT_LABEL = 'paseo.parent-agent-id'
+/** The label on the agent a launcher check runs (bridge.js check): never a session, deleted once it answered. */
+export const CHECK_LABEL = 'persona.check'
+/**
+ * The label beside SESSION_LABEL when the bridge kept the id itself on an agent Persona neither started nor took over
+ * (Paseo moved it to another Claude session: a fork, a rewind): the id is the session's, the agent is not Persona's own.
+ */
+export const KEPT_LABEL = 'persona.kept'
+/** Where the bridge's copy of an agent holds the id it keeps for it before Paseo's record has the label (bridge.js keptIdOf). */
+export const KEPT = Symbol('persona.kept')
 /** Persona's effort levels, weakest first (proto.EffortLevels). */
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** Persona's permission modes (proto.PermissionModes): Claude Code's, which Paseo's Claude providers take as they are. */
@@ -38,6 +50,8 @@ export const LAUNCHER_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/
 export const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 /** A Claude Code session id (the node's idRe). */
 export const CLAUDE_ID = /^[0-9a-fA-F-]{8,64}$/
+/** A Codex thread id (the node's rolloutUUID). */
+export const CODEX_THREAD = /^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/
 
 // ---- providers ----
 
@@ -118,14 +132,15 @@ export function defaultProvider(entries = [], roots = {}) {
 
 /**
  * The id a Paseo agent has in Persona, undefined while it has none: the label Persona left on it (it started or took
- * the session over); else, for Claude Code, its Claude session id — the id the same conversation has everywhere in
- * Persona ("Offline", herdr) — once Paseo has one; else paseo-<agent id>.
+ * the session over, or the bridge kept the id); else, for Claude Code, the id the bridge keeps for it (KEPT: the session
+ * it was listed under before Paseo moved it to a fork), else its Claude session id — the id the same conversation has
+ * everywhere in Persona ("Offline", herdr) — once Paseo has one; else paseo-<agent id>.
  */
 export function sessionIdOf(agent, roots = {}) {
   const l = agent?.labels?.[SESSION_LABEL]
   if (typeof l === 'string' && SESSION_ID.test(l)) return l
   if (agentRoot(agent, roots) === 'claude') {
-    const c = claudeId(agent)
+    const c = agent?.[KEPT] ?? claudeId(agent)
     return c && SESSION_ID.test(c) ? c : undefined
   }
   return typeof agent?.id === 'string' && agent.id ? `${RUNTIME}-${agent.id}` : undefined
@@ -150,20 +165,91 @@ export function transcriptOf(agent, roots = {}) {
 }
 
 /**
+ * The Codex thread an agent's conversation is (runtime.sessions' codex_thread): the thread its Codex persists, for an
+ * agent running Codex; none for any other. The node finds the thread's rollout on its own as well: named here, it
+ * lists the conversation once, as this session, with the thread's own subagents under it (#4495).
+ */
+export function codexThreadOf(agent, roots = {}) {
+  if (agentRoot(agent, roots) !== 'codex') return undefined
+  const p = agent?.persistence
+  for (const id of [p?.metadata?.threadId, p?.sessionId, agent?.runtimeInfo?.sessionId]) {
+    if (typeof id === 'string' && CODEX_THREAD.test(id)) return id
+  }
+  return undefined
+}
+
+/**
+ * The agent that created this one, by its Paseo id: a delegated agent (Paseo's create_agent, as an orchestrator's
+ * reviewers). Undefined for an agent the user started, and once Paseo detached it from its creator.
+ */
+export function parentAgentId(agent) {
+  const id = agent?.labels?.[PARENT_LABEL]
+  return typeof id === 'string' && id.trim() ? id.trim() : undefined
+}
+
+/**
+ * Whether an agent archived in Paseo stays a row of its own, not running (#4771, #5129): one of the user's own that ran
+ * Claude Code or Codex, whose session id is not its transcript's or thread's: one Persona started (paseo-<agent id>) or took over, which keeps
+ * its id on the persona.session label. Named to the node as a transcript (unlisted_transcripts) it would come back
+ * under the transcript's id, and what Persona keeps under the session's own (a to-do's link, a pin, an archive mark)
+ * would be left behind. Codex requires Persona's valid label: agents started in Paseo itself keep their archive behavior.
+ */
+export function archivedUnderOwnId(agent, roots = {}) {
+  if (!agent?.archivedAt || parentAgentId(agent)) return false
+  const transcript = transcriptOf(agent, roots)
+  const id = sessionIdOf(agent, roots)
+  if (transcript) return Boolean(id && id !== transcript)
+  const label = agent?.labels?.[SESSION_LABEL]
+  const thread = codexThreadOf(agent, roots)
+  return Boolean(thread && typeof label === 'string' && SESSION_ID.test(label) && label !== thread)
+}
+
+/**
+ * How Paseo can rewind an agent's conversation (agent.rewind.request), by what its provider says it supports:
+ * conversation: back to before a message of the user's; code: the files too in the same step (Paseo's "both").
+ * Claude Code does both; Codex, pi and omp the conversation only; OpenCode only both at once, which is no conversation
+ * rewind of Persona's. A Paseo too old to say does neither.
+ */
+export function rewindOf(agent) {
+  const c = agent?.capabilities ?? {}
+  const conversation = c.supportsRewindConversation === true
+  return { conversation, code: conversation && c.supportsRewindBoth === true }
+}
+
+/**
+ * A user message as a rewind compares it (bridge.js rewind): Persona's context blocks left out (the chat shows them as
+ * rows of their own), white space ignored. Empty for what the user did not type (a command's echo, an interruption).
+ */
+export function promptKey(text) {
+  if (typeof text !== 'string') return ''
+  const t = text.replace(/<persona-context\b[^>]*>[\s\S]*?<\/persona-context>/g, '').trim()
+  if (/^<(command-name|command-message|local-command-[a-z]+)>/.test(t) || /^\[Request interrupted/.test(t)) return ''
+  return t.replace(/\s+/g, '')
+}
+
+/**
  * A session row's status for an agent: needing you while a request waits, working, "Offline" when closed. Stopped (idle,
  * or a turn that failed): done while Paseo says it waits for you to look at it (requiresAttention, cleared once you
  * open it in Paseo), idle — seen — once it does not (#2831), as herdr's done / idle carry herdr's own seen state.
  * A Paseo without that flag: done once it has run a turn.
+ * @param {object} agent
+ * @param {{ quiet?: boolean, fleet?: boolean }} [o]
+ *   quiet: an agent another agent created, in that agent's workspace (#4494). It never waits to be looked at: Paseo
+ *   sets the flag on it like on any agent, but shows it on no workspace and notifies nobody, its creator is told what
+ *   it did, and nobody opens it there to clear the flag.
+ *   fleet: agents it created have not finished. Closed meanwhile (Paseo let its process go) it is not "Offline":
+ *   their reports wake it, and a list of what runs keeps it, with them under it.
  */
-export function rowStatus(agent) {
+export function rowStatus(agent, o = {}) {
   if ((agent?.pendingPermissions?.length ?? 0) > 0) return 'blocked'
   switch (agent?.status) {
     case 'running':
     case 'initializing':
       return 'working'
     case 'closed':
-      return 'offline'
+      return o.fleet ? 'idle' : 'offline'
   }
+  if (o.quiet) return 'idle'
   if (typeof agent?.requiresAttention === 'boolean') return agent.requiresAttention ? 'done' : 'idle'
   return agent?.status === 'error' || agent?.lastUserMessageAt ? 'done' : 'idle'
 }
@@ -195,7 +281,7 @@ export function strayRecord(project) {
   return project.projectName === basename(c.worktreeRoot ?? c.cwd ?? '')
 }
 
-/** The name of an agent's slot: its Paseo workspace's title, else the branch, else the folder. */
+/** The name of the Paseo workspace an agent is in (its row's slot_name): its title, else the branch, else the folder. */
 export function slotNameOf(project, cwd) {
   const title = typeof project?.workspaceName === 'string' ? project.workspaceName.trim() : ''
   const branch = project?.checkout?.currentBranch
@@ -203,7 +289,7 @@ export function slotNameOf(project, cwd) {
 }
 
 /** The repository a placement belongs to: the main checkout's directory for a worktree, else its own. */
-function repoRootOf(project) {
+export function repoRootOf(project) {
   const c = project?.checkout
   const root = linkedWorktree(project) ? c.mainRepoRoot : (c?.worktreeRoot ?? c?.cwd)
   return typeof root === 'string' && root ? root : undefined
@@ -256,14 +342,19 @@ export function projectSpaces(placed, canon = (p) => p) {
  * The runtime.sessions row of an agent (docs/integrations/runtimes.md "What to implement"), undefined for one not listed.
  * @param {object} agent - an AgentSnapshotPayload
  * @param {{ project?: object, roots?: Record<string, string>, labels?: Record<string, string>, lastText?: string,
- *   spaceId?: string, spaceName?: string }} [o]
+ *   spaceId?: string, spaceName?: string, parent?: string, quiet?: boolean, fleet?: object[],
+ *   canon?: (path: string) => string, archived?: boolean }} [o]
  *   project: its ProjectPlacement; labels: provider id → its label (the name of a provider the apps do not know);
- *   spaceId, spaceName: its project space and that space's name (projectSpaces).
+ *   spaceId, spaceName: its project space and that space's name (projectSpaces); parent: the session of the agent that
+ *   created it, when that one is listed beside it; quiet: Paseo shows what it did on no workspace (rowStatus); fleet:
+ *   the agents it created that have not finished (the bridge knows all three); canon: a path as its physical
+ *   directory (the bridge resolves symbolic links); archived: an agent archived in Paseo that is listed all the same
+ *   (archivedUnderOwnId): not running, whatever its record says. Without it an archived agent has no row.
  */
 export function agentRow(agent, o = {}) {
   const roots = o.roots ?? {}
   const id = sessionIdOf(agent, roots)
-  if (!id || agent?.archivedAt) return undefined
+  if (!id || (agent?.archivedAt && !o.archived)) return undefined
   const root = agentRoot(agent, roots)
   const cwd = typeof agent.cwd === 'string' ? agent.cwd : ''
   const p = o.project
@@ -272,7 +363,7 @@ export function agentRow(agent, o = {}) {
     session_id: id,
     title: (typeof agent.title === 'string' && agent.title.trim()) || basename(cwd),
     cwd,
-    status: rowStatus(agent),
+    status: o.archived ? 'offline' : rowStatus(agent, { quiet: o.quiet, fleet: (o.fleet?.length ?? 0) > 0 }),
     updated_at: new Date(Date.parse(agent.updatedAt) || Date.now()).toISOString(),
     rev: Date.parse(agent.updatedAt) || 0,
     space_id: space ?? (agent.workspaceId || cwd),
@@ -280,14 +371,22 @@ export function agentRow(agent, o = {}) {
     agent: appAgent(root),
     launcher: agent.provider,
   }
-  // Its Paseo workspace (a worktree, or one of the tasks in a folder) is its slot in the project.
-  if (space && typeof agent.workspaceId === 'string' && agent.workspaceId) {
-    row.slot_id = agent.workspaceId
-    row.slot_name = slotNameOf(p, cwd)
-  }
+  // When it was created: a delegated agent's card in its creator's chat counts its running time from it (#5120).
+  const created = Date.parse(agent.createdAt)
+  if (created) row.started_at = new Date(created).toISOString()
+  // Its Paseo workspace (a worktree, or one of the tasks in a folder) names where in the project it is. It is no slot:
+  // a slot is one tab, and the apps draw the agents sharing one as that tab's panes (one row for them all, each named
+  // by its agent; one that stopped running "replaced" by another there). A workspace's agents are conversations of
+  // their own, as in Paseo's own tabs (#4493).
+  if (space && typeof agent.workspaceId === 'string' && agent.workspaceId) row.slot_name = slotNameOf(p, cwd)
+  // The workspace itself, by id: the node keeps it on the row of the engine's runtime, and the apps tie the session to
+  // that workspace's row in the catalog (runtime.workspaces, workspaceRow), agents in it or not.
+  if (typeof agent.workspaceId === 'string' && SESSION_ID.test(agent.workspaceId)) row.workspace_id = agent.workspaceId
   // Its repository, for "By repo" (#2840): Paseo keeps its worktrees under its own folder, where the path names none.
+  // By its physical directory (#4492), as the node names the working tree: a repository whose sessions write its path
+  // two ways (a home behind a symbolic link) is two projects in the apps.
   const repo = p?.checkout?.isGit ? repoRootOf(p) : undefined
-  if (repo) row.repo_root = repo
+  if (repo) row.repo_root = o.canon ? o.canon(repo) : repo
   if (row.agent === RUNTIME && o.labels?.[agent.provider]) row.agent_label = o.labels[agent.provider]
   const model = agent.model ?? agent.runtimeInfo?.model
   if (typeof model === 'string' && model) row.model = model
@@ -295,11 +394,83 @@ export function agentRow(agent, o = {}) {
   if (mode) row.permission_mode = mode
   const effort = agent.effectiveThinkingOptionId ?? agent.thinkingOptionId
   if (EFFORTS.includes(effort)) row.effort = effort
+  // How far a rewind goes here: the node offers it, and the files with it, only where Paseo's provider can.
+  const rewind = rewindOf(agent)
+  row.capabilities = { rewind: rewind.conversation, rewind_code: rewind.code }
   const t = transcriptOf(agent, roots)
   if (t) row.transcript = t
+  const thread = codexThreadOf(agent, roots)
+  if (thread) row.codex_thread = thread
   const last = agent.status === 'error' && agent.lastError ? `出错了：${agent.lastError}` : o.lastText
   if (last) row.last_text = snippet(last)
+  // A delegated agent is its creator's subtask, as a Codex subagent is its chat's (#4494): the apps fold it under
+  // that session, and the hub pushes no "done" for it and holds its creator's until the fleet has reported back.
+  // While it waits for the user the node lists it without its parent (docs/integrations/runtimes.md).
+  if (o.parent) {
+    row.is_subagent = true
+    row.parent_session_id = o.parent
+  }
+  // The agents it created that have not finished are its background work: its own turn ended, and theirs wake it.
+  const fleet = (o.fleet ?? []).map(backgroundOf).filter(Boolean)
+  if (fleet.length) row.background = fleet
   return row
+}
+
+/** A delegated agent that has not finished, as a background task of the agent that created it (proto.BackgroundTask). */
+export function backgroundOf(agent) {
+  if (typeof agent?.id !== 'string' || !agent.id) return undefined
+  const title = typeof agent.title === 'string' ? agent.title.trim() : ''
+  return {
+    id: `${RUNTIME}-${agent.id}`, kind: 'agent', ...(title ? { description: snippet(title) } : {}),
+    started_at: ts(agent.createdAt ?? agent.updatedAt),
+  }
+}
+
+// ---- workspaces ----
+
+/** A Paseo workspace id (its workspace-registry-model generateWorkspaceId). */
+export const WORKSPACE_ID = /^wks_[0-9a-f]{16}$/
+
+/**
+ * A Paseo workspace (a WorkspaceDescriptorPayload) as a runtime.workspaces row (docs/protocol/protocol.md "Runtime ↔
+ * node"): its id, its name (its title, else its branch or folder), its folder and kind, its branch, the space its agents'
+ * rows name (o.spaceId: projectSpaces, which files a worktree's own project record under its repository's), its
+ * repository's main checkout, and whether Paseo made the checkout (owned: archiving the workspace removes it).
+ * Undefined for one being archived, or without a folder.
+ * @param {object} d
+ * @param {{ spaceId?: string, spaceName?: string, canon?: (path: string) => string }} [o]
+ */
+export function workspaceRow(d, o = {}) {
+  const p = d?.project
+  const cwd = (typeof d?.workspaceDirectory === 'string' && d.workspaceDirectory) || p?.checkout?.cwd || ''
+  if (typeof d?.id !== 'string' || !SESSION_ID.test(d.id) || !cwd || d.archivingAt) return undefined
+  const kind = d.workspaceKind === 'worktree' ? 'worktree' : d.workspaceKind === 'local_checkout' || d.workspaceKind === 'checkout' ? 'checkout' : 'folder'
+  const row = { workspace_id: d.id, title: (typeof d.name === 'string' && d.name.trim()) || basename(cwd), cwd, kind }
+  const branch = d.gitRuntime?.currentBranch ?? p?.checkout?.currentBranch
+  if (kind !== 'folder' && typeof branch === 'string' && branch && branch !== 'HEAD') row.branch = branch
+  const space = o.spaceId ?? spaceIdOf(p) ?? (typeof d.projectId === 'string' ? d.projectId : undefined)
+  if (space) row.space_id = space
+  const name = o.spaceName ?? p?.projectName ?? d.projectDisplayName
+  if (typeof name === 'string' && name) row.space_name = name
+  const repo = kind === 'folder' ? undefined : (repoRootOf(p) ?? d.projectRootPath)
+  if (typeof repo === 'string' && repo) row.repo_root = o.canon ? o.canon(repo) : repo
+  if (kind === 'worktree' && (Boolean(d.worktreeSlug) || d.gitRuntime?.isPaseoOwnedWorktree === true || p?.checkout?.isPaseoOwnedWorktree === true)) {
+    row.owned = true
+  }
+  return row
+}
+
+/**
+ * Where Paseo puts the worktrees of a repository (its utils/worktree.js getPaseoWorktreesRoot): <worktrees
+ * root>/<project hash>, the hash of the main checkout's physical path, eight base-36 characters.
+ * @param {string} base - the worktrees root (Paseo's worktrees.root, else <Paseo home>/worktrees)
+ * @param {string} repoRoot - the repository's main checkout, symbolic links resolved
+ */
+export function paseoCheckouts(base, repoRoot) {
+  const digest = createHash('sha256').update(repoRoot).digest()
+  let value = 0n
+  for (let i = 0; i < 8; i++) value = (value << 8n) | BigInt(digest[i])
+  return join(base, value.toString(36).padStart(13, '0').slice(0, 8))
 }
 
 // ---- the timeline ----

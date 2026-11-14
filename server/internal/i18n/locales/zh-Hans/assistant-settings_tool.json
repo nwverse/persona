@@ -1,4 +1,6 @@
 {
+  "title_task_workspace_preference": "派发任务时优先使用",
+  "change_task_workspace_preference": "派发任务时优先使用：{before} → {after}",
   "title_notes": "关于我",
   "title_main_tasks_quiet": "主对话派的任务只在主对话里通知",
   "title_start_requested_tasks": "我在对话里说过的，直接开始",
@@ -22,6 +24,10 @@
   "change_interject_background": "「插话时把手头的命令转到后台」：{before} → {after}",
   "title_agent_tasks": "Persona 启动的每个 Agent 都归入一个有人跟进的任务",
   "change_agent_tasks": "「Persona 启动的每个 Agent 都归入一个有人跟进的任务」：{before} → {after}",
+  "title_inbox_signals": "收件箱有新消息说到受督办的任务时，告诉它的督办方",
+  "change_inbox_signals": "「收件箱有新消息说到受督办的任务时，告诉它的督办方」：{before} → {after}",
+  "title_main_supervises_own_tasks": "主对话自己督办它派出的任务",
+  "change_main_supervises_own_tasks": "「主对话自己督办它派出的任务」：{before} → {after}",
   "title_model_tiers": "Agent 预设",
   "change_model_tier": "{profile} · {tier}：{before} → {after}",
   "title_review_sample_percent": "抽查验收的比例",
@@ -39,5 +45,16 @@
   "minutes_unchanged": "会议纪要保留设置未变：已保存 {saved}，当前生效为 {after}。",
   "minutes_applied": "会议纪要保留已设为 {saved}，当前生效为 {after}。转写仍按录音保留时间清理。",
   "title_main_background_folded": "后台轮次默认折叠",
-  "change_main_background_folded": "「后台轮次默认折叠」：{before} → {after}"
+  "change_main_background_folded": "「后台轮次默认折叠」：{before} → {after}",
+  "title_standing_authorizations": "长期授权",
+  "title_meeting_transcription_default": "会议转写",
+  "change_meeting_transcription_default": "会议转写：{before} → {after}，从新开始的会议起生效。使用 Hub 转写时，会议音频会发送给 Hub 的转写服务。纪要写好后，Hub 会删除音频。",
+  "meeting_transcription_device": "在设备上",
+  "meeting_transcription_hub": "在 Hub 上",
+  "meeting_transcription_not_ready": "会议转写：{before} → {after}，从新开始的会议起生效。使用 Hub 转写时，会议音频会发送给 Hub 的转写服务。纪要写好后，Hub 会删除音频。Hub 转写尚未就绪，就绪后才会在会议开始页面提供此选项。",
+  "meeting_transcription_no_database": "此 Hub 没有数据库。请先连接数据库，再更改会议转写默认方式。",
+  "meeting_transcription_unchanged": "会议转写默认方式未变。",
+  "meeting_transcription_applied": "会议转写已设为{mode}，从新开始的会议起生效。",
+  "title_admission": "执行 Agent 准入闸",
+  "change_admission": "执行 Agent 准入闸：{before} → {after}"
 }

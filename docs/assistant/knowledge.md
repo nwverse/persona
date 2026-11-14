@@ -17,6 +17,9 @@ As part of moving hub business logic into managers (`docs/assistant/assistant.md
   `connectors.changes` (a connector's changes since a cursor), `connectors.archive_media` (attachments for a message; when the manager is elsewhere, up to 4 MB, since one bus message must not occupy a slow link longer than a heartbeat; larger ones leave `[附件]` ("[attachment]") on the line), `connectors.items` / `connectors.doc_title` (documents, meetings, events). A connector declaring `history` also offers its older history, read-only: `connectors.history_chats`, `connectors.history` and `connectors.history_anchors` (`docs/protocol/connector-protocol.md` "History").
   **The manager owns the cursor** (`cursors/<connector>.json`, same file as before), which advances only after writing the data. For Moments posts submitted by plugin programs (`posts.*`, `archive.chats`), the hub first checks
   whether "Include in knowledge base" is on, then forwards them unchanged to the manager (`kb.posts_put`, `kb.posts_comments`, `kb.posts_pending`, `kb.archived_chats`).
+- **iMessage archive disable**: each read is tagged with its source manager's generation. Before writing a page and its cursor, the assistant obtains a durable commit reservation for that generation; turning "Hand to Persona" off retires the generation and waits for already reserved pages to finish. A successful response therefore follows those commits and excludes late replies, including after an off/on cycle. Previously saved messages remain, and a later enabled round retries from the last committed cursor. The boundary covers archive ingestion, not in-flight read tools or a completed deletion.
+  The manager stores outstanding reservation tokens in its settings and reloads them after an uncertain write before acknowledging cleanup. The assistant journals each reservation's token, generation and exact source/chat pairs under `archive-recovery/` before `Begin`, then advances its begin/settle/end stage. A replacement assistant reloads and retries those records before any new archive read: it aborts pre-admission work, settles an unfinished ingest only for the recorded pairs, or ends post-cursor work without replaying its write. An unreadable journal fails closed instead of looking like no work. A failed ingest can leave a journal that would publish messages during recovery, so its reservation remains held until the journal is settled. Retirement is signaled before waiting on reservation storage, even if the request later fails. A failed or cancelled off request may already have saved the off choice, but does not attest that an already admitted commit has finished; it returns an error until outstanding commits end or the reservation store is readable. If the saved switch cannot be read at startup, the source stays off and retries the choice on a settings refresh or later source pass. An uncertain release or journal recovery is retried on a later archive round. Reservations are not expired automatically: if their owner disappears before confirming completion and no recovery journal identifies the work, disabling can remain blocked for investigation rather than reporting a false success.
+  New managers require the reservation protocol for iMessage; new assistants skip an older manager that does not advertise it. The guarantee assumes one authoritative source manager and writers that use this protocol: it cannot fence work already admitted by an older manager or independent source managers acting on the same data. Current production runs the source manager and assistant together; a synthetic bus relay exercises the remote call protocol, but the current hub does not route these connector calls between independent managers.
 - **The hub itself no longer reads the knowledge base.** The extension manager reaches it through its own `kbAsk` (`server/internal/extmgr/kb.go`): deleting a source's data (`kb.forget`) and the extensions' public `kb.*` calls.
   Triage after an Agent's turn stops moved into the assistant (`docs/assistant/agent-work.md` ("Responsibilities")), which reads the project owning a directory directly; `kb.context` and `kb.projects` still answer on the bus, but nothing calls them now.
   Events seen by the hub are one-way: new source data (connector live events, enabling "Include in knowledge base", enabling "Hand to Persona" for "Information", `kb.kick`),
@@ -34,7 +37,7 @@ As part of moving hub business logic into managers (`docs/assistant/assistant.md
   the user's timezone can be read (archives are placed in that timezone first, avoiding writes in another timezone), and the data directory lock (`data/.lock`, only one manager process writes at a time).
   Before opening: `kb_*` tools say "Not ready yet; try again later"; app APIs return `503 kb_unavailable`; plugin posts get the same error (resubmit next round); source deletion gets 503;
   Agent-finished entries wait in the manager (latest per Agent, at most 200) and are written once open. On disconnect from the hub, the manager closes the knowledge base and releases the lock,
-  preventing a process the hub no longer recognizes (token replaced) from writing alongside its replacement; it reopens on reconnect. Changed hub `kb` settings (handshake after hub restart) trigger reopening with the new settings.
+  preventing a process the hub no longer recognizes (token replaced) from writing alongside its replacement; it reopens on reconnect. When the manager stops (its connection to the hub is no longer served), it closes for good: a call that comes later, such as a debounced timer firing while the process winds down, finds it not open, so it neither takes the lock back from the manager taking over nor writes into the directory (#5510). Changed hub `kb` settings (handshake after hub restart) trigger reopening with the new settings.
 - **When the manager is disconnected** (restart, crash, newly started hub):
   - Archiving waits; **nothing is lost**: connectors redeliver by cursor (on return the manager reads from the last written position, reading every due connector in its first round); plugin post calls
     wait up to 30 seconds for the manager (plugins start with the hub, before the manager; manager restarts), then return `assistant_offline` if still absent; the plugin stops this round there and rereads next round;
@@ -77,11 +80,12 @@ Transcribed text from phone recordings (and watch recordings relayed through the
 - Detail, segment, reconciliation, search and summarization readers wait for active replacements and use a coherent accepted snapshot while a journal remains. Writable open restores pending snapshots before returning a store; a recovery error prevents opening or further recording metadata edits. Read-only open refuses an archive requiring recovery. Legacy directories need no migration, and the existing file paths and transcript links stay valid.
 - Recovery assumes one writable store owns the archive directory. Individual file contents are synced before replacement and directory syncing is best effort where supported; subprocess interruption and replacement failures are tested, not arbitrary hardware or filesystem corruption. External filesystem readers must wait for writable recovery if a journal remains: raw files can contain unfinished replacements after interruption or failed restoration. The journal covers upload content, not a transaction with generated summaries, project links or the database index; that index remains rebuildable from files.
 - For completed transcripts (`complete: true`) whose current revision has not been summarized, each manager round makes at most 3 model calls for them, newest first, failed ones included (same purpose as chat compression, `kb.compress`, prompt `prompts/kb/recording.md`). A recording whose summary failed waits 10 minutes, doubled with each failure in a row up to 6 hours, and the next one goes on; a new revision of it is tried at once (#4246; before, the first failure stopped the round and that recording was sent again every round). A paused model connection, or no model set up, stops the round without counting:
-  produces a summary, one-line description, title (used if the user has not named it), tags and mentioned projects; projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
+  produces a summary, one-line description, title (used if the user has not named it), tags and mentioned projects, written in the recording's language (else the owner's; [meeting-minutes.md](meeting-minutes.md) "How the hub generates them"); projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
 - Retention follows assistant setting `recording_days` (default 14 days, independent of `text_days`): each round deletes directories and index rows whose start time predates retention; tombstones are retained equally long.
-  A recording with minutes is **trimmed** instead (#3780): past `recording_days` its directory keeps only `meta.json` (with `trimmed_at`), `minutes.json` and `minutes.md`, and everything else (`segments.json`, `transcript.md`, `summary.md`, `live.json`, a pending undo journal, which is restored first) is deleted; its index row stays. It is deleted like any other once it started before assistant setting `minutes_days` (forever by default: unset or `0`; otherwise 1–3650 days, never below `recording_days`). With forever, retention never deletes these minutes; the user can still delete the recording and its minutes together. A trimmed recording is still listed, read and searched by its minutes; it takes no upload (`expired`), gets no summary and no new minutes, and its attendance is off. Tombstones keep the `recording_days` window: an upload of anything older is expired anyway (`server/internal/kb/recordings.go`, `PruneRecordings`).
+  A recording with minutes is **trimmed** instead (#3780): past `recording_days` its directory keeps only `meta.json` (with `trimmed_at`), `minutes.json`, `minutes.md`, a meeting's `meeting.json` (its private mark and its room, which the manager deletes then; never searched, [meeting-minutes.md](meeting-minutes.md) "Upload fields") and the photos the minutes cite (their files in `attachments/`, their entries in `photos.json` and `photos.md`; [meeting-minutes.md](meeting-minutes.md) "Phase 3: photos"), and everything else (`segments.json`, `transcript.md`, `summary.md`, `live.json`, the other photos, a pending undo journal, which is restored first) is deleted; its index row stays. It is deleted like any other once it started before assistant setting `minutes_days` (forever by default: unset or `0`; otherwise 1–3650 days, never below `recording_days`). With forever, retention never deletes these minutes; the user can still delete the recording and its minutes together. A trimmed recording is still listed, read and searched by its minutes; it takes no upload (`expired`), gets no summary and no new minutes, and its attendance is off. Tombstones keep the `recording_days` window: an upload of anything older is expired anyway (`server/internal/kb/recordings.go`, `PruneRecordings`).
 - `kb_list` / `kb_get` / `kb_search` and the app's Knowledge page gain the `recordings` category; `kb_get` includes summary, bookmarks and any transcription still retained (up to 12k characters). Recording content cannot be edited via `kb_update` (the phone is authoritative); only tags can change.
 - A recording that is a meeting (`kind: meeting`, overlapping a calendar item, or minutes asked for) also gets structured minutes besides the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` and `minutes.md` in the same directory, from chunked calls to the same `kb.compress` model, removed with the recording and kept past its transcript until `minutes_days` (above), returned as `detail.minutes`. `kb_get` prints them before the transcript, followed by where each action item stands (a suggestion, or its to-do open, done, cancelled or deleted); `kb_search` and the app search find them, and `kb_search kind=recordings` searches the recordings alone (finding a meeting by its title, the phone's calendar title or the matched calendar item's name). `kb_list` shows the start time of meetings and events as it does for recordings, and `kb_get` on a meeting or event lists the recordings matched to it.
+- An all-day recording (`kind: day`, #4741, [day-recap.md](day-recap.md)) grows by appends (`POST /api/v1/recordings/{id}/segments`) and gets a daily recap instead of a summary or minutes: `recap_notes.json` (notes per hour of its clock, which go with the transcript), `recap.json` and `recap.md` (kept past the transcript like minutes), written by the knowledge base's own recap lane, pushed once a day and told to the evening routine; `kb_get` prints the recap and where its suggested to-dos stand before the transcript (`server/internal/kb/day_recap.go`, `server/internal/assistant/kb_day.go`).
 
 ## Extra notes directories (`kb.extra_dirs`)
 
@@ -94,6 +98,7 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
 - Files and grep are natural for Claude Code: the assistant, AI twin and Agents in herdr need no new API; `rg keyword ~/.persona/data` searches directly.
 - People can read and edit directly too (an edited `summary.md` is treated as existing context on the next compression).
 - Postgres holds only the index needed for sorting and filtering (`kb_entities`: type, name, importance, relevance, tags, path, updated time); it can be rebuilt from files if lost.
+- The full-text search index is files as well (`.search/` in the data directory, "Search index" below): worked out from the files, built again from them when it is lost, and gone when they go.
 
 ## Directory layout
 
@@ -107,7 +112,7 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     summary.md              # Compressed context (AI-maintained, rolling updates)
     .receipts.json          # Live-ingestion source/chat message IDs and original times (bookkeeping, not searched)
     retention.json          # Retention ledger: the selection rule of each line another rule than the chat's usual one decided (not searched)
-    .ingest.json            # Pending live-ingestion recovery intent, removed after completion
+    .ingest.json            # Pending live-ingestion recovery intent, removed after completion (not searched)
   people/<person id>/       # One directory per person: Lark lark-<userId>, mail mail-<address>
     meta.json               # Name, chats, linked projects, tags
     summary.md              # Who they are, relationship to me, recent conversations with me
@@ -131,6 +136,9 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     minutes.json            # Meeting minutes (meeting-minutes.md): structured, each item at a transcript time
     minutes.md              # The same minutes as Markdown with clock times; searched
     live.json               # An attended meeting's live sentences and questions (meeting-minutes.md "Attending a meeting"); never searched or shown
+    photos.json             # A meeting's photos (meeting-minutes.md "Phase 3: photos"): their bookkeeping (digests, deletions, the room's queue); never searched
+    photos.md               # A line per listed photo: its number, clock time, caption, recognized text and the room's note; searched
+    attachments/p<n>.jpg    # The photos themselves (or .png); never searched
   recordings/.deleted.json  # Deleted recording UUIDs (tombstones); late uploads within retention return 410
   cursors/<connector>.json  # A connector's archive cursor (bookkeeping, not searched)
   select/<chat id>.json     # The selection's mine-rule context of a chat between daily batches (not searched)
@@ -143,6 +151,10 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     STOP                    # There: nothing is read until a person resumes
     log-YYYY-MM-DD.jsonl    # One line per call, no contents
     log.key                 # The key of the log's chat hashes
+  .search/                  # The search index ("Search index" below): worked out from the files above, never searched itself
+    manifest.json           # Which of the files below make up the index, and what it was built with
+    seg-<n>.idx             # Segments: of each file read, its path, mtime, size and keys
+    log-<n>.log             # The files read since the last segment was written
 ```
 
 Beside the data directory, `kb-backups/kb-YYYYMMDDHHMMSS.tar.gz` are the backups taken before each history import run ("History import", "Backups").
@@ -161,7 +173,7 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
 
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
-The loop's work runs in three **lanes** (`assistant/kb_lanes.go`, #4247), each in its own goroutine, so a slow step in one (a meeting's
+The loop's work runs in **lanes** (`assistant/kb_lanes.go`, #4247), each in its own goroutine, so a slow step in one (a meeting's
 minutes, a slow model) no longer holds back the others. Every round (2 minutes, a wake, or 5 seconds after a kick) starts each lane
 that is not still running; a lane that became due while it ran starts again as soon as it ends. The lanes are split by what they write,
 so no two write the same files at once:
@@ -172,6 +184,8 @@ so no two write the same files at once:
 - **topics**: knowledge points (step 3b), two distill calls then two merges, two at a time (topics and their sources' marks, under
   the store's topic lock, a merge applied only while its topic is as it was asked about).
 - **minutes**: meeting minutes from recordings ([meeting-minutes.md](meeting-minutes.md)), whose calls can take many minutes.
+- **index**: the search index ("Search index" below; `.search/`, which only this lane writes). A run reads the files changed since the
+  last one and calls no model; its first run on an existing archive reads every file, which is why it does not share a lane.
 
 Before starting lanes a round only checks, quickly, that the knowledge base is writable and the user's zone readable;
 moving the archive into the user's zone ("Time zones") is the archive lane's first step, so the loop never waits behind a
@@ -187,6 +201,12 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    Topic groups read only the newest topic page. Every 6 minutes, read each email account's Inbox messages with UID above the last one (40 per page, at most 5 pages per round; with multiple pages, take the newest first, then fill the middle page by page and continue next time if unfinished),
    reading at most 10 full bodies per round (summaries for the rest), into `mail-<account>-<other address>` chats. Cursors are in `cursors/mail.json` (per-account UIDs, plus `<account>#v` for UIDVALIDITY,
    `#t` for the latest archived message time, `#f` / `#h` for unfilled gaps; on UIDVALIDITY change, restart from the newest page and only take messages later than `#t`; before 2026-11-03 it was `mail-cursors.json`, used as fallback when the new file is absent).
+   The existing decimal receipt IDs remain in use until a change between two known, nonzero validity values is observed.
+   After that, `<account>#e` records an identity epoch, and IDs include the epoch, last known validity and UID.
+   A retry keeps the same identity if ingestion succeeded before checkpoint publication; a further known change before publication gets a different identity.
+   Each account's inbox has its own cursor and epoch. An absent prior validity or a zero response cannot establish that a change occurred, so it does not start an epoch or reset the cursor.
+   A cursor already advanced by an older version cannot reconstruct mail previously skipped by a UID collision. A rollback to an older writer is not identity-safe: it ignores the epoch and emits decimal IDs, and may advance the validity without recording the change. Do not run mixed-version archive writers against the same data.
+   The existing later-than-`#t` filter and newest-page restart still limit recovery: same-second or older messages and an oversized renumbered tail are not guaranteed to be archived.
    Connectors (`docs/plans/plan-connectors.md`, implementing `connector.Archive`) read chats with new messages "since last time" by cursor every 10 minutes,
    with cursor `cursors/<connector>.json` and chat id `<connector>-<chat>`. Older history comes in separately ("History import", step 5).
    Source subscriptions (#2039) are read the same way, one archive per subscription with "Add to knowledge base" on (`connectors.changes` with the subscription's id, a cursor on its held items; [subscriptions.md](../extensions/subscriptions.md) "Destinations").
@@ -438,9 +458,9 @@ The driver runs in its own goroutine (`kbHistoryLoop`, never inside the knowledg
 3. the owner approved the source's plan in the assistant chat (`kb_history_resume` records `approved_at` and what the selection reads of every chat then). Listing
    a plan or changing the selection never starts anything; a change that reads more than was approved takes the approval back ("Plans");
 4. there is no `history/STOP`;
-5. the source does not wait for the search index: `needs_search_index` (default `true`) holds a source back while `kb.SearchIndexed` is false. Search reads every archived line
-   today, which a benchmark showed is too slow at millions of lines; the persistent index (#1273) flips that one constant. A source with modest history sets
-   `needs_search_index: false` to run before it;
+5. the source does not wait for the search index: `needs_search_index` (default `true`) holds a source back until the archive has one (`Store.SearchIndexReady`: the index
+   lane has been through every file once, minutes at most on an existing archive, and no check of the index has failed since; "Search index"). Without it a search reads every
+   archived line, which a benchmark showed is too slow at millions of lines (#1273). A source with modest history sets `needs_search_index: false` to run before it;
 6. the connector archives into the knowledge base now and declares `history` (`connectors.archives`).
 
 Sources run one at a time, in the order `kb.history.sources` lists them. Everything is on disk, so a redeploy at any time loses nothing: a restart takes the lock again, backs up,
@@ -578,7 +598,7 @@ configuration" is `kb.history.enabled: false`: it stops the run before its next 
 
 The import rewrites day files, so before every run (every time it takes the lock) the data directory is archived to `<parent of the data directory>/kb-backups/kb-YYYYMMDDHHMMSS.tar.gz`
 (UTC; written to a temporary name and renamed; the file 0600, the directory 0700). Every `attachments/` directory is left out (never rewritten by the import, and possibly tens
-of gigabytes), and so are the lock files and anything that is not a regular file or a directory. A data directory that is a link is archived where it leads, and a
+of gigabytes), and so are the search index (`.search/`: built again from the files wherever they are restored), the lock files and anything that is not a regular file or a directory. A data directory that is a link is archived where it leads, and a
 backup that would hold no file fails (the import's own plan is there at least), so an empty archive never counts as one of the three. If the backup fails, the run does not
 start. Then only the newest three are kept: the oldest by the time in the name are deleted, and only regular files named `kb-<14 digits>[-n].tar.gz` in that directory are ever considered.
 
@@ -605,7 +625,7 @@ Archive dates and times (daily files, each line's "- 15:04", timeline "- 2006-01
 
 Files record clock times, not timezones, so each file declares its timezone and all data moves once on a timezone change (`kb/zone.go`):
 
-- **Chats:** `messages/.zone` records the timezone name. Without this file, the data predates timezone tracking and was written in the hub's timezone.
+- **Chats:** `messages/.zone` records the timezone name. It is bookkeeping: search never reads it as a day. Without this file, the data predates timezone tracking and was written in the hub's timezone.
   - `Store.Rezone` converts each line to an instant using the old timezone, then regroups by day and rewrites clock times in the new one.
   - Write first to `messages.rezone/`, then swap with `messages/`, so each chat is entirely new or entirely old.
   - Interrupted work resumes next time: before the swap, original files remain untouched; after it, only `messages.old/` needs deletion. The same data is never converted twice.
@@ -692,6 +712,19 @@ The model may mistake product names in notification emails (each App Store app, 
 and prompts (`server/internal/prompts/kb/`, `docs/assistant/prompts.md`) explicitly exclude notifications, marketing and billing. At startup the manager marks projects sourced only from these chats and never manually tagged as `ignored`:
 no more updates, snapshots or prompts; the app groups them under **Not projects**. Changing their status in tags restores them.
 
+## Deleting a project
+
+A project can be deleted from the knowledge list on the web (#4412) and on the iPhone and iPad (#7077: a project row's swipe or context menu); both ask first and then offer Undo. The delete is soft (`kb/project_trash.go`):
+
+- The project's directory moves to `.trash/<id>/project` in the data dir, so it drops out of lists, search, prompts and the pipeline, which only read `projects/`. Its index rows go.
+- The chats, people and items that named it stop naming it. `.trash/<id>/trash.json` records which ones (`unlinked`, as `<kind>/<id>`), with the slug, the name and `deleted_at`.
+- Restoring moves the directory back, re-adds the project to the recorded entities that still exist, reindexes it and removes the trash entry. A project created with the same slug since then blocks the restore (`409`); nothing is overwritten.
+- Projects merged into it go with it (`.trash/<id>/merged/<slug>`, listed in `merged`) and come back with it, so their unmerge record still points at a project that exists.
+- The trash is never searched, and compression running while a project is deleted doesn't link it again. Documents linked only from a project in the trash are kept by document retention, so a restore finds them.
+- Forgetting a source (`ForgetSource`) removes for good every trash entry that holds something the source brought in (its chats, people, items or posts, or timeline lines it wrote), so a restore can't bring forgotten data back.
+- Merged projects can't be deleted (`404`), and a read-only knowledge base refuses both (`403 kb_read_only`). Nothing else empties the trash yet; entries stay until restored or removed by hand. Entry ids are a timestamp; the slug and name are in `trash.json`.
+- The routes are for full credentials only: an extension's token opens none of them (`extwire.RouteScopes`).
+
 ## Topics (#3783)
 
 Projects and chats are filed by where knowledge came from, and their summaries follow fixed status sections (what this is, progress, next steps, risks). They say where a piece of work
@@ -703,9 +736,11 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
   the entries it came from (`sources`: `projects/<slug>` or `chats/<id>` and the day) and the day it was last confirmed (`when`). `points.json` is the record; `summary.md` is
   written from it after every change, grouped by subtopic, and is what search and the assistant read.
 - **Distill** (`kb/topic_distill.go`, prompt `kb/topic_distill`): a project is due once its timeline has 8 new lines, or fewer and it has been quiet 30 minutes; a chat (not P3, with
-  real people, `HasPeople`) once its summary changed and it was last distilled more than 12 hours ago. One call takes up to 12 KB of a project's timeline lines from where the last one
-  stopped (each clipped to 600 characters, oldest first), or a chat's summary, plus the names, aliases and one lines of the 80 biggest topics, and returns at most 25 candidates, each
-  with a topic name and a path. A name matching a topic's name or alias (`normName`, as projects match) files it there; a new name opens a topic, at most 4 a call and 150 in all (the
+  real people, `HasPeople`) once its summary changed and it was last distilled more than 12 hours ago. One call takes up to 6 KB of a project's timeline lines from where the last one
+  stopped (each clipped to 600 characters, oldest first), or a chat's summary (clipped to 6 KB, not split), plus the names, aliases and one lines of the 80 biggest topics, and
+  returns at most 12 candidates, each with a topic name and a path. The sizes keep a call's answer well inside its 3-minute deadline also on a model that writes 30–40 tokens a
+  second (#4350: with 12 KB and 25 points a third of the calls ran out of time). A project call that ran out of time, or whose answer did not fit even in twice the room, is tried
+  again (after the usual wait) with half the lines it carried, at least 2, halving again while it keeps failing; a success lifts the cap. A name matching a topic's name or alias (`normName`, as projects match) files it there; a new name opens a topic, at most 4 a call and 150 in all (the
   rest of that call's points for new topics are dropped and logged). How far a source was read is its mark, `.topics.json` in its directory: a project's line count and the size of
   `log.md` when it read to the end (an unchanged size means nothing new, and the timeline is not read again), a chat's summary hash. The first pass over existing timelines is the
   same step from line one, so a knowledge base with long timelines fills in over some rounds.
@@ -778,7 +813,9 @@ Metadata of all six entity types can include `pinned` (user-confirmed facts) and
 
 - Omitted or `null` `tags` keeps the current value; explicit `[]` clears; a nonempty array replaces. After explicit clearing, metadata retains `tags: []`, allowing clients to replace cached tags with the latest empty value.
 - Only explicit updates change `pinned`; an empty string clears it. Compression and project rewrites receive it as read-only input; the model cannot overwrite stored facts. Person corrections also feed related chat compression.
-- Manual writes lock fields touched by default, including person `note`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.
+- People accept `status: active`, `ignored` (an account excluded from automatic person notes, summaries and new chat/project associations), or `self` (the owner, excluded from external participant rosters). Missing or empty metadata status retains normal active-contact behavior. In updates, omitted or empty status keeps the current value; use `active` to restore a contact. Other nonempty person statuses are rejected before changing fields or links.
+- Historical associations and summaries remain on disk; linked-entity rosters and project deduplication member counts omit ignored/self accounts without deleting those records. `kb.list` for people omits ignored accounts before ranking and pagination, so totals and offsets count only listed people; self accounts remain listed. Ignored accounts can still be explicitly read by ID with `kb.get` and corrected with `kb.update`. This does not synchronize `self` into the separate encrypted `kb.owner` record.
+- Manual writes lock fields touched by default, including person `note` and `status`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.
 - `lock: false` adds no locks in this update, letting extensions choose continued background maintenance; it does not remove existing locks. Legacy `locked` tag protection remains effective.
 - `remove_people`, `remove_chats`, `remove_projects`, `remove_aliases` remove associations or project aliases, not entities. A batch adds first then removes, so removal wins; existing reverse associations are removed too. `remove_aliases` applies to projects.
 - Automatic deduplication skips manually protected projects and associations. Explicit merging retains existing merge precedence, updates locked reverse associations and concatenates both pinned values; the source remains a merged record with its original protected metadata readable.
@@ -805,6 +842,55 @@ Now every locked field has a holder, and writes follow **the user > an extension
 - **The user** (app, assistant `kb_update`, HTTP `PUT`) writes anything, as before, and takes over every locked field touched: its provenance is dropped, so the extension can no longer change it.
 - The answer carries `before`: each written field's previous value (`summary` the old text), so the extension can keep its own undo log; undo is another `kb.update` with those values, plus `unlock` when the field was free before.
 - **Without extensions nothing changes**: no write adds `provenance`; the user's writes only remove entries that exist. The legacy `hub_api` HTTP `PUT` from an extension token still counts as the user.
+
+### Fields each kind takes
+
+Every write path (`kb.update`, HTTP `PUT`, the assistant's `kb_update`) takes only the fields the entry's kind uses (`kb/fields.go`). Everything else is taken out of the update before it applies, so it is neither written, nor locked, nor attributed. The answer names it in `ignored: [{field, reason}]` (the assistant's tool says "Not saved: …"); fields used are written as before. Any kind takes `importance`, `relevance`, `tags`, `pinned` and `lock`, and in addition:
+
+| Kind | Also takes |
+| --- | --- |
+| projects | `name`, `project_kind`, `status`, `goal`, `my_role`, `note`, `summary`, `log` (with `source`), `aliases` / `remove_aliases`, `chats` / `remove_chats`, `people` / `remove_people`, `dirs`, `merge_into` |
+| chats | `name`, `summary`, `projects` / `remove_projects`, `remove_people` |
+| people | `note`, `status`, `profile`, `projects` / `remove_projects`, `remove_chats` |
+| docs, meetings, events | `note`, `projects` / `remove_projects` |
+| topics | `name`, `note`, `aliases` / `remove_aliases` (`summary` is refused: it is written from the points) |
+| recordings | `projects` / `remove_projects` |
+
+A person's `summary` and `log` used to be dropped without a word (and `summary` was even locked, for nothing): summary.md is written from what is known of the person. What an extension knows of them goes in its `profile`.
+
+### Person profiles
+
+A person's summary.md (`WritePersonSummary`) is written from what is known: the user's confirmed facts (`pinned`), the note, the projects and chats, the direct chat's summary. What a writer has learned about the person (an extension that keeps track of the people the user deals with, or the user) goes in a **profile** of its own, in four parts kept apart (`kb/profile.go`):
+
+| Part | What | Each item |
+| --- | --- | --- |
+| `facts` | Their role, what they are in charge of, how they relate to the user | `text`, `sources` |
+| `views` | What the user said of them, in the user's own words | `text` (quoted), `sources` |
+| `inferences` | What the writer infers and nobody stated; only a hint | `text`, `basis` (required), `sources` |
+| `commitments` | Promises and to-dos between them, either way | `text`, `owes` (`user`: the user to them; `them`: they to the user), `due?` (YYYY-MM-DD), `done?`, `sources` |
+
+- **Sources** are required on every item (1 to 5): a knowledge-base path (`chats/<id>/messages/<day>.md`, `recordings/<id>`), a URL, or `user` for the user's own word.
+- **Bounds**: at most 30 items a part, 500 characters a text, 300 a basis, and 8000 bytes for one profile as summary.md shows it. A profile that breaks a rule is refused whole (`invalid_params` over RPC, 400 over HTTP) and nothing of the update is written; nothing is cut to fit.
+- **Whose**: each writer has its own (`ext:<id>` for an extension, `user` for the user's writes). A write of `profile` replaces only the writer's own as a whole; one with no items removes it. Nobody else's profile, nor the person's `pinned` and `note`, is touched, so a profile never conflicts with another holder and adds nothing to `locked_fields` or `provenance`. The answer's `before.profile` is the writer's profile before (or `null`).
+- **Stored** in `people/<id>/profiles.json`, outside meta.json and outside search.
+- **Shown** in summary.md after the pinned facts and the note. There is one section per writer (the user's first, then the extensions' by id), headed with who wrote it, when, and that it is the user's private knowledge, for reference only and never to be passed on to the person or written into anything sent to others. Each part has its own subheading, and every line carries its part (`[事实]`, `[用户原话]`, `[推断·仅供参考]` with its basis, `[承诺·…]`), so a line a search returns still says whether it is a fact or a guess. All profiles together are at most 16000 bytes; a profile that would go past that is named but not shown.
+- **Read**: `kb_get` and `kb.get` show it in `summary`, and `kb.get` also gives `profiles` by writer as written, for an extension to read its own back. `kb_search` and `kb.search` find its lines in summary.md, labelled. An ignored person (`status: ignored`) has no summary.md, so its profiles are kept but not shown.
+
+#### Who reads the private parts
+
+`views` and `inferences` are the user's private view of someone. A conversation that writes to other people on the user's behalf never reads them; the hub enforces this by the conversation's origin, without relying on the heading's instruction (`assistant/outward_reader.go`):
+
+| Conversation | Origin | Reads |
+| --- | --- | --- |
+| The inbox's AI twin (drafts and sends replies) | `inbox` | Facts and commitments only |
+| Lark `/agent` (answers in chats other people read) | `lark_agent` | Facts and commitments only |
+| Any conversation an extension opens (its answers go to the extension, which may send them on) | `extension`, or any origin with `opened_by` | Facts and commitments only |
+| The main conversation, the user's other conversations, a channel's (the owner's private chat) | `user`, `channel`, … | Everything |
+| An extension with `kb.read` (`kb.get`, `kb.search`) | — | Everything, as before |
+
+- **How**: for such a conversation the hub drops every line of a private part, and the parts' subheadings, from whatever any of its tools returns: `kb_get`'s summary.md, `kb_search`'s hits (passed over during the search, so they do not use up its limit), and quotes in `conversation_read`, `agent_read` or any other tool's text. summary.md writes every line of these parts on one line with its label (`[用户原话]`, `[推断·仅供参考]`), even for a profiles.json edited by hand, so a line is recognized wherever it turns up (`kb.PrivateProfileLine`).
+- **When unsure, less**: while the origins cannot be read, every conversation is treated as one of these; so is a conversation not noted yet while a start on its machine is under way (its first tool calls can come before its origin is noted).
+- **Not covered**: the conversation's own file and shell tools (Read, Bash) on a computer that also holds the knowledge base can open `people/<id>/summary.md` or `profiles.json` directly, and an extension's own MCP tools answer it without passing through the hub. A paraphrase, rather than a quote, of a private line in another conversation is not recognized either.
 
 ### Built-in organization and extensions side by side (#6100)
 
@@ -846,8 +932,12 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 | `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count) |
 | `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`); projects also include `agents` |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
+| `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |
+| `GET /api/v1/kb-trash` | Deleted projects, newest first (`items`: trash entries) |
+| `POST /api/v1/kb-trash/{id}/restore` | Put a deleted project and its links back; returns the entry; 404 if there is no such entry, 409 if a project with its slug exists again |
 | `GET /api/v1/kb-search?q=&messages=0` | Full-text search (by line, for older apps; assistant `kb_search` does the same search through bus `kb.search`) |
 | `GET /api/v1/kb-search?q=&results=1` | App search: grouped and sorted by entry (`results`: `entry`, `count`, first 3 `hits` lines, `in_name`), see "Search" below |
+| `GET /api/v1/kb-search?q=&kind=` | Either search within one kind (`projects` … `topics`, as `kb_search`'s `kind`; with `results=1`, the ranked entries of that kind); another kind is a 400. The voice `search_knowledge` passes it, `recordings` for past meetings (#3862 phase 6) |
 | `GET /api/v1/kb/{kind}/{id}?q=` | Open from search: adds `matches` (every hit in this entry; messages include `day` and two neighboring messages each in `before` / `after`), up to 40 |
 | `GET /api/v1/kb/moments/{id}` | One archived Moments post (`post`, `markdown`: body + all comments), opened from a project's Related Moments |
 | `GET /api/v1/kb/chats/{id}/context` | What the knowledge base knows about a chat (`chat_id`, `chat_name`, `kind`, `summary`, first three projects as `projects: [{name, summary}]`), same context the hub puts in prompts; read-only, used by plugin /agent (#1484) |
@@ -866,11 +956,206 @@ Reworked after feedback on 2026-10-31: "I find results but can't locate them aft
 - Find keeps of each file only what a result can show: its first 3 distinct matching lines and a count up to 99 (`hitsPerResult`, `foundCap`); a file whose text folds to itself has its lines matched as written instead of folded one by one. `kb_search` (`Search`) takes the data dir's files from the same cached walk instead of walking the whole directory on every call, so all of `history/` is skipped (its `messages/` too) and a data dir that is a symlink is searched. Results are otherwise identical to the previous code (`find_hits_test.go`, `search_walk_test.go`; `BenchmarkFind/every`, `BenchmarkSearch`).
 - `kb_search` with `kind` (`SearchKind`) reads only that kind's files from the same walk: by entry, those whose name has every word first, then in `kb_list`'s order, and with `messages` only the chats' message days. It never reads the notes directories or the Moments posts. Without `kind`, `Search` keeps its order.
 - Opening a chat from a search (`Matches`) checks each day for all the words through the same cache and reads only the days that have them, instead of reading and folding every day until it has 40 hits. In a 365-day chat of the synthetic archive, a rare word takes ~9 ms → 2 ms right after a Find; a new engine pays one more `stat` per day (~+10-20%, ~9 ms → 10 ms), and a common word that fills the limit within a few days stays ~0.5 ms (`BenchmarkMatches`; results identical to reading every file, `matches_test.go`).
+- Since #1273 a persistent index says which files cannot hold the words ("Search index" below). `Find`, `kb_search` and `Matches` `stat` every file and read only those it leaves. `Find` reads them entry by entry in rounds (16 files, then four times as many) and stops reading an entry that has its 99 lines and the three it shows, which no later file can change: a chat with the word on every day costs its newest days. The timings above are from before the index; on the same synthetic archive (37k files, a 32-CPU Linux machine) a warm Find went ~37 ms → 13–19 ms, a cold one ~196 ms → 76 ms, `kb_search` for a word no file has ~113 ms → 11 ms, and a cold `Matches` for a rare word ~6.2 ms → 1.1 ms; `Matches` for a common word pays ~0.06 ms for asking the index (`go test -bench 'BenchmarkFind|BenchmarkSearch|BenchmarkMatches' ./internal/kb`, which build the index first; `BenchmarkSearchIndex` times the first index, 1.1 s, and a run with nothing changed, 25 ms).
 - Find only counts lines in the files opening an entry shows (`Matches`): profile, timeline and metadata (`summary.md`, `log.md`, `meta.json`; a recording's `transcript.md`), a chat's day files, a doc's JSON. Bookkeeping under an entry (`moments-judged.json`, `handles.json`, any other file) is not searched, so every result with hits shows them once opened (`TestFindAgreesWithMatches`). A limit of zero or less gives no results.
 - Opening an entry shows **Search "term"** at the top: every hit in this entry, with one message before and after each message hit. Tapping opens that day (`KBDayView`), scrolls to and highlights the message, and allows paging to adjacent days.
 - Going back no longer errors: the Knowledge page itself is pushed by `navigationDestination(isPresented:)`; using `NavigationLink(value:)` inside to push an entry
   inserts the new page beneath it (`docs/lessons/ios.md` ("Navigation")), making the tap appear ineffective and exposing the entry page's yellow warning only on Back. Knowledge links now all use view-based navigation.
   Returning reruns `.task(id: query)`; do not search again if the same term already has results, and cancellation is not an error.
+
+## Search index (#1273)
+
+A search used to open and read every file. That was fine at the ~420k lines search was written for, not at the millions a history import brings: on a
+synthetic archive of that size (3,982,000 lines in 362,000 day files of 2,000 chats, every message a text of its own; `kb/search_scale_test.go`),
+the first search of a new engine took ~2 s and ~1 GB of memory (4.3–4.6 s with `GOMAXPROCS=2`), and `kb_search` for a word no file has 7.6 s.
+The 64 MB content cache cannot hold an archive of that size, so every search read most of it again.
+
+**What it is.** `.search/` in the data directory holds, for each file it has read, the path, mtime and size the file had then and the file's
+*keys* (below). It is asked one thing only: "can this file, as it is now, hold every word of the query?", and it may answer no only for a
+file whose path, mtime and size are exactly the ones it read. `Find`, `Search`, `SearchKind` and `Matches` `stat` every file, pass over those the
+index rules out, and read the others with the code that read them all before. The index never says what a result is, only which files need not
+be opened, so results, their order and the limits are the scan's.
+
+**An index that is missing, half built, behind or damaged costs time and nothing else.** A file added, changed or renamed since the index read it has
+no entry with its path, mtime and size, and is read; a deleted one is not there to `stat`. A segment, key block or list that fails its checksum, a
+manifest that was read and is not one (it does not decode, whatever the decoder minds: not JSON, a value of another type, a time that is not a
+time; or it names a file under a name the index gives none of its files), a manifest that names a missing file, an index written with other
+Unicode tables (the keys are taken from `fold`'s output, so the manifest records `unicode.Version` and `norm.Version`) or in another format: the
+search goes on without the index (one log line), and the next update starts it again from the files. Only a manifest that cannot be read at all
+(the disk, a permission) is tried again as it is. A failed check is held against the index it was made of and no other: by the time a search or
+an update reports it, another index may be in use (built again, or read again from disk), and that one is asked instead. A segment file that is
+not the one a search read its file table from ("A name is never used twice" below) is not read either: the search asks the index as it is on
+disk now. `rm -r <data dir>/.search` is always safe, also while the manager runs, searches or updates the index
+(`TestSearchesWhileTheIndexIsUpdatedAndRemoved`, which every `-race` run of the package includes).
+
+Tests: `kb/search_index_query_test.go` compares `Find`, `Search`, `SearchKind` and `Matches` with the scan over generated archives (Chinese and
+English mixed) and random queries, at several limits, with the index absent, half built, built, behind (files changed, added, renamed and deleted
+since), up to date and damaged in each of its parts; `kb/search_index_test.go` covers the update itself, with a hook at the moments where
+another process or search can act and no test could time it (after an update's look at the files, around its read of one, between a search's
+failed check and its report), and flips every bit of the manifest. A search opens every entry's files
+whatever the index says, and on some machines a file open costs most of a millisecond, so every run of the package does a light comparison: small
+archives, the scan's answers worked out once for each state of an archive, each query at one limit and on one of the two engines by turns, and
+the tests that flip every byte of a segment and of a log do it in memory. `PERSONA_KB_DIFF_DEPTH=2` does the whole grid (larger archives, every
+query at every limit on both engines, in every state), each step above 2 adds as many random queries again, and `PERSONA_KB_DIFF_SEED` draws other
+archives and queries.
+For the review fixes of 2026-11-13 the whole grid ran at depth 2 with the default seed and with seed 7 (36 s each on the Linux machine of the
+numbers below), at depth 4 with seed 20261113 (51 s) and at depth 2 on the benchmarks' 37,000-file archive (`PERSONA_KB_BENCH_ARCHIVE=1`, 87 s),
+without a difference from the scan; the light comparison takes 3.5 s there.
+
+**Keys.** A search finds a file when every word of the query is a *substring* of the file's folded text (`fold`: lowercase, then NFC; the words are
+the query split at white space), and then looks for the lines. So the index answers "which files can hold this substring", never "which files
+hold this word": `uild` finds `build`, `#127` finds `#1273`. A word index for Latin text, as the issue first proposed, would lose those. Instead
+every character of the folded text that is not white space gives one key, made of itself and what follows:
+
+- a wide character (U+2E80 and up: CJK, kana, Hangul, full-width forms, emoji), or a narrow one followed by a wide one: the pair of the two;
+- a narrow character followed by a narrow one: the three (the third may be wide, or the end of the token);
+- the last character before white space or the end of the file: the pair of it and "end".
+
+Pairs for CJK because most words are two characters: with triples a two-character query, the usual one, could not be answered. Triples for
+Latin text because nearly every file has every common pair of letters. A word of the query gives the keys inside it, and a file is read only if
+it has them all; several words are several such conditions, anywhere in the file (the scan's whole-file check).
+
+| Query | What the index does |
+| --- | --- |
+| One CJK character (`周`), one letter or digit, or two narrow characters (`ab`) | No key lies inside the word, but every key that *starts* with it is next to the others in the sorted keys: the files of any of them are candidates. Exact for one character; ~3 ms at 4M lines for a single letter, the slowest case |
+| Mixed scripts (`v2版本`, `周报draft`) | The pair at each boundary links the two sides, so the word's keys run through it without a gap |
+| Punctuation (`#1273`, `foo.go`, `a-b`) | A character like any other, as it is to the scan: no word boundaries, stemming or stop words |
+| Case and normalization (`Café`, decomposed `é`) | Both the files' keys and the query's come from `fold`, the scan's own folding. Nothing else is folded: a full-width `Ａ` is not `a` to the scan, nor to the index |
+| White space | `unicode.IsSpace`, where `strings.Fields` splits the query: no word holds any and no key spans it |
+
+A file can have all the keys of a word without the word (the keys come from different places): it is read and the scan says no. The other way
+round cannot happen: `TestGramsNeverRuleOutAFileThatHoldsTheWords` and its fuzz target check that a file holding the words is never ruled out.
+
+**On disk** (`kb/search_index_segment.go`): immutable segments (`seg-<n>-<id>.idx`: the files' paths, mtimes and sizes, the sorted keys in blocks
+of 64 with a checksum each, and for every key the list of its files as a bitmap, gaps or "all"), a log of the files read since the last segment
+(`log-<n>-<id>.log`, appended to, a checksum per entry, a torn tail ignored) and `manifest.json`, replaced by rename, which names the files that
+make up the index. A file's newest entry wins. Of a segment only the file table and one entry per key block stay in memory; the lists are read
+per query. The directory is 0700 and the files 0600, like the rest of the data directory. A segment is synced before the manifest that names it
+is written, and the manifest before it is renamed into place; the directory is not synced and the log never is. After a power loss the manifest
+can therefore be the one before, or name a segment that is not there: both are found when it is read, and the index is built again.
+
+**A name is never used twice.** A key's list is numbers into its own segment's file table, and a reader keeps that table in memory while it opens
+the file again for every query. A list read through another segment's table rules out the wrong files with every checksum passing, which is the
+one way this index could lose a result. So no file of the index ever gets a name another had: `<id>` is 64 bits drawn at random for each file
+(`<n>` only orders them for someone reading the directory), whether the index goes on, is built again after a failed check, starts over because
+`.search` was removed, or is put back from a copy. A counter alone would start again with the index, and a second `seg-000001.idx` of the same
+size is what a read-only store once read through the first one's table. As a second guard a segment's footer carries a random id of its own, and
+whoever holds a segment's table compares the footer on disk with the one it read every time it opens the file, for a query or a merge: when
+they differ a search reads the index from disk again and asks that, and a merge stops. An update makes the same check of every segment before
+it goes on from what it has in memory. This also holds inside the writing process: a search that began before a rebuild holds the snapshot from
+before, finds its segment gone or not the one it read, and asks the index that is there now. The manifest's `format` is 2 since then; an index
+in another format is built again.
+
+**Why beside the files and not in Postgres.** Server state lives in Postgres, and the entries' own index is there (`kb_entities`), so this one
+was measured there first: the same 4M-line archive (366,521 files, 286 MB of folded text, 97 million pairs of a key and a file) in a disposable
+`postgres:18` container with its default settings.
+
+| Where | First build | On disk | WAL the build writes | What it does not do |
+| --- | --- | --- | --- | --- |
+| `.search/` | 30 s | 155 MB | none | |
+| Each file's folded text in a table, `pg_trgm` GIN | 310 s | 1.45 GB, 329 MB of it a second copy of the text | 1.1 GB | A word under three characters reads the whole table (`周报` 0.26 s, `周` 0.73 s); needs an extension the hub's database does not use today |
+| The keys above as one `bigint[]` per file, GIN | 175 s | 1.14 GB | 1.3 GB | One character or two letters (a range of keys) cannot be asked; a word nearly every file has reads the whole table (2.7 s); an import's 36,000 changed files take 93 s and 3.2 GB of WAL |
+| One row per key and file, B-tree (measured at 396,000 lines, times ten) | ~140 s | ~8 GB | ~9 GB | Every query can be asked, in under 20 ms at that size; the size rules it out |
+
+None of them saves what a search still pays: people and Agents edit the files directly, so a search `stat`s every file whichever index it
+asks, and asking this one takes milliseconds. In the database the index would also be a second thing to keep in step with the files (a data
+directory restored without the database, or the other way round), and its writes would go through the WAL and the commits that "Disk writes"
+in `docs/operations/docker.md` is about; here a run that found changes syncs one small manifest (at most once a minute while it follows the
+files), a first build, an import's batch or a merge one segment and the manifest each time, and the log is not synced at all, since what a
+crash loses is read again. SQLite was not measured: every release binary is built with
+`CGO_ENABLED=0` for its platform, so it would be a new pure-Go database dependency, and its trigram tokenizer cannot answer a word under three
+characters either. This was decided for #1273 on 2026-11-13 on these measurements (the index stays in files beside the knowledge base, a cache
+of what the files say that can be removed at any time), and what would reopen it is the index having to hold something that cannot be worked out
+from the files again: that would be state, which belongs in Postgres.
+
+**Updates** (`Engine.UpdateSearchIndex`, the manager's **index** lane). A run `stat`s every file and reads those that are new or changed, once
+their mtime is 10 seconds old (`indexSettle`; a file still being appended to is read by searches, as before) and if they are no larger than 4 MB
+(`indexMaxFile`; larger files are always read). The look and the read are two moments, and in a first build the look at every file lies between
+them. An entry says that the bytes which had this mtime and size have these keys, so a run keeps a file's keys only when that is what it saw: it
+opens the file, asks the open file for its mtime and size, reads through the same handle and asks it again, and both answers have to be the ones
+the look got. A file that is another one by then (replaced, even by text of the same size, and even if the first is back under its own mtime
+later) or that changes while it is read is left out of that run and counted as waiting: searches read it, and the next run looks again. Asking
+the path a second time would not do, since by then it can name the first file again while the bytes read were the other's. Nothing else in the
+index pairs the `stat` of a file of the archive with bytes read at another moment: the log, a merge and a purge carry entries as they were
+written and read no file of the archive. The index's own manifest is the one other file looked at and read at two moments, in the order that
+is safe: its mtime and size are taken before it is read, so one replaced in between is read again at the next look, and no result depends on
+it. A few changed files go to the log; more than 4,096 (a first build, an import) are written
+as segments of at most 2 million keys, each published as it is finished, so a run that is cut short loses one batch and searches use what is
+done. More than 8 segments are merged into one, streaming. The lane runs at most once a minute while it only follows the files (a run looks at
+every file, and live messages kick a round every few seconds), and at once for a first build, an index that failed a check or a deletion (below).
+A run that fails (a full disk, a directory the manager may not write) is not tried again at the next kick, since every try looks at all the files
+and reads a batch first: the next run is no sooner than 15 seconds later, then twice as long after each failure in a row, up to 5 minutes
+(`kbIndexRetry`, `kbIndexRetryMax`). Nothing starts it when the wait is over: it starts at the first round after that (a kick, or the loop's
+tick every two minutes), which is what the log line says. The log has a failure once while the runs fail the same way, and a line when updating
+works again; searches read the files meanwhile. Failures are told apart by the operation, the kind of index file (its name without the number,
+id or temporary ending that is new at every try) and the system's error, so `permission denied` when the directory is made and
+`permission denied` when the manifest is written are two failures, and the second is logged after the first was put right. A run told to stop
+(the manager ends) returns within a moment while it looks at the files or merges, and after the batch in hand while it reads them. A read-only
+knowledge base (`kb.read_only`) never writes the index: it uses the one the writing process keeps, and looks every 30 seconds whether the
+manifest is still the one it read. That look does not depend on what the store holds: one that holds no index (none was there, or the one it
+read failed a check) reads what is on disk at its next look, so a read-only process never stays without an index while a whole one is there.
+
+**One writer, and what two would cost.** The process that holds the data directory's lock writes the index, one run at a time; a search in that
+process that has to read the index from disk again (it was removed) does not touch what a run under way works with. The lock is let go when the
+manager's service ends, without waiting for a run under way, so at a hand-over the old process's run can overlap the new one's until it notices
+it was told to stop. Two writers cannot make a search wrong: every entry, in a segment or in the log, says only that the file with this path,
+mtime and size has these keys, each under a checksum, and no list is read through another segment's table (above). What they can do is undo each
+other's work: one's clean-up removes a segment the other is about to name, one manifest replaces the other's, or both append to the log at the
+same place. Each of these is a manifest that names a missing file, a segment that is not the one read, or a log that ends at an entry failing its
+checksum. Searches read the files meanwhile, and the next update reads the index again and, when it does not check out, builds it again. The
+worst case is one more first build.
+
+**The first build of an existing archive** runs in the index lane, in its own goroutine: the manager's start does not wait for it, and neither
+does a search, which reads the files the index has not reached yet (what every search did before) and gets faster as segments are published. At
+4M lines it takes ~30 s with four readers and ~43 s with `GOMAXPROCS=2` (one reader), and holds ~500 MB at most (numbers below); a search
+meanwhile takes what it took before the index (up to ~2 s for Find and ~7 s for `kb_search` of an absent word there, 6–8 s with `GOMAXPROCS=2`). The history import
+waits for it (`needs_search_index`).
+
+**Deletions.** An entry of a file that is gone is never used, but its keys would stay on disk until the next merge. So after text is deleted on
+purpose (a source forgotten, with its topics; retention pruning days, Moments posts or recordings; a recording, one of its photos or a project
+deleted) the next index run, within one round, writes the index again without it; entries of files that went another way are dropped within
+10 minutes (`indexPurgeEvery`), and the older versions of files that changed within 24 hours (`indexMergeEvery`) or as soon as they are a quarter
+of the index. Both are counted from the last merge, whose time is in the manifest; a time that is yet to come (the clock was set back, or the
+manifest's time is not the one written) counts as long ago, not as a reason to wait for it. The index holds no text,
+only keys of two or three characters next to paths, mtimes and sizes; it is in the data directory, so it has the same owner and modes and goes when the
+directory goes, and the history import's backups leave it out.
+
+**Limits.** A file's content is known by its mtime and size, as in the content cache, but the index outlives the process. A file whose text
+changed while both stayed the same is searched by what it said before, and there are three ways to get there, none of them something Persona
+does (nothing in it sets a file's mtime) and none of them the index's own doing (it keeps a file's keys only under the mtime and size the open
+file had before and after it was read, "Updates" above):
+
+- the file is rewritten to the same size and its mtime set back to what it was (`os.Chtimes`, `touch -d`), which is also the one thing an
+  update's two looks at the open file cannot see when all of it happens within that file's read;
+- a copy that keeps times puts other text of the same size under the mtime the index read (`cp -p`, `rsync -t`, `touch -r`): two versions of a
+  file with the same mtime and size, one of them indexed and the other copied over it;
+- the clock is set back by more than the 10 seconds an update waits for a file to settle, on a filesystem that keeps mtimes to the second, and the
+  file is rewritten to the same size within the very second (by the clock as set back) that its mtime already said.
+
+A new process does not heal any of them: it reads the same index. Removing `.search` does (the next run builds it again), and so does anything
+that gives the file another mtime or size. Notes directories (`kb.extra_dirs`) are outside the data directory and read on every search, as before,
+and so are a recording's `meta.json` and `transcript.md` (searched from the committed snapshot, not the disk). What a cold search still costs is
+listing the directories and one `stat` per file.
+
+**Numbers** (`PERSONA_KB_SCALE_LINES=4000000 PERSONA_KB_SCALE_TEXT=varied go test ./internal/kb -run '^TestSearchScale$' -v -timeout 0`; a 32-CPU Linux
+machine shared with other work, files in the OS page cache; median of 5, of 3 for `kb_search`; cold is a new engine and a new store, the index
+read from disk):
+
+| 3,982,000 lines, 362,000 day files | Before | With the index |
+| --- | --- | --- |
+| Cold Find: rare word / word on every line / absent word | 1.85 s / 1.97 s / 2.33 s | 0.89 s / 1.09 s / 0.90 s |
+| The same with `GOMAXPROCS=2` | 4.62 s / 4.53 s / 4.26 s | 1.27 s / 1.63 s / 1.18 s |
+| Warm Find (the same engine again) | 0.94 s / 1.02 s / 1.22 s | 0.20 s / 0.28 s / 0.15 s |
+| The same with `GOMAXPROCS=2` | 3.10 s / 3.27 s / 2.96 s | 0.55 s / 0.61 s / 0.52 s |
+| Cold `kb_search`: rare word / absent word | 0.78 s / 7.63 s | 0.76 s / 0.93 s |
+| The same with `GOMAXPROCS=2` | 0.75 s / 6.92 s | 0.78 s / 1.21 s |
+| Peak memory of the process: Find / `kb_search` | 974 MB / 481 MB (1,123 MB / 528 MB with `GOMAXPROCS=2`) | 499 MB / 356 MB (493 MB / 364 MB) |
+| First index: time, size on disk, peak memory | | 30 s, 155 MB, 493 MB (42 s and 505 MB with `GOMAXPROCS=2`) |
+| An index run with nothing changed | | 0.5–0.8 s (0.95 s with `GOMAXPROCS=2`) |
+
+At 396,000 lines (36,000 day files): cold Find 0.25 s → 0.15 s for a rare or absent word and unchanged, 0.27 s, for a word on every line (a chat
+has 18 days there, fewer than the first round reads); `kb_search` for an absent word 0.74 s → 0.10 s; the first index takes 2 s and 27 MB. With
+the one repeated line the benchmarks used before, the 4M index is 22 MB and builds in 14 s: measure an index on text that varies.
 
 ## Pages (checked with real data 2026-10-31)
 

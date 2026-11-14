@@ -26,6 +26,34 @@ everywhere, and no other meaning uses `doc.on.doc`.
 Errors use the triangle (`error`, `errorFilled`); the octagon (`critical`) is only a machine's critical alert. Copy is
 `doc.on.doc`, Paste `doc.on.clipboard`, Interrupt `stop.fill`, a model or launcher `cube` (`cpu` is only a processor).
 
+## Recording marks
+
+A recording, the mode that keeps recording, its paused state and the summaries made from them are different meanings,
+each with its own entry (all-day recording, #4741, `docs/apple/recording.md` "All-day recording (Apple)"):
+
+| Entry | Symbol | Meaning |
+| --- | --- | --- |
+| `Theme.Icon.recording` | `waveform.circle` | one recording (the Recordings page, a clip) |
+| `Theme.Icon.allDay` | `record.circle` | All-Day Recording: the mode, its switch on the phone, a recorded day's row in Recent Recordings (`RecordingDayRow`), its button, page and recording state on the watch, the consent sheet's heading |
+| `Theme.Icon.allDayPaused` | `pause.circle` | all-day recording paused, waiting for a tap: a state beside its words, never the Pause control (`pause`, `pause.fill`) |
+| `Theme.Icon.meetingMark` | alias of `meeting` (`person.2.wave.2`) | a meeting marked inside a day (the watch's Mark Meeting, a meeting in the day's timeline) |
+| `Theme.Icon.dayRecap` | `text.book.closed` | the hub's recap of a day: the Day Recap section's header on a day's page and the Today row under the switch (`RecordingDayTodayRow`). Its own symbol, not `minutes` (`note.text`, the watch's Meeting Minutes): one covers a whole day |
+
+The All-Day Recording complication can't read `Theme.Icon` (the widget extension doesn't build it), so `WatchFaceTokens`
+repeats `allDaySymbol`, `allDayPausedSymbol` and `allDayAlertSymbol` (`Theme.Icon.error`'s triangle, for stopped and a
+face gone stale) with an `// icon:` note naming the entry each mirrors; change both together.
+
+## Minutes' summary card
+
+The summary card of a meeting's minutes (#6563, `docs/design/DESIGN_SYSTEM.md` "Minutes cards (#5026)") names its marks
+apart from the four cards' (`keyPoint`, `decision`, `openQuestion`, `todo`):
+
+| Entry | Symbol | Meaning |
+| --- | --- | --- |
+| `Theme.Icon.conclusions` | `lightbulb.max` | the Core Conclusions box: where the meeting landed, in the AI's words (not `pluginLight`, an extension's light) |
+| `Theme.Icon.decided` | `checkmark.seal.fill` | a decision's mark before its words in a topic card, where a point has a dot (`decision`, the signature, heads the four cards' Decisions) |
+| `Theme.Icon.topicProgress` … `topicGeneral` | `chart.bar.xaxis.ascending`, `calendar.badge.checkmark`, `shippingbox`, `speedometer`, `chart.dots.scatter`, `screwdriver`, `ladybug`, `paintbrush.pointed`, alias of `people` (`person.3`), `person.bubble`, `banknote`, `flame`, `circle.grid.2x2` | a topic card's icon by the hub's `icon` (`progress`, `schedule`, `release`, `performance`, `metrics`, `tooling`, `quality`, `design`, `people`, `customer`, `budget`, `risk`, `general`), through `RecordingMinutesCards.symbol`; any other value is `general`, so the model never names a symbol |
+
 ## Each style has an icon language
 
 A style's `ComponentSpec.icons` (`IconSpec`) says how its SF Symbols look: a weight, whether filled symbols are drawn as
@@ -56,6 +84,7 @@ A new style that has its own icons sets `icons` in its `ComponentSpec`; nothing 
 | A Settings row that opens a page / a Settings switch with a mark | `SettingsRow(title:symbol:tint:)` / `SettingsSwitchRow(title:symbol:tint:isOn:)`; never a page's own `Toggle` + `Label` |
 | A component that takes a symbol name (`Chip`, `EmptyStateView`, BeautifulUI's pills, tool chips, sidebar rows) | pass `Theme.Icon.styled(Theme.Icon.x)`; the design-system components already do |
 | A system control that draws its own symbol (`Label(_:systemImage:)` in a menu, a swipe action, a tab) | `Theme.Icon.x` as written |
+| A row on the watch's home list (all-day recording, Mark Meeting, Meeting Recording, Meeting Minutes, Record) | `Label(_:systemImage:)` with `.labelStyle(.watchRow)`: every row's symbol in one column (`Theme.Size.icon`, larger with the text), a symbol wider than it drawn a size smaller, so titles line up and none is overdrawn (#6046) |
 | A brand, an iPhone app, a Linux distribution | `BrandMark`, `BrandTile`, `BrandBadge` with `Theme.Brand` (never `Image("…")`) |
 
 `ThemedIcon` takes its size and color from the caller like `Image(systemName:)`. Where the symbol must be an `Image`
@@ -78,7 +107,7 @@ tiles. Raw point sizes are only for pictures with a fixed layout (share cards, t
 
 Icons take role colors, never hex values: `.secondary` / `.tertiary` for chrome and accessories, `Theme.accent` for what
 can be tapped, `Theme.danger`, `Theme.caution`, `Theme.positive` for outcomes, `AgentState.tone` and `StatusPalette` for
-Agent states (Needs you red, Working amber, Unread green), `Theme.ai` for the AI mark. A tile's glyph is white on its
+Agent states (Needs you blue, Working amber, Unread green), `Theme.ai` for the AI mark. A tile's glyph is white on its
 tint. State colors are the same in every style.
 
 ## Avatars, state dots and app icons
@@ -95,8 +124,8 @@ tint. State colors are the same in every style.
 ## Extensions and other targets
 
 The widgets, the Live Activity, the Share and Notification extensions do not compile `Theme`, so their few symbols are
-literals in their own files. The watch and the Mac compile `Shared/` and use `Theme.Icon`; the Mac's own names are in
-`apple/Mac/Design/MacTokens.swift` and point at `Theme.Icon`.
+literals in their own files. The watch compiles `Shared/` and uses `Theme.Icon`. The retired native Mac had its own names in a
+Mac-only token file and pointed them at `Theme.Icon`; that target no longer exists.
 
 ## Checks
 

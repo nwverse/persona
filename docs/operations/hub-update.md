@@ -40,7 +40,10 @@ from a vault at runtime rather than stored in the environment file.
 Enable the timer only after the bootstrap and publication checks below pass. The publisher is
 `scripts/release/publish_hub_release.py --config <ssh-config.json>`; its config
 supplies `remote_root` and `credentials_command`, which returns SSH credentials
-as JSON (`host`, `port`, `username`, `password`, or a fields array keyed by id).
+as JSON (`host`, `port`, `username` and either `password` or `key_filename`, or a
+fields array keyed by id). `key_filename` is the path of a private key file on the
+build machine, for hosts that only accept key logins; exactly one of the two must be
+set, and no other key or SSH agent is tried.
 SSH host keys must already be trusted. Credentials are never written to release
 artifacts. The publisher needs Python and Paramiko; the remote needs Python.
 The optional `release_namespace` defaults to `hub` and selects a feed below
@@ -58,6 +61,9 @@ set `PERSONA_TEST_DOCKER_CONFIG` to a credential-free directory containing
 `cli-plugins/docker-compose`; deployment tests only render configuration offline.
 The worker passes its Python interpreter through to every script suite.
 The SSH publisher uses Paramiko 4.0.0 in the same private environment.
+The remote runs the publication program with Python 3.11 or later: `python3`, unless the
+publisher config's optional `remote_python` names another interpreter (one program name or
+absolute path, for hosts whose `python3` is older). The node and manager publishers use it too.
 
 Build with `update_url=file://<remote_root>/releases/hub` for a private source.
 By default, SSH uploads only the Hub platform and atomically promotes its manifest. The
@@ -221,7 +227,7 @@ releases retain their separate publishing workflow.
 ## Current state (verified 2026-11-02)
 
 - Version: `personad version` is a string written in with `-X main.version`.
-  - `deploy.sh`, `publish.sh`: `git describe --always --dirty` plus a minute-resolution timestamp, like `v0.1.1-23-gabc1234-202611021530`;
+  - `deploy.sh`, `publish.sh`: `git describe --tags --match 'v[0-9]*' --always --dirty` plus a minute-resolution timestamp, like `v0.1.1-23-gabc1234-202611021530`. The nearest `vX.Y.Z` tag names it, a lightweight one too (a GitHub release's tag is one; plain `git describe` skipped v0.4.0, #7201), and `testflight/<build>` never does;
   - Docker image: built by CI when a `v*` tag is pushed; the version is the tag without `v`.
 - hub:
   - `GET /api/v1/health` returns `{ok, version, features}`; the WebSocket `hello` carries `server_version`;
@@ -252,7 +258,8 @@ releases retain their separate publishing workflow.
 ## 1. Skills move out of the binary
 
 - **The user's skill space**: `~/.persona/skills/<name>/` on the machine that runs the assistant.
-  - Each directory is one skill (with a `SKILL.md` inside); the user adds and edits them, and personad only reads, never writes;
+  - Each directory is one skill (with a `SKILL.md` inside); users can add and edit them. Updates never overwrite them;
+    an explicitly confirmed Web ZIP import can add a new name, with a narrow Undo for that new installation.
   - The machine that runs the assistant is usually the hub machine's local node; when the assistant is configured on another machine, it is that one.
 - **Syncing into the assistant directory**: every time node starts the assistant process (both Claude and Codex assistants; `/agent` and the AI twin also use the assistant directory):
   1. For each skill under `~/.persona/skills/`, create a symlink at `<assistant dir>/.claude/skills/<name>`.
@@ -270,8 +277,78 @@ releases retain their separate publishing workflow.
 - **Drop `-tags public`**: there is no difference between the two anymore; `files_public.go` / `files_bundled.go` merge into one embed holding only built-in skills.
   - The privacy scan before release stays, and also checks that every skill in the binary is registered as redistributable (`assistantskills.Redistributable`);
   - A test guards it: the built-in skills directory may only contain skills registered as redistributable.
-- **App**: Settings › Assistant › Skills, a read-only list (name, the description from `SKILL.md`, whether it comes from "my skills" or **Built-in**).
-  API `GET /api/v1/skills`; the hub asks the node that runs the assistant. Management (add / delete / edit) comes later.
+- **App**: Settings › Assistant › Skills lists name, description and user / built-in / plugin source.
+  `GET /api/v1/skills` remains read-only and compatible with older clients; the hub asks the current assistant's node.
+  The Web additionally offers **Upload ZIP**, described below. Native clients are unchanged.
+
+### Web skill ZIP installation
+
+For people adding a trusted skill package, Settings › Assistant › Skills has one **Upload ZIP** action.
+Choose a file, wait for checks, review the plain-text name, description, actual destination and computer, then
+**Install skill** or **Cancel**. Selecting a file never installs it. No shell, dependency installer, HTML renderer
+or model is used to check a package. The feature changes no model/profile setting.
+
+The manager authorizes the current assistant and its execution computer using the existing full-access route,
+then sends `skills.import` to that node. The browser cannot select another machine or supply a path.
+The node uses `assistantskills.UserDir`: normally `~/.persona/skills/<name>/`, respecting `PERSONA_SKILLS_DIR`
+and the existing `PERSONA_HOME` resolver. This store is shared by assistants running as that machine's user;
+it is not silently changed to a private manager store. A changed computer, root identity, expired reference,
+offline machine or old node fails explicitly. Open the page again after changing environments.
+
+Package contract:
+
+- One ZIP with exactly one uppercase `SKILL.md`, either at the root or inside one enclosing directory; all
+  resources must be in that same package. Nested skills, several manifests and outside-wrapper files are refused.
+- The entire manifest is UTF-8, at most 64 KiB, with YAML frontmatter between `---` lines. `name` and `description`
+  are non-empty YAML strings. The name (not the ZIP filename) is at most 64 ASCII lowercase letters/digits with
+  single separating hyphens, not a reserved device name. Description is at most 4096 UTF-8 bytes.
+  Duplicate YAML keys, aliases/anchors and custom tags are refused.
+- At most 4 MiB compressed, 16 MiB expanded, 4 MiB per file, 512 archive entries and 12 path levels; maximum
+  expansion ratio 200 per entry. Both declared and actually read sizes/CRC are checked. Only Store/Deflate,
+  ordinary files/directories are accepted. No links, special files, traversal, absolute/drive/UNC/backslash paths,
+  reserved names, duplicate entries, case/Unicode-normalization collisions or internal provisioning stamps.
+- Preview extracts into a private temporary sibling and removes it before replying; only bounded, expiring metadata
+  receipts remain (32 per node, ten minutes). Install rechecks the exact same ZIP, current environment and conflicts,
+  then publishes by an exclusive atomic rename. No existing directory, built-in, plugin or local runtime skill is
+  overwritten or shadowed. Unsupported exclusive-rename platforms fail closed. Failure/cancellation removes staging.
+
+After installation the existing list refreshes. A ten-minute **Undo installation** receipt exists only on this
+connected page/node lifetime; reloading, switching assistant or node restart can invalidate it. Undo only detaches the
+same unchanged new directory, with identity/content/mode checks; modified or replaced packages are refused. It moves
+files to a hidden `.undone-…` sibling and reports that recovery path, rather than deleting them. This also protects a
+local writer holding an open file during the move. There is no arbitrary-path delete or edit API. Recovery is retained
+for the user; no background job deletes it or reinstalls an undone package.
+
+A canceled preview has no durable staged files. Cancellation before the atomic publish cleans staging; a lost response
+after publish may mean the whole installation completed, so refresh the list before retrying. Writes are never
+automatically retried. Repeated/concurrent installation cannot replace the winning name.
+
+Discovery uses existing provisioning: `assistantLarkEnv` links the user store into `.claude/skills`, and
+`assistantRuntimeSkills` links it into `.agents/skills`. Claude reads the existing assistant directory; Codex's
+existing `skills/extraRoots/set` points at `.claude/skills`. No new discovery engine or `@skill` behavior is added.
+The settings list is the Persona-provisioned inventory, not every skill a runtime might discover. Refresh lists
+immediately; start a new chat to safely pick up installation/Undo, as already-running sessions may retain old context.
+Tests exercise actual import/list/provisioning entry points and resource reads, not a paid Claude/Codex turn.
+
+`TestImport*`, `TestSkillImport*` and `web/src/views/settings/Skills.test.tsx` cover archive safety, atomic races,
+environment/credential changes, strict server-derived targeting and the confirmation/Undo states. The opt-in
+`TestSkillImportBrowserHarness` uses the real manager handler and archive store with synthetic device transport
+and a temporary directory; unrelated routes use `scripts/mock/mock_hub.py`. It is UI integration evidence, not a
+production or live-model test. Its header documents loopback ports and shutdown; run with `SKILL_IMPORT_QA=1`.
+
+Curated synthetic captures, actually inspected in a browser (not production assets):
+
+| Preview | Light | Dark |
+| --- | --- | --- |
+| Desktop, standard text | [Light](../web/screenshots/skill-zip/preview-light.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/preview-dark.png) |
+| 390 px, largest supported text setting | [Light](../web/screenshots/skill-zip/narrow-light-large.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/narrow-dark-large.png) |
+| Localized narrow layout | [Simplified Chinese](../web/screenshots/skill-zip/zh-preview.png) | [Japanese](../web/screenshots/skill-zip/ja-preview.png) |
+
+Browser observations: Cancel initially owns preview focus; Tab reaches Install with a visible ring; Escape closes
+and restores Upload ZIP focus. No horizontal overflow at 390 px, including Large. A missing-string description
+shows an actionable validation error; a duplicate name shows conflict with no overwrite action. Installation adds
+`example-review` to the real fixture store/list, and Undo removes only the new `example-cancel` while retaining its
+resources in the reported recovery sibling. These are local fixture results, not live Claude/Codex discovery.
 
 ## 2. Build channels
 
@@ -281,7 +358,7 @@ The binary gets three more `-X` variables (`cmd/personad`):
 | --- | --- |
 | `main.channel` | `release` (published, updates automatically), `docker` (in the image, only suggests pulling a new image), `dev` (default when unset: local builds, tests) |
 | `main.build` | A monotonic build number, see "Version numbers" |
-| `main.updateURL` | `dl/` at the publish address (`publish.site_url`, already public). If unset, no checks |
+| `main.updateURL` | Where the build looks for releases: the config's `publish.update_url` (e.g. a GitHub repository's `releases/latest/download`), else `dl/` at the publish address (`publish.site_url`, already public). If unset, no checks. A hub's `hub.json` `update.url` replaces it at run time ("Update source") |
 
 - Only `release` swaps its own binary; `docker` tells the user to pull the image; `dev` only shows the version.
 - Direct deploys (`deploy.sh` and the main session's deploy script) also stamp `release` and use the build time as the build number: newer than the public release at the time, so they are not downgraded; once the publisher releases a newer version, the hub takes over on its own (section 6).
@@ -322,15 +399,20 @@ The binary gets three more `-X` variables (`cmd/personad`):
 ```
 
 - `ancestors`: all commits reachable from this commit (`git rev-list <commit>`), the first 6 bytes of each, sorted, then base64 ("no regression").
-- `programs`: programs published together with personad that the hub runs alongside (`update.ProgramNames`: `personad-wechat`, `docs/extensions/wechat.md`; `persona-hub` and `persona-manager`, [../server/server.md](../server/server.md) ("Programs");
-  Telegram's `personad-telegram` was also here up to #1704; after that it is an extension and goes through the extension market):
-  `{"personad-wechat": {"linux-amd64": {name, size, sha256, binary_sha256}, …}}`. Old hubs ignore this field and still only swap personad.
+- `programs`: programs published together with personad that the hub runs alongside (`update.ProgramNames`:
+  `persona-hub` and `persona-manager`, [../server/server.md](../server/server.md) ("Programs")):
+  `{"persona-manager": {"linux-amd64": {name, size, sha256, binary_sha256}, …}}`. Old hubs ignore this field
+  and still only swap personad. Messaging extensions, including WeChat and Telegram, are published through the
+  extension marketplace, not bundled program downloads.
 
 - `nodes`: the other programs a node can run, published with personad (`update.NodePrograms`: `persona-node`, the device's own): `{"persona-node": {"linux-amd64": {name, size, sha256, binary_sha256}, …}}`.
   `node_protocol`, `node_protocol_min`, `node_capabilities`: what the release's nodes announce in `node.info` (`docs/protocol/protocol.md` ("Node handshake")), so a manager of another build sends one only when it drives it (`docs/operations/node-update.md` ("Node packages")). Old hubs ignore all three.
 - Every release is also kept at `dl/<version>/` (its node builds, `personad-*` and `persona-node-*`, and this manifest as `manifest.json`; also `dl/X.Y.Z/` for the tag `vX.Y.Z`), where managers fetch the node build of their hub's version; `dl/latest.json` and `dl/*.gz` stay the newest release.
 - A downloaded file must match both `sha256` (archive) and `binary_sha256` (decompressed), and the new binary's `version -v` must report the version and build number in the manifest.
   `SHA256SUMS` stays for install.sh.
+- The publisher checks the same before anything goes up (#4522): v0.2.1's `latest.json` said build 202611110749 while every binary beside it was 202611110745. A later run had written the manifest over an earlier run's binaries, so every hub downloaded the release and then refused it.
+  `personad release manifest` now refuses to describe binaries of another build, and `personad release verify --dir <dir>` reads a written `latest.json` back against its downloads: sizes and sha256s; the binaries this machine runs (its own platform's) must report the version and build in `version -v`; every other binary must hold the build number (the `-X main.build` value is kept in each binary as it is, whatever its platform).
+  `publish.sh` runs it right before uploading. The tag publisher (`scripts/operations/tag_release.py`) checks a receipt that carries `latest.json` the same way before attaching it to a GitHub Release (running this machine's `personad version -v`), and uploads `latest.json` after the files it lists.
 - `min_app_build`: Apps below it cannot use this hub version. For `protocol`, see "Compatibility".
 - There is no minimum node build: a node reports a version string, and the hub redeploys any node whose version differs from its own. That redeploy runs after the new hub has confirmed
   (section 8, step 9 "Update nodes along with it"), not before the new hub starts; a machine that fails to update keeps the reason.
@@ -343,7 +425,7 @@ Public releases use `publish.sh` manually on the publisher's dev machine, and th
 - Tests must still pass before publishing, plus `publish.sh`'s own checks (if any fails, nothing is published):
   1. Read the live `latest.json` (if any): the new build number must be larger, and the live version's commit must be an ancestor of this one (`git merge-base --is-ancestor`);
   2. Build the four platforms (with `channel=release`, `build`, `updateURL` written in), privacy scan (the binary may only contain redistributable skills);
-  3. Generate `latest.json` (version, build number, commit, the commits it contains `ancestors`, release time, sha256 of each platform's archive and decompressed binary, `min_app_build`, `protocol`);
+  3. Generate `latest.json` (version, build number, commit, the commits it contains `ancestors`, release time, sha256 of each platform's archive and decompressed binary, `min_app_build`, `protocol`), refused when a binary is not that build, then read it back with `release verify` before any upload ("Version manifest");
      do not publish when the working tree has uncommitted changes in server/ or web/ (`NO_DEPLOY=1` still builds, and the commit in the binary carries `-dirty`): whatever commit the manifest names, the binary must be exactly it;
   4. After publishing, read back `VERSION`, `SHA256SUMS`, `latest.json` and compare them with the local ones.
 
@@ -369,8 +451,7 @@ The existing path of building from the default branch and deploying directly (`d
 - The main session's deploy script lives outside the repo and must add the same four `-X` flags to its `go build` (the report gives the line to add).
 - **Deploy only from a working tree that contains the default branch**: `deploy.sh` first fetches the remote's default branch (how it finds the branch: the comment above the check); if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if it cannot be fetched);
   deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a stale branch").
-- The hub machine also needs `personad-wechat` (the WeChat bot program, `docs/extensions/wechat.md`): `deploy.sh` builds the same version for the hub and puts it next to personad; nodes do not need it.
-  Telegram is not here: it is an extension (#1704), installed and upgraded on the hub from the extension market.
+- WeChat and Telegram are installed and upgraded from the extension marketplace; `deploy.sh` does not build their programs.
 - **Update a hub with `deploy.sh <hub machine id>`, not by copying a binary and running `personad hub switch` by hand.** `deploy.sh` first puts this build's node packages for every platform in the hub's `bin/nodes/`, then switches the hub blue-green (no restart while the socket units are unchanged, `docs/operations/hub-restart.md`).
   A hand switch leaves `bin/nodes/` on the previous build: the hub hands out a `personad-<os>-<arch>` there as its own version (it has no version file), so **Redeploy** in the app puts the old node back on a computer.
   To check: every `bin/nodes/persona-node-*.version` on the hub machine equals the hub's `/api/v1/health` version.
@@ -395,7 +476,7 @@ Comparing only build numbers can go backwards: a directly deployed hub runs comm
 
 ### Programs swapped together with personad (2026-11-03, #533)
 
-The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `persona-hub` and `persona-manager`, the hub's and the manager's own programs ([../server/server.md](../server/server.md) ("Programs")).
+The programs (`update.ProgramNames`): `persona-hub` and `persona-manager`, the hub's and the manager's own programs ([../server/server.md](../server/server.md) ("Programs")).
 
 - When the manifest has `programs` for this hub's platform, they are downloaded and verified (same sha256, and `version -v` must be this version), then swapped in together with personad: placed next to personad,
   existing ones kept as `.prev`, and ones that did not exist before recorded as newly installed. If any one fails to download or verify, the whole update is skipped. A program whose swap fails midway is left as it was, and going back leaves it too.
@@ -428,6 +509,33 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
   - CI writes the image name into the binary at build time; it is not hard-coded in the source.
 - **dev**: no checks, only shows the version.
 - Network unavailable or bad manifest: show the reason under **Check for Updates** in the App when no install or confirmation is in progress; otherwise keep the update's progress and error. Do not hammer retries (keep the hourly interval).
+
+### Update source
+
+Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's binaries were built pointing at a publish site that stayed on an older release, and nothing short of a new build could change that.
+
+- **Which source**: `hub.json`'s `update.url` when set (`docs/operations/config.md`), else the URL the build was made with (`main.updateURL`). The value is the directory `latest.json` is in. A GitHub repository's release base works as it is:
+  `https://github.com/<owner>/<repo>/releases/latest/download` redirects `latest.json` and `personad-<os>-<arch>.gz` to the newest release's assets, and the client follows the redirects. A release build made without an update URL updates itself once `update.url` gives one.
+- **What follows it**: everything the hub fetches as "the release": its checks, downloads and node binaries for every platform; the node builds the manager fetches when `node_packages.url` is empty; the manager install script's download address (its sha256s come from the same `latest.json`); and the `install.sh` line for a new computer (the source without its `/dl`).
+  GitHub's base has no `<version>/manifest.json`, so a manager there gets the newest release's node builds when it drives them (`docs/operations/node-update.md` ("Node packages")).
+- **What it may be**: `https://`, `http://` only to this machine (nothing is signed, "Security"), or `file:///<directory>` (a private publisher's copy), with no user, password, query or fragment, and not `latest.json` itself. One that does not read leaves the hub with no source rather than the build's: Settings › hub says why (`why_not`), and the log says so at the start. The error never shows the address.
+- **Proxy**: `update.proxy` (`http://[user:pass@]host:port`, `internal/netproxy`) carries these requests alone (manifest, downloads and a Docker hub's registry checks). It is also the node builds' proxy when they come from the update source and `node_packages.proxy` is empty. Everything else the hub talks to goes as before: a proxy in the service's environment (`HTTPS_PROXY`) would carry all of it.
+  Without `update.proxy`, these requests use the environment's proxies, as before. One that does not read fails every check with the reason rather than going around it. The log, `GET /api/v1/hub/update` and the errors show the proxy as `http://host:port`, never its user and password.
+- **Seeing it**: `GET /api/v1/hub/update` carries `update_url` (the source in effect), `update_url_from` (`hub.json` or `build`) and `update_proxy`. hub.json is read at the hub's start: a change takes effect at the next start or update.
+- **The default of official builds** is the maintainers' decision. It is either the publish site's `dl/`, kept in step with each GitHub Release, or the GitHub Releases base through `publish.update_url`. Either way `update.url` lets a hub choose another without a new build.
+
+### The Android app
+
+A hub with an update source offers its phones the Android app of the newest stable release that carries one, with no setup (#5563). The phones update from their hub (`GET /api/v1/app/android/latest`), which serves what is in `apps/android/` (`docs/protocol/protocol.md` ("Android packages")); until now only a publisher copying an APK over SSH put anything there.
+
+- **What a release carries**: a version-tag release has `android.json` beside `latest.json`, naming its signed APK (`Persona-<version>-android.apk`, `docs/operations/release.md`). It holds the fields of the hub's `latest.json` for the app (package, version code and name, minimum SDK, the signing certificate's SHA-256, size, SHA-256, source commit, notes) plus `version` (the release) and `name` (the APK's file name). For the official GitHub `releases/latest/download` source, a latest release without `android.json` makes the hub read the Release list and use the newest earlier stable release with both `android.json` and its named APK; drafts, prereleases and incomplete entries are skipped. It checks at most 10,000 releases and reports an error if more remain unchecked. A custom source without `android.json` changes nothing.
+- **When**: at every update check (a minute after start, then hourly), before the hub's own update so an install's restart cannot cut the download short, from the same source and through `update.proxy`. A Docker hub checks too, but has a source only when `update.url` gives one (`docs/operations/docker.md` ("Upgrading")).
+- **What it writes**: it downloads the APK, checks its size and SHA-256, and writes `<sha256>.apk`, its gzip copy and then `latest.json` under `.publish.lock`: the layout and lock of `scripts/release/android_apk_atomic.py`, so an SSH publisher and the sync never write at the same time, and the endpoints and the app need no change. It keeps the APK it replaced (a phone may still be downloading it) and removes older ones.
+- **What it never does**: go back to a lower or equal version code (a publisher building every commit on main stays ahead of the releases); put an APK of another package, or signed with another key, over the published one (the phones could not install it over the app they have, so a hub publishing its own builds keeps them); overwrite a `latest.json` it cannot read. A refusal or failure is logged once, not at every check, and the phones keep the app they have.
+- **On the phone**: the app finds the version at launch or in the foreground. Settings shows the last check, its hub and the result: update available, up to date, no APK, check failed, or an incompatible package or signing key. The system still asks before installing an update.
+- **Security**: as for the hub's own binaries ("Security"), the publisher signs no manifest; the SHA-256 guards against a broken download. The phone itself refuses an APK signed with another key than the app it has.
+
+Code: `server/internal/update/android.go`, called from `server/internal/hub/selfupdate_check.go`.
 
 ## 8. Updating (release build; automatic and manual use the same flow)
 
@@ -561,7 +669,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check}` |
+| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check, update_url?, update_url_from?, update_proxy?}` (the last three: "Update source") |
 | POST | `/api/v1/hub/update/check` | Check immediately |
 | POST | `/api/v1/hub/update` | Start update (409 with a reason for non-release builds); `{"now": true}` is **Update Now** after the second confirmation, skipping the idle wait |
 | PUT | `/api/v1/hub/update/settings` | `{auto}`; `{auto_notice_seen: true}`; `{auto_update_nodes: true\|false}` |
@@ -615,7 +723,10 @@ does not satisfy that contract.
   - Skills: symlink creation and cleanup, automatic migration of old installs, user precedence on a name collision, gate command only present with its skill; built-in skill directory contains only redistributable skills;
   - dev / docker channels never install, however new the manifest is (API 409);
   - **No downgrade** (`TestNoDowngrade`): a directly deployed binary (build number = build time) does not install a manifest with a smaller or equal build number; only larger ones install;
+  - **Update source** (`selfupdate_source_test.go`): `hub.json`'s `update.url` replaces the build's for checks, install scripts and node builds, and the view says which; a URL that does not read (plain http elsewhere, a password, a query, `latest.json` itself) leaves no source and never shows the password; `update.proxy` carries the update's requests with its credentials and nothing else, and one that does not read fails checks without a direct request;
+  - **Release manifest** (`update/verify_test.go`, `cmd/personad/release_test.go`): a manifest over binaries of another build (this platform's runs and says so, another's lacks the build number), another version, a changed or missing download is refused, and `release manifest` writes nothing then;
 - publish.sh: no publishing if the build number does not increase or the live commit is not an ancestor.
+- tag_release.py: a receipt whose `latest.json` is not its binaries' build is never uploaded; `latest.json` goes up after the files it lists (`scripts/operations/test_tag_release.py`).
 - App: FakeHub tests for the hub row in Settings, first-time notice, banner (appears, dismissed with × and not shown again, progress, explanation while disconnected, both incompatibility notices), update history and Skills list.
   Screenshots: two styles × light/dark.
 

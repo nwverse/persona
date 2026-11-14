@@ -29,7 +29,9 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   The App's own starts count as well (#1642, `launcher_health_starts.go`): the hub tells the manager how a start it waited for went (`session.start_ended`: a failure, or a start the node ran before answering that worked),
   and a "New Agent" answered at once (`async`) is followed in the machine's session list, from `starting` to started or to `start_error` (counted once while the node lists it: the starts counted are kept with the records, so one is not counted again after the manager restarts; the failure's `updated_at` is the node's clock and is not compared with the record's).
   A start whose outcome the hub does not know (the computer offline, the call timed out) and a request the node refused before running anything are not recorded.
-- **On-demand recheck before a reroute** (#2018): a start aimed at a machine whose launcher has a failing record probes that machine once on the spot before moving elsewhere.
+  A timed-out call is one whose own context ran out or was cancelled (`context.DeadlineExceeded` / `context.Canceled`, or an uncoded relayed error with exactly those words, `startWaitEnded`, #6324): a node link stuck for the whole `taskStartTimeout` says nothing of the launcher, so it is only logged. A node's own timeout text (`session.start: context deadline exceeded`) still counts as `timeout`.
+  An unanswered task start is reconciled before it fails (#6540): the hub snapshots the machine's session list before `session.start`, and when the answer never comes back (`startResultUnknown`) it lists again for up to `taskStartAdoptWait` (30 s, polling every `taskStartAdoptPoll`). A manager-started Claude start carries its own `session_id` (a v4 UUID the hub generated), and the reconciliation first matches that exact id on the machine's list — only the session that start created can carry it, so a session the owner started by hand, or another workspace-none task's session in the same directory, can never be misadopted (#6908). Only when the node is too old to honor `session_id` does the hub fall back to the heuristic (`adoptStartedSession`): a session absent from the snapshot, hub-started, with the same launcher and directory and a fresh sign of life, that no open to-do has linked yet (`todos.activeBySession`), newest wins. The open-to-do exclusion applies in every fallback, so a task can never steal another task's Agent; its remaining limit is two unanswered starts in one directory on a node that ignored `session_id`, where one could adopt the other's session (a mislabeled card, never a duplicate Agent). If the pre-start list could not be read, the machine stops answering, the to-do book cannot be read, or no matching session appears, the start fails as before and stays on its machine: an unknown result never triggers a retry or a flexible-task reroute.
+- **On-demand recheck before a reroute** (#2018): a start aimed at a machine whose launcher has a failing record probes that machine once on the spot before moving elsewhere, and a fixed-machine task probes it the same way before refusing (`launcherUnusableNow`, #6324).
   If the probe passes (the launcher was fixed after the record, for example a CLI installed or a PATH corrected), the record is cleared to `ok` at once and the start stays on the asked machine.
   If it fails again, or the machine cannot answer, the usual reroute applies. Concurrent starts for the same machine × launcher wait for one probe (single flight), and a probe is not repeated
   within 30 seconds (`healthRecheckThrottle`), so a burst of starts does not turn into a burst of probes. This also covers the case where periodic checks are off: no manual button is needed.
@@ -75,12 +77,12 @@ A check asked for by hand of that launcher (`POST /api/v1/launchers/health/check
 Without a reset it follows the usual rules: unavailable for 6 hours, checked at the interval. Until the reset it counts in the main chat's readiness as a rate limit that passes by itself (`rate_limited`), and not at all after it.
 
 - `agents_list`: gets an extra "unavailable launchers" section at the end, one line each: computer / launcher / state / category / error; a usage limit adds `resets_at=<RFC 3339>, in …`.
-- The launcher list for creating an Agent (`GET /api/v1/machines/{mid}/launchers`) carries `health` on each item (`{state, error, kind, checked_at, resets_at?}`), and the clients gray out the blocked ones ("In the App" below).
+- The launcher list for creating an Agent and the main chat's menu (`GET /api/v1/machines/{mid}/launchers`) leave out a launcher whose latest check failed, and carry `health` (`{state, error, kind, checked_at, resets_at?}`) on the ones they keep — a `not_in_terminal` entry stays and is grayed out ("In the App" below).
 - `agent_start` and explicitly flexible `task_plan` tasks: when the launcher to use is unavailable on this computer, it is rechecked on the spot first (see "On-demand recheck before a reroute"); a passing probe keeps the start on the asked computer, otherwise it switches to another online computer where this launcher is healthy (a directory under the original computer's home becomes the new computer's home),
   and the "reason" in the answer / card says it switched and why (for a usage limit with a reset: `is at its subscription usage limit on <machine> (resets_at=…, in …)`); if no healthy one is found, start as originally planned and warn in the answer that the latest check failed. A task plan switches once when the card is produced and checks again when it actually starts.
   Flexible task plans verify the mapped directory with `fs.stat` on each candidate before changing the task, including during preview and retry. Only a confirmed directory qualifies; a missing path, file, unreadable response or unreachable node is skipped while other candidates are considered. If none qualifies after a failed start, the task keeps its original machine, directory and error; it does not retry that failure on the same machine. A passing follow-up probe clears health but does not by itself retry a failed start.
   Healthy first: last check passed > never checked; never checked is not treated as broken.
-- `task_plan` defaults to `machine_policy: "fixed"`, also for saved plans without the field. Preview, start and retry retain that machine and its directory. A known unusable launcher fails on that target without starting elsewhere; normal health recovery (a passing check, including Test availability on that computer) permits a later retry there. A terminal-shell `not_in_terminal` refusal can only be cleared by a real terminal start, so an explicit task retry rechecks that shell on the same computer; it still runs the normal native authentication and startup gates. Set `machine_policy: "flexible"` only for portable work that may move. A card edit that changes the machine pins the new target unless it explicitly chooses flexible placement.
+- `task_plan` defaults to `machine_policy: "fixed"`, also for saved plans without the field. Preview, start and retry retain that machine and its directory. A known unusable launcher fails on that target without starting elsewhere, after the same on-the-spot probe a reroute runs (a passing probe starts it there); normal health recovery (a passing check, including Test availability on that computer) permits a later retry there. A terminal-shell `not_in_terminal` refusal can only be cleared by a real terminal start, so an explicit task retry rechecks that shell on the same computer; it still runs the normal native authentication and startup gates. Set `machine_policy: "flexible"` only for portable work that may move. A card edit that changes the machine pins the new target unless it explicitly chooses flexible placement.
 - The tool answers `Queued` while asynchronous dispatch is pending. This is not proof of an Agent start: errors appear on the same task and its failure receipt. A missing or foreign session in a start response is rejected; a `starting` session is not recorded as a successful launcher check.
 
 ## A launcher the computer doesn't have (#2640)
@@ -133,22 +135,20 @@ set `default` if you want it to wait for your approval at every step. Member hub
 - A state change broadcasts a `launcher_health` event (`{type, record}`, only to connected clients, not a push).
   The "decisions / blocked / progress" board reads `state=blocked` records, or subscribes to this event, to list what is blocked.
 
-## In the App (#1643)
+## In the App
 
-Decided with the user: gray out with the reason, never hide.
+Decided with the user (2026-11-11): the two model lists offer only what works now, so a launcher whose latest check failed is not listed at all (#4437). Earlier (#1643) the clients grayed out a `blocked` launcher with the reason and kept it selectable.
 
-- **New Agent** (iOS / Mac / visionOS `LauncherPicker` in `NewChatView`, web `NewAgent.tsx`): a launcher whose `health.state` is `blocked` on the picked computer stays listed, dimmed, with one line saying why
-  (`not_in_terminal`: "Not available in this computer's terminal"; the other classes a line each: key or sign-in rejected, gateway can't use the model, CLI too old, didn't answer, failed its last check).
-  Choosing it does not pick it: it opens how to fix it (iOS / Mac a sheet, web a panel under the launchers): why, what to do (define it where the terminal's shell reads it, or add it as a model provider,
-  with **Add Provider** going to the provider wizard; other classes: fix its key, gateway or CLI), the record's `error` under Details, and **Try Anyway**, which picks it after all:
-  a start with it that works is what clears a `not_in_terminal` record, so the user must be able to start it once it is fixed. `failing` / `repairing` launchers are offered as before (the hub is still on them); an older hub sends no `health` and nothing changes.
-- The first pick when nothing is configured to follow (an older hub without model configuration) skips blocked launchers: the one used last on that computer unless blocked, else the first that is not (`LauncherChoices.initial`, web `initialLauncher`).
-  When the launcher that will run is blocked anyway (Model Settings' default, or Try Anyway) the form says so; Start stays enabled. iOS / Mac say the line under the launcher row (and under the picker's Default row);
-  the web marks the Default chip and puts that launcher's line first, tagged "Used this time".
-- The list is read fresh each time the sheet opens (iOS / Mac `AppModel.launchersForStart`, which refreshes the app's launcher cache; the web reads it per dialog): health changes behind any cache, as a start that fails blocks a launcher and one that works clears it.
-- **Run Agent here** (a shell pane is a terminal too) and the web's hand-off of a to-do to a new agent: a blocked launcher stays a choice, listed after the usable ones with its line before it is chosen
-  (iOS / Mac under a section of the picker's menu titled with the line, which a menu shows where it drops an option's second line, and the line in the footer once picked; web a description under the menu row, or the reason in the option and under the select), and the first pick is a usable one.
-  Neither has a separate help, so it stays selectable on both clients for the same reason as Try Anyway.
+- **New Agent** (iOS / Mac / visionOS `LauncherPicker` in `NewChatView`, web `NewAgent.tsx`) and the main chat's launcher menu both read `GET /api/v1/machines/{mid}/launchers`, which now leaves out a launcher whose latest check failed on that computer
+  (a `failing`, `repairing` or `blocked` record within 6 hours, a usage limit until its reset) — the same records that route starts elsewhere. `failing` and `repairing` used to be offered; they are hidden too now.
+  A launcher that was never checked stays: no result is not a failure, and the periodic checks are off unless the manager turns them on.
+- It comes back with a passing check on that computer (a periodic round when those are on, or **Test availability**), or when the record stops counting: the failure is older than 6 hours, or a usage limit's reset has passed.
+  A successful start does not clear these: `recordStartSuccess` only clears `not_in_terminal`.
+- `not_in_terminal` is the one failure that stays listed (dimmed, with its line, and **Try Anyway** as before): its checks pass — the node's login shell runs the launcher — and only a real start in the terminal clears it, so hiding it would leave no way to make that start.
+- The launcher the running configuration names with no pick (the `default` of the purpose the form follows) stays listed too, with its record: the next Start uses it whether or not it is offered, so the form must be able to say why it may fail — the clients mark the default row and show its line.
+- Because the list no longer carries the other failing entries, a client's gray-out with the reason, its **Try Anyway** and the help panel now appear for `not_in_terminal`, for that default, or with an older hub that still sends `health` on a blocked launcher (`LauncherBlockedHelp`, `NewAgent.tsx`). The list itself (iOS / Mac `AppModel.launchersForStart`, the web per dialog) is read fresh each time it opens, so a change behind any cache shows at once.
+- The same route feeds **Run Agent here** and the web's hand-off of a to-do to a new agent, so they follow the same rule; the `not_in_terminal` exception is what keeps a launcher those paths must be able to start.
+- A model configuration that names a hidden launcher is otherwise left alone: an explicit configuration is never silently changed.
 - **Add Provider** in the help is offered only for a computer in the hub group the provider wizard saves to (the hub-level one); on another group's computer the words still say to add a provider there.
 - The assistant's launcher menus (headless `claude -p` in the login shell) are unchanged: `not_in_terminal` does not apply there, and the main chat's readiness covers its model.
 - A failed start whose session has `start_error_code` (#1642) shows the hub's whole sentence under "Didn't Start" in the chat (iOS `StartingNote`, web chat page) instead of clipping it after three lines; without a code it is shown as before.
@@ -167,6 +167,28 @@ asked for it) and uses it only on the detour path (`healthDetour`, the chokepoin
 - This first cut never reorders machines or blocks a start: one launcher maps to one provider, so every machine offering it sees the same
   provider-level capacity, and two different providers are not equivalent (an explicit model configuration is never silently changed,
   `docs/assistant/model-config.md`). Deferring starts until recovery, per-machine gateway attribution and the App/Lark entries are later work.
+
+## Execution-agent admission gate
+
+The hub machine once ran 40+ claude processes at load 160 and timed out, so starting an execution Agent is now gated on the target computer's
+reported resources (`server/internal/assistant/admission.go`, #6608). The gate runs on the two execution-Agent start paths only — a task plan's
+`startTaskAgent` and the `agent_start` tool — both of which use `session.start`. The assistant's own conversations (main, leaders, scheduled) start
+through `assistant.send` and never pass it.
+
+The data is the manager's retained 10-second node sample (`machines` monitoring, `docs/server/machines.md`): available memory
+(`MemTotal − MemUsed`), load1, the system's core count, and the node-reported `claude_procs` count (Linux only; nil skips the process condition).
+A start is refused when any line is hit: free memory below the threshold, the claude process count at its cap, load1 above cores × the multiplier,
+or the task's direction already at its running-Agent cap. Thresholds live in the `assistant.admission` setting with code defaults (hub machine 2.5
+GiB free / 20 processes, other machines 2 GiB, load multiplier 4, direction cap 3 with a per-project override map); machine-specific lines are keyed
+by machine id, never hard-coded. A managed machine whose sample is missing, stale (older than 30 s) or lacks a load reading is refused (unknown
+load denies); a computer the resource layer does not retain is skipped, and a hub without a devices manager leaves the gate inert.
+
+A refused `machine_policy=fixed` task stays put and gets the reason plus the least-loaded reachable alternative. A `flexible` task is moved to that
+alternative when its launcher runs there and its directory exists (the same `fs.stat` and reroute-trail rules as the launcher detour); no alternative means refusal. The
+direction cap refuses either policy, since moving machines does not free a direction slot. The check and the slot reservation happen in one critical section
+(`claimIfAllowed`), so concurrent admits cannot both take the last slot; a task's claim is held from the decision until its agent is linked into the todo or the start
+fails for good (an `agent_start` tool call has no todo, so its claim ends with the call), covering both the RPC race and the 10-second metrics/ledger gap. Other
+`session.start` callers (dispatch, self-heal, successor Agents, Feishu cards) are intentionally not wired in this first cut.
 
 ## Not done
 

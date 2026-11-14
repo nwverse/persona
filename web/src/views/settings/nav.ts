@@ -6,8 +6,8 @@ import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
 
-export type Tab = "general" | "persona" | "notifications" | "models" | "agents" | "channels" | "connectors" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
-export const TABS: Tab[] = ["general", "persona", "notifications", "models", "agents", "channels", "connectors", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
+export type Tab = "general" | "persona" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
+export const TABS: Tab[] = ["general", "persona", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
@@ -40,6 +40,8 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   agents: { label: t("settings-nav.tab_agents"), icon: "terminal", hint: t("settings-nav.hint_agents") },
   channels: { label: t("settings-nav.tab_channels"), icon: "chat", hint: t("settings-nav.hint_channels") },
   connectors: { label: t("settings-nav.tab_connectors"), icon: "link", hint: t("settings-nav.hint_connectors") },
+  // the manager's pages of every source of the Inbox (#5278), shown with inbox_sources
+  sources: { label: t("settings-nav.tab_sources"), icon: "inbox", hint: t("settings-nav.hint_sources") },
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
   devices: { label: t("settings-nav.tab_devices"), icon: "key", hint: t("settings-nav.hint_devices") },
@@ -52,7 +54,7 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
  *  ("<name>'s settings", with Switch); this device's; and the hub's, the same whichever assistant is current. */
 export type NavGroup = "assistant" | "device" | "hub";
 export const NAV_GROUPS: { key: NavGroup; tabs: Tab[] }[] = [
-  { key: "assistant", tabs: ["models", "persona", "channels", "connectors", "extensions", "knowledge", "agents"] },
+  { key: "assistant", tabs: ["models", "persona", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
   { key: "device", tabs: ["general", "notifications", "shortcuts"] },
   { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
 ];
@@ -60,67 +62,6 @@ export const NAV_GROUPS: { key: NavGroup; tabs: Tab[] }[] = [
 /** The current assistant's group: its pages follow the pick, and an item opened in one goes back to its list when the
  *  pick changes (an item is one assistant's). */
 export const ASSISTANT_TABS: ReadonlySet<Tab> = new Set(NAV_GROUPS[0].tabs);
-
-// ── search ──────────────────────────────────────────────
-
-/** A group (or a models/agents section) inside a page that the search box can jump to. */
-export interface SearchGroup {
-  tab: Tab;
-  group: string;
-  /** The `data-settings-group` marker of a Group, or the element id of a models/agents section. */
-  anchor: string;
-  hint?: string;
-}
-
-/** The group headings the search box matches (a curated static index; titles are the pages' own headings). */
-export const SEARCH_INDEX: SearchGroup[] = [
-  // General
-  { tab: "general", group: t("settings.appearance"), anchor: "appearance" },
-  { tab: "general", group: t("settings.sidebar_pages"), anchor: "sidebar-pages" },
-  // Persona
-  { tab: "general", group: t("settings.agent_preferences"), anchor: "agent-preferences" },
-  { tab: "general", group: t("settings.this_browser"), anchor: "this-browser" },
-  // the assistant's profile
-  { tab: "persona", group: t("settings-triagesettings.title"), anchor: "triage" },
-  // the hub's
-  { tab: "avatar", group: t("settings.avatar"), anchor: "avatar" },
-  { tab: "hub", group: t("workspace-board.setting_group"), anchor: "agent-group" },
-  // Models' sections and Agents' sections (their element ids)
-  { tab: "models", group: t("settings-nav.tab_providers"), anchor: "settings-providers" },
-  { tab: "models", group: t("settings-nav.tab_model_config"), anchor: "settings-model-config" },
-  { tab: "agents", group: "Claude Code", anchor: "settings-claude" },
-  { tab: "agents", group: "Codex", anchor: "settings-codex" },
-  { tab: "agents", group: "Antigravity", anchor: "settings-agy" },
-  { tab: "agents", group: "omp", anchor: "settings-omp" },
-  { tab: "knowledge", group: t("settings-knowledge.topics_title"), anchor: "knowledge-topics" },
-  { tab: "knowledge", group: t("settings-knowledge.items"), anchor: "knowledge-items" },
-  { tab: "knowledge", group: t("settings-knowledge.messages"), anchor: "knowledge-messages" },
-  { tab: "knowledge", group: t("settings-knowledge.docs"), anchor: "knowledge-docs" },
-  // Notifications
-  { tab: "notifications", group: t("settings-notifications.system_title"), anchor: "system" },
-  { tab: "notifications", group: t("settings-notifications.done_title"), anchor: "done" },
-  // Connectors
-  { tab: "connectors", group: t("settings-connectors.mail"), anchor: "mail" },
-  { tab: "connectors", group: t("settings-connectors.lark"), anchor: "lark" },
-  { tab: "connectors", group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent" },
-  // Extensions
-  { tab: "extensions", group: t("settings-extensions.title"), anchor: "extensions" },
-  { tab: "extensions", group: t("settings-extensions.market_title"), anchor: "market" },
-  // Shortcuts / hub
-  { tab: "shortcuts", group: t("settings-shortcutsettings.terminal_title"), anchor: "shortcuts-terminal" },
-  { tab: "hub", group: t("settings-hubsettings.version"), anchor: "hub-version" },
-  { tab: "hub", group: t("settings-hubsettings.update"), anchor: "hub-update" },
-];
-
-/** The search box's matches: categories by label / hint, and page groups by their heading. */
-export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGroup[] } {
-  const q = query.trim().toLocaleLowerCase();
-  if (!q) return { tabs: [], groups: [] };
-  return {
-    tabs: TABS.filter((t) => (TAB_INFO[t].label + " " + TAB_INFO[t].hint).toLocaleLowerCase().includes(q)),
-    groups: SEARCH_INDEX.filter((g) => (g.group + " " + (g.hint ?? "")).toLocaleLowerCase().includes(q)),
-  };
-}
 
 /** The category and item a URL's query names; `tab` is null when it names none (the phone's list). */
 export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: string | null; section: SettingsSection | null } {
