@@ -128,9 +128,13 @@ def split_diff(text, limit=180_000, worktree=None, base=None, head=None):
     if "".join(pieces) != text:
         raise WatchError("semantic-review file chunks do not reproduce the complete diff")
     chunks, current = [], ""
-    for piece in pieces:
-        if len(piece) > limit:
-            lines = piece.splitlines(keepends=True)
+    reconstructed = []
+    for original_piece in pieces:
+        file_chunks = []
+        if len(original_piece) <= limit:
+            file_chunks = [(original_piece, original_piece)]
+        else:
+            lines = original_piece.splitlines(keepends=True)
             first = next((index for index, line in enumerate(lines) if line.startswith("@@ ")), len(lines))
             header = "".join(lines[:first])
             hunks, current_hunk = [], []
@@ -150,16 +154,21 @@ def split_diff(text, limit=180_000, worktree=None, base=None, head=None):
                 if len(hunk) + len(header) > limit:
                     raise WatchError("one diff hunk exceeds the semantic-review chunk bound; review this file manually")
                 if piece != header and len(piece) + len(hunk) > limit:
-                    chunks.append(piece)
+                    file_chunks.append((piece, None))
                     piece = header
                 piece += hunk
-        if current and len(current) + len(piece) > limit:
-            chunks.append(current)
-            current = ""
-        current += piece
+            file_chunks.append((piece, None))
+            reconstructed.append(header + "".join(hunks))
+        for file_chunk, original in file_chunks:
+            if current and len(current) + len(file_chunk) > limit:
+                chunks.append(current)
+                current = ""
+            current += file_chunk
+            if original is not None:
+                reconstructed.append(original)
     if current:
         chunks.append(current)
-    if "".join(chunks) != text:
+    if "".join(reconstructed) != text:
         raise WatchError("semantic-review chunks do not reproduce the complete diff")
     return chunks
 

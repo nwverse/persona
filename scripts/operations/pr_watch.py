@@ -449,13 +449,15 @@ class Watcher:
         try:
             merged = self.merge(config, pr)
             outcome = "merged" if merged else "passed"
-            self.state.put(repo, number, head, outcome=outcome, merged=merged)
+            self.state.put(repo, number, head, evidence_key=current.get("evidence_key"),
+                           outcome=outcome, merged=merged)
             if not self.dry_run:
                 self.notify(config, number, head, outcome)
         except WatchError as error:
             blocking = "not mergeable" in str(error) or "conflict" in str(error) or "issue" in str(error)
             retry = 0 if blocking else time.time() + min(900, 60 * (2 ** min(int(current.get("merge_attempts", 0)), 4)))
-            self.state.put(repo, number, head, outcome="merge_failed", blocking=blocking,
+            self.state.put(repo, number, head, evidence_key=current.get("evidence_key"),
+                           outcome="merge_failed", blocking=blocking,
                            merge_attempts=int(current.get("merge_attempts", 0)) + 1,
                            retry_after=retry, failure=str(error))
             self.log("%s#%s merge blocked: %s" % (repo, number, bounded(error, 700)))

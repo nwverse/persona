@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -201,16 +202,49 @@ class WatcherTests(unittest.TestCase):
             text = subprocess.check_output(["git", "diff", "--unified=0", base + "..." + head], cwd=root, text=True)
             self.assertEqual(pr_watch_review.split_diff(text, worktree=root, base=base, head=head), [text])
 
+    def test_small_file_then_large_file_keeps_original_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com")
+            def git(*args):
+                return subprocess.check_output(["git"] + list(args), cwd=root, env=env, text=True).strip()
+            git("init", "-q", "-b", "main")
+            (root / "a.py").write_text("old\n")
+            (root / "b.py").write_text("old\n" * 100)
+            git("add", ".")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            (root / "a.py").write_text("small\n")
+            (root / "b.py").write_text("".join(("new-%d\n" % i if i % 10 == 0 else "old\n") for i in range(100)))
+            git("commit", "-qam", "head")
+            head = git("rev-parse", "HEAD")
+            text = subprocess.check_output(["git", "diff", "--unified=0", base + "..." + head], cwd=root, text=True)
+            chunks = pr_watch_review.split_diff(text, limit=250, worktree=root, base=base, head=head)
+            self.assertGreater(len(chunks), 2)
+            self.assertEqual(chunks[0].split("diff --git", 1)[0], "")
+            self.assertIn("a.py", chunks[0])
+            self.assertNotIn("b.py", chunks[0])
+            self.assertTrue(all("b.py" in chunk for chunk in chunks[1:]))
+            for hunk in re.findall(r"(?m)^@@ .*$", text):
+                self.assertEqual(sum(chunk.count(hunk) for chunk in chunks), 1)
+
     def test_publication_failure_keeps_passed_evidence(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
                 patch.object(pr_watch, "verify", return_value=[]) as verify, \
-                patch.object(self.watcher, "success_review", side_effect=pr_watch_common.WatchError("offline")):
+                patch.object(self.watcher, "success_review", side_effect=pr_watch_common.WatchError("offline")), \
+                patch.object(self.watcher, "merge", return_value=True):
             self.watcher.process("example/one", 7)
-        state = self.watcher.state.get("example/one", 7)
-        self.assertEqual(state["semantic"], "passed")
-        self.assertEqual(state["verification"], "passed")
-        self.assertIn("@", state["evidence_key"])
+            state = self.watcher.state.get("example/one", 7)
+            self.assertEqual(state["semantic"], "passed")
+            self.assertEqual(state["verification"], "passed")
+            self.assertIn("@", state["evidence_key"])
+            state.pop("head", None)
+            state["retry_after"] = 0
+            with patch.object(self.watcher, "success_review"):
+                self.watcher.process("example/one", 7)
         self.assertEqual(review.call_count, 1)
         self.assertEqual(verify.call_count, 1)
 
