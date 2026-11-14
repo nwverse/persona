@@ -452,12 +452,12 @@ export struct InboxWorkspacePage {
         this.inboxSearch(true)
         this.inboxActions()
       }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap }).width('100%')
-      Row({ space: Tokens.gap }) {
+      Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
         Select(this.optionList(this.workspace.sourceOptions.map((value: string) => this.sourceLabel(value))))
-          .selected(this.sourceIndex()).value(this.sourceLabel(this.workspace.sourceFilter)).onSelect((index: number) => this.workspace.sourceFilter = this.workspace.sourceOptions[index]).layoutWeight(1)
+          .selected(this.sourceIndex()).value(this.sourceLabel(this.workspace.sourceFilter)).onSelect((index: number) => this.workspace.sourceFilter = this.workspace.sourceOptions[index]).flexGrow(1).flexShrink(0).constraintSize({ maxWidth: '100%' })
         Select(this.optionList(this.workspace.accountOptions.map((value: string) => value === 'all' ? tr('all') : this.workspace.accountName(value))))
-          .selected(this.accountIndex()).value(this.workspace.accountFilter === 'all' ? tr('all') : this.workspace.accountName(this.workspace.accountFilter)).onSelect((index: number) => this.workspace.accountFilter = this.workspace.accountOptions[index]).layoutWeight(1)
-      }.padding({ left: Tokens.page, right: Tokens.page })
+          .selected(this.accountIndex()).value(this.workspace.accountFilter === 'all' ? tr('all') : this.workspace.accountName(this.workspace.accountFilter)).onSelect((index: number) => this.workspace.accountFilter = this.workspace.accountOptions[index]).flexGrow(1).flexShrink(0).constraintSize({ maxWidth: '100%' })
+      }.width('100%').padding({ left: Tokens.page, right: Tokens.page })
       CapsuleSegmentButtonV2({ itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction), itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control), itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta), items: new SegmentButtonV2Items([{ text: tr('inbox_open') }, { text: tr('done') }, { text: tr('all') }]),
         selectedIndex: this.workspace.statusFilter === 'open' ? 0 : this.workspace.statusFilter === 'done' ? 1 : 2,
         $selectedIndex: (index: number) => this.workspace.statusFilter = index === 0 ? 'open' : index === 1 ? 'done' : 'all' })
