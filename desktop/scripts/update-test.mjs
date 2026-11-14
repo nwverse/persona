@@ -24,7 +24,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createCacheIdentity, createRunPaths, prepareRunPaths, removeOwnedRunPaths, updaterCacheName } from "./update-test-cache.mjs";
+import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, testAppId, updaterCacheName } from "./update-test-cache.mjs";
 
 const OLD = "0.9.0";
 const NEW = "0.9.1";
@@ -140,10 +140,13 @@ async function build(version, port) {
   const target = platform === "win32" ? ["--win", "nsis", "--x64"] : platform === "darwin" ? ["--mac", "zip", `--${process.arch}`] : ["--linux", "AppImage", "--x64"];
   const { code, text } = await run(process.execPath, [
     join(root, "node_modules", "electron-builder", "cli.js"), "--config", "electron-builder.update-test.yml", ...target, "--publish", "never",
-    `-c.publish.url=http://127.0.0.1:${port}/`, `-c.extraMetadata.version=${version}`, `-c.extraMetadata.name=${cacheIdentity}`, `-c.directories.output=${directory}`,
+    `-c.publish.url=http://127.0.0.1:${port}/`, `-c.appId=${testAppId(runPaths.identity)}`, `-c.nsis.guid=${nsisGuid(runPaths.identity)}`,
+    `-c.extraMetadata.version=${version}`, `-c.extraMetadata.name=${cacheIdentity}`, `-c.directories.output=${directory}`,
   ], { seconds: 1500, quiet: true, env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.update-test", CSC_IDENTITY_AUTO_DISCOVERY: "false" } });
   if (code !== 0) console.log(text);
   need(`build ${version}`, code === 0, `exit ${code}`);
+  const updateConfig = await readFile(join(directory, platform === "win32" ? "win-unpacked" : platform === "darwin" ? `mac-${process.arch}/${PRODUCT}.app/Contents/Resources` : "linux-unpacked", "resources", "app-update.yml"), "utf8");
+  need(`${version} uses this run's updater cache identity`, new RegExp(`^updaterCacheDirName: ${cacheIdentity}$`, "m").test(updateConfig), cacheIdentity);
   return directory;
 }
 
@@ -250,6 +253,8 @@ async function main() {
     // Ad-hoc only (no certificate, no identity): Apple silicon refuses to start a binary with no signature at all.
     need("ad-hoc signature so the app can start", (await run("codesign", ["--force", "--deep", "--sign", "-", bundle], { seconds: 300, quiet: true })).code === 0);
     executable = join(bundle, "Contents", "MacOS", PRODUCT);
+    const { text: bundleId } = await run("plutil", ["-extract", "CFBundleIdentifier", "raw", "-o", "-", join(bundle, "Contents", "Info.plist")], { seconds: 60, quiet: true });
+    need("the packaged app owns this run's Squirrel identity", bundleId.trim() === testAppId(runPaths.identity), bundleId.trim());
   } else {
     installed = join(work, "app");
     await mkdir(installed);

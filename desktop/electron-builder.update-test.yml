@@ -6,9 +6,9 @@
 #     app-update.yml exactly as a release's feed is; nothing at run time can redirect it;
 #   - the entry is update-test/main.mjs, which records updater events for the harness and then loads the real main
 #     process unchanged. That file is listed only here, so a release package does not contain it;
-#   - a separate app ID and name, so its installer GUID, install directory and profile never touch a real Persona
-#     install or the unsigned development build. The harness overrides extraMetadata.name with a fresh random value
-#     for each run; electron-builder derives updaterCacheDirName from it, so concurrent runs have separate caches.
+#   - a separate, per-run app ID and package name. The harness overrides both from one random identity, stable for the
+#     old and new versions in that run. This owns the updater cache, macOS Squirrel job and Windows NSIS uninstall key;
+#     neither another update test nor a real Persona install or unsigned development build shares those identities.
 extends: ./electron-builder.unsigned.yml
 appId: com.example.persona.update-test
 productName: Persona Update Test

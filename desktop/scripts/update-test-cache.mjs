@@ -1,9 +1,25 @@
 // Paths belonging to one update-test run. Every removable path is below the run's own root.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join, sep } from "node:path";
 
-export const createCacheIdentity = () => `persona-desktop-update-test-${randomUUID()}`;
+export const createCacheIdentity = () => {
+  const identity = `persona-desktop-update-test-${randomUUID()}`;
+  updaterCacheName(identity);
+  return identity;
+};
+
+/** Stable within a run, distinct between runs. Only the update-test config receives this placeholder identity. */
+export const testAppId = identity => `com.example.persona.update-test.${identity.slice("persona-desktop-update-test-".length)}`;
+
+/** Explicitly reproduce electron-builder's NSIS default, so the GUID's per-run ownership is visible at the call site. */
+export function nsisGuid(identity) {
+  const bytes = createHash("sha1").update(Buffer.from("6ba7b8129dad11d180b400c04fd430c8", "hex")).update(testAppId(identity)).digest();
+  bytes[6] = bytes[6] & 0x0f | 0x50;
+  bytes[8] = bytes[8] & 0x3f | 0x80;
+  const hex = bytes.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 /** Must match electron-builder: sanitized extraMetadata.name.toLowerCase() + "-updater". */
 export const updaterCacheName = identity => {
@@ -29,13 +45,15 @@ export function createRunPaths(work, identity, platform = process.platform) {
     home,
     identity,
     cache: join(cacheBase, updaterCacheName(identity)),
-    // Squirrel.Mac uses the test package's bundle ID, under this run's temporary HOME.
-    shipIt: join(cacheBase, "com.example.persona.update-test.ShipIt"),
-    // The AppImage started by electron-updater has no --user-data-dir; it uses the default profile.
-    defaultProfile: join(configBase, "persona-desktop-update-test"),
+    // Squirrel's cache and launchd job both use this run's bundle identifier. CFFIXED_USER_HOME is required because
+    // CoreFoundation otherwise prefers the account directory to HOME; the job takes explicit cache/state paths.
+    shipIt: join(cacheBase, `${testAppId(identity)}.ShipIt`),
+    // The AppImage started by electron-updater has no --user-data-dir; it uses the default profile for this run.
+    defaultProfile: join(configBase, identity),
     environment: {
       HOME: home,
       ...(platform === "win32" ? { USERPROFILE: home, LOCALAPPDATA: join(home, "AppData", "Local"), APPDATA: join(home, "AppData", "Roaming") } : {}),
+      ...(platform === "darwin" ? { CFFIXED_USER_HOME: home } : {}),
       ...(platform === "linux" ? { XDG_CACHE_HOME: join(home, ".cache"), XDG_CONFIG_HOME: join(home, ".config") } : {}),
     },
   };

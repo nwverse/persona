@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { createCacheIdentity, createRunPaths, prepareRunPaths, removeOwnedRunPaths, updaterCacheName } from "./update-test-cache.mjs";
+import { createCacheIdentity, createRunPaths, nsisGuid, prepareRunPaths, removeOwnedRunPaths, testAppId, updaterCacheName } from "./update-test-cache.mjs";
+
+const { UUID } = createRequire(import.meta.url)("builder-util-runtime");
+
+test("test-only application and NSIS identities are stable in a run and unique across runs", () => {
+  const identity = createCacheIdentity();
+  const other = createCacheIdentity();
+  assert.equal(testAppId(identity), testAppId(identity));
+  assert.notEqual(testAppId(identity), testAppId(other));
+  assert.match(testAppId(identity), /^com\.example\.persona\.update-test\.[a-f0-9-]{36}$/);
+  assert.equal(nsisGuid(identity), UUID.v5(testAppId(identity), UUID.OID));
+  assert.notEqual(nsisGuid(identity), nsisGuid(other));
+});
 
 const marker = async path => {
   await mkdir(dirname(path), { recursive: true });
@@ -22,11 +35,19 @@ for (const platform of ["linux", "darwin", "win32"]) {
     await prepareRunPaths(paths);
     const home = paths.home;
     const own = [paths.cache, paths.shipIt, paths.defaultProfile];
+    const other = createRunPaths(work, createCacheIdentity(), platform);
+    if (platform === "darwin") {
+      assert.equal(paths.environment.CFFIXED_USER_HOME, home);
+      assert.equal(paths.shipIt, join(home, "Library/Caches", `${testAppId(identity)}.ShipIt`));
+      assert.notEqual(paths.shipIt, other.shipIt);
+    }
     const protectedMarkers = [
       // The unsigned development identity is never a valid cleanup target.
       join(home, platform === "win32" ? "AppData/Local" : platform === "darwin" ? "Library/Caches" : ".cache", "com.example.persona.desktop.ShipIt", "sentinel.txt"),
-      // A concurrent run has a different random cache identity under the same cache root.
-      join(paths.cache, "..", `${updaterCacheName(createCacheIdentity())}`, "sentinel.txt"),
+      // A concurrent run has different random cache, bundle/ShipIt and default-profile identities.
+      join(paths.cache, "..", `${updaterCacheName(other.identity)}`, "sentinel.txt"),
+      join(other.shipIt, "sentinel.txt"),
+      join(other.defaultProfile, "sentinel.txt"),
       join(home, platform === "darwin" ? "Documents" : "documents", "sentinel.txt"),
     ];
     if (platform === "linux") protectedMarkers.push(join(home, ".config", "unrelated-application", "sentinel.txt"));
@@ -66,6 +87,9 @@ test("cleanup refuses a foreign path and reports a failed removal separately", a
 test("the harness uses the test-only cache override, not a fixed HOME cache deletion", async () => {
   const script = await readFile(new URL("./update-test.mjs", import.meta.url), "utf8");
   assert.match(script, /extraMetadata\.name=\$\{cacheIdentity\}/);
+  assert.match(script, /-c\.appId=\$\{testAppId\(runPaths\.identity\)\}/);
+  assert.match(script, /-c\.nsis\.guid=\$\{nsisGuid\(runPaths\.identity\)\}/);
+  assert.match(script, /updaterCacheDirName: \$\{cacheIdentity\}\$/);
   assert.doesNotMatch(script, /com\.example\.persona\.desktop\.ShipIt/);
   assert.doesNotMatch(script, /const CACHE =/);
 });
