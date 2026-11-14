@@ -3,8 +3,8 @@ package assistant
 import (
 	"context"
 	"slices"
-	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -85,26 +85,22 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 }
 
 // inboxToAgent sends what someone else wrote on a task's GitHub thread straight to the task's agent (#7346): a line of
-// it and the thread's URL, as someone else's words for the agent to read there itself (sendToTask: an agent closed
-// after a stretch of work is resumed first, and its turn ends the task's parking). The supervisor still gets signal g,
-// marked as the copy; when no agent could take it (none, all stopped, its machine offline, the send failed) g goes as
-// before. In the background: a send to a live agent can take a minute and the twin's pass does not wait for it.
+// it and the thread's URL, as someone else's words for the agent to read there itself (sendToTaskAs, waiting for an
+// agent closed after a stretch of work to resume, up to 5 minutes; its turn ends the task's parking). The supervisor
+// still gets signal g, marked as the copy only once the note reached the agent; when no agent could take it (none, all
+// stopped, its machine offline, the resume or send failed) g goes as before. In the background: the twin's pass does
+// not wait on a node.
 func (s *Service) inboxToAgent(ctx context.Context, g superviseSignal) {
 	in := *g.Inbox
 	g.Inbox = &in
 	if t, ok := s.todoNow(g.Todo); ok && taskOpen(t) {
-		said, err := s.sendToTask(ctx, t, prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
-			Preview: in.Preview, URL: in.URL, Count: in.Count}))
-		switch {
-		case err != nil:
+		_, err := s.sendToTaskAs(ctx, t, prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
+			Preview: in.Preview, URL: in.URL, Count: in.Count}), true)
+		if err != nil {
 			s.logf("task %s: inbox %s not sent to its agent: %v", t.ID, in.Item, err)
-		case strings.HasPrefix(said, "being sent"):
-			in.ToAgent = "resuming"
-		default:
+		} else {
 			in.ToAgent = "sent"
-		}
-		if in.ToAgent != "" {
-			s.logf("task %s: inbox %s %s to its agent", t.ID, in.Item, in.ToAgent)
+			s.logf("task %s: inbox %s sent to its agent", t.ID, in.Item)
 		}
 	}
 	s.signal(g)
@@ -117,10 +113,14 @@ func (s *Service) taskHasAgent(id string) bool {
 	return ok && taskOpen(t) && slices.ContainsFunc(t.Agents, func(a TodoAgent) bool { return a.ReleasedAt == nil && a.DismissedAt == nil })
 }
 
-// inboxThreadURL is the web address of a GitHub connector item's thread (a PR or an issue), the only kind whose new
-// messages go to the task's agent as well (#7346); "" for any other item.
+// githubThreadURL: a pull request's or an issue's page on github.com (a comment's anchor allowed), the discussions
+// whose new comments and reviews go to the task's agent; not a CI run (/actions…) or any other page.
+var githubThreadURL = lazyre.New(`^https://github\.com/[\w.-]+/[\w.-]+/(?:pull|issues)/[1-9][0-9]*(?:[/#?].*)?$`)
+
+// inboxThreadURL is the web address of a GitHub connector item's PR or issue discussion, the only kind whose new
+// messages go to the task's agent as well (#7346); "" for any other item, a GitHub CI item included.
 func inboxThreadURL(it *InboxItem) string {
-	if it.Source != "github" || it.Connector == nil || !strings.HasPrefix(it.Connector.URL, "https://github.com/") {
+	if it.Source != "github" || it.Connector == nil || !githubThreadURL.MatchString(it.Connector.URL) {
 		return ""
 	}
 	return it.Connector.URL

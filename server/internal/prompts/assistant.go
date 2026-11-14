@@ -765,8 +765,8 @@ type SuperviseEntry struct {
 type SuperviseInbox struct {
 	Item, Title, Sender, Preview string
 	Count                        int
-	// URL is a GitHub thread's address; ToAgent says the note went straight to the task's agent (InboxToAgent,
-	// #7346): "sent", or "resuming" while its closed agent resumes first. "" when the supervisor is the only one told.
+	// URL is a GitHub PR's or issue's address; ToAgent is "sent" once the note reached the task's agent (InboxToAgent,
+	// #7346), "" when the supervisor is the only one told.
 	URL, ToAgent string
 }
 

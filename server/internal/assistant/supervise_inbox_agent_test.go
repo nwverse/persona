@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +56,7 @@ func TestInboxGitHubCommentGoesToTheTaskAgent(t *testing.T) {
 		}
 	}
 	n := f.notices()[0]
-	for _, want := range []string{"任务「修登录崩溃」", "收件箱里有别人发来的新消息说到它", linkedPRURL, "直接发给它的 Agent，这里是副本", "不要再 agent_send 转一遍"} {
+	for _, want := range []string{"任务「修登录崩溃」", "收件箱里有别人发来的新消息说到它", linkedPRURL, "直接发给它的 Agent（它收到了），这里是副本", "不要再 agent_send 转一遍"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("supervisor message lacks %q:\n%s", want, n)
 		}
@@ -117,5 +118,43 @@ func TestInboxGitHubCommentReachesAParkedTasksAgent(t *testing.T) {
 	waitFor(t, "the copy to the supervisor", func() bool { return len(f.notices()) == 1 })
 	if sent := sentToAgent(f)[before:]; len(sent) != 1 || !strings.Contains(sent[0], linkedPRURL) {
 		t.Fatalf("a parked task's agent got %q", sent)
+	}
+}
+
+// A GitHub CI item (its URL a run under /actions) is no discussion: it stays with the supervisor.
+func TestInboxGitHubCIItemStaysWithTheSupervisor(t *testing.T) {
+	s, f := newQuietService(t)
+	turnInboxSignalsOn(t, s)
+	todo := agentTask(t, s, f)
+	before := len(sentToAgent(f))
+	it := linkedPRItem(s, todo.ID, "c1", "CI failed: server")
+	it.Connector.URL = "https://github.com/example/repo/actions?query=branch%3Afix"
+	s.superviseInbox(context.Background(), []*InboxItem{it}, map[*InboxItem]bool{it: true})
+	waitFor(t, "the signal", func() bool { return len(f.notices()) == 1 })
+	if got := len(sentToAgent(f)) - before; got != 0 || strings.Contains(f.notices()[0], "这里是副本") {
+		t.Fatalf("a CI item went to the agent (%d) or was marked a copy:\n%s", got, f.notices()[0])
+	}
+}
+
+// A closed agent is resumed and the send waited for: the copy is marked only once it reached the agent, and a failed
+// resume or send leaves the supervisor's entry unmarked, so the comment is not lost to both.
+func TestInboxGitHubCommentToAClosedAgent(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		s, f := newQuietService(t)
+		turnInboxSignalsOn(t, s)
+		todo := agentTask(t, s, f)
+		f.setSessions("box", proto.Session{SessionID: "sec00001", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "秘书",
+			Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: time.Now()})
+		if fail {
+			f.mu.Lock()
+			f.failSend = errors.New("resume failed")
+			f.mu.Unlock()
+		}
+		it := linkedPRItem(s, todo.ID, "c1", "Please merge current main")
+		s.superviseInbox(context.Background(), []*InboxItem{it}, map[*InboxItem]bool{it: true})
+		waitFor(t, "the signal", func() bool { return len(f.notices()) == 1 })
+		if marked := strings.Contains(f.notices()[0], "这里是副本"); marked == fail {
+			t.Fatalf("send failed=%v, copy marked=%v:\n%s", fail, marked, f.notices()[0])
+		}
 	}
 }

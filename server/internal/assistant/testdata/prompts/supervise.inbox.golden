@@ -14,11 +14,11 @@
 
 3. 任务「修崩溃的 PR」（todo_3）：收件箱里有别人发来的新消息说到它
    验收标准：派活时没写，按任务本身要的结果判断
-   收件箱事件 github:pr12「fix: login crash」，最新一条是 maintainer 发的：「Please merge current main」（https://github.com/example/repo/pull/12）；hub 已经把要点和链接直接发给它的 Agent，这里是副本
+   收件箱事件 github:pr12「fix: login crash」，最新一条是 maintainer 发的：「Please merge current main」（https://github.com/example/repo/pull/12）；hub 已经把要点和链接直接发给它的 Agent（它收到了），这里是副本
 
 4. 任务「修另一个 PR」（todo_4）：收件箱里有别人发来的新消息说到它（2 条）
    验收标准：派活时没写，按任务本身要的结果判断
-   收件箱事件 github:pr13「fix: logout」，最新一条是 maintainer 发的：「One nit」（https://github.com/example/repo/pull/13）；hub 正在恢复它的 Agent，再把要点和链接发过去，这里是副本
+   收件箱事件 github:pr13「fix: logout」，最新一条是 maintainer 发的：「One nit」（https://github.com/example/repo/pull/13）
 
 怎么处理（你是这些任务的负责人，处理而不是转述）：
 - 带收尾记录的：那是 Agent 自己填的，合并、部署、验证都要你照常核对，对不上就按 rework 处理并指出哪一项不属实。
