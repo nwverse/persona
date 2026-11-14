@@ -78,7 +78,9 @@ func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
 	if main == "" {
 		return
 	}
-	for _, t := range s.todosOf(ctx, "*") {
+	todos := s.todosOf(ctx, "*")
+	rehomed := map[string]map[string]bool{} // old conversation → the tasks taken from its queued supervision
+	for _, t := range todos {
 		if t.DoneAt != nil || t.Supervision == nil {
 			continue
 		}
@@ -98,9 +100,69 @@ func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
 			s.logf("task %s: rehome supervision: %v", t.ID, err)
 			continue
 		}
+		if rehomed[sup] == nil {
+			rehomed[sup] = map[string]bool{}
+		}
+		rehomed[sup][t.ID] = true
 		if t.Origin != main {
 			s.taskCard(ctx, main, t.ID, "")
 		}
+	}
+	if len(rehomed) > 0 {
+		web := s.webBase(ctx)
+		for sup, ids := range rehomed {
+			s.rehomeQueuedSupervision(ctx, sup, ids, todos, web)
+		}
+	}
+}
+
+// rehomeQueuedSupervision takes the rehomed tasks' signals out of an old side conversation's durable queue and gathers
+// them again under their new supervisor. Queue admission already acknowledged their outbox entries, and their old dedup
+// reservation would otherwise acknowledge the replay without delivering it. Other tasks in a mixed digest are regathered
+// too, exactly as dropQueuedSupervisionTasks preserves them for /stop (#5732).
+func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids map[string]bool, known []Todo, web string) {
+	b := &s.supervise
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	_, taken := s.dropQueuedSupervisionTasks(old, ids, known)
+
+	b.mu.Lock()
+	b.init()
+	var memory, remaining []superviseSignal
+	for _, g := range b.queued[old] {
+		if ids[g.Todo] {
+			memory = append(memory, g)
+		} else {
+			remaining = append(remaining, g)
+		}
+	}
+	if len(memory) > 0 {
+		b.setQueuedLocked(old, nil)
+	}
+	taken = mergeSignals(taken, memory)
+	replay := mergeSignals(remaining, taken)
+	for _, g := range taken {
+		delete(b.sent, g.id())
+	}
+	for _, g := range replay {
+		if _, newer := b.pending[g.id()]; !newer {
+			b.pending[g.id()] = g
+		}
+	}
+	s.updateSupervisePending(func(pending map[string]superviseSignal) {
+		for _, g := range replay {
+			if cur, ok := b.pending[g.id()]; ok {
+				pending[g.id()] = cur
+			}
+		}
+	})
+	b.mu.Unlock()
+
+	if len(replay) > 0 {
+		s.forgetSupervision(ctx, replay, web)
+		b.mu.Lock()
+		s.scheduleDigestLocked(time.Now())
+		b.mu.Unlock()
 	}
 }
 

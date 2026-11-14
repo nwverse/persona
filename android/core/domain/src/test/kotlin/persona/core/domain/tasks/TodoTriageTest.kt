@@ -167,6 +167,34 @@ class TodoTriageTest {
     }
 
     @Test
+    fun cancelledIsNeitherOpenNorFinished() {
+        val cancelled = todo("cancelled").copy(cancelledAt = hoursAgo(1))
+        val alone = triageTodos(listOf(cancelled), groupLookup, now, zone = zone)
+        assertEquals(0, alone.open)
+        assertEquals(1, alone.cancelled)
+        assertEquals(0, alone.finished)
+        val controls = triageTodos(listOf(cancelled, todo("open"), todo("done", doneAt = hoursAgo(2))), groupLookup, now, zone = zone)
+        assertEquals(1, controls.open)
+        assertEquals(1, controls.cancelled)
+        assertEquals(1, controls.finished)
+    }
+
+    @Test
+    fun mainTriageUsesTheCurrentTimeForTheUsageLimitGrace() {
+        val limited = todo("limited", agents = listOf(agent("limited")))
+        val expiredSession = session("limited", "unread").copy(
+            turnError = "usage limit reached", turnErrorKind = "usage_limit",
+            turnErrorResetsAt = Instant.ofEpochMilli(now - 11 * 60_000L).toString(),
+        )
+        val expiredLookup = lookupOf(expiredSession)
+        assertEquals(TriageStatus.Interrupted, limited.triageStatus(expiredLookup, now))
+        assertEquals(TriageSection.Waiting, limited.triage(expiredLookup, now, zone = zone).section)
+
+        val recentLookup = lookupOf(expiredSession.copy(turnErrorResetsAt = Instant.ofEpochMilli(now - 5 * 60_000L).toString()))
+        assertEquals(TriageStatus.UsageLimit, limited.triageStatus(recentLookup, now))
+    }
+
+    @Test
     fun theUsersOwnTodoWithoutAgentsNeverShelvesNorOneDueAhead() {
         assertEquals(TriageSection.Other, at(todo("t", updated = 100, origin = null)).section)
         assertEquals(TriageSection.Other, at(todo("t", updated = 100, agents = listOf(agent("old")), dueDate = "2026-12-01")).section)

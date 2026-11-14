@@ -236,7 +236,7 @@ nonisolated enum TodoTriageLogic {
     static func countsAsOpen(_ todo: TodoItem, _ t: TodoTriage) -> Bool {
         // a failed start has done_at too (the hub ends it), yet while it waits on the owner it is theirs to retry: open
         if t.rule == .failedStart { return t.section == .waiting }
-        if todo.doneAt != nil || t.section == .shelved || t.section == .done { return false }
+        if todo.doneAt != nil || t.section == .cancelled || t.section == .shelved || t.section == .done { return false }
         return t.rule != .accepted && t.rule != .deployed
     }
 

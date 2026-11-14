@@ -279,7 +279,8 @@ func (s *Service) dropSupervisionFor(tasks []Todo) int {
 	}
 	r.mu.Unlock()
 	for to := range conversations {
-		dropped += s.dropQueuedSupervisionTasks(to, ids, known)
+		n, _ := s.dropQueuedSupervisionTasks(to, ids, known)
+		dropped += n
 	}
 	b.mu.Lock()
 	if len(b.pending) > 0 {
@@ -289,19 +290,20 @@ func (s *Service) dropSupervisionFor(tasks []Todo) int {
 	return dropped
 }
 
-// dropQueuedSupervisionTasks removes only the stopped tasks' supervise messages from one persisted queue. Structured
-// signals preserve the exact rest of a mixed digest. For an older message, other todo ids found in its text are turned
-// into fresh unjudged signals rather than silently losing their notification.
-func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string]bool, known []Todo) int {
+// dropQueuedSupervisionTasks removes only the selected tasks' supervise messages from one persisted queue and returns
+// their signals for a caller that needs to replay them elsewhere. Structured signals preserve the exact rest of a mixed
+// digest. For an older message, other todo ids found in its text are turned into fresh unjudged signals rather than
+// silently losing their notification.
+func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string]bool, known []Todo) (int, []superviseSignal) {
 	r := &s.relays
 	r.mu.Lock()
 	if !s.relayLocked(context.Background()) {
 		r.mu.Unlock()
-		return 0
+		return 0, nil
 	}
 	q := r.st.Queue[conversation]
 	kept := make([]relayMsg, 0, len(q))
-	var regather []superviseSignal
+	var regather, taken []superviseSignal
 	for i, m := range q {
 		if m.Tool != superviseTool || i == 0 && r.draining[conversation] {
 			kept = append(kept, m)
@@ -313,6 +315,7 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 			for _, g := range *m.Signals {
 				if ids[g.Todo] {
 					target = true
+					taken = append(taken, g)
 				} else {
 					remaining = append(remaining, g)
 				}
@@ -325,6 +328,12 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 				at := m.At
 				if at.IsZero() {
 					at = time.Now().UTC()
+				}
+				for id := range ids {
+					if strings.Contains(m.Text, id) {
+						taken = append(taken, superviseSignal{Todo: id, Kind: sigUnjudged,
+							Key: "pre-restart-" + at.UTC().Format(time.RFC3339Nano), At: at, Detail: "重启前排队的督办"}) // i18n-ignore: the supervision message is the assistant's prompt
+					}
 				}
 				for _, other := range known {
 					if other.ID == "" || ids[other.ID] || !strings.Contains(m.Text, other.ID) {
@@ -344,7 +353,7 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 	n := len(q) - len(kept)
 	if n == 0 {
 		r.mu.Unlock()
-		return 0
+		return 0, nil
 	}
 	if len(kept) == 0 {
 		delete(r.st.Queue, conversation)
@@ -368,7 +377,7 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 		}
 	})
 	b.mu.Unlock()
-	return n
+	return n, taken
 }
 
 // dropQueuedNotices takes the task notices waiting for conversation to off its queue (one going in right now stays)

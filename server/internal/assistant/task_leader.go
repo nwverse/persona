@@ -489,6 +489,7 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 			// A resumed leader is acknowledged only after the real send, never when the goroutine was merely started.
 			s.ackSupervisePending(kept)
 			s.parkedDueTold(context.Background(), kept)
+			s.turnsTold(context.Background(), kept)
 		}()
 		return true, nil
 	}
@@ -536,6 +537,7 @@ func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, 
 			if err := s.sendToLeaderNow(ctx, lead, text); err == nil {
 				s.ackSupervisePending(kept)
 				s.parkedDueTold(ctx, kept)
+				s.turnsTold(ctx, kept)
 				return
 			}
 			wait = leaderRetryBackoff(wait)

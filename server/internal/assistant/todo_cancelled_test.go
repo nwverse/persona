@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -36,4 +37,21 @@ func TestCancelledTodoCarriesItsTimeAndReason(t *testing.T) {
 		}
 	}
 	t.Fatal("cancelled task is missing from the snapshot")
+}
+
+// Legacy rows predate the stored completion marker: their supervision verdict still has to project the additive
+// cancellation fields at the API boundary, including the existing review-note fallback (#5732).
+func TestLegacyCancelledTodoCarriesItsTimeAndReason(t *testing.T) {
+	s, _, _ := newSupervisedService(t)
+	done := time.Date(2026, 11, 10, 8, 0, 0, 0, time.UTC)
+	putTodo(s, Todo{ID: "legacy_cancelled", Title: "旧方案停止", Origin: "conv1", DoneAt: &done, DoneBy: db.DoneByReview,
+		Supervision: &Supervision{Supervisor: "conv1", State: reviewCancelled,
+			Reviews: []TaskReview{{Verdict: reviewCancelled, Note: "由新方案接手"}}}})
+	got := listedTodos(t, s)["legacy_cancelled"]
+	if got["done_by"] != db.DoneByReview || got["cancelled_reason"] != "由新方案接手" {
+		t.Fatalf("legacy listed cancellation = %+v", got)
+	}
+	if got["cancelled_at"] == nil || got["cancelled_at"] != got["done_at"] {
+		t.Fatalf("legacy cancelled_at %v, done_at %v", got["cancelled_at"], got["done_at"])
+	}
 }

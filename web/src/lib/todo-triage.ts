@@ -158,7 +158,7 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
 export function countsAsOpen(todo: Todo, t: Triage): boolean {
   // a failed start has done_at too (the hub ends it), yet while it waits on the owner it is theirs to retry: open
   if (t.rule === "failed_start") return t.section === "waiting";
-  if (todo.done_at || t.section === "shelved" || t.section === "done") return false;
+  if (todo.done_at || t.section === "cancelled" || t.section === "shelved" || t.section === "done") return false;
   return t.rule !== "accepted" && t.rule !== "deployed";
 }
 

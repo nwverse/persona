@@ -100,6 +100,57 @@ func TestAgentStartReportsStartedWhenTaskClosesDuringLaunch(t *testing.T) {
 	}
 }
 
+// An unknown start result can be confirmed from either the node's creation identity or its bounded session adoption.
+// If the card closed during the same launch, both paths retain the Agent on that done card and report the confirmed session.
+func TestAgentStartUnknownReportsStartedWhenTaskClosesDuringLaunch(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		creationID bool
+		want       string
+	}{
+		{"creation id", true, "confirmed by its creation id"},
+		{"adopted session", false, "confirmed from the machine's own list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := newQuietService(t)
+			shortAgentStartTimeout(t)
+			f.slowStart = true
+			f.onStart = func(f *fakeHub, a map[string]any) {
+				id, _ := a["creation_id"].(string)
+				now := time.Now().UTC()
+				s.todos.mu.Lock()
+				if todo := s.todos.todos[id]; todo != nil {
+					todo.DoneAt = &now
+				}
+				s.todos.mu.Unlock()
+				sess := proto.Session{SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+					Launcher: a["launcher"].(string), StartedByPersona: true, Status: proto.StatusWorking,
+					State: proto.StateWorking, UpdatedAt: now}
+				if tc.creationID {
+					sess.Hierarchy = &proto.SessionHierarchy{CreationID: id}
+				}
+				f.sessions["box"] = []proto.Session{sess}
+			}
+			res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
+				json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI"}`))
+			if err != nil {
+				t.Fatalf("a confirmed Agent must not read as a start failure: %v", err)
+			}
+			if !strings.Contains(res, "Started on ") || !strings.Contains(res, tc.want) ||
+				!strings.Contains(res, "task closed while the Agent started") || !strings.Contains(res, "Do NOT start it again") {
+				t.Fatalf("confirmed started-with-warning result = %q", res)
+			}
+			if len(f.starts) != 1 {
+				t.Fatalf("the start was attempted %d times, want 1", len(f.starts))
+			}
+			todo := onlyTodo(s)
+			if todo.DoneAt == nil || len(todo.Agents) != 1 || todo.Agents[0].SessionID != "s-late" {
+				t.Fatalf("the confirmed Agent is not linked to the closed card for cleanup: %+v", todo)
+			}
+		})
+	}
+}
+
 // An unanswered start still has its task from before the request. When the session appears later, its persisted
 // creation id links it back to that same card without guessing from cwd or adopting a manual session (#5732).
 func TestAgentStartUnknownKeepsPendingTaskAndLinksByCreationID(t *testing.T) {

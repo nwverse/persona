@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -145,6 +147,50 @@ func TestOpenLegacySideTaskRehomesToMain(t *testing.T) {
 	}
 	if got := todoNow(s, "legacy-default-leader-plan").Supervision.Supervisor; got != "conv1" {
 		t.Fatalf("legacy default leader-plan did not rehome to main: %q", got)
+	}
+}
+
+// A legacy side's queued review was already acknowledged from the durable outbox. Rehoming its task must replay that
+// exact signal for main, not leave an unusable review prompt behind in the old conversation (#5732).
+func TestLegacySideQueuedReviewRehomesToMain(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: time.Millisecond}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor, v.State = "side1", reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "legacy-side-review", Detail: "legacy-review-marker-5732", At: time.Now()}
+	s.signal(g)
+	reserveUndelivered(t, s, g) // the old digest reserved dedup and took the signal out of memory before queue admission
+	if !s.queueDigest("side1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "queued legacy review", At: g.At},
+		[]superviseSignal{g}, g.At, time.Time{}) {
+		t.Fatal("the legacy side did not accept its queued review")
+	}
+	if got := storedSupervisePending(t, s); len(got) != 0 {
+		t.Fatalf("queue admission did not acknowledge the old side's outbox signal: %+v", got)
+	}
+
+	s.rehomeSupervisedTodos(ctx)
+	s.sendDigest(ctx)
+	waitFor(t, "the rehomed review in the main conversation", func() bool {
+		got := strings.Join(f.noticesTo("conv1"), "\n")
+		return strings.Contains(got, todo.ID) && strings.Contains(got, "legacy-review-marker-5732")
+	})
+	if got := s.queuedFor("side1"); got != 0 {
+		t.Fatalf("the old side still holds %d queued message(s)", got)
+	}
+	if got := strings.Join(f.noticesTo("side1"), "\n"); strings.Contains(got, "legacy-review-marker-5732") {
+		t.Fatalf("the old side received the rehomed review:\n%s", got)
+	}
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
+		t.Fatalf("main could not accept the rehomed review: %v", err)
+	}
+	if got := todoNow(s, todo.ID); got.DoneAt == nil {
+		t.Fatal("main's acceptance did not close the rehomed task")
 	}
 }
 

@@ -223,6 +223,14 @@ struct TodoTriageTests {
         #expect(!(tray.needsYou + tray.running).contains { $0.id == "task:accepted" || $0.id == "task:done" })
     }
 
+    @Test func cancelledIsNeitherOpenNorFinished() {
+        let cancelled = todo("cancelled") { $0.cancelledAt = ago(1) }
+        let alone = TodoTriageLogic.triageTodos([cancelled], lookup: lookup, now: now)
+        #expect(alone.open == 0 && alone.cancelled == 1 && alone.finished == 0)
+        let controls = TodoTriageLogic.triageTodos([cancelled, todo("open"), todo("done", done: 2)], lookup: lookup, now: now)
+        #expect(controls.open == 1 && controls.cancelled == 1 && controls.finished == 1)
+    }
+
     @Test func ownTodoWithoutAgentsOrDueAheadNeverShelves() {
         #expect(at(todo("t", updated: 100, origin: nil)).section == .other)
         #expect(at(todo("t", updated: 100, agents: ["old"]) { $0.dueDate = "2026-12-01" }).section == .other)

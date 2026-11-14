@@ -255,6 +255,14 @@ describe("triageTodos", () => {
     expect([r.open, r.shelved, r.finished]).toEqual([2, 0, 3]);
   });
 
+  it("counts cancelled separately from open and finished", () => {
+    const cancelled = todo("cancelled", { cancelled_at: hoursAgo(1) });
+    const alone = triageTodos([cancelled], lookup, NOW);
+    expect([alone.open, alone.cancelled, alone.finished]).toEqual([0, 1, 0]);
+    const controls = triageTodos([cancelled, todo("open"), todo("done", { done_at: hoursAgo(2) })], lookup, NOW);
+    expect([controls.open, controls.cancelled, controls.finished]).toEqual([1, 1, 1]);
+  });
+
   it("never merges a closed to-do into an open one's row", () => {
     const r = triageTodos([todo("a", { title: "Same title" }), todo("b", { title: "Same title", done_at: hoursAgo(1) })], lookup, NOW);
     expect(r.sections.other).toHaveLength(1);

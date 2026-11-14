@@ -145,7 +145,7 @@ fun Todo.triage(
     superseded: Boolean = false,
 ): Triage {
     val last = lastActivity(lookup, restoredAt)
-    val status = triageStatus(lookup)
+    val status = triageStatus(lookup, now)
     // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
     // Explicit closure and acceptance are already Done; Seen does not move them through awaiting review.
     val seenMs = ms(this.seenAt)
@@ -184,7 +184,7 @@ fun Todo.triage(
 fun Todo.countsAsOpen(t: Triage): Boolean {
     // a failed start has done_at too (the hub ends it), yet while it waits on the owner it is theirs to retry: open
     if (t.rule == TriageRule.FailedStart) return t.section == TriageSection.Waiting
-    if (isDone || t.section == TriageSection.Shelved || t.section == TriageSection.Done) return false
+    if (isDone || t.section == TriageSection.Cancelled || t.section == TriageSection.Shelved || t.section == TriageSection.Done) return false
     return t.rule != TriageRule.Accepted && t.rule != TriageRule.Deployed
 }
 

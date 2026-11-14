@@ -635,21 +635,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
-		linkErr := s.linkPreparedAgentTask(ctx, task, am, a.Cwd, res.Session.SessionID)
-		closedDuringStart := errors.Is(linkErr, db.ErrTodoCompleted)
-		if closedDuringStart {
-			// The user closed the card while the node was starting it. Keep the Agent on that done card so the close
-			// loop can retire it, exactly as task_plan does; never turn this successful launch into a retryable error.
-			linkErr = s.linkTodoAgentOfDoneTask(ctx, task.ID, am.ID, res.Session.SessionID, task.Title, a.Cwd, "")
-		}
-		warning := ""
-		switch {
-		case linkErr != nil:
-			warning = fmt.Sprintf(" Warning: the Agent started, but its task link could not be recorded: %v. "+
-				"Do NOT start it again; use the existing session.", linkErr)
-		case closedDuringStart:
-			warning = " Warning: the task closed while the Agent started; it remains linked to that task for cleanup. Do NOT start it again."
-		}
+		closedDuringStart, linkErr := s.linkStartedAgentTask(ctx, task, am, a.Cwd, res.Session.SessionID)
+		warning := agentStartTaskWarning(closedDuringStart, linkErr)
 		return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
 			"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note) + warning, nil
 	}
@@ -682,6 +669,27 @@ func startResultUnknown(err error) bool {
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
 
+// linkStartedAgentTask attaches a confirmed session to its prepared task. If the user closed that card while the start
+// was in flight, retain the Agent on the done card for the close loop to retire, for answered and unknown starts alike.
+func (s *Service) linkStartedAgentTask(ctx context.Context, task Todo, m Device, cwd, sid string) (bool, error) {
+	err := s.linkPreparedAgentTask(ctx, task, m, cwd, sid)
+	if !errors.Is(err, db.ErrTodoCompleted) {
+		return false, err
+	}
+	return true, s.linkTodoAgentOfDoneTask(ctx, task.ID, m.ID, sid, task.Title, cwd, "")
+}
+
+func agentStartTaskWarning(closed bool, linkErr error) string {
+	if linkErr != nil {
+		return fmt.Sprintf(" Warning: the Agent started, but its task link could not be recorded: %v. "+
+			"Do NOT start it again; use the existing session.", linkErr)
+	}
+	if closed {
+		return " Warning: the task closed while the Agent started; it remains linked to that task for cleanup. Do NOT start it again."
+	}
+	return ""
+}
+
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
 // built links it to the task made before the request, by creation_id or the hub-issued session id when available,
 // and by the older bounded adoption heuristic otherwise. Otherwise the pending task stays visible for a later
@@ -690,19 +698,21 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, 
 	if list, err := s.sessions(ctx, m.ID); err == nil {
 		for _, sess := range list {
 			if sess.CreationID() == task.ID {
-				if err := s.linkPreparedAgentTask(ctx, task, m, cwd, sess.SessionID); err == nil {
+				closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID)
+				if closed || linkErr == nil {
 					return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 						"confirmed by its creation id), a task of this conversation (its card is in the conversation; %s).%s",
-						m.Name, cwd, sess.SessionID, told, note)
+						m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
 				}
 			}
 		}
 	}
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
-		if err := s.linkPreparedAgentTask(ctx, task, m, cwd, sess.SessionID); err == nil {
+		closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID)
+		if closed || linkErr == nil {
 			return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 				"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
-				"%s).%s", m.Name, cwd, sess.SessionID, told, note)
+				"%s).%s", m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
 		}
 	}
 	s.signal(superviseSignal{Todo: task.ID, Kind: sigUnjudged, Key: "start-unknown@" + task.ID,

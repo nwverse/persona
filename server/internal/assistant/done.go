@@ -70,6 +70,29 @@ func doneSignals(replies []prompts.TaskDoneReply) taskDoneSignals {
 	return s
 }
 
+// directOwnerMarker reports whether any occurrence of marker starts a direct requirement at the line or a
+// sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
+// skipping one such occurrence must not suppress a later direct one (#5732).
+func directOwnerMarker(lower, marker string) bool {
+	for from := 0; from < len(lower); {
+		i := strings.Index(lower[from:], marker)
+		if i < 0 {
+			return false
+		}
+		i += from
+		before := strings.TrimSpace(lower[:i])
+		direct := before == ""
+		for _, end := range []string{".", "!", "?", ":", ";", ","} {
+			direct = direct || strings.HasSuffix(before, end)
+		}
+		if direct {
+			return true
+		}
+		from = i + len(marker)
+	}
+	return false
+}
+
 // ownerActionLine is a final reply's explicit request for the owner to act. The judge still decides the task as a
 // whole; these unambiguous offers and hand-offs are a safety net against calling the work done (#5732). Negated forms
 // are informational, not a request.
@@ -118,14 +141,8 @@ func ownerActionLine(text string) string {
 				continue
 			}
 			if p.marker == "you need to" || p.marker == "you'll need to" {
-				// A direct owner requirement starts the line or a sentence/clause. Subordinate and narrative uses
-				// ("if …", "evaluates whether …") are not unambiguous owner-only next steps (#5732).
-				before := strings.TrimSpace(lower[:strings.Index(lower, p.marker)])
-				direct := before == ""
-				for _, end := range []string{".", "!", "?", ":", ";", ","} {
-					direct = direct || strings.HasSuffix(before, end)
-				}
-				if !direct {
+				// Inspect every occurrence: a subordinate first use does not hide a later direct owner requirement (#5732).
+				if !directOwnerMarker(lower, p.marker) {
 					continue
 				}
 			}

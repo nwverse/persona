@@ -48,6 +48,38 @@ func simulateSupervisionRestart(t *testing.T, s *Service) {
 	s.relays.mu.Unlock()
 }
 
+// markLeaderTurnSignalled puts a terminated turn and its untold signal on the real turn ledger.
+func markLeaderTurnSignalled(t *testing.T, s *Service, g superviseSignal) {
+	t.Helper()
+	last := proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusIdle, UpdatedAt: time.Now().UTC()}
+	if _, again := s.takeTurn(context.Background(), Todo{ID: g.Todo}, last, nil, turnClose{Key: "turn-" + g.Key}, true, time.Now().Add(-time.Hour), turnDone); again {
+		t.Fatal("the terminated test turn was already taken")
+	}
+	if s.turnSignalled(g) {
+		t.Fatal("the test turn signal was told before delivery")
+	}
+}
+
+// requireLeaderTurnToldAfterRestart drops the in-memory ledger and requires the persisted told receipt to deduplicate.
+func requireLeaderTurnToldAfterRestart(t *testing.T, s *Service, g superviseSignal) {
+	t.Helper()
+	waitFor(t, "the leader delivery's told receipt", func() bool {
+		e, ok := s.turnOf(context.Background(), g.Todo)
+		return ok && e.Signal != nil && e.Signal.Told != nil
+	})
+	b := &s.tasks.turns
+	b.mu.Lock()
+	b.loaded, b.doc = false, taskTurnsDoc{}
+	b.mu.Unlock()
+	if _, ok := s.turnOf(context.Background(), g.Todo); !ok { // the sweep loads the ledger before asking turnSignalled
+		t.Fatal("the persisted turn is missing after restart")
+	}
+	if !s.turnSignalled(g) {
+		e, ok := s.turnOf(context.Background(), g.Todo)
+		t.Fatalf("the %s success path did not record the turn as told after restart: ok %v, turn %+v, signal %+v, original %+v", g.Key, ok, e, e.Signal, g)
+	}
+}
+
 // A needs-user state produces no new watch signal. Its gathered notification must therefore survive a restart before
 // the first digest, reach main, and leave the durable outbox only after real delivery or queue admission (#5732).
 func TestNeedsUserPendingSurvivesRestartBeforeDigest(t *testing.T) {
@@ -116,8 +148,12 @@ func TestOfflineTaskLeaderAcknowledgesOnlyAfterSend(t *testing.T) {
 	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
 	s, f, todo := newSupervisedServiceOn(t, st)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	g := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "offline-worker-stall", At: time.Now()}
+	if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
+		t.Fatal(err)
+	}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "offline-worker-stall", At: time.Now()}
 	s.signal(g)
+	markLeaderTurnSignalled(t, s, g)
 	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusOffline})
 	started, release := make(chan struct{}), make(chan struct{})
 	f.answerNode(DeviceSessionSend, func(_ string, _ json.RawMessage) (any, error) {
@@ -135,6 +171,7 @@ func TestOfflineTaskLeaderAcknowledgesOnlyAfterSend(t *testing.T) {
 	}
 	close(release)
 	waitFor(t, "the offline leader's real-send acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
+	requireLeaderTurnToldAfterRestart(t, s, g)
 }
 
 // An unreachable leader's signal is delivered as a decision above it; the original worker signal must not replay too.
@@ -169,8 +206,9 @@ func TestLeaderRetrySuccessAcknowledgesPending(t *testing.T) {
 	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
 	s, f, todo := newSupervisedServiceOn(t, st)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	g := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "retry-leader", At: time.Now()}
+	g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "retry-leader", At: time.Now()}
 	s.signal(g)
+	markLeaderTurnSignalled(t, s, g)
 	setSettings(t, s, func(v *Settings) { v.Main = "" }) // nobody above: only the leader retry can deliver it
 	calls := 0
 	f.answerNode(DeviceSessionSend, func(_ string, _ json.RawMessage) (any, error) {
@@ -184,6 +222,69 @@ func TestLeaderRetrySuccessAcknowledgesPending(t *testing.T) {
 	lead := TodoAgent{MachineID: "box", SessionID: "s1"}
 	s.escalateLeaderMessage(lead, []superviseSignal{g}, "worker supervision")
 	waitFor(t, "the successful leader retry's acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
+	requireLeaderTurnToldAfterRestart(t, s, g)
+}
+
+// With no conversation above an unreachable leader, the current-process retry must keep both the durable signal and a
+// real delivery attempt; removing it from pending and marking it sent would otherwise suppress delivery until restart.
+func TestUnreachableLeaderWithoutUpperRetriesInCurrentProcess(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 5 * time.Millisecond}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor = "box/s1"
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	released := time.Now()
+	leader := Todo{ID: "leader-task", Origin: "conv1", Supervision: &Supervision{},
+		Agents: []TodoAgent{{MachineID: "box", SessionID: "s1", Source: sourceLeader, ReleasedAt: &released}}}
+	putTodo(s, leader)
+	f.setSessions("box") // the released leader has no reachable agent
+
+	// sendDigest reads main at entry, then webBase before routing. Remove main between those reads so the real escalation
+	// branch has nobody above it despite passing the entry guard. Restore main only after this attempt, before its retry.
+	setMain := func(main string) {
+		s.prefs.mu.Lock()
+		v := *s.prefs.cached
+		v.Main = main
+		s.prefs.cached, s.prefs.at = &v, time.Now()
+		s.prefs.gen++
+		s.prefs.mu.Unlock()
+	}
+	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		setMain("")
+		return FeishuStatus{}, nil
+	})
+	g := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "retry-without-upper", At: time.Now()}
+	if lead, handled, reachable := s.leaderRoute(g); !handled || reachable {
+		t.Fatalf("test leader route = %+v, handled %v, reachable %v; want handled and unreachable", lead, handled, reachable)
+	}
+	s.signal(g)
+	s.sendDigest(ctx)
+	if got := s.settings(ctx).Main; got != "" {
+		t.Fatalf("the test did not clear main during routing: %q", got)
+	}
+	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "box/s1" {
+		t.Fatalf("the test worker was rehomed before escalation: supervisor %q", got)
+	}
+	kept := storedSupervisePending(t, s)[g.id()].Key == g.Key
+
+	leader.Agents[0].ReleasedAt = nil // the same leader task has an active agent again; no hub restart
+	putTodo(s, leader)
+	setMain("conv1")
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking})
+	delivered := false
+	waitFor(t, "the current-process retry after the leader returns", func() bool {
+		delivered = strings.Contains(strings.Join(deliveredTo(f, "s1"), "\n"), todo.ID)
+		return delivered
+	})
+	waitFor(t, "the retried delivery's durable acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
+	if !kept || !delivered {
+		t.Fatalf("unreachable leader retry: durable signal kept %v, delivered %v, pending %+v", kept, delivered, storedSupervisePending(t, s))
+	}
 }
 
 // Queue admission and outbox acknowledgment are one relay-state write. An older crash state with both is reconciled.

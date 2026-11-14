@@ -119,7 +119,8 @@ func (s *Service) sendDigest(ctx context.Context) {
 			// Unreachable, not dropped: it becomes a decision for the conversation above the leader (escalateLeaderSignal),
 			// which has its own delivery target below.
 			g = s.escalateLeaderSignal(ctx, g)
-			if g.Todo == "" { // nobody above it: it is told again next time
+			if g.Todo == "" { // nobody above it: restore both the durable outbox and this process's retry (#5732)
+				s.restoreDigest([]superviseSignal{original}, now, prev)
 				continue
 			}
 			s.replaceSupervisePending(original, g)
