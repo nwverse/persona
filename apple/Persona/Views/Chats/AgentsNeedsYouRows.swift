@@ -25,18 +25,22 @@ nonisolated extension AgentsNeedsYou {
     }
 
     /// The rows for `cards` (pending, oldest first, as `AppModel.pendingInteractions` gives them) and `waiting` (the
-    /// sessions whose state needs the user, card or not), both already narrowed to what the caller shows.
-    static func rows(cards: [Interaction], waiting: [Session]) -> [Row] {
+    /// sessions whose state needs the user, card or not), both already narrowed to what the caller shows. `home` is the
+    /// session whose row a card goes under: a side session's card goes under the parent whose chat it lives in
+    /// (`AppModel.sideHomes`, #7944), so that session is one row, counted once; every other card under its own.
+    static func rows(cards: [Interaction], waiting: [Session],
+                     home: (Interaction) -> SessionKey = { $0.sessionKey }) -> [Row] {
         var rows: [Row] = []
         var at: [SessionKey: Int] = [:]
         for ix in cards {
+            let key = ix.isSessionless ? ix.sessionKey : home(ix)
             if ix.isSessionless {
-                rows.append(Row(key: ix.sessionKey, cards: [ix], since: ix.createdAt))
-            } else if let i = at[ix.sessionKey] {
+                rows.append(Row(key: key, cards: [ix], since: ix.createdAt))
+            } else if let i = at[key] {
                 rows[i].cards.append(ix)
             } else {
-                at[ix.sessionKey] = rows.count
-                rows.append(Row(key: ix.sessionKey, cards: [ix], since: ix.createdAt))
+                at[key] = rows.count
+                rows.append(Row(key: key, cards: [ix], since: ix.createdAt))
             }
         }
         for s in waiting where at[s.key] == nil {

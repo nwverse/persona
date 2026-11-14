@@ -64,42 +64,115 @@ final class AppModel {
     private(set) var machineChoices: [MachineChoice] = []
     /// `machines` without watching it, as `sessionsNow`: for `namedMachine(_:)` / `namedMachines`.
     @ObservationIgnored private(set) var machinesNow: [Machine] = []
+    /// Every machine's sessions as the hub sent them, side sessions too. The lists and every count read `allSessions`,
+    /// where a side session is folded into its parent's chat (`sessionsChanged`); a session's own page looks it up by key.
     private(set) var sessionsByMachine: [MachineRef: [Session]] = [:] {
-        didSet {
-            allSessions = sessionsByMachine.values.flatMap { $0 }
-            sessionsNow = allSessions
-            let going = DockAgent.going(scoped(allSessions))
-            if going != goingAgents { goingAgents = going }
-            let lists = AssistantLists(allSessions, group: hub?.group ?? "", shown: assistantShown)
-            if lists != assistantLists { assistantLists = lists }
-            var index: [SessionKey: Session] = [:]
-            for (machine, sessions) in sessionsByMachine {
-                for session in sessions {
-                    let key = SessionKey(group: machine.group, machineID: machine.id, sessionID: session.sessionID)
-                    if index[key] == nil {
-                        index[key] = session
-                        chats[key]?.updateSendFeedback(session, previous: sessionIndex[key])
-                    }
+        didSet { sessionsChanged() }
+    }
+
+    /// What follows a change of the lists, the one place they land: folded once (`SideFold`, #7944; never in a view's
+    /// body, docs/apple/performance.md P4/P5), then the index, the cells the views watch, the counts and the snapshot.
+    private func sessionsChanged() {
+        var raw = sessionsByMachine.values.flatMap { $0 }
+        var groups = Set(links.lazy.filter(\.foldsSides).map(\.group))
+        #if DEBUG
+        // `-showSideSessions …`: sample side sessions under the open session, for screenshots (`SideSessionSamples`).
+        sampleSides = []
+        if let samples = SideSessionSamples.rows(raw) {
+            raw += samples.rows
+            groups.insert(samples.group)
+            sampleSides = samples.rows
+        }
+        #endif
+        let fold = SideFold.fold(raw, groups: groups)
+        sideFoldGroups = groups
+        sideFold = fold
+        allSessions = fold.listed
+        sessionsNow = allSessions
+        let going = DockAgent.going(scoped(allSessions))
+        if going != goingAgents { goingAgents = going }
+        let lists = AssistantLists(allSessions, group: hub?.group ?? "", shown: assistantShown)
+        if lists != assistantLists { assistantLists = lists }
+        var index: [SessionKey: Session] = [:]
+        for (machine, sessions) in sessionsByMachine {
+            for session in sessions {
+                let key = SessionKey(group: machine.group, machineID: machine.id, sessionID: session.sessionID)
+                if index[key] == nil {
+                    index[key] = session
+                    chats[key]?.updateSendFeedback(session, previous: sessionIndex[key])
                 }
             }
-            sessionIndex = index
-            for (key, cell) in sessionCells where !Session.sameForItsPage(cell.value, index[key]) { cell.value = index[key] }
-            for (key, cell) in sessionLineCells where !Session.sameApartFromTicks(cell.value, index[key]) { cell.value = index[key] }
-            for (key, cell) in workflowCells {
-                let run = index[key.session]?.workflows?.first { $0.toolUseID == key.call }
-                if cell.value != run { cell.value = run }
-            }
-            dropSpentUltracodeAsks()
-            // Only the spaces a view watches (`siblings(of:)`): working out every space's tabs sorted each one on every
-            // push, with no chat open to show them (#343).
-            if !spaceCells.isEmpty {
-                let watched = allSessions.filter { $0.spaceKey.map { spaceCells[$0] != nil } ?? false }
-                let spaces = Self.liveBySpace(watched)
-                for (space, cell) in spaceCells where !Self.sameForTheirPages(cell.value, spaces[space] ?? []) { cell.value = spaces[space] ?? [] }
-            }
-            countBadges()
-            saveSnapshot()
         }
+        #if DEBUG
+        for s in sampleSides where index[s.key] == nil { index[s.key] = s }
+        #endif
+        sessionIndex = index
+        for (key, cell) in sideCells {
+            let now = SideSessions(fold, parent: key)
+            if cell.value != now { cell.value = now }
+        }
+        for (key, cell) in sessionCells where !Session.sameForItsPage(cell.value, index[key]) { cell.value = index[key] }
+        for (key, cell) in sessionLineCells where !Session.sameApartFromTicks(cell.value, index[key]) { cell.value = index[key] }
+        for (key, cell) in workflowCells {
+            let run = index[key.session]?.workflows?.first { $0.toolUseID == key.call }
+            if cell.value != run { cell.value = run }
+        }
+        dropSpentUltracodeAsks()
+        // Only the spaces a view watches (`siblings(of:)`): working out every space's tabs sorted each one on every
+        // push, with no chat open to show them (#343).
+        if !spaceCells.isEmpty {
+            let watched = allSessions.filter { $0.spaceKey.map { spaceCells[$0] != nil } ?? false }
+            let spaces = Self.liveBySpace(watched)
+            for (space, cell) in spaceCells where !Self.sameForTheirPages(cell.value, spaces[space] ?? []) { cell.value = spaces[space] ?? [] }
+        }
+        countBadges()
+        saveSnapshot()
+    }
+
+    /// The lists are folded again when a hub's hello says it folds side sessions now, or no longer.
+    func refoldSides() {
+        if Set(links.lazy.filter(\.foldsSides).map(\.group)) != sideFoldGroups { sessionsChanged() }
+    }
+    /// The side-session fold of the lists as they are now (`SideFold`, #7944): which rows went under which parent, each
+    /// parent's sides and their rollup. Empty without the feature. A view reads a parent's through `sides(of:)`.
+    @ObservationIgnored private(set) var sideFold = SideFold.Result()
+    /// The groups whose hub folds side sessions, as the lists were last folded for.
+    @ObservationIgnored private(set) var sideFoldGroups: Set<String> = []
+    /// One observable cell per parent a view shows the sides of (`sides(of:)`): its chat's chip and sheet are drawn again
+    /// when what they show of its sides changes, not on every push.
+    @ObservationIgnored private var sideCells: [SessionKey: SidesCell] = [:]
+    #if DEBUG
+    @ObservationIgnored private var sampleSides: [Session] = []
+    #endif
+
+    /// A parent's side sessions, for views about it (its chat's chip, ⋯ and sheet).
+    func sides(of key: SessionKey) -> SideSessions {
+        if let cell = sideCells[key] { return cell.value }
+        let cell = SidesCell(SideSessions(sideFold, parent: key))
+        sideCells[key] = cell
+        return cell.value
+    }
+
+    /// The listed session whose row and chat a card belongs to (`SideFold.home`): a side session's card is its parent's.
+    /// A value to hand to `AgentsNeedsYou.rows`, made from the fold as it is now.
+    var sideHomes: @Sendable (Interaction) -> SessionKey {
+        let fold = sideFold, groups = sideFoldGroups
+        return { SideFold.home($0, fold: fold, on: groups.contains($0.group)) }
+    }
+
+    /// The side session whose chat shows a card; nil for a card that is no side's.
+    func sideChat(of ix: Interaction) -> SessionKey? {
+        SideFold.chat(ix, fold: sideFold, on: sideFoldGroups.contains(ix.group))
+    }
+
+    /// The parent whose chat a folded side session lives in; nil for any other session.
+    func sideParent(of key: SessionKey) -> SessionKey? { sideFold.home[key] }
+
+    /// The cards of a parent's side sessions (`SideFold.home`), oldest first: its chat shows them with its own.
+    func sideCards(for key: SessionKey) -> [Interaction] {
+        guard sideFoldGroups.contains(key.group) else { return [] }
+        let homes = sideHomes
+        return pendingInteractions.filter { $0.sessionKey != key && homes($0) == key }
     }
     private(set) var allSessions: [Session] = []
     /// The Persona conversations (`assistantConversations`, `archivedConversations`).
@@ -199,8 +272,18 @@ final class AppModel {
     /// over the picture.
     var computerActivities: [MachineRef: ComputerActivity] = [:]
     var openChat: SessionKey? {
-        didSet { if openChat != nil { agentsNavigationRevision += 1 } }
+        didSet {
+            // A side session lives in its parent's chat (#7944): a notification, a Needs You card or a link that names one
+            // opens the parent with it shown (ChatView takes `sideLanding`).
+            if let k = openChat, let parent = sideFold.home[k] {
+                sideLanding = SideLanding(parent: parent, side: sideFold.chat[k] ?? k)
+                openChat = parent
+            }
+            if openChat != nil { agentsNavigationRevision += 1 }
+        }
     }
+    /// The side session to show over its parent's chat once that chat is on screen (`openChat`); taken by the chat.
+    var sideLanding: SideLanding?
     /// Cancels deferred list resets even after a newer targeted open has already been consumed.
     @ObservationIgnored private(set) var agentsNavigationRevision = 0
     /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
@@ -2058,6 +2141,7 @@ final class AppModel {
         case .hello(let hello):
             let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
+            refoldSides() // this hub may fold side sessions now, or no longer (#7944)
             if let page = sessionLists.lists[group], page.loaded, !page.query.legacy, page.paged != hello.features.contains("sessions_list"), let link = link(group) {
                 page.cancel()
                 Task { await self.refresh(link) }
@@ -3656,7 +3740,8 @@ final class AppModel {
             }
         }
         // Agents counts what its Needs You section lists: one per session that waits for the user, not one per card.
-        b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: scopedInteractions, waiting: AgentsNeedsYou.waiting(scoped(allSessions))),
+        b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: scopedInteractions, waiting: AgentsNeedsYou.waiting(scoped(allSessions)),
+                                                            home: sideHomes),
                                         place: place)
         if b != badges { badges = b }
         let waiting = waitingAgents()
@@ -4010,7 +4095,7 @@ final class AppModel {
             return ix
         }
         return WatchSummary(sessions: WatchGroupRefresh.summarySessions(live), interactions: interactions, machines: machines,
-                            inbox: Array(inbox.prefix(20)))
+                            inbox: Array(inbox.prefix(20)), sideFold: links.isEmpty ? nil : sideFoldGroups.sorted())
     }
 }
 

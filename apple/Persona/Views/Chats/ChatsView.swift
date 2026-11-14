@@ -866,7 +866,7 @@ private struct AgentsList: View {
                      pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
                      held: model.heldInList, preferences: preferences,
                      pagedGroups: Set(model.sessionLists.lists.filter { $0.value.paged }.keys),
-                     listQuery: listQuery)
+                     listQuery: listQuery, sideFold: model.sideFoldGroups)
     }
 
     private func listProjection() -> AgentListProjection {
@@ -966,7 +966,8 @@ private struct AgentsList: View {
         let waiting = AgentsNeedsYou.rows(
             cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.scopedInteractions, session: session,
                                         machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil),
-            waiting: AgentsNeedsYou.waiting(base)) // a subtask waiting for you is a row of its own (`CodexTasks`)
+            waiting: AgentsNeedsYou.waiting(base), // a subtask waiting for you is a row of its own (`CodexTasks`)
+            home: model.sideHomes) // a side session's card is its parent's (#7944)
         let _ = (lookup.needsYou = waiting.count)
         let needsYou = quick == .all || quick == .needsYou ? waiting : []
         let interactions = needsYou.flatMap(\.cards)

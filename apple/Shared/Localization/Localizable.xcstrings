@@ -14935,6 +14935,28 @@
         }
       }
     },
+    "A side session needs you" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A side session needs you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッションが対応を待っています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有子会话需要你"
+          }
+        }
+      }
+    },
     "A start with it that works clears this; otherwise it clears by itself after 6 hours." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -66095,6 +66117,28 @@
         }
       }
     },
+    "From Side Session · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From Side Session · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッション・%@から"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自子会话 · %@"
+          }
+        }
+      }
+    },
     "From [Notification Settings View 5d2f81]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -93789,6 +93833,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No Side Sessions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Side Sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッションはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有子会话"
+          }
+        }
+      }
     },
     "No Skills Yet" : {
       "localizations" : {
@@ -138302,6 +138368,50 @@
       },
       "extractionState" : "manual"
     },
+    "Side Sessions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Side Sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子会话"
+          }
+        }
+      }
+    },
+    "Side Sessions (%lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Side Sessions (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッション（%lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子会话（%lld）"
+          }
+        }
+      }
+    },
     "Side by Side" : {
       "localizations" : {
         "en" : {
@@ -138324,6 +138434,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Side sessions started from this session show up here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Side sessions started from this session show up here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションから始めた子セッションがここに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从这个会话开出的子会话会显示在这里。"
+          }
+        }
+      }
     },
     "Sign In" : {
       "localizations" : {
