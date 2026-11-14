@@ -28,6 +28,10 @@ type modelExecution struct {
 	Runtime   string `json:",omitempty"`
 	IsMain    bool   `json:",omitempty"`
 	ConfigDir string `json:"-"` // a conversation's directory, not its model; retained across process restarts
+	// MainCompactWindow: the compaction window the manager holds the main conversation to (assistant.main_compact_window,
+	// #7314), sent with is_main; 0 (another conversation, an older manager, the setting at 0) leaves the launcher's
+	// (assistantCompactionPolicy). Omitted when 0, so a fingerprint from before it stays the same.
+	MainCompactWindow int `json:",omitempty"`
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
@@ -80,9 +84,10 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		ModelFingerprint string `json:"model_fingerprint"`
 		Runtime          string `json:"runtime"`
 		IsMain           bool   `json:"is_main"`
+		MainCompact      int    `json:"main_compact_window"`
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: res.Runtime, IsMain: res.IsMain}
+	return res.Launcher, modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: res.Runtime, IsMain: res.IsMain, MainCompactWindow: res.MainCompact}
 }
