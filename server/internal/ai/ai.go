@@ -302,34 +302,48 @@ func (u *messageUsage) into(to *Usage) {
 	}
 }
 
-// errorOf reads a Messages error: an object with its type and message (type falling back to a code), or only a
-// message string. ok is false when raw holds no error at all.
-func errorOf(raw json.RawMessage) (kind, msg string, ok bool) {
+// errorOf reads a Messages error: an object with its type, code and message, or only a message string. kind retains
+// the established display/type behavior; code stays separate so new code semantics never mistake type for it.
+func errorOf(raw json.RawMessage) (kind, code, msg string, ok bool) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "", "", false
+		return "", "", "", false
 	}
 	if json.Unmarshal(raw, &msg) == nil {
-		return "error", msg, true
+		return "error", "", msg, true
 	}
 	var o struct {
-		Type    string `json:"type"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Type string `json:"type"`
 	}
 	if json.Unmarshal(raw, &o) != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return cmp.Or(o.Type, o.Code, "error"), o.Message, true
+	code, msg = gatewayErrorDetails(raw)
+	return cmp.Or(o.Type, code, "error"), code, msg, true
 }
 
 // messageFailure is the error a Messages error reported after the 200 stands for, and whether it counts as an
-// answer: a limit (overloaded_error, rate_limit_error) holds the gate like HTTP 529 / 429 and is no answer; any
-// other is a streamFailure, Transient as its type's HTTP status would be (api_error 500, timeout_error 504).
-func messageFailure(kind, msg string) (bool, error) {
-	if limit := streamLimitFor("error", kind, msg); limit != nil {
+// answer: a limit (overloaded_error, rate_limit_error, or an explicit limit code) holds the gate and is no answer;
+// any other is a streamFailure, Transient as its type's HTTP status would be (api_error 500, timeout_error 504).
+func messageFailure(kind, code, msg string) (bool, error) {
+	kind = cmp.Or(kind, code, "error")
+	if limit := streamLimitFor("error", code, msg); limit != nil {
 		return false, limit
 	}
-	return true, &streamFailure{status: messageErrorStatus[strings.ToLower(kind)], kind: kind, msg: msg}
+	status := messageErrorStatus[strings.ToLower(kind)]
+	failureStatus := status
+	if failureStatus == 0 { // a generic stream error has no HTTP type; wording fallback uses bad-request semantics
+		failureStatus = http.StatusBadRequest
+	}
+	// An unknown code retains the established type-based limit behavior. A recognized non-limit code (a missing model,
+	// excess context or an unsupported endpoint) is not replaced by a contradictory type.
+	recognizedNonLimit := failureKindFor(failureStatus, code, "") != FailureOther || strings.EqualFold(strings.TrimSpace(code), "unsupported_endpoint")
+	if !recognizedNonLimit {
+		if limit := streamLimitFor("error", kind, msg); limit != nil {
+			return false, limit
+		}
+	}
+	failure := &streamFailure{status: status, kind: kind, msg: msg}
+	return true, withFailureKind(failure, failureKindFor(failureStatus, code, msg))
 }
 
 // streamCut is the error of a stream that ended before its end event: the connection was cut, and whatever text
@@ -349,6 +363,8 @@ func readMessage(body io.Reader) (Reply, bool, error) {
 	}
 	var out struct {
 		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
 		Model   string `json:"model"`
 		Content []struct {
 			Type string `json:"type"`
@@ -362,8 +378,8 @@ func readMessage(body io.Reader) (Reply, bool, error) {
 		return Reply{}, true, fmt.Errorf("ai: decode: %w", err)
 	}
 	// An error body sent with 200 (a gateway that ignored "stream" and failed) is the failure it reports.
-	if kind, msg, ok := errorOf(out.Error); out.Type == "error" || (out.Type == "" && ok && len(out.Content) == 0) {
-		answered, err := messageFailure(cmp.Or(kind, "error"), msg)
+	if kind, code, msg, ok := errorOf(out.Error); out.Type == "error" || (out.Type == "" && ok && len(out.Content) == 0) {
+		answered, err := messageFailure(kind, cmp.Or(code, out.Code), cmp.Or(msg, out.Message))
 		return Reply{}, answered, err
 	}
 	var b strings.Builder
@@ -401,6 +417,7 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 	err := SSEEvents(body, func(data string) bool {
 		var ev struct {
 			Type string `json:"type"`
+			Code string `json:"code"`
 			// Message is message_start's message, or an error's text where a relay puts it at the top.
 			Message      json.RawMessage `json:"message"`
 			ContentBlock struct {
@@ -418,7 +435,8 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return false
 		}
-		kind, msg, isError := errorOf(ev.Error)
+		kind, code, msg, isError := errorOf(ev.Error)
+		code = cmp.Or(code, ev.Code)
 		if ev.Type == "" && isError { // an error event without its type: the error is what it carries
 			ev.Type = "error"
 		}
@@ -450,7 +468,7 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 			if msg == "" {
 				_ = json.Unmarshal(ev.Message, &msg) // a relay's {"type":"error","message":"..."}
 			}
-			failedAnswered, failed = messageFailure(cmp.Or(kind, "error"), msg)
+			failedAnswered, failed = messageFailure(kind, code, msg)
 			return true
 		}
 		return false
@@ -513,6 +531,15 @@ func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
 		}
 	}
 	return true
+}
+
+// responseFailure keeps a Responses stream error's text and limit behavior while adding the same typed model/context
+// semantics as an HTTP rejection. The stream itself has no error status, so wording fallback uses bad-request semantics.
+func responseFailure(event, code, msg string) error {
+	if limit := streamLimitFor(event, code, msg); limit != nil {
+		return limit
+	}
+	return withFailureKind(fmt.Errorf("ai: %s: %s", event, msg), failureKindFor(http.StatusBadRequest, code, msg))
 }
 
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
@@ -621,20 +648,17 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				reply = finished()
 				return Reply{Model: reply.Model, Usage: reply.Usage}, true, &RefusalError{StopReason: reason}
 			}
-			msg := ev.Message
+			msg, code := ev.Message, ev.Code
 			if ev.Response.Error != nil {
-				msg = ev.Response.Error.Message
+				msg, code = ev.Response.Error.Message, cmp.Or(ev.Response.Error.Code, code)
 			}
-			return reply, true, fmt.Errorf("ai: %s: %s", ev.Type, msg)
+			return reply, true, responseFailure(ev.Type, code, msg)
 		case "response.failed", "error":
 			msg, code := ev.Message, ev.Code
 			if e := ev.Response.Error; e != nil {
 				msg, code = e.Message, cmp.Or(e.Code, code)
 			}
-			if limit := streamLimitFor(ev.Type, code, msg); limit != nil { // a limit told after the 200 holds the gate too
-				return reply, true, limit
-			}
-			return reply, true, fmt.Errorf("ai: %s: %s", ev.Type, msg)
+			return reply, true, responseFailure(ev.Type, code, msg)
 		}
 		return reply, false, nil
 	}
