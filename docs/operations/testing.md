@@ -1246,6 +1246,8 @@ row there may rise (`top`, `ChatPin.riseTop`). `KeepTappedRowTests` (#3757, docs
 (`PERSONA_MOCK_HUB` at the newest end, as `UnfoldTests`; `PERSONA_TOOL_TURN_HUB` in the middle and at the oldest end, where the long history has
 no work line): in the middle and at the oldest end the tapped row stays within 2 pt; at the newest end one opened only
 rises, at most to the top bar, the newest end on screen until it gets there, and one closed takes the list back to the newest end.
+Run it on an iPhone and on an iPad (the chat beside the sidebar): it finds its rows above the composer, not at a share of the window, and the oldest
+end by which messages the list shows, not only where its headers are (#8619).
 
 - Don't query App during measurement: each XCUITest accessibility snapshot occupies main thread; polling 0.1 s makes taps "drop" 15–20 frames, quiet 2.2 s then reading gives 0–3.
   Disable `probe.chat-rows` 10 Hz too (`-unfoldTrace` only draws `probe.unfold`).
