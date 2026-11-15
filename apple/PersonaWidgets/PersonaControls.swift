@@ -33,6 +33,21 @@ struct PersonaAgentsControl: ControlWidget {
     }
 }
 
+/// Control: open a new assistant conversation with dictation already running.
+struct DictatePersonaControl: ControlWidget {
+    var body: some ControlWidgetConfiguration { Self.configuration(kind: "persona.control.dictate") }
+
+    static func configuration(kind: String) -> some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: kind) {
+            ControlWidgetButton(action: OpenPersonaDictationIntent()) {
+                Label("Dictate to Persona", systemImage: Theme.Icon.dictate)
+            }
+        }
+        .displayName("Dictate to Persona")
+        .description("Opens a new conversation and starts dictation.")
+    }
+}
+
 /// Also retain kinds saved by interim canonical-identity builds, with the same drawing and action.
 struct CompatibleAssistantControl: ControlWidget {
     var body: some ControlWidgetConfiguration { AskPersonaControl.configuration(kind: "persona.control.ask") }

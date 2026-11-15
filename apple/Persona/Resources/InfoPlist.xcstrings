@@ -375,19 +375,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona turns your voice into text when you hold the mic button, for example to dictate a reply to Claude."
+            "value": "Persona turns your voice into text when you use the mic button, for example to dictate a reply to Claude."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "マイクボタンを押している間、Personaがあなたの声をテキストに変換します。たとえばClaudeへの返信を音声で入力します。"
+            "value": "マイクボタンを使用すると、Personaがあなたの声をテキストに変換します。たとえばClaudeへの返信を音声で入力します。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "按住麦克风按钮时，Persona 把你的语音转成文字，比如口述一条给 Claude 的回复。"
+            "value": "使用麦克风按钮时，Persona 把你的语音转成文字，比如口述一条给 Claude 的回复。"
           }
         }
       }

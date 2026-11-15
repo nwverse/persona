@@ -2,6 +2,13 @@
 import BeautifulUI
 import SwiftUI
 
+/// The bar's start boundary, also allowing a unit test to fail or count a start without opening the microphone.
+@MainActor protocol DictationStarting {
+    func start(hints: [String], update: @escaping (String) -> Void, failed: @escaping (String) -> Void)
+}
+
+extension Dictation: DictationStarting {}
+
 /// The composer's mic tapped (not held): the composer's capsule turns into ChatGPT's dictation bar, [✕] the wave [■] [↑].
 /// ✕ drops what was heard; ■ puts it into the draft and sends nothing; ↑ puts it into the draft and sends. ■ and ↑ wait
 /// for the recognizer's last words ("Transcribing", a spinner on the button pressed). The draft typed before stays and
@@ -39,7 +46,7 @@ final class DictationBarModel {
 
     /// The mic's tap gives no haptic, as before the bar: the bar's own buttons do, and their generator gets ready once
     /// the bar is in (not on the tap's frame, which already carries the bar's spring).
-    func start(_ dictation: Dictation, hints: [String], reduceMotion: Bool) {
+    func start(_ dictation: any DictationStarting, hints: [String], reduceMotion: Bool, onFailure: (() -> Void)? = nil) {
         run = UUID(); let mine = run
         Task {
             try? await Task.sleep(for: Theme.DictationBar.warmAfter)
@@ -54,6 +61,7 @@ final class DictationBarModel {
             AppModel.shared.toast = Toast(problem, style: .error)
             guard let self, self.run == mine else { return }
             self.close(.cancel, reduceMotion: reduceMotion)
+            onFailure?()
         })
     }
 

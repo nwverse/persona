@@ -852,6 +852,7 @@ extension Theme {
         /// iPhone apps' icons: drawn whole in an app icon's squircle with its edge, not fitted as a mark.
         static func isAppIcon(_ asset: String) -> Bool { asset.hasPrefix("ios-app-") }
 
+        #if !WIDGET_EXTENSION
         /// A Linux distribution's mark; macOS uses the system's apple.logo.
         static func os(_ f: OSFamily) -> String? {
             switch f {
@@ -859,5 +860,6 @@ extension Theme {
             default: "os-\(f.rawValue)"
             }
         }
+        #endif
     }
 }

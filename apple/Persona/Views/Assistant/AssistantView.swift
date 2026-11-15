@@ -703,6 +703,7 @@ struct AssistantView: View {
             model.assistantCurrent = nil
         }
         withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
+        let newChat = model.assistantNewChat
         do {
             // The first one becomes the main conversation; with the settings not read yet, whether there is one is unknown.
             let makesMain = space == nil && model.assistantConfig != nil && model.assistantMain == nil
@@ -712,6 +713,12 @@ struct AssistantView: View {
                                                 permissionMode: starterMode.isEmpty ? nil : starterMode,
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
+            }
+            // New Chat or Dictate opened while the request was away: its accepted conversation stays in the roster,
+            // but an older completion must not replace the newer starter or interrupt its dictation.
+            guard newChat == model.assistantNewChat else {
+                withAnimation(Theme.Motion.standard) { pending = nil }
+                return
             }
             // The accepted conversation is visible before a follow-up configuration refresh.
             if makesMain { Task { await model.refreshAssistant() } }
@@ -724,6 +731,10 @@ struct AssistantView: View {
                 failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
             }
         } catch {
+            guard newChat == model.assistantNewChat else {
+                withAnimation(Theme.Motion.standard) { pending = nil }
+                return
+            }
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
             // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
@@ -1347,7 +1358,9 @@ struct StarterComposer: View {
                 ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: launchers, model: model),
-                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener, send: submit) {
+                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener,
+                                 dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                                 takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) }, send: submit) {
                     #if os(iOS)
                     // As a conversation's + (#3225): the iPhone's touch and hold, the iPad's tap with Photos and Files first.
                     if attachOpener == nil {
@@ -1527,6 +1540,8 @@ struct BeautifulStarterComposer: View {
                                return true
                            },
                            quotes: quotesBinding,
+                           dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
+                           takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) },
                            send: {
                                let typed = text
                                let t = typed.trimmingCharacters(in: .whitespacesAndNewlines)
