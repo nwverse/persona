@@ -54,7 +54,7 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal bool) (done 
 		return false, err
 	}
 	defer unlock()
-	if err := n.closeInTurn(ctx, id); err != nil {
+	if err := n.close(ctx, id); err != nil {
 		return false, err
 	}
 	return true, nil

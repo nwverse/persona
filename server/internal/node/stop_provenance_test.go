@@ -142,6 +142,35 @@ func TestStopChangesNeedDurableProvenanceBeforeTouchingTerminal(t *testing.T) {
 	}
 }
 
+func TestUserCloseEntryPointsHoldRecoveryLock(t *testing.T) {
+	for _, action := range []string{"session.close", "panes.close", "session.retire"} {
+		t.Run(action, func(t *testing.T) {
+			n, _, cwd := actionNode(t)
+			provenanceHerdr(n)
+			n.state.put(actionSession, sessionState{Launcher: "claude", Cwd: cwd, Pane: "w1:p1", StopCause: proto.StopIdle})
+			observed := false
+			n.state.persist = func(id string, st sessionState) {
+				if id != actionSession || st.StopCause != proto.StopUser {
+					return
+				}
+				observed = true
+				if release, free := n.recovery.tryLock(id); free {
+					release()
+					t.Error("user closure did not serialize with guarded recovery")
+				}
+			}
+			if _, err := request(t, n, action, map[string]any{
+				"session_id": actionSession, "pane": "w1:p1", "close_terminal": true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !observed {
+				t.Fatal("user closure did not record its stop cause")
+			}
+		})
+	}
+}
+
 func TestUnconfirmedAutomaticStopDoesNotGrantRecovery(t *testing.T) {
 	n, f, home := herdrNode(t)
 	provenanceHerdr(n)

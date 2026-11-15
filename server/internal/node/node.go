@@ -2064,6 +2064,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			n.stopAssistant(p.SessionID)
 			return ok(nil)
 		}
+		release := n.recovery.lock(p.SessionID)
+		defer release()
+		unlock := n.typing.lock(p.SessionID)
+		defer unlock()
 		return ok(n.close(ctx, p.SessionID))
 	case "session.archive", "session.unarchive": // the tool's own archive (archive.go); a runtime's answers above
 		return n.nativeArchive(ctx, p.SessionID, method == "session.archive")

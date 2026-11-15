@@ -476,15 +476,8 @@ func (n *Node) sessionFor(id string, a host.Agent) *proto.Session {
 
 // close quits any Claude running in the machine's engine (started by Persona or by hand) and closes its pane: herdr
 // closes its tab, or in a split tab only its own pane, so the other panes survive; herdr-core ends its terminal.
+// Its user-action callers hold the recovery and typing locks, including retire's already-checked turn.
 func (n *Node) close(ctx context.Context, id string) error {
-	release := n.recovery.lock(id)
-	defer release()
-	unlock := n.typing.lock(id)
-	defer unlock()
-	return n.closeInTurn(ctx, id)
-}
-
-func (n *Node) closeInTurn(ctx context.Context, id string) error {
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
 	}
