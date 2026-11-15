@@ -213,6 +213,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		case a.Agent == opencodeAgent:
 			s.Title = opencodeTitle(a.Title)
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
+		case a.Agent == cursorAgent || a.Agent == agyAgent:
+			// herdr drives the pane (agent.prompt, the keys); Persona does not read the conversation (workagent.go).
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
 		}
@@ -223,8 +225,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		out = append(out, s)
 		seen[id] = true
 	}
-
-	n.forgetDialogs(livePanes)
 
 	for _, s := range n.starts.listed(seen) { // starting.go
 		n.decorateIn(&s, pass)
@@ -273,10 +273,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			seen[s.SessionID] = true
 		}
 	}
-	for _, s := range n.claudeSessions(n.liveClaudes(), seen) { // claudes outside Persona's panes (claudebg.go)
+	for _, s := range n.claudeSessions(n.liveClaudes(), seen, livePanes) { // claudes outside Persona's panes (claudebg.go)
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
+	n.forgetDialogs(livePanes) // after every row that reads a pane's dialog, the tmux claudes' too
 	for _, s := range n.codexSessionsIn(seen, pass) {
 		out = append(out, s)
 	}
