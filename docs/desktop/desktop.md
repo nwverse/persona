@@ -49,7 +49,11 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
 - **Data**: the web works it out where the Dock badge's count comes from (`web/src/lib/desktop-island.ts`, a leaf beside
   `AttentionSignals`) and sends it with `setIslandState` when it changes, words already in the user's language. The shell
   keeps the latest even while the island is off, so turning it on shows the current counts at once. No second
-  connection to the hub.
+  connection to the hub. The counts are the whole hub's, so the rows cover every agent too: on a hub with the paged
+  Agents list, which pushes only its first page, they come from the complete list the pins and grouping read
+  (`useFullAgentSessions`), and only while the island is on, as the web learns from `getIsland` at start and from the
+  Settings switch; the pushed page stands in until it has loaded. A row's line finds its card as the Agents list does,
+  including a question from a child session folded under it (`sessionCard`).
 - **Shell**: `desktop/src/island.ts` draws it from a local page (`island.html`, as the setup window), in a frameless,
   transparent, always-on-top panel that takes no focus and stays on every Space and over full-screen apps. The page's
   preload (`island-preload.cts`) has two fixed operations: the pointer over it or away, and a clicked row's route. A
