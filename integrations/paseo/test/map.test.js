@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   AUTO_ACCEPT_ROOTS, CANCELED_NOTE, ERROR_LEAD, ERROR_TEXT, agentRoot, agentRow, archivedUnderOwnId, autoAcceptOf, codexThreadOf, backgroundOf,
-  defaultProvider, exitNote, interactionOf, launchersOf, linkedWorktree, modeBeforePlan,
-  parentAgentId, paseoMode, promptKey, providerRoots, responseOf, rewindOf, rowStatus, projectSpaces, sessionIdOf, slotNameOf, spaceIdOf,
+  defaultProvider, effortFor, exitNote, interactionOf, launchersOf, linkedWorktree, modeBeforePlan,
+  parentAgentId, paseoMode, promptKey, providerRoots, responseOf, rewindOf, rowStatus, projectSpaces, sameKindProvider, sessionIdOf, slotNameOf, spaceIdOf,
   strayRecord, timelineItems, toolCall, transcriptOf, workspaceRow, paseoCheckouts,
 } from '../lib/map.js'
 import { agentSnapshot, autoAcceptFeature, entry, workspaceDescriptor } from './fake-paseo.js'
@@ -322,11 +322,31 @@ test("launchers: one per usable provider, with the agent it starts and its model
       { id: 'fable[1m]', name: 'Fable (1M)', default: true, efforts: ['low', 'medium', 'high', 'max'], default_effort: 'max' },
       { id: 'haiku', name: 'Haiku' },
     ] },
-    { name: 'my-codex', agent: 'codex', model: 'My Codex', models: [] },
+    // Paseo creates a Codex agent with no first message: the form need not ask for one (#8140).
+    { name: 'my-codex', agent: 'codex', model: 'My Codex', models: [], prompt_optional: true },
     { name: 'grok', agent: 'paseo', model: 'G', models: [{ id: 'g', name: 'G', efforts: ['xhigh'] }] },
   ])
   assert.equal(defaultProvider(entries, roots), 'my-claude', "Claude Code's own is off: the first running Claude Code")
   assert.equal(defaultProvider([{ provider: 'claude', enabled: true, status: 'ready' }, ...entries], roots), 'claude')
+})
+
+test('a launcher Paseo lacks: its provider of the same kind, its own built-in first, never another kind (#8140)', () => {
+  const roots = { claude: 'claude', 'my-claude': 'claude', 'cc-b': 'claude', codex: 'codex', 'my-codex': 'codex', grok: 'acp' }
+  const launchers = ['my-claude', 'cc-b', 'my-codex', 'grok'].map((name) => ({ name }))
+  assert.equal(sameKindProvider(launchers, roots, 'claude'), 'my-claude', 'the first of its kind, Paseo default first')
+  assert.equal(sameKindProvider([...launchers, { name: 'claude' }], roots, 'claude'), 'claude', "Paseo's built-in Claude Code, when it is on")
+  assert.equal(sameKindProvider(launchers, roots, 'codex'), 'my-codex')
+  assert.equal(sameKindProvider(launchers, roots, 'claude', (p) => p !== 'my-claude'), 'cc-b', 'only those it accepts (plan mode)')
+  for (const kind of ['traex', 'agy', '', undefined]) assert.equal(sameKindProvider(launchers, roots, kind), undefined, String(kind))
+})
+
+test("an effort the model does not offer: the nearest lower one it offers, else its lowest; none of Persona's: none (#8140)", () => {
+  const four = ['low', 'medium', 'high', 'max']
+  assert.equal(effortFor('xhigh', four), 'high')
+  assert.equal(effortFor('high', four), 'high')
+  assert.equal(effortFor('medium', ['low', 'high', 'turbo']), 'low')
+  assert.equal(effortFor('low', ['high', 'max']), 'high', 'none lower: the lowest it offers')
+  assert.equal(effortFor('high', ['turbo', 'minimal']), undefined, "no level of Persona's: the model's own default")
 })
 
 test("tool calls as the apps draw them: Claude Code's names and arguments", () => {
