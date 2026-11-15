@@ -9882,10 +9882,19 @@ if os.environ.get("MOCK_CANT_ANSWER") == "1":
              [("按生产的值", "和线上保持一致。"), ("保留 staging 的值", "只在预发环境不同。")])):
         INTERACTIONS.append(
             {"id": _id, "machine_id": "server", "session_id": _sid, "session_title": _title, "cwd": "/home/me/code/deploy",
-             "kind": "question", "agent": "codex", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+             # The subagent asked first: its card folds into the thread's chat too (#8010), under the thread's own
+             # (newest first once the cards scroll).
+             "kind": "question", "agent": "codex", "created_at": ago(minutes=1 if _sid == CODEX_ASKS else 2),
+             "expires_at": later(hours=24),
              "tool_name": "request_user_input", "tool_use_id": "call_" + _id,
              "questions": [{"question": _q, "header": "部署", "multi_select": False,
                             "options": [{"label": l, "description": d} for l, d in _opts]}]})
+    # With MOCK_SIDE_SESSIONS=1 too, the /btw side session (#7944) is one the node reads outside Persona's panes (its
+    # outsideCapabilities: no approve): its card in the review's chat says which side it is from, and why it is greyed.
+    for _s in SESSIONS:
+        if _s["session_id"] == SIDE_BTW:
+            _s["capabilities"] = {"read": True, "send": False, "interrupt": False, "approve": False, "terminal": False,
+                                  "attach": False}
 
 if os.environ.get("MOCK_OPENCODE"):
     INTERACTIONS.append(
