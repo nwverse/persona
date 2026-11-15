@@ -145,6 +145,37 @@ check('nothing of the test is left in Paseo, nor in the list', probes.length ===
   `${probes.length} probes, ${projectsBefore} → ${projectsAfter.length} projects`)
 look.stop()
 
+// ---- what a start in Paseo can run (#8140) ----
+
+// The list for the Paseo host is its providers alone. A launcher Paseo does not have (Claude Code's built-in provider
+// is off here) starts on its provider of the same kind, an effort its model does not offer goes down to one it does,
+// and the answer says both; the start is in a folder of its own, so the checks on `work` below are not disturbed.
+const hostList = await tryCall('launchers.list', { host: 'paseo' })
+check("the list for Paseo's host is its providers alone", hostList?.host_runtime === true && (hostList.launchers ?? []).length > 0 &&
+  hostList.launchers.every((l) => l.source === 'paseo') && hostList.launchers.some((l) => l.name === 'e2e-claude'), JSON.stringify(hostList).slice(0, 300))
+const kindDir = join(root, 'kind')
+mkdirSync(kindDir, { recursive: true })
+// A model of the provider and an effort it lacks with a lower one it has, when there is one (Paseo lowers it), else the
+// default model at xhigh (as asked when it has xhigh).
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+let pick
+for (const m of models.models ?? []) {
+  const has = m.efforts ?? []
+  const effort = EFFORTS.find((e, i) => !has.includes(e) && has.some((x) => EFFORTS.indexOf(x) < i))
+  if (effort) {
+    pick = { model: m.id, effort, offered: has }
+    break
+  }
+}
+pick ??= { effort: 'xhigh', offered: (models.models ?? []).find((m) => m.default)?.efforts ?? [] }
+const stood = await tryCall('session.start', { cwd: kindDir, prompt: '', launcher: 'claude', agent_type: 'claude', model: pick.model, effort: pick.effort }, 60_000)
+const lowered = pick.offered.includes(pick.effort) ? !stood?.instead?.effort
+  : stood?.instead?.effort === pick.effort && (!stood?.session?.effort || pick.offered.includes(stood.session.effort))
+check('a launcher Paseo lacks runs on its provider of the same kind, an effort its model lacks lowered, both said',
+  stood?.session?.launcher === 'e2e-claude' && stood?.instead?.launcher === 'claude' && lowered,
+  JSON.stringify({ pick, instead: stood?.instead, launcher: stood?.session?.launcher, model: stood?.session?.model, effort: stood?.session?.effort }))
+if (stood?.session?.session_id) await tryCall('session.close', { session_id: stood.session.session_id })
+
 // ---- a session from the phone ----
 
 const started = await node.call('session.start', { cwd: work, prompt: 'Please E2E_HELLO', launcher: 'e2e-claude', permission_mode: 'default' }, 60_000)
@@ -281,8 +312,12 @@ const underTranscript = (from = closedAt) => node.events.slice(from)
 const agentNow = async () => (await paseo.request('fetch_agent_request', { agentId })).agent
 await tryCall('session.close', { session_id: sid })
 await until('not running', () => listed()?.status === 'offline', 30_000).catch(() => {})
-check('closed from the phone: archived in Paseo, and still listed under the same id, not running',
-  claudeSid && (await agentNow())?.archivedAt && listed()?.status === 'offline' && listed()?.title === 'E2E 改名', JSON.stringify(listed()))
+// Paseo changes nothing of an archived agent: its row offers no rewind, mode, effort or model (#8133).
+const archivedCaps = listed()?.capabilities
+check('closed from the phone: archived in Paseo, and still listed under the same id, not running, offering nothing Paseo refuses for it',
+  claudeSid && (await agentNow())?.archivedAt && listed()?.status === 'offline' && listed()?.title === 'E2E 改名' &&
+  archivedCaps?.rewind === false && archivedCaps?.rewind_code === false && archivedCaps?.modes === false && archivedCaps?.model === false,
+  JSON.stringify(listed()))
 check('its conversation still reads under that id', await hasText('Hello from the mock model, step by step.') &&
   (await texts()).some((i) => i.client_msg_id === 'cm-e2e-7'))
 await tryCall('session.send', { session_id: sid, text: 'Back again E2E_HELLO', client_msg_id: 'cm-e2e-8' }, 60_000)
