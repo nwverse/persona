@@ -26,6 +26,40 @@ struct ReturnSendsTests {
         #expect(!ReturnSends.breakTyped(from: "nihao", to: "nihao "))
     }
 
+    /// Review of 996f8a2: edits whose common prefix runs into an old line break return false without reading past the end.
+    @Test func editsAroundAnExistingLineBreakStayInBounds() {
+        #expect(!ReturnSends.breakTyped(from: "\n", to: "a\n"))
+        #expect(!ReturnSends.breakTyped(from: "a\n", to: "ab\n"))
+        #expect(!ReturnSends.breakTyped(from: "\n", to: "\na"))
+        #expect(ReturnSends.breakTyped(from: "\n", to: "\n\n"))
+        #expect(!ReturnSends.breakTyped(from: "", to: "a"))
+        #expect(!ReturnSends.breakTyped(from: "é", to: "é\u{301}"))
+    }
+
+    /// Review of 996f8a2: a line break that arrives while the keyboard still has marked text (a Japanese or Chinese
+    /// keyboard confirming its composition) never sends; the same edit without marked text does.
+    @Test func aLineBreakWhileComposingNeverSends() {
+        #expect(!ReturnSends.breakSends(from: "あ", to: "あ\n", composing: true))
+        #expect(!ReturnSends.breakSends(from: "ni", to: "ni\n", composing: true))
+        #expect(ReturnSends.breakSends(from: "あ", to: "あ\n", composing: false))
+    }
+
+    @Test func aLetThroughOrPausedLineBreakDoesNotSend() {
+        #expect(!ReturnSends.breakSends(from: "a", to: "a\n", composing: false, allowed: true))
+        #expect(!ReturnSends.breakSends(from: "a", to: "a\n", composing: false, paused: true))
+        #expect(!ReturnSends.breakSends(from: "a", to: "ab", composing: false))
+    }
+
+    /// Marked text is asked for only once a line break was typed (the check runs on every keystroke).
+    @Test func composingIsReadOnlyForALineBreak() {
+        var asked = 0
+        func composing() -> Bool { asked += 1; return false }
+        _ = ReturnSends.breakSends(from: "a", to: "ab", composing: composing())
+        #expect(asked == 0)
+        _ = ReturnSends.breakSends(from: "a", to: "a\n", composing: composing())
+        #expect(asked == 1)
+    }
+
     @Test func plainReturnSendsAndModifiedReturnDoesNot() {
         #expect(ReturnSends.keySends([], composing: false))
         #expect(ReturnSends.keySends(.capsLock, composing: false))

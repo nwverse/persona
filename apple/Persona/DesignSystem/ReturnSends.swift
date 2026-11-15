@@ -25,8 +25,18 @@ nonisolated enum ReturnSends {
             o.formIndex(after: &i)
             n.formIndex(after: &j)
         }
-        guard n[j] == UInt8(ascii: "\n") else { return false }
+        // `j` moves with `i`, so it stops short of `n`'s end (one byte longer); the guard keeps that true by itself.
+        guard j != n.endIndex, n[j] == UInt8(ascii: "\n") else { return false }
         return n[n.index(after: j)...].elementsEqual(o[i...])
+    }
+
+    /// Whether an edit to the draft is a Return that sends: one line break typed, with nothing else holding Return
+    /// (`paused`), not a hardware Shift- or Option-Return let through (`allowed`), and never while the keyboard still
+    /// has marked text (`composing`): a keyboard that confirms its composition with a line break must not send (#2203).
+    /// `composing` is read only after a line break was typed: it asks the field (this runs on every keystroke).
+    static func breakSends(from old: String, to new: String, composing: @autoclosure () -> Bool,
+                           allowed: Bool = false, paused: Bool = false) -> Bool {
+        !paused && !allowed && breakTyped(from: old, to: new) && !composing()
     }
 
     /// What a hardware Return does with these modifiers held: send with none, else what the field does (Shift and
@@ -92,8 +102,11 @@ private struct ReturnSendsModifier: ViewModifier {
                 guard enabled else { return }
                 let allowed = breakAllowed
                 breakAllowed = false
-                // The cheap checks first: this runs on every keystroke (docs/apple/performance.md P4).
-                guard !paused, !allowed, ReturnSends.breakTyped(from: old, to: new), !Self.shiftHeld else { return }
+                // The cheap checks first: this runs on every keystroke (docs/apple/performance.md P4); the field's
+                // marked text and Shift are read only once a line break was typed.
+                guard ReturnSends.breakSends(from: old, to: new, composing: TypedText.composingFocused,
+                                             allowed: allowed, paused: paused),
+                      !Self.shiftHeld else { return }
                 // Take the line break back out of the field itself as well as the draft: sending confirms what the
                 // field shows (`TypedText.commitFocused`), which would otherwise put it back.
                 if let view = FirstResponder.current as? UITextView, view.text == new { view.text = old }

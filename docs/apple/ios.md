@@ -1378,7 +1378,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   the web's Enter nudges a blocked send), or nothing with nothing to send, never a blank line. While the keyboard is composing (marked
   text) Return confirms the composition and sends nothing (#2203). The full-page editor (Expand) keeps Return a new line, and BeautifulUI's
   bar leaves Return alone while its @ / / list or a menu is open. The fields are SwiftUI's vertical `TextField`, which never submits on
-  Return, so the software key is read off the draft (`ReturnSends.breakTyped`: an edit that only adds one line break), the line break taken
+  Return, so the software key is read off the draft (`ReturnSends.breakSends`: an edit that only adds one line break, while the field holds no marked text), the line break taken
   back out of the text view as well as the draft before the send confirms what the field shows; a hardware Return is caught by
   `onKeyPress` first, with `GCKeyboard`'s Shift as the fallback when the press does not reach the field. A paste that brings a line break
   with other text never sends. The web has no setting (Enter sends with a precise pointer, `enterSends`) and Android none, so there is no
