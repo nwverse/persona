@@ -80,10 +80,11 @@ internal fun selectedPoint(
     hasValue: (MetricPoint) -> Boolean = { true },
 ): MetricPoint? {
     val ordered = points.sortedBy { it.t }
+    val before = ordered.lastOrNull { it.t <= time }
+    val after = ordered.firstOrNull { it.t >= time }
     // Do not borrow an edge value from either side of an explicitly marked outage or a missing series.
-    val before = ordered.lastOrNull { it.t <= time && (it.gap || hasValue(it)) }
-    val after = ordered.firstOrNull { it.t >= time && (it.gap || hasValue(it)) }
-    if (before?.gap == true || after?.gap == true) return null
+    if (before?.let { it.gap || !hasValue(it) } == true) return null
+    if (after?.let { it.gap || !hasValue(it) } == true) return null
     if (before != null && after != null && after.t - before.t > 3L * step) return null
     return listOfNotNull(before, after).filterNot { it.gap }.minByOrNull { abs(it.t - time) }
         ?.takeIf { abs(it.t - time) <= 2L * step }

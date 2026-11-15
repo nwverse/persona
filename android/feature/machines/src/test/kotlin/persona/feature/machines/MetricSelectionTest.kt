@@ -46,9 +46,15 @@ class MetricSelectionTest {
         assertNull(selectedPoint(listOf(MetricPoint(110)), 110, 10) { it.cpu != null })
         assertNull(selectedPoint(emptyList(), 110, 10) { it.cpu != null })
 
-        val points = listOf(MetricPoint(100, cpu = 10.0), MetricPoint(110), MetricPoint(120, cpu = 20.0))
-        assertEquals(100L, selectedPoint(points, 105, 10) { it.cpu != null }?.t)
-        assertEquals(120L, selectedPoint(points, 115, 10) { it.cpu != null }?.t)
+        val missing = listOf(MetricPoint(100, cpu = 10.0), MetricPoint(110), MetricPoint(120, cpu = 20.0))
+        assertNull(selectedPoint(missing, 105, 10) { it.cpu != null })
+        assertNull(selectedPoint(missing, 110, 10) { it.cpu != null })
+        assertNull(selectedPoint(missing, 115, 10) { it.cpu != null })
+
+        val contiguous = listOf(MetricPoint(100, cpu = 10.0), MetricPoint(110, cpu = 15.0), MetricPoint(120, cpu = 20.0))
+        assertEquals(100L, selectedPoint(contiguous, 105, 10) { it.cpu != null }?.t)
+        assertEquals(110L, selectedPoint(contiguous, 114, 10) { it.cpu != null }?.t)
+        assertEquals(120L, selectedPoint(contiguous, 116, 10) { it.cpu != null }?.t)
         val gap = listOf(MetricPoint(100, cpu = 10.0), MetricPoint(110), MetricPoint(130, gap = true))
         assertNull(selectedPoint(gap, 110, 10) { it.cpu != null })
     }
