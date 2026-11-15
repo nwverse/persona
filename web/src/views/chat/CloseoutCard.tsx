@@ -159,12 +159,12 @@ function CommandEvidenceLine({ item }: { item: CloseoutCommandEvidence }) {
     <li data-closeout-command-evidence={item.state} className="flex min-w-0 flex-col gap-0.5">
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span className="shrink-0 text-ink-3">{t("chat-chatview.closeout_evidence_claimed")}</span>
-        <code className="min-w-0 font-mono text-[12px] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{item.claim}</code>
+        <code className="min-w-0 font-mono text-xs leading-[inherit] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{item.claim}</code>
       </span>
       {item.command && (
         <span className="flex min-w-0 items-baseline gap-1.5">
           <span className="shrink-0 text-ink-3">{t("chat-chatview.closeout_evidence_recorded")}</span>
-          <code className="min-w-0 font-mono text-[12px] whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{item.command}</code>
+          <code className="min-w-0 font-mono text-xs leading-[inherit] whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{item.command}</code>
         </span>
       )}
       <span className={item.isError ? "text-orange" : "text-ink-3"}>{facts.join(" · ")}</span>
