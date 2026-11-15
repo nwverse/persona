@@ -650,8 +650,9 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		switch missingCode(h.Error) { // the launcher's health record: its start or check found no such command
 		case proto.CodeClaudeMissing:
 			// One miss, from a node that found Claude Code on this connection, can be a check caught in Claude Code's
-			// npm self-update (the case below): the node's self-check decides. A second miss in a row stands.
-			if plain && d.ClaudeVersion != "" && h.Fails < 2 {
+			// npm self-update (the case below): the node's self-check decides. A second miss in a row stands. Only
+			// misses count (MissingFails): an earlier failure of another kind (auth, a timeout) is not one.
+			if plain && d.ClaudeVersion != "" && h.MissingFails < 2 {
 				break
 			}
 			return problem(proto.CodeClaudeMissing, "install_claude")

@@ -206,15 +206,44 @@ func TestReadinessClaudeHealthMissWhileUpdating(t *testing.T) {
 	f, s, _ := readyMachine(t)
 	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
 	record := LauncherHealth{Machine: "server", Launcher: "claude", State: healthFailing, Kind: classifyLauncherError("zsh:1: command not found: claude"),
-		Error: "zsh:1: command not found: claude", CheckedAt: time.Now(), Source: healthSourceCheck, Fails: 1}
+		Error: "zsh:1: command not found: claude", CheckedAt: time.Now(), Source: healthSourceCheck, Fails: 1, MissingFails: 1}
 	s.health.loaded = true
 	s.health.recs = map[string]*LauncherHealth{healthKey("server", "claude"): &record}
 	r := getReadiness(t, s, "", "")
 	if cl := readinessStep(t, r, StepClaude); cl.State != StepOK || r.Mode != ReadinessFull {
 		t.Fatalf("one miss: claude = %+v (%s)", cl, r.Mode)
 	}
-	record.Fails = 2
+	record.Fails, record.MissingFails = 2, 2
 	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("two misses in a row: %+v", cl)
+	}
+}
+
+// An earlier failure of another kind is not a miss (#7670 review): after an auth failure, the first "command not found:
+// claude" of a self-update still defers to the self-check; a second miss in a row stands, and anything else in between
+// starts the count again.
+func TestReadinessClaudeHealthMissAfterAnotherFailure(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	ctx := context.Background()
+	fail := func(err string) LauncherHealth {
+		return s.recordHealth(ctx, "server", "claude", healthResult{agent: "claude", err: err, source: healthSourceCheck})
+	}
+	claude := func() ReadinessStep { return readinessStep(t, getReadiness(t, s, "", ""), StepClaude) }
+	fail("401 unauthorized")
+	if h := fail("zsh:1: command not found: claude"); h.Fails != 2 || h.MissingFails != 1 {
+		t.Fatalf("record = %+v", h)
+	}
+	if cl := claude(); cl.Code == proto.CodeClaudeMissing {
+		t.Fatalf("auth failure, then one miss: %+v", cl)
+	}
+	fail("timed out waiting for the model")
+	fail("zsh:1: command not found: claude")
+	if cl := claude(); cl.Code == proto.CodeClaudeMissing {
+		t.Fatalf("a timeout between two misses: %+v", cl)
+	}
+	fail("zsh:1: command not found: claude")
+	if cl := claude(); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
 		t.Fatalf("two misses in a row: %+v", cl)
 	}
 }
