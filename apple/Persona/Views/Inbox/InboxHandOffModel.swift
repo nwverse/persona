@@ -528,18 +528,24 @@ extension AppModel {
     func waitForHandOffDelivery(_ key: SessionKey, _ msg: PendingMessage,
                                 followRetries: Bool = false) async -> InboxHandOffModel.AgentSendResult {
         var tracked = msg
+        var lastFailed: PendingMessage?
         while !Task.isCancelled {
             var current = chat(key).pending.first { $0.id == tracked.id }
-            if current == nil, followRetries, tracked.state == .failed {
-                // A refused send goes again under a new id. Never pick between duplicates: an unrelated matching
-                // message is not evidence that this hand-off went.
-                let candidates = chat(key).pending.filter {
-                    $0.id != tracked.id && $0.createdAt == tracked.createdAt && $0.text == tracked.text && $0.images == tracked.images
+            if current == nil, followRetries {
+                // An uncertain retry stays sending while its old receipt is checked; retain its failed snapshot so the
+                // replacement id is still recognizable after that await. Never pick between duplicates: an unrelated
+                // matching message is not evidence that this hand-off went.
+                let failed = tracked.state == .failed ? tracked : lastFailed
+                if let failed {
+                    let candidates = chat(key).pending.filter {
+                        $0.id != failed.id && $0.createdAt == failed.createdAt && $0.text == failed.text && $0.images == failed.images
+                    }
+                    if candidates.count == 1 { current = candidates[0] }
                 }
-                if candidates.count == 1 { current = candidates[0] }
             }
             if let current {
                 tracked = current
+                if current.state == .failed { lastFailed = current }
                 switch current.state {
                 case .sent: return handOffSent(key, current)
                 case .failed where followRetries:
