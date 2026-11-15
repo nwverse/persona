@@ -76,11 +76,14 @@ build_one() {
   fi
   local build_target="$target"
   [ "$os" = linux ] && build_target="$target.2.28"
-  if ! (cd "$dir" && "${cmd[@]}" --locked --release --target "$build_target" >"$out/.persona-iphone-bridge-$os-$arch.log" 2>&1); then
-    echo "persona-iphone-bridge $os/$arch: FAILED (see $out/.persona-iphone-bridge-$os-$arch.log)"
+  # The build's output stays out of <out dir>: the release scans everything there for private values, and a
+  # compiler's output names this computer's paths.
+  local log="${TMPDIR:-/tmp}/persona-iphone-bridge-$os-$arch.log"
+  if ! (cd "$dir" && "${cmd[@]}" --locked --release --target "$build_target" >"$log" 2>&1); then
+    echo "persona-iphone-bridge $os/$arch: FAILED (see $log)"
     return 1
   fi
-  rm -f "$out/.persona-iphone-bridge-$os-$arch.log"
+  rm -f "$log"
   cp "${CARGO_TARGET_DIR:-$dir/target}/$target/release/persona-iphone-bridge" "$out/persona-iphone-bridge-$os-$arch" || return 1
   chmod 755 "$out/persona-iphone-bridge-$os-$arch"
   echo "persona-iphone-bridge $os/$arch: built"

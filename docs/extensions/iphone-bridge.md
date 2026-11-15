@@ -422,14 +422,17 @@ How the bridge reaches the computers that need it (#8199):
 - **Built with each release.** `scripts/release/publish.sh` runs `native/iphone-bridge/release.sh`, which builds
   `persona-iphone-bridge-<os>-<arch>` for linux/amd64, linux/arm64, darwin/arm64 and darwin/amd64. macOS builds need the
   Apple Rust targets on a Mac. Linux builds need `zig` and `cargo-zigbuild`, and target glibc 2.28. A platform the publishing
-  computer can't build is left out with a `note:`, and a build that fails stops the release. `--remap-path-prefix` cuts this
+  computer can't build is left out with a `note:`, and so is a build that fails: the bridge never holds up a release. `--remap-path-prefix` cuts this
   computer's home and checkout out of panic locations, so the binaries pass `scripts/release/check_bundle_privacy.py`. That
   scan knows aws-lc's two upstream credits (`by <…@openssl.org>`, `by <…@arm.com>`) in that exact context. The darwin builds are
   signed ad hoc as `com.nwverse.persona-iphone-bridge`, like the other programs.
 - **Listed in the release.** Each archive is in `SHA256SUMS`, in `latest.json` under `helpers` (`update.Manifest.Helpers`:
   name → platform → `{name, size, sha256, binary_sha256}`), and kept with the node builds under `dl/<version>/`.
-  `personad release verify` and `scripts/operations/tag_release.py` check a helper's bytes, but not a build number: it has
-  its own version. On the publishing computer's own platform, `version` must say `persona-iphone-bridge …`.
+  Only builds that are there are listed, and `publish.sh` uploads every one it lists. `personad release verify` and
+  `scripts/operations/tag_release.py` check a helper's bytes, but not a build number: it has its own version. On the
+  publishing computer's own platform, `version` must say `persona-iphone-bridge …`. A GitHub release whose private upload
+  command doesn't carry a listed helper's file is not refused: `tag_release.py` warns and uploads a copy of `latest.json`
+  without it, so hubs on that source find no build of the helper.
 - **With Persona Link.** `install.sh` puts it at `~/.persona/bin/persona-iphone-bridge` when it installs a computer's
   node service and the release has a build for that platform. A failed or missing download is only a warning.
   `scripts/app/mac-link.sh install` builds it for that Mac (when Rust is there) and puts it in the same place. It leaves the

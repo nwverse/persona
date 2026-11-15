@@ -1,4 +1,5 @@
 """The private tag consumer never broadens signing credentials or public refs."""
+import io
 import json
 import os
 from pathlib import Path
@@ -280,6 +281,18 @@ class TagReleaseTests(unittest.TestCase):
         tag_release.check_release_manifest(assets)
         with self.assertRaisesRegex(tag_release.ConfigError, "not in the receipt"):
             tag_release.check_release_manifest([item for item in assets if item["name"] != name])
+        # A receipt from an upload command that doesn't carry the helper yet goes up without it, never refused.
+        self.assertEqual(tag_release.drop_missing_helpers(assets, self.root / "state"), assets)
+        without = [item for item in assets if item["name"] != name]
+        with patch.object(tag_release.sys, "stderr", new_callable=io.StringIO) as err:
+            kept = tag_release.drop_missing_helpers(without, self.root / "state")
+        self.assertIn(name, err.getvalue())
+        latest = next(item for item in kept if item["name"] == "latest.json")
+        self.assertEqual(Path(latest["path"]).parent, self.root / "state")
+        self.assertNotIn("helpers", json.loads(Path(latest["path"]).read_text()))
+        self.assertEqual(json.loads(Path(latest["path"]).read_text())["files"], index["files"])
+        tag_release.check_release_manifest(kept)
+        self.assertEqual(sorted(item["name"] for item in kept), sorted(item["name"] for item in without))
         (directory / name).write_bytes(gzip.compress(b"another build", mtime=0))
         with self.assertRaisesRegex(tag_release.ConfigError, "size or sha256"):
             tag_release.check_release_manifest(assets)

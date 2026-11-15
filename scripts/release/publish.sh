@@ -240,11 +240,13 @@ for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   done
 done
 # The iPhone helper (persona-iphone-bridge, Rust, native/iphone-bridge) for each platform this machine can build: in
-# latest.json under helpers and kept with the node builds under dl/<version>/, where a computer's node fetches it when
-# the app installs it (docs/extensions/iphone-bridge.md "Releases"). A platform it can't build here (no Rust target, no
-# zig) is left out with a note; a build that fails stops the release. Cargo's build directory is kept between runs.
+# latest.json under helpers (only the builds that are here, all of which go up with the rest below) and kept with the
+# node builds under dl/<version>/, where a computer's node fetches it when the app installs it
+# (docs/extensions/iphone-bridge.md "Releases"). Never in the release's way: a platform it can't build here (no Rust
+# target, no zig) or a build that fails is left out with a note, and the release goes on without it. Cargo's build
+# directory is kept between runs.
 CARGO_TARGET_DIR="${PERSONA_BRIDGE_TARGET:-$HOME/.cache/persona/iphone-bridge-target}" \
-  native/iphone-bridge/release.sh "$OUT/bin" || { echo "persona-iphone-bridge did not build" >&2; exit 1; }
+  native/iphone-bridge/release.sh "$OUT/bin" || echo "note: some persona-iphone-bridge builds failed; this release goes without them" >&2
 # adhoc_identifiers <dir>: the darwin builds in dir, signed ad hoc again under their program's identifier
 # (com.nwverse.personad, com.nwverse.persona-node, ...) in place of the a.out Go's linker always writes. Only the name
 # changes: an ad-hoc signature's designated requirement stays the build's cdhash, so keeping macOS privacy permissions
