@@ -443,8 +443,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
         }
         if (changed) rt.sessionsChanged()
         // More agents than are read at connect (or a page Paseo did not give): which of them are gone cannot be told.
-        if (!whole) return
-        missing.push(...listed.filter((id) => !there.has(id) && !reading.told.has(id)))
+        if (whole) missing.push(...listed.filter((id) => !there.has(id) && !reading.told.has(id)))
       }
       if (!archiveRead) await readArchive()
       else if (named.length) {

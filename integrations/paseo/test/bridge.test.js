@@ -1396,8 +1396,12 @@ test("a failed read of Paseo's archive tells the node nothing, not that there ar
   const { node, logs } = await setup(t, {
     sweepMs: 80,
     agents: [...Object.values(agents()).map((agent) => ({ agent, project: PROJECT })), { agent: archivedOne, project: PROJECT }],
-    handlers: { fetch_agents_request: (msg) => (msg.filter?.includeArchived && fail
-      ? { type: 'rpc_error', payload: { requestType: msg.type, error: 'Paseo is busy', code: 'handler_error' } } : undefined) },
+    handlers: { fetch_agents_request: (msg) => {
+      if (msg.filter?.includeArchived && fail) return { type: 'rpc_error', payload: { requestType: msg.type, error: 'Paseo is busy', code: 'handler_error' } }
+      // The sweep's directory, a page Paseo does not give: which agents are gone cannot be told, the archive is read all the same.
+      if (!msg.subscribe && !msg.filter?.includeArchived) return { payload: { subscriptionId: null, entries: null, pageInfo: null } }
+      return undefined
+    } },
   })
   await until('the read at connect failed', () => logs.some((l) => /reading its archived agents: Paseo is busy/.test(l)))
   await until('and the sweep\'s', () => logs.some((l) => /reading its directory again: Paseo is busy/.test(l)))
