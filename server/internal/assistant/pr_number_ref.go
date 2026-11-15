@@ -91,6 +91,10 @@ func deliveryCloseout(text string) string {
 	if !strings.Contains(text, "<closeout") {
 		return ""
 	}
+	text = strings.TrimSpace(text)
+	if footer := strings.LastIndex(text, "\n<oai-mem-citation>"); footer >= 0 && strings.HasSuffix(text, "</oai-mem-citation>") {
+		text = strings.TrimSpace(text[:footer]) // runtime citation metadata may follow the agent's final record
+	}
 	var lines []string
 	fence := ""
 	inCloseout := false

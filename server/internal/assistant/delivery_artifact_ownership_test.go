@@ -18,6 +18,10 @@ const researchNoPRCloseout = "<closeout status=\"done\" merged=\"n/a\" deployed=
 	"artifact: doc docs/research.md\nartifact: url https://github.com/o/r/issues/4\n" +
 	"verified: Research findings checked against the original criteria.\n</closeout>"
 
+const relatedMemoryFooter = "\n<oai-mem-citation>\n<citation_entries>\n" +
+	"notes.md:1-2|note=[related work https://github.com/o/r/pull/10]\n" +
+	"</citation_entries>\n</oai-mem-citation>"
+
 func researchDeliveryTask(t *testing.T) (*Service, *fakeHub, Todo, string) {
 	t.Helper()
 	st := todoTestDB(t)
@@ -68,11 +72,15 @@ func TestAcceptedResearchDropsUnownedPRReferences(t *testing.T) {
 			}
 			s.watchDeploy(ctx, todo.ID, deployWatch{PR: wrong, Since: time.Now()})
 			s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryMerged})
+			report := researchNoPRCloseout
+			if current == "10" {
+				report += relatedMemoryFooter
+			}
 			f.setItems(
 				proto.Item{Role: "user", Kind: proto.KindText, Text: todo.Notes},
 				proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Research references " +
 					"https://github.com/o/r/pull/9 and https://github.com/o/r/pull/10; neither is our delivery.\n" +
-					researchNoPRCloseout},
+					report},
 			)
 			var checkedRelated atomic.Bool
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +281,9 @@ func TestReportedPRRequiresTaskOwnedCloseout(t *testing.T) {
 			{Role: "assistant", Kind: proto.KindText, Text: explicit},
 		}, ""},
 		{"latest own artifact", []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: "Related: https://github.com/o/r/pull/9\n" + explicit}}, pr},
+		{"own artifact before citation metadata", []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: explicit + relatedMemoryFooter}}, pr},
+		{"citation metadata only", []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: "Research is complete.\n<oai-mem-citation>\n" +
+			explicit + "\n</oai-mem-citation>"}}, ""},
 		{"indented artifact in own record", []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: strings.Replace(explicit, "\nartifact:", "\n    artifact:", 1)}}, pr},
 		{"inline tag mentioned in own record", []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: strings.Replace(explicit, "\nartifact:", "\ndid: Fixed the <closeout> reader.\nartifact:", 1)}}, pr},
 		{"own artifact after example", []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: "Example:\n````text\n" +
