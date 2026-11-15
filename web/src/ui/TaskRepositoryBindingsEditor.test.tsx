@@ -305,6 +305,37 @@ it("holds a version change while the editor is opening, then refreshes after it 
   expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("#12");
 });
 
+it("ignores a stale read's late failure after a successful save", async () => {
+  await render("assistant", "todo_example", undefined, 1);
+  await answer(calls[0], set);
+  // A version change starts background read B; opening the editor invalidates it but leaves it pending.
+  await render("assistant", "todo_example", undefined, 2);
+  const background = pendingCall("/todos/todo_example/repositories")!;
+  await click("Manage links");
+  await answerEditor(catalog, set);
+  await settle();
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/8");
+  await press(linkInput(), "Enter");
+  await click("Save");
+  const save = calls.at(-1)!;
+  await answer(save, twoLinks);
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("#8");
+  // The invalidated read fails late with a 404: it must not hide the valid saved links.
+  await answer(background, { code: "not_found", error: "Not Found" }, 404);
+  await settle();
+  const section = document.querySelector("[data-todo-repositories]");
+  expect(section).toBeTruthy();
+  expect(section!.textContent).toContain("#8");
+  expect(section!.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("reports a current read failure normally", async () => {
+  await render();
+  await answer(calls[0], { code: "task_repositories_store_unavailable", error: "unavailable" }, 503);
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("Couldn't confirm repository links were loaded or saved.");
+});
+
 it("falls back to the legacy PR link on a hub without the association route", async () => {
   await render("assistant", "todo_example", "https://example.com/pull/3211");
   await answer(calls[0], { code: "not_found", error: "Not Found" }, 404);
