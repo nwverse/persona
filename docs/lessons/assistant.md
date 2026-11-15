@@ -1,5 +1,13 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A finite startup wait cannot make a one-shot MCP tool list reliable (#8470). Registering a task leader and resolving
+  its pane can both happen after discovery. Capture a change cursor before building the list, wake it from persisted
+  task-link changes, and refresh only when the tool definitions actually differ. Re-resolve identity on heartbeat,
+  invalidate cursors across manager restarts, back off on outages, and exclude discovery watches from idle accounting.
+  Leadership is the active `todo_agents.source`, set from the new plan even for `continues`; there is no to-do role
+  column to update. A sharing `node_receipt=identity_missing` instead concerns creation/incarnation receipts, not MCP
+  pane identity, and is not evidence of the latter's failure.
+
 - A GitHub number is not proof of a delivery PR (#8248). Resolve number-only references through issue metadata before recording them; an ordinary issue has no `pull_request` object. Prefer an explicit closeout PR artifact over incidental references, and recover a PR hidden by a clipped preview from the linked agent's full closeout when repairing a false record. Do not turn a masked permission 404 into proof of absence: confirm PR access, preserve real historical PRs, and persist correction before publishing it. Item-level misses must not put unrelated PR checks on an outage cooldown.
 
 - A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
