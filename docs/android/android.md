@@ -297,6 +297,43 @@ child card expanded only when that parent row exists. Covered by `SessionHierarc
 `RequestApprovalTest`, `FoldedSessionsShotsTest` and
 `ChildSessionsShotsTest` (Glass, Brief and Board, light/dark).
 
+**Side sessions (#7944)**
+
+A Claude desktop app's side chat or /btw question (`parent_agent_id`) folds under its topmost listed parent on the same
+machine when hello lists `sessions_side_fold`: the hub sends it with `folded_under` and `folded_as: "side"`, and a row
+folded through one (a side's own Codex subtasks and workers) with `folded_side`. Such a row is never a row or a count of
+its own: the same `foldRows` that hides children hides it from the Agents list and its counts, the dock, the capsule's
+Unread, badge and completion notices (a finished side notices as its parent), shortcuts and the widget, knowledge
+projects, the Machines page and Needs you (its cards and waiting row are on the parent's key, `Interaction.homeKey`),
+and a side's own subtasks never come back as roots. The parent shows its folded state, computed from the side rows the
+list holds (`withHeldSides` in `SideSessions.kt`, `core:domain`), so seeing or answering a side shows at once; only a
+paged parent whose sides the list does not hold reads the hub's `children.sides*`. `Session.foldedState` adds the
+sides-only step: unread when a side's result is not looked at yet (`sides_unread`), unless the parent works itself;
+Codex children and workers do not make it unread. The raw `Session.state` stays as the hub sent it for the chat and
+completion tracking. The ongoing notification's counts are the hub's fleet summary, which folds sides the same way.
+
+In the parent's chat (every style) the header carries a **Side sessions** `JIconButton` (`PersonaIcons.sideSessions`)
+with the number of sides as its count capsule and the needs-you dot while one waits, shown only while there are sides,
+and ⋯ has **Side sessions (N)**. Both open a `JSheet` as the peers sheet does: the sides flat (sides of sides too), needs
+you first, then working, then by last activity, stopped ones last (`sideSessions`), each with its state's dot, title and
+state word. A tap opens the side's own chat (`ChatRoute.side`), its full conversation over the parent's page, Back
+returning to the parent. Sides are not subagent cards in the parent's chat (`childSessions(…, sides = true)`); a side's
+chat shows the rows folded through it (`sideChildren`). A side's own question or approval shows in the parent's chat as
+**From side session · title** and as its own card in the side's chat; a card from a row folded through a side shows in
+that side's chat only (`chatPageCards`). Notifications, Needs you rows (`NeedsYouLine.Agent.side`) and search hits
+(a held side the query finds, `sideHit`; a local search keeps the parent's row, `sideSearchHits`) name the side: the
+route opens the parent, which then opens the side over itself once. A paged list searches with `q`, which finds a
+parent by its own fields; the hub's ranked `search=` (whose `search_hits[…].hit_session_id` names the side) is not read
+yet.
+There is no action to start a side session. Hiding follows the hub's `folded_under`, as for children; the feature gates
+the control, the sheet, the card routing and the landing, so without it everything stays as before (a hub whose
+managers do not all fold sides sends no side rows folded, except from a newer manager, whose sides then read as
+children, as an older app shows them). Covered by
+`SessionHierarchyTest`, `SideSessionsTest`, `SideFoldFixturesTest` (`spec/fixtures/side-fold/cases.json`),
+`SideSessionHomeTest`, `NeedsYouLinksTest`, the capsule's `ChildSessionsTest`
+and `SideSessionsShotsTest` (the control, the ⋯ row and the sheet in Glass, Brief and Board, light/dark,
+`feature/chat/build/side-sessions-shots/`).
+
 - **Sorting**: the list settings have "Sort: **Status first** / **Recently updated**" (iOS `AgentSort`, stored on the device). With recently updated, sessions in each group sort only by time, and active spaces, repositories and computers sort by their newest session, first. With status first the sections stay the same; only the order inside a section is by time. The logic is in `AgentList.kt` in `core:domain` (`AgentListSettings.sort`).
 - **Subtasks** (`CodexTaskForest.kt` in `core:domain`): a subtask is a session another one started: a Codex subagent, or a runtime's delegated session, such as a Paseo agent another agent created (#4494), whichever agent runs it; terminal panes never are. Its parent, on the same computer, is the session its `parent_session_id` names, of any source (a Codex thread's subagents sit under the runtime session that runs the thread); with no `parent_session_id`, the one Codex thread its `parent_thread_id` names; failing those, the session its `root_session_id` names. It sits under its parent's row in **Subtasks (N)**, folded until opened, finished ones included. One that the list of running sessions draws (Running, and the running part of All) hangs there only while that list draws a row above it too: a working agent whose creator was let go is a row of its own, where it would otherwise be drawn nowhere. No count includes a subtask, wherever it is drawn: quick filters, computer chips and headers, group headers, and the Machines page's card and **Running sessions**, which leave it out (`machineSessions`); the hub's fleet summary (ongoing notification, widget, tile) counts a runtime's the same way. Outside the Agents list (#4769): the floating capsule's **Unread**, its count, the badge and the completion notices leave it out as the Unread count does (`capsuleNotifiableUnreadSessions`; it is read under its parent in Agents). The flat lists of what goes on, the main chat's dock (**Needs you** / **In progress** and **All**, `dockAgents`), the capsule's activity and a knowledge project's **Agents** (`projectAgents`), leave it out while they show its parent, or a session above that, as `codexTaskForest` hangs a running one only under a drawn row (`foldedSubtasks`): the dock shows a task's agents as the task, so the agents one created are in the task's row, and the row's background line counts the ones still running where the host reports them (a Paseo creator does). A working one whose creator the list does not show (finished, or let go) stays an entry of its own there. The launcher's recent-agent shortcuts take the Running list's rule (`RecentAgents`). A subtask that needs the user is a row of its own instead, in Needs you and counted, until it no longer does (`isNestedSubtask`; `docs/design/DESIGN_SYSTEM.md` ("Sessions that need the user")); the node already sends a runtime session that waits for the user without its parent, and the app's rule covers the rest. Opened under a quick filter and then answered, it stays where it was until the filter or the list is left, like any opened row (`openedRowsOfTheirOwn`). A row under Subtasks offers no **Pin**, since Pinned lists rows of their own only; one already pinned offers **Unpin**. Checked by `CodexTaskForestTest`, `CodexTaskTreeTest`, `AgentsHomeAffordancesTest`, `MachinesTest`, `TaskDockTest`, `CapsuleSessionsTest`, `KnowledgePresentationTest`, `ShortcutTextTest`, `CodexTaskTreeShotsTest` (three styles × light / dark, `build/runtime-subtask-shots/`), and for the dock and the capsule `AssistantTraysShotsTest.subtasksAreInTheirCreatorsRowInEveryStyle` (`feature/chat/build/assistant-trays-shots/subtasks-*`) and `CapsuleSubtasksShotsTest` (`app/build/capsule-subtasks-shots/`).
 - **Origin filters and the botmux toggle**: the quick filters gain **Lark groups / Terminal** (#2526: botmux sessions / herdr and Tern panes, decided by the `pane_id` prefix, `agentSource` in `SessionSource.kt`). As on iOS / web, filters only show items that have Agents, and a selected item that becomes empty stays. When there are too many items for one row (all six have Agents), the Brief labels and the Board count cells switch to horizontal scrolling (each Board cell is at least 92dp wide and still splits the width evenly when it fits; when scrolling, a sliver of the next cell shows at the edge) instead of squeezing into ellipses (screenshot `AgentsParityShotsTest.sixFilters`, 360dp wide). The **botmux** capsule under the filters (web #2786) hides / shows botmux sessions on this device. It appears when there are botmux sessions or they are hidden; the number is the botmux session count under the current scope, computer and search (when not hidden it reuses the **Lark groups** count; when hidden it counts separately, without building the list again). Hiding while on **Lark groups** goes back to **All**; choosing **Lark groups** while hidden shows them again.
@@ -992,9 +1029,8 @@ the other on the same phone, not across phones.
   it moves between runs: an earlier run on the Xiaomi phone put the release median at 8 ms for the Agents list. Read the
   tail and the janky share, not the median.
 - These are two phones, one run each. An earlier run of the same steps agreed: on the Huawei phone 11.33% against
-  1.62% janky for the Agents list and 10.58% against 0% for the chat. The release build has no Baseline Profile of the
-  app's own yet, only the one merged from its libraries (#4055), so its first launches after an install are the slowest
-  it gets.
+  1.62% janky for the Agents list and 10.58% against 0% for the chat. These builds had no Baseline Profile of the app's
+  own yet, only the one merged from its libraries; "Baseline Profile" below adds one (#4055).
 
 `android_scroll_perf.py` (below) opens pages through the debug entry and only runs on a debug package. To compare
 builds, install them under different application ids (`-PpersonaApplicationId`, "Build and install"), pair each one,
@@ -1003,6 +1039,83 @@ and run:
 ```sh
 CHAT=<machine>/<session> COLD=6 python3 scripts/diag/android_build_perf.py <serial> out.json debug=<package> release=<package>
 ```
+
+## Baseline Profile
+
+`android/app/src/main/baseline-prof.txt` lists the app's classes and methods that ART should compile ahead of time
+(#4055). AGP merges it with the profiles the libraries ship, R8 rewrites the names into those of the shrunk app, and
+the release APK carries the result as `assets/dexopt/baseline.prof`. `androidx.profileinstaller` (1.4.1, pulled in by
+the Compose and activity libraries) writes it into the system's profile after the first launch when the install did not
+use it already; some systems read it at install (HarmonyOS 4.2 below), an install from a downloaded APK usually does
+not. The phone's next profile-guided compile then covers the pages people use, not only what the JIT saw so far.
+
+The file is generated, not written by hand. It holds what ART recorded on a phone while the release build walked the
+main pages of the demo: the Agents list, the 60-message assistant conversation, an Agent conversation, Inbox, Settings
+and the Persona page. Each rule names one class or method the phone saw; there are no whole-class wildcards, because
+in a measurement they compiled about twice as much code for no faster start.
+
+### Regenerating it
+
+On a phone with adb (tested on HarmonyOS 4.0, an Android 12 base, without root; `rules` also reads the rule format
+that newer systems print with `cmd package dump-profiles --dump-classes-and-methods`):
+
+```sh
+./scripts/app/android.sh release -s <phone>      # the commit to profile, installed as a release build
+# open the app and tap "No hub? Try the demo first" on the welcome page (or pair it), then:
+python3 scripts/app/android_baseline_profile.py capture -s <phone> --out /tmp/persona-profile.txt
+python3 scripts/app/android_baseline_profile.py rules /tmp/persona-profile.txt --report /tmp/persona-profile.json
+python3 scripts/app/test_android_baseline_profile.py
+```
+
+`capture` opens the pages above with `persona://open` links in one process, scrolls each, stays in the app for 90
+seconds so ART's profile saver writes, then runs `cmd package dump-profiles` and pulls the text. `rules` rewrites
+`baseline-prof.txt`. The phone reports the names of the shrunk app: the project keeps names (`-dontobfuscate`), but R8
+still merges classes, inlines methods, narrows signatures and turns lambdas into synthetic classes, so the script maps
+every name back through the R8 mapping file that the same build writes under the app's build directory, and drops what
+the mapping cannot explain (it prints the count; `--report` lists them). Build and capture from the same commit, or the
+mapping does not match the phone.
+
+Regenerate it when a page's code moves to other classes (a large refactor of the chat, the Agents list or the app
+shell), when a page is added to the walk, or when an R8 or AGP upgrade changes how classes are merged. Rules that no
+longer name anything are ignored by R8, so a stale file costs nothing at build time; it only covers less of the app.
+To see how much still applies, compare the rules with the rewritten profile that the R8 step writes under the app's
+build directory.
+
+The standard way to produce this file is a Macrobenchmark module with `BaselineProfileRule` and the
+`androidx.baselineprofile` Gradle plugin, which drives the pages from a test and handles R8's names itself. It needs a
+new module and an Android 13 or newer device (or a rooted one) to run on; this script is the smaller step that needs
+neither, and replacing it with that module later is optional.
+
+### Measured effect
+
+Measured 2026-11-13 on physical devices via adb: release builds of the same commit without and with the file
+(16 KB larger APK), each freshly installed with `adb install` and opened in the demo, in the order without, with,
+without, with on the same phone. Cold start is the median `TotalTime` of `am start -W` into the demo (10 to 16 starts
+per install, the first dropped); CPU per frame is the app's CPU time over the frames drawn while flinging the
+60-message conversation or the Agents list, 10 rounds each. Two numbers are the two rounds.
+
+| Phone | When | Without | With |
+| --- | --- | --- | --- |
+| Huawei BLK-AL80, HarmonyOS 4.2 | Compiled at install from the APK's profile: odex | 9.9 MB | 17.1 MB |
+| | First launch after install | 511, 522 ms | 435, 453 ms |
+| | Cold start | 366, 416 ms | 343, 384 ms |
+| | CPU per frame, conversation / Agents list | 13.4, 13.2 / 15.8, 15.6 ms | 12.0, 12.1 / 14.7, 14.5 ms |
+| Samsung SM-S9370, Android 15 | Not compiled until the idle job: cold start | 332, 328 ms | 334, 333 ms |
+| | After `cmd package compile -m speed-profile -f` (what the idle job runs): odex | 8.2 MB | 13.9 MB |
+| | Cold start | 121, 127 ms | 116, 116 ms |
+| | CPU per frame, conversation / Agents list | 5.2, 5.1 / 5.7, 5.7 ms | 4.7, 4.7 / 5.4, 5.4 ms |
+| Huawei LIO-AL00, HarmonyOS 4.0 | Did not recompile in the measured minutes: cold start | 340, 367 ms | 343 ms (one round) |
+
+- The file helps from the first compile that reads it until the phone recompiles with its own record of what was used.
+  HarmonyOS 4.2 compiles the APK's profile at install, so the first launch and the first scrolls get it; Android 15
+  installs from adb uncompiled and gets it at the idle job. On the HarmonyOS 4.2 phone, a recompile after five minutes
+  of the same pages brought the build without the file level (cold start 318, 355 ms against 340, 362 ms).
+- Frames of 34 ms or longer were near zero on both phones with and without the file, so the gain shows as CPU time,
+  not as dropped frames. Memory (PSS on the Agents list) moved within the run-to-run spread.
+- The cost is storage: the compiled code is 5 to 7 MB larger.
+- On the HarmonyOS 4.2 phone the cold start of the same build moved by 40 to 50 ms between rounds, more than the 23 to
+  32 ms by which the build with the file was faster within each round; the first launch and CPU per frame differ by
+  more than their spread.
 
 ## Interface style performance
 
