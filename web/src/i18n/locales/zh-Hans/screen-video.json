@@ -17,6 +17,7 @@
   "fallback_lost": "视频断了，先用 VNC。",
   "fallback_locked": "Mac 锁屏了，解锁前先用 VNC。",
   "fallback_not_allowed": "这台 Mac 还没允许视频，先用 VNC。",
+  "fallback_busy": "这台 Mac 已经有两台设备在看视频，先用 VNC。",
   "how_to_turn_on": "怎么开",
   "turn_on_title": "为这台 Mac 打开视频",
   "how_settings": "在那台 Mac 的「系统设置 › 隐私与安全性 › 录屏与系统录音」里打开 Persona Screen。",
@@ -37,5 +38,15 @@
   "mobile_data_clearer_usage": "约 0.6 GB / 小时",
   "mobile_data_saver_usage": "约 0.2–0.3 GB / 小时",
   "mobile_data_quality": "移动数据下的画质",
-  "mobile_data_close": "关闭"
+  "mobile_data_close": "关闭",
+  "stats_tier": "档位",
+  "tier_start": "按当前网络起步",
+  "tier_link_slowed": "网络变慢",
+  "tier_link_steady": "网络稳定",
+  "tier_network_changed": "网络变了",
+  "tier_device_warm": "设备发热或在省电",
+  "tier_device_behind": "浏览器跟不上",
+  "tier_choice": "你改了画质",
+  "tier_seconds_ago": "{n} 秒前",
+  "tier_minutes_ago": "{n} 分钟前"
 }

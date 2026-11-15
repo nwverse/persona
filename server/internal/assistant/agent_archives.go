@@ -184,6 +184,11 @@ func archiveSnapshot(s proto.Session) proto.Session {
 	if len(preview) > 180 {
 		preview = preview[:180]
 	}
+	caps := &proto.SessionCapabilities{Read: true}
+	if s.Capabilities != nil {
+		caps.StopCause = s.Capabilities.StopCause
+		caps.Terminal = s.Capabilities.Terminal
+	}
 	return proto.Session{
 		MachineID: s.MachineID, SessionID: s.SessionID, Title: s.Title,
 		Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
@@ -192,7 +197,7 @@ func archiveSnapshot(s proto.Session) proto.Session {
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
 		UpdatedAt: s.UpdatedAt, LastText: string(preview),
 		Status: proto.StatusOffline, State: proto.StateOffline,
-		Capabilities: &proto.SessionCapabilities{Read: true},
+		Capabilities: caps,
 	}
 }
 
@@ -361,10 +366,20 @@ func archiveRow(rec agentArchive) proto.Session {
 }
 
 // markAgentArchives puts the archive's marks on list's rows. It returns the keys of list's rows that have a record,
-// in list order, one per line: what the rows only the archive has depend on (tailKeys) besides the records.
+// and of the ids their conversations went by that have one (proto.Session.Aliases, #8131), in list order, one per
+// line: what the rows only the archive has depend on (tailKeys) besides the records. Paseo's conversations were
+// listed under their transcripts once, and an archive record kept then repeated the row listed under its own id
+// now; the record stays, and is shown again if no row names its id any more.
 func markAgentArchives(machine string, list []proto.Session, records map[string]agentArchive, pending map[string]bool, mark uint64) string {
 	var listed strings.Builder
 	for i := range list {
+		for _, alias := range list[i].Aliases() {
+			key := runtimeListID(machine, alias)
+			if _, ok := records[key]; ok {
+				listed.WriteString(key)
+				listed.WriteByte('\n')
+			}
+		}
 		key := runtimeListID(machine, list[i].SessionID)
 		rec, ok := records[key]
 		if !ok {
@@ -466,6 +481,24 @@ func runtimeListID(machine, session string) string {
 // decorated applies manager-owned archive visibility to its final agent states.
 func (svc *Service) decorated(machine string) []proto.Session {
 	list, _, err := svc.archivedInventory(context.Background(), machine)
+	if err != nil {
+		svc.logf("load agent archives: %v", err)
+	}
+	return list
+}
+
+// decoratedInto is decorated with the machine's rows copied into buf's array instead of a new one (liveLoop's own
+// list of the machine from its last round, fleetInputsInto). The node's rows overwrite the array's whole before they
+// are decorated, so nothing of its last decoration stays; the list returned is buf's array unless it outgrew it. Its
+// rows are folded as archivedInventory folds them, and the fold is kept for the machine the same way.
+func (svc *Service) decoratedInto(machine string, buf []proto.Session) []proto.Session {
+	mark := svc.archiveMark() // before the list is read, as archivedInventory
+	list := buf[:0]
+	if svc.devs != nil {
+		list, _ = svc.devs.AppendSessions(list, machine)
+	}
+	list, _, err := svc.archivedSessions(context.Background(), machine, svc.decorateInventory(machine, list, true), mark)
+	svc.foldInventory(machine, list)
 	if err != nil {
 		svc.logf("load agent archives: %v", err)
 	}

@@ -21,6 +21,11 @@ const (
 	// (POST /api/v1/sessions/{mid}/{sid}/autoname; docs/protocol/protocol.md "Naming an Agent on request"). The hub
 	// lists the agent_autoname feature only while every manager that carries Agents names it.
 	CapabilityAgentAutoname = "agent_autoname"
+	// CapabilitySessionsSideFold: the manager folds a Claude desktop app's side sessions (parent_agent_id) under the
+	// session they were started from, folded_as "side", with folded_side and the children's sides rollup
+	// (docs/protocol/protocol.md "Session hierarchy", #7944). The hub lists the sessions_side_fold feature only while
+	// every manager that carries Agents names it; until then clients keep drawing side sessions as rows.
+	CapabilitySessionsSideFold = "sessions_side_fold"
 	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
 	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
 	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
@@ -210,6 +215,11 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"GET /api/v1/assistant/dispatch-policy",
+	"PUT /api/v1/assistant/dispatch-policy",
+	"GET /api/v1/assistant/worker-presets",
+	"GET /api/v1/assistant/start-defaults",
+	"PUT /api/v1/assistant/start-defaults",
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
@@ -263,6 +273,9 @@ var Routes = []string{
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
 	"GET /api/v1/todos",
+	"GET /api/v1/todos/{id}/repositories",
+	"PUT /api/v1/todos/{id}/repositories",
+	"PUT /api/v1/todos/{id}/repositories/{repo_id}/links",
 	"POST /api/v1/todos",
 	"PATCH /api/v1/todos/{id}",
 	"DELETE /api/v1/todos/{id}",

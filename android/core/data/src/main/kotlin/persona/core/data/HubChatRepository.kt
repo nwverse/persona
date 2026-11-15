@@ -35,6 +35,8 @@ class HubChatRepository(
     private val awaitingTranscript: Flow<Set<SessionKey>> = emptyFlow(),
     /** How long a closed chat stays subscribed; 0 unsubscribes at once. */
     private val releaseAfterMillis: Long = 0,
+    /** Streamed text publishes its first chunk at once, then at most once per this window; the turn's end publishes at once. */
+    private val deltaPublishWindowMillis: Long = 50,
 ) : ChatRepository {
     private class Entry(val key: SessionKey, val scope: CoroutineScope) {
         val reducer = ContinuityReducer()
@@ -76,6 +78,18 @@ class HubChatRepository(
         var durationSeconds: Map<String, Long> = emptyMap()
         /** Back online or reopened and no live delta since: the empty delta that ends a turn may have been missed. */
         var reconnected = false
+        /** The open streaming window (see [scheduleDeltaPublish]); null when none is open. Guarded by [lock]. */
+        var deltaWindow: Job? = null
+        /** A delta arrived since the window's last publish. Guarded by [lock]. */
+        var deltaDirty = false
+        /**
+         * Nothing has come from the hub for this chat yet: its first page is on its way, or was refused as not_loaded
+         * and waits for the watch ([notLoadedWait]). With nothing cached the chat shows its loading state meanwhile, not
+         * an empty chat (#8321).
+         */
+        var firstPagePending = true
+        /** The open's first read was refused as not_loaded ([awaitWatch]): ends the wait if no items come first. */
+        var notLoadedWait: Job? = null
     }
 
     private val entries = LinkedHashMap<SessionKey, Entry>(64, 0.75f, true)
@@ -94,6 +108,7 @@ class HubChatRepository(
                             val gap = entry.reducer.apply(event.items, event.history, event.fromSeq, event.toSeq,
                                 event.backlog, event.hasMore, event.moreAfter)
                             entry.eventError = null
+                            firstPageIn(entry) // a watch's backlog also stands in for a first read it refused
                             publish(entry, verified = gap == ContinuityReducer.Gap.None &&
                                 (event.backlog || entry.state.value.verified))
                             entry.sync.settle(gap)
@@ -101,16 +116,24 @@ class HubChatRepository(
                         dispatch(entry, actions)
                         if (entry.persistPending.compareAndSet(false, true)) entry.scope.launch { persist(entry) }
                     }
-                    is DeltaEvent -> update(SessionKey(event.machineId, event.sessionId)) { entry ->
-                        entry.realtime.delta(event, entry.reducer.items)
-                        entry.reconnected = false
-                        if (!event.turnFinished) {
-                            entry.turnDurationSeconds = null
-                            entry.durationAfterSeq = entry.reducer.items.lastOrNull()?.seq ?: 0
-                        }
-                        else {
-                            entry.stopRequested = false
-                            requestSync(entry.key)
+                    is DeltaEvent -> existing(SessionKey(event.machineId, event.sessionId))?.let { entry ->
+                        entry.ready.await()
+                        entry.lock.withLock {
+                            entry.realtime.delta(event, entry.reducer.items)
+                            entry.reconnected = false
+                            if (!event.turnFinished) {
+                                entry.turnDurationSeconds = null
+                                entry.durationAfterSeq = entry.reducer.items.lastOrNull()?.seq ?: 0
+                                scheduleDeltaPublish(entry)
+                            }
+                            else {
+                                entry.stopRequested = false
+                                // The turn's end publishes now; a window left open would hold the next turn's first chunk.
+                                entry.deltaWindow?.cancel()
+                                entry.deltaWindow = null
+                                requestSync(entry.key)
+                                publish(entry)
+                            }
                         }
                     }
                     is ScreenEvent -> update(SessionKey(event.machineId, event.sessionId)) { entry ->
@@ -128,7 +151,11 @@ class HubChatRepository(
                         }
                         requestSync(entry.key)
                     }
-                    is ErrorEvent -> event.sessionKey?.let { key -> update(key) { it.eventError = event.error.ifBlank { DataText.of(Key.UnknownError) } } }
+                    // The hub's own failure for the chat (a backlog it could not read): said, and a first page no longer awaited.
+                    is ErrorEvent -> event.sessionKey?.let { key -> update(key) {
+                        it.eventError = event.error.ifBlank { DataText.of(Key.UnknownError) }
+                        firstPageIn(it)
+                    } }
                     is SessionsEvent -> retainedEntries().filter { it.key.machineId == event.machineId }.forEach { entry ->
                         entry.lock.withLock {
                             if (sessions !is HubSessionsRepository && connection.state.value == ConnectionState.Online)
@@ -232,8 +259,11 @@ class HubChatRepository(
         override suspend fun sendQueuedNow(session: Session) = delegate.sendQueuedNow(session)
         override suspend fun info(session: Session) = delegate.info(session)
         override suspend fun completeRow(session: Session) = delegate.completeRow(session)
+        override suspend fun childRows(session: Session) = delegate.childRows(session)
+        override suspend fun childPage(session: Session, since: String?) = delegate.childPage(session, since)
         override suspend fun interactionHistory(session: Session) = delegate.interactionHistory(session)
         override suspend fun restoreModel(session: Session) = delegate.restoreModel(session)
+        override suspend fun catalogPrices(ids: List<String>) = delegate.catalogPrices(ids)
         override suspend fun fork(session: Session, atItemId: String): String {
             // A finished streamed reply keeps showing its draft id; the node only knows the transcript one (#5305).
             val entry = existing(session.key)
@@ -244,6 +274,9 @@ class HubChatRepository(
 
     /** The composer shares interruption state with menu actions. Failed requests leave it unchanged. */
     fun trackComposer(delegate: ChatComposerService): ChatComposerService = object : ChatComposerService by delegate {
+        override suspend fun upload(session: SessionKey, name: String, file: java.io.File, destination: String): String =
+            delegate.upload(session, name, file, destination)
+
         override suspend fun interrupt(session: SessionKey) {
             delegate.interrupt(session)
             update(session) { it.stopRequested = true }
@@ -358,6 +391,22 @@ class HubChatRepository(
         }
     }
 
+    override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int): List<Item> {
+        require(fromSeq >= 0 && throughSeq >= fromSeq)
+        val out = mutableListOf<Item>()
+        var from = fromSeq
+        repeat(20) {
+            val page = transport.items(session, ItemsQuery(fromSeq = from, throughSeq = throughSeq))
+            out += page.items
+            val last = page.items.lastOrNull()?.seq
+            if (!page.more || last == null || last >= throughSeq) return out.distinctBy { it.id }
+            val next = last + 1
+            if (next <= from) return out.distinctBy { it.id }
+            from = next
+        }
+        return out.distinctBy { it.id }
+    }
+
     override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int): List<Item> {
         require(fromSeq >= 0 && toSeq >= fromSeq)
         val entry = existing(session) ?: return emptyList()
@@ -452,6 +501,7 @@ class HubChatRepository(
         entry.release = null
         entry.opening?.cancel()
         entry.timer?.cancel()
+        entry.notLoadedWait?.cancel() // the next open reads again, and waits again if it has to
         entry.subscribed = false
         connection.send(envelope("unsubscribe", entry.key))
         trimIdleEntries()
@@ -471,6 +521,28 @@ class HubChatRepository(
         val entry = existing(key) ?: return
         entry.ready.await()
         entry.lock.withLock { change(entry); publish(entry) }
+    }
+
+    /**
+     * Called holding [Entry.lock] after a streamed chunk was applied. The first chunk of a burst publishes at once; chunks
+     * that arrive while the window is open only mark it dirty, and its end publishes the latest state once. The window
+     * repeats while chunks keep arriving and closes after a quiet window, so a later chunk publishes at once again.
+     */
+    private fun scheduleDeltaPublish(entry: Entry) {
+        entry.deltaDirty = true
+        if (entry.deltaWindow?.isActive == true) return
+        entry.deltaDirty = false
+        publish(entry)
+        entry.deltaWindow = entry.scope.launch {
+            while (true) {
+                delay(deltaPublishWindowMillis)
+                val quiet = entry.lock.withLock {
+                    if (!entry.deltaDirty) { entry.deltaWindow = null; true }
+                    else { entry.deltaDirty = false; publish(entry); false }
+                }
+                if (quiet) return@launch
+            }
+        }
     }
 
     private fun requestSync(key: SessionKey) {
@@ -521,16 +593,53 @@ class HubChatRepository(
                 else entry.sync.reload(page.items, page.history, page.toSeq, page.hasMore)
                 val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                 entry.eventError = null
+                firstPageIn(entry)
                 publish(entry, verified = !overtaken)
                 if (overtaken || entry.sync.behind) dispatch(entry, entry.sync.settle(ContinuityReducer.Gap.Fill))
             }
             persist(entry)
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { entry.lock.withLock {
-            entry.state.update { it.copy(loading = false, error = DataText.of(Key.ChatSyncFailed), verified = false) }
+        catch (error: Exception) { entry.lock.withLock {
+            if (initial && notLoaded(error)) awaitWatch(entry)
+            else {
+                firstPageIn(entry)
+                entry.state.update { it.copy(loading = false, error = DataText.of(Key.ChatSyncFailed), verified = false) }
+            }
         } }
         finally { withContext(NonCancellable) { entry.lock.withLock { entry.sync.finishFill() } } }
     }
+
+    /**
+     * The open's first read was refused as not_loaded: the agent's engine let it go, and its runtime reads it only while
+     * its chat is watched (Paseo, docs/integrations/paseo.md "Content", #8132). The subscribe that follows this read loads
+     * it, and the hub's backlog brings the page a second or three later. Until then the chat keeps its loading state, not
+     * the refusal (#8321): any items event ends the wait, the hub's error for the chat says why it can't, and after
+     * [NOT_LOADED_WAIT_MILLIS] with neither the chat says it could not sync. Called holding [Entry.lock].
+     */
+    private fun awaitWatch(entry: Entry) {
+        entry.firstPagePending = true
+        entry.eventError = null // a wait of an earlier open that ran out
+        entry.notLoadedWait?.cancel()
+        entry.notLoadedWait = entry.scope.launch {
+            delay(NOT_LOADED_WAIT_MILLIS)
+            entry.lock.withLock {
+                if (!entry.firstPagePending) return@withLock
+                entry.firstPagePending = false
+                entry.eventError = DataText.of(Key.ChatSyncFailed)
+                publish(entry, verified = false)
+            }
+        }
+        publish(entry, verified = false)
+    }
+
+    /** Something came from the hub for the chat (a page, items, its error): no first page pends. Holding [Entry.lock]. */
+    private fun firstPageIn(entry: Entry) {
+        entry.firstPagePending = false
+        entry.notLoadedWait?.cancel()
+        entry.notLoadedWait = null
+    }
+
+    private fun notLoaded(error: Throwable) = hubCodedFailure(error)?.code == NOT_LOADED
 
     /** [first]: a read the continuity already issued; without it, [ContinuitySync.continueFill] opens one. */
     private suspend fun catchUp(entry: Entry, first: List<Action>? = null) = entry.requests.withLock {
@@ -548,6 +657,7 @@ class HubChatRepository(
                             val result = entry.sync.after(page.items, page.history, page.fromSeq, page.toSeq, page.moreAfter)
                             val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                             entry.eventError = null
+                            firstPageIn(entry)
                             publish(entry, verified = result.gap == ContinuityReducer.Gap.None && !overtaken)
                             if (result.actions.isEmpty() && overtaken) entry.sync.continueFill() else result.actions
                         }
@@ -562,6 +672,7 @@ class HubChatRepository(
                             entry.sync.reload(page.items, page.history, page.toSeq, page.hasMore)
                             val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                             entry.eventError = null
+                            firstPageIn(entry)
                             publish(entry, verified = !overtaken)
                             if (overtaken || entry.sync.behind) entry.sync.continueFill() else emptyList()
                         }
@@ -571,8 +682,10 @@ class HubChatRepository(
             }
             persist(entry)
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { entry.lock.withLock {
-            entry.state.update { it.copy(error = DataText.of(Key.ChatSyncFailed), verified = false) }
+        catch (error: Exception) { entry.lock.withLock {
+            // While the open waits for the watch (awaitWatch), a catch-up its runtime refuses alike says nothing new.
+            if (entry.notLoadedWait?.isActive != true || !notLoaded(error))
+                entry.state.update { it.copy(error = DataText.of(Key.ChatSyncFailed), verified = false) }
         } }
         finally { withContext(NonCancellable) { entry.lock.withLock { entry.sync.finishFill() } } }
     }
@@ -649,7 +762,8 @@ class HubChatRepository(
             entry.reconnected = false
         }
         val items = entry.realtime.items(recorded)
-        entry.state.update { it.copy(items = items, loading = false,
+        // Loading only while nothing is shown and the hub has not answered for the chat yet: an empty chat is one it said is empty.
+        entry.state.update { it.copy(items = items, loading = entry.firstPagePending && items.isEmpty(),
             history = entry.reducer.history,
             streamingItemIds = entry.realtime.streamingItemIds(),
             hasOlder = entry.reducer.hasMore == true, error = entry.eventError, verified = verified,
@@ -673,4 +787,15 @@ class HubChatRepository(
         put("type", type); put("machine_id", session.machineId); put("session_id", session.sessionId)
     }
     private fun part(item: Item) = item.id.substringAfterLast('#').toIntOrNull() ?: 0
+
+    companion object {
+        /** The code of a read that would start the agent: one its engine let go, read only while watched (#8132). */
+        private const val NOT_LOADED = "not_loaded"
+        /**
+         * How long an open whose first read was refused as not_loaded waits for the watch ([awaitWatch]): the web's read
+         * time (`READ_TIMEOUT_MS`), past the hub's own limits for a backlog (10 s for the watch, then 30 s for the read),
+         * so the hub's error for the chat comes first.
+         */
+        internal const val NOT_LOADED_WAIT_MILLIS = 45_000L
+    }
 }
