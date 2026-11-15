@@ -1259,19 +1259,20 @@ if os.environ.get("MOCK_PASEO"):
 # lists them: under Paseo's own id (agent "paseo"), each with its provider as launcher and the provider's label
 # (agent_label). Grok waits for an approval (its card names Grok); Cursor, whose mark the web has, is idle. The model
 # capability is the node's for a runtime that switches models (Paseo); their launchers are on the server's list
-# (machine_launchers).
+# (machine_launchers). Both have Auto Accept, so they list the two modes they take (#8261, capabilities.permission_modes)
+# beside modes false: Grok runs on its own approval (no mode reported) at its model's high effort, Cursor in Full access.
 PASEO_GROK, PASEO_CURSOR = "paseo-9a5e0000-0000-4000-8000-000000000010", "paseo-9a5e0000-0000-4000-8000-000000000011"
 PASEO_PROVIDERS = bool(os.environ.get("MOCK_PASEO_PROVIDERS"))
 if PASEO_PROVIDERS:
     _provider_caps = {"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False,
-                      "close": True, "rename": True, "model": True}
+                      "close": True, "rename": True, "model": True, "modes": False, "permission_modes": ["default", "bypassPermissions"]}
     SESSIONS += [
         _paseo(PASEO_GROK, "Check the release notes", "Triage", None, "main", "blocked", "needs_you", 1,
                "May I run the release script?", agent="paseo", agent_label="Grok", launcher="grok", model="grok-4",
-               pending_interactions=1, capabilities=_provider_caps),
+               pending_interactions=1, capabilities=_provider_caps, efforts=["low", "high"], effort="high"),
         _paseo(PASEO_CURSOR, "Tidy the settings page", "Triage", None, "main", "idle", "idle", 20,
                "Moved the toggles into one group.", agent="paseo", agent_label="Cursor", launcher="cursor", model="auto",
-               capabilities=_provider_caps),
+               capabilities=dict(_provider_caps), permission_mode="bypassPermissions"),
     ]
 # MOCK_PASEO_NOT_LOADED=1 (#8321, on the Paseo computer): a Grok agent Paseo let go (closed after an hour idle, listed
 # offline). As its bridge does since #8132, every read of its chat is refused as not_loaded until a subscribe watches
@@ -14009,7 +14010,8 @@ LAUNCHER_MODELS["claude-desktop"] = {"agent": "claude", "models": [], "locked": 
 # MOCK_PASEO_PROVIDERS=1 (#8142): Paseo's Grok and Cursor providers, as the node lists a runtime's launcher models (agent
 # "paseo": the runtime's own id, for an agent the apps have no id for).
 if PASEO_PROVIDERS:
-    LAUNCHER_MODELS["grok"] = {"agent": "paseo", "models": [{"id": "grok-4", "name": "Grok 4", "default": True},
+    # Grok 4's thinking options among Persona's levels (#8261): New Agent offers those alone for it, none for Grok 4 Fast
+    LAUNCHER_MODELS["grok"] = {"agent": "paseo", "models": [{"id": "grok-4", "name": "Grok 4", "default": True, "efforts": ["low", "high"]},
                                                             {"id": "grok-4-fast", "name": "Grok 4 Fast"}]}
     LAUNCHER_MODELS["cursor"] = {"agent": "paseo", "models": [{"id": "auto", "name": "Auto", "default": True},
                                                               {"id": "grok-4", "name": "Grok 4"}]}
@@ -14299,8 +14301,10 @@ def machine_launchers(mid=""):
         # Its Codex App runs: its launcher starts a chat there (#5726, docs/integrations/codex.md).
         out.append({"name": "codex-app", "model": "", "source": "codex_app", "agent": "codex", "agent_type": "codex"})
     if PASEO_PROVIDERS and mid == "server":
-        # Paseo's providers the apps have no id for (#8142): the runtime's own id as their agent, the runtime as source
-        out += [{"name": n, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo"} for n, m in (("grok", "Grok 4"), ("cursor", "Auto"))]
+        # Paseo's providers the apps have no id for (#8142): the runtime's own id as their agent, the runtime as source,
+        # named as in Paseo and saying the modes a start takes (#8261)
+        out += [{"name": n, "display_name": d, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo",
+                 "permission_modes": ["default", "bypassPermissions"]} for n, d, m in (("grok", "Grok", "Grok 4"), ("cursor", "Cursor", "Auto"))]
     if machine_alerts.ON:
         return machine_alerts.with_health(mid, out)
     return launcher_health_list(out)
@@ -25815,6 +25819,13 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and p.endswith("/info"):  # the chat's "Developer info" card
             s = next((s for s in all_sessions() if s["session_id"] == p.split("/")[5]), {})
             codex = s.get("agent") == "codex"
+            if s.get("agent") == "paseo":
+                # a Paseo provider's session has no transcript here: the node says nobody gives its counts (#8261), and
+                # keeps zeros for older apps
+                return self.send_json({"session_id": s["session_id"], "cwd": s.get("cwd"), "model": s.get("model"), "agent": "paseo",
+                                       "launcher": s.get("launcher"), "permission_mode": s.get("permission_mode"), "effort": s.get("effort"),
+                                       "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "usage_unknown": True,
+                                       "last_activity": ago()})
             return self.send_json({"session_id": s.get("session_id", ""), "cwd": s.get("cwd"),
                                    "model": "gpt-5.5" if codex else "claude-opus-5",
                                    "launcher": s.get("launcher"), "git_branch": "main", "version": "0.153.0" if codex else "2.1.320",

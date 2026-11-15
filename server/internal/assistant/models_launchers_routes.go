@@ -483,8 +483,9 @@ func (s *Service) machineLauncherRoutes() {
 		def := s.pickerDefault(ctx, r)
 		keep, _ := def["provider"].(string)
 		shown := s.withHealth(ctx, mid, list, keep)
-		// A Persona-managed provider shows its display name over its ID (launcher_auto_name); tiers and default still
-		// name the ID, which clients look up here.
+		// A Persona-managed provider shows its display name over its ID (launcher_auto_name), and a runtime's provider the
+		// name the runtime gives it (Paseo's label, the node's display_name, #8261); tiers and default still name the
+		// ID, which clients look up here.
 		stored := s.storedLaunchers(ctx)
 		for i, l := range shown {
 			j := slices.IndexFunc(stored, func(m storedLauncher) bool { return m.Name == l.Name })
