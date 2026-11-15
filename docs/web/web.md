@@ -51,7 +51,11 @@ TaskBoard and session/detail entry points. Quiet schedules have a separate Progr
 `web/src/lib/assistant-entries.ts`, checked against `spec/fixtures/entries`). Needs you holds what the Pending and To start
 entries held, plus the tasks Progress used to rank first and the hand-opened Agents that ask; In progress holds the other
 open tasks and the hand-opened working Agents, which replaces the Agents entry. Finished tasks fold nowhere: the board has
-them. The rest of this section describes the earlier three entries; the counting rule still holds for In progress.
+them. A task waiting for its supervisor's review is in neither: **Persona reviewing** (#8678), an entry after In progress
+shown only while such a task waits, drawn neutral (grey `ink-3` dot, `ink-2` label) since nothing in it is the user's,
+lists it whatever the age of the review, with "Supervisor reviewing" on each row (`entries.review`;
+unified-entry.md "Needs you and In progress: each thing once (#3387)"). The rest of this section describes the earlier three
+entries; the counting rule still holds for In progress.
 
 Progress lists and counts the conversation's open tasks by **the To-dos page's rule** (#3331, `todoBucket` in
 `web/src/lib/todo-triage.ts`, the same `countsAsOpen` as the page's "Not done"): working, waiting for the user, finished but
@@ -2075,6 +2079,11 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   retry, and success, Follow default or a dropped pick clears it. An older hub or a non-default manager gets no pre-start
   Fast control or tier field; an older manager gets 501 `assistant_service_tier_manager_outdated` for an explicit tier,
   and an older node refuses it rather than running Standard. New Agent has no start speed setting.
+  If Model configuration › Main chat later changes to another agent kind, the existing main conversation does not migrate:
+  with no pick and a confirmed cross-kind mismatch, its pill and setup use the actual session launcher / model / effort,
+  and a lazy-loaded status strip above the composer names the actual and configured launchers and opens the existing
+  **New main chat…** dialog (#4662). The Main chat settings editor shows the same explanation from its provider draft.
+  A same-kind default, an unloaded launcher list, an unknown default or a conversation pick shows no strip.
 - **Tests**: `lib/session-models.test.ts` (providers, the current row, unavailable reasons, Codex, prices, what a pick
   sends, the lists kept and read again), `lib/session-panel.test.ts` (the switch to another launcher: with and without the
   feature, another engine, the pending setup and note, what a switch or its cancel sends, the pill's pending setup, which
