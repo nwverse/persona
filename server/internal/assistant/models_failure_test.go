@@ -340,6 +340,11 @@ func TestGatewayMessagePrecedenceAndBoundedFallback(t *testing.T) {
 			want: "deeper",
 		},
 		{
+			name: "deeper string error wins",
+			raw:  `{"message":"top-level","error":{"code":"model_not_found","message":"nested","error":"model missing"}}`,
+			want: "model missing",
+		},
+		{
 			name: "nested message beats top-level",
 			raw:  `{"message":"top-level","error":{"message":"nested"}}`,
 			want: "nested",

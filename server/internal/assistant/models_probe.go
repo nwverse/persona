@@ -450,7 +450,8 @@ func regionOpenVendors(l i18n.Lang) string {
 }
 
 // gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":{"error":{"message"}}},
-// {"error":"…"}, {"message"}), or the start of the body. Like the classifier, it reads at most error.error.
+// {"error":{"error":"…"}}, {"error":"…"}, {"message"}), or the start of the body. Like the classifier, it reads at most
+// error.error.
 func gatewayMessage(raw []byte) string {
 	var body struct {
 		Error   json.RawMessage `json:"error"`
@@ -467,6 +468,10 @@ func gatewayMessage(raw []byte) string {
 			}
 			if json.Unmarshal(e.Error, &deeper) == nil && deeper.Message != "" {
 				return deeper.Message
+			}
+			var deeperText string
+			if json.Unmarshal(e.Error, &deeperText) == nil && deeperText != "" {
+				return deeperText
 			}
 			if e.Message != "" {
 				return e.Message
