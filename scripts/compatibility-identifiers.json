@@ -219,6 +219,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "deploy/docker/.env.example": {
+      "reason": "Upgrade instructions identify the historical container image repository for existing installations.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "deploy/docker/compose.yaml": {
       "reason": "Installation, upgrade or privacy input adapter retaining an existing deployment identity.",
       "tokens": [
@@ -1262,6 +1270,14 @@
         "my-jarvis-art",
         "plugin_jarvis",
         "started_by_jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "web/src/lib/drafts-storage.test.ts": {
+      "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
+      "tokens": [
+        "jarvis-new"
       ],
       "path_tokens": [],
       "external_refs": []
