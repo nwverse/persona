@@ -115,6 +115,11 @@ class ChatFileBubbleShotsTest {
             for (s in AppStyle.entries) for (night in listOf(false, true)) {
                 rule.runOnIdle { style = s; dark = night }
                 rule.waitForIdle()
+                if (sc.open) {
+                    // Compose idleness does not finish the native click ripple; give its fade-out wall-clock time.
+                    Thread.sleep(500)
+                    rule.waitForIdle()
+                }
                 val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
                 val name = "bubble-${sc.name.lowercase()}-$language-${s.name.lowercase()}-${if (night) "dark" else "light"}-${fontScale.text()}.png"
                 File(out, name).outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
