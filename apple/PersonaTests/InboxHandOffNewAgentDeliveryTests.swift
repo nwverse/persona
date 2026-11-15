@@ -86,6 +86,7 @@ struct InboxHandOffNewAgentDeliveryTests {
         model.started(key, markDone: true)
         model.open()
         #expect(calls.opened == 1 && calls.done == 1 && model.sent?.key == key)
+        try await until { calls.waited.count == 1 }
         #expect(calls.waited.count == 1 && calls.records.isEmpty, "the local enqueue must not record")
 
         try await until { calls.records.count == 1 }
