@@ -733,3 +733,7 @@ modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up
 inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
 the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
 `JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
+
+## A failed read over an empty cache is not an empty page
+
+A page that keeps its last answer while it reloads has four things to say, and mixing them up shows wrong facts: a spinner for a first read, the content (with a pull indicator) while it reloads, one line above the kept content when the reload failed, and the whole-page failure with Retry only when there is nothing to show. The trap is the cached empty list: with `value.isEmpty()` and an error, drawing the empty state tells an offline user that they have nothing. `jLoadableContent` treats a loaded empty value that carries a failure as a failure. A retry must also leave the failure state at once: the Hub version page kept its error on screen for the whole retry until the model got a `loading` flag that the page maps back to the spinner.
