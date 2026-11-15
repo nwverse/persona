@@ -246,8 +246,8 @@
     <string name="settings_ext_preview_again">Preview Again</string>
     <string name="settings_ext_uninstall_title">Remove %1$s?</string>
     <string name="settings_ext_uninstall_text">This stops it and deletes its settings and secrets; the connectors it provides go too.</string>
-    <string name="settings_ext_uninstall_keep_result">The package is deleted too; the data folder stays on the hub machine. Anything still needing manual cleanup is listed after removal; the extension is still removed.</string>
-    <string name="settings_ext_uninstall_delete_data_result">The package and data folder are deleted too. Anything still needing manual cleanup is listed after removal; the extension is still removed.</string>
+    <string name="settings_ext_uninstall_keep_result">The package will be deleted too; the data folder will stay on the hub machine. Anything still needing manual cleanup will be listed after removal.</string>
+    <string name="settings_ext_uninstall_delete_data_result">The package and data folder will be deleted too. Anything still needing manual cleanup will be listed after removal.</string>
     <string name="settings_ext_removal_warnings_text">Removed. A few things still need you to clean them up by hand.</string>
     <string name="settings_ext_removal_warnings_header">Needs manual cleanup</string>
     <string name="settings_ext_removal_copy">Copy warnings</string>
