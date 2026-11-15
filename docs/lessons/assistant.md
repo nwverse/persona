@@ -1,5 +1,13 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
+- A retry that puts a failed send back for the next digest must first ask whether the next try can succeed (#8518).
+  The task leader path picked "resume and escalate" from the listed status (`StatusOffline`), but a stopped, read-only
+  agent is also listed `interrupted` when a restart cut it off, and the node refuses every send to it
+  (`agent_stopped`). Put back as an ordinary failure, that became a node round trip every 30 seconds that nobody above
+  the leader heard of. Classify by the node's refusal code, not by status or its words: a refusal that holds until
+  someone acts goes the escalation path once, with a growing retry; transient failures keep the digest retry.
+
 - A finite startup wait cannot make a one-shot MCP tool list reliable (#8470). Registering a task leader and resolving
   its pane can both happen after discovery. Capture a change cursor before building the list, wake it from persisted
   task-link changes, and refresh only when the tool definitions actually differ. Re-resolve identity on heartbeat,

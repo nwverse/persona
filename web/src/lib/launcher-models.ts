@@ -78,11 +78,13 @@ export interface MachineLaunchers {
   /** The profile the presets come from (they follow its switches). */
   tiers_profile?: { id: string; name: string };
   /** `?purpose=assistant` on a hub with `assistant_model_pick` (#5033): what can't run the main chat on this computer, with
-   *  why in the request's language (shown off, not hidden). */
+   *  why in the request's language (shown off, not hidden). For "New agent" (#8109): the Persona-managed providers its
+   *  own-service rule leaves out on this computer, with why; absent when there are none, or from an older hub. */
   unavailable?: UnavailableLauncher[];
 }
 
-/** One of MachineLaunchers.unavailable: a launcher of the computer or a Model provider that can't run assistant chats here. */
+/** One of MachineLaunchers.unavailable: a launcher of the computer or a Model provider that can't run assistant chats here
+ *  (or, for "New agent", can't start Agents here). */
 export interface UnavailableLauncher {
   name: string;
   display_name?: string;

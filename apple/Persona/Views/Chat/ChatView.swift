@@ -5336,6 +5336,8 @@ struct Composer: View, Equatable {
     /// last model while the picker has not answered (the 11-13 Haiku/Opus divergence fix).
     private var assistantEffective: AssistantModelChoice.Effective? {
         guard isMainAssistantChat else { return nil }
+        // The response cache is unobserved; this small revision is the redraw signal after a fresh hub answer.
+        _ = model.assistantLauncherRevision
         return AssistantModelChoice.effective(session: model.session(key), response: model.cachedAssistantLaunchers(key.machineRef))
     }
     /// The model name the composer title and the modes menu row both show for the main chat, from the one effective
@@ -5613,6 +5615,7 @@ struct Composer: View, Equatable {
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                  voice: voiceEntry,
                                  modesTitle: modesTitle,
+                                 modesDisclosure: assistantModelPickAvailable,
                                  quotes: contexts,
                                  alwaysOpen: ChatComposerKind.macCard,
                                  history: key.path,
@@ -5652,7 +5655,8 @@ struct Composer: View, Equatable {
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
                 }
             } else if AppStyle.current.usesBeautifulUI {
-                // The BeautifulUI style's prompt bar; every other style keeps the original input line.
+                // The BeautifulUI style's prompt bar; every other style keeps the original input line. Its direct
+                // model action opens the main chat's Change Model sheet, including on macOS (#6542).
                 PromptComposer(placeholder: status.isActive ? String(localized: "Add a note (queued)") : (suggestion ?? placeholder ?? String(localized: "Message Claude")),
                                text: textBinding, selection: $selection, focused: $focused,
                                hasAttachments: hasAttachments,
@@ -5663,6 +5667,8 @@ struct Composer: View, Equatable {
                                commands: promptCommands,
                                models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model, list: runningModels) : [],
                                modelID: PromptItems.runningModelID(model.session(key)?.model, list: runningModels),
+                               assistantModelName: assistantModelPickAvailable ? (assistantEffectiveName ?? String(localized: "Change Model…")) : nil,
+                               assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil,
                                pickModel: { id in
                                    switch PromptItems.modelPick(id, running: model.session(key)?.model, list: runningModels) {
                                    case .typeID: typingModel = true // #1644: through …/modes
@@ -5898,10 +5904,11 @@ struct Composer: View, Equatable {
             }
         }
         // Keep the effective Main chat model fresh so the composer title matches what the next message runs (#6542):
-        // re-read when the conversation is replaced (/clear) or Model Settings change.
-        .task(id: "\(key.sessionID)-\(model.launchersRevision)") {
+        // re-read when the conversation changes or Model/Assistant settings change. A transcript rev would cancel this
+        // request every streaming tick, so the AppModel invalidates the cache from assistant snapshots instead.
+        .task(id: "\(key.sessionID)-\(model.assistantLauncherRequestRevision)") {
             guard assistantModelPickAvailable else { return }
-            _ = try? await model.assistantLaunchers(key.machineRef)
+            _ = try? await model.assistantLaunchers(key.machineRef, refresh: true)
         }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }

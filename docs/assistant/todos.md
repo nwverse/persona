@@ -44,10 +44,11 @@ takes only `plan` from it (`assistant/tasks_permission.go`). None of this reache
 Auto Accept (their launcher says `auto_accept`; Grok and Paseo's other ACP providers, OpenCode): they start with it on,
 as the owner decided (#8141, `docs/integrations/paseo.md` "Agents Persona starts"). A read-only task's first message adds
 `本任务只读：不改项目文件、不提交、不对外写入` after its own prompt, without changing the saved prompt or duplicating the
-constraint on retries. Codex read-only tasks keep `permission: plan` and the hard read-only sandbox. traex and omp take no
-permission mode or effort, so their tasks start with neither and a read-only one has only the first-message constraint (#7559);
-one the call names is refused. pi, cursor and agy start a writable task the same way, but one the call names is dropped
-rather than refused, as the node ignores it for them (#8151); a read-only task for them is refused (below). Planning, card edits,
+constraint on retries. With the default `assistant.readonly_mode: sandbox`, Codex read-only tasks keep `permission: plan`
+and the hard read-only sandbox. traex and omp take no permission mode or effort, so their tasks start with neither
+and a read-only one has only the first-message constraint (#7559); one the call names is refused. pi, cursor and agy
+start a writable task the same way, but one the call names is dropped rather than refused, as the node ignores it for
+them (#8151); a read-only task for them is refused (below). Planning, card edits,
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
 
@@ -56,10 +57,30 @@ planned (#8316, `assistant/tasks_placement.go` `readonlyLauncherRefusal`): these
 `task_plan` answers `readonly_unsupported` with the launchers on that computer that do take a read-only task (Claude
 Code's and Codex's), and nothing is saved or started. The model may plan the task writable or on one of those; no other
 launcher is put in its place. The same check runs again before a start (a card edited to one of them, a plan saved
-before this). A launcher whose agent the computer's list does not say goes to the node with `plan`, as before, and the
+before this). A launcher whose agent the computer's list does not say keeps the selected protection mode, as above, and the
 node refuses a plan-mode start it cannot hold read-only (below); a start an engine runtime runs is the runtime's to refuse.
 
-Ordinary plan-mode starts keep their existing behavior. For Codex read-only tasks, the node must honor `plan` or refuse
+Advanced users can choose **Settings > Assistant > Read-only task protection > Instructions only**, or use
+`persona_settings` with key `assistant.readonly_mode` and value `prompt`. Agent-initiated changes require the owner's
+confirmation on the phone. The confirmation explains the scope and rollback; denial, dismissal or an Agent answering
+for the owner saves nothing. `sandbox` is the default and restores the existing behavior.
+
+`prompt` keeps `readonly: true` and the first-message constraint, but starts Codex with `permission: default` rather than
+forcing `plan`. The node leaves the launcher's permission arguments and Codex configuration alone; it does not add
+`--sandbox read-only` or a bypass flag. Claude-family tasks and Auto Accept providers retain their existing
+`bypassPermissions` behavior.
+**Instructions only is not a security boundary**: the runtime's normal permissions still apply, including any sandbox
+the owner configured there. The setting is per assistant, independent of the model, and is rechecked on new starts and
+retries (including waiting or older saved plans). It does not restart or change running Agents. Ordinary explicit plan
+starts and helpers preserving their caller's permissions are unchanged.
+
+`persona_settings` list/get/set exposes the effective value. `GET /api/v1/assistant` returns `readonly_mode` as `sandbox`
+or `prompt`, including the default when unset; `PUT /api/v1/assistant` accepts the same values. Writes require a full-role
+caller and an explicit matching manager header or query parameter, as for `default_permission_mode`; other values and
+`null` are rejected without changing settings. The existing Web Settings selection is a direct owner edit. Switch back
+to `sandbox` in Settings or through an owner-confirmed `persona_settings` change to restore the default for future starts.
+
+Ordinary plan-mode starts keep their existing behavior. In `sandbox` mode, for Codex read-only tasks the node must honor `plan` or refuse
 the start. Terminal starts and supported terminal resumes use `--sandbox read-only
 --ask-for-approval never`: no approval can escalate past the sandbox. The node retains that constraint for later
 resumes, including a message that reopens the session. The terminal policy uses `never` because Codex 0.167 no
@@ -82,7 +103,8 @@ change by the user.
 
 Health-space plans and mixed plans still wait for Start. Clients show the Read-only requested label on a waiting plan and
 collapse a started plan to "Started N tasks". The saved task's `permission` is the actual launch mode:
-`bypassPermissions` for Claude and an Auto Accept provider, and `plan` for Codex read-only tasks.
+`bypassPermissions` for Claude and an Auto Accept provider, and, by default, `plan` for Codex read-only tasks
+(`default` in `prompt` mode).
 
 ## Data model
 
@@ -106,12 +128,13 @@ Server state is stored in the hub's Postgres database (read/written by the assis
 - `inbox_item` (text, NOT NULL, DEFAULT ''): the Inbox row it was made from (#6480, `docs/assistant/inbox.md` "Merge rows and Add to to-dos"), `''` for any other to-do. Migration `0512` (manager side). The to-do's page opens the row from it; the row links back through its chain.
 - `project` (text, NOT NULL, DEFAULT ''): the slug of the knowledge-base project the to-do belongs to, `''` for none. Migration `0461` (manager side, #2581, "Project" below). Not a foreign key: projects live in the knowledge base's files.
 - `kind` (text, NOT NULL, DEFAULT ''): `''` for a to-do or a task, `concern` for one of the owner's concerns (#3561, "Concerns" below). Set when it is made, never changed. Migration `0487` (manager side). `done_by` gains `reported` for a concern closed by its report.
-- (Not in the table) `stage`, `stage_kind`, `pr_url`, `delivery`: stage strip, task kind, change link and delivery-card location, stored in settings `assistant.todo_stages`, merged when reading to-dos ("Delivery"). `pr_url` comes from the full PR or merge request link in an Agent's reply; a PR named by number alone ("PR #7350", or "#7350" in a reply that speaks of a PR) becomes a full GitHub URL when its repository is known without guessing: the task's own PRs, the one repository the reply or the to-do's title or notes link, or the repository earlier full links from the same repository root on that computer showed (settings `assistant.repo_roots`, `assistant/pr_number_ref.go`, #7921). Anything ambiguous records nothing.
+- (Not in the table) `stage`, `stage_kind`, `pr_url`, `pr_status`, `delivery`: stage strip, task kind, change link, observed PR facts and delivery-card location, stored in settings `assistant.todo_stages`, merged when reading to-dos ("Delivery"). `pr_url` comes from the full PR or merge request link in an Agent's reply; a PR named by number alone ("PR #7350", or "#7350" in a reply that speaks of a PR) becomes a full GitHub URL when its repository is known without guessing: the task's own PRs, the one repository the reply or the to-do's title or notes link, or the repository earlier full links from the same repository root on that computer showed (settings `assistant.repo_roots`, `assistant/pr_number_ref.go`, #7921). Anything ambiguous records nothing.
   Number-only references are recorded only after GitHub confirms a pull request, normally through the issue response's non-null `pull_request` field (#8248). An issue URL alone is not a delivery PR. If acceptance encounters a stale PR record and verification fails, it removes that record only after confirming an ordinary issue or a missing item with readable PR access; remaining PRs still pass the same delivery gate. A 404 from an inaccessible repository, permission failures, rate limits and transient errors do not discard the record. Item-level 404/422 responses do not pause unrelated PR checks.
   A closeout's explicit `artifact: pr` outranks incidental PR numbers or URL artifacts elsewhere in that reply; full PR links, `#N`, `N` and `owner/repo#N` are supported. If a clipped session-list preview missed that artifact, repairing a confirmed false PR reads only the linked agents' latest full turns, saves a recovered delivery PR together with removal of the false one, and checks the recovered PR before accepting. If the task has no real PR (for example, read-only research whose closeout links only an issue), the confirmed false record and its stale delivery hold are removed without requiring a replacement PR. Normal polling still never fetches a transcript for a clipped preview. A recognizable full PR URL in `task_review.link` is checked ahead of the stored link; an issue URL or number alone is not a PR override.
   `stage_kind` is `code` or `general` (#3380): read-only tasks are general (plan permission alone is not: code tasks start in plan mode to get a plan approved). Otherwise, only nonempty `done_when` with research, investigation, report, plan, triage, cleanup, summary, analysis or doc-review wording and no code wording is general; missing or ambiguous criteria default to code. Code wording includes PR, MR, merge, deploy, release, fix, bug, implement, code, test, commit, build, feature and refactor, with Chinese equivalents. A linked GitHub PR or an HTTPS merge request on any host overrides general. Older clients ignore the new field; the web omits the strip for general tasks and retains its existing task status.
   Mid-task replies (session lists, full followed items and supervisor progress reports) and final handoffs update the same forward-only progress. List snippets ending in an ellipsis and followed items marked with `FullSize` are skipped, without fetching transcripts from the session-list handler. GitHub `/pull/N` and any host's `/merge_requests/N` or `/-/merge_requests/N` links count; bare `MR !N` does not. Web links use `PR #N` or `MR !N` respectively.
   A pending `IxPlan` approval temporarily shows `plan` before review; answering it restores the stored stage, without recording a backwards progress change. Agent-link changes recompute pending plans for both the old and new task. Other permissions and questions never imply plan approval.
+  `pr_status` is additive forge evidence, not another task state: `url`, `state` (`open`, `merged`, `closed`), `draft`, `review`, `checks`, `conflicts`, and `checked_at`. The existing minute deployment pass reads GitHub PRs at most once per ten minutes per open to-do, independently of whether the running hub reports its commit, after its deploy checks and on a deadline of its own (one minute), so slow forge reads never delay a deploy. Failed reads never refresh old facts. Web uses matching facts no older than fifteen minutes and no active Agent or owner decision to show **Waiting for merge**, outside **In progress** but still open, with the existing PR link and blocker labels. A known open PR becoming merged or closed returns an external-event/someone-else hold to the same supervisor's `pending_review`; merging alone never accepts or closes it. Only that hold wakes: a to-do at work, in rework or under review keeps its state; the park must wait on this PR, its `reason` naming the PR by link or as `#N` (`parkWaitsOnPR`; `task_review` asks a supervisor parking on a PR to include its link), so a park for anything else stays until its own time even while the PR is open; it must be the one in place when the PR was read, and the stage's PR is checked under the stage lock first, so a PR replaced while it was read changes neither the facts nor the supervision. A merged observation moves the stage to merge only while the open to-do and its stage still name that PR, checked under the stage lock (`setTaskStageOn`). A personal priority/date hold or an unrelated post-deployment hold is not disturbed. Older clients ignore these facts.
 
 ### 2. todo_spaces table
 Records project workspaces (herdr workspaces) linked as a whole to a to-do:

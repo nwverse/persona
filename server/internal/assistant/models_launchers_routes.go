@@ -505,6 +505,10 @@ func (s *Service) machineLauncherRoutes() {
 			if p, tiers := s.pickerTiers(ctx, mid, usable); len(tiers) > 0 {
 				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
 			}
+			// and the providers left out here for their own-service rule, with why (#8109), as the main chat's has them
+			if skipped := s.ownServiceSkipped(ctx, mid, list, s.requestLang(r)); len(skipped) > 0 {
+				out["unavailable"] = skipped
+			}
 		}
 		apierr.WriteJSON(w, out)
 	})
