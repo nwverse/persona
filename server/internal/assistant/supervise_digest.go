@@ -74,6 +74,10 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.last = now
 	b.mu.Unlock()
 
+	list = s.screenMechanicalSignals(ctx, list, now, prev)
+	if len(list) == 0 {
+		return
+	}
 	web := s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	var order []string
