@@ -236,7 +236,7 @@ func TestLaunchEffortSkipsModelsWithoutLevels(t *testing.T) {
 		args []string
 		want bool
 	}{{nil, false}, {[]string{"--model", "deep"}, true}} {
-		argv := launchArgv("claude", c.args, nil, launchEffort("high", ids, sessionModel(c.args, nil, launchEnv)), "flat", nil)
+		argv := launchArgv("claude", c.args, nil, launchEffort("high", ids, sessionModel(c.args, nil, launchEnv)), "flat", nil, "")
 		if got := slices.Contains(argv, "--effort"); got != c.want {
 			t.Errorf("argv %q: --effort %v, want %v", argv, got, c.want)
 		}

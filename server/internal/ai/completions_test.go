@@ -87,6 +87,137 @@ func TestChatCompletionsStreaming(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsReasoningEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name, effort, want string
+	}{
+		{name: "unset preserves the old body"},
+		{name: "explicit", effort: "high", want: "high"},
+		{name: "off", effort: "off", want: "none"},
+		{name: "none", effort: "none", want: "none"},
+		{name: "disabled", effort: "disabled", want: "none"},
+		{name: "max passes through like Responses", effort: "max", want: "max"},
+		{name: "unknown level is left to upstream like Responses", effort: "ultra", want: "ultra"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw []byte
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var err error
+				raw, err = io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer s.Close()
+			_, err := New(Config{API: "chat", BaseURL: s.URL, APIKey: "example-key", Model: "model", ReasoningEffort: tc.effort}).Chat(context.Background(),
+				Request{Messages: []Message{{RoleUser, "hi"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.effort == "" {
+				want := `{"messages":[{"role":"user","content":"hi"}],"model":"model","stream":true,"stream_options":{"include_usage":true}}`
+				if string(raw) != want {
+					t.Fatalf("body changed without effort:\n got %s\nwant %s", raw, want)
+				}
+				return
+			}
+			var body map[string]any
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["reasoning_effort"] != tc.want {
+				t.Fatalf("reasoning_effort = %v, want %q; body %v", body["reasoning_effort"], tc.want, body)
+			}
+		})
+	}
+}
+
+func TestChatRejectsReasoningEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"unsupported parameter", `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`, true},
+		{"parameter named by param", `{"error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
+		{"unknown argument", `{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}`, true},
+		{"extra field", `{"detail":[{"loc":["body","reasoning_effort"],"msg":"Extra inputs are not permitted"}]}`, true},
+		{"field not supported", `{"error":{"message":"reasoning_effort is not supported"}}`, true},
+		{"unsupported value", `{"error":{"message":"Unsupported value: 'max'. Supported values are: 'low', 'high'.","param":"reasoning_effort"}}`, false},
+		{"unsupported named level", `{"error":{"message":"unsupported reasoning_effort \"ultra\""}}`, false},
+		{"operator ceiling", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, false},
+		{"ceiling code wins over generic message", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
+		{"invalid value code wins over generic message", `{"error":{"code":"invalid_value","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
+		{"invalid value", `{"error":{"message":"reasoning_effort must be a non-empty string"}}`, false},
+		{"other field", `{"error":{"message":"Unsupported parameter: stream_options"}}`, false},
+		{"echoed effort does not associate another field's error", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, false},
+		{"unassociated details do not associate a generic error", `{"error":{"message":"Unsupported parameter","details":{"reasoning_effort":"high"}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ChatRejectsReasoningEffort([]byte(tc.body)); got != tc.want {
+				t.Fatalf("ChatRejectsReasoningEffort() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChatCompletionsReasoningEffortRetry(t *testing.T) {
+	oldLog := logf
+	var logs []string
+	logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	t.Cleanup(func() { logf = oldLog })
+	for _, tc := range []struct {
+		name, rejection      string
+		rejections, requests int
+		ok                   bool
+		wantLogs             int
+	}{
+		{"field rejected", `{"error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`, 1, 2, true, 1},
+		{"field rejected twice", `{"error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`, 2, 2, false, 1},
+		{"value rejected", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, 1, 1, false, 0},
+		{"ceiling rejected", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, 1, 1, false, 0},
+		{"ceiling code with generic message", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 1, false, 0},
+		{"another parameter rejected", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, 1, 1, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs = nil
+			var requests []map[string]any
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				requests = append(requests, body)
+				if len(requests) <= tc.rejections {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, tc.rejection)
+					return
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer s.Close()
+			reply, err := New(Config{API: "chat", BaseURL: s.URL, APIKey: "example-key", Model: "model", ReasoningEffort: "high"}).Chat(context.Background(), Request{})
+			if len(requests) != tc.requests || (err == nil) != tc.ok || tc.ok && reply.Text != "ok" {
+				t.Fatalf("reply=%+v err=%v requests=%v", reply, err, requests)
+			}
+			if requests[0]["reasoning_effort"] != "high" {
+				t.Fatalf("first request: %v", requests[0])
+			}
+			if tc.requests == 2 {
+				if _, present := requests[1]["reasoning_effort"]; present {
+					t.Fatalf("retry kept the rejected field: %v", requests[1])
+				}
+			}
+			if len(logs) != tc.wantLogs {
+				t.Fatalf("retry logs = %q, want %d", logs, tc.wantLogs)
+			}
+			if tc.wantLogs == 1 && (!strings.Contains(logs[0], "reasoning_effort") || !strings.Contains(logs[0], "without")) {
+				t.Fatalf("degradation log = %q", logs)
+			}
+		})
+	}
+}
+
 func TestChatCompletionsTokenParameterRetry(t *testing.T) {
 	for _, test := range []struct {
 		name, errorMessage string

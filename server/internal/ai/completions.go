@@ -24,8 +24,9 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 	if r.MaxTokens > 0 {
 		body["max_tokens"] = r.MaxTokens
 	}
-	// Each rejected field is changed at most once, so one call sends at most three requests.
-	renamedTokens, droppedStreamOptions := false, false
+	ApplyReasoningEffort(body, "chat", c.cfg.Model, c.cfg.ReasoningEffort)
+	// Each rejected field is changed at most once, so independent compatibility retries stay bounded.
+	renamedTokens, droppedStreamOptions, droppedEffort := false, false, false
 	for {
 		encoded, _ := json.Marshal(body)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiEndpoint(c.cfg.BaseURL, "chat/completions"), bytes.NewReader(encoded))
@@ -44,8 +45,14 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			resp.Body.Close()
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
-			// reject stream_options. Retry only those rejected requests; arbitrary 400s and already-started
-			// streams must never be replayed.
+			// reject stream_options or reasoning_effort. Retry only those rejected requests; arbitrary 400s,
+			// invalid effort values, policy ceilings and already-started streams must never be replayed.
+			if !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && ChatRejectsReasoningEffort(raw) {
+				droppedEffort = true
+				delete(body, "reasoning_effort")
+				logf("ai: chat/completions: gateway rejected reasoning_effort; retrying once without it")
+				continue
+			}
 			if !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
 				renamedTokens = true
 				delete(body, "max_tokens")
@@ -78,6 +85,94 @@ func ChatRequiresCompletionTokens(raw []byte) bool {
 	message := strings.ToLower(envelope.Error.Message)
 	return strings.Contains(message, "max_tokens") && strings.Contains(message, "max_completion_tokens") &&
 		(strings.Contains(message, "unsupported") || strings.Contains(message, "not supported"))
+}
+
+// ChatRejectsReasoningEffort reports an error body that rejects the reasoning_effort parameter itself. An unsupported
+// level, an invalid value or an operator ceiling is a different error and must keep its original response. Callers
+// restrict this compatibility retry to the HTTP status they accept.
+func ChatRejectsReasoningEffort(raw []byte) bool {
+	var envelope struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+		Detail  []struct {
+			Loc []any  `json:"loc"`
+			Msg string `json:"msg"`
+		} `json:"detail"`
+	}
+	if json.Unmarshal(raw, &envelope) == nil {
+		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+			var object struct {
+				Message string `json:"message"`
+				Param   string `json:"param"`
+				Code    string `json:"code"`
+			}
+			if json.Unmarshal(envelope.Error, &object) == nil {
+				if chatReasoningValueCode(object.Code) {
+					return false
+				}
+				return chatReasoningFieldError(object.Message, object.Param)
+			}
+			var message string
+			return json.Unmarshal(envelope.Error, &message) == nil && chatReasoningFieldError(message, "")
+		}
+		if envelope.Message != "" {
+			return chatReasoningFieldError(envelope.Message, "")
+		}
+		for _, detail := range envelope.Detail {
+			for _, part := range detail.Loc {
+				if part == "reasoning_effort" && chatReasoningFieldError(detail.Msg, "reasoning_effort") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return chatReasoningFieldError(string(raw), "")
+}
+
+// chatReasoningValueCode vetoes a retry when a structured error code already identifies a value or policy rejection,
+// even if the message is only a generic "unsupported parameter".
+func chatReasoningValueCode(code string) bool {
+	code = strings.ToLower(strings.TrimSpace(code))
+	for _, marker := range []string{"ceiling", "unsupported_value", "invalid_value", "unsupported_reasoning_effort", "invalid_reasoning_effort"} {
+		if strings.Contains(code, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// chatReasoningFieldError matches only the error's own message and parameter, never an echoed request in its details.
+func chatReasoningFieldError(message, param string) bool {
+	message = strings.ToLower(message)
+	param = strings.ToLower(strings.TrimSpace(param))
+	if param != "" && param != "reasoning_effort" {
+		return false
+	}
+	if !strings.Contains(message, "reasoning_effort") && param != "reasoning_effort" {
+		return false
+	}
+	for _, valueError := range []string{
+		"unsupported value", "invalid value", "supported values", "unsupported reasoning_effort", "invalid reasoning_effort",
+		"reasoning_effort_above_ceiling", "reasoning_effort must be",
+	} {
+		if strings.Contains(message, valueError) {
+			return false
+		}
+	}
+	for _, fieldError := range []string{
+		"unsupported parameter", "not supported parameter", "unknown parameter", "unrecognized parameter",
+		"unrecognized request argument", "unknown field", "unrecognized field", "unexpected field",
+		"extra inputs are not permitted", "additional properties are not allowed",
+	} {
+		if strings.Contains(message, fieldError) {
+			return true
+		}
+	}
+	// Gateways quote JSON strings inside their error message differently. Ignore quoting and whitespace only for the
+	// field-only "reasoning_effort is not supported" form; a named value between those words does not match.
+	compact := strings.NewReplacer(`\`, "", `"`, "", `'`, "", " ", "", "\t", "", "\r", "", "\n", "").Replace(message)
+	return strings.Contains(compact, "reasoning_effortisnotsupported")
 }
 
 // chatRejectsStreamOptions recognizes an error body that names the stream_options field. Such a server then
