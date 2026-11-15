@@ -5,9 +5,7 @@ import { EASE } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { useModalFocus } from "../../ui/overlay";
 
-/** The draft full screen on a phone (#5688): collapse at the top right, the text filling the visible height, send at the
- *  bottom right. It edits the box's own draft; closing hands back the caret so the box picks up where this left off. */
-export function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, blocked, onSend }: {
+type ExpandedProps = {
   value: string;
   placeholder: string;
   selection: [number, number];
@@ -16,7 +14,18 @@ export function ExpandedComposer({ value, placeholder, selection, onChange, onCo
   canSend: boolean;
   blocked: boolean;
   onSend: (sel: [number, number], repeat?: boolean) => void;
-}) {
+};
+
+type SuggestionProps = { text: string; onFill: () => void; onSend?: () => void };
+
+/** Both conditional composer overlays share one chunk and one first-screen loader. */
+export function ComposerOverlay(props: ExpandedProps | SuggestionProps) {
+  return "value" in props ? <ExpandedComposer {...props} /> : <SuggestionPill {...props} />;
+}
+
+/** The draft full screen on a phone (#5688): collapse at the top right, the text filling the visible height, send at the
+ *  bottom right. It edits the box's own draft; closing hands back the caret so the box picks up where this left off. */
+function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, blocked, onSend }: ExpandedProps) {
   const panel = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const start = useRef(selection);
@@ -92,7 +101,7 @@ export function ExpandedComposer({ value, placeholder, selection, onChange, onCo
 
 /** The suggested next message over the box (iOS SuggestionPill): the row fills it in, the arrow sends it as it is; a
  *  risky one (no onSend) has no arrow (#4644). */
-export function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => void; onSend?: () => void }) {
+function SuggestionPill({ text, onFill, onSend }: SuggestionProps) {
   return (
     <div data-testid="composer-suggestion" className="mb-2 flex items-center gap-1 rounded-full bg-surface p-1 pl-1 shadow-card" style={{ animation: `fade-up 200ms ${EASE} both` }}>
       <button

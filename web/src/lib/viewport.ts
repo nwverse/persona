@@ -87,16 +87,13 @@ function stopMouseWatch() {
   mediaList(FINE)?.removeEventListener("change", mousePointer);
 }
 
-function mousePointer(e: PointerEvent | MediaQueryListEvent) {
+function mousePointer(e?: PointerEvent | MediaQueryListEvent) {
   // The media listener also covers an imperative hasFinePointer() caller with no hook mounted.
-  if ("matches" in e) {
-    if (e.matches) stopMouseWatch();
-    return;
-  }
-  // Only a mouse proves the query wrong. A stylus already matches any-pointer:fine where reported correctly; promoting
-  // pen would change the keyboard on a pen-only touch device, and touch's compatibility mouse events are not pointer events.
-  if (e.pointerType !== "mouse") return;
-  sawMouse = true;
+  // Only a mouse proves the query wrong; a correctly reported stylus already matches fine, and touch must not promote.
+  if (e && "pointerType" in e) {
+    if (e.pointerType !== "mouse") return;
+    sawMouse = true;
+  } else if (!matches(FINE)) return;
   stopMouseWatch();
   fineListeners.forEach((listener) => listener());
 }
@@ -113,20 +110,17 @@ function watchMouse() {
  *  mouse pointer is seen it stays true for this page, even on Windows browsers that misreport the media query. */
 export function hasFinePointer(): boolean {
   if (sawMouse) return true;
-  if (matches(FINE)) {
-    stopMouseWatch();
-    return true;
-  }
-  watchMouse();
-  return false;
+  const fine = matches(FINE);
+  if (fine) stopMouseWatch();
+  else watchMouse();
+  return fine;
 }
 
 /** Whether Enter (without Shift) sends: with a precise pointer, yes; on a touch screen alone it is a new line there and
  *  only the button sends. Mod+Enter always sends, but Mod+Alt+Enter is left out: that is the waiting-card shortcut
  *  (lib/shortcuts.ts), and the composer must not swallow the key before the shortcut dispatcher sees it. */
 export function enterSends(e: { key: string; shiftKey: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }, fine: boolean): boolean {
-  const mod = e.ctrlKey || e.metaKey;
-  return e.key === "Enter" && !e.shiftKey && (mod ? !e.altKey : fine);
+  return e.key === "Enter" && !e.shiftKey && (e.ctrlKey || e.metaKey ? !e.altKey : fine);
 }
 
 /** The narrow layout (below lg: the sidebar is a drawer, the side panel covers the page): Tailwind's `max-lg:`, kept in step. */

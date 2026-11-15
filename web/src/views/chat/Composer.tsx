@@ -46,8 +46,7 @@ import type { VoiceOffer } from "./voice/VoiceParts";
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
 // The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
-const ExpandedComposer = lazyPage(() => import("./ComposerOverlays").then((m) => m.ExpandedComposer));
-const SuggestionPill = lazyPage(() => import("./ComposerOverlays").then((m) => m.SuggestionPill));
+const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay), { idle: true });
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
@@ -224,7 +223,7 @@ export const Composer = memo(function Composer({
     const timer = setTimeout(() => setNudge(0), NUDGE_MS);
     return () => clearTimeout(timer);
   }, [nudge]);
-  const nudgeBlocked = (repeat: boolean) => {
+  const nudgeBlocked = (repeat?: boolean) => {
     setNudge((n) => n + 1);
     // held down, the key repeats: one fresh ask, not one per repeat
     if (!repeat) blocked?.onNudge?.();
@@ -456,9 +455,6 @@ export const Composer = memo(function Composer({
     setGrow((g) => (g.cap === cap && g.over === over ? g : { cap, over }));
   }, [draft, compact, grow.over]);
   const showExpand = compact && grow.over && !disabled;
-  useEffect(() => {
-    if (showExpand) void ExpandedComposer.preload().catch(() => {});
-  }, [showExpand]);
   useEffect(() => {
     if (!compact || disabled) setExpanded(false);
   }, [compact, disabled]);
@@ -838,7 +834,7 @@ export const Composer = memo(function Composer({
         </Suspense>
       )}
 
-      {pill && <Suspense fallback={null}><SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} /></Suspense>}
+      {pill && <Suspense fallback={null}><ComposerOverlay text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} /></Suspense>}
 
       <div
         className={cx(
@@ -1133,7 +1129,7 @@ export const Composer = memo(function Composer({
       </div>
       {expanded && (
         <Suspense fallback={null}>
-          <ExpandedComposer
+          <ComposerOverlay
             value={draft}
             placeholder={placeholder}
             selection={[input.current?.selectionStart ?? draft.length, input.current?.selectionEnd ?? draft.length]}
@@ -1147,7 +1143,7 @@ export const Composer = memo(function Composer({
             }}
             canSend={Boolean(canSend) && !blocked}
             blocked={Boolean(blocked)}
-            onSend={(sel, repeat = false) => {
+            onSend={(sel, repeat) => {
               collapsedSel.current = sel;
               setExpanded(false);
               if (blocked) nudgeBlocked(repeat);
