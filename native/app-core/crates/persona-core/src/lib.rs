@@ -3,12 +3,17 @@
 
 #![forbid(unsafe_code)]
 
+mod apple_text;
+mod compat;
+
 pub mod answer;
 pub mod continuity;
 pub mod item;
 pub mod recents;
 pub mod sort;
 pub mod state;
+pub mod stream_chunks;
 pub mod transport;
+pub mod turns;
 
 pub use item::Item;

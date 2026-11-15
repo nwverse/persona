@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // A supervisor's accepted closes a task, so with assistant.done_needs_delivery on ("a finished task closes only once
@@ -23,6 +25,24 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	pr := t.PRURL
 	if ciPRURL.MatchString(link) {
 		pr = link
+	} else {
+		replacement, noPR, err := s.reportedTaskPR(ctx, t, pr)
+		if err != nil {
+			return err
+		}
+		if noPR || replacement != "" && replacement != pr {
+			if err := s.forgetTaskPR(ctx, t.ID, pr, replacement); err != nil {
+				return err
+			}
+			current, ok := s.todoNow(t.ID)
+			if !ok {
+				return fmt.Errorf("task %s no longer exists", t.ID)
+			}
+			if current.PRURL != replacement {
+				return fmt.Errorf("task %s: its delivery record changed during verification; retry the review", t.ID)
+			}
+			t, pr = current, current.PRURL
+		}
 	}
 	m := ciPRURL.FindStringSubmatch(pr)
 	if m == nil {
@@ -50,11 +70,13 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		isPR, err := s.forge().IsPR(cctx, m[1], number)
 		cancel()
 		if err == nil && !isPR {
-			replacement, err := s.reportedTaskPR(ctx, t, pr)
-			if err != nil {
-				return err
+			for _, previous := range t.PRs {
+				if previous != pr {
+					return fmt.Errorf("task %s: earlier PR references have no delivery ownership evidence; "+
+						"report this task's explicit delivery artifact or completed non-PR closeout before accepting", t.ID)
+				}
 			}
-			if err := s.forgetTaskPR(ctx, t.ID, pr, replacement); err != nil {
+			if err := s.forgetTaskPR(ctx, t.ID, pr, ""); err != nil {
 				return err
 			}
 			current, ok := s.todoNow(t.ID)
@@ -64,12 +86,17 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 			if current.PRURL == pr {
 				return fmt.Errorf("task %s: its non-PR record changed during verification; retry the review", t.ID)
 			}
-			// The removed link may have hidden an earlier, real PR. Apply the same delivery gate to that one.
+			// A concurrent, genuine delivery still has to pass the gate; reference history is not ownership proof.
 			return s.acceptedDeliveryError(ctx, current, "", outcome)
 		}
 	}
 	if !r.held() {
 		return nil
+	}
+	if r.State == deployUnknown || r.State == deployNotIn && r.Err != nil {
+		s.logf("task %s: delivery status temporarily unverifiable: %v", t.ID, r.Err)
+		return fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
+			i18n.Args{"task": t.ID, "pr": pr, "reason": fmt.Sprint(r.Err)}))
 	}
 	why := map[string]string{
 		deployUnmerged: "the PR is not merged",

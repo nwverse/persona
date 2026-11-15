@@ -427,6 +427,10 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
 	placed, placedWhy, placedPermission := t.Machine, t.Why, t.Permission
+	if t.Role == roleLeader { // legacy one-shot tool discovery may wait for this link (task_leader.go)
+		s.leaderStarts.Add(1)
+		defer s.leaderStarts.Add(-1)
+	}
 	t.Permission = strings.TrimSpace(t.Permission)
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	var lost startLinkLost
