@@ -498,6 +498,10 @@ const (
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
 
+// CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
+// #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
+const CodeAgentStopped = "agent_stopped"
+
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
 // the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine
 // ("claude" or "codex") a switch to another engine moves the conversation to (#5054, docs/protocol/protocol.md

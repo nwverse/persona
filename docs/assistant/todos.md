@@ -44,10 +44,11 @@ takes only `plan` from it (`assistant/tasks_permission.go`). None of this reache
 Auto Accept (their launcher says `auto_accept`; Grok and Paseo's other ACP providers, OpenCode): they start with it on,
 as the owner decided (#8141, `docs/integrations/paseo.md` "Agents Persona starts"). A read-only task's first message adds
 `本任务只读：不改项目文件、不提交、不对外写入` after its own prompt, without changing the saved prompt or duplicating the
-constraint on retries. Codex read-only tasks keep `permission: plan` and the hard read-only sandbox. traex and omp take no
-permission mode or effort, so their tasks start with neither and a read-only one has only the first-message constraint (#7559);
-one the call names is refused. pi, cursor and agy start a writable task the same way, but one the call names is dropped
-rather than refused, as the node ignores it for them (#8151); a read-only task for them is refused (below). Planning, card edits,
+constraint on retries. With the default `assistant.readonly_mode: sandbox`, Codex read-only tasks keep `permission: plan`
+and the hard read-only sandbox. traex and omp take no permission mode or effort, so their tasks start with neither
+and a read-only one has only the first-message constraint (#7559); one the call names is refused. pi, cursor and agy
+start a writable task the same way, but one the call names is dropped rather than refused, as the node ignores it for
+them (#8151); a read-only task for them is refused (below). Planning, card edits,
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
 
@@ -56,10 +57,30 @@ planned (#8316, `assistant/tasks_placement.go` `readonlyLauncherRefusal`): these
 `task_plan` answers `readonly_unsupported` with the launchers on that computer that do take a read-only task (Claude
 Code's and Codex's), and nothing is saved or started. The model may plan the task writable or on one of those; no other
 launcher is put in its place. The same check runs again before a start (a card edited to one of them, a plan saved
-before this). A launcher whose agent the computer's list does not say goes to the node with `plan`, as before, and the
+before this). A launcher whose agent the computer's list does not say keeps the selected protection mode, as above, and the
 node refuses a plan-mode start it cannot hold read-only (below); a start an engine runtime runs is the runtime's to refuse.
 
-Ordinary plan-mode starts keep their existing behavior. For Codex read-only tasks, the node must honor `plan` or refuse
+Advanced users can choose **Settings > Assistant > Read-only task protection > Instructions only**, or use
+`persona_settings` with key `assistant.readonly_mode` and value `prompt`. Agent-initiated changes require the owner's
+confirmation on the phone. The confirmation explains the scope and rollback; denial, dismissal or an Agent answering
+for the owner saves nothing. `sandbox` is the default and restores the existing behavior.
+
+`prompt` keeps `readonly: true` and the first-message constraint, but starts Codex with `permission: default` rather than
+forcing `plan`. The node leaves the launcher's permission arguments and Codex configuration alone; it does not add
+`--sandbox read-only` or a bypass flag. Claude-family tasks and Auto Accept providers retain their existing
+`bypassPermissions` behavior.
+**Instructions only is not a security boundary**: the runtime's normal permissions still apply, including any sandbox
+the owner configured there. The setting is per assistant, independent of the model, and is rechecked on new starts and
+retries (including waiting or older saved plans). It does not restart or change running Agents. Ordinary explicit plan
+starts and helpers preserving their caller's permissions are unchanged.
+
+`persona_settings` list/get/set exposes the effective value. `GET /api/v1/assistant` returns `readonly_mode` as `sandbox`
+or `prompt`, including the default when unset; `PUT /api/v1/assistant` accepts the same values. Writes require a full-role
+caller and an explicit matching manager header or query parameter, as for `default_permission_mode`; other values and
+`null` are rejected without changing settings. The existing Web Settings selection is a direct owner edit. Switch back
+to `sandbox` in Settings or through an owner-confirmed `persona_settings` change to restore the default for future starts.
+
+Ordinary plan-mode starts keep their existing behavior. In `sandbox` mode, for Codex read-only tasks the node must honor `plan` or refuse
 the start. Terminal starts and supported terminal resumes use `--sandbox read-only
 --ask-for-approval never`: no approval can escalate past the sandbox. The node retains that constraint for later
 resumes, including a message that reopens the session. The terminal policy uses `never` because Codex 0.167 no
@@ -82,7 +103,8 @@ change by the user.
 
 Health-space plans and mixed plans still wait for Start. Clients show the Read-only requested label on a waiting plan and
 collapse a started plan to "Started N tasks". The saved task's `permission` is the actual launch mode:
-`bypassPermissions` for Claude and an Auto Accept provider, and `plan` for Codex read-only tasks.
+`bypassPermissions` for Claude and an Auto Accept provider, and, by default, `plan` for Codex read-only tasks
+(`default` in `prompt` mode).
 
 ## Data model
 
