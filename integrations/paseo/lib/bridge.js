@@ -68,6 +68,8 @@ const EXPIRY_SLACK = 60_000 // ms: a dismissal this near the end is its time run
 const AT_ONCE = 5000 // ms
 // A launcher check (check): the probe's answer within this, and the rest of the node's 90 s for creating and cleaning up.
 const CHECK_WAIT = 70_000 // ms
+// A read of an agent Paseo let go that no watch asked for (timeline): refused as not_loaded, which the hub words.
+const NOT_LOADED = "This agent isn't running in Paseo: its conversation is read while its chat is open. Nothing was read."
 
 /**
  * @param {{ paseo?: object, log?: (msg: string) => void, connect?: (path: string) => import('node:net').Socket }} [deps]
@@ -1259,17 +1261,39 @@ export function createPaseoBridge(deps = {}, options = {}) {
     return res
   }
 
-  /** An agent's whole conversation as items (read again only when the agent moved). */
-  async function timeline(agent) {
+  /**
+   * Whether Paseo let the agent go: closed (its idle runtime collected) or archived (archivedRows). Paseo loads such an
+   * agent to answer any request about its timeline, relaunching its provider (0.15.4 ensureAgentLoaded: no read leaves
+   * it stored), so only a person loads one: a watch of its chat, a send, a rewind, a mode change (#8132).
+   */
+  const unloaded = (agent) => agent?.status === 'closed' || Boolean(agent?.archivedAt)
+
+  /**
+   * An agent's whole conversation as items (read again only when the agent moved). load: the read may load an agent
+   * Paseo let go (unloaded), as a watch's may. Any other read of one (the manager's, an app's background sync) gets the
+   * last whole read while that is all of it (taken once it stopped, at the updatedAt it has now: a stored conversation
+   * does not change), else is refused (not_loaded), asking Paseo nothing.
+   */
+  async function timeline(agent, o = {}) {
     const key = `${agent.updatedAt}|${agent.status}`
     const c = timelines.get(agent.id)
     if (c && c.key === key && (agent.status !== 'running' || Date.now() - c.at < 500)) {
       keepTimeline(agent.id, c)
       return c
     }
+    if (unloaded(agent) && !o.load) {
+      if (c?.stopped && c.updatedAt === agent.updatedAt) {
+        keepTimeline(agent.id, c)
+        return c
+      }
+      throw new RpcError(NOT_LOADED, 'not_loaded')
+    }
     const res = await fetchTimeline(agent.id)
-    const tl = timelineItems(res.entries, { maxSeq: res.window?.maxSeq, running: isRunning(res.agent ?? agent), echoes })
-    const out = { key, at: Date.now(), tl, history: history(agent.id, res.epoch), epoch: res.epoch }
+    const running = isRunning(res.agent ?? agent)
+    const tl = timelineItems(res.entries, { maxSeq: res.window?.maxSeq, running, echoes })
+    // When the read is all of the conversation: Paseo answers with the agent as it is once loaded.
+    const out = { key, at: Date.now(), tl, history: history(agent.id, res.epoch), epoch: res.epoch,
+      updatedAt: res.agent?.updatedAt ?? agent.updatedAt, stopped: !running }
     keepTimeline(agent.id, out)
     if (tl.lastText) lastTexts.set(agent.id, tl.lastText)
     return out
@@ -1292,9 +1316,14 @@ export function createPaseoBridge(deps = {}, options = {}) {
 
   const isRunning = (a) => a?.status === 'running' || a?.status === 'initializing' || Boolean(a?.activeTurn)
 
+  // A read may load an agent Paseo let go (timeline) while its session is watched: every app watches a chat it opens
+  // (the web and Android just after their first page, which the watch's backlog sends again), and the manager the turn
+  // of a message a channel delivered; nothing else watches.
+  const mayLoad = (sessionId) => watches.has(sessionId)
+
   async function items(params) {
     const agent = agentFor(params.session_id)
-    const t = await timeline(agent)
+    const t = await timeline(agent, { load: mayLoad(params.session_id) })
     const res = page(t.tl.items, params, { history: t.history, toSeq: t.tl.toSeq })
     const w = watches.get(params.session_id)
     if (w && !w.transcript && params.after_seq !== undefined && typeof res.to_seq === 'number') {
@@ -1308,7 +1337,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
 
   async function cursor(sessionId) {
     const agent = agentFor(sessionId)
-    const t = await timeline(agent)
+    const t = await timeline(agent, { load: mayLoad(sessionId) }) // asked by a watch as it starts
     const w = watches.get(sessionId)
     if (w && !w.transcript) {
       w.last = t.tl.toSeq
@@ -1320,7 +1349,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
 
   async function item(params) {
     const agent = agentFor(params.session_id)
-    const t = await timeline(agent)
+    const t = await timeline(agent, { load: mayLoad(params.session_id) })
     const it = t.tl.items.find((x) => x.id === params.item_id)
     if (!it) throw new RpcError(`no item ${params.item_id}`, 'not_found')
     return it
@@ -2185,6 +2214,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
     try {
       const agent = agents.get(w.agentId)?.agent
       if (!agent || !paseo.connected) return
+      // Paseo let it go while its chat was open: a stored conversation does not change, and reading it would load it
+      // again each time (#8132). A watch moved to another agent (switched) reads the one it shows now, as opening does.
+      if (unloaded(agent) && !w.switched) return
       // Another agent's timeline (switched) is read whole, whatever a page read of it set meanwhile.
       const incremental = !w.switched && w.epoch !== undefined && w.safe !== undefined
       let res = await fetchTimeline(agent.id, incremental ? { epoch: w.epoch, seq: w.safe } : undefined)
