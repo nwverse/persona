@@ -633,6 +633,8 @@ export interface Item {
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   is_error?: boolean;
+  /** The runtime's own outcome, when the node recorded one (docs/protocol/protocol.md "Tool outcomes"). */
+  outcome?: { status?: string; exit_code?: number };
   full_size?: number;
   queued?: boolean;
   wake?: boolean;
