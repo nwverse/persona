@@ -209,6 +209,44 @@ final class CallGraphTests: XCTestCase {
         XCTAssertTrue(why.contains("may pass it on as a value"), why)
     }
 
+    func testAFunctionInAStringInterpolationIsCalledOnlyByAnInterpolationThatTakesOne() {
+        // The default interpolation prints a function as "(Function)". An `appendInterpolation` of the sources that
+        // takes a function unlabeled may call it, so there the name is handed on (#7578).
+        expect("""
+        nonisolated func label() -> String { _ = try? Data(contentsOf: url); return "" } // off
+        func screen() -> String {
+            Task.detached { _ = label() }
+            return "\\(label)"
+        }
+        """)
+        let findings = expect("""
+        nonisolated func label() -> String { _ = try? Data(contentsOf: url); return "" } // unknown
+        extension DefaultStringInterpolation {
+            mutating func appendInterpolation(_ make: () -> String) { appendLiteral(make()) }
+        }
+        func screen() -> String {
+            Task.detached { _ = label() }
+            return "\\(label)"
+        }
+        """)
+        let why = findings.first?.reason ?? ""
+        XCTAssertTrue(why.contains("passes it on as a value"), why)
+    }
+
+    func testACallInAStringInterpolationIsACall() {
+        expect("""
+        nonisolated func count() -> Int { (try? Data(contentsOf: url))?.count ?? 0 } // main
+        nonisolated final class Queue: Sendable {
+            func pending() -> Data? { try? Data(contentsOf: url) } // main
+        }
+        func show(_ work: @escaping () -> Int) -> String { "\\(work())" }
+        func screen(_ queue: Queue) -> [String] {
+            Task.detached { _ = count(); _ = queue.pending() }
+            return [show { count() }, "\\(queue.pending()) waiting"]
+        }
+        """)
+    }
+
     func testWhatObjectiveCCanCallIsUnknown() {
         expect("""
         import UIKit

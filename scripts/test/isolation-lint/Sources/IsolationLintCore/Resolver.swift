@@ -207,6 +207,8 @@ public final class Lint {
     var typeVariables: Set<String> = []
     var metatypes: Set<String> = []
     var declaredFunctionNames: Set<String> = []
+    /// An `appendInterpolation` of the sources takes a function unlabeled, so `"\(x.name)"` may call what it names.
+    var interpolationTakesFunctions = false
     var propertyFramesByName: [String: [(file: Int, frame: Int)]] = [:]
 
     public struct Input: Sendable {
@@ -255,6 +257,9 @@ public final class Lint {
                 if case .function(let info) = frame.kind {
                     functionsByName[info.name, default: []].append((f, i))
                     declaredFunctionNames.insert(info.name)
+                    if info.name == "appendInterpolation", let first = info.parameters.first, first.label == nil, first.isFunctionType {
+                        interpolationTakesFunctions = true
+                    }
                 }
                 if case .property(let info) = frame.kind {
                     for name in info.names { propertyFramesByName[name, default: []].append((f, i)) }
@@ -277,6 +282,11 @@ public final class Lint {
     }
 
     private struct ConfigKey: Hashable { var defaultMain: Bool; var nonsending: Bool }
+
+    /// The reference reads a value and cannot hand a function on: see `NameReference.readsValue` and `.interpolated`.
+    func readsValue(_ reference: NameReference) -> Bool {
+        reference.readsValue || (reference.interpolated && !interpolationTakesFunctions)
+    }
 
     static func last(_ qualified: String) -> String {
         qualified.split(separator: ".").last.map(String.init) ?? qualified
@@ -806,7 +816,7 @@ public final class Lint {
                 for (file, index) in referencesByName[name] ?? [] {
                     let reference = files[file].references[index]
                     if reference.indirect != .no { unseen.append("\(files[file].path):\(reference.line) names the property in a key path"); continue }
-                    guard !reference.readsValue, reaches(reference.receiver, file: file, frame: reference.frame, member) != .no else { continue }
+                    guard !readsValue(reference), reaches(reference.receiver, file: file, frame: reference.frame, member) != .no else { continue }
                     unseen.append("\(files[file].path):\(reference.line) may read the closure without calling it")
                 }
             }
@@ -863,7 +873,7 @@ public final class Lint {
                 for one in config { nodes.append(Edge(node: Node(file: f, frame: call.frame, config: one), line: call.line)) }
             }
             for reference in files[f].references where reference.name == parameter.name && reference.receiver == .none
-                && !reference.readsValue && isInside(f, reference.frame, frame) {
+                && !readsValue(reference) && isInside(f, reference.frame, frame) {
                 called = true
                 unseen.append("\(here) passes the closure on at line \(reference.line)")
             }
@@ -1325,7 +1335,7 @@ public final class Lint {
                 let reference = files[file].references[index]
                 // A key path names a property. `.name` alone is a value of the type the context asks for, and what
                 // is read, indexed or assigned to is not a function handed on.
-                if reference.indirect == .keyPath || reference.readsValue || reference.receiver == .implicit { continue }
+                if reference.indirect == .keyPath || readsValue(reference) || reference.receiver == .implicit { continue }
                 // `return x.name` from a function that returns a named type: a value, not a function.
                 if reference.returned, case .function(let around) = files[file].frames[reference.frame].kind,
                    let returns = around.returns, returns != "(function)", !isTypeVariable(returns), aliases[returns] == nil { continue }

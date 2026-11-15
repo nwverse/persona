@@ -157,6 +157,9 @@ struct NameReference: Sendable {
     /// The base of a further member access, a subscript, an operand or a condition: a value is read here, a function
     /// is not passed on.
     var readsValue: Bool
+    /// The sole, unlabeled expression of a string interpolation (`"\(x.name)"`): the default interpolation describes a
+    /// function there and never calls it, but an `appendInterpolation` of the sources may take one.
+    var interpolated = false
     /// An argument of a call: the callee's path (`["urls", "map"]`).
     var argumentOf: [String]?
     /// What a function returns (`return x.name`, or its whole body): `frame` is that function.
@@ -1005,14 +1008,18 @@ private final class Collector: SyntaxVisitor {
                 return element.as(BinaryOperatorExprSyntax.self)?.operator.text == "??"
             }
         }
-        // `"\(x.name)"`: an interpolation describes the value, and a function there is printed, never called. The
-        // expression sits in a list inside the segment, not in the string literal itself. A labeled one
-        // (`"\(x, privacy: .public)"`) goes to an interpolation method that may take a closure.
-        if let labeled = parent.as(LabeledExprSyntax.self), labeled.label == nil,
-           let list = labeled.parent?.as(LabeledExprListSyntax.self), list.count == 1, list.parent?.is(ExpressionSegmentSyntax.self) == true {
-            return true
-        }
         return false
+    }
+
+    /// `"\(x.name)"`: the reference is the sole, unlabeled expression of an interpolation. It sits in a list inside the
+    /// segment, not in the string literal itself. A labeled one (`"\(x, privacy: .public)"`) goes to an interpolation
+    /// method that may take a closure.
+    func isInterpolated(_ node: some SyntaxProtocol) -> Bool {
+        guard let parent = node.parent else { return false }
+        if parent.is(OptionalChainingExprSyntax.self) || parent.is(ForceUnwrapExprSyntax.self) { return isInterpolated(parent) }
+        guard let labeled = parent.as(LabeledExprSyntax.self), labeled.label == nil,
+              let list = labeled.parent?.as(LabeledExprListSyntax.self) else { return false }
+        return list.count == 1 && list.parent?.is(ExpressionSegmentSyntax.self) == true
     }
 
     /// The node is what the function around it returns: `return x.name`, or the only expression of its body.
@@ -1062,7 +1069,7 @@ private final class Collector: SyntaxVisitor {
         if !isCallee(node) {
             references.append(NameReference(name: node.declName.baseName.text, receiver: receiver(of: node), frame: current,
                                             line: line(node), indirect: selectorDepth > 0 ? .selector : .no, readsValue: readsValue(node),
-                                            argumentOf: argumentOf(node), returned: isReturned(node)))
+                                            interpolated: isInterpolated(node), argumentOf: argumentOf(node), returned: isReturned(node)))
         }
         // The member's own name is recorded above; only the base is walked.
         if let base = node.base { walk(base) }
@@ -1073,7 +1080,7 @@ private final class Collector: SyntaxVisitor {
         if !isCallee(node) {
             references.append(NameReference(name: node.baseName.text, receiver: .none, frame: current, line: line(node),
                                             indirect: selectorDepth > 0 ? .selector : .no, readsValue: readsValue(node),
-                                            argumentOf: argumentOf(node), returned: isReturned(node)))
+                                            interpolated: isInterpolated(node), argumentOf: argumentOf(node), returned: isReturned(node)))
         }
         return .visitChildren
     }
