@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBinding, string, error) {
@@ -221,9 +222,33 @@ func launcherProvider(name string) string {
 	return "launcher." + name
 }
 
+// chatEffortForModel applies the provider's declared model capabilities without treating an empty list as a
+// declaration of "no efforts" (empty currently means unknown). Keep that future distinction here so both probes and
+// real calls adopt it together. Disabling thinking is a separate control and maps to Chat's "none" downstream.
+func chatEffortForModel(models []proto.ProviderModel, model, effort string) string {
+	if effort == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "off", "none", "disabled":
+		return effort
+	}
+	for _, candidate := range models {
+		if candidate.ID != model {
+			continue
+		}
+		if len(candidate.Efforts) == 0 || slices.Contains(candidate.Efforts, effort) {
+			return effort
+		}
+		return ""
+	}
+	return effort
+}
+
 // apiConfig is the connection an API binding calls, with its key opened.
 func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, error) {
 	var c ai.Config
+	var providerModels []proto.ProviderModel
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		c = s.legacyModelConfig(ctx, b.Provider)
 	} else if name, ok := strings.CutPrefix(b.Provider, "launcher."); ok {
@@ -237,6 +262,7 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 					return c, err
 				}
 				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, ReasoningEffort: l.Effort, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
+				providerModels = l.Models
 				key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 				if err != nil {
 					return c, err
@@ -268,8 +294,8 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 	if c.API != "" && c.API != "messages" && c.API != "responses" && c.API != "chat" {
 		return c, i18n.Err("assistant-models.err_api_protocol")
 	}
-	if c.API != "responses" && c.API != "messages" && c.API != "" && c.ReasoningEffort != "" {
-		c.ReasoningEffort = ""
+	if c.API == "chat" {
+		c.ReasoningEffort = chatEffortForModel(providerModels, c.Model, c.ReasoningEffort)
 	}
 	return c, nil
 }

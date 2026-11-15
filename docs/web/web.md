@@ -1164,8 +1164,9 @@ and **Meeting minutes** in Background processing · Direct API, right after Info
   With its provider cleared, the draft previews what it will follow: the category's provider from the catalog
   (`parentCategory`), with that launcher's model list, the category's model as its **Default**, the backend chip and
   whether it takes an effort. Effort goes by the provider the draft runs on (`effortOffered`): the hub lists `effort` in
-  an API purpose's `fields` only while the provider in effect takes one, so Meeting minutes on a Chat Completions
-  connection offer it again once a Messages or Responses one is picked, and Save sends it. The launcher's model list is
+  an API purpose's `fields` while the provider in effect takes one. Although the server now accepts effort on Chat
+  Completions too, this editor still treats Chat as unsupported until #8780, so Meeting minutes on a Chat Completions
+  connection offer choices again once a Messages or Responses one is picked, and Save sends them. The launcher's model list is
   inert while a save is on its way, and the page shows only its latest catalog request's answer, so an older one still
   on its way never puts back what a save's reload replaced.
 - **Unchanged in look**: the background supervisor (its **Follows Main chat** comes from the hub's `inherited_from`, its
