@@ -454,9 +454,9 @@ func (s *Service) renderTodoDecisionsContext(ctx context.Context, todoID string,
 				ancestor = r.TodoID
 			}
 			if from != "" {
-				from += "；"
+				from += "；" // i18n-ignore: a line of the prompt the model reads (prompts/todo/decisions.md)
 			}
-			from += "前序任务「" + contextText(oneLine(ancestor)) + "」"
+			from += "前序任务「" + contextText(oneLine(ancestor)) + "」" // i18n-ignore: a line of the prompt the model reads
 		}
 		d.Decisions = append(d.Decisions, prompts.TodoDecision{N: i + 1, Question: contextText(r.Question),
 			Choice: contextText(r.Choice), Reason: contextText(r.Reason), When: r.CreatedAt.In(loc).Format("01-02 15:04"), From: from})
