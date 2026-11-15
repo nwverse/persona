@@ -129,7 +129,6 @@ class HubChatRepository(
                             else {
                                 entry.stopRequested = false
                                 // The turn's end publishes now; a window left open would hold the next turn's first chunk.
-                                entry.deltaDirty = false
                                 entry.deltaWindow?.cancel()
                                 entry.deltaWindow = null
                                 requestSync(entry.key)

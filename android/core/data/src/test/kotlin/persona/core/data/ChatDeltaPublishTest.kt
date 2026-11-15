@@ -15,13 +15,18 @@ class ChatDeltaPublishTest {
     private fun item(seq: Int) = Item("$seq#0", seq, role = if (seq % 2 == 0) "assistant" else "user", kind = "text",
         text = "history $seq ".repeat(20))
 
-    private class Harness(val connection: FakeConnection, val repository: HubChatRepository, val seen: MutableList<ChatSnapshot>)
+    private class Harness(val connection: FakeConnection, val repository: HubChatRepository, val seen: MutableList<ChatSnapshot>,
+        /** While true, the items fetch (a turn end's requestSync) never returns. */
+        val fetchHangs: java.util.concurrent.atomic.AtomicBoolean)
 
     /** A chat with 200 history items, observed by a collector that sees every published state. */
     private fun TestScope.harness(window: Long): Harness {
         val connection = FakeConnection()
         val history = (1..200).map { item(it) }
-        val transport = FakeChatTransport().apply { fetch = { ItemsResponse(history, history = "h", toSeq = 200) } }
+        val hangs = java.util.concurrent.atomic.AtomicBoolean(false)
+        val transport = FakeChatTransport().apply {
+            fetch = { if (hangs.get()) awaitCancellation(); ItemsResponse(history, history = "h", toSeq = 200) }
+        }
         val repository = HubChatRepository(transport, connection,
             FakeItemsCache(CachedChat(history, "h", 200, false)), FakeSessions(), backgroundScope,
             deltaPublishWindowMillis = window)
@@ -29,7 +34,7 @@ class ChatDeltaPublishTest {
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.observe(key).collect { seen += it } }
         runCurrent()
         seen.clear()
-        return Harness(connection, repository, seen)
+        return Harness(connection, repository, seen, hangs)
     }
 
     private suspend fun TestScope.delta(h: Harness, text: String) {
@@ -69,7 +74,8 @@ class ChatDeltaPublishTest {
         // 100 ms of chunks at 10 ms: the first at once, then one publish per 50 ms window.
         advanceTimeBy(100); runCurrent()
         assertEquals("字".repeat(10), h.seen.last().items.last().text)
-        assertTrue("publishes=${h.seen.size}", h.seen.size <= 4)
+        // Virtual time is exact: the chunk at 0 ms at once, the window ending at 50 ms, and the one ending at 100 ms.
+        assertEquals("publishes=${h.seen.size}", 3, h.seen.size)
     }
 
     @Test fun theTurnsEndPublishesAtOnceAndNoLaterWindowRepeatsIt() = runTest {
@@ -83,6 +89,21 @@ class ChatDeltaPublishTest {
         assertTrue(h.seen.last().streamingItemIds.isEmpty())
         advanceTimeBy(200); runCurrent()
         assertEquals(2, h.seen.size)
+    }
+
+    @Test fun theTurnsEndPublishesWithoutWaitingForTheCatchUpFetch() = runTest {
+        val h = harness(window = 50)
+        h.fetchHangs.set(true)
+        h.connection.state.value = ConnectionState.Connecting
+        runCurrent()
+        h.seen.clear()
+        delta(h, "甲")
+        delta(h, "甲乙")        // inside the open window: not published yet
+        assertEquals(1, h.seen.size)
+        delta(h, "")            // turn finished: no time passes and the fetch never answers
+        assertEquals(2, h.seen.size)
+        assertEquals("甲乙", h.seen.last().items.last().text)
+        assertTrue(h.seen.last().streamingItemIds.isEmpty())
     }
 
     @Test fun aNewTurnsFirstChunkShowsAtOnceEvenWhileTheLastTurnsWindowIsOpen() = runTest {
@@ -131,6 +152,10 @@ class ChatDeltaPublishTest {
             val charsCopied = h.seen.sumOf { it.items.lastOrNull()?.text?.length ?: 0 }
             println("MEASURE window=${window}ms chunkGap=${gap}ms publishes=$publishes itemsBuilt=$itemsBuilt charsCopied=$charsCopied finalChars=${h.seen.last().items.last().text?.length}")
             assertEquals(8000, h.seen.last().items.last().text?.length)
+            // The PR table's counts (virtual time, so exact; +-2 for a future off-by-one in the window): no gap is the first
+            // chunk plus one window's end; a gap of 80 ms outlasts a 50 ms window (every chunk at once) and not a 100 ms one.
+            val expected = when { gap == 0L -> 1..3; window == 50L -> 198..202; else -> 159..163 }
+            assertTrue("window=$window gap=$gap publishes=$publishes", publishes in expected)
         }
     }
 }

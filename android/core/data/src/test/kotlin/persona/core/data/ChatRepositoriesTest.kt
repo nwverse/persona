@@ -573,7 +573,6 @@ class ChatRepositoriesTest {
         event(ItemsEvent(key.machineId, key.sessionId, listOf(nextUser), "h", 3, 4))
         assertNull(snapshot.error)
         event(DeltaEvent(key.machineId, key.sessionId, "示例回复"))
-        advanceTimeBy(50); runCurrent()   // the chunk shows when its publish window ends (ChatDeltaPublishTest)
         val nextDraftId = snapshot.items.last().id
         assertNotEquals(draftId, nextDraftId)
         val nextReply = reply.copy(id = "5#0", seq = 5)
