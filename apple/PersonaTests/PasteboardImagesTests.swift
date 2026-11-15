@@ -1,5 +1,7 @@
 #if os(iOS)
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import Persona
 
@@ -370,6 +372,114 @@ private nonisolated final class FakePasteboard: @unchecked Sendable {
     }
 }
 #endif
+
+/// Signature-selected PNG/JPEG writes stay byte-exact; every other format keeps UIKit's decoding fallback.
+@MainActor final class PhonePasteboardImageWriteTests: XCTestCase {
+    func testPNGWriteReadsBackExactBytesImageAndLiveContent() throws {
+        try assertRawImageRoundTrip(mime: "image/png", type: .png,
+                                    bytes: try XCTUnwrap(SyntheticClipboardImage.image().pngData()))
+    }
+
+    func testJPEGWriteReadsBackExactBytesImageAndLiveContent() throws {
+        let bytes = try XCTUnwrap(SyntheticClipboardImage.image().jpegData(compressionQuality: 0.73))
+        try assertRawImageRoundTrip(mime: "image/jpeg", type: .jpeg, bytes: bytes)
+    }
+
+    func testJPEGSignatureWinsOverDeclaredMIME() throws {
+        let bytes = try XCTUnwrap(SyntheticClipboardImage.image().jpegData(compressionQuality: 0.73))
+        try assertRawImageRoundTrip(mime: "image/png", type: .jpeg, bytes: bytes)
+    }
+
+    func testTIFFWithoutARawSignatureUsesTheUIKitFallback() throws {
+        let bytes = try makeTIFF()
+        let board = UIPasteboard.general
+        defer { board.items = [] }
+        board.string = "synthetic text to replace"
+        let changeCount = board.changeCount
+
+        PhonePasteboard.live.write(.image(ClipboardImage(mime: "image/tiff", bytes: bytes)))
+
+        XCTAssertNotEqual(board.changeCount, changeCount)
+        XCTAssertTrue(board.hasImages)
+        let image = try XCTUnwrap(board.image)
+        XCTAssertEqual(image.size, CGSize(width: 2, height: 2))
+        let content = try XCTUnwrap(PhonePasteboard.live.read())
+        XCTAssertEqual(content.kind, .image)
+        XCTAssertNotNil(content.image?.bytes)
+    }
+
+    func testBytesThatAreNoPictureLeaveThePasteboardUntouched() throws {
+        let board = UIPasteboard.general
+        defer { board.items = [] }
+        board.string = "synthetic text to preserve"
+        let changeCount = board.changeCount
+
+        PhonePasteboard.live.write(.image(ClipboardImage(mime: "image/png", bytes: Data([0, 1, 2, 3]))))
+
+        XCTAssertEqual(board.string, "synthetic text to preserve")
+        XCTAssertEqual(board.changeCount, changeCount)
+        XCTAssertFalse(board.hasImages)
+    }
+
+    func testShortInputsUseOnlyTheirSignature() throws {
+        let png = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        let cases: [(String, Data, UTType?)] = [
+            ("empty", Data(), nil),
+            ("one byte", Data([0x89]), nil),
+            ("JPEG prefix", Data([0xff, 0xd8]), nil),
+            ("JPEG signature only", Data([0xff, 0xd8, 0xff]), .jpeg),
+            ("seven PNG signature bytes", Data(png.prefix(7)), nil),
+            ("PNG signature only", png, .png),
+            ("short JPEG segment", Data([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xd9]), .jpeg),
+        ]
+        let board = UIPasteboard.general
+        defer { board.items = [] }
+        for (name, bytes, expectedType) in cases {
+            board.string = "synthetic text to preserve"
+            let changeCount = board.changeCount
+
+            PhonePasteboard.live.write(.image(ClipboardImage(mime: "image/png", bytes: bytes)))
+
+            if let expectedType {
+                XCTAssertEqual(board.data(forPasteboardType: expectedType.identifier), bytes, name)
+                XCTAssertTrue(board.hasImages, name)
+                XCTAssertNotEqual(board.changeCount, changeCount, name)
+            } else {
+                XCTAssertEqual(board.string, "synthetic text to preserve", name)
+                XCTAssertEqual(board.changeCount, changeCount, name)
+                XCTAssertFalse(board.hasImages, name)
+            }
+        }
+    }
+
+    private func assertRawImageRoundTrip(mime: String, type: UTType, bytes: Data) throws {
+        let board = UIPasteboard.general
+        defer { board.items = [] }
+        board.string = "synthetic text to replace"
+
+        PhonePasteboard.live.write(.image(ClipboardImage(mime: mime, bytes: bytes)))
+
+        XCTAssertTrue(board.hasImages)
+        XCTAssertEqual(try XCTUnwrap(board.data(forPasteboardType: type.identifier)), bytes)
+        let image = try XCTUnwrap(board.image)
+        XCTAssertEqual(image.size, CGSize(width: 2, height: 2))
+        XCTAssertEqual(image.cgImage?.width, 2)
+        XCTAssertEqual(image.cgImage?.height, 2)
+        let content = try XCTUnwrap(PhonePasteboard.live.read())
+        XCTAssertEqual(content.kind, .image)
+        XCTAssertNotNil(content.image?.bytes)
+    }
+
+    private func makeTIFF() throws -> Data {
+        let image = try XCTUnwrap(SyntheticClipboardImage.image().cgImage)
+        let bytes = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            bytes, UTType.tiff.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return bytes as Data
+    }
+}
 
 private enum SyntheticClipboardImage {
     static func image() -> UIImage {
