@@ -185,6 +185,7 @@ type Node struct {
 	sends     sentLog         // recent client_msg_ids (sendsafe.go)
 	echoes    echoLog         // sends tied to their transcript lines (echo.go)
 	typing    typingLocks     // one send at a time per session (sendsafe_turns.go)
+	recovery  typingLocks     // guarded resumes and user closures; first-message delivery takes typing independently
 	sendOrder sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
 	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
 	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
@@ -674,6 +675,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.codexTakeoverCall(ctx, method, params)
 	}
 	var p struct {
+<<<<<<< HEAD
 		Path                    string        `json:"path"`
 		SessionID               string        `json:"session_id"`
 		CreationID              string        `json:"creation_id"`
@@ -720,6 +722,54 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Action                  string        `json:"action"`    // launchers.repair: which of its fixed repairs
 		TabName                 *string       `json:"tab_name"`
 		TZ                      string        `json:"tz"` // the user's time zone
+=======
+		Path             string        `json:"path"`
+		SessionID        string        `json:"session_id"`
+		CreationID       string        `json:"creation_id"`
+		Incarnation      string        `json:"incarnation"`
+		Cwd              string        `json:"cwd"`
+		Launcher         string        `json:"launcher"`
+		AgentType        string        `json:"agent_type"`
+		Model            string        `json:"model"`
+		ModelFingerprint string        `json:"model_fingerprint"`
+		Runtime          string        `json:"runtime"`
+		ConfigDir        string        `json:"config_dir"`
+		Prompt           string        `json:"prompt"`
+		ResumeSessionID  string        `json:"resume_session_id"`
+		ResumeAutomatic  bool          `json:"resume_automatic"`
+		Host             string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
+		WorkspaceID      string        `json:"workspace_id"`
+		NameHint         string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
+		Text             string        `json:"text"`
+		SkillOwner       string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
+		Images           []proto.Image `json:"images"`
+		PreKeys          []string      `json:"pre_keys"`
+		Keys             []string      `json:"keys"`
+		Lines            int           `json:"lines"`
+		BeforeSeq        int           `json:"before_seq"`
+		AfterSeq         *int          `json:"after_seq"`
+		Limit            int           `json:"limit"`
+		SinceSeq         int           `json:"since_seq"`
+		Source           string        `json:"source"`
+		Format           string        `json:"format"`
+		Turns            int           `json:"turns"`
+		LazyImages       bool          `json:"lazy_images"`
+		UserInputs       bool          `json:"user_inputs"`
+		FoldWork         bool          `json:"fold_work"`
+		FromSeq          int           `json:"from_seq"`
+		ThroughSeq       int           `json:"through_seq"`
+		Name             string        `json:"name"`
+		Pane             string        `json:"pane"`      // panes.*: a pane the host lists
+		InPane           string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
+		Direction        string        `json:"direction"` // panes.split: right or down
+		TabID            string        `json:"tab_id"`    // tabs.*
+		Label            string        `json:"label"`     // tabs.rename
+		Kind             string        `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
+		Op               string        `json:"op"`        // panes.git: fetch, pull or push
+		Action           string        `json:"action"`    // launchers.repair: which of its fixed repairs
+		TabName          *string       `json:"tab_name"`
+		TZ               string        `json:"tz"` // the user's time zone
+>>>>>>> origin/main
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
 		HTTP           *quota.Request  `json:"http,omitempty"`
 		Async          bool            `json:"async"`
@@ -847,10 +897,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if method == "session.stop" {
 		var a struct {
-			Retire bool `json:"retire"`
+			Retire    bool            `json:"retire"`
+			StopCause proto.StopCause `json:"stop_cause"`
 		}
 		_ = json.Unmarshal(params, &a)
-		stopped, err := n.stop(ctx, p.SessionID, a.Retire)
+		cause := proto.StopUser
+		if a.Retire && a.StopCause.AllowsSupervisorResume() {
+			cause = a.StopCause
+		}
+		stopped, err := n.stopWithCause(ctx, p.SessionID, a.Retire, cause)
 		return map[string]any{"stopped": stopped}, err
 	}
 	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing
@@ -1153,6 +1208,21 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if p.ResumeSessionID != "" {
+			unlock := n.recovery.lock(p.ResumeSessionID)
+			defer unlock()
+		}
+		if p.ResumeAutomatic {
+			if err := n.supervisorResumeAllowed(p.ResumeSessionID, p.PermissionMode, p.Launcher); err != nil {
+				return nil, err
+			}
+		}
+		if n.stopCause(p.ResumeSessionID).AllowsSupervisorResume() {
+			// Consume the old stop before starting: a failed/interrupted resume is not another confirmed idle stop.
+			if err := n.saveStopCause(ctx, p.ResumeSessionID, proto.StopUnknown); err != nil {
+				return nil, err
+			}
+		}
 		if p.ResumeSessionID != "" && p.Host == "" {
 			p.Host = n.startKind(n.withResumeHost(ctx, p.ResumeSessionID))
 		}
@@ -2043,6 +2113,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			n.stopAssistant(p.SessionID)
 			return ok(nil)
 		}
+		release := n.recovery.lock(p.SessionID)
+		defer release()
+		unlock := n.typing.lock(p.SessionID)
+		defer unlock()
 		return ok(n.close(ctx, p.SessionID))
 	case "session.archive", "session.unarchive": // the tool's own archive (archive.go); a runtime's answers above
 		return n.nativeArchive(ctx, p.SessionID, method == "session.archive")
@@ -2165,6 +2239,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		OS:                 runtime.GOOS,
 		Arch:               runtime.GOARCH,
 		Home:               n.home,
+		HomeReal:           realHome(n.home),
 		DataDir:            n.dir,
 		HerdrVersion:       hv,
 		HerdrRunning:       running,
