@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Outgoing } from "./Composer";
 import type { MentionSource } from "./ComposerPanel";
 import type { Item, Session } from "../../lib/types";
 import { getFeedState, setRoute } from "../../lib/feed";
+import { loadPages } from "../../lib/lazy-page";
 import { outboxKey, type OutboxEntry } from "../../lib/outbox";
 import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
@@ -333,6 +334,9 @@ describe("ChatView opening line over an empty chat (#2450)", () => {
 });
 
 describe("closeout command evidence wiring", () => {
+  // the evidence row is a chunk of its own (CloseoutEvidence, #8118); a static render draws only a loaded one
+  beforeAll(() => loadPages(), 60_000);
+
   it("uses only the closeout's own last exchange, never an earlier run", () => {
     const was = captured.session;
     captured.session = {

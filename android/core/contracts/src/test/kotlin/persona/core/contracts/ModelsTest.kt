@@ -31,6 +31,18 @@ class ModelsTest {
         assertEquals(0, s.pendingInteractions)
     }
 
+    @Test fun suggestionRiskDecodesAndAnAbsentFieldIsSafeByDefault() {
+        for ((field, expected) in mapOf("\"suggestion_risky\":true" to true,
+            "\"suggestion_risky\":false" to false, "" to false)) {
+            val comma = if (field.isEmpty()) "" else ","
+            val session = JsonCodec.decodeFromString<Session>(
+                """{"session_id":"s","suggestion":"Review the plan"$comma$field}""",
+            )
+            assertEquals(field.ifEmpty { "absent" }, expected, session.suggestionRisky)
+            assertEquals("Review the plan", session.suggestion)
+        }
+    }
+
     @Test fun zeroTimeIsUnset() {
         assertNull(parseTime("0001-01-01T00:00:00Z"))
         assertTrue(parseTime("2026-10-29T15:05:32.42Z") != null)
@@ -101,6 +113,43 @@ class ModelsTest {
         val dsh = JsonCodec.decodeFromString<Session>("""{"session_id":"s","agent":"dsh"}""")
         assertTrue(!dsh.isClaude && !dsh.isCodex)
         assertTrue(JsonCodec.decodeFromString<Session>("""{"session_id":"s","agent":""}""").isClaude)
+    }
+
+    @Test fun aPaseoProviderIsNamedByItsOwnNameNeverTheEngines() {
+        fun label(json: String) = JsonCodec.decodeFromString<Session>("""{"session_id":"paseo-1","agent":"paseo",$json}""").agentLabel
+        // Paseo calls every provider but Claude Code and Codex "paseo" (#8143): the row's label, else its launcher.
+        assertEquals("My Grok", label(""""agent_label":"My Grok","launcher":"grok""""))
+        // The runtime's own name, which a node gives a row its bridge left unlabelled, is the engine's: the launcher instead.
+        assertEquals("grok", label(""""agent_label":"Paseo","launcher":"grok""""))
+        assertEquals("grok", label(""""agent_label":" ","launcher":"grok""""))
+        assertEquals("grok", label(""""launcher":"grok""""))
+        // Nothing else to go by: as before.
+        assertEquals("Paseo", label(""""agent_label":"Paseo""""))
+        assertEquals("paseo", label(""""status":"idle""""))
+        // Its providers running Claude Code and Codex are those agents', and another runtime keeps its own name.
+        assertEquals("Claude", JsonCodec.decodeFromString<Session>("""{"session_id":"s","agent":"claude","launcher":"my-claude","space_kind":"paseo"}""").agentLabel)
+        assertEquals("Codex", JsonCodec.decodeFromString<Session>("""{"session_id":"s","agent":"codex","launcher":"my-codex","space_kind":"paseo"}""").agentLabel)
+        assertEquals("DSH", JsonCodec.decodeFromString<Session>("""{"session_id":"s","agent":"dsh","agent_label":"DSH","launcher":"dsh"}""").agentLabel)
+        assertEquals("grok", unknownAgentName(PaseoAgent, "paseo", "grok"))
+        assertEquals("pi", unknownAgentName("pi", null, "my-pi"))
+    }
+
+    @Test fun aPaseoCardNamesItsProviderOrSaysOnlyWhatItWants() {
+        // A node that labels the card with the row's label (#8142): the provider's name.
+        val named = JsonCodec.decodeFromString<Interaction>("""{"id":"p","kind":"question","agent":"paseo","agent_label":"Grok"}""")
+        assertEquals("Grok", named.agentDisplayName)
+        assertTrue(named.fromOtherAgent)
+        assertEquals("Grok 在问你", (named.headline).zhAny())
+        // An older node's card names only the engine: no name, never "Paseo" (nor "Claude"), and still another agent's card.
+        for (engine in listOf(named.copy(agentLabelHint = "Paseo"), named.copy(agentLabelHint = "paseo"), named.copy(agentLabelHint = null))) {
+            assertNull(engine.agentDisplayName)
+            assertTrue(engine.fromOtherAgent)
+            assertEquals("在问你", (engine.headline).zhAny())
+            assertEquals("请求使用 read_file", (engine.copy(kind = "permission", toolName = "read_file").headline).zhAny())
+        }
+        // Whose card it is: only Claude Code's (or an older hub's, which names none) is Claude's.
+        assertEquals(listOf(false, false, false, true, true),
+            listOf(null, "", "claude", "codex", "dsh").map { Interaction(id = "c", kind = "question", agent = it).fromOtherAgent })
     }
 
     @Test fun interactionRetainsRememberedPermissionScope() {
