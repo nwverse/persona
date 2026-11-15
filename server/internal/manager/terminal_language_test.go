@@ -147,13 +147,18 @@ func managerJoinGolden(language, dir string) string {
 func TestManagerJoinErrorsSpeakTheTerminalLanguage(t *testing.T) {
 	for _, tc := range managerTerminalCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, kind := range []string{"refused", "tls_required"} {
+			for _, kind := range []string{"refused", "tls_required", "conflict"} {
 				t.Run(kind, func(t *testing.T) {
 					isolate(t)
 					setManagerTerminal(t, tc.setting)
 					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if kind == "refused" {
 							w.WriteHeader(http.StatusUnauthorized)
+							return
+						}
+						if kind == "conflict" {
+							w.WriteHeader(http.StatusConflict)
+							_, _ = w.Write([]byte(`{"error":"wrong code kind"}`))
 							return
 						}
 						w.WriteHeader(http.StatusForbidden)
@@ -179,6 +184,12 @@ func TestManagerJoinErrorsSpeakTheTerminalLanguage(t *testing.T) {
 }
 
 func managerJoinErrorGolden(language, kind string) string {
+	if kind == "conflict" {
+		if language == "ja" {
+			return "ハブはコードを交換しませんでしたが、コードはまだ有効です（HTTP 409）：wrong code kind"
+		}
+		return "the hub did not trade the code, which is still good (HTTP 409): wrong code kind"
+	}
 	if kind == "tls_required" {
 		switch language {
 		case "zh-Hans":
@@ -245,6 +256,28 @@ func managerNoDatabaseGolden(language string) string {
 		return "このマネージャーにはデータベースがありません。Dockerをインストールして専用のPostgresコンテナーを作成するか、--database-url 'postgres://USER:PASSWORD@HOST:5432/DBNAME'を指定してください（インストールコードは使用されていません）"
 	default:
 		return "This manager has no database. Install Docker to create its own Postgres container, or add --database-url 'postgres://USER:PASSWORD@HOST:5432/DBNAME' (the install code was not spent)"
+	}
+}
+
+func TestManagerDockerDownSpeaksTheTerminalLanguage(t *testing.T) {
+	goldens := map[string]string{
+		"en":      "Docker is installed but not running. Run sudo systemctl start docker (on Mac, open Docker Desktop or OrbStack), then retry",
+		"zh-Hans": "有 Docker，但它没在运行：运行 sudo systemctl start docker（Mac 上打开 Docker Desktop 或 OrbStack），再重来",
+		"ja":      "Dockerはありますが実行されていません。sudo systemctl start dockerを実行し（MacではDocker DesktopまたはOrbStackを開き）、その後再試行してください",
+	}
+	for _, tc := range managerTerminalCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			setManagerTerminal(t, tc.setting)
+			e := newEnv(io.Discard)
+			e.look = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+			d := &fakeDocker{down: true}
+			d.wire(e)
+			err := e.dockerProblem(context.Background())
+			if err == nil || err.Error() != goldens[tc.language] {
+				t.Fatalf("docker error %q, want %q", err, goldens[tc.language])
+			}
+		})
 	}
 }
 
@@ -351,7 +384,7 @@ func managerUninstallGolden(language, dir string) string {
 	case "ja":
 		return fmt.Sprintf("マネージャーm-0a1b2cのサービスを停止して削除しました。\nデータベースコンテナーpersona-mgr-m-0a1b2c-pgを停止しました。データボリュームpersona-mgr-m-0a1b2c-dataとそのデータは保持されています。再度installすると再利用できます。データも削除するには--purgeを指定してください。\nディレクトリー%sは保持されています。アプリでこのアシスタントを削除するまで、ハブはそのtokenを受け付けます。\n", dir)
 	default:
-		return fmt.Sprintf("Stopped and removed manager m-0a1b2c's service.\nDatabase container persona-mgr-m-0a1b2c-pg stopped. Data volume persona-mgr-m-0a1b2c-data and its data were kept: install again to reuse them, or add --purge to delete the data too.\nDirectory %s was kept. Delete this assistant in the app before the hub stops accepting its token.\n", dir)
+		return fmt.Sprintf("Stopped and removed manager m-0a1b2c's service.\nDatabase container persona-mgr-m-0a1b2c-pg stopped. Data volume persona-mgr-m-0a1b2c-data and its data were kept: install again to reuse them, or add --purge to delete the data too.\nDirectory %s was kept. Delete this assistant in the app so the hub stops accepting its token.\n", dir)
 	}
 }
 

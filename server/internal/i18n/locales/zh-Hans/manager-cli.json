@@ -48,6 +48,7 @@
   "join_code_refused": "hub 不认这个安装码：它不对、过期了（10 分钟）或者已经用过；在 App 里给这个助手重新拿一个",
   "join_tls_required": "hub 不接受经公网明文换码，这个安装码也作废了：在 App 里重新拿一个，用 hub 的 https 地址（TLS 端口）",
   "join_http_forbidden": "hub 拒绝了换码（HTTP 403）：{error}",
+  "join_code_conflict": "the hub did not trade the code, which is still good (HTTP 409): {error}",
   "join_rate_limited": "试错太多次，hub 暂时不接受这台电脑换码：过几分钟再试",
   "join_hub_too_old": "hub {hub} 还不支持管理者（HTTP {status}）：先升级 hub",
   "join_http_error": "hub 没换成（HTTP {status}）：{error}",

@@ -215,7 +215,7 @@ func redeem(ctx context.Context, o JoinOptions, hub, code string) (joinReply, er
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(raw, &e)
-		return j, ConfigError{fmt.Errorf("the hub did not trade the code, which is still good (HTTP 409): %s", firstLine(e.Error))}
+		return j, ConfigError{errors.New(i18n.T(l, "manager-cli.join_code_conflict", i18n.Args{"error": firstLine(e.Error)}))}
 	case http.StatusTooManyRequests:
 		return j, errors.New(i18n.T(l, "manager-cli.join_rate_limited"))
 	case http.StatusNotFound, http.StatusMethodNotAllowed:
