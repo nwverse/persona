@@ -1,5 +1,13 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## An acknowledged Enter does not confirm Codex consumed a message (#8354)
+
+Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
+and the blocked-session fallback; preserve drafts and report unknown delivery if it cannot be observed. Do not recover
+a pre-existing draft merely because it equals earlier assistant text: equality proves neither ownership nor non-delivery.
+Use an isolated fixture that acknowledges Enter without consuming the paste, and prove it fails without the production
+check. This demonstrates the confirmation gap, not the cause of any particular live incident.
+
 # A continuation must stay on its original to-do (#6820)
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
@@ -1038,3 +1046,12 @@ the deployment filesystem as well as the development machine, including a settle
 ## Stopped-session ownership is not recovery permission (#8214)
 
 A `codex_history` source can be node-resumable while still rejecting ordinary messages. Keep the generic source-owned read-only guard; admit only the node-qualified terminal row to the explicit supervised Resume path. Persist user stops and fail closed on missing provenance instead of interpreting an old start time or a localized reason string as permission. A cached eligible row also needs a node-side recheck serialized with closes, and a new running observation must clear old eligibility. Keep this metadata in capabilities rather than enlarging the frequently copied Session row past its allocation size class.
+
+## Claude Code keeps one gateway model list per config directory (#8417)
+
+With `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` on, Claude Code caches the gateway's `/v1/models` in
+`<config dir>/cache/gateway-models.json` for the last base URL only, refreshes it in the background, and shows it only
+while that is the running gateway. Several providers on one computer overwrite each other's list, so a headless
+`initialize` answer is not a stable source for a provider's gateway models. Turning discovery off to hide entries is
+wrong too: it removes the gateway's list from every `/model` the user opens. Read the gateway itself
+(`node/launcher_gateway_models.go`) and compare lists from several computers before concluding a list is clean.
