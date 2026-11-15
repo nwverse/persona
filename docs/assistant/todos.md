@@ -191,7 +191,7 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 - `done_when` (jsonb, NOT NULL, DEFAULT '[]'): acceptance criteria (string array); `expect_minutes` (integer, NOT NULL, DEFAULT 0): expected minutes.
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).
-- `pending_since` (timestamptz, NULL): when the task entered `pending_review`; kept by every write while the review waits, NULL in every other state. The apps read it to tell a supervisor's review under way from one that is overdue (`docs/assistant/unified-entry.md` "Needs you and In progress: each thing once (#3387)"). Rows already waiting when the column was added started from `updated_at`.
+- `pending_since` (timestamptz, NULL): when the task entered `pending_review`; kept by every write while the review waits, NULL in every other state. Android and Apple read it to tell a supervisor's review under way from one that is overdue; the web lists every review alike (`docs/assistant/unified-entry.md` "Needs you and In progress: each thing once (#3387)"). Rows already waiting when the column was added started from `updated_at`.
 
 ### 6. task_briefs and task_brief_todos tables
 A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
@@ -350,7 +350,7 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 
 - **Nobody is working on this** is not a row of this table: the hub works it out, since it needs to know whether the Agents' computers are connected and whether a wake is pending, and sends it as `orphaned` on the to-do ("Nobody is working on this"). A client that shows it puts it ahead of Interrupted and Follow up; one that does not shows the row above as before.
 - To-do list ordering: unfinished first (same state by `created_at` descending), completed collapsed at bottom.
-- Completion means the task is over: its Agents' sessions no longer say they currently work for it; **Reopen** to continue. A chat-dispatched task the hub completed also reopens when one of its Agents starts a turn again: an auto-completed one on any new turn (sent more with `agent_send`, or by the user; see "Stop Agents of completed tasks", #5892); one accepted by its supervisor on any new turn too when its plan started the Agent (`task_plan`). An accepted task with no plan (its Agent adopted with `agent_supervise` or `agent_send` with a task, an Agent that became a task by itself, one linked by hand, or `agent_start`'s) reopens only when its own conversation sent that Agent more after the acceptance (`agent_send` from the task's conversation or supervisor, or the owner's message on its card): such an Agent is often kept on for other work, and its other turns (its own timers, other conversations, messages from other sessions, the owner typing in its session) leave the task closed (#6726). Cancelled tasks stay closed when their Agent works again; only an explicit **Reopen** resumes their task tracking and supervision (#1851).
+- Completion means the task is over: its Agents' sessions no longer say they currently work for it; **Reopen** to continue. A chat-dispatched task the hub completed also reopens when one of its Agents starts a turn again: an auto-completed one on any new turn (sent more with `agent_send`, or by the user; see "Stop Agents of completed tasks", #5892), since nobody accepted that close. A task accepted by a review (its supervisor's `task_review`, or the judge's own spot check, "Spot-check reviews" below) reopens only when its own conversation sent that Agent more after the acceptance (`agent_send` or `agent_interrupt` with `then` from the task's conversation, its supervisor or the background supervisor that follows it up for the main chat, or the owner's message on its card), whoever started the Agent (`task_plan`, `agent_supervise`, `agent_send` with a task, an Agent that became a task by itself, one linked by hand, `agent_start`). The background supervisor counts only for tasks whose ledger names the main chat, not for a task a side chat supervises. Such a send is noted before it goes and kept in the assistant's settings (`assistant.sends_out`), so a manager restart does not lose it (#7539); when the note cannot be saved, the send is not made and says so (try again). It reopens the task as soon as the Agent's computer takes it; a send that definitely failed (refused, or it never left the manager) reopens nothing; one whose answer never came, was lost with a manager restart, or that the computer could not confirm (its error says `delivered: unknown`, for example a Claude inbox holding the text for approval) reopens the task on the Agent's next turn, however late the Agent reads the text (a week at most), unless the task opened or was accepted again meanwhile or the Agent went to another task. A turn of the Agent that starts while the send is still out waits for its answer: when the send definitely failed (and no other send for the task is out), that turn was other work and the task stays closed; otherwise the turn and its end are the task's. A bare `/exit` or `/quit` asks for no work (the Agent's computer closes the Agent) and reopens nothing, and a message on a task's card reopens that task only. Accepting the task again, even while it is still closed, ends every send of more before it. `docs/assistant/todo-status-sop.md` ("Accepted tasks") has the details and the gaps that remain. Its Agent's other turns (its own timers and wakeups, other conversations, messages from other sessions, the owner typing in its session) leave the task closed, and their ends get no receipt, judgment or supervision signal: no new "judged done, waiting for your review" for a task already accepted (#6726, #7539). A judgment of work from before the acceptance that lands after it is dropped too: no check, delivery, stage or supervision signal from it. So is anything past the receipt of a turn whose end was being read when the task closed. **Reopen** and `todo_reopen` reopen any of them. Cancelled tasks stay closed when their Agent works again; only an explicit **Reopen** resumes their task tracking and supervision (#1851).
 - **A hub restart during startup** (#3251, `assistant/tasks_recover.go`): a task start keeps the assistant busy from before its goroutine is launched until linking, failure bookkeeping or entering a retained-tab remedy has finished. The built-in manager therefore waits for it before switching binaries, subject to its existing 30-minute maximum (`docs/assistant/managers.md`). After a forced restart or crash, before its background loops begin, the assistant reads saved to-dos and plans. A started plan updated within `taskStartTimeout` (5 minutes) before this service was created, with an open task that has no agent, start error or recorded start remedy, is marked failed with an explicit restart reason. This includes read-only / plan-mode tasks and reused topic to-dos, whose plan relationship is saved in `ReuseTodo` instead of the to-do’s `PlanID`. The plan keeps the error, the conversation gets a failed receipt, and the supervisor receives an urgent failed-start signal (other tasks use the ordinary failure notification). Completed or cancelled tasks, any task with an agent, recorded remedies, older plans and starts admitted by the new service are left alone. The window uses the plan's saved update time, so approving an old draft or retrying a failed start can still qualify; historical dangling work is not replayed on deployment.
   The hub never resends these starts automatically: a node, especially a runtime bridge, may finish the previous request after its connection drops, and the saved plan has neither a start idempotency key nor a session / pane identity to adopt safely. The reason asks the supervisor or user to wait for the computer to reconnect and inspect its sessions before retrying. An offline computer does not delay recording the failure. No kept tab is invented for `beginRemedy`; existing remedies retain their normal expiry handling. Recovery requires the plan’s saved `TodoID`: it does not guess a task association if the process stopped before that link was saved.
 - **Remedying a start** (#2570, `assistant/start_remedy.go`): when the new tab's shell stopped on a startup question (`shell_waiting`) or Claude's own screen stopped before its input box (`agent_start_stalled`), the computer keeps the tab for 10 minutes (`node/shellsettle.go`). For a supervised task the hub records this on the plan task (`start`: `state` remedying / started / failed, `attempt`, `by`, `machine`, `pane`, `until`, `code`, `reason`) instead of failing the to-do, and the supervision message carries the question, the tab's last lines and the retries left. The main conversation may read the tab (`task_start_screen`), type into it (`task_start_keys`: any text up to 32 characters and keys, with a reason; the node takes them only into that kept tab while no agent runs there) and start again in it (`task_retry`, which also reopens a start that failed for good, in a new tab); at most 3 retries per task, and the hub never retries by itself. Each step is a `start_remedy` feed item. A retry that starts sends the supervisor a `started` signal. The start fails for good (`done_at` + `start_error`, the failed receipt, the bot's report) when the supervision turn that saw it ends with no retry running (the turn of the conversation that message went to, not another supervising conversation's, #4927), when the kept tab expires (checked on the supervisor's tick, so a restart catches up), or when a retry fails without a kept tab. If that turn never told the user (no `notify_user`, task review card or visible finish), the hub writes "Didn't start: <task>. <reason>" into the conversation and pushes it.
@@ -516,9 +516,9 @@ Results still read from transcripts (receipts, `agent_read`, chat page); Unread 
 
 **Stop provenance and recovery** (#8214): only `idle`, `task_completed` and recorded `restart` stops permit this assistant path. The node persists the confirmed stop cause in existing session state; a user close (including a kept terminal or `/exit`) revokes eligibility, and observing a running session clears the old cause. A restart status, an old start timestamp or a lost connection cannot prove the cause: an unrecorded crash remains unknown and needs the owner's Resume. Legacy rows, unknown/future causes and missing provenance stay read-only to the assistant. User closure first reads its saved stop back through `state.load`; a resume similarly saves and verifies unknown provenance before starting, so a failed or interrupted attempt cannot reuse the previous idle stop. A failed or unsupported save returns `stop_not_saved` without touching the terminal. Monotonic `stop_cause_at` revisions keep late metadata writes from reviving an older cause. The node rechecks the cause under the same per-session recovery lock as user closures, so a cached eligible row cannot undo a later close. Resumable `codex_history` rows enter this path only with read/terminal capabilities and no subagent; other read-only sources stay refused. The owner's explicit Resume is unchanged. Both the node and the managers carrying its provenance must support this addition; a component that drops it fails closed, not open.
 
-When every Agent of a task has stopped, the user's message on the task's card (`route`) or the task's **Retry** starts a new Agent for it instead (`assistant/tasks_successor.go`): on the computer, in the directory and with the launcher of its latest Agent, linked to the to-do, its first message the user's after who worked on the task before and that Agent's last reply; the `routed` feed line carries `new_agent`. Persona's own follow-ups (a supervisor's rework, relayed answers to decisions, acceptance or conclusions) start nothing and are refused (`route_agents_stopped`). One new Agent per task at a time (#8272): a second message while it is still starting (a follow-up line, or the same one sent again after the phone stopped waiting) waits for that start and is then sent to the new Agent; if that start failed, the waiting message starts the Agent itself, and a start still going after its own bound plus a minute answers `route_starting` (nothing sent).
+When every Agent of a task has stopped, the user's message on the task's card (`route`) or the task's **Retry** starts a new Agent for it instead (`assistant/tasks_successor.go`): on the computer, in the directory and with the launcher of its latest Agent, linked to the to-do, its first message the user's after who worked on the task before and that Agent's last reply; the `routed` feed line carries `new_agent`. A message on the card of a task the hub closed (`done_by` `auto` or an accepted `review`, not cancelled) reopens it once the new Agent started (or may have: the start's answer never came), so that Agent's work is the task's; a start that definitely failed (its computer unreachable, its launcher refused, or it never left the manager) leaves the task closed (#7539). Persona's own follow-ups (a supervisor's rework, relayed answers to decisions, acceptance or conclusions) start nothing and are refused (`route_agents_stopped`), and so is a bare `/exit` or `/quit`: what it would close is closed already (`route_agents_exited`). One new Agent per task at a time (#8272): a second message while it is still starting (a follow-up line, a bare `/exit`, or the same one sent again after the phone stopped waiting) waits for that start and is then sent to the new Agent; if that start failed, the waiting message starts the Agent itself, and a start still going after its own bound plus a minute answers `route_starting` (nothing sent).
 
-When a resumed Agent starts a turn, its completed to-do (a chat-dispatched task it still belongs to that the hub closed: `done_by` `auto` or an accepted `review`; user-completed and cancelled tasks stay completed) reopens, as **Reopen** does (`reopened_at` recorded): the task shows as in progress, the turn's end gets its interrupted or done receipt and notice as usual, and completion is judged again (#5892). If the to-do is completed again, the Agent stops again after 3 minutes idle.
+When a resumed Agent starts a turn, its completed to-do (a chat-dispatched task it still belongs to that the hub closed: `done_by` `auto`, or an accepted `review` whose conversation sent the Agent more after the acceptance, see "State calculation rules" above; user-completed and cancelled tasks stay completed) reopens, as **Reopen** does (`reopened_at` recorded): the task shows as in progress, the turn's end gets its interrupted or done receipt and notice as usual, and completion is judged again (#5892). If the to-do is completed again, the Agent stops again after 3 minutes idle.
 
 A cancellation stays final whether the Agent receives a user message, an `agent_send`, or continues after a background job, before or after its idle stop. It produces no new task receipt, completion judgment, supervision signal or automatic triage follow-up while the to-do stays closed. This also applies to older cancellations stored as `done_by = review` with a `cancelled` supervision ledger. The user can still explicitly **Reopen** the task. Cancelling a task stops its Agents right away, working or not (`session.stop` without `retire`, `assistant/supervise_leader.go`), keeps their terminals and archives them; a session with no terminal (another tool's, an engine that runs Agents itself) is closed as before.
 
@@ -929,3 +929,104 @@ a new to-do. Existing historical successor chains are still guarded against dupl
 3. **Empty-workspace rename does not migrate**: when renaming through hub with no active sessions, hub cannot resolve old workspace name; `todo_spaces` does not automatically migrate, like pin/mute.
 4. **`/clear` recreates session**: Agent `/clear` creates a new session uuid underneath; new session does not auto-link to old to-do, and original session row stays listed.
 5. **Assistant disconnected**: to-do APIs and create/send with `todo_id` return 503; workspace renames through hub do not migrate and answered cards are not recorded as decisions ("Who owns what").
+
+## Repository associations
+
+Repository associations are optional metadata for ordinary to-dos and existing
+single-repository tasks. They do not create or remove directories, change the
+workspace mode, or advance task progress. Legacy `new` / `existing` / `none`,
+Engine-created workspaces, reused directories and cleanup retain their existing
+behavior. The existing `pr_url` and delivery judgment stay independent: multiple
+linked PRs never imply that a task is complete.
+
+The Web to-do creation dialog and detail use the optional **Repositories and
+work** group. The detail is read-only by default: it draws the saved
+repositories as rows with their issues and pull requests as links, so the
+associations the agent maintains are visible without opening an editor. Each
+repository row carries its provider's own mark and its project address on one
+line; a link shows its retained full title as the hyperlink, falling back to the
+localized type and number when no title is known. The association store holds no
+physical workspace path, so a row shows no filesystem path; directory aliases
+are not paths, and physical paths belong to the workspace preparation service.
+Opening the editor holds the draft and the revision it began from: a to-do
+version change while it is open never replaces them, and the newest store is
+read again when the dialog closes. Source options are disclosed per repository.
+No alias or base branch is required: an empty alias means no directory override
+and a missing ref means the remote default branch. This feature does no Git or
+remote issue lookup.
+An issue/PR URL must belong to the saved provider, instance and target repository;
+links retain numeric string IDs, including IDs beyond JavaScript's integer range.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/todos/{id}/repositories` | Returns `schema_version`, `manager`, `todo_id`, `revision` and `repositories` |
+| PUT | `/api/v1/todos/{id}/repositories` | `{expected_revision, expected_catalog_revision, repositories}` replaces business associations atomically; `[]` clears them |
+| PUT | `/api/v1/todos/{id}/repositories/{repo_id}/links` | `{expected_revision, links}` replaces one repository's links; `[]` clears them |
+
+`POST /api/v1/todos` also accepts optional `repository_bindings` containing
+`catalog_revision` and `repositories`. The Todo and associations commit in one
+transaction. Older requests omitting it retain existing behavior; ordinary PATCH
+operations never touch association storage. The catalog response and
+`repositories_list` include `catalog_revision`. Writes require exact revisions;
+conflicts preserve the client draft and require reconciliation. Read failures
+never masquerade as an empty set.
+
+`todo_repositories_get`, `todo_repositories_set`, `todo_repository_links_set` and
+`todo_repository_links_add` expose the same manager-owned store. `todo_get` includes
+its canonical associations. The additive tool accepts `{id, links: [{url, title}]}`
+with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
+total), infers repository groups offline and needs no preconfigured catalog.
+Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
+characters are rejected. The tool schemas describe this byte limit explicitly;
+their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
+A nonempty title updates a retained link and increments
+the association revision. Omitted or empty titles in URL-only reports or older
+editors preserve known titles; removing a link removes its title. Agents obtain
+titles from the related work and maintain them through the same tool. The app
+shows a localized type and number until a title is available; it never guesses
+titles or performs a remote metadata request when opening a to-do.
+It preserves source snapshots, aliases and requested refs. Assistant conversations
+can manage their manager's to-dos; task Agents can read or edit only their actively
+linked open to-do, with its ID available through `todo_decisions`. Empty ordinary
+to-dos need no catalog read. `todo_create` accepts the optional creation object; a matching
+existing Todo with supplied bindings is explicitly refused so callers can read
+and edit that Todo without silently discarding associations. Writes retain the
+existing outbound confirmation rule for health conversations.
+
+Existing `pr_url` / `prs` references are imported once before the first interactive
+association read or edit. During a meeting turn, `todo_get` and
+`todo_repositories_get` read only saved associations: they never import links or
+write association data, revisions or receipts. An ordinary user turn retains the
+historical import behavior. New Agent reports append every supported PR URL to this same store,
+including self-hosted instances; old stage and delivery fields retain their existing
+judgment semantics. A stored receipt prevents historical imports and repeated reports
+from restoring links removed by the user. An explicit additive call can restore them.
+Imports and interactive edits lock the same Todo and commit atomically; changes
+broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
+Metadata import errors are logged without blocking the legacy progress path; explicit
+tool and HTTP failures remain errors. Link-derived repositories absent from the
+catalog have `catalog_state: "unlisted"`; recording a URL performs no repository
+verification, remote lookup or catalog mutation.
+
+Shared Go types and validators: `server/internal/assistant/repository/task.go`.
+Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
+`spec/fixtures/task-repositories/contract.json`. Directory aliases use one ASCII
+rule, case-insensitive uniqueness, reserved-device-name rejection and an optional
+empty override. Explicit `root` layout maps one selected repository to `.`;
+`container` layout uses a validated nonempty effective directory name. This
+opt-in mapping never changes legacy cwd inference.
+
+Each association saves identity and credential-free transport by value. Catalog
+names are independent. A removed or identity-changed catalog entry is reported
+without replacing the saved source. Catalog clients omitting `clone_url` preserve
+its previous value when identity is unchanged; a changed identity gets its own
+canonical fallback. Adopting a new source requires removing and reselecting the
+association in separate saves.
+
+Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
+select repository IDs through `repository.Snapshot`, and persist that value with
+their operation in the same transaction. The reader locks the Todo, including an
+empty set. Digests exclude links and association revision. Consumers retain the
+operation's snapshot for retries; no permanent business-association seal or
+legacy-start hook exists. Physical records, paths, resolved commits and cleanup
+belong to the workspace preparation service.

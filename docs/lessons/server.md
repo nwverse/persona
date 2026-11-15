@@ -49,12 +49,22 @@ connection (`codexHanded`); the hub keeps such a report only from a connection i
 (`codexInventoryHanded`: `hookedAt` equal to the manager's `ConnectedAt`), which also covers older nodes. Write a test
 of the sequence, not only of each side's storage.
 
+## On macOS a process holds inheritable sockets nobody meant to hand on (2026-11-14, #7489)
+
+Sealing what a process was handed (`osproc.SealInherited`, `claimInherited` in `server/internal/hub/listen.go`) does not cover what it makes later, and on macOS two kinds of socket are inheritable without anyone clearing close-on-exec. Go's `accept` there makes the new connection close-on-exec only after the call returns, without `syscall.ForkLock` (`src/internal/poll/sys_cloexec.go` in Go; Linux uses `accept4` with `SOCK_CLOEXEC`): a child started at that moment holds the connection too, and sealing it there keeps it open. The first lookup through the system resolver, Go's default on macOS, leaves a `com.apple.netsrc` kernel control socket open for the life of the process, never close-on-exec: every child started afterwards holds it (`lsof` shows `[ctl com.apple.netsrc …]`).
+
+A test process that has run other tests holds the servers and connections they left, so a test of what a child inherits must not depend on what that process holds: have the process that starts the child seal first, as the real one does, and hand it a stray descriptor of its own to show that it does. `TestPassedSocketsReachNoChild`'s exec helper took only the listeners before its exec and failed now and then in a full `go test ./internal/hub/` on a Mac (`a child got sockets [26]`); with a server accepting in a loop beside it, about one run in 1,500.
+
 ## An empty list sent as null means "no change" to an optional field (2026-11-14)
 
 The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.
 Go marshals a nil slice as `null`, so lifting the last blocked pattern stored none on the hub but left the node blocking
 the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
 empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
+
+## A node binary's name does not prove its platform (2026-11-14, #7206)
+
+The local node package lookup trusted `personad-<os>-<arch>` and `persona-node-<os>-<arch>` filenames without reading the executable, so one misnamed Hub build could be sent to every node of that named platform. Check the Go build info before selecting a local or bundled candidate and ignore a mismatch, allowing the normal release lookup to supply the right build; do not run a cross-platform binary on the Hub. The install path needs its own failure boundary too: verify `.new` before renaming it over the active binary, through direct and nested SSH, and remove it when the check fails. A test that only checks an error message misses whether the old executable survived.
 
 ## An update waits only for what its restart interrupts (2026-11-13, #6364)
 
@@ -572,6 +582,44 @@ urgent activity updates. Defer a wake time, not a payload: at expiry read the la
 fleet, preferences, foreground state and tokens, and recheck after a slow claim.
 Empty/done, an open phone or a fresh update token suppresses a queued start. Restart
 reconstructs its deadline from the durable budget and the current manager snapshot.
+
+## A push-start the phone has not answered is an activity the hub cannot reach (#7641)
+
+A push-to-start reaches the phone through APNs even while the phone cannot reach the hub. The activity starts, its
+update token never comes back, and the hub can neither update nor end it: it goes stale and stays. "No token" is not
+"no activity": starting again each round, and after each restart, only added cards (15 starts in 22 hours, not one
+update or end). Hold the next start until the phone answers (a reported update token, its app connecting) or for as
+long as an activity can run, and keep the hold with the start budget so a restart or the other slot sees it. Put the
+hold on before sending, so an answer that follows at once is what lifts it; a claimed start that was not sent keeps
+only the cooldown. Hold only what may be on screen: a start APNs or the relay refused (any status but 200) put up
+nothing, so lift the hold when that answer comes, or the phone that cannot reach the hub goes 8 hours without an
+activity; only a start with no answer at all is in doubt and keeps it. Keep the send's outcome typed (refused, not
+sent, no answer) rather than a log line, since the transport's retries already blur "failed" into one error. A test
+that never reports a token models this case, not the usual one: have the phone answer where the test is about the
+cooldown. The hub's update and end paths were fine all along; check them with a token before
+looking for a lost push.
+
+The hold and its lift were first written against "the device's current start", on the reasoning that a refusal comes
+within the send's retries, well inside the cooldown. That is a guess about timing, not a guarantee: a slow send, a
+slow store or the slot that is leaving can deliver the write after the next start was claimed, where a late lift
+drops that start's hold and a late hold keeps a refused one back for 8 hours. A write that follows from an event
+says which event: the time the start was claimed at, or the time the phone answered, and the store applies it only
+to a start claimed up to then (`claimed_at <= asOf`, one statement under the row lock). That needs the claim time to
+name one claim, so a claim is refused unless it is later than the last one, whatever the deadline says.
+
+The hub then kept the deadline the store last told it, so as not to ask each round, and dropped it when its own lift
+moved the store's. Two slots share the store through a blue-green switch, and a lift is whichever slot's the phone
+reaches or the refusal comes back to: the other one held on for up to 8 hours on a deadline nobody had any more.
+State another process can move is read where it is kept, each time it decides something; a copy needs a way to hear
+of every writer, and "this process's own writes" is not that. Test it with two hubs over one store, not with a
+restart, which starts from nothing remembered. What the hub still keeps per device is only the last deferral it
+logged, so hours of rounds are one line.
+
+The app connecting lifted the hold by the `device_id` in `register_phone`, and an older app sends none. The id that
+registration falls back to (the connection's credential, then `legacy`) names the phone's tools, not its pushes:
+starts are claimed under the push id, so a lift by the fallback id changes no row and looks done. An id has a
+namespace; resolve the fallback into the ids of the table being written (the devices that credential registered, as
+`wakeDevices` does for the same registrations) and assert on the store's row for a registration without the id.
 
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
