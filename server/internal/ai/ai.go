@@ -342,7 +342,7 @@ func messageFailure(kind, code, msg string) (bool, error) {
 			return false, limit
 		}
 	}
-	failure := &streamFailure{status: status, kind: kind, msg: msg}
+	failure := &streamFailure{status: status, kind: kind, code: code, msg: msg}
 	return true, withFailureKind(failure, failureKindFor(failureStatus, code, msg))
 }
 

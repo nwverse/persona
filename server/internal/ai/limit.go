@@ -446,19 +446,26 @@ func (e *httpError) failureKind() FailureKind {
 // Transient: the same request tried again may get an answer: the call ran out of time, the connection failed (before
 // the answer, or partway through it: a body shorter than it said, a stream that stopped before its end, a reset), or
 // an upstream answered 5xx or 408 (often a gateway in front of the model), also as a Messages error after the 200
-// (streamFailure). An exact X-Should-Retry: false (case-insensitive, surrounded by optional space) overrides that
-// 5xx/408 default. A request turned down (other 4xx), a model that isn't set up, a pause (IsPaused: wait for the
-// gate, don't hurry it) and a reply's own problems (a refusal, a reply that doesn't decode) are not.
+// (streamFailure). Recognized model/context/endpoint codes and an exact X-Should-Retry: false (case-insensitive,
+// surrounded by optional space) override that 5xx/408 default. A request turned down (other 4xx), a model that isn't
+// set up, a pause (IsPaused: wait for the gate, don't hurry it) and a reply's own problems (a refusal, a reply that
+// doesn't decode) are not.
 func Transient(err error) bool {
 	if err == nil || IsPaused(err) {
 		return false
 	}
 	var h *httpError
 	if errors.As(err, &h) {
+		if _, typed := failureKindForCode(h.code); typed {
+			return false
+		}
 		return !h.noRetry && (h.status >= 500 || h.status == http.StatusRequestTimeout)
 	}
 	var f *streamFailure
 	if errors.As(err, &f) {
+		if _, typed := failureKindForCode(f.code); typed {
+			return false
+		}
 		return f.status >= 500 || f.status == http.StatusRequestTimeout
 	}
 	// A *url.Error is a request that got no answer at all (a deadline, a refused or reset connection); a *net.OpError
@@ -469,15 +476,15 @@ func Transient(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.As(err, &n)
 }
 
-// parseRetryAfter reads syntactically valid Retry-After seconds or an HTTP date. Malformed and absent values are not
-// a cooldown; valid zero remains distinct so an explicit reset can expire immediately.
+// parseRetryAfter reads syntactically valid non-negative Retry-After seconds or an HTTP date. Malformed and absent
+// values are not a cooldown; valid zero remains distinct so an explicit reset can expire immediately.
 func parseRetryAfter(v string) (time.Duration, bool) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return 0, false
 	}
 	var d time.Duration
-	if n, err := strconv.Atoi(v); err == nil {
+	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 		d = time.Duration(n) * time.Second
 	} else if t, err := http.ParseTime(v); err == nil {
 		d = t.Sub(now())
@@ -507,8 +514,8 @@ func (e *streamLimit) Error() string { return fmt.Sprintf("ai: %s: %s", e.event,
 // answer would be: an api_error (500) or timeout_error (504) is tried again as before streaming, when it came as the
 // status itself; an unknown type is not.
 type streamFailure struct {
-	status    int
-	kind, msg string
+	status          int
+	kind, code, msg string
 }
 
 func (e *streamFailure) Error() string { return fmt.Sprintf("ai: error: %s: %s", e.kind, e.msg) }

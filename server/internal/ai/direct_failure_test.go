@@ -50,7 +50,7 @@ func TestDirectHTTPFailureKindsAcrossProtocols(t *testing.T) {
 		{"unknown code keeps context wording", 400, `{"error":{"code":"future_code","message":"prompt is too long: synthetic input"}}`, FailureContextTooLong, false},
 		{"unknown code generic message", 400, `{"error":{"code":"future_code","message":"request rejected"}}`, FailureOther, false},
 		{"string error wording", 404, `{"error":"unknown model example-model"}`, FailureModelUnavailable, false},
-		{"explicit model code beyond ordinary statuses", 500, `{"error":{"code":"model_not_found","message":"request rejected"}}`, FailureModelUnavailable, true},
+		{"explicit model code beyond ordinary statuses", 500, `{"error":{"code":"model_not_found","message":"request rejected"}}`, FailureModelUnavailable, false},
 	}
 	for _, protocol := range apis {
 		for _, tc := range cases {
