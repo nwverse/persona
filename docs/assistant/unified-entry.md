@@ -71,7 +71,11 @@ the Paseo or Cindy runtime, or a host without checkout support), the task runs i
 A repository nobody has committed to (no ref names a commit) has nothing to check out, so `worktree.prepare` fails
 with code `worktree_no_commits` (#5548): an inferred `new` then uses the free directory as `existing`, and an occupied one
 is refused with a message naming the task that holds it; an explicit `new` fails saying the repository has no commits.
-An explicit `workspace` overrides inference. When a caller means a particular branch/PR/checkout, it should name that checkout with `existing`.
+An explicit `workspace` overrides inference. When a caller knows a particular checkout, it should name it with `existing`.
+For an explicit `new.branch`, admission first asks the node whether that branch already has a checkout in the same repository.
+It reuses that checkout only after a successful clean-tree check, complete live-Agent inventory, and the hub's unfinished-task
+ownership check. Dirty, occupied, changed or unverifiable checkouts are refused with their path and known owner; nothing is forced.
+Older nodes omit branch lookup and keep the existing creation/refusal behavior. An unnamed `new` still creates its task-specific branch.
 Inference uses the node's `worktree.status`; if the node cannot answer, the plan reports the error and asks for an explicit choice.
 The same preference is available through `persona_settings` as `assistant.task_workspace_preference`.
 
@@ -88,6 +92,8 @@ There is no new workspace-root/template setting or arbitrary new-path override. 
 calls `newWorktree`, uses the engine's returned path/host workspace ID, and stores the actual `cwd` in the plan and the unchanged
 `todo_agents.cwd` column. A retry uses the created checkout rather than creating another one; a created checkout stays on its machine.
 Creation/lookup failures prevent Agent launch and appear on the task as failed dispatch with the underlying reason.
+A safely reused checkout is saved with `workspace_resolved.reused: true`, not `created: true`; it keeps its actual path and
+machine on retries just as a newly created checkout does. This recovery does not grant permission or change the Start gate.
 
 An existing workspace on the same machine and canonical path cannot be reused while another unfinished task holds it.
 The refusal names that task's ID/title and suggests waiting or choosing New (v1 has no queue).
