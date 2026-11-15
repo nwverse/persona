@@ -2,7 +2,11 @@ package persona.feature.settings
 
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
+import android.content.ComponentCallbacks
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
@@ -92,6 +96,52 @@ class PairingWelcomeTest {
         assertNull(shadowOf(rule.activity).nextStartedActivity)
         // The welcome page is still under the card.
         welcome().assertExists()
+    }
+
+    /** Counts what the link host registers on the application (memory-pressure callbacks, taken with its WebView pool). */
+    private class HostProbe(base: Context) : ContextWrapper(base) {
+        var registered = 0
+        private val app = object : ContextWrapper(base.applicationContext) {
+            override fun registerComponentCallbacks(callback: ComponentCallbacks) { registered++; super.registerComponentCallbacks(callback) }
+        }
+        override fun getApplicationContext(): Context = app
+    }
+
+    private fun showProbed(probe: HostProbe, content: @Composable () -> Unit) = rule.setContent {
+        PersonaTheme(reduceMotion = true) { CompositionLocalProvider(LocalContext provides probe) { content() } }
+    }
+
+    /** A page with a guide link is wrapped in exactly one link host, so the probe sees it (and the next tests mean something). */
+    @Test fun aBuildWithAGuideAddressHostsTheWelcomePageOnce() {
+        val probe = HostProbe(rule.activity)
+        showProbed(probe) { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = guide) }
+        rule.waitForIdle()
+        assertEquals(1, probe.registered)
+    }
+
+    /** No guide address: no link host, so no WebView pool and no renderer warm-up on the first-run page. */
+    @Test fun withoutABuildAddressTheWelcomePageHasNoLinkHostAndStartsNoWebView() {
+        val probe = HostProbe(rule.activity)
+        showProbed(probe) { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = null) }
+        rule.waitForIdle()
+        welcome().assertExists()
+        assertEquals(0, probe.registered)
+    }
+
+    @Test fun anAddressThatIsNotHttpsIsTreatedAsNoAddress() {
+        val probe = HostProbe(rule.activity)
+        showProbed(probe) { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = "http://guide.example.com/start") }
+        rule.waitForIdle()
+        rule.onNodeWithText(text(R.string.settings_pairing_welcome_guide)).assertDoesNotExist()
+        assertEquals(0, probe.registered)
+    }
+
+    /** Settings › Pairing and Add hub are inside the shell, which has its own host: not wrapped again, guide or not. */
+    @Test fun aPageInsideTheShellIsNotWrappedInASecondLinkHost() {
+        val probe = HostProbe(rule.activity)
+        showProbed(probe) { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, skipWelcome = true, gettingStartedUrl = guide) }
+        rule.waitForIdle()
+        assertEquals(0, probe.registered)
     }
 
     @Test fun otherWaysShowEveryOtherWayAndBackReturnsToTheWelcomePage() {
