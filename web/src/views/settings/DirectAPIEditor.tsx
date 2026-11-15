@@ -145,9 +145,9 @@ export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, o
         <input className={`${inputClass} font-mono`} value={draft.model} disabled={disabled} placeholder={model || t("settings-modelconfiguration.follow_default")}
           spellCheck={false} autoComplete="off" onChange={(event) => change({ model: event.target.value })} />
       </label>
-      <p className="text-caption2 text-ink-3">{t("settings-modelconfiguration.api_model_hint")}</p>
-      {listing && <p role="status" className="text-caption2 text-ink-3">{t("settings-modelconfiguration.api_models_loading")}</p>}
-      {listError && <div role="alert" className="flex items-start gap-2 text-caption2 text-ink-3">
+      <p className="text-submeta text-ink-3">{t("settings-modelconfiguration.api_model_hint")}</p>
+      {listing && <p role="status" className="text-submeta text-ink-3">{t("settings-modelconfiguration.api_models_loading")}</p>}
+      {listError && <div role="alert" className="flex items-start gap-2 text-submeta text-ink-3">
         <span className="min-w-0 break-words">{t("settings-modelconfiguration.list_error", { error: listError })}</span>
         <button type="button" disabled={disabled || listing} onClick={() => setReload((value) => value + 1)} className="shrink-0 whitespace-nowrap font-medium text-accent-ink hover:underline">{t("settings-modelconfiguration.retry")}</button>
       </div>}
@@ -159,7 +159,7 @@ export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, o
         {draft.effort && !efforts?.includes(draft.effort) && <option value={draft.effort}>{t("settings-modelconfiguration.model_current", { id: draft.effort })}</option>}
         {efforts.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}
       </select>
-      <span className="mt-1 block text-caption2 text-ink-3">{unsupported ? t("settings-modelconfiguration.api_effort_unsupported")
+      <span className="mt-1 block text-submeta text-ink-3">{unsupported ? t("settings-modelconfiguration.api_effort_unsupported")
         : reportedEfforts === undefined ? t("settings-modelconfiguration.api_effort_unknown") : t("settings-modelconfiguration.api_effort_hint")}</span>
     </label>}
     <div className="flex flex-col items-start gap-2">
@@ -173,9 +173,9 @@ export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, o
       {unresolvedInheritance && <p role="status" className="text-label text-ink-3">{t("settings-modelconfiguration.api_test_inheritance")}</p>}
       {failure && <div role="alert" className="text-label text-red">
         <p>{t(`settings-modelconfiguration.api_test_${failure.kind}`)}</p>
-        {failure.detail && <p className="mt-1 break-words text-caption2">{failure.detail}</p>}
+        {failure.detail && <p className="mt-1 break-words text-submeta">{failure.detail}</p>}
       </div>}
-      <p className="text-caption2 leading-relaxed text-ink-3">{t("settings-modelconfiguration.api_test_hint")}</p>
+      <p className="text-submeta leading-relaxed text-ink-3">{t("settings-modelconfiguration.api_test_hint")}</p>
     </div>
   </>;
 }
