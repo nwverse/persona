@@ -49,6 +49,9 @@ func (o *Operator) Create(ctx context.Context, opts Options) (_ Result, err erro
 	if err != nil {
 		return Result{}, err
 	}
+	if err := o.checkClients(hub, manager, "pg_dump", "pg_restore"); err != nil {
+		return Result{}, err
+	}
 	for _, target := range []Target{hub, manager} {
 		if err := o.backend.Quiesced(ctx, target, target.Database, false); err != nil {
 			return Result{}, err
@@ -126,6 +129,9 @@ func (o *Operator) Verify(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := o.checkClients(hub, manager, "pg_restore"); err != nil {
+		return Result{}, err
+	}
 	if err := o.verifyPayload(ctx, hub, manager, staging, manifest); err != nil {
 		return Result{}, fmt.Errorf("temporary-database verification failed: %w", err)
 	}
@@ -161,6 +167,9 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := o.checkClients(hub, manager, "pg_restore"); err != nil {
+		return Result{}, err
+	}
 	if hub.Database != manifest.HubDatabase || manager.Database != manifest.ManagerDatabase {
 		return Result{}, errors.New("the target database names differ from the bundle; use the original names so the restored configuration and databases agree")
 	}
@@ -176,7 +185,7 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 			return Result{}, err
 		}
 	}
-	hubStage, err := o.stageDatabase(ctx, hub, filepath.Join(staging, hubDumpPath), manifest.Hub, manifest.ManagerKeyFingerprint, nil, "h")
+	hubStage, err := o.stageDatabase(ctx, hub, filepath.Join(staging, hubDumpPath), manifest.Hub, manifest.HubKeyFingerprint, nil, "h")
 	if err != nil {
 		return Result{}, err
 	}
@@ -367,6 +376,23 @@ func anySealedValueOpens(values []string, keys [][]byte) bool {
 	return false
 }
 
+// checkClients stops early when the backend cannot run the PostgreSQL client
+// programs a command needs (fakes without clients have nothing to check).
+func (o *Operator) checkClients(hub, manager Target, programs ...string) error {
+	checker, ok := o.backend.(interface {
+		CheckClients(Target, ...string) error
+	})
+	if !ok {
+		return nil
+	}
+	for _, target := range []Target{hub, manager} {
+		if err := checker.CheckClients(target, programs...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubStage, managerStage *stagedDatabase) ([2]string, error) {
 	var previous [2]string
 	type swapRecord struct {
@@ -417,19 +443,51 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 			if err != nil {
 				return previous, errors.Join(err, rollback())
 			}
-			if err := o.backend.Rename(ctx, item.target, item.target.Database, record.previous); err != nil {
+			err := o.backend.Rename(ctx, item.target, item.target.Database, record.previous)
+			if err != nil {
+				// An error does not prove the rename did not commit.
+				record.previousMoved = o.renameMayHaveCommitted(item.target, item.target.Database, record.previous)
+				if record.previousMoved {
+					previous[index] = record.previous
+				}
 				return previous, errors.Join(err, rollback())
 			}
 			record.previousMoved = true
 			previous[index] = record.previous
 		}
 		if err := o.backend.Rename(ctx, item.target, item.staged.name, item.target.Database); err != nil {
+			if o.renameMayHaveCommitted(item.target, item.staged.name, item.target.Database) {
+				// The staged database may now be the installed one: never drop
+				// it as a stage; rollback renames it back first.
+				item.staged.active = false
+				record.installed = true
+			}
 			return previous, errors.Join(err, rollback())
 		}
 		item.staged.active = false
 		record.installed = true
 	}
 	return previous, nil
+}
+
+// renameMayHaveCommitted reconciles a failed rename against the server: it is
+// treated as not committed only when the source still exists and the
+// destination does not. When that cannot be established (the check fails, or
+// both or neither name exist) it is treated as committed, so rollback tries to
+// undo it; an undo of a rename that never happened fails harmlessly and is
+// reported, whereas dropping or abandoning an installed database is not.
+func (o *Operator) renameMayHaveCommitted(target Target, from, to string) bool {
+	ctx, cancel := cleanupContext()
+	defer cancel()
+	fromExists, err := o.backend.Exists(ctx, target, from)
+	if err != nil {
+		return true
+	}
+	toExists, err := o.backend.Exists(ctx, target, to)
+	if err != nil {
+		return true
+	}
+	return !(fromExists && !toExists)
 }
 
 func (o *Operator) uniqueName(ctx context.Context, target Target, prefix string) (string, error) {

@@ -165,3 +165,100 @@ func manifestJSON(t *testing.T, bundle string) []byte {
 func strconvQuote(value string) string {
 	return `"` + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`) + `"`
 }
+
+// A rename whose error arrives after the server committed it must not be taken
+// for "nothing happened": rollback has to put the databases back from what
+// actually exists, and must not leave files and databases from different
+// installs.
+func TestUncertainRenameResultRollsBackToTheRealState(t *testing.T) {
+	for _, fault := range []string{"manager:install", "hub:install", "manager:previous", "hub:previous"} {
+		t.Run(fault, func(t *testing.T) {
+			fixture := newBackupFixture(t, "persona_manager")
+			operator := fixture.operator()
+			if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+				t.Fatal(err)
+			}
+			fixture.mutate(t)
+			fixture.backend.commitThenFail = fault
+			_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+			if err == nil || !strings.Contains(err.Error(), "injected connection loss") {
+				t.Fatalf("restore error = %v", err)
+			}
+			if !fixture.backend.commitThenFired {
+				t.Fatal("the fault was never injected")
+			}
+			if got := fixture.backend.server(fixture.hub)[fixture.hub.Database]; got == nil || got.dump != "hub-two" {
+				t.Fatalf("hub database after rollback = %+v", got)
+			}
+			if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != "manager-two" {
+				t.Fatalf("manager database after rollback = %+v", got)
+			}
+			raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
+			if string(raw) != "changed knowledge" {
+				t.Fatalf("files were not rolled back: %q", raw)
+			}
+			assertNoTemporaryDatabases(t, fixture.backend)
+			for _, server := range fixture.backend.servers {
+				for name := range server {
+					if strings.HasPrefix(name, "persona_previous_") {
+						t.Errorf("previous database %s was not renamed back", name)
+					}
+				}
+			}
+		})
+	}
+}
+
+// Without usable pg_dump/pg_restore every command stops before it touches the
+// bundle, the files or the databases.
+func TestUnsupportedClientsFailBeforeAnyWork(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mutate(t)
+	fixture.backend.clientErr = errors.New("compose is not supported")
+	fixture.backend.created, fixture.backend.renamed = nil, nil
+	if _, err := operator.Verify(context.Background(), Options{Home: fixture.home, Bundle: fixture.output}); err == nil || !strings.Contains(err.Error(), "compose is not supported") {
+		t.Errorf("verify = %v", err)
+	}
+	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err == nil || !strings.Contains(err.Error(), "compose is not supported") {
+		t.Errorf("restore = %v", err)
+	}
+	other := fixture.options()
+	other.Output = filepath.Join(filepath.Dir(fixture.output), "second.backup")
+	if _, err := operator.Create(context.Background(), other); err == nil || !strings.Contains(err.Error(), "compose is not supported") {
+		t.Errorf("create = %v", err)
+	}
+	if len(fixture.backend.created) != 0 || len(fixture.backend.renamed) != 0 {
+		t.Errorf("databases were touched: created %v renamed %v", fixture.backend.created, fixture.backend.renamed)
+	}
+	if _, err := os.Stat(other.Output); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("bundle published: %v", err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
+	if string(raw) != "changed knowledge" {
+		t.Errorf("files touched: %q", raw)
+	}
+}
+
+// A bundle from a non-Docker install has no docker/db-password. Restoring it on
+// a Docker install must keep that file: the database role's password is not
+// part of the bundle, and the file is how the containers authenticate.
+func TestRestoreKeepsDockerPasswordFileAbsentFromBundle(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	password := filepath.Join(fixture.home, "docker", "db-password")
+	writeFixtureFile(t, password, []byte("compose-password"))
+	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(password)
+	if err != nil || string(raw) != "compose-password" {
+		t.Fatalf("docker/db-password after restore = %q, %v", raw, err)
+	}
+}

@@ -36,7 +36,12 @@ type fakeBackend struct {
 	failInstallPart string
 	installFailed   bool
 	installErr      error
+	// commitThenFail makes one rename of the named part succeed and then report
+	// an error, as a connection lost after the server committed would.
+	commitThenFail  string // "<part>:install" or "<part>:previous"
+	commitThenFired bool
 	active          map[string]int
+	clientErr       error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -164,8 +169,23 @@ func (f *fakeBackend) Rename(_ context.Context, target Target, from, to string) 
 	server[to] = server[from]
 	delete(server, from)
 	f.renamed = append(f.renamed, from+"->"+to)
+	if !f.commitThenFired && f.commitThenFail != "" {
+		kind := ""
+		switch {
+		case strings.HasPrefix(from, "persona_staged_") && to == target.Database:
+			kind = "install"
+		case from == target.Database && strings.HasPrefix(to, "persona_previous_"):
+			kind = "previous"
+		}
+		if kind != "" && f.commitThenFail == target.Part+":"+kind {
+			f.commitThenFired = true
+			return errors.New("injected connection loss after the rename committed")
+		}
+	}
 	return nil
 }
+
+func (f *fakeBackend) CheckClients(Target, ...string) error { return f.clientErr }
 
 func (f *fakeBackend) Exists(_ context.Context, target Target, name string) (bool, error) {
 	f.mu.Lock()
@@ -375,6 +395,13 @@ func TestCreateRejectsMismatchedCurrentKey(t *testing.T) {
 	_, err := fixture.operator().Create(context.Background(), fixture.options())
 	if err == nil || !strings.Contains(err.Error(), "different secret.key") {
 		t.Fatalf("mismatched key error = %v", err)
+	}
+	// The operator needs to know what to do: the rotation resumes when the
+	// manager starts, and cannot be rolled back once committed.
+	for _, wanted := range []string{"start the built-in manager once", "resumes at startup", "stop it and retry", "cannot be rolled back"} {
+		if !strings.Contains(err.Error(), wanted) {
+			t.Errorf("mismatched key error lacks %q: %v", wanted, err)
+		}
 	}
 	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("bundle exists after key failure: %v", statErr)

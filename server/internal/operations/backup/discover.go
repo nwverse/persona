@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
 )
@@ -114,12 +113,21 @@ func makeTarget(part, rawURL, container, defaultContainer string) (Target, error
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return Target{}, fmt.Errorf("%s database URL is not a postgres:// URL", part)
 	}
-	cfg, err := pgx.ParseConfig(rawURL)
+	cfg, err := parseAddressing(rawURL)
 	if err != nil || cfg.Database == "" {
 		return Target{}, fmt.Errorf("%s database URL must name a database", part)
 	}
-	if defaultContainer != "" && !loopbackDatabaseHost(u.Hostname()) {
-		defaultContainer = ""
+	// The connection goes where pgx says (host= in the query overrides the URL
+	// authority, and a list means any of them), so that decides on the local
+	// container too.
+	hosts := []string{cfg.Host}
+	for _, fallback := range cfg.Fallbacks {
+		hosts = append(hosts, fallback.Host)
+	}
+	for _, host := range hosts {
+		if !loopbackDatabaseHost(host) {
+			defaultContainer = ""
+		}
 	}
 	return Target{Part: part, URL: rawURL, Database: cfg.Database, Container: container, DefaultContainer: defaultContainer}, nil
 }
@@ -142,8 +150,8 @@ func withDatabase(rawURL, name string) (string, error) {
 }
 
 func sameDatabase(a, b Target) bool {
-	ac, aerr := pgx.ParseConfig(a.URL)
-	bc, berr := pgx.ParseConfig(b.URL)
+	ac, aerr := parseAddressing(a.URL)
+	bc, berr := parseAddressing(b.URL)
 	return aerr == nil && berr == nil && a.Database == b.Database && ac.Host == bc.Host && ac.Port == bc.Port
 }
 

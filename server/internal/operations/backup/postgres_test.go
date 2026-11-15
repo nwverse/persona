@@ -211,3 +211,102 @@ func TestRestorePassesPlainDatabaseName(t *testing.T) {
 		}
 	}
 }
+
+// The decision to fall back to the local container must use the host the
+// connection really uses (pgx's), not the URL authority: here the authority
+// says localhost but the query moves the connection to another server.
+func TestContainerFallbackFollowsTheConnectionHost(t *testing.T) {
+	isolateLibpqEnvironment(t)
+	for raw, want := range map[string]string{
+		"postgres://u@localhost/db?host=remote.example":           "",
+		"postgres://u@127.0.0.1/db?host=remote.example":           "",
+		"postgres://u@localhost/db?host=127.0.0.1,remote.example": "",
+		"postgres://u@/db?host=remote.example":                    "",
+		"postgres://u@remote.example/db?host=127.0.0.1":           "persona-postgres",
+		"postgres://u@127.0.0.1/db":                               "persona-postgres",
+		"postgres://u@localhost:5433/db":                          "persona-postgres",
+	} {
+		target, err := makeTarget("hub", raw, "", "persona-postgres")
+		if err != nil {
+			t.Fatalf("makeTarget(%q): %v", raw, err)
+		}
+		if target.DefaultContainer != want {
+			t.Errorf("makeTarget(%q).DefaultContainer = %q, want %q", raw, target.DefaultContainer, want)
+		}
+	}
+}
+
+// pgx reads sslrootcert/sslcert while parsing; a file that is not readable
+// where personad runs must not turn into "must name a database".
+func TestMakeTargetIgnoresUnreadableTLSFiles(t *testing.T) {
+	isolateLibpqEnvironment(t)
+	raw := "postgres://u@127.0.0.1/db?sslmode=verify-full&sslrootcert=/nonexistent/ca.pem&sslcert=/nonexistent/c.pem&sslkey=/nonexistent/k.pem"
+	target, err := makeTarget("hub", raw, "", "persona-postgres")
+	if err != nil {
+		t.Fatalf("makeTarget: %v", err)
+	}
+	if target.Database != "db" || target.DefaultContainer != "persona-postgres" {
+		t.Fatalf("target = %+v", target)
+	}
+	if _, err := makeTarget("hub", "postgres://u@127.0.0.1/?sslrootcert=/nonexistent/ca.pem", "", ""); err == nil || !strings.Contains(err.Error(), "must name a database") {
+		t.Fatalf("a URL without a database = %v", err)
+	}
+}
+
+// A non-loopback host (the shipped Compose form: host "postgres") with no
+// pg_dump/pg_restore here and no usable container fails before anything is
+// done, with a message that says so.
+func TestClientPreflightFailsEarlyWithoutUsableClients(t *testing.T) {
+	isolateLibpqEnvironment(t)
+	missing := func(string) (string, error) { return "", os.ErrNotExist }
+	present := func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	compose, err := makeTarget("hub", "postgres://persona@postgres:5432/persona", "", "persona-postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &postgresBackend{lookPath: missing}
+	err = backend.CheckClients(compose, "pg_dump", "pg_restore")
+	if err == nil {
+		t.Fatal("a non-loopback host without clients was accepted")
+	}
+	for _, wanted := range []string{"pg_dump", "postgres", "Compose", "not supported"} {
+		if !strings.Contains(err.Error(), wanted) {
+			t.Errorf("error lacks %q: %v", wanted, err)
+		}
+	}
+	if strings.Contains(err.Error(), "persona@") {
+		t.Errorf("error leaks the URL: %v", err)
+	}
+	only := func(name string) (string, error) {
+		if name == "pg_dump" {
+			return "/usr/bin/pg_dump", nil
+		}
+		return "", os.ErrNotExist
+	}
+	if err := (&postgresBackend{lookPath: only}).CheckClients(compose, "pg_dump", "pg_restore"); err == nil || !strings.Contains(err.Error(), "pg_restore") {
+		t.Errorf("pg_restore missing = %v", err)
+	}
+	if err := (&postgresBackend{lookPath: only}).CheckClients(compose, "pg_dump"); err != nil {
+		t.Errorf("only pg_dump needed and present: %v", err)
+	}
+	if err := (&postgresBackend{lookPath: present}).CheckClients(compose, "pg_dump", "pg_restore"); err != nil {
+		t.Errorf("clients present: %v", err)
+	}
+	// The loopback default container needs docker itself.
+	local, err := makeTarget("hub", "postgres://persona@127.0.0.1:5432/persona", "", "persona-postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&postgresBackend{lookPath: missing}).CheckClients(local, "pg_dump"); err == nil || !strings.Contains(err.Error(), "docker") {
+		t.Errorf("no clients and no docker = %v", err)
+	}
+	dockerOnly := func(name string) (string, error) {
+		if name == "docker" {
+			return "/usr/bin/docker", nil
+		}
+		return "", os.ErrNotExist
+	}
+	if err := (&postgresBackend{lookPath: dockerOnly}).CheckClients(local, "pg_dump", "pg_restore"); err != nil {
+		t.Errorf("container fallback available: %v", err)
+	}
+}

@@ -371,6 +371,27 @@ var libpqQueryEnvironment = map[string]string{
 	"passfile":                 "PGPASSFILE",
 }
 
+// parseAddressing parses a database URL for where and as whom to connect. pgx
+// loads TLS files while parsing, so those parameters are stripped (and TLS
+// turned off, which also keeps pgx from doubling every host into TLS and plain
+// fallbacks): host, port, user, password and database must not depend on
+// whether the files are readable where personad runs. It is for addressing
+// only, never for connecting.
+func parseAddressing(rawURL string) (*pgx.ConnConfig, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	query := u.Query()
+	for _, key := range []string{"sslrootcert", "sslcert", "sslkey", "sslpassword", "sslcrl", "sslcrldir", "sslmode", "sslsni", "sslnegotiation"} {
+		query.Del(key)
+	}
+	query.Set("sslmode", "disable")
+	addressing := *u
+	addressing.RawQuery = query.Encode()
+	return pgx.ParseConfig(addressing.String())
+}
+
 // clientEnvironment is the libpq environment for pg_dump/pg_restore. libpq
 // expands a URI only as an explicit dbname argument, never in PGDATABASE, so
 // every part is passed as its own variable; the password only in PGPASSWORD.
@@ -383,14 +404,7 @@ func clientEnvironment(target Target, database string, docker bool) []string {
 	}
 	// pgx loads TLS files while parsing; host, port, user and password must
 	// not depend on whether those files are readable here.
-	addressing := *u
-	query := u.Query()
-	for _, key := range []string{"sslrootcert", "sslcert", "sslkey", "sslpassword", "sslcrl", "sslcrldir", "sslmode", "sslsni", "sslnegotiation"} {
-		query.Del(key)
-	}
-	query.Set("sslmode", "disable")
-	addressing.RawQuery = query.Encode()
-	if cfg, err := pgx.ParseConfig(addressing.String()); err == nil {
+	if cfg, err := parseAddressing(target.URL); err == nil {
 		values["PGHOST"], values["PGPORT"] = cfg.Host, strconv.Itoa(int(cfg.Port))
 		values["PGUSER"], values["PGPASSWORD"] = cfg.User, cfg.Password
 	}
@@ -465,4 +479,33 @@ func sortedIdentities(identity DatabaseIdentity) DatabaseIdentity {
 
 func cleanupContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
+// CheckClients fails before any work when the programs a command needs cannot
+// run: not on PATH here, and no Docker container to run them in (an explicit
+// one, or the local persona-postgres default for a loopback server).
+func (b *postgresBackend) CheckClients(target Target, programs ...string) error {
+	container := target.Container
+	if container == "" {
+		var missing []string
+		for _, program := range programs {
+			if _, err := b.lookPath(program); err != nil {
+				missing = append(missing, program)
+			}
+		}
+		if len(missing) == 0 {
+			return nil
+		}
+		container = target.DefaultContainer
+		if container == "" {
+			return fmt.Errorf("the %s database needs %s, which is not installed here, and its server is not on this machine's loopback address, so no local container is assumed. "+
+				"Backing up from inside the hub container of the shipped Docker Compose deployment (database host \"postgres\") is not supported yet. "+
+				"Run personad backup where PostgreSQL client tools of the server's major version are installed, or pass --%s-docker-container naming a container that has them",
+				target.Part, strings.Join(missing, " and "), target.Part)
+		}
+	}
+	if _, err := b.lookPath("docker"); err != nil {
+		return fmt.Errorf("the %s database needs pg_dump/pg_restore, which are not installed here, and the docker command that would run them in container %q is not available either; install PostgreSQL client tools of the server's major version", target.Part, container)
+	}
+	return nil
 }

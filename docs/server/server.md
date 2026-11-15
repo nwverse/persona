@@ -342,6 +342,15 @@ Script steps:
 4. Rename restored database persona.
 5. Restore old binary, start container, wait for health.
 
+### Whole-install backup (`personad backup`)
+
+`personad backup create|verify|restore` backs up the hub and the built-in manager together: both databases, `secret.key` files, runtime files and the knowledge base (`personad backup <command> -h`). Stop the hub and the built-in manager first (`--writes-quiesced`).
+
+- **It needs `pg_dump` and `pg_restore` of the server's major version**, on `PATH` where `personad backup` runs. Without them, it falls back to `docker exec` into `persona-postgres` only when the database host is a loopback address (the native Docker deployment); `--hub-docker-container` / `--manager-docker-container` name another container.
+- **The shipped Docker Compose deployment is not supported yet.** Its database host is `postgres`, not loopback, and the hub image has neither the PostgreSQL client tools nor the `docker` command. `personad backup` then stops at once, before touching anything, and says so. Use the dump steps above, or run it where the client tools are installed and the database is reachable.
+- **A pending key rotation refuses the backup** (a `secret.key.next-*` file exists and the manager's database names the new key). Start the built-in manager once so it finishes the rotation (it resumes at startup), then stop it and retry; a rotation cannot be rolled back after its commit.
+- **Restore keeps `docker/db-password`** when the bundle has none (a bundle from a non-Docker install): the database role's password is not part of a bundle.
+
 ### Logs
 
 ```sh

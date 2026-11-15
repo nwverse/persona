@@ -49,6 +49,7 @@ func TestSocketDatabaseURLsAreAccepted(t *testing.T) {
 }
 
 func TestNonPostgresDatabaseURLsAreStillRejected(t *testing.T) {
+	isolateLibpqEnvironment(t) // PGDATABASE would otherwise name the database
 	for _, raw := range []string{"", "mysql://u@h/db", "http://h/db", "/var/lib/db", "postgres://h:5432"} {
 		if _, err := makeTarget("hub", raw, "", ""); err == nil {
 			t.Errorf("makeTarget(%q) was accepted", raw)

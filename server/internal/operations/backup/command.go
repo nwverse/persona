@@ -20,7 +20,11 @@ const Usage = `personad backup create --output <file> --writes-quiesced [databas
   personad backup verify --bundle <file> [database options]
                            verify every SHA-256 and restore both dumps into temporary databases (no service writes)
   personad backup restore --bundle <file> --writes-quiesced [--allow-external-kb] [database options]
-                           stage both databases and runtime files, preserve the previous databases, and roll back on failure`
+                           stage both databases and runtime files, preserve the previous databases, and roll back on failure
+
+  Needs pg_dump/pg_restore of the server's major version on PATH, or (for a loopback server) docker with the
+  persona-postgres container. The shipped Docker Compose deployment (database host "postgres", hub image without
+  client tools or docker) is not supported yet and stops before any work.`
 
 type operatorRunner interface {
 	Create(context.Context, Options) (Result, error)

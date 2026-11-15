@@ -112,7 +112,8 @@ func collectPayload(home, staging string, manifest *Manifest) error {
 	manifest.HubKeyFingerprint = secretkey.Fingerprint(hubKey)
 	manifest.ManagerKeyFingerprint = secretkey.Fingerprint(managerKey)
 	if manifest.Manager.SealingKey != "" && manifest.Manager.SealingKey != manifest.ManagerKeyFingerprint {
-		return errors.New("the built-in manager database names a different secret.key; finish or roll back its key rotation before backup")
+		return errors.New("the built-in manager database names a different secret.key than the one on disk, usually because its key rotation is unfinished (a secret.key.next-* file is pending). " +
+			"If so, start the built-in manager once so it finishes the rotation (it resumes at startup), then stop it and retry; the rotation cannot be rolled back after its commit")
 	}
 	return nil
 }
@@ -295,7 +296,16 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", name), target: filepath.Join(home, name), runtime: true})
 	}
 	for _, name := range optionalRootFiles {
-		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", filepath.FromSlash(name)), target: filepath.Join(home, filepath.FromSlash(name)), runtime: true})
+		source := filepath.Join(staging, "runtime", filepath.FromSlash(name))
+		// A bundle without it (a non-Docker install) must not move aside a
+		// Docker install's database password: the role's password is not part
+		// of the bundle, and the file is how the containers authenticate.
+		if name == "docker/db-password" {
+			if _, err := os.Lstat(source); err != nil {
+				continue
+			}
+		}
+		items = append(items, restoreItem{source: source, target: filepath.Join(home, filepath.FromSlash(name)), runtime: true})
 	}
 	nextKeys, _ := filepath.Glob(filepath.Join(home, "secret.key.next-*"))
 	for _, name := range nextKeys {
