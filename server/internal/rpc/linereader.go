@@ -133,7 +133,7 @@ func (s *lineReader) Scan() bool {
 				// limit. Nothing is copied until the line is whole (line).
 				s.parts = append(s.parts, s.buf)
 				s.held += len(s.buf)
-				s.buf, s.spent = takeGrown(min(s.piece, s.max-s.held)), false
+				s.buf = takeGrown(min(s.piece, s.max-s.held))
 				s.start, s.end, s.seen = 0, 0, 0
 			} else {
 				// Out of the first buffer straight to four times it (64 KiB: a session list of a few dozen rows fits),
@@ -198,7 +198,10 @@ func (s *lineReader) dropParts() {
 	switch len(s.parts) {
 	case 0:
 	case 1:
-		giveGrown(s.parts[0])
+		if !s.spent {
+			giveGrown(s.parts[0])
+		}
+		s.spent = false // the next buffer is this line's tail, not the spent first piece it replaced
 	default:
 		s.spent = true
 	}
