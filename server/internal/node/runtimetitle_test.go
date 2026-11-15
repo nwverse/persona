@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -66,24 +67,21 @@ func TestRuntimeTitleIsThePromptOnlyWhenPaseoDerivedIt(t *testing.T) {
 	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": rows})
 	want := map[string]proto.TitleSource{"derived": proto.TitleSourcePrompt, "context": proto.TitleSourcePrompt,
 		"given": proto.TitleSourceUnknown, "folder": proto.TitleSourcePrompt}
-	var got map[string]proto.Session
-	settled := func() bool {
+	var differs string
+	defer func() {
+		if t.Failed() {
+			t.Log(differs)
+		}
+	}()
+	waitFor(t, "each row's title and where it came from", func() bool {
 		freshOffline()
-		got = listed(t, n)
+		got := listed(t, n)
 		for name, source := range want {
-			if s, ok := got["paseo-"+name]; !ok || s.TitleSource != source || s.Title != titles[name] {
+			if s := got["paseo-"+name]; s.TitleSource != source || s.Title != titles[name] {
+				differs = fmt.Sprintf("%s: %q from %q, want %q", name, s.Title, s.TitleSource, source)
 				return false
 			}
 		}
 		return true
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for !settled() && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	for name, source := range want {
-		if s := got["paseo-"+name]; s.TitleSource != source || s.Title != titles[name] {
-			t.Errorf("%s: %q from %q, want %q", name, s.Title, s.TitleSource, source)
-		}
-	}
+	})
 }
