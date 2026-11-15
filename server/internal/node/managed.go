@@ -430,8 +430,13 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
 	catalog := resp.CodexCatalogURL
-	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) && !codexReadsCatalog(codexVersionAt(ctx, exe)) {
-		catalog = "" // the node checked another codex than this one (another PATH), and this one would not read it
+	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) {
+		// The node checked another codex than this one (another PATH): asked here, as briefly as the node waits.
+		vctx, cancel := context.WithTimeout(context.Background(), codexCatalogWait)
+		if !codexReadsCatalog(codexVersionAt(vctx, exe)) {
+			catalog = ""
+		}
+		cancel()
 	}
 	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env, catalog)
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
@@ -640,7 +645,7 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	if limits := outputLimits(l); limits != nil && l.AgentType() == "claude" { // the session model's limit (sessionOutput)
 		out["max_output_tokens"] = limits
 	}
-	if catalog, codex := n.codexCatalog(context.Background(), l); catalog != "" {
+	if catalog, codex := n.codexCatalogFor(l); catalog != "" { // waited for briefly: it never holds a start long
 		out["codex_catalog_url"], out["codex_catalog_codex"] = catalog, codex
 	}
 	if mergesNoProxy(l) {

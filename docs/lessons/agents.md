@@ -572,6 +572,14 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   its codex started a TUI on a pipe ("stdin is not a terminal"): put the subcommand in the launch's own arguments.
   Reproduce with a fake `personad` that is an app-server only when it gets `app-server`
   (`TestManagedCodexModelsAskTheAppServer`).
+- Whatever the node does while `launcher.env` waits counts against the 10 seconds `personad launch` waits for the
+  node (`LaunchNodeWait`), and those steps add up: finding codex can run a login shell for 15 seconds, a `codex
+  --version` whose wrapper's child keeps stdout open outlives its timeout without `WaitDelay`, and the probe takes 5
+  more. Bound the wait itself (`codexCatalogWait`), let the lookup go on behind it, and keep failures for a while (#8814).
+- Judge a catalog by every field Codex requires, not a few: one entry short of them fails Codex's whole list, and the
+  start then runs on fallback metadata with no list at all. A 200 whose body does not arrive whole says nothing about
+  the catalog. `$CODEX_HOME/models_cache.json` is one file for every provider in that home, used only for its writer,
+  the same version and 5 minutes (#8814).
 - Observe Codex against a local fake gateway with a temporary `CODEX_HOME`: the requests it makes (path, query,
   `Authorization`), what `model/list` returns and whether `codex exec` warns about fallback metadata. Never point the
   experiment at a real gateway with the user's key. See `docs/integrations/codex.md` ("Gateway model catalog").

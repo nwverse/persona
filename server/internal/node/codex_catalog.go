@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -59,6 +60,19 @@ const codexCatalogRetry = time.Minute
 // codexCatalogMost is the most of an answer the probe reads; a larger one is not taken for a catalog.
 const codexCatalogMost = 32 << 20
 
+// codexCatalogWait is the most launcher.env waits for the whole lookup (finding codex, its version, the probe): well
+// under the 10 seconds `personad launch` waits for the node (nodecmd.LaunchNodeWait), so a lookup never fails a start.
+// Past it the answer has no catalog, as before, and the lookup goes on: what it finds is kept for the next start.
+var codexCatalogWait = 2 * time.Second
+
+// codexVersionTimeout bounds one `codex --version`.
+var codexVersionTimeout = 5 * time.Second
+
+var codexCatalogLookups singleflight.Group
+
+// CodexCatalogWait is codexCatalogWait, for nodecmd's check that `personad launch` waits well longer for the node.
+func CodexCatalogWait() time.Duration { return codexCatalogWait }
+
 // codexCatalogAnswer is what the probe last learned of a gateway.
 type codexCatalogAnswer struct {
 	url   string    // the catalog, "" for none
@@ -71,6 +85,30 @@ var codexCatalogCache = struct {
 	got    map[string]codexCatalogAnswer
 	flight singleflight.Group
 }{got: map[string]codexCatalogAnswer{}}
+
+// codexCatalogFor is codexCatalog as launcher.env asks for it: waited for at most codexCatalogWait, after which l's
+// codex starts without a catalog while the lookup goes on (one per provider at a time).
+func (n *Node) codexCatalogFor(l proto.ManagedLauncher) (catalog, codex string) {
+	if l.AgentType() != "codex" || l.BaseURL == "" {
+		return "", ""
+	}
+	sum := sha256.Sum256([]byte(l.APIKey + "\x00" + l.Env))
+	key := strings.Join([]string{l.Name, l.Rev, l.BaseURL, hex.EncodeToString(sum[:])}, "\x00")
+	got := codexCatalogLookups.DoChan(key, func() (any, error) {
+		catalog, codex := n.codexCatalog(context.Background(), l)
+		return [2]string{catalog, codex}, nil
+	})
+	wait := time.NewTimer(codexCatalogWait)
+	defer wait.Stop()
+	select {
+	case r := <-got:
+		v := r.Val.([2]string)
+		return v[0], v[1]
+	case <-wait.C:
+		n.logf("launcher %s: no answer on its gateway's Codex model catalog within %s; starting without it, still asking", l.Name, codexCatalogWait)
+		return "", ""
+	}
+}
 
 // codexCatalog is the model catalog URL for l's codex (no client_version: Codex adds its own) and the codex executable
 // whose version allowed it; "" when l is no Codex provider with a gateway and a key, this computer's codex is too old
@@ -115,8 +153,8 @@ func (n *Node) codexCatalog(ctx context.Context, l proto.ManagedLauncher) (catal
 				a.url, a.at = prev.url, prev.at
 			}
 		}
-		if found != "" && prev.url != found {
-			n.logf("launcher %s: its gateway serves Codex's model catalog at %s", l.Name, found)
+		if found != "" && prev.url != found { // the path only: a base URL can carry credentials
+			n.logf("launcher %s: its gateway serves Codex's model catalog (%s below its base URL)", l.Name, strings.TrimPrefix(found, base))
 		}
 		if !had && len(codexCatalogCache.got) >= 64 {
 			codexCatalogCache.got = map[string]codexCatalogAnswer{}
@@ -143,7 +181,8 @@ func (n *Node) codexCatalog(ctx context.Context, l proto.ManagedLauncher) (catal
 
 // probeCodexCatalog asks each of codexCatalogPaths below base at once, as Codex would ask its model_catalog_url, and
 // is the first, in that order, that answers with a catalog. With none, sure says whether every path answered (an
-// answer that is no catalog), not an error, no answer in time or a status that may pass (5xx, 408, 429).
+// answer that is no catalog), not an error, no answer in time, a body that did not arrive whole in time or a status
+// that may pass (5xx, 408, 429).
 func probeCodexCatalog(ctx context.Context, base, key, version string, env map[string]string) (catalog string, sure bool) {
 	const (
 		none = iota
@@ -176,11 +215,19 @@ func probeCodexCatalog(ctx context.Context, base, key, version string, env map[s
 				return
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusOK && isCodexCatalog(resp.Body) {
-				got[i] <- found
+			if resp.StatusCode != http.StatusOK {
+				got[i] <- none
 				return
 			}
-			got[i] <- none
+			body, err := io.ReadAll(io.LimitReader(resp.Body, codexCatalogMost+1))
+			switch {
+			case err != nil: // cut off, or past the probe's time: an answer that did not arrive says nothing
+				got[i] <- unsure
+			case len(body) <= codexCatalogMost && isCodexCatalog(body):
+				got[i] <- found
+			default:
+				got[i] <- none
+			}
 		}()
 	}
 	sure = true
@@ -195,36 +242,72 @@ func probeCodexCatalog(ctx context.Context, base, key, version string, env map[s
 	return "", sure
 }
 
-// isCodexCatalog: r is a catalog Codex can use, `{"models":[…]}` with at least one entry, each with the fields Codex
-// cannot do without in every version that reads one (a unique, non-empty slug, a display name, its thinking levels and
-// its visibility), and one at least that its picker lists. OpenAI's model list ({"data":[…]}) is none.
-func isCodexCatalog(r io.Reader) bool {
-	var doc struct {
-		Models []map[string]json.RawMessage `json:"models"`
+// codexCatalogFields are the fields every Codex model entry has, with the JSON kind of each ('"' a string, 'b' a
+// boolean, '0' a number, '[' a list, '{' an object): those codex-rs ModelInfo cannot do without in every version that
+// reads a catalog by default (0.161 to 0.169 alike), slug aside. One without them fails Codex's whole catalog: it then
+// lists nothing and runs every model on fallback metadata, worse than no catalog.
+var codexCatalogFields = map[string]byte{"display_name": '"', "supported_reasoning_levels": '[', "shell_type": '"',
+	"visibility": '"', "supported_in_api": 'b', "priority": '0', "support_verbosity": 'b', "truncation_policy": '{',
+	"experimental_supported_tools": '['}
+
+// jsonKind is raw's kind as codexCatalogFields writes it; 0 for null, nothing or anything else.
+func jsonKind(raw json.RawMessage) byte {
+	raw = bytes.TrimSpace(raw)
+	switch {
+	case len(raw) == 0:
+		return 0
+	case raw[0] == '"', raw[0] == '[', raw[0] == '{':
+		return raw[0]
+	case raw[0] == 't', raw[0] == 'f':
+		return 'b'
+	case raw[0] == '-', raw[0] >= '0' && raw[0] <= '9':
+		return '0'
 	}
-	if json.NewDecoder(io.LimitReader(r, codexCatalogMost)).Decode(&doc) != nil || len(doc.Models) == 0 {
+	return 0
+}
+
+// fieldsOfKinds is obj's fields when it is a JSON object with each of fields of its kind; nil otherwise.
+func fieldsOfKinds(obj json.RawMessage, fields map[string]byte) map[string]json.RawMessage {
+	var m map[string]json.RawMessage
+	if jsonKind(obj) != '{' || json.Unmarshal(obj, &m) != nil {
+		return nil
+	}
+	for name, kind := range fields {
+		if jsonKind(m[name]) != kind {
+			return nil
+		}
+	}
+	return m
+}
+
+// isCodexCatalog: body is a catalog Codex can read, `{"models":[…]}` with at least one entry, each with a unique,
+// non-empty slug and every field of codexCatalogFields (each thinking level an effort and a description, the truncation
+// policy a mode and a limit), and one at least that its picker lists. OpenAI's model list ({"data":[…]}) is none. The
+// words inside (a level, a shell type, a visibility) are not checked: they change with Codex, whose version the gateway
+// was told.
+func isCodexCatalog(body []byte) bool {
+	var doc struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	if json.Unmarshal(body, &doc) != nil || len(doc.Models) == 0 {
 		return false
 	}
-	text := func(raw json.RawMessage) (string, bool) {
-		var s string
-		return s, len(raw) > 0 && raw[0] == '"' && json.Unmarshal(raw, &s) == nil
-	}
 	seen, listed := map[string]bool{}, false
-	for _, m := range doc.Models {
-		slug, ok := text(m["slug"])
-		if !ok || strings.TrimSpace(slug) == "" || seen[slug] {
+	for _, raw := range doc.Models {
+		m := fieldsOfKinds(raw, codexCatalogFields)
+		var slug, visibility string
+		var levels []json.RawMessage
+		if m == nil || jsonKind(m["slug"]) != '"' || json.Unmarshal(m["slug"], &slug) != nil || strings.TrimSpace(slug) == "" ||
+			seen[slug] || json.Unmarshal(m["visibility"], &visibility) != nil || json.Unmarshal(m["supported_reasoning_levels"], &levels) != nil ||
+			fieldsOfKinds(m["truncation_policy"], map[string]byte{"mode": '"', "limit": '0'}) == nil {
 			return false
+		}
+		for _, level := range levels {
+			if fieldsOfKinds(level, map[string]byte{"effort": '"', "description": '"'}) == nil {
+				return false
+			}
 		}
 		seen[slug] = true
-		levels := m["supported_reasoning_levels"]
-		var list []json.RawMessage
-		if _, ok := text(m["display_name"]); !ok || len(levels) == 0 || levels[0] != '[' || json.Unmarshal(levels, &list) != nil {
-			return false
-		}
-		visibility, ok := text(m["visibility"])
-		if !ok {
-			return false
-		}
 		listed = listed || visibility == "list"
 	}
 	return listed
@@ -233,21 +316,39 @@ func isCodexCatalog(r io.Reader) bool {
 var codexVersionCache = struct {
 	sync.Mutex
 	stamp, version string
-	until          time.Time // a failed run's: asked again after it; zero for an answer, kept while the file is
+	until          time.Time // asked again after it
 }{}
+
+// codexMissingUntil: no codex was found (agentExecutable may run a login shell for it) until then; not asked again
+// before it.
+var codexMissingUntil struct {
+	sync.Mutex
+	until time.Time
+}
 
 // codexVersion is this computer's codex (agentExecutable's) and its version (codexVersionAt).
 func codexVersion(ctx context.Context) (exe, version string) {
+	codexMissingUntil.Lock()
+	missing := time.Now().Before(codexMissingUntil.until)
+	codexMissingUntil.Unlock()
+	if missing {
+		return "", ""
+	}
 	exe, err := agentExecutable("codex")
 	if err != nil {
+		codexMissingUntil.Lock()
+		codexMissingUntil.until = time.Now().Add(codexCatalogRetry)
+		codexMissingUntil.Unlock()
 		return "", ""
 	}
 	return exe, codexVersionAt(ctx, exe)
 }
 
 // codexVersionAt is the version of the codex at exe as Codex sends it with a catalog request (major.minor.patch, from
-// `codex --version`), with a "-" suffix for a prerelease; "" when it says none or cannot be run. Kept while the
-// executable is unchanged; a run that failed or hung is tried again after codexCatalogRetry, not on every start.
+// `codex --version`), with a "-" suffix for a prerelease; "" when it says none or cannot be run within ctx and
+// codexVersionTimeout. Kept for codexCatalogTTL while the executable is unchanged: a shim (volta, mise, asdf) stays
+// the same file when the codex behind it is upgraded. A run that failed or hung is tried again after
+// codexCatalogRetry, not on every start.
 func codexVersionAt(ctx context.Context, exe string) string {
 	st, err := os.Stat(exe)
 	if err != nil {
@@ -255,16 +356,18 @@ func codexVersionAt(ctx context.Context, exe string) string {
 	}
 	stamp := exe + "\x00" + st.ModTime().String() + "\x00" + strconv.FormatInt(st.Size(), 10)
 	codexVersionCache.Lock()
-	kept := codexVersionCache.stamp == stamp && (codexVersionCache.until.IsZero() || time.Now().Before(codexVersionCache.until))
+	kept := codexVersionCache.stamp == stamp && time.Now().Before(codexVersionCache.until)
 	version, until := codexVersionCache.version, time.Time{}
 	codexVersionCache.Unlock()
 	if kept {
 		return version
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, codexVersionTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, exe, "--version").Output()
-	version, until = parseCodexVersion(string(out)), time.Time{}
+	cmd := exec.CommandContext(ctx, exe, "--version")
+	cmd.WaitDelay = time.Second // a wrapper's child that keeps stdout open does not hold the answer past the timeout
+	out, err := cmd.Output()
+	version, until = parseCodexVersion(string(out)), time.Now().Add(codexCatalogTTL)
 	if err != nil {
 		version, until = "", time.Now().Add(codexCatalogRetry)
 	}
