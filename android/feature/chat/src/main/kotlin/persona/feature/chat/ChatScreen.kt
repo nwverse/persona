@@ -22,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -198,6 +200,9 @@ private fun ChatPage(
     var footerHeight by remember { mutableIntStateOf(0) }
     var taskHeight by remember { mutableIntStateOf(0) }
     var stackHeight by remember { mutableIntStateOf(0) }
+    // The page's height above the keyboard, in pixels, read only where it is used (PendingStack.cap, the trays' room): it moves
+    // on every frame the keyboard slides, and a BoxWithConstraints here composed the whole page again on each of them.
+    var pageHeightPx by remember { mutableIntStateOf(-1) }
     val pageTrays = rememberChatPageTrays(key, chrome, renderStyle, connection)
     val assistantTrays = pageTrays.assistantTrays
     var trayApproving by pageTrays.trayApproving
@@ -865,9 +870,12 @@ private fun ChatPage(
                     followEnd()
                 }
             }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
-            BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
-                val pageHeight = maxHeight
-                val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+            val windowHeightPx = LocalWindowInfo.current.containerSize.height
+            val pageDensity = LocalDensity.current
+            // Until the page is measured (its first frame) the window's height stands in.
+            val pageHeight: () -> Dp = { with(pageDensity) { (if (pageHeightPx >= 0) pageHeightPx else windowHeightPx).toDp() } }
+            val trayMax: () -> Dp = { pageHeight() * AssistantTrayTokens.maximumHeightFraction }
+            Box(Modifier.fillMaxSize().padding(bottom = linkInset).onSizeChanged { pageHeightPx = it.height }) {
                 // The rule a question a supervisor passed up suggests, under its card (#4929); a hub from before sends none.
                 val ruleLine: (@Composable (Interaction) -> Unit)? = if (tasks == null) null else { card ->
                     RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
@@ -882,10 +890,12 @@ private fun ChatPage(
                     val density = LocalDensity.current
                     val above = LocalChromeInsets.current.top
                     val otherShown = if (task) stackCards.isNotEmpty() else taskAsk != null
-                    val cap by remember(pageHeight, keyboard, density, above, task, otherShown) {
+                    // The window's height is a key too: it stands in for the page's until the page is measured, and the
+                    // lambda this derived state keeps must see the window's current one after a resize.
+                    val cap by remember(keyboard, density, above, task, otherShown, windowHeightPx) {
                         derivedStateOf {
                             with(density) {
-                                PendingStack.cap(pageHeight, keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
+                                PendingStack.cap(pageHeight(), keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
                                     header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
                                     other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
                             }
@@ -999,7 +1009,9 @@ private fun ChatPage(
                             if (agentChat) computerPill?.invoke(Modifier.padding(horizontal = Tokens.Space.m))
                             // This agent has nothing left for you, others have (#4325): one tap to the next, no jump.
                             val openRequest = chrome.onOpenRequest
-                            val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+                            val ime = WindowInsets.ime
+                            val imeDensity = LocalDensity.current
+                            val keyboard by remember(ime, imeDensity) { derivedStateOf { ime.getBottom(imeDensity) > 0 } }
                             if (showsNextWaiting(offerNext, requests.size, readOnly, canOpen = openRequest != null, keyboard = keyboard))
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
