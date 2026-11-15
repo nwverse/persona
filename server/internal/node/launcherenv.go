@@ -34,7 +34,8 @@ var proxyEnvClear = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_prox
 // always has; a provider keeps the shell's proxy unless it has one (a dead one is dropped at launch,
 // withoutDeadProxies). Its bypass list replaces the shell's in both spellings (`personad launch` adds the inherited
 // ones to it first when it follows the shell's proxy, mergesNoProxy). What the launcher's own environment sets (Env)
-// goes too, a proxy variable in both spellings: its value is the one that counts.
+// goes too, a proxy variable in both spellings: its value is the one that counts. So does the reply limit when the
+// provider's models set one.
 func envClearFor(l proto.ManagedLauncher) []string {
 	var clear []string
 	switch {
@@ -46,6 +47,10 @@ func envClearFor(l proto.ManagedLauncher) []string {
 		clear = append(slices.Clone(providerEnvClear), "NO_PROXY", "no_proxy")
 	default:
 		clear = slices.Clone(providerEnvClear)
+	}
+	// The reply limit only when providerEnv sets it (outputTokens): otherwise the shell's stays, as it always has.
+	if _, set := providerEnv(l, "", "", false)[maxOutputEnv]; set {
+		clear = append(clear, maxOutputEnv)
 	}
 	for _, kv := range launcherEnvVars(l.Env) {
 		for _, k := range append([]string{kv[0]}, otherSpelling(kv[0])...) {
@@ -201,7 +206,57 @@ const (
 	markedWindow = 1000000
 	// gatewayTimeoutMS: API_TIMEOUT_MS for a gateway that sets none (slow third-party gateways, cindy's default).
 	gatewayTimeoutMS = 3000000
+	// unknownModelOutput: the longest reply Claude Code asks a model it does not know for, and unknownModelOutputCap
+	// the most CLAUDE_CODE_MAX_OUTPUT_TOKENS raises that to (2.1.325, and the official env-vars reference).
+	unknownModelOutput    = 32000
+	unknownModelOutputCap = 128000
 )
+
+// maxOutputEnv: the longest reply Claude Code asks for, one value for every model of the process, each capped at its
+// own limit (outputTokens).
+const maxOutputEnv = "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
+
+// processModelVars: the variables naming a model the process runs or can switch to (the session, a tier, the small
+// model, sub-Agents, the /model menu's extra entry).
+var processModelVars = []string{"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+	"CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_CUSTOM_MODEL_OPTION"}
+
+// claudeTierAliases: names Claude Code resolves to one of its tiers (whose model processModelVars already name).
+var claudeTierAliases = []string{"opus", "sonnet", "haiku", "fable", "best", "opusplan", "default", "inherit"}
+
+// claudeKnows: Claude Code knows model m itself, so it asks m for m's own output limit: a Claude ID, also inside a
+// gateway's spelling of it (anthropic/claude-opus-5-5, a dated ID). It matches its known IDs anywhere in a name.
+func claudeKnows(m string) bool { return strings.Contains(strings.ToLower(m), "claude-") }
+
+// outputTokens is CLAUDE_CODE_MAX_OUTPUT_TOKENS for l with env's models (#8798), 0 to leave Claude Code's own limit:
+// the least max_output_tokens of the models the process runs that Claude Code does not know, capped at what Claude
+// Code accepts, when that raises the 32000 it asks them for. None when the session's model is a Claude one (its
+// own limit is already its full one), and none when one of those models reports no limit: the one value serves them
+// all, and asking a model for more than it writes is refused by a strict gateway.
+func outputTokens(l proto.ManagedLauncher, env map[string]string) int {
+	if session := env["ANTHROPIC_MODEL"]; session == "" || claudeKnows(session) {
+		return 0
+	}
+	n := 0
+	for _, k := range processModelVars {
+		m := env[k]
+		if m == "" || claudeKnows(m) || slices.Contains(claudeTierAliases, strings.ToLower(strings.TrimSuffix(m, oneMillionSuffix))) {
+			continue
+		}
+		pm, _ := providerModel(l, m)
+		if pm.MaxOutputTokens <= 0 {
+			return 0
+		}
+		if n == 0 || pm.MaxOutputTokens < n {
+			n = pm.MaxOutputTokens
+		}
+	}
+	if n <= unknownModelOutput {
+		return 0
+	}
+	return min(n, unknownModelOutputCap)
+}
 
 // providerModel is what l knows of model m ("<id>" or "<id>[1m]").
 func providerModel(l proto.ManagedLauncher, m string) (proto.ProviderModel, bool) {
@@ -350,6 +405,11 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 			}
 		}
 	}
+	// The reply limit by the models the process ends up with (the launcher's own environment may name one), unless
+	// that environment sets it itself (empty: Claude Code's own limit).
+	if n := outputTokens(l, env); n > 0 && !given[maxOutputEnv] {
+		env[maxOutputEnv] = strconv.Itoa(n)
+	}
 	return env
 }
 
@@ -419,4 +479,48 @@ func launchEnvFor(clear, env []string, assistant bool) ([]string, []string) {
 func launcherDefaultEffort(l proto.ManagedLauncher) string {
 	pm, _ := providerModel(l, l.Model)
 	return cmp.Or(l.Effort, pm.DefaultEffort)
+}
+
+// noEffortModels are the IDs of l's models its gateway says take no thinking level (ProviderModel.NoEffort), for
+// `personad launch` to leave out the default level for one (launcher.env's no_effort, launchEffort).
+func noEffortModels(l proto.ManagedLauncher) []string {
+	var ids []string
+	for _, pm := range l.Models {
+		if pm.NoEffort {
+			ids = append(ids, pm.ID)
+		}
+	}
+	return ids
+}
+
+// launchEffort is the default level `personad launch` passes as --effort (launcher.env's effort), "" when the
+// session's model takes none (#8798): the last --model of the caller's arguments, else of the launcher's own, else
+// the launcher's model, is one of noEffort ("<id>" or "<id>[1m]"). Claude Code would send the level to a model the
+// gateway says has none.
+func launchEffort(effort string, noEffort []string, model string, args, launcherArgs []string) string {
+	m := cmp.Or(modelArg(args), modelArg(launcherArgs), model)
+	if effort == "" || m == "" {
+		return effort
+	}
+	if slices.Contains(noEffort, m) || slices.Contains(noEffort, strings.TrimSuffix(m, oneMillionSuffix)) {
+		return ""
+	}
+	return effort
+}
+
+// modelArg is the model the last -m / --model in args names before a "--" (what follows it is the prompt), "" none.
+func modelArg(args []string) string {
+	var m string
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--":
+			return m
+		case (a == "--model" || a == "-m") && i+1 < len(args):
+			i++
+			m = args[i]
+		case strings.HasPrefix(a, "--model="):
+			m = strings.TrimPrefix(a, "--model=")
+		}
+	}
+	return m
 }
