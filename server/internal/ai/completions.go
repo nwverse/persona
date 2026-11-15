@@ -43,15 +43,16 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			resp.Body.Close()
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
-			// reject stream_options. Retry only those rejected requests; arbitrary 400s and already-started
-			// streams must never be replayed.
-			if !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
+			// reject stream_options. Retry only those rejected requests without an explicit no-retry signal; arbitrary
+			// 400s and already-started streams must never be replayed.
+			noRetry := explicitNoRetry(resp.Header)
+			if !noRetry && !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
 				renamedTokens = true
 				delete(body, "max_tokens")
 				body["max_completion_tokens"] = r.MaxTokens
 				continue
 			}
-			if !droppedStreamOptions && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) && chatRejectsStreamOptions(raw) {
+			if !noRetry && !droppedStreamOptions && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) && chatRejectsStreamOptions(raw) {
 				droppedStreamOptions = true
 				delete(body, "stream_options")
 				continue
@@ -60,7 +61,8 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 		}
 		reply, err := readCompletions(resp.Body)
 		resp.Body.Close()
-		return reply, true, err
+		var limit *streamLimit
+		return reply, !errors.As(err, &limit), err
 	}
 }
 
@@ -104,8 +106,12 @@ func readCompletions(body io.Reader) (Reply, error) {
 			return nil
 		}
 		var chunk struct {
-			Model string `json:"model"`
-			Error *struct {
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Model   string `json:"model"`
+			Error   *struct {
+				Code    string `json:"code"`
 				Message string `json:"message"`
 			} `json:"error"`
 			Choices []struct {
@@ -127,8 +133,18 @@ func readCompletions(body io.Reader) (Reply, error) {
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			return fmt.Errorf("ai: decode stream: %w", err)
 		}
-		if chunk.Error != nil {
-			return fmt.Errorf("ai: stream error: %s", chunk.Error.Message)
+		if chunk.Error != nil || chunk.Type == "error" {
+			code, msg := chunk.Code, chunk.Message
+			if chunk.Error != nil {
+				if chunk.Error.Code != "" {
+					code = chunk.Error.Code
+				}
+				msg = chunk.Error.Message
+			}
+			if limit := streamLimitFor("stream error", code, msg); limit != nil {
+				return limit
+			}
+			return withFailureKind(fmt.Errorf("ai: stream error: %s", msg), failureKindFor(http.StatusBadRequest, code, msg))
 		}
 		if chunk.Model != "" {
 			reply.Model = chunk.Model

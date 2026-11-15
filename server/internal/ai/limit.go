@@ -405,24 +405,38 @@ func (g *gate) changed() {
 	g.wake = make(chan struct{})
 }
 
-// httpError is an answer other than 200.
+// httpError is an answer other than 200. body keeps the established clipped text; code and message retain the
+// semantics from the full body, and kind carries a model/context failure through wrapping and the gate.
 type httpError struct {
-	status     int
-	body       string
-	retryAfter time.Duration
+	status          int
+	body            string
+	retryAfter      time.Duration
+	retryAfterGiven bool
+	code            string
+	message         string
+	noRetry         bool
+	kind            FailureKind
 }
 
 func newHTTPError(resp *http.Response, raw []byte) *httpError {
+	code, message := gatewayErrorDetails(raw)
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),
-		retryAfter: retryAfter(resp.Header.Get("Retry-After"))}
+		retryAfter: retryAfter(resp.Header.Get("Retry-After")), retryAfterGiven: strings.TrimSpace(resp.Header.Get("Retry-After")) != "",
+		code: code, message: message, noRetry: explicitNoRetry(resp.Header), kind: failureKindFor(resp.StatusCode, code, message)}
 }
 
-func (e *httpError) Error() string { return fmt.Sprintf("ai: HTTP %d: %s", e.status, e.body) }
+func explicitNoRetry(header http.Header) bool {
+	return strings.EqualFold(strings.TrimSpace(header.Get("X-Should-Retry")), "false")
+}
+
+func (e *httpError) Error() string            { return fmt.Sprintf("ai: HTTP %d: %s", e.status, e.body) }
+func (e *httpError) failureKind() FailureKind { return e.kind }
 
 // Transient: the same request tried again may get an answer: the call ran out of time, the connection failed (before
 // the answer, or partway through it: a body shorter than it said, a stream that stopped before its end, a reset), or
 // an upstream answered 5xx or 408 (often a gateway in front of the model), also as a Messages error after the 200
-// (streamFailure). A request turned down (other 4xx), a model that isn't set up, a pause (IsPaused: wait for the
+// (streamFailure). An exact X-Should-Retry: false (case-insensitive, surrounded by optional space) overrides that
+// 5xx/408 default. A request turned down (other 4xx), a model that isn't set up, a pause (IsPaused: wait for the
 // gate, don't hurry it) and a reply's own problems (a refusal, a reply that doesn't decode) are not.
 func Transient(err error) bool {
 	if err == nil || IsPaused(err) {
@@ -430,7 +444,7 @@ func Transient(err error) bool {
 	}
 	var h *httpError
 	if errors.As(err, &h) {
-		return h.status >= 500 || h.status == http.StatusRequestTimeout
+		return !h.noRetry && (h.status >= 500 || h.status == http.StatusRequestTimeout)
 	}
 	var f *streamFailure
 	if errors.As(err, &f) {
@@ -487,26 +501,40 @@ var messageErrorStatus = map[string]int{
 	"api_error": http.StatusInternalServerError, "timeout_error": http.StatusGatewayTimeout,
 }
 
-// streamCodes are the in-stream error codes that report a limit, and which one.
+// streamCodes are explicit error codes that report a limit, and which one. HTTP classification uses the same machine
+// semantics; the Messages API's overloaded_error and rate_limit_error entries preserve its established type behavior.
 var streamCodes = map[string]string{
 	"rate_limit_exceeded": ReasonBusy, "slow_down": ReasonBusy, "server_is_overloaded": ReasonBusy,
+	"rpm_limit": ReasonBusy, "tpm_limit": ReasonBusy, "concurrency_limit": ReasonBusy, "account_concurrency_full": ReasonBusy,
 	"insufficient_quota": ReasonQuota, "credit_balance_exhausted": ReasonQuota,
 	"organization_spend_limit_exceeded": ReasonQuota, "project_spend_limit_exceeded": ReasonQuota,
+	"account_quota_exhausted": ReasonQuota, "budget_exhausted": ReasonQuota, "weekly_budget_exhausted": ReasonQuota,
+	"api_key_model_limit_exhausted": ReasonQuota, "quota_exhausted": ReasonQuota,
 	// The Messages API's error types for HTTP 529 and 429, which a stream reports in an error event after the 200.
 	"overloaded_error": ReasonBusy, "rate_limit_error": ReasonBusy,
 }
 
-// streamLimitFor is the limit an in-stream failure's code reports, nil for any other failure.
-func streamLimitFor(event, code, msg string) *streamLimit {
+// limitReasonForCode reads only an explicit code, never error.type. Recognized rate/concurrency codes stay busy even
+// when their message speaks of quota; rate_limit_error keeps its pre-existing quota-wording exception.
+func limitReasonForCode(code, msg string) (string, bool) {
 	code = strings.TrimSpace(code)
 	reason, ok := streamCodes[strings.ToLower(code)]
 	if !ok {
-		return nil
+		return "", false
 	}
 	if strings.EqualFold(code, "rate_limit_error") && quotaWords.MatchString(strings.ToLower(msg)) {
 		reason = ReasonQuota // as an HTTP 429 whose body speaks of quota (classify)
 	}
-	return &streamLimit{reason: reason, event: event, code: code, msg: msg}
+	return reason, true
+}
+
+// streamLimitFor is the limit an in-stream failure's code reports, nil for any other failure.
+func streamLimitFor(event, code, msg string) *streamLimit {
+	reason, ok := limitReasonForCode(code, msg)
+	if !ok {
+		return nil
+	}
+	return &streamLimit{reason: reason, event: event, code: strings.TrimSpace(code), msg: msg}
 }
 
 var (
@@ -563,10 +591,25 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 	if !errors.As(err, &h) {
 		return "", 0, ""
 	}
+	code, message := h.code, h.message
+	if code == "" && message == "" { // also support the package's direct httpError test fixtures
+		code, message = gatewayErrorDetails([]byte(h.body))
+	}
 	body := strings.ToLower(h.body)
+	if message != "" {
+		body += "\n" + strings.ToLower(message) // unknown codes keep the wording fallback, past the clipped text too
+	}
+	codedReason, coded := limitReasonForCode(code, message)
 	switch {
+	case h.status == http.StatusPaymentRequired:
+		reason = ReasonQuota
+	case h.status == http.StatusTooManyRequests && h.noRetry && (h.retryAfterGiven || h.retryAfter > 0):
+		// This is an explicit cooldown, not a busy answer to back off from exponentially.
+		reason = ReasonQuota
 	case h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
 		return "", 0, ""
+	case coded:
+		reason = codedReason
 	case strings.Contains(body, "concurrency"):
 		reason = ReasonBusy
 	case h.status == http.StatusTooManyRequests && quotaWords.MatchString(body):
