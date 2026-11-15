@@ -17,8 +17,11 @@ const GroupHeadingOffset = createContext<{ offset: number; depth: number; pinned
 const headingReports = new Map<Element, (height: number) => void>();
 let headingSizes: ResizeObserver | null = null;
 function watchHeading(el: Element, report: (height: number) => void): () => void {
-  headingSizes ??= new ResizeObserver((entries) => {
-    for (const e of entries) headingReports.get(e.target)?.(e.borderBoxSize?.[0]?.blockSize ?? e.target.getBoundingClientRect().height);
+  headingSizes ??= new ResizeObserver(entries => {
+    for (const e of entries) {
+      const box = e.borderBoxSize?.[0];
+      headingReports.get(e.target)?.(box ? box.blockSize : e.target.getBoundingClientRect().height);
+    }
   });
   headingReports.set(el, report);
   headingSizes.observe(el);

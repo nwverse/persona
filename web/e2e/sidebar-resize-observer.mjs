@@ -19,7 +19,7 @@ try {
   const page = await context.newPage();
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   page.on("pageerror", error => errors.push(String(error)));
-  await page.goto(`${origin}/?token=mock`);
+  await page.goto(new URL(`?token=mock`, origin).href);
   await page.locator("[data-chat-content] [data-answer]").first().waitFor({ timeout: 30_000 });
   await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
   assert.deepEqual(errors.filter(text => text.includes("ResizeObserver")), [], "the initial sidebar measurement must not produce a resize loop");
