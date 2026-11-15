@@ -11,7 +11,7 @@ import type { Budget } from "./data-use";
 import type { Change } from "./tiers/policy";
 import type { Bias } from "./tiers/ladder";
 import { updateOf, type ScreenVideoTiers } from "./video-tiers";
-import { encode, FRAME_REFINEMENT, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
+import { encode, FRAME_KEYFRAME, FRAME_REFINEMENT, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
 
 /** A duplex of bytes, one stream's worth; the relay WebSocket now, a direct route later (#6398 step 6). */
 export type VideoTransport = {
@@ -83,6 +83,11 @@ export class ScreenVideoStream {
   private partialSince: number | null = null;
   /** The quality tiers (#6558), when the page drives them; they start once the helper's hello lists them too. */
   readonly tiers: ScreenVideoTiers | null;
+  /** A frame came since the last `hello` or `paused`: the helper's capture is running. Before that a tier waits
+   *  (`held`), as on the iPhone: an `update` that reaches Persona Screen before its capture has started can be lost
+   *  (#7856), and capture starts again on resume. A new `hello` drops a held tier: its policy picks its own start. */
+  private framed = false;
+  private held: Change | null = null;
 
   constructor(
     private transport: VideoTransport,
@@ -124,9 +129,14 @@ export class ScreenVideoStream {
     if (!this.over) this.transport.send(encode({ type: "update", ...update }));
   }
 
-  /** A tier the policy chose: to the helper, then to the link. */
+  /** A tier the policy chose: to the helper, then to the link; before the first frame after `hello`, the newest waits
+   *  for it (each change carries the whole tier). */
   private apply(change: Change | null) {
     if (!change || this.over) return;
+    if (!this.framed) {
+      this.held = change;
+      return;
+    }
     this.send(updateOf(change));
     this.onEvent({ type: "tier", change });
   }
@@ -198,6 +208,8 @@ export class ScreenVideoStream {
         case "hello":
           this.heard();
           this.codec = m.codec;
+          this.framed = false; // a new capture: its first frame says it runs
+          this.held = null;
           this.newDecoder();
           this.onEvent({ type: "hello", hello: m });
           if (this.tiers) this.apply(this.tiers.hello(m, this.nowMicros() / 1_000_000));
@@ -217,8 +229,14 @@ export class ScreenVideoStream {
           this.heard();
           this.transport.send(encode({ type: "report", last_frame: m.number, capture_micros: m.capture_micros, arrival_micros: this.nowMicros(), bytes_since_last: this.sinceReport, flags: 0 }));
           this.sinceReport = 0;
+          if (!this.framed) {
+            this.framed = true;
+            const tier = this.held;
+            this.held = null;
+            this.apply(tier);
+          }
           // Only the read's first message can have begun in an earlier read.
-          this.tiers?.frame(m.capture_micros, arrived, first ? waiting : null, raw.body.length + 5, (m.flags & FRAME_REFINEMENT) !== 0);
+          this.tiers?.frame(m.capture_micros, arrived, first ? waiting : null, raw.body.length + 5, (m.flags & FRAME_REFINEMENT) !== 0, (m.flags & FRAME_KEYFRAME) !== 0);
           if (!this.decoder || !this.configured) return this.finish("undecodable");
           this.began.set(m.number, this.now());
           try {
@@ -233,6 +251,7 @@ export class ScreenVideoStream {
           break;
         case "paused":
           this.heard(true);
+          this.framed = false; // capture starts again on resume: changes wait for its first frame
           this.newest?.picture.close();
           this.newest = null;
           this.onEvent({ type: "paused", reason: m.reason });
