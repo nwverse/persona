@@ -231,8 +231,6 @@ struct ChatsView: View {
     @Environment(AppModel.self) private var model
     /// The shell (docs/apple/ios.md「New shell」): its ☰ and Assistant | Agents switch take the navigation bar.
     @Environment(\.shell) private var shell
-    /// A phone's tabs (iPhone Duo open): the switch over the page column, as on Assistant (#2623).
-    @Environment(\.pageTabSwitch) private var pageTabSwitch
     /// The Sidebar layout (#6332): this list is the sidebar's, the Persona sidebar's rows over it, and the page beside it
     /// starts at the Persona conversation (`UnifiedSidebarColumn`); nil in the Separate layout.
     @Environment(\.unifiedSidebar) private var unified
@@ -341,7 +339,7 @@ struct ChatsView: View {
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
         SplitNavigation(path: pushing, listKey: listKey,
-                        destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch,
+                        destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing),
                         columnColor: unified == nil ? nil : UnifiedSidebar.columnColor) {
             listColumn
         } empty: {

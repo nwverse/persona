@@ -426,6 +426,7 @@ type TaskRun struct {
 	InboxWorthy, InboxEvery bool
 	// Facts: the run's facts Persona worked out (RenderBriefFacts), above the task's prompt; "" for a task without them.
 	Facts string
+	State string // formatted scheduled-task state and update instructions
 }
 
 func RenderTaskRun(t TaskRun) string { return render("assistant/task_run", t) }
@@ -868,6 +869,12 @@ func RenderTaskDoneWhen(criteria []string) string {
 	return render("assistant/task_done_when", struct{ Criteria []string }{criteria})
 }
 
+// RenderTaskGoal is a task's done_when as one checkable condition, for a Claude Code /goal typed before the task's
+// first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
+func RenderTaskGoal(criteria []string) string {
+	return strings.TrimSpace(render("assistant/task_goal", struct{ Criteria []string }{criteria}))
+}
+
 // Relay is a message one assistant conversation sends another (conversation_send / conversation_new): what was
 // written, behind a note saying where it comes from and how many hops it is from the user's own message.
 type Relay struct {
@@ -891,6 +898,9 @@ type CodexMemory struct {
 }
 
 func RenderCodexMemory(m CodexMemory) string { return render("assistant/codex_memory", m) }
+
+// RenderMemoryDream asks the background pass to consolidate durable preferences.
+func RenderMemoryDream() string { return render("assistant/memory_dream", nil) }
 
 // RuntimeInstructions is what the assistant on an agent runtime (DSH…) gets with a new conversation's first message
 // (assistant/runtime_instructions): the shared memory, and the skills' gated commands it runs as tools.

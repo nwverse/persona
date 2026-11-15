@@ -62,6 +62,25 @@ type droppedError struct{}
 func (droppedError) Error() string        { return ErrClosed.Error() }
 func (droppedError) Is(target error) bool { return target == ErrClosed }
 
+// ErrNotSent marks an error returned before the request was written: the caller stopped waiting, or the connection
+// closed, while the call still waited to write. The other side never saw the request. NotSent wraps the cause, which
+// errors.Is still finds (context.Canceled, ErrClosed) and whose words it keeps, so a caller that cannot tell this
+// apart reads it as before.
+var ErrNotSent = errors.New("rpc: request not sent")
+
+// NotSent marks err (non-nil) as returned before the request went out (ErrNotSent).
+func NotSent(err error) error {
+	if err == nil || errors.Is(err, ErrNotSent) {
+		return err
+	}
+	return notSentError{err}
+}
+
+type notSentError struct{ err error }
+
+func (e notSentError) Error() string   { return e.err.Error() }
+func (e notSentError) Unwrap() []error { return []error{e.err, ErrNotSent} }
+
 // ErrNotWritten is matched (errors.Is) by what Call answers when the caller's ctx ended before the request could be
 // written (the writer busy with a long write ahead): the other side never saw it. The error is still the ctx's
 // (errors.Is DeadlineExceeded / Canceled), with its words.
@@ -257,9 +276,13 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 	for sc.Scan() {
 		readAt := p.lastReadTime()
 		var m message
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
-			p.lastActivity.Store(readAt.UnixNano())
-			continue
+		// A line in a buffer of its own keeps its params or result where they are (ownedline.go); any other is in the
+		// reader's buffer, which the next line overwrites, so they are copied out of it.
+		if !sc.Owned() || !unmarshalOwned(sc.Bytes(), &m) {
+			if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+				p.lastActivity.Store(readAt.UnixNano())
+				continue
+			}
 		}
 		if deadlineMessage(m) {
 			// Classify the rest of this raw read before waking the caller. Otherwise a deadline followed by an ordinary
@@ -423,7 +446,8 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message) (writeObserv
 	}
 	// Wait for the writer, but not past the caller or the connection: the write ahead may never finish. A write
 	// already under way cannot be interrupted. Try the immediate acquisition first so delayed means another write held
-	// the slot when this message arrived, rather than merely that a select chose one ready case over another.
+	// the slot when this message arrived, rather than merely that a select chose one ready case over another. Until the
+	// write begins nothing went out (NotSent).
 	observation := writeObservation{}
 	select {
 	case p.wsem <- struct{}{}:
@@ -435,21 +459,21 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message) (writeObserv
 			p.writeWaiters.Add(-1)
 		case <-ctx.Done():
 			p.writeWaiters.Add(-1)
-			return observation, ctx.Err()
+			return observation, NotSent(ctx.Err())
 		case <-p.closed:
 			p.writeWaiters.Add(-1)
-			return observation, ErrClosed
+			return observation, NotSent(ErrClosed)
 		}
 	}
 	defer func() { <-p.wsem }()
 	// Both may have become ready together and select picks at random: check again so a cancelled request never
 	// reaches the wire.
 	if err := ctx.Err(); err != nil {
-		return observation, err
+		return observation, NotSent(err)
 	}
 	select {
 	case <-p.closed:
-		return observation, ErrClosed
+		return observation, NotSent(ErrClosed)
 	default:
 	}
 	_, err = p.w.Write(b)
@@ -463,7 +487,7 @@ func (p *Peer) writeContextObserved(ctx context.Context, m message) (writeObserv
 // into the request's line.
 func (p *Peer) Call(ctx context.Context, method string, params any, out any) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return NotSent(err)
 	}
 	id := fmt.Sprintf("%s%d", p.prefix, p.nextID.Add(1))
 	ch := make(chan message, 1)
