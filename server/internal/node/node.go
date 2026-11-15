@@ -710,7 +710,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Kind             string        `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
 		Op               string        `json:"op"`        // panes.git: fetch, pull or push
 		Action           string        `json:"action"`    // launchers.repair: which of its fixed repairs
-		Branch           string        `json:"branch"`    // worktree.create
 		TabName          *string       `json:"tab_name"`
 		TZ               string        `json:"tz"` // the user's time zone
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
@@ -736,8 +735,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 
 		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
 
-		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
-		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -1525,64 +1522,64 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return n.gitOp(ctx, dir, p.Op)
-	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
-		var in struct {
-			Composer bool `json:"composer"`
-		}
+	case methodWorktreePrepare: // "New worktree…": what the dialog starts from (worktree.go)
+		var in worktreePrepareParams
 		if err := json.Unmarshal(params, &in); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
 		if in.Composer {
-			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID)
+			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID)
 		}
-		return n.worktreePrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd)
-	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
-		var in struct {
-			Composer bool `json:"composer"`
-		}
+		return n.worktreePrepare(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd)
+	case methodWorktreeCreate: // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
+		var in worktreeCreateParams
 		if err := json.Unmarshal(params, &in); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
 		if in.Composer {
-			return n.worktreeCompose(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+			return n.worktreeCompose(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
 		}
 		if err := rejectComposerFields(ctx, params); err != nil {
 			return nil, err
 		}
-		if p.AutoName {
-			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
+		if in.AutoName {
+			if strings.TrimSpace(in.Branch) != "" || strings.TrimSpace(in.Path) != "" {
 				return nil, errors.New("Choose automatic naming or an explicit branch and path")
 			}
-			return n.worktreeCreateAutomatic(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
+			return n.worktreeCreateAutomatic(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
 		}
-		return n.worktreeCreate(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
-	case "worktree.source":
-		return n.worktreeSources(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
-	case "worktree.preset":
-		return n.worktreeSavePreset(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
-	case "worktree.delete":
-		return n.worktreeDelete(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
-	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
-		var a struct {
-			NameHint     string `json:"name_hint"`
-			DeleteBranch bool   `json:"delete_branch"`
-			Force        bool   `json:"force"`
+		return n.worktreeCreate(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
+	case methodWorktreeSource, methodWorktreePreset, methodWorktreeDelete:
+		var in worktreeSourceParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
-		_ = json.Unmarshal(params, &a)
+		switch method {
+		case methodWorktreeSource:
+			return n.worktreeSources(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
+		case methodWorktreePreset:
+			return n.worktreeSavePreset(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
+		}
+		return n.worktreeDelete(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
+	case methodWorktreeAdd, methodWorktreeStatus, methodWorktreeRemove: // a new agent's own worktree (agentworktree.go, #6115)
 		ctx = worktreeComposerContext(ctx, params) // its refusals in the request's language (the hub sends it)
 		switch method {
-		case "worktree.add":
-			return n.worktreeAdd(ctx, p.Kind, p.Cwd, p.Branch, a.NameHint)
-		case "worktree.status":
-			return n.worktreeStatus(ctx, p.Kind, p.Cwd)
+		case methodWorktreeAdd:
+			var in worktreeAddParams
+			_ = json.Unmarshal(params, &in)
+			return n.worktreeAdd(ctx, in.Kind, in.Cwd, in.Branch, in.NameHint)
+		case methodWorktreeStatus:
+			var in worktreeStatusParams
+			_ = json.Unmarshal(params, &in)
+			return n.worktreeStatus(ctx, in.Kind, in.Cwd)
 		}
-		return n.worktreeRemove(ctx, p.Kind, p.Path, a.DeleteBranch, a.Force)
-	case "worktree.snapshot": // a reviewer's own copy of an agent's change (reviewsnapshot.go, #2173)
-		var a struct {
-			NameHint string `json:"name_hint"`
-		}
-		_ = json.Unmarshal(params, &a)
-		return n.worktreeSnapshot(ctx, p.Kind, p.Cwd, a.NameHint)
+		var in worktreeRemoveParams
+		_ = json.Unmarshal(params, &in)
+		return n.worktreeRemove(ctx, in.Kind, in.Path, in.DeleteBranch, in.Force)
+	case methodWorktreeSnapshot: // a reviewer's own copy of an agent's change (reviewsnapshot.go, #2173)
+		var in worktreeSnapshotParams
+		_ = json.Unmarshal(params, &in)
+		return n.worktreeSnapshot(ctx, in.Kind, in.Cwd, in.NameHint)
 	case "tabs.close":
 		return ok(n.closeTab(ctx, p.Kind, p.TabID))
 	case "tabs.rename":
@@ -1825,8 +1822,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return map[string]any{"ok": true, "name": name}, nil
-	case "worktree.rename": // its refusals in the request's language (the hub sends it)
-		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Name))
+	case methodWorktreeRename: // its refusals in the request's language (the hub sends it)
+		var in worktreeRenameParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":
