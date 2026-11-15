@@ -86,6 +86,7 @@ export async function startFakePaseo(t, o = {}) {
     archivedWorkspaces: [], // ids archive_workspace_request archived
     onArchiveWorkspace: undefined, // (descriptor) => the disk part of an archive (a test's; a throw is Paseo's error)
     timelines: new Map(), // agent id → { epoch, entries }
+    loads: [], // ids of the agents a timeline request loaded from storage (closed or archived ones), in order
     conns: [],
     requests: [], // every session request, in order
     hellos: [],
@@ -249,6 +250,14 @@ export async function startFakePaseo(t, o = {}) {
         f.subs.delete(msg.subscriptionId)
         return reply(c, 'subscription.release.response', { requestId: id, subscriptionId: msg.subscriptionId })
       case 'fetch_agent_timeline_request': {
+        // Paseo loads an agent it let go before it reads the timeline (0.15.4 ensureAgentLoaded): its provider runs
+        // again, and the lists see it loaded, its updatedAt as it was (a restore keeps it). An archived one is loaded
+        // as history, still archived and listed nowhere.
+        const stored = f.agents.get(msg.agentId)?.agent
+        if (stored?.status === 'closed' || stored?.archivedAt) {
+          f.loads.push(msg.agentId)
+          if (!stored.archivedAt) f.upsert({ ...stored, status: 'idle' })
+        }
         const a = f.agents.get(msg.agentId)
         const tl = f.timelines.get(msg.agentId) ?? { epoch: 'ep1', entries: [] }
         let list = tl.entries

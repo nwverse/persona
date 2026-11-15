@@ -68,6 +68,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
     models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true, same_kind: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent, l.prompt_optional]),
     [['my-claude', 'claude', undefined], ['my-codex', 'codex', true], ['grok', 'paseo', undefined]])
+  assert.deepEqual(node.hello.launchers.map((l) => l.auto_accept), [undefined, undefined, true], "Grok's approval is Paseo's Auto Accept (#8141)")
   assert.deepEqual(node.hello.launchers[0].models, [{ id: 'fable[1m]', name: 'Fable', default: true, efforts: ['low', 'high', 'max'], default_effort: 'max' }])
   const byId = Object.fromEntries(rows().map((r) => [r.session_id, r]))
   assert.deepEqual(Object.keys(byId).sort(), [SID, 'paseo-e1', `paseo-${a.codex.id}`, `paseo-${a.grok.id}`].sort(), 'a Claude agent without a session yet is not listed')
@@ -210,6 +211,93 @@ test("a Claude Code session's watch is its live text only: the node reads the tr
   await new Promise((r) => setTimeout(r, 300))
   assert.equal(node.all('session.items').filter((x) => x.session_id === SID).length, 0, 'no items: the transcript has them')
   assert.equal(fake.requestsOf('fetch_agent_timeline_request').filter((r) => r.agentId === a.claude.id).length, 0, 'its timeline is not read')
+})
+
+test('an agent Paseo let go is loaded only by opening its chat: a background read asks Paseo nothing (#8132)', async (t) => {
+  const { fake, node, bridge, a } = await setup(t)
+  const id = `paseo-${a.grok.id}` // closed: Paseo collected its idle runtime
+  fake.setTimeline(a.grok.id, [entry(1, { type: 'user_message', text: '查日志', messageId: 'u1' }), entry(2, { type: 'assistant_message', text: '查完了' })])
+  const reads = (agentId) => fake.requestsOf('fetch_agent_timeline_request').filter((r) => r.agentId === agentId).length
+  // The manager's read after a turn, an app's background sync of its recent chats: refused, nothing asked of Paseo.
+  for (const params of [{ turns: 1 }, { after_seq: 0 }, { limit: 1 }]) {
+    await assert.rejects(call(node, 'session.items', { session_id: id, ...params }), (e) => e.code === 'not_loaded', JSON.stringify(params))
+  }
+  await assert.rejects(call(node, 'session.item', { session_id: id, item_id: '2#0' }), (e) => e.code === 'not_loaded')
+  assert.equal(reads(a.grok.id), 0, 'no timeline request: Paseo would load the agent to answer it')
+  assert.deepEqual(fake.loads, [])
+
+  // A person opens its chat: the watch loads it, once, and the chat shows its history.
+  await call(node, 'session.watch', { session_id: id, since_seq: 0 })
+  assert.deepEqual(fake.loads, [a.grok.id], 'loaded by the watch')
+  const page = await call(node, 'session.items', { session_id: id, turns: 3 })
+  assert.deepEqual(page.items.map((i) => i.text), ['查日志', '查完了'])
+  assert.equal(page.history, `paseo:${a.grok.id}:ep1`)
+  await call(node, 'session.unwatch', { session_id: id })
+
+  // An hour later Paseo lets it go again, its updatedAt as it was: a background read is answered with the last read.
+  await until('loaded', () => bridge.state.agents.get(a.grok.id)?.agent.status === 'idle')
+  fake.upsert({ ...fake.agents.get(a.grok.id).agent, status: 'closed' })
+  await until('let go again', () => bridge.state.agents.get(a.grok.id)?.agent.status === 'closed')
+  const before = reads(a.grok.id)
+  assert.deepEqual((await call(node, 'session.items', { session_id: id, turns: 3 })).items, page.items, 'all of it: a stored conversation does not change')
+  assert.equal(reads(a.grok.id), before)
+  // Once it moved while stored (renamed in Paseo), the last read may not be all of it: refused again.
+  fake.update(a.grok.id, { title: 'C2' })
+  await until('moved', () => bridge.state.agents.get(a.grok.id)?.agent.title === 'C2')
+  await assert.rejects(call(node, 'session.items', { session_id: id, turns: 1 }), (e) => e.code === 'not_loaded')
+  assert.equal(reads(a.grok.id), before)
+  assert.deepEqual(fake.loads, [a.grok.id])
+
+  // A Claude agent whose transcript Claude Code's cleanup removed: the node, finding no file, asks the bridge. Its
+  // timeline is read the same way, only while its chat is open.
+  fake.upsert({ ...fake.agents.get(a.claude.id).agent, status: 'closed' })
+  await until('the Claude agent let go', () => bridge.state.agents.get(a.claude.id)?.agent.status === 'closed')
+  fake.setTimeline(a.claude.id, [entry(1, { type: 'user_message', text: '一个月前的问题', messageId: 'u1' })])
+  await assert.rejects(call(node, 'session.items', { session_id: SID, turns: 1 }), (e) => e.code === 'not_loaded')
+  assert.equal(reads(a.claude.id), 0)
+  await call(node, 'session.watch', { session_id: SID, since_seq: 0 })
+  assert.deepEqual((await call(node, 'session.items', { session_id: SID, turns: 3 })).items.map((i) => i.text), ['一个月前的问题'])
+  assert.deepEqual(fake.loads, [a.grok.id, a.claude.id])
+})
+
+test('a watched chat whose agent Paseo lets go reads nothing more until the agent runs again (#8132)', async (t) => {
+  const { fake, node, bridge, a } = await setup(t)
+  const id = `paseo-${a.codex.id}` // running
+  const reads = () => fake.requestsOf('fetch_agent_timeline_request').filter((r) => r.agentId === a.codex.id).length
+  fake.setTimeline(a.codex.id, [entry(1, { type: 'user_message', text: '跑测试', messageId: 'u1' })])
+  await call(node, 'session.watch', { session_id: id, since_seq: 0 })
+  await until('the subscription made', () => [...fake.subs.values()].some((s) => s.kind === 'timeline'))
+  fake.setTimeline(a.codex.id, [entry(1, { type: 'user_message', text: '跑测试', messageId: 'u1' }), entry(2, { type: 'assistant_message', text: '都过了' })])
+  fake.update(a.codex.id, { status: 'idle', lastUserMessageAt: '2026-11-04T01:00:00Z' })
+  await until('the end of the turn pushed', () => node.all('session.items').some((x) => x.session_id === id && x.items.some((i) => i.text === '都过了')))
+  const before = reads()
+  // The chat stays open; an hour idle, Paseo collects the agent's runtime. Reading it now would load it again.
+  fake.upsert({ ...fake.agents.get(a.codex.id).agent, status: 'closed' })
+  await until('let go', () => bridge.state.agents.get(a.codex.id)?.agent.status === 'closed')
+  await new Promise((r) => setTimeout(r, 400)) // past the watch's refresh delay
+  assert.equal(reads(), before, 'nothing read once Paseo let it go')
+  assert.deepEqual(fake.loads, [])
+  // A message has Paseo load and run it: its next turn is read as it runs.
+  fake.setTimeline(a.codex.id, [entry(1, { type: 'user_message', text: '跑测试', messageId: 'u1' }), entry(2, { type: 'assistant_message', text: '都过了' }),
+    entry(3, { type: 'user_message', text: '再跑一次', messageId: 'u2' })])
+  fake.update(a.codex.id, { status: 'running' })
+  await until('the next turn pushed', () => node.all('session.items').some((x) => x.session_id === id && x.items.some((i) => i.text === '再跑一次')))
+  assert.deepEqual(fake.loads, [], 'read while Paseo had it loaded')
+})
+
+test('an archived agent kept as a row is loaded only by opening its chat (#8132)', async (t) => {
+  const thread = '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0009'
+  const kept = agentSnapshot({ id: 'kept-codex', provider: 'my-codex', status: 'closed', labels: { 'persona.session': 'paseo-kept-codex' },
+    archivedAt: new Date().toISOString(), persistence: { provider: 'my-codex', sessionId: thread, metadata: { provider: 'codex' } } })
+  const { fake, node, rows } = await setup(t, { agents: [...Object.values(agents()).map((agent) => ({ agent, project: PROJECT })), { agent: kept, project: PROJECT }] })
+  await until('the retained Codex row', () => rows().some((r) => r.session_id === 'paseo-kept-codex'))
+  fake.setTimeline(kept.id, [entry(1, { type: 'user_message', text: '归档前', messageId: 'u1' }), entry(2, { type: 'assistant_message', text: '做完了' })])
+  await assert.rejects(call(node, 'session.items', { session_id: 'paseo-kept-codex', turns: 1 }), (e) => e.code === 'not_loaded')
+  assert.deepEqual(fake.loads, [], 'Paseo would load an archived agent to read it, as history')
+  await call(node, 'session.watch', { session_id: 'paseo-kept-codex', since_seq: 0 })
+  assert.deepEqual((await call(node, 'session.items', { session_id: 'paseo-kept-codex', turns: 3 })).items.map((i) => i.text), ['归档前', '做完了'])
+  assert.deepEqual(fake.loads, [kept.id])
+  assert.ok(fake.agents.get(kept.id).agent.archivedAt, 'still archived: reading it restores nothing')
 })
 
 test('a watched session another agent takes on: the watch follows that agent, and its content is another history', async (t) => {
@@ -1703,6 +1791,52 @@ test("an Agent Persona started calls its own Persona tools without a card; every
     ['paseo-e1', 'mcp__persona__dispatch_start'], ['paseo-e1', 'mcp__persona__phone_notify'], [SID, 'mcp__persona__report_to_supervisor'],
   ].sort())
   assert.equal(fake.requestsOf('set_agent_mode_request').length, 0)
+})
+
+test("an Agent Persona started on any provider calls its own Persona tools without a card: Grok, OpenCode, Codex (#8141)", async (t) => {
+  const own = ['mcp__persona__report_to_supervisor', 'mcp__persona__todo_decision_add']
+  const providers = { ...PROVIDERS, opencode: {} }
+  const entries = [...ENTRIES, { provider: 'opencode', enabled: true, status: 'ready', label: 'OpenCode', models: [] }]
+  const { fake, node, a, rows } = await setup(t, { allowTools: own, providers, entries })
+  node.resolve = () => ({ allow: true })
+  const started = (provider, sid) => {
+    const x = agentSnapshot({ provider, cwd: '/tmp', title: sid, status: 'running', labels: { 'persona.session': sid } })
+    fake.upsert(x, PROJECT)
+    return x
+  }
+  const grok = started('grok', 'paseo-g1')
+  const opencode = started('opencode', 'paseo-o1')
+  const codex = started('my-codex', 'paseo-c1')
+  await until('listed', () => ['paseo-g1', 'paseo-o1', 'paseo-c1'].every((id) => rows().some((r) => r.session_id === id)))
+  // Grok over ACP names an MCP tool in its input; OpenCode by <server>_<tool>; Codex in its approval of the server.
+  const useTool = (tool) => ({ type: 'unknown', input: { variant: 'UseTool', tool_name: tool, tool_input: { kind: 'done', text: 'x' } }, output: null })
+  const elicitation = (server, tool) => ({ provider: 'codex', name: 'CodexMcpElicitation', kind: 'tool', title: `MCP approval: ${server}`,
+    description: `Allow the ${server} MCP server to run tool "${tool}"?`, input: { mode: 'form', requestedSchema: null, url: null },
+    metadata: { threadId: 'th-1', turnId: null, serverName: server, elicitationId: null } })
+  const mine = [
+    [grok.id, { id: 'g-own', provider: 'acp', name: 'other', kind: 'tool', title: 'Use tool', detail: useTool('persona__report_to_supervisor') }],
+    [opencode.id, { id: 'o-own', provider: 'opencode', name: 'persona_todo_decision_add', kind: 'tool', title: 'Persona todo decision add', input: {} }],
+    [codex.id, { id: 'c-own', ...elicitation('persona', 'report_to_supervisor') }],
+  ]
+  for (const [agentId, request] of mine) fake.permission(agentId, request)
+  await until('the own tools answered', () => fake.requestsOf('agent_permission_response').length === mine.length)
+  assert.deepEqual(fake.requestsOf('agent_permission_response').map((r) => [r.requestId, r.response]).sort(),
+    [['c-own', { behavior: 'allow' }], ['g-own', { behavior: 'allow' }], ['o-own', { behavior: 'allow' }]], 'allowed once each: no rule kept, no mode set')
+  // Still asked: another of Persona's tools in those Agents, another server's tool of the same name, and any tool of an
+  // agent made in Paseo's own app.
+  const asks = [
+    [grok.id, { id: 'g-phone', provider: 'acp', name: 'other', kind: 'tool', title: 'Use tool', detail: useTool('persona__phone_notify') }],
+    [opencode.id, { id: 'o-phone', provider: 'opencode', name: 'persona_phone_notify', kind: 'tool', title: 'Persona phone notify', input: {} }],
+    [codex.id, { id: 'c-other', ...elicitation('other', 'report_to_supervisor') }],
+    [a.grok.id, { id: 'g-mine', provider: 'acp', name: 'other', kind: 'tool', title: 'Use tool', detail: useTool('persona__report_to_supervisor') }],
+  ]
+  for (const [agentId, request] of asks) fake.permission(agentId, request)
+  await until('the others asked', () => node.asked.length === asks.length)
+  assert.deepEqual(node.asked.map((ix) => [ix.session_id, ix.tool_name]).sort(), [
+    ['paseo-c1', 'CodexMcpElicitation'], ['paseo-g1', 'mcp__persona__phone_notify'], ['paseo-o1', 'persona_phone_notify'],
+    [`paseo-${a.grok.id}`, 'mcp__persona__report_to_supervisor'],
+  ].sort())
+  assert.equal(fake.requestsOf('set_agent_mode_request').length + fake.requestsOf('set_agent_feature_request').length, 0)
 })
 
 for (const toolName of ['mcp__persona__report_to_supervisor', 'mcp__jarvis__report_to_supervisor']) {
