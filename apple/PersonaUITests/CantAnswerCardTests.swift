@@ -3,11 +3,11 @@ import XCTest
 /// A question card the app can't answer says why under it (#6868), instead of only greying out: a Codex thread on a shared
 /// app-server not joined yet offers the ⋯ menu's Attach Live there, and attaching makes the card answerable; a subagent
 /// its parent drives says to answer on the computer; a card the app can answer looks as it always did. Against
-/// scripts/mock/mock_hub.py with MOCK_CANT_ANSWER=1 MOCK_MANAGERS=0 (TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>):
-/// with the mock's managers the MacBook is another assistant's (工作), and once the roster is read its rows leave the
-/// app's lists, the answerable card's session and the side session's parent with them (as PerfInbox, #8737). Each test
-/// starts from /mock/reset (the thread not joined). TEST_RUNNER_PERSONA_SHOTS=<dir> also saves the screens there as PNG,
-/// in TEST_RUNNER_PERSONA_SHOTS_APPEARANCE (light by default).
+/// scripts/mock/mock_hub.py with MOCK_CANT_ANSWER=1 MOCK_MANAGERS=1 (TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>):
+/// one manager, as the other UI fixtures (#8749). With the mock's several the MacBook is another assistant's, and since
+/// #8581 its rows leave the app once the list is scoped, the answerable card's session and the side session's parent
+/// with them (#8748). Each test starts from /mock/reset (the thread not joined). TEST_RUNNER_PERSONA_SHOTS=<dir> also
+/// saves the screens there as PNG, in TEST_RUNNER_PERSONA_SHOTS_APPEARANCE (light by default).
 final class CantAnswerCardTests: XCTestCase {
     private var hub = ""
     private let live = "server/c0de6868-1111-4000-8000-000000000001"
@@ -20,7 +20,7 @@ final class CantAnswerCardTests: XCTestCase {
 
     override func setUpWithError() throws {
         guard let h = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
-            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_CANT_ANSWER=1 MOCK_MANAGERS=0 (PERSONA_MOCK_HUB)")
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_CANT_ANSWER=1 MOCK_MANAGERS=1 (PERSONA_MOCK_HUB)")
         }
         hub = h
         continueAfterFailure = false
