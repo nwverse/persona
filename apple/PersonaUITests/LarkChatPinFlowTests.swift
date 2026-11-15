@@ -33,8 +33,10 @@ final class LarkChatPinFlowTests: XCTestCase {
     @MainActor private func pins(_ app: XCUIApplication) {
         // The iPhone shell's one trailing menu keeps Pins and Persona summary together.
         app.buttons["lark.chat.more"].tapCenter()
-        app.buttons["lark.pins.open"].tapCenter()
-        XCTAssertTrue(app.buttons["lark.pins.close"].waitForExistence(timeout: 10))
+        let open = app.buttons["lark.pins.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10), "Pins is not in the one trailing menu")
+        open.tapCenter()
+        XCTAssertTrue(app.buttons["lark.pins.close"].waitForExistence(timeout: 10), "Pins did not open from the one menu")
     }
     @MainActor private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
         for _ in 0..<8 where !element.isHittable { app.swipeUp(velocity: .slow) }
