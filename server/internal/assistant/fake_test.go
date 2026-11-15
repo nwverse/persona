@@ -100,6 +100,7 @@ type fakeHub struct {
 	offline      map[string]bool
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
+	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -509,6 +510,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.starts = append(f.starts, a)
 		if f.refuseUltra != nil && a["ultracode"] == true {
 			return nil, f.refuseUltra
+		}
+		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
+			return nil, f.refuseGoal
 		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
