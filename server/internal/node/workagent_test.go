@@ -109,7 +109,10 @@ func TestSessionStartPiUsesTheWorkAgent(t *testing.T) {
 		}
 	})
 	_, err := n.start(ctx, home, piAgent, "fix it", "", "w1", "", "", "", "", "", modelExecution{Model: "ag-chat/cursor/grok-4.7"})
-	if err != nil && !strings.Contains(err.Error(), "context canceled") {
+	// The hook cancels mid-call. The in-flight herdr read then ends either as "context canceled" or, when the
+	// cancellation wins the race and expires the connection's deadline first, as "i/o timeout". Both are this test
+	// stopping the start on purpose; anything else is a real failure. The trace below checks the command landed.
+	if err != nil && !strings.Contains(err.Error(), "context canceled") && !strings.Contains(err.Error(), "i/o timeout") {
 		t.Fatal(err)
 	}
 	typed := f.trace("pane.send_input")

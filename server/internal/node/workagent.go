@@ -84,12 +84,18 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 		return nil, err
 	}
 	pane := created.Pane.String()
-	time.Sleep(300 * time.Millisecond) // the fresh shell loads its rc file; typed input is buffered either way
+	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
+		return nil, n.abandonStart(ctx, launch, created, ws, err)
+	}
 	shells := paneShells(ctx, created)
 	cmd := withHerdrAgent(typedHerdrAgent(launch, herdrName, shells...), workAgentCommand(launcher, program, model))
-	if err := launch.Run(ctx, created.Pane, n.agentCommand(cmd, shellQuote, shells...)); err != nil {
-		return nil, fmt.Errorf("run launcher: %w", err)
+	// The command goes through the start file, so a line break in it cannot meet a shell that runs each line on its
+	// own (typedstart.go).
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(cmd, shellQuote, shells...), shells...)
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 	if kind == piAgent {
 		return n.finishPiStart(ctx, launch, created, cwd, launcher, model, prompt)
 	}
