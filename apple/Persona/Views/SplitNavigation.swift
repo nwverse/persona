@@ -165,7 +165,8 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             #endif
             // On the whole split, not the detail stack: its pages are built from the destinations the sidebar
             // registered, in the sidebar's environment.
-            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage, listHidden: columns == .detailOnly, pageSwitch: pageSwitch))
+            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage, listHidden: columns == .detailOnly, pageSwitch: pageSwitch,
+                                                     sideBars: sideBars))
             .environment(\.splitShowList, SplitShowList(show: { [columns = $columns] in
                 withAnimation(Theme.Motion.layout) { columns.wrappedValue = SplitColumns.shown }
             }, hide: { [columns = $columns] in
@@ -353,6 +354,8 @@ struct SplitDetail: Equatable {
     /// The Sidebar layout on a phone (#6332): the list is the drawer's, and a first page has the drawer's button where a
     /// back would be.
     var drawer = false
+    /// The system's bars run down the side (the open Duo on its side, #4853): their Show Sidebar brings the list back.
+    var sideBars = false
 }
 
 extension EnvironmentValues {
@@ -412,6 +415,9 @@ private struct SplitDetailPage: ViewModifier {
         .modifier(PageTabSwitchInset(shown: split?.pageSwitch == true))
         // The Sidebar layout on a phone (#6332): a first page opens the drawer where its back would be.
         .modifier(DrawerButtonItem(shown: !ownsBack && split?.drawer == true && split?.isFirstPage == true))
+        // A first page with its list folded beside or over it (#8603): the sidebar's button where a back would be.
+        .modifier(ListButtonItem(shown: !ownsBack && split?.drawer != true && split?.sideBars != true
+                                    && split?.isFirstPage == true && split?.listHidden == true))
         #endif
         #endif
     }
@@ -558,6 +564,32 @@ struct SplitPageMin: ViewModifier {
 /// The drawer's button at the leading edge of a first page's bar in the Sidebar layout on a phone (#6332): the persona's
 /// face as on the conversation (`ShellPersonaButton`, the inbox's mark), with how many Agents need the user. Only where
 /// it shows; everywhere else the page is left exactly as it was.
+/// A root's button that brings its folded list back (#8603): the page was picked in the list, so where a back would be
+/// it has the sidebar's button, as the main conversation has. Not the system's toggle: UIKit drew that on a root at first
+/// but not again after a page pushed on the root was popped (the open Duo upright, Inbox → an Agent's chat → Back), which
+/// left the root with no way back to the sidebar.
+struct ListButtonItem: ViewModifier {
+    var shown: Bool
+    @Environment(\.splitShowList) private var showList
+
+    func body(content: Content) -> some View {
+        if shown {
+            content
+                .toolbar(removing: .sidebarToggle)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { showList?.show() } label: {
+                            Label(String(localized: "Show Sidebar"), systemImage: Theme.Icon.sidebar).labelStyle(.iconOnly)
+                        }
+                        .accessibilityIdentifier("sidebar-show-button")
+                    }
+                }
+        } else {
+            content
+        }
+    }
+}
+
 struct DrawerButtonItem: ViewModifier {
     var shown: Bool
     @Environment(\.splitShowList) private var showList

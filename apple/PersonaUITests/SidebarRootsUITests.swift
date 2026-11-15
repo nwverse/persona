@@ -69,7 +69,7 @@ final class SidebarRootsUITests: XCTestCase {
         // The Separate layout's Agents tab with its column folded and nothing open: the empty page's Show List.
         let showList = app.buttons.matching(NSPredicate(format: "label IN %@", ["Show List", "显示列表"])).firstMatch
         for opener in [element("assistant-sidebar-button"), element("sidebar-drawer-button"), element("chat-sidebar-button"),
-                       element("chevron.left"), systemToggle, showList]
+                       element("shell-place-sidebar"), element("sidebar-show-button"), element("chevron.left"), systemToggle, showList]
         where opener.exists && opener.isHittable {
             // At the frame just read: a button on its way out as the page settles failed the tap's own lookup.
             let frame = opener.frame
@@ -99,13 +99,16 @@ final class SidebarRootsUITests: XCTestCase {
         target.tap()
     }
 
-    /// A row near the column's foot can have the floating "N Need You" jump (`SidebarNeedsJump`) over its middle, which
-    /// takes the tap: the column is dragged up a little until the row is clear of it, then the row is tapped.
-    @MainActor private func tapClear(_ row: XCUIElement) {
+    /// The floating "N Need You" jump (`SidebarNeedsJump`) over a row near the column's foot takes the tap.
+    @MainActor private func underJump(_ row: XCUIElement) -> Bool {
         let jump = app.buttons["sidebar-needs-jump"].firstMatch
-        for _ in 0..<4 where jump.exists && row.exists && row.frame.insetBy(dx: 0, dy: -24).intersects(jump.frame) {
-            let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
-            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -120)))
+        return jump.exists && row.exists && row.frame.insetBy(dx: 0, dy: -24).intersects(jump.frame)
+    }
+
+    /// Taps a row clear of the jump: the column scrolled a little first where it lies over the row.
+    @MainActor private func tapClear(_ row: XCUIElement) {
+        for _ in 0..<3 where underJump(row) {
+            column.swipeUp(velocity: .slow)
             Thread.sleep(forTimeInterval: 0.6) // the list's glide
         }
         row.tap()
@@ -113,11 +116,20 @@ final class SidebarRootsUITests: XCTestCase {
 
     /// Picks an Agent's row in the sidebar's Agents list, scrolling to it; a row tapped while the list still glides after
     /// the scroll can be missed, so again until the Agent is the root (at most three taps).
-    @MainActor private func pickAgent(_ step: String) -> Page {
-        let row = app.buttons.matching(identifier: "agents.row").firstMatch
+    @MainActor private func pickAgent(_ step: String, titled title: String? = nil) -> Page {
+        let rows = app.buttons.matching(identifier: "agents.row")
         reveal(element("sidebar-main"))
-        for _ in 0..<10 where !(row.exists && row.isHittable) { column.swipeUp(velocity: .slow) }
-        XCTAssertTrue(row.exists && row.isHittable, "\(step): no Agent's row:\n\(app.debugDescription)")
+        // Any Agent: the first row in reach and clear of the jump; a named one: its row.
+        func find() -> XCUIElement {
+            if let title { return rows.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch }
+            return rows.allElementsBoundByIndex.first { $0.exists && $0.isHittable && !underJump($0) } ?? rows.firstMatch
+        }
+        var row = find()
+        for _ in 0..<16 where !(row.exists && row.isHittable) {
+            column.swipeUp(velocity: .slow)
+            row = find()
+        }
+        XCTAssertTrue(row.exists && row.isHittable, "\(step): no Agent's row \(title ?? ""):\n\(app.debugDescription)")
         for _ in 0..<3 where page()?.root != "agent" {
             if !(row.exists && row.isHittable) { reveal(element("sidebar-main")) }
             tapClear(row)
@@ -363,23 +375,7 @@ final class SidebarRootsUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.8) // the column's slide
         }
 
-        // (a) An Agent picked in the sidebar: a root.
-        let root = pickAgent("an Agent picked in the sidebar")
-        XCTAssertEqual(root.path, 0, "the Agent's chat is not the root")
-        foldColumn("the Agent's root")
-        XCTAssertFalse(backShown(), "a ‹ on an Agent's chat picked in the sidebar:\n\(app.debugDescription)")
-        let opener = [sidebarButton, drawerButton, systemToggle].first { $0.exists && $0.isHittable }
-        XCTAssertNotNil(opener, "no button that opens the sidebar on the Agent's root:\n\(app.debugDescription)")
-        if wide { XCTAssertTrue(sidebarButton.isHittable || systemToggle.isHittable, "the root's button is not the sidebar's") }
-        shot("8603-root")
-        opener?.tap()
-        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 5) && element("sidebar-main").isHittable,
-                      "the root's button did not bring the sidebar out:\n\(app.debugDescription)")
-        let afterOpen = settled("agent", "the sidebar brought out over the Agent's root")
-        XCTAssertEqual(afterOpen.path, 0)
-        XCTAssertEqual(afterOpen.transitions, root.transitions, "bringing the sidebar out moved the page: \(root) → \(afterOpen)")
-
-        // (b) A waiting Agent opened from inside the main conversation (or Inbox, where the conversation lists none): pushed.
+        // (a) A waiting Agent opened from inside the main conversation (or Inbox, where the conversation lists none): pushed.
         pick("sidebar-main", "the conversation")
         var under = "conversation"
         var before = settled("conversation", "the conversation")
@@ -396,6 +392,11 @@ final class SidebarRootsUITests: XCTestCase {
                 .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.4)))
         }
         XCTAssertTrue(card.exists && card.isHittable, "no waiting Agent on \(under):\n\(app.debugDescription)")
+        shot("8603-under")
+        // The same Agent is then picked in the sidebar: its chat's title leads the card's label.
+        let title = card.label.components(separatedBy: CharacterSet(charactersIn: "、,，")).first?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        XCTAssertFalse(title.isEmpty, "the waiting Agent's card names no chat: \(card.label)")
         card.tap()
         let pushed = settled(under, "a waiting Agent opened from \(under)")
         XCTAssertEqual(pushed.path, 1, "the Agent's chat was not pushed on \(under): \(pushed)")
@@ -409,5 +410,23 @@ final class SidebarRootsUITests: XCTestCase {
         back.allElementsBoundByIndex.first { $0.exists && $0.isHittable }?.tap()
         let popped = settled(under, "‹ from the pushed chat")
         XCTAssertEqual(popped.path, 0, "‹ did not go back to \(under): \(popped)")
+        XCTAssertFalse(backShown(), "back at \(under), a ‹ still shows:\n\(app.debugDescription)")
+        shot("8603-popped")
+
+        // (b) The same Agent picked in the sidebar: a root.
+        let root = pickAgent("the same Agent picked in the sidebar", titled: title)
+        XCTAssertEqual(root.path, 0, "the Agent's chat is not the root")
+        foldColumn("the Agent's root")
+        XCTAssertFalse(backShown(), "a ‹ on an Agent's chat picked in the sidebar:\n\(app.debugDescription)")
+        let opener = [sidebarButton, drawerButton, systemToggle].first { $0.exists && $0.isHittable }
+        XCTAssertNotNil(opener, "no button that opens the sidebar on the Agent's root:\n\(app.debugDescription)")
+        if wide { XCTAssertTrue(sidebarButton.isHittable || systemToggle.isHittable, "the root's button is not the sidebar's") }
+        shot("8603-root")
+        opener?.tap()
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 5) && element("sidebar-main").isHittable,
+                      "the root's button did not bring the sidebar out:\n\(app.debugDescription)")
+        let afterOpen = settled("agent", "the sidebar brought out over the Agent's root")
+        XCTAssertEqual(afterOpen.path, 0)
+        XCTAssertEqual(afterOpen.transitions, root.transitions, "bringing the sidebar out moved the page: \(root) → \(afterOpen)")
     }
 }
