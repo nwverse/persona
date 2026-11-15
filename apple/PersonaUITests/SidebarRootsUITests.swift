@@ -30,6 +30,12 @@ final class SidebarRootsUITests: XCTestCase {
 
     @MainActor private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
 
+    /// The sidebar's scrolling column: beside the page, or a phone's drawer (whose host names it as the Separate layout's).
+    @MainActor private var column: XCUIElement {
+        let split = element("unified-sidebar")
+        return split.exists ? split : element("assistant-sidebar")
+    }
+
     @MainActor private func page() -> Page? { app.probe("sidebar-page", as: Page.self) }
 
     /// The page once `root` is in front and nothing has moved for a moment (a push, had there been one, has run).
@@ -81,7 +87,6 @@ final class SidebarRootsUITests: XCTestCase {
         if !target.exists, element("sidebar-fold-places").exists, id.hasPrefix("sidebar-") {
             element("sidebar-fold-places").tap()
         }
-        let column = element("unified-sidebar")
         // Above or below where the column was left scrolled.
         for _ in 0..<6 where !(target.exists && target.isHittable) { column.swipeDown(velocity: .fast) }
         for _ in 0..<8 where !(target.exists && target.isHittable) { column.swipeUp(velocity: .slow) }
@@ -118,7 +123,6 @@ final class SidebarRootsUITests: XCTestCase {
 
         let row = app.buttons.matching(identifier: "agents.row").firstMatch
         reveal(element("sidebar-main"))
-        let column = element("unified-sidebar")
         for _ in 0..<10 where !(row.exists && row.isHittable) { column.swipeUp(velocity: .slow) }
         XCTAssertTrue(row.exists && row.isHittable, "no Agent's row:\n\(app.debugDescription)")
         row.tap()
@@ -144,6 +148,7 @@ final class SidebarRootsUITests: XCTestCase {
         pick("sidebar-machines", "Machines")
         now = settled("machines", "Machines")
         let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'MacBook'")).firstMatch
+        _ = card.waitForExistence(timeout: 10)
         for _ in 0..<6 where !(card.exists && card.isHittable) { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(card.exists && card.isHittable, "no MacBook card:\n\(app.debugDescription)")
         card.tap()
@@ -152,6 +157,10 @@ final class SidebarRootsUITests: XCTestCase {
         XCTAssertEqual(next.transitions, now.transitions + 1, "the drill-down did not push: \(now) → \(next)")
         XCTAssertTrue(systemBack, "no Back on the machine's page:\n\(app.debugDescription)")
         shot("3-machine")
+
+        // A phone's drawer: a sub-page has only Back, the drawer opens from a root (docs/design/sidebar-navigation.md,
+        // "One button on each side"). The rest needs the column beside or over the page.
+        if app.windows.firstMatch.frame.width < 600 { return }
 
         // Machines keeps its drill-down while the conversation is in front.
         pick("sidebar-main", "the conversation")
@@ -172,7 +181,7 @@ final class SidebarRootsUITests: XCTestCase {
         // An edge swipe at a root reaches no other item.
         let window = app.windows.firstMatch
         let edge = UIDevice.current.userInterfaceIdiom == .pad || element("sidebar-main").isHittable
-            ? (element("unified-sidebar").frame.maxX + 2) / window.frame.width : 0.005
+            ? (column.frame.maxX + 2) / window.frame.width : 0.005
         window.coordinate(withNormalizedOffset: CGVector(dx: edge, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: min(edge + 0.5, 0.95), dy: 0.5)))
         let afterSwipe = settled("machines", "an edge swipe at Machines' root")
