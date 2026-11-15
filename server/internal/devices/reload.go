@@ -54,8 +54,9 @@ func (m *Machine) expectedReload() bool {
 	return time.Now().Before(m.reloadUntil) || m.warmLocked(time.Now())
 }
 
-// reloadRetryBudget bounds how long call retries not-started refusals.
-var reloadRetryBudget = 20 * time.Second
+// reloadRetryBudget bounds how long call retries not-started refusals, reloadRetryEvery how often it tries. Vars so
+// tests change them.
+var reloadRetryBudget, reloadRetryEvery = 20 * time.Second, 100 * time.Millisecond
 
 // call retries only an explicit not-started refusal or a close before writing. An ambiguous dropped write is never
 // replayed. The retry budget bounds waiting, not the operation's original execution deadline after the node is ready.
@@ -78,7 +79,7 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		select {
 		case <-ctx.Done():
 			return rpc.NotSent(ctx.Err())
-		case <-time.After(min(100*time.Millisecond, time.Until(deadline))):
+		case <-time.After(min(reloadRetryEvery, time.Until(deadline))):
 		}
 	}
 }

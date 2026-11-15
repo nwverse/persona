@@ -173,12 +173,17 @@ func TestACallThatNeverWentOutSaysSo(t *testing.T) {
 		}
 	})
 	t.Run("refused as restarting until the caller's wait ran out", func(t *testing.T) {
+		// The next try is a minute away: the caller's wait runs out while the manager waits for it, never while a try
+		// is out, however slowly the first refusal comes back within that wait.
+		old := reloadRetryEvery
+		reloadRetryEvery = time.Minute
+		t.Cleanup(func() { reloadRetryEvery = old })
 		d, m, attempts := restarting(t)
-		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := d.CallNode(ctx, m.cfg.ID, "session.send", json.RawMessage(`{"session_id":"example-session"}`))
-		if !errors.Is(err, rpc.ErrNotSent) || !errors.Is(err, context.DeadlineExceeded) || attempts.Load() < 2 {
-			t.Fatalf("a send the node refused as restarting until the wait ran out: %v (attempts %d), want a deadline marked not sent",
+		if !errors.Is(err, rpc.ErrNotSent) || !errors.Is(err, context.DeadlineExceeded) || attempts.Load() != 1 {
+			t.Fatalf("a send the node refused as restarting until the wait ran out: %v (attempts %d), want a deadline marked not sent after one refusal",
 				err, attempts.Load())
 		}
 	})
