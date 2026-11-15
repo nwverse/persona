@@ -174,7 +174,9 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeConn(ctx, monitor)
-	deadline := time.Now().Add(30 * time.Second)
+	poll := time.NewTicker(200 * time.Millisecond)
+	defer poll.Stop()
+	timeout := time.After(30 * time.Second)
 	for {
 		var workers int
 		if err := monitor.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND backend_type <> 'client backend'`, subName).Scan(&workers); err != nil {
@@ -183,10 +185,11 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 		if workers > 0 {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-poll.C:
+		case <-timeout:
 			t.Fatal("the logical replication apply worker never started")
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
 
 	if err := backend.Quiesced(ctx, sub, subName, false); err != nil {

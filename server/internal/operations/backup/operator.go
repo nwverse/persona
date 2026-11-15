@@ -515,6 +515,15 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 					}
 				} else {
 					previous[record.index] = ""
+					// The target name was free, so no bundle database can be
+					// installed under it, whatever an unresolved check said. What
+					// is left of the stage is discarded.
+					if record.installed {
+						record.installed = false
+						if exists, err := o.backend.Exists(ctx, record.target, record.staged.name); err == nil && exists {
+							record.staged.active = true
+						}
+					}
 				}
 			}
 		}

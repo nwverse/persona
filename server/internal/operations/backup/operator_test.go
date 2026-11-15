@@ -58,7 +58,8 @@ type fakeBackend struct {
 	existsFailures    int
 	armExistsFailures int
 	// existsErrName makes Exists of that name fail once a fault has fired.
-	existsErrName string
+	existsErrName   string
+	existsErrPrefix string
 	// failUndoPart makes undoing an install of that part fail.
 	failUndoPart string
 	active       map[string]int
@@ -247,6 +248,9 @@ func (f *fakeBackend) Exists(_ context.Context, target Target, name string) (boo
 	if f.existsFailures > 0 {
 		f.existsFailures--
 		return false, errors.New("cannot check the database (briefly)")
+	}
+	if f.commitThenFired && f.existsErrPrefix != "" && strings.HasPrefix(name, f.existsErrPrefix) {
+		return false, errors.New("cannot check that database")
 	}
 	if f.existsErrName == name && f.commitThenFired {
 		return false, errors.New("cannot check that database")

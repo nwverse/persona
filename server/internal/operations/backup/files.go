@@ -287,6 +287,10 @@ func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, a
 		_ = os.Remove(transaction.backupRoot)
 		transaction.backupRoot = ""
 	}
+	if transaction.externalRoot != "" && emptyDirectory(transaction.externalRoot) {
+		_ = os.Remove(transaction.externalRoot)
+		transaction.externalRoot = ""
+	}
 	return transaction.backupRoot, transaction.externalRoot, transaction.rollback, nil
 }
 

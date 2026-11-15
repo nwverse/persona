@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -538,6 +539,7 @@ func TestBriefExistenceFailureDoesNotKeepBundleFiles(t *testing.T) {
 			}
 			assertDatabases(t, fixture, "hub-two", "manager-two")
 			assertNothingDropped(t, fixture, "persona_staged_")
+			assertNoTemporaryDatabases(t, fixture.backend) // the stage that never got installed is discarded
 		})
 	}
 }
@@ -656,5 +658,148 @@ func TestOutputRefusalResolvesSymlinks(t *testing.T) {
 				t.Errorf("staging left behind: %v", entries)
 			}
 		})
+	}
+}
+
+// The aside rename worked, the install rename failed without happening, the
+// check of it failed and so did the re-check: the install is taken for
+// committed. The previous database then renames back, which proves the target
+// name was free, so no bundle database is live and the files must go back.
+func TestSuccessfulPreviousUndoProvesNoBundleDatabaseIsLive(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mutate(t)
+	fixture.backend.failInstallPart = "manager"
+	fixture.backend.armExistsFailures = 2 // the commit check and the re-check
+	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("restore error = %v", err)
+	}
+	if got := readNote(t, fixture); got != "changed knowledge" {
+		t.Errorf("files were kept although both live databases are the install's own: %q", got)
+	}
+	if strings.Contains(err.Error(), "may be live") {
+		t.Errorf("the error claims a bundle database may be live: %v", err)
+	}
+	assertDatabases(t, fixture, "hub-two", "manager-two")
+	assertNoTemporaryDatabases(t, fixture.backend) // and the stage is not left behind
+}
+
+// A successfully undone install is no longer installed, even when another part
+// of the undo failed. The hub has no previous database in the second case, so
+// nothing but the undo of its install can clear it.
+func TestUndoneInstallIsNotCountedAsLive(t *testing.T) {
+	for _, hubExisted := range []bool{true, false} {
+		t.Run(fmt.Sprintf("hub-existed=%v", hubExisted), func(t *testing.T) {
+			fixture := newBackupFixture(t, "persona_manager")
+			operator := fixture.operator()
+			if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+				t.Fatal(err)
+			}
+			fixture.mutate(t)
+			if !hubExisted {
+				delete(fixture.backend.server(fixture.hub), fixture.hub.Database)
+			}
+			// The manager's aside rename fails without happening and both of its
+			// checks fail, so its undo cannot tell; the hub's install is undone fine.
+			fixture.backend.preCommit, fixture.backend.armExistsFailures = "manager:previous", 2
+			_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+			if err == nil || !strings.Contains(err.Error(), "injected") {
+				t.Fatalf("restore error = %v", err)
+			}
+			if got := readNote(t, fixture); got != "changed knowledge" {
+				t.Errorf("files were kept although no bundle database is live: %q", got)
+			}
+			if hubExisted {
+				assertDatabases(t, fixture, "hub-two", "manager-two")
+			} else if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != "manager-two" {
+				t.Errorf("manager database = %+v", got)
+			}
+		})
+	}
+}
+
+// A previous database whose existence cannot be checked is not taken for
+// absent: it stays named, so the operator can find it.
+func TestParkedDatabaseWhoseCheckFailsStaysNamed(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	fixture.backend.failUndoPart = "manager"
+	fixture.backend.existsErrPrefix = "persona_previous_m_"
+	_, err := restoreWithFault(t, fixture, "manager:install")
+	if err == nil {
+		t.Fatal("restore succeeded")
+	}
+	parked := ""
+	for name := range fixture.backend.server(fixture.manager) {
+		if strings.HasPrefix(name, "persona_previous_m_") {
+			parked = name
+		}
+	}
+	if parked == "" {
+		t.Fatal("no previous manager database is parked")
+	}
+	if !strings.Contains(err.Error(), "previous built-in manager database: "+parked) {
+		t.Errorf("the parked database %s is not named: %v", parked, err)
+	}
+}
+
+// plainlyAbsentBeside says yes only when it established that the name is gone
+// and the other exists.
+func TestPlainlyAbsentBesideNeedsBothFactsEstablished(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	backend := fixture.backend
+	operator := fixture.operator()
+	target := fixture.hub
+	server := backend.server(target)
+	check := func(label string, want bool) {
+		t.Helper()
+		if got := operator.plainlyAbsentBeside(context.Background(), target, "gone", "persona"); got != want {
+			t.Errorf("%s: plainlyAbsentBeside = %v, want %v", label, got, want)
+		}
+	}
+	check("name absent, other present", true)
+	delete(server, "persona")
+	check("both absent", false)
+	server["persona"] = &fakeDatabase{}
+	server["gone"] = &fakeDatabase{}
+	check("name present", false)
+	delete(server, "gone")
+	backend.existsFailures = 1
+	check("the check of the name fails", false)
+	backend.existsFailures = 0
+	backend.commitThenFired, backend.existsErrName = true, "persona"
+	check("the check of the other fails", false)
+}
+
+// No external knowledge base existed before the restore: nothing was kept, so
+// no empty directory is left and none is reported.
+func TestRestoreLeavesNoEmptyPreviousExternalKnowledgeBase(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	parent := t.TempDir()
+	external := filepath.Join(parent, "knowledge")
+	writeFixtureFile(t, filepath.Join(external, "fact.md"), []byte("external original"))
+	writeFixtureFile(t, filepath.Join(fixture.home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"persona_manager","kb_dir":`+strconvQuote(external)+`}`))
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(external); err != nil {
+		t.Fatal(err)
+	}
+	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true, AllowExternalKB: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PreviousExternalKB != "" {
+		t.Errorf("an empty previous external knowledge base is reported: %s", result.PreviousExternalKB)
+	}
+	if left, _ := filepath.Glob(filepath.Join(parent, ".*persona-backup-previous-*")); len(left) != 0 {
+		t.Errorf("an empty previous-copy directory is left: %v", left)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(external, "fact.md")); string(raw) != "external original" {
+		t.Errorf("the knowledge base was not restored: %q", raw)
 	}
 }
