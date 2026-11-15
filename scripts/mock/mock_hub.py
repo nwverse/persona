@@ -21,6 +21,9 @@ if os.environ.get("MOCK_CHILD_SESSIONS"):
 # MOCK_PASEO_PROVIDERS=1 (#8142) builds on it too: two of its providers the apps have no id for (Grok, Cursor).
 if os.environ.get("MOCK_PASEO_PROVIDERS"):
     os.environ.setdefault("MOCK_PASEO", "1")
+# MOCK_PASEO_NOT_LOADED=1 (#8321) as well: a Grok agent Paseo let go, read only once its chat is watched.
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):
+    os.environ.setdefault("MOCK_PASEO", "1")
 # MOCK_TEAM=1 (#5180) builds on MOCK_TAB_PANES's tab of three: it adds a worker's request, a third worker and a stopped pane.
 MOCK_TEAM = bool(os.environ.get("MOCK_TEAM"))
 if MOCK_TEAM:
@@ -46,7 +49,7 @@ CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOC
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
-            "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
+            "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
@@ -1270,6 +1273,18 @@ if PASEO_PROVIDERS:
                "Moved the toggles into one group.", agent="paseo", agent_label="Cursor", launcher="cursor", model="auto",
                capabilities=_provider_caps),
     ]
+# MOCK_PASEO_NOT_LOADED=1 (#8321, on the Paseo computer): a Grok agent Paseo let go (closed after an hour idle, listed
+# offline). As its bridge does since #8132, every read of its chat is refused as not_loaded until a subscribe watches
+# it: then "Paseo" loads it, which takes MOCK_PASEO_LOAD_SECONDS (default 3), and the backlog brings its history.
+# GET /mock/paseo-unload lets it go again.
+PASEO_CLOSED = "paseo-9a5e0000-0000-4000-8000-000000000012"
+PASEO_LOADED = {"on": False}
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):
+    SESSIONS.append(_paseo(PASEO_CLOSED, "Sort the holiday photos", "Triage", None, "main", "offline", "offline", 90,
+                           "Done: 212 photos in 9 albums, one per town.", agent="paseo", agent_label="Grok", launcher="grok",
+                           model="grok-4", capabilities={"read": True, "send": True, "interrupt": True, "approve": True,
+                                                         "terminal": False, "attach": False, "close": True, "rename": True,
+                                                         "model": True}))
 # MOCK_CHILD_SESSIONS=1 (#5120): the Paseo agent that created two agents created two more, both finished (one of them
 # failed), and an agent whose creator is not listed stays a row of its own. With the hub's folding (fold_hierarchy) the
 # web lists none of the children: the lead's row needs you (its waiting child) and its chat draws a card for each.
@@ -2554,7 +2569,7 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # Knowledge points by topic (#3783), on by default; MOCK_KB_TOPICS_OFF=1 starts it off (#7251's empty map).
                     "kb_topics": os.environ.get("MOCK_KB_TOPICS_OFF") != "1",
                     # The sidebar's Recent lists the scheduled tasks' chats too (#8324), off by default;
-                    # MOCK_RECENT_TASK_CHATS=1 starts on. Left out with MOCK_LEGACY_HUB.
+                    # MOCK_RECENT_TASK_CHATS=1 starts on; =absent is a hub from before it. Left out with MOCK_LEGACY_HUB.
                     "recent_task_chats": os.environ.get("MOCK_RECENT_TASK_CHATS") == "1"}
 # What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
 RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
@@ -2579,7 +2594,7 @@ def assistant_state(space="", archived=False):
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
-                   recent_task_chats=cfg["recent_task_chats"])
+                   **({} if os.environ.get("MOCK_RECENT_TASK_CHATS") == "absent" else {"recent_task_chats": cfg["recent_task_chats"]}))
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -7606,6 +7621,11 @@ if os.environ.get("MOCK_CHILD_SESSIONS"):  # #5120: the lead's two exchanges, an
     ITEMS[PASEO_GRANDCHILD] = (
         [it("user", "text", 2, text="Trace why a refresh after a retry returns 401.")]
         + [it("assistant", "text", 0.2, text="Following the 401 through the retry.")])
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):  # #8321: what the closed Grok agent did before Paseo let it go
+    ITEMS[PASEO_CLOSED] = (
+        [it("user", "text", 95, text="Sort the holiday photos by place, one album per town.")]
+        + tool("Bash", {"command": "exiftool -GPSPosition -csv ~/Pictures/Holiday"}, "212 photos, 9 places", 94)
+        + [it("assistant", "text", 90, text="Done: 212 photos in 9 albums, one per town.")])
 if os.environ.get("MOCK_ORCA_CHILDREN"):
     ITEMS["c2073000-0000-4000-8000-000000000006"] = [
         it("user", "text", 61, text="Review the prior work in this workspace."),
@@ -16726,6 +16746,28 @@ if os.environ.get("MOCK_REPLY_MARKDOWN") == "1":
     mock_reply_markdown()
 
 
+# MOCK_CJK_PATHS=1 (#8386): a reply naming files whose names are Chinese or Japanese, written without backticks, and
+# those files (so …/stat says they are there; their folders are too). Before the fix only the ASCII start of each path
+# linked: the folder. In an Agents chat of its own and at the end of Persona's conversation. Made-up content.
+CJK_PATHS = "a1f3c2d4-0000-4000-8000-000000008386"
+CJK_PATHS_TEXT = ("报表整理好了：\n\n"
+                  "- 报表：/Users/me/code/weather/reports/报表_2026H2.xlsx\n"
+                  "- 说明：~/文档/项目说明.md，改动记在 /Users/me/code/weather/docs/变更记录.md里了。\n"
+                  "- 会议纪要：/Users/me/code/weather/notes/会議メモ.txtを参照してください。\n\n"
+                  "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。")
+
+
+def mock_cjk_paths():
+    for f in ("/Users/me/code/weather/reports/报表_2026H2.xlsx", "/Users/me/文档/项目说明.md", "/Users/me/code/weather/docs/变更记录.md",
+              "/Users/me/code/weather/notes/会議メモ.txt", "/Users/me/code/weather/data/2026年/sales-売上_v2.csv"):
+        FILES[f] = "placeholder\n".encode()
+    ITEMS[CJK_PATHS] = [it("user", "text", 6, text="报表放哪了？"), it("assistant", "text", 5, text=CJK_PATHS_TEXT)]
+    SESSIONS.append(sess("macbook", CJK_PATHS, "报表整理", "/Users/me/code/weather", "done", "unread", "weather", 1, "cjk-paths", 21, 5,
+                         "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="报表放哪了？"), it("assistant", "text", 1, text=CJK_PATHS_TEXT)]
+
+
+
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
@@ -18089,6 +18131,8 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long m
     for _f in ("docs/review-queue.md", "notes/status.md", "docs/brief.md", "notes/runs/20261110T165351Z/snapshot.json"):
         FILES["/Users/me/code/shop-app/" + _f] = b"# placeholder\n"
     FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
+if os.environ.get("MOCK_CJK_PATHS") == "1":  # its files are there (#8386)
+    mock_cjk_paths()
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
@@ -18393,7 +18437,8 @@ def office_pptx():
 # What the hub (node filemime.go) calls a binary file by its name; others are video/mp4 as before.
 MOCK_MIMES = {".wav": "audio/wav", ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".heic": "image/heic", ".webm": "video/webm", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel",
               ".pdf": "application/pdf", ".doc": "application/msword", ".pages": "application/vnd.apple.pages", ".png": "image/png", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-              ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
+              ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+              ".zip": "application/zip", ".csv": "text/csv"}
 
 
 def mock_mime(path):
@@ -20231,6 +20276,29 @@ if os.environ.get("MOCK_FILE_LINKS"):
     MOCK_LINKS[MOCK_REPO + "/old-settings.json"] = ("../legacy/settings.json", None)
 
 
+# MOCK_FILE_ATTACH=1 (#8361): files sent with a message as cards: in the widget conversation, a message with eight
+# <persona-file kind="file"> tags (a PDF, workbooks, a document, archives; all made up) kept in the node's uploads, and
+# an earlier one whose file the computer no longer has.
+if os.environ.get("MOCK_FILE_ATTACH"):
+    import mock_office
+    _day = "/Users/me/.persona/uploads/2026-11-15/"
+    _pdf = base64.b64decode(mock_pdf())  # bytes: FILES serves them as a file, a str as text
+    _attached = [("q3-report.pdf", _pdf), ("budget-2026.xlsx", quarterly_xlsx()), ("sales-by-region.xlsx", quarterly_xlsx()),
+                 ("meeting-notes.docx", mock_office.docx("Meeting notes", ["Made-up notes for screenshots."])),
+                 ("logs-1114.zip", b"PK\x05\x06" + b"\0" * 18), ("contract-draft.pdf", _pdf),
+                 ("季度汇总.xlsx", quarterly_xlsx()), ("screenshots.zip", b"PK\x05\x06" + b"\0" * 18)]  # i18n-ignore: a made-up file name
+    _sizes = [2411724, 88123, 1153434, 245760, 19608371, 655360, 317440, 44354765]
+    for (_name, _bytes) in _attached:
+        FILES[_day + _name] = _bytes if isinstance(_bytes, bytes) else _bytes.encode()
+    _tags = "\n".join('<persona-file kind="file" path="%s" name="%s" size="%d"/>' % (_day + n, n, z) for (n, _), z in zip(_attached, _sizes))
+    ITEMS[WIDGET] = ITEMS[WIDGET] + [
+        it("user", "text", 0, text='上周导出的数据也看一下\n\n<persona-file kind="file" path="/tmp/old-export-20261110-140200.csv" name="old-export.csv" size="12288"/>'),  # i18n-ignore
+        it("assistant", "text", 0, text="收到，两份我都对照着看。"),  # i18n-ignore
+        it("user", "text", 0, text="帮我对比这几份季度数据，重点看第三季度的支出\n\n" + _tags),  # i18n-ignore
+        it("assistant", "text", 0, text="8 个文件都收到了。先从 q3-report.pdf 和两张 xlsx 看起，第三季度的支出我单独列一张对比表。"),  # i18n-ignore
+    ]
+
+
 def link_real(rel):
     """The tree key a path through a mock symlink folder stands for (MOCK_FILE_LINKS)."""
     for k, (_, real) in MOCK_LINKS.items():
@@ -20672,7 +20740,8 @@ def net_control(path, q):
 # MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned: the hub's version and its updating itself
 # (docs/operations/hub-update.md): a newer release to install (auto-update off), an update waiting for two busy agents, "Automatic updates enabled"
 # told for the first time, a newer release auto-update holds back (its code does not contain the hub's commit, with
-# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). Unset:
+# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). behind
+# (#8108): up to date against a build-time source whose newest release is older than the hub (source_behind). Unset:
 # GET /api/v1/hub/update is 404 (a hub from before), no line anywhere.
 HUB_UPDATE_MODE = os.environ.get("MOCK_HUB_UPDATE", "")
 HUB_UPDATE = {}
@@ -20695,6 +20764,10 @@ def hub_update_state():
         elif HUB_UPDATE_MODE == "notice":
             HUB_UPDATE.update(state="idle", auto=True, auto_notice=True)
             HUB_UPDATE["latest"] = dict(latest, version=HUB_UPDATE["version"], build=HUB_UPDATE["build"], newer=False)
+        elif HUB_UPDATE_MODE == "behind":
+            HUB_UPDATE.update(state="idle", auto=True, update_url="https://site.example.com/dl", update_url_from="build", source_behind=True)
+            HUB_UPDATE["latest"] = {"version": "v0.1.17-177-g563f7fde5b-202611071005", "build": 202611071005,
+                                    "released": "2026-11-07T10:05:00Z", "newer": False, "bad": False}
         elif HUB_UPDATE_MODE in ("docker", "docker-pinned"):
             pinned = HUB_UPDATE_MODE == "docker-pinned"
             HUB_UPDATE.update(version="0.3.0", build=0, channel="docker", can_update=False, auto=False,
@@ -22455,7 +22528,74 @@ IPHONE_CONSENT = {"dev-mock-1"} if os.environ.get("MOCK_IPHONE_CONSENT") == "1" 
 IPHONE_ON = {"macbook"}
 IPHONE_SELF_APP = {}  # what the app said of itself with its consent (bundle_id, name)
 IPHONE_JOBS = {}  # machine id -> {"at", "started", "cancelled"}: a pairing from the app (MOCK_IPHONE=pair)
-IPHONE_MODES = ("one", "several", "none", "pair")
+IPHONE_MODES = ("one", "several", "none", "pair", "setup")
+# MOCK_IPHONE=setup (#8199): the guided setup from the start. The extension off (with MOCK_EXTENSIONS=1 its built-in
+# entry is listed, and turning it on there starts the rest); MacBook without the bridge (Install runs
+# 2 × MOCK_COMPUTER_STEP); this simulator on MacBook's cable once MacBook is turned on (Pair waits for Trust a step,
+# then pairs); Developer Mode off until 2 steps after pairing (as if the user turned it on and the phone restarted), then
+# the developer disk image missing until Prepare (2 steps); Mac Studio a Mac without Xcode (ddi_present false); the
+# server a Linux computer (listed as the hub lists one, without the bridge or a developer disk image). Forget unpairs.
+# The install job's step is in MOCK_LANG (en, ja, zh-Hans), as the hub words it for the web (#8217). POST
+# /api/v1/iphone/try answers a screenshot and Weather opened. GET /mock/iphone shows it, GET /mock/iphone?reset=1
+# starts it over.
+IPHONE_SETUP = {"ext": MOCK_IPHONE != "setup", "installed": {"studio"}, "paired_at": None, "prepared_at": None, "tried": 0}
+
+
+IPHONE_SETUP_STEPS = {
+    "zh-Hans": {"install": "正在下载 iPhone 助手程序", "pair": "在这台 iPhone 上点「信任」，再输入锁屏密码", "prepare": "正在准备这台 iPhone，大约一分钟"},
+    "en": {"install": "Downloading the iPhone helper", "pair": "On the iPhone, tap Trust, then enter its passcode", "prepare": "Getting the iPhone ready, about a minute"},
+    "ja": {"install": "iPhoneヘルパーをダウンロードしています", "pair": "iPhoneで「信頼」をタップしてからパスコードを入力してください", "prepare": "iPhoneを準備しています（1分ほど）"},
+}
+
+
+def iphone_system(machine):
+    """A computer the hub lists iPhone control for: a Mac, and in the setup mode a Linux computer too (as the hub does)."""
+    return machine.get("os") == "darwin" or (MOCK_IPHONE == "setup" and machine.get("os") == "linux")
+
+
+def iphone_setup_job(machine_id):
+    """The setup mode's job on a computer, moved on by the clock: what it says now, and its effect once done."""
+    job = IPHONE_JOBS.get(machine_id)
+    if not job:
+        return None
+    t = time.time() - job["at"]
+    kind = job.get("kind", "pair")
+    if job.get("cancelled"):
+        return {"kind": kind, "state": "cancelled", "started": job["started"]}
+    if t <= 2 * COMPUTER_STEP:
+        steps = IPHONE_SETUP_STEPS.get(LAUNCHER_HEALTH_LANG, IPHONE_SETUP_STEPS["zh-Hans"])
+        out = {"kind": kind, "state": "running", "started": job["started"], "step": steps.get(kind, "")}
+        if kind == "pair":
+            out.update(code="trust_pending", device="dev-mock-1")
+        elif kind == "prepare":
+            out["device"] = "dev-mock-1"
+        return out
+    if kind == "install":
+        IPHONE_SETUP["installed"].add(machine_id)
+    elif kind == "pair" and IPHONE_SETUP["paired_at"] is None:
+        IPHONE_SETUP["paired_at"] = job["at"] + 2 * COMPUTER_STEP
+    elif kind == "prepare" and IPHONE_SETUP["prepared_at"] is None:
+        IPHONE_SETUP["prepared_at"] = job["at"] + 2 * COMPUTER_STEP
+    return {"kind": kind, "state": "done", "started": job["started"], **({"device": "dev-mock-1"} if kind != "install" else {})}
+
+
+def iphone_setup_devices(machine_id):
+    me = {"id": "dev-mock-1", "name": "我的 iPhone", "product_type": IPHONE_MODEL, "ios": IPHONE_IOS, "locked": False}
+    if machine_id != "macbook" or machine_id not in IPHONE_ON or machine_id not in IPHONE_SETUP["installed"]:
+        return []
+    now, paired, prepared = time.time(), IPHONE_SETUP["paired_at"], IPHONE_SETUP["prepared_at"]
+    if paired is None:
+        return [{**me, "paired": False, "usb": True, "connected": False, "ready": False, "state": "idle", "code": "usb_unpaired",
+                 "note": "已用数据线连上，还没有配对：在机器页点「配对」"}]
+    base = {**me, "paired": True, "usb": True, "transport": "network"}
+    if now - paired < 2 * COMPUTER_STEP:
+        return [{**base, "connected": False, "ready": False, "state": "backoff", "developer_mode": False, "code": "developer_mode_off",
+                 "note": "这台 iPhone 没打开开发者模式：在「设置 › 隐私与安全性 › 开发者模式」里打开，重启后确认"}]
+    if prepared is None:
+        return [{**base, "connected": True, "ready": False, "state": "connected", "developer_mode": True, "code": "ddi_not_mounted",
+                 "note": "这台 iPhone 还没装载开发者磁盘映像：用数据线把它连到这台电脑一次，装载后再试"}]
+    return [{**base, "connected": True, "ready": True, "state": "connected", "developer_mode": True, "auto_prepare": True,
+             "capabilities": {"screenshot": True, "input": True, "apps": True, "ax_tree": False}}]
 
 
 def iphone_devices(machine_id):
@@ -22479,6 +22619,19 @@ def iphone_devices(machine_id):
 
 def iphone_of(machine):
     enabled = machine["id"] in IPHONE_ON
+    if MOCK_IPHONE == "setup":
+        job = iphone_setup_job(machine["id"])
+        devices = [{**d, "allowed": enabled and d["id"] in IPHONE_CONSENT} for d in iphone_setup_devices(machine["id"])]
+        installed = machine["id"] in IPHONE_SETUP["installed"]
+        out = {"enabled": enabled, "installed": installed, "devices": devices,
+               "ddi_present": machine.get("os") == "darwin" and machine["id"] != "studio"}
+        if installed:
+            out["version"] = "0.1.0"
+        else:
+            out.update(note="这台电脑上没有装 iPhone 设备桥（persona-iphone-bridge）", code="bridge_missing")
+        if job:
+            out["job"] = job
+        return out
     devices = [{**d, "allowed": enabled and d["id"] in IPHONE_CONSENT} for d in iphone_devices(machine["id"])]
     out = {"enabled": enabled, "installed": True, "version": "0.1.0", "devices": devices}
     job = IPHONE_JOBS.get(machine["id"])
@@ -22491,7 +22644,7 @@ def iphone_of(machine):
 
 
 def iphone_list():
-    if MOCK_IPHONE not in IPHONE_MODES:
+    if MOCK_IPHONE not in IPHONE_MODES or not IPHONE_SETUP["ext"]:
         return {"on": False, "devices": []}
     seen = {}
     for m in MACHINES:
@@ -22508,16 +22661,21 @@ def iphone_list():
 def refresh_iphones():
     if MOCK_IPHONE in IPHONE_MODES:
         for m in MACHINES:
-            if m.get("os") == "darwin":
-                m["iphone"] = iphone_of(m)
+            if iphone_system(m):
+                if IPHONE_SETUP["ext"]:
+                    m["iphone"] = iphone_of(m)
+                else:
+                    m.pop("iphone", None)
     for send, _ in list(LIVE):
         try: send({"type": "machines", "machines": out_machines()})
         except Exception: pass
 
 
 if MOCK_IPHONE in IPHONE_MODES:
+    if MOCK_IPHONE == "setup":
+        IPHONE_ON.clear()  # nothing turned on yet
     for _m in MACHINES:
-        if _m.get("os") == "darwin":
+        if iphone_system(_m) and IPHONE_SETUP["ext"]:
             _m["iphone"] = iphone_of(_m)
 
 # Every fixture, including machines added by optional modes, follows the engine contract.
@@ -22853,6 +23011,17 @@ if MOCK_BROWSER:
                           {"name": "confirm", "type": "boolean", "title": "操作前在手机上确认", "default": False,
                            "description": "打开后，助手每次在浏览器里跑脚本（打开网页、点按、填表）之前先在手机上问你；关着时直接做，记进 hub 的日志"}]},
                       "config": {"machines": ["macbook"]}, "secrets": [], "permissions": []}
+
+
+if MOCK_IPHONE == "setup":
+    PLUGINS["iphone"] = {"id": "iphone", "name": "操控手机", "kind": "", "status": "disabled", "version": "202611151200",
+                         "source": "builtin", "enabled": False, "contributes": {},
+                         "description": "让助手经你的电脑操作配对的 iPhone：看屏幕、点按、滑动、输入、截图。",
+                         "form": {"fields": [
+                             {"name": "machines", "type": "array", "title": "能操控 iPhone 的电脑", "unique_items": True,
+                              "items": {"name": "items", "type": "string", "format": "machine", "os": ["darwin", "linux"]}},
+                             {"name": "confirm", "type": "boolean", "title": "每一步操作前都在手机上问我", "default": False}]},
+                         "config": {"machines": [], "confirm": False}, "secrets": [], "permissions": []}
 
 
 # Messages (iMessage) as a built-in extension (#1830 step 6): which Mac's Messages the connector reads, one Mac only.
@@ -24170,6 +24339,9 @@ def plugins_route(handler, p, body):
                 _auto_upgrade_paused(member)
         pl["enabled"] = bool(req.get("enabled"))
         pl["status"] = "disabled" if not pl["enabled"] else ("needs_setup" if pl["source"] == "installed" else "running")
+        if pl["id"] == "iphone" and MOCK_IPHONE == "setup":  # the guided setup's first step (#8199)
+            IPHONE_SETUP["ext"] = pl["enabled"]
+            refresh_iphones()
         if following_pack and pl["enabled"]:
             for member_id in list(_EXTENSION_PACK_OFF):
                 member = PLUGINS.get(member_id)
@@ -24910,8 +25082,15 @@ class H(BaseHTTPRequestHandler):
             if machine is None or "browser" not in machine:
                 return self.send_json({"error": "浏览器插件没打开，或这台不是 Mac"}, 404)
             return self.send_json(browser_now(machine))
+        if p == "/mock/iphone" and "reset" in q and MOCK_IPHONE == "setup":  # the guided setup from the start again
+            IPHONE_SETUP.update(ext=False, installed={"studio"}, paired_at=None, prepared_at=None, tried=0)
+            IPHONE_ON.clear(); IPHONE_JOBS.clear(); IPHONE_CONSENT.clear()
+            if "iphone" in PLUGINS:
+                PLUGINS["iphone"].update(enabled=False, status="disabled", config={"machines": [], "confirm": False})
+            refresh_iphones()
         if p == "/mock/iphone":
-            return self.send_json({"consent": sorted(IPHONE_CONSENT), "self_app": IPHONE_SELF_APP})
+            return self.send_json({"consent": sorted(IPHONE_CONSENT), "self_app": IPHONE_SELF_APP, "on": sorted(IPHONE_ON),
+                                   "setup": {**IPHONE_SETUP, "installed": sorted(IPHONE_SETUP["installed"])}})
         if p == "/api/v1/iphone":  # the extension iphone (MOCK_IPHONE)
             return self.send_json(iphone_list())
         if p.startswith("/api/v1/machines/") and p.endswith("/iphone"):
@@ -25583,6 +25762,10 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"settings": CODEX_SETTINGS.setdefault(p.split("/")[4], _codex_settings())})
         if p.startswith("/api/v1/sessions/") and p.endswith("/items"):
             sid = unquote(p.split("/")[5])  # a subagent's is "<session>@<agent>" (the web app sends %40)
+            if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:  # MOCK_PASEO_NOT_LOADED: no watch has loaded it yet
+                LOG.write("  items %s refused: not_loaded\n" % sid); LOG.flush()
+                return self.send_json({"error": "This agent isn’t running in Paseo. Its conversation loads while its chat is open.",
+                                       "code": "not_loaded"}, 409)
             items = find_items(sid)
             last = items[-1]["seq"] if items else 0
             if "after_seq" in q:
@@ -25606,6 +25789,9 @@ class H(BaseHTTPRequestHandler):
             served(sid, "page", out)
             live_step_page_sent(sid)
             return self.send_json(out)
+        if p == "/mock/paseo-unload":  # MOCK_PASEO_NOT_LOADED: Paseo lets the Grok agent go again
+            PASEO_LOADED["on"] = False
+            return self.send_json({"ok": True})
         if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
             q = parse_qs(urlparse(self.path).query)
             if q.get("asked") != ["1"]: IMAGES_FAIL["on"] = q.get("ok", [""])[0] != "1"
@@ -25770,7 +25956,8 @@ class H(BaseHTTPRequestHandler):
 
     def upload(self):
         """POST /api/v1/machines/{mid}/files?name=…: the body read slowly enough to watch the progress bar
-        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads."""
+        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads;
+        MOCK_UPLOAD_FAIL=<part of a name>: those fail once their bytes are in, as a full disk would (#8361)."""
         q = parse_qs(urlparse(self.path).query)
         name = (q.get("name") or ["file"])[0]
         n = int(self.headers.get("Content-Length") or 0)
@@ -25781,6 +25968,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"error": "MacBook 上的 personad 太旧，不能接收文件，需要重新部署", "code": "node_outdated"}, 409)
         if (q.get("dest") or [""])[0] == "dir":
             return file_ops_upload(self, q, n)
+        kept = (q.get("dest") or [""])[0] == "attachment"  # #8361: kept beside the chat's pictures under its own name
         kbps = int(os.environ.get("MOCK_UPLOAD_KBPS", "2048"))
         left = n
         video = name.lower().rsplit(".", 1)[-1] in ("mov", "mp4", "m4v")
@@ -25791,9 +25979,18 @@ class H(BaseHTTPRequestHandler):
             left -= len(got)
             if video: body.append(got)
             time.sleep(len(got) / 1024 / kbps)
+        if os.environ.get("MOCK_UPLOAD_FAIL") and os.environ["MOCK_UPLOAD_FAIL"] in name:
+            return self.send_json({"error": "no space left on device"}, 500)
         stem, dot, ext = name.rpartition(".")
         if not stem: stem, dot, ext = ext, "", ""
         path = "/tmp/%s-%s%s%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"), dot, ext)
+        if kept:
+            day, i = "/Users/me/.persona/uploads/" + datetime.now().strftime("%Y-%m-%d") + "/", 1
+            path = day + name
+            while path in FILES:
+                i += 1
+                path = day + "%s %d%s%s" % (stem, i, dot, ext)
+            FILES[path] = b""  # there to open and to stat; the made-up bytes are not kept
         if video: FILES[path] = b"".join(body)  # downloadable again, like a node's temp file (#981)
         UPLOADS.append({"name": name, "size": n, "path": path, "machine": urlparse(self.path).path.split("/")[4]})
         return self.send_json({"path": path, "name": path.rsplit("/", 1)[1], "size": n})
@@ -26353,15 +26550,27 @@ class H(BaseHTTPRequestHandler):
             refresh_iphones()
             row = next((d for d in iphone_list()["devices"] if d["id"] == device), {"id": device, "name": "", "machines": [], "consented": device in IPHONE_CONSENT})
             return self.send_json(row)
+        if self.command == "POST" and p == "/api/v1/iphone/try":  # the guided setup's Try It (MOCK_IPHONE=setup)
+            body = json.loads(self.last_body or b"{}")
+            if (body.get("device") or "") not in IPHONE_CONSENT:
+                return self.send_json({"error": "这台 iPhone 还没准备好：在这台 iPhone 上允许操控，并让它的电脑开着"}, 409)
+            IPHONE_SETUP["tried"] += 1
+            png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+            return self.send_json({"screenshot": {"mime": "image/png", "data": png}, "opened": True, "app": "com.apple.weather"})
         if self.command == "POST" and p.startswith("/api/v1/machines/") and "/iphone/" in p:  # Pair / Forget / Cancel
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "iphone" not in machine:
                 return self.send_json({"error": "操控手机的扩展没打开，或这台电脑连不了 iPhone"}, 404)
             action = p.rsplit("/", 1)[1]
-            if action == "pair":
+            if MOCK_IPHONE == "setup" and action in ("pair", "install", "prepare"):
+                IPHONE_JOBS[machine["id"]] = {"kind": action, "at": time.time(), "started": ago()}
+            elif action == "pair":
                 IPHONE_JOBS[machine["id"]] = {"at": time.time(), "started": ago()}
             elif action == "cancel":
                 if machine["id"] in IPHONE_JOBS: IPHONE_JOBS[machine["id"]]["cancelled"] = True
+            elif action == "forget" and MOCK_IPHONE == "setup":
+                IPHONE_SETUP.update(paired_at=None, prepared_at=None)
+                IPHONE_CONSENT.discard("dev-mock-1")
             elif action != "forget":
                 return self.send_json({"error": "unknown action"}, 404)
             refresh_iphones()
@@ -27180,7 +27389,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main"] = "" if body["main"] == "-" else body["main"]
             if isinstance(body.get("main_tasks_quiet"), bool):
                 ASSISTANT_CONFIG["main_tasks_quiet"] = body["main_tasks_quiet"]
-            if isinstance(body.get("recent_task_chats"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
+            if isinstance(body.get("recent_task_chats"), bool) and not os.environ.get("MOCK_LEGACY_HUB") \
+                    and os.environ.get("MOCK_RECENT_TASK_CHATS") != "absent":
                 ASSISTANT_CONFIG["recent_task_chats"] = body["recent_task_chats"]
             if MEETING_ATTENDANCE and "meeting_attendance_default" in body:
                 ASSISTANT_CONFIG["meeting_attendance_default"] = body["meeting_attendance_default"]
@@ -27936,7 +28146,17 @@ class H(BaseHTTPRequestHandler):
                                         except Exception:
                                             pass
                         threading.Thread(target=stream, daemon=True).start()
-                    if since:
+                    if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:
+                        # MOCK_PASEO_NOT_LOADED: the watch loads the agent, and the hub's backlog read waits for it
+                        def load(sid=sid, mid=mid, fold=bool(msg.get("fold_work"))):
+                            time.sleep(float(os.environ.get("MOCK_PASEO_LOAD_SECONDS", "3")))
+                            PASEO_LOADED["on"] = True
+                            history = find_items(sid)
+                            page, more = last_turns(history, 2) if PAGING["on"] else (history, False)
+                            send({"type": "items", "machine_id": mid, "session_id": sid, "backlog": True, "has_more": more, **span(history),
+                                  "items": lazy_images(fold_work(page) if fold else page)})
+                        threading.Thread(target=load, daemon=True).start()
+                    elif since:
                         newer = [x for x in items if x["seq"] > since]
                         send({"type": "items", "machine_id": mid, "session_id": sid, "items": lazy_images(newer), "backlog": True,
                               **span(items, since, max(since, items[-1]["seq"] if items else 0))})

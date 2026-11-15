@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod compat;
+pub mod answer;
 pub mod continuity;
 pub mod item;
 pub mod recents;
