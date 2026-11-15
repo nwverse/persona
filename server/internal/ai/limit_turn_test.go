@@ -227,6 +227,39 @@ func TestRequestsPutOffForWantOfATurnAreInTheLog(t *testing.T) {
 	}
 }
 
+// With several requests out, the line tells how long the one out longest has been, among those still out: the ones
+// that ended are not counted, whichever of them ended first.
+func TestTheLineTellsTheLongestStillOut(t *testing.T) {
+	clk := fakeClock(t) // 19:43:00
+	gone, cancel := context.WithCancel(context.Background())
+	cancel() // a request that would have to wait is put off at once instead
+	g := &gate{host: "upstream", wake: make(chan struct{})}
+	var out []turn
+	for range 4 { // one a minute, from 19:43:00
+		next, err := g.admit(gone)
+		if err != nil {
+			t.Fatalf("request %d: %v", len(out), err)
+		}
+		out = append(out, next)
+		clk.add(time.Minute)
+	}
+	// The last comes back busy with three others out: the connection is held, under a cap of two. Then the first
+	// ends: the two in the middle are out, and they fill the cap.
+	if err := g.done(out[3], false, false, &httpError{status: 503, body: busyBody}); !IsPaused(err) {
+		t.Fatalf("the busy answer: %v", err)
+	}
+	_ = g.done(out[0], false, false, io.ErrUnexpectedEOF)
+	clk.add(busyFirst + time.Second) // the pause is over
+	if _, err := g.admit(gone); !IsPaused(err) {
+		t.Fatalf("a request with the cap full: %v, want put off", err)
+	}
+	longest := 3*time.Minute + busyFirst + time.Second // the second request went out at 19:44:00
+	want := ": 1 request(s) put off for want of a turn since 19:47:06: 2 out under a cap of 2, the longest for " + longest.String()
+	if logs := clk.lines(); len(logs) != 2 || !strings.HasSuffix(logs[1], want) {
+		t.Fatalf("logs = %q, want the second to end %q", logs, want)
+	}
+}
+
 // A pause that runs past today names its day in the log: "until 15:43:00" for a Retry-After of twenty hours read as
 // a pause that was already over.
 func TestAHoldPastTodayNamesItsDay(t *testing.T) {

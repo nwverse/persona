@@ -140,7 +140,7 @@ type gate struct {
 	strikes  int       // busy answers in a row
 	cap      int       // requests in flight at most, 0 for no cap
 	inflight int
-	out      []time.Time   // when each request in flight went out (as many as inflight), for the log (noTurn)
+	out      []time.Time   // when each request in flight went out, the longest out first, for the log (noTurn)
 	fine     int           // successes since the cap last changed
 	wake     chan struct{} // closed on every change, for requests waiting under the cap
 	// The requests put off for want of a turn since the last log line about them (noTurn): how many, since when,
@@ -256,17 +256,12 @@ func (g *gate) noTurn() {
 	}
 	what := "none out"
 	if len(g.out) > 0 {
-		oldest := g.out[0]
-		for _, t := range g.out[1:] {
-			if t.Before(oldest) {
-				oldest = t
-			}
-		}
 		what = fmt.Sprintf("%d out", len(g.out))
 		if g.cap > 0 {
 			what += fmt.Sprintf(" under a cap of %d", g.cap)
 		}
-		what += fmt.Sprintf(", the longest for %s", at.Sub(oldest).Round(time.Second))
+		// g.out is in the order they went out (admit), so its first is the one out longest.
+		what += fmt.Sprintf(", the longest for %s", at.Sub(g.out[0]).Round(time.Second))
 		if g.held && g.probing {
 			what += "; one is finding out whether the pause is over"
 		}
