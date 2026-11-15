@@ -134,6 +134,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 		groups[to] = append(groups[to], g)
 	}
+	ctx = s.allStoppedBatch(ctx, list)
 	delivered := false
 	for _, lead := range leaderOrder {
 		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[[2]string{lead.MachineID, lead.SessionID}], web, now, prev) || delivered
@@ -390,6 +391,12 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if b, ok := s.briefOfTodo(t.ID); !ok || b.Overdue == nil || st == reviewNeedsUser || st == reviewParked {
 			return prompts.SuperviseEntry{}, false // re-scoped, with the owner, or parked meanwhile
 		}
+	case sigAllStopped:
+		fresh, holds := s.checkedAllStopped(ctx, t, g)
+		if !holds {
+			return prompts.SuperviseEntry{}, false // a member resumed or gained a wake/card while queued
+		}
+		g.Detail, g.Minutes = fresh.Detail, fresh.Minutes
 	case sigIdle, sigUnjudged, sigStalled:
 		if st == reviewParked {
 			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
@@ -477,6 +484,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind != sigNeedsYou {
 		e.Ask = ""
 	}
+	if g.Kind == sigAllStopped {
+		return e, true // Detail covers every participant; no arbitrary last agent in the fingerprint
+	}
 	// Where its agent is and what it said last: the whole last answer when it stopped, a line while it works.
 	agents := s.taskAgents(ctx, t)
 	var last proto.Session
@@ -519,7 +529,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigParkedDue: 2, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigParkedDue: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:

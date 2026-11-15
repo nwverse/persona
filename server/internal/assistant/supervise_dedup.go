@@ -50,7 +50,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // kinds' keys move with every turn or sweep, which is not news while the agent's words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted:
+	case sigParkedDue, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped:
 		return true
 	}
 	return false
