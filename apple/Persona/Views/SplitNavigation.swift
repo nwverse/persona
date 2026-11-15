@@ -25,6 +25,11 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// The list column's own color, for the strip over it on the iPad (`SidebarTopFill`) and behind the phone's drawer;
     /// nil, the system sidebar's.
     var columnColor: Color? = nil
+    /// The Sidebar layout's page (#8359): `empty` draws the root the sidebar picked, and the path holds only what is
+    /// opened inside it. Its first page is the root itself (`firstPage`), and a pushed page always has Back.
+    var rootsSwap = false
+    /// The root the sidebar picked (`rootsSwap`): a new one, as a new path, slides a list laid over the page away.
+    var selection: AnyHashable? = nil
     #if os(iOS)
     /// The Sidebar layout on a phone's width (#6332): the list in this drawer, the pages one stack whose root is `empty`
     /// (`drawerLayout`); nil, the list at the stack's root as before. Set around this split only (`splitDrawer`): it is
@@ -51,12 +56,15 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     #endif
 
     init(path: Binding<NavigationPath>, listKey: String? = nil, destinations: Destinations, pageSwitch: Bool = false,
-         columnColor: Color? = nil, @ViewBuilder sidebar: () -> Sidebar, @ViewBuilder empty: () -> Empty) {
+         columnColor: Color? = nil, rootsSwap: Bool = false, selection: AnyHashable? = nil,
+         @ViewBuilder sidebar: () -> Sidebar, @ViewBuilder empty: () -> Empty) {
         _path = path
         self.listKey = listKey
         self.destinations = destinations
         self.pageSwitch = pageSwitch
         self.columnColor = columnColor
+        self.rootsSwap = rootsSwap
+        self.selection = selection
         self.sidebar = sidebar()
         self.empty = empty()
         #if os(iOS)
@@ -65,6 +73,10 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
         _columns = State(initialValue: SplitListMemory.startsClosed(listKey) ? .detailOnly : SplitColumns.shown)
         #endif
     }
+
+    /// The page in front is the first one: nothing under it to go back to. With roots (#8359) that is the root alone;
+    /// otherwise the first page the list opened, beside it.
+    private var firstPage: Bool { rootsSwap ? path.isEmpty : path.count <= 1 }
 
     var body: some View {
         layout.environment(\.splitPush, SplitPush { [path = $path] value in path.wrappedValue.append(value) })
@@ -101,7 +113,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 }
             }
             .navigationSplitViewStyle(.balanced)
-            .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1))
+            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage))
             // The detail column once came out a few points wide, the chat squeezed into it (2026-11-02, not reproduced):
             // what the columns and the stack did, for the next time (`log show --predicate 'category == "split"'`).
             .onChange(of: columns) { old, new in
@@ -153,7 +165,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             #endif
             // On the whole split, not the detail stack: its pages are built from the destinations the sidebar
             // registered, in the sidebar's environment.
-            .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: columns == .detailOnly, pageSwitch: pageSwitch))
+            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage, listHidden: columns == .detailOnly, pageSwitch: pageSwitch))
             .environment(\.splitShowList, SplitShowList(show: { [columns = $columns] in
                 withAnimation(Theme.Motion.layout) { columns.wrappedValue = SplitColumns.shown }
             }, hide: { [columns = $columns] in
@@ -162,6 +174,9 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             #if os(iOS)
             // A pick that changes the page (an Agent, a place): a list laid over the page goes (#4852).
             .onChange(of: path) { hideOverlay() }
+            // A new root the sidebar picked, with no path to change (#8359): the content is already replaced, the list's
+            // sliding away is the only motion.
+            .onChange(of: selection) { hideOverlay() }
             #endif
             #endif
         } else {
@@ -228,9 +243,10 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// it opens the drawer as on the conversation (`AssistantDrawerLayout.firstPages`). Behind the drawer, the column's
     /// color (the Agents list's own page color without one): its head and foot and the list are one surface, in dark mode too.
     private func drawerLayout(_ drawer: AssistantDrawer) -> some View {
-        AssistantDrawerLayout(drawer: drawer, enabled: path.count <= 1, backdrop: columnColor ?? Theme.groupedPage, firstPages: true, sidebar: { sidebar }, page:
+        // With roots (#8359) the drawer's drag works at the root, and a pushed page's back swipe has the first page too.
+        AssistantDrawerLayout(drawer: drawer, enabled: firstPage, backdrop: columnColor ?? Theme.groupedPage, firstPages: !rootsSwap, sidebar: { sidebar }, page:
             NavigationStack(path: $path) { empty.modifier(destinations) })
-            .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: true, drawer: true))
+            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage, listHidden: true, drawer: true))
             .environment(\.splitShowList, SplitShowList(show: { drawer.open() }))
     }
     #endif

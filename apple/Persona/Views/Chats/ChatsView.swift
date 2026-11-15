@@ -263,12 +263,17 @@ struct ChatsView: View {
         case .whole: "sidebar.list"
         }
     }
+    /// The Sidebar layout's page and the Persona tab's (#8359, docs/design/sidebar-navigation.md option 3): the sidebar
+    /// picks the page's root (`UnifiedSidebar.roots`), and the path holds only what is opened inside it. The Agents tab's
+    /// page keeps "Choose an Agent" at its root and its chat as the first page.
+    private var rootsMode: Bool { unified.map { $0.part != .agents } ?? false }
     /// Laid out for searching (`AgentsHeader.compact`).
     private var headerCompact: Bool { header.compact }
     /// Where the shell's bar is and how far it has faded for the rising field, read apart from this body (`AgentsTopBarPlace`).
     private var topBarPlace: AgentsTopBarPlace { AgentsTopBarPlace(header: header) }
     #else
     private var ownsTop: Bool { false }
+    private var rootsMode: Bool { false }
     private var headerCompact: Bool { false }
     private var topBarPlace: EmptyModifier { EmptyModifier() }
     #endif
@@ -333,12 +338,13 @@ struct ChatsView: View {
         let _ = searching
         SplitNavigation(path: pushing, listKey: listKey,
                         destinations: AgentsDestinations(unifiedPath: unified == nil ? nil : pushing), pageSwitch: pageTabSwitch,
-                        columnColor: unified == nil ? nil : UnifiedSidebar.columnColor) {
+                        columnColor: unified == nil ? nil : UnifiedSidebar.columnColor,
+                        rootsSwap: rootsMode, selection: rootsMode ? unified.map { AnyHashable($0.root) } : nil) {
             listColumn
         } empty: {
-            if unified != nil, unified?.part != .agents {
-                // The Sidebar layout (#6332): the page beside the sidebar starts at the Persona conversation, the root
-                // what the sidebar opens goes over (`AssistantView`'s embedded page); so does the Persona tab's (#4206).
+            if rootsMode {
+                // The Sidebar layout (#6332) and the Persona tab's (#4206): the page beside the sidebar. `AssistantView`
+                // (embedded) draws the root the sidebar picked, the conversation or another page (#8359).
                 AssistantView()
             } else {
                 SplitPlaceholder(symbol: Theme.Icon.agents, title: String(localized: "Choose an Agent"),
@@ -350,7 +356,10 @@ struct ChatsView: View {
         // On a phone the sidebar is the drawer, the Persona conversation the page under everything it opens (#6332).
         .environment(\.splitDrawer, unified?.drawer)
         #endif
-        .modifier(UnifiedFront(unified: unified, atRoot: path.isEmpty))
+        .modifier(UnifiedFront(unified: unified, atRoot: rootsMode ? unified?.atRoot == true && path.isEmpty : path.isEmpty))
+        #if DEBUG && os(iOS)
+        .background { if rootsMode, ScreenProbe.enabled, let unified { SidebarPageProbe(root: unified.root, path: path.count) } }
+        #endif
         #if os(iOS)
         .tabActiveTask(id: model.api.map { PersonalAgentEntryModel.Connection($0) }) {
             await personalEntry.watch(model.api)
@@ -483,7 +492,16 @@ struct ChatsView: View {
                 #endif
                 spaceAt = spaceAt.filter { $0.key < p.count }
                 // Back at the list: next launch starts here. Not the Persona tab's page (#4206): its path is Persona's.
-                if p.isEmpty, !leaving, takesAgents { AppModel.rememberChat(nil); model.chatSwitched = [:] }
+                if p.isEmpty, !agentsRootInFront, !leaving, takesAgents { AppModel.rememberChat(nil); model.chatSwitched = [:] }
+            }
+            .onChange(of: rootsMode ? unified?.root : nil) { _, root in
+                guard let root else { return }
+                #if os(iOS)
+                // A phone's drawer: the page under it was replaced, the drawer goes (#6332).
+                if let unified, widthClass != .regular, root.value != nil { unified.drawer.close() }
+                #endif
+                // Back at the conversation or a place: no Agent's page in front, the next launch starts at the conversation.
+                if path.isEmpty, !agentsRootInFront, !leaving, takesAgents { AppModel.rememberChat(nil); model.chatSwitched = [:] }
             }
             .onChange(of: model.agentsListReveal) { _, request in
                 // The Sidebar layout: Agents is a part of the sidebar, not a page: choosing it shows that part, and
@@ -597,7 +615,7 @@ struct ChatsView: View {
     private func pushOpenChat() {
         guard let key = model.openChat, !leaving else { return }
         spaceAt = [:] // the chat is the first page now, no space page under anything (as `openFromList`)
-        path = NavigationPath([key])
+        if rootsMode, let unified { unified.select(.page(AnyHashable(key)), path: $path) } else { path = NavigationPath([key]) }
         #if DEBUG
         // `-openOverSpace YES` with `-openSession`: the chat on its space's page, a page under it (its ‹, #1337).
         if UserDefaults.standard.bool(forKey: "openOverSpace") {
@@ -673,8 +691,21 @@ struct ChatsView: View {
 
     /// Something opened from here (a new chat, a debug page): it replaces the detail column, or pushes onto the list.
     private func openFromList(_ value: some Hashable) {
+        if rootsMode, let unified {
+            // The page's root (#8359): replaced, not pushed. A space at the root is under index -1 (`openSpace`).
+            spaceAt = (value as? SpaceRoute).map { [-1: $0.id] } ?? [:]
+            unified.select(.page(AnyHashable(value)), path: $path)
+            return
+        }
         spaceAt = (value as? SpaceRoute).map { [0: $0.id] } ?? [:]
         path = NavigationPath([value])
+    }
+
+    /// The Sidebar layout's root is something the Agents list opened (an Agent's chat, a space…), not the conversation
+    /// or a place (#8359).
+    private var agentsRootInFront: Bool {
+        guard rootsMode, let root = unified?.root else { return false }
+        return root.value != nil && root.place == nil
     }
 
     /// A personal agent's conversation asked for from outside (a Spotlight result, #4519): once the stack is still, as
@@ -689,11 +720,20 @@ struct ChatsView: View {
     /// and a rebuilt list or the next launch would bring that chat back over this conversation.
     private func pushOpenPersonalAgent() {
         guard let session = model.openPersonalAgent, !leaving else { return }
+        AppModel.rememberChat(nil)
+        spaceAt = [:]
+        if rootsMode, let unified {
+            // Personal Agents is the root (#8359), the conversation pushed on it: its ‹ goes back to that list.
+            unified.select(.page(AnyHashable(PersonalAgentsRoute())), path: $path)
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { path = NavigationPath([session]) }
+            model.openPersonalAgent = nil
+            return
+        }
         var under = NavigationPath()
         under.append(PersonalAgentsRoute())
         under.append(session)
-        AppModel.rememberChat(nil)
-        spaceAt = [:]
         pushing.wrappedValue = under
         model.openPersonalAgent = nil
     }
@@ -1623,13 +1663,25 @@ private struct AgentsList: View {
     /// this is the same as pushing it.
     private func openFromList(_ value: some Hashable) {
         openedWorkspace = nil
+        #if os(iOS)
+        if let unified, unified.part != .agents {
+            // The Sidebar layout's page (#8359): its root replaced, not pushed. A space at the root is index -1 (`openSpace`).
+            spaceAt = (value as? SpaceRoute).map { [-1: $0.id] } ?? [:]
+            unified.select(.page(AnyHashable(value)), path: $path)
+            return
+        }
+        #endif
         spaceAt = (value as? SpaceRoute).map { [0: $0.id] } ?? [:]
         path = NavigationPath([value])
     }
 
     private func selectEmptyWorktree(_ workspace: HostWorkspace) {
         spaceAt = [:]
+        #if os(iOS)
+        if let unified, unified.part != .agents { unified.select(.conversation, path: $path) } else { path = NavigationPath() }
+        #else
         path = NavigationPath()
+        #endif
         openedWorkspace = workspace.key
         AppModel.rememberChat(nil)
     }
@@ -2190,7 +2242,7 @@ private struct AgentsList: View {
             } else {
                 ForEach(r.worktrees) { w in
                     if w.catalog {
-                        WorkspaceSidebarCard(workspace: w, project: r.name, selectedSession: openedWorkspace == nil ? model.visibleSession : nil,
+                        WorkspaceSidebarCard(workspace: w, project: r.name, selectedSession: openedWorkspace == nil ? shownAgent : nil,
                                              selectedWorkspace: openedWorkspace, folded: { isFolded($0) }, toggle: { toggleFold($0) },
                                              open: { openWorktree($0) },
                                              selectAgent: { openFromList($0) },
@@ -3105,7 +3157,14 @@ private struct AgentsList: View {
     /// The agent open beside the list in By Repository's cards (#2531; the split's list, not a phone's, whose list is
     /// never beside a chat): its row is washed. The split's column is compact itself, so not its width class.
     private func treeSelected(_ key: SessionKey) -> Bool {
-        repoTree && !ownsTop && openedWorkspace == nil && model.visibleSession == key
+        repoTree && !ownsTop && openedWorkspace == nil && shownAgent == key
+    }
+
+    /// The Agent whose row is shaded: the Sidebar layout's root while it is an Agent's chat, also with pages opened on it
+    /// (#8359); elsewhere the chat on screen.
+    private var shownAgent: SessionKey? {
+        if let unified, unified.part != .agents { return unified.root.value?.base as? SessionKey }
+        return model.visibleSession
     }
 
     /// `open`: the Mac's agent open beside the list; By Repository's cards on iOS, the one whose row is washed.
@@ -4582,18 +4641,14 @@ private struct UnifiedFront: ViewModifier {
         if let unified {
             // The tab follows what is in front in the Sidebar layout; in the Separate layout's tabs the tab bar sets it.
             let follows = unified.part == .whole
+            // What is shaded follows the page's root (`UnifiedSidebar.atRoot`, `shownPlace`, #8359).
             content
                 .onChange(of: atRoot) { _, root in
-                    unified.atRoot = root
-                    if root {
-                        unified.shownPlace = nil
-                        if follows, model.selectedTab != .assistant { model.selectedTab = .assistant }
-                    }
+                    if root, follows, model.selectedTab != .assistant { model.selectedTab = .assistant }
                 }
                 .onChange(of: model.visibleSession) { _, key in
-                    // An Agent's chat in front (not one of Persona's): no place is shown, and the tab is Agents'.
+                    // An Agent's chat in front (not one of Persona's): the tab is Agents'.
                     guard let key, model.session(key)?.assistant != true, !atRoot else { return }
-                    unified.shownPlace = nil
                     if follows, model.selectedTab != .chats { model.selectedTab = .chats }
                 }
         } else {

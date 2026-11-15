@@ -933,14 +933,19 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   `\.splitSideBars`): nothing is above the columns there, so the column's head and the page's top bar sat at the
   display's edge, the mark under its rounded corner (#4853). Both columns start `Theme.Space.l` lower, or as low as the
   lower of their own tops (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the page's top stay on one line.
-- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`),
-  whose detail starts at the Persona conversation: `AssistantView` without a stack of its own (`embedded`), pushing on
-  the split's one path (`\.unifiedPath`). A pick in the sidebar replaces what is over the conversation, as the web's
-  routes: an Agent's chat (its row, a card), a place (`ShellRoute` / `SidebarRoute`, the split's first page without a back),
-  the conversation itself (its row, `ShellPage.conversation`). Every page the Persona page opens is a value there, never a
-  flag, so the next pick does not land under it. The conversation's sidebar button folds and brings back the split's
-  column (`SplitShowList.hide`). The shaded row follows what is beside the sidebar (`UnifiedSidebar.atRoot`,
-  `shownPlace`).
+- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`;
+  the Persona tab's in the Separate layout too). **Switching area replaces the page's root; only drilling down pushes**
+  (#8359, docs/design/sidebar-navigation.md section 6): each sidebar item is a root of its own, the main conversation, a
+  place (`ShellRoute`), Health or Messages (`SidebarRoute`), an Agent's chat (its row, a card, a route) or another page the
+  Agents list opens. A pick replaces the root at once, with no push, pop or Back; the split's path (`\.unifiedPath`) holds
+  only what is opened inside the page (an Inbox item, a machine, a recording), pushed with Back. Each root keeps its
+  drill-down while the user is elsewhere, and the root in front picked again goes back to it (`SidebarPageRoots`, held by
+  `UnifiedSidebar`). `AssistantView` without a stack of its own (`embedded`) stays the stack's root and draws the root picked
+  (`sidebarRootPage`); `SplitNavigation(rootsSwap:)` counts the root as the first page. The conversation's sidebar button
+  folds and brings back the split's column (`SplitShowList.hide`). The shaded row follows the root, also while drilled in
+  (`UnifiedSidebar.atRoot`, `shownPlace`; an Agent's row from the root). Laid over the page (the open Duo upright) the
+  column slides away on a pick, the only motion. DEBUG: `-probes YES` writes `probe.sidebar-page` (the root, the path, how
+  many animated navigation transitions ran; `SidebarRootsUITests`).
 - **On a phone** (`SplitNavigation`'s drawer layout, `\.splitDrawer`, `SplitDetail.drawer`): the same column in the
   drawer (`AssistantDrawerLayout`, the shell's drawer: 82% of the width, at most 380 pt), the Persona conversation the root
   of one stack under it, and what the drawer opens that stack's first page. The conversation's bar has no Assistant |
@@ -975,7 +980,8 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   phone's drawer the face opens it, as before.
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
   page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
-  would be, the setting switching both ways at once, nothing picked: Separate). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
+  would be, the setting switching both ways at once, nothing picked: Separate), `SidebarRootsUITests` (a pick replaces the
+  root, a drill-down pushes, each root keeps its drill-down; iPad, open Duo, iPhone), `SidebarPageRootsTests` (the rule). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
   the setting's page.
 
 ## Home-screen quick actions (#3199)

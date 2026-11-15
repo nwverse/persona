@@ -25,10 +25,44 @@ import SwiftUI
     /// The Persona rows' search and dialogs (`AssistantSidebarUI`), shared by the head, the rows in the Agents list and
     /// the presenters around the column. Lazy: made when the column is first drawn (P3).
     @ObservationIgnored lazy var ui = AssistantSidebarUI()
-    /// The page beside the sidebar is the Persona conversation itself, nothing over it: its row is the one shaded.
-    var atRoot = true
-    /// The place shown beside the sidebar (Inbox, To-dos, Machines…), its row shaded; nil for a conversation or an Agent.
-    var shownPlace: ShellPage?
+    /// The page beside the sidebar: its root, picked in the sidebar, and the drill-down path each root was left with
+    /// (#8359, `SidebarPageRoots`). A pick replaces the root; only what is opened inside the page is pushed.
+    private(set) var roots = SidebarPageRoots()
+    /// The root in front.
+    var root: SidebarPageRoot { roots.current }
+    /// The page beside the sidebar is the Persona conversation (with or without pages opened from it): its row is the
+    /// one shaded.
+    var atRoot: Bool { roots.current == .conversation }
+    /// The place shown beside the sidebar (Inbox, To-dos, Machines…), its row shaded while it is the page's root, also
+    /// with pages opened from it; nil for a conversation or an Agent.
+    var shownPlace: ShellPage? { roots.current.place }
+
+    /// `root` picked (its row, a route) while the page shows `path` over the root in front: the root replaced at once,
+    /// or the root in front back at its root (`SidebarPageRoots.select`). Only the pop of a re-pick animates.
+    @discardableResult
+    func select(_ root: SidebarPageRoot, path: Binding<NavigationPath>, contentChanged: Bool = false) -> SidebarPageRoots.Step {
+        apply(path: path) { roots.select(root, path: path.wrappedValue, contentChanged: contentChanged) }
+    }
+
+    /// Another assistant or hub: every root was the one before's (`SidebarPageRoots.forget`).
+    func forget(path: Binding<NavigationPath>) {
+        apply(path: path) { roots.forget() }
+    }
+
+    private func apply(path: Binding<NavigationPath>, _ make: () -> SidebarPageRoots.Step) -> SidebarPageRoots.Step {
+        var t = Transaction()
+        t.disablesAnimations = true
+        // The root and the path change in one update, without animation: the page is replaced, not pushed or popped.
+        let step = withTransaction(t) {
+            let s = make()
+            if !s.animated, path.wrappedValue != s.path { path.wrappedValue = s.path }
+            return s
+        }
+        if step.animated, path.wrappedValue != step.path {
+            withAnimation { path.wrappedValue = step.path }
+        }
+        return step
+    }
     /// How much of the Agents' Needs You section is on screen in the list (its heading and its rows, `NeedsAnchor`), and,
     /// when none is, whether it was scrolled past (above) or not reached yet (below): the jump's arrow (`SidebarNeedsJump`).
     private(set) var needsOnScreen = 0
@@ -195,7 +229,6 @@ struct UnifiedSidebarColumn<Agents: View>: View {
     }
 
     private func show(_ page: ShellPage) {
-        state.shownPlace = page.isSidebarPlace ? page : nil
         // The Agents tab's foot opens Persona's pages (New Chat, Settings' places) on the Persona tab (#4206).
         if state.part == .agents, model.selectedTab != .assistant { model.selectedTab = .assistant }
         router?.show(page)
