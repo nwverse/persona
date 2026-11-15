@@ -662,9 +662,9 @@ func startResultUnknown(err error) bool {
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
 
-// sendUnknown: a session.send whose answer never came back, though it may have reached the node (startResultUnknown),
-// unless the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait ran out, or the
-// connection closed, before it was written, or the node's not-started refusals outlasted the retries).
+// sendUnknown: a session.send or session.start whose answer never came back, though it may have reached the node
+// (startResultUnknown), unless the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait
+// ran out, or the connection closed, before it was written, or the node's not-started refusals outlasted the retries).
 func sendUnknown(err error) bool {
 	return startResultUnknown(err) && !errors.Is(err, rpc.ErrNotSent)
 }

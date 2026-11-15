@@ -655,7 +655,8 @@ func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, a
 // started, a new agent for it, after its agents had all stopped, or may have (the start's answer is unknown; started is
 // empty then). The owner asks the task for more: it is open again, and the new agent's work is the task's from now (it
 // has no send on record for closedTurnReopens, and its first turn may have started before it was linked, while the
-// task was still closed). A start that definitely failed asked for nothing, and the task stays as it was (#7539).
+// task was still closed). A start that definitely failed (refused, or it never went out: rpc.ErrNotSent) asked for
+// nothing, and the task stays as it was (#7539).
 func (s *Service) successorOpens(ctx context.Context, t Todo, started proto.Session) {
 	s.tasks.completionMu.Lock()
 	defer s.tasks.completionMu.Unlock()
@@ -725,7 +726,7 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_stopped")
 		}
 		started, err := s.startTaskSuccessor(ctx, t, last, text)
-		if hubClosedTask(&t) && (err == nil || startResultUnknown(err)) {
+		if hubClosedTask(&t) && (err == nil || sendUnknown(err)) { // a start that never went out asked for nothing
 			s.successorOpens(ctx, t, started)
 		}
 		if err != nil {

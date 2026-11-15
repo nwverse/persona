@@ -625,10 +625,10 @@ func TestBackgroundSupervisorLeavesASideConversationsTaskClosed(t *testing.T) {
 }
 
 // The owner's message on the card of an accepted task whose agents have all stopped starts a new agent for it. When
-// that start definitely fails (the agent's computer is unreachable, its launcher is refused), nothing was asked of the
-// task: it stays exactly as accepted, and its supervisor hears nothing of it.
+// that start definitely fails (the agent's computer is unreachable, its launcher is refused, the start never went out),
+// nothing was asked of the task: it stays exactly as accepted, and its supervisor hears nothing of it.
 func TestACardMessageWhoseNewAgentFailsLeavesTheTaskClosed(t *testing.T) {
-	for _, why := range []string{"computer unreachable", "launcher refused"} {
+	for _, why := range []string{"computer unreachable", "launcher refused", "start never went out"} {
 		t.Run(why, func(t *testing.T) {
 			ctx := context.Background()
 			s, f, todo := doneAndReviewed(t)
@@ -638,10 +638,13 @@ func TestACardMessageWhoseNewAgentFailsLeavesTheTaskClosed(t *testing.T) {
 				LastText: "Fixed it: PR https://github.com/o/r/pull/77 is merged", Status: proto.StatusOffline, State: proto.StateOffline,
 				UpdatedAt: time.Now(), Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}, ReadOnlyReason: "stopped"})
 			f.mu.Lock()
-			if why == "computer unreachable" {
+			switch why {
+			case "computer unreachable":
 				f.devices = []Device{{ID: "box", Name: "box", Online: true, Reachable: false}}
-			} else {
+			case "launcher refused":
 				f.failStart = errors.New("launcher not found")
+			default: // the node refused it as restarting until the manager's retries ran out (devices.Machine.call)
+				f.failStart = rpc.NotSent(context.DeadlineExceeded)
 			}
 			f.mu.Unlock()
 			if _, err := s.routeToTask(ctx, "conv1", todo.ID, "Please cover the landscape case too"); err == nil {
