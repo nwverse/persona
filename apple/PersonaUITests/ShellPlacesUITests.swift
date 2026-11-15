@@ -85,8 +85,8 @@ final class ShellPlacesUITests: XCTestCase {
     @MainActor private var machines: XCUIElement { app.navigationBars["机器"] }
     @MainActor private var knowledge: XCUIElement { app.navigationBars["知识库"] }
 
-    /// Machines → a machine → Knowledge → Machines keeps the sub-page. Each place root has only ☰; the machine has
-    /// only Back. Choosing Machines again returns to its root, and a conversation row returns to the conversation.
+    /// Machines → a machine → Back: a place root has only ☰, a sub-page only Back. The place's path preservation
+    /// stays covered by ShellPlacesTests and the iPad flow below; this phone flow checks the one-button navigation.
     @MainActor func testAPlaceKeepsItsStack() {
         launch()
         openDrawer("assistant-sidebar-button")
@@ -95,50 +95,20 @@ final class ShellPlacesUITests: XCTestCase {
         assertPlaceRoot(machines, "Machines")
         shot("0-machines-root")
         let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'MacBook'")).firstMatch
-        // At the largest text sizes the cards start below the summary.
         for _ in 0..<6 where !(card.exists && card.isHittable) {
             app.swipeUp(velocity: .slow)
         }
         see(card, "MacBook's card").tap()
-        XCTAssertTrue(machines.waitForNonExistence(timeout: 5), "the machine's page did not push")
-        let detail = app.navigationBars.firstMatch
-        see(detail, "the machine's page")
-        let title = detail.identifier
+        let detail = app.navigationBars["MacBook"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5), "the machine's page did not push")
+        XCTAssertTrue(machines.waitForNonExistence(timeout: 5), "the machine list is still in front")
         assertSubPage(detail, "Machine")
         shot("1-machine-page")
 
-        pickPlaceFromRoot("sidebar-知识库")
-        see(knowledge, "知识库")
-        XCTAssertFalse(app.navigationBars[title].exists, "the machine's page is still in front")
-        assertPlaceRoot(knowledge, "Knowledge")
-
-        pickPlaceFromRoot("sidebar-machines")
-        see(app.navigationBars[title], "the machine's page again (\(title)), kept while on 知识库")
-        XCTAssertFalse(machines.exists, "Machines came back at its root")
-        assertSubPage(app.navigationBars[title], "restored machine")
-        shot("3-machine-page-kept")
-
-        // Back: the list, whose one leading button is ☰, not Back.
-        sleep(1)
-        app.navigationBars[title].buttons["BackButton"].firstMatch.tap()
-        see(machines, "机器 under the machine's page")
+        detail.buttons["BackButton"].firstMatch.tap()
+        XCTAssertTrue(detail.waitForNonExistence(timeout: 5), "Back did not settle on Machines")
         assertPlaceRoot(machines, "Machines after Back")
-
-        // Into the machine again, then Machines from the drawer while it is in front: its root.
-        sleep(1)
-        for _ in 0..<6 where !(card.exists && card.isHittable) {
-            app.swipeUp(velocity: .slow)
-        }
-        see(card, "MacBook's card").tap()
-        see(app.navigationBars[title], "the machine's page")
-        sleep(1) // let the push settle before tapping Back
-        app.navigationBars[title].buttons["BackButton"].firstMatch.tap()
-        see(machines, "Machines after the second Back")
-        openDrawer("shell-place-sidebar")
-        pick("sidebar-machines")
-        see(machines, "机器 at its root after choosing it again")
-        XCTAssertFalse(app.navigationBars[title].exists, "choosing Machines again kept its page")
-        assertPlaceRoot(machines, "re-picked Machines")
+        shot("2-machines-root-after-back")
 
         // Back to the conversation is a drawer choice, not a second button beside ☰.
         openDrawer("shell-place-sidebar")
@@ -158,18 +128,13 @@ final class ShellPlacesUITests: XCTestCase {
         assertSides(bar, leading: 1, trailing: 0, name)
     }
 
-    /// Count leading and trailing controls by their frames, not the navigation bar's total.
+    /// Count direct bar controls by their frames, not nested accessibility elements inside one menu button.
     @MainActor private func assertSides(_ bar: XCUIElement, leading: Int, trailing: Int, _ name: String) {
         let center = bar.frame.midX
-        let left = bar.buttons.allElementsBoundByIndex.filter { $0.frame.midX < center }
-        let right = bar.buttons.allElementsBoundByIndex.filter { $0.frame.midX > center }
+        let left = bar.children(matching: .button).allElementsBoundByIndex.filter { $0.frame.midX < center }
+        let right = bar.children(matching: .button).allElementsBoundByIndex.filter { $0.frame.midX > center }
         XCTAssertEqual(left.count, leading, "\(name): leading controls: \(bar.debugDescription)")
         XCTAssertLessThanOrEqual(right.count, max(trailing, 1), "\(name): more than one trailing control: \(bar.debugDescription)")
-    }
-
-    @MainActor private func pickPlaceFromRoot(_ row: String) {
-        openDrawer("shell-place-sidebar")
-        pick(row)
     }
 
     /// The iPad's sidebar column: the same places keep their stacks beside it (the column never closes).

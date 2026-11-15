@@ -22710,6 +22710,9 @@ def _slot_view(ui, range_="7d", machine=None):
         return {"sections": [{"footer": "只算从 %s 发出的请求。" % name, "items": [
             {"type": "stat_grid", "stats": [{"label": "今天的请求", "value": "214"}, {"label": "失败", "value": "3", "tone": "danger"}]},
             _chart("line", [("请求", None, [120, 180, 90, 40, 260, 230, 214])], title="近 7 天的请求", unit="次")]}]}
+    if ui == "usage-detail":
+        return {"title": "用量明细", "sections": [{"items": [
+            {"type": "row", "title": "示例请求", "subtitle": "今天 10:00 · 1,204 tokens", "value": "¥0.02"}]}]}
     tabs = [("1d", "今天"), ("7d", "7 天"), ("30d", "30 天"), ("90d", "90 天")]
     return {"title": "用量", "state": "range=" + range_, "refresh_after": 600, "sections": [
         {"items": [{"type": "button", "title": ("● " if r == range_ else "") + t, "action": {"id": "range:" + r}} for r, t in tabs]},
@@ -22722,7 +22725,9 @@ def _slot_view(ui, range_="7d", machine=None):
             _chart("line", [("费用", "caution", [3.1, 5.2, 2.0, 1.1, 8.3, 7.6, 3.5])], title="费用", unit="元")]},
         {"title": "按模型", "items": [
             {"type": "row", "title": "model-large", "subtitle": "1,021 次", "value": "12.4M"},
-            {"type": "row", "title": "model-small", "subtitle": "183 次", "value": "4.6M"}]}]}
+            {"type": "row", "title": "model-small", "subtitle": "183 次", "value": "4.6M"}]},
+        # A real pushed child for the iPhone shell's root / sub-page navigation test.
+        {"items": [{"type": "button", "title": "查看用量明细", "action": {"id": "usage-detail", "push": {"ui": "usage-detail", "title": "用量明细"}}}]}]}
 
 
 def _fit_v1(view):
@@ -22747,9 +22752,7 @@ def _ui_view(ui, launcher=""):
             {"type": "metric", "label": "余额", "value": "¥ 182.40", "detail": "刷新过 %d 次" % _UI_STATE["refreshed"], "tone": "positive"},
             {"type": "progress", "label": "本月预算", "ratio": 0.38, "detail": "¥ 57.60 / ¥ 150", "tone": "neutral"},
             {"type": "progress", "label": "今日额度", "ratio": 0.93, "detail": "快用完了", "tone": "danger"},
-            {"type": "text", "text": "数字每 5 分钟更新一次。", "style": "secondary"},
-            # The shell navigation suite's real root → sub-page fixture: a made-up usage detail.
-            {"type": "button", "title": "查看用量明细", "action": {"id": "usage-detail", "push": {"ui": "notes", "state": '{"page": "detail", "id": "n1"}', "title": "用量明细"}}}]},
+            {"type": "text", "text": "数字每 5 分钟更新一次。", "style": "secondary"}]},
         {"title": "Key", "footer": "停用后，用这个 Key 的启动器会立刻失败。", "items": [
             {"type": "row", "title": "工作", "subtitle": "sk-…3fa9 · 今天 1.2 万 token", "value": "¥ 12.30", "badge": {"text": "有效", "tone": "positive"},
              "action": {"id": "key:work"}},
@@ -23504,9 +23507,11 @@ def markets_route(handler, p, body):
             if action:
                 _UI_STATE["capsule_refreshed"] += 1
             handler.send_json({"view": _capsule_view(), **({"toast": "摘要已刷新"} if action else {})}); return True
-        if parts[7] in ("usage", "today", "gpu"):
+        if parts[7] in ("usage", "usage-detail", "today", "gpu"):
             if parts[7] == "gpu" and not ctx.get("machine"):
                 handler.send_json({"error": "没有这台机器", "code": "not_found"}, 404); return True
+            if parts[7] == "usage-detail":
+                handler.send_json({"view": _slot_view(parts[7])}); return True
             machine = next((m for m in MACHINES if ctx.get("machine") in (m["id"], m.get("name"))), {"name": ctx.get("machine")})
             state = req.get("state") or "range=7d"
             if (req.get("action") or "").startswith("range:"):

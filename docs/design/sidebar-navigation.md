@@ -168,8 +168,9 @@ Implementation:
 
 | Item | Check |
 | --- | --- |
-| A place keeps its stack | ☰ → Machines → a machine → Back → Machines → ☰ → Knowledge → ☰ → Machines: the machine's page is in front; Back → Machines; ☰ → a conversation row → the conversation (`ShellPlacesUITests.testAPlaceKeepsItsStack`) |
-| Choosing the place in front pops it | ☰ → Machines → a machine → Back → ☰ → Machines: the Machines list (same test) |
+| One leading button and return to the conversation | ☰ → Machines → a machine → Back → Machines → ☰ → a conversation row: root and child each have one leading control, then the drawer returns to the conversation (`ShellPlacesUITests.testAPlaceKeepsItsStack`) |
+| Choosing the place in front pops it | `ShellPlacesTests.choosingThePlaceInFrontGoesToItsRoot` covers the re-pick-to-root rule |
+| A place keeps its stack | `ShellPlacesTests` covers save on leave, restore on return, re-pick and assistant switch; the iPad flow checks it in the UI |
 | One leading button | A place root shows ☰ and no Back; a machine sub-page shows Back and no ☰ (same test) |
 | One trailing action | Inbox, Knowledge, an Inbox item, a Lark chat and Browser Sign-ins have one ⋯; their previous actions remain in that menu on iPhone |
 | Root edge-swipe | From a place root, a slow drag from the leading screen edge returns to the conversation and does not open the drawer (`ShellPagerTests.testPushedPagesSwipeBack`) |

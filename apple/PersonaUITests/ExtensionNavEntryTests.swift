@@ -59,21 +59,32 @@ final class ExtensionNavEntryTests: XCTestCase {
         XCTAssertTrue(face.waitForExistence(timeout: 15), app.debugDescription)
         face.tap()
         checkEntry(app, "usage")
-        let bar = app.navigationBars["Example 网关"]
+        let bar = app.navigationBars["用量"] // i18n-ignore: the mock extension's title
         XCTAssertTrue(bar.waitForExistence(timeout: 10))
         XCTAssertFalse(bar.buttons["BackButton"].exists, "the usage root has Back beside ☰")
-        XCTAssertEqual(bar.buttons.count, 1, "the usage root has more than one leading button")
+        assertSides(bar, leading: 1, trailing: 0, "usage root")
         XCTAssertTrue(app.buttons["shell-place-sidebar"].exists)
 
         let detail = app.buttons["查看用量明细"] // i18n-ignore: the mock's made-up detail
-        XCTAssertTrue(detail.waitForExistence(timeout: 10), "no usage detail row:\n\(app.debugDescription)")
+        for _ in 0..<10 where !(detail.exists && detail.isHittable) {
+            app.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(detail.isHittable, "no usage detail row after scrolling:\n\(app.debugDescription)")
         detail.tap()
-        let child = app.navigationBars["用量明细"]
+        let child = app.navigationBars["用量明细"] // i18n-ignore: the mock's detail title
         XCTAssertTrue(child.waitForExistence(timeout: 10), "the usage detail did not push:\n\(app.debugDescription)")
         XCTAssertTrue(child.buttons["BackButton"].exists)
-        XCTAssertEqual(child.buttons.count, 1, "the usage sub-page has more than one leading button")
+        assertSides(child, leading: 1, trailing: 0, "usage sub-page")
         XCTAssertFalse(app.buttons["shell-place-sidebar"].exists, "the usage sub-page has ☰ beside Back")
         shot(app, "usage-subpage")
+    }
+
+    @MainActor private func assertSides(_ bar: XCUIElement, leading: Int, trailing: Int, _ name: String) {
+        let center = bar.frame.midX
+        let left = bar.children(matching: .button).allElementsBoundByIndex.filter { $0.frame.midX < center }
+        let right = bar.children(matching: .button).allElementsBoundByIndex.filter { $0.frame.midX > center }
+        XCTAssertEqual(left.count, leading, "\(name): leading controls: \(bar.debugDescription)")
+        XCTAssertLessThanOrEqual(right.count, max(trailing, 1), "\(name): more than one trailing control: \(bar.debugDescription)")
     }
 
     @MainActor func testTheIPadSidebarListsTheExtensionsPages() throws {
