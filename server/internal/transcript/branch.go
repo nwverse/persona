@@ -47,7 +47,8 @@ type treeLine struct {
 	sidechain    bool
 	assistant    bool // the line is the assistant's (a reply, a tool call): the message it grew from was answered
 	system       bool // a system line (a recap, a turn's duration, a notice)
-	turnEnd      bool // a turn_duration line: the turn it closes ended
+	turnEnd      bool
+	turnStart    bool // an image-only or task-notification skipped prompt opened a model turn
 	raw          []byte
 	// said / saidAt: the agent's words on this line (Meta.LastText / LastTextAt as it set them); spoke says it wrote
 	// text at all (said is "" for botmux's sentinel alone).
@@ -65,6 +66,7 @@ type treeRec struct {
 	reply        bool
 	system       bool
 	turnEnd      bool
+	turnStart    bool
 	raw          []byte
 	errorLine    string
 	hasOutcome   bool
@@ -366,7 +368,7 @@ func (t *Tail) Revoked() (rest []string, revoked bool) {
 // Line is told about the line ParseLine just read into meta, with the items it returned.
 func (t *Tail) Line(meta *Meta, items []proto.Item) { t.line(meta, items, true) }
 
-func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool) {
+func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool, skippedStart ...bool) {
 	tl := meta.tree
 	meta.tree = treeLine{}
 	if tl.spoke {
@@ -378,7 +380,8 @@ func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool) {
 	rec := tl.rec(items)
 	// A parsed record is replayable. A skipped large prompt is replayable too (its quick-tail transition is real),
 	// while a skipped tool result or compact summary is tree shape only.
-	rec.hasOutcome = recordOutcome || rec.prompt
+	rec.hasOutcome = recordOutcome || rec.prompt || len(skippedStart) > 0 && skippedStart[0]
+	rec.turnStart = len(skippedStart) > 0 && skippedStart[0] && !rec.prompt
 	if meta.TurnError != "" {
 		rec.errorLine = meta.turnErrorLine
 	}
@@ -415,6 +418,14 @@ func (t *Tail) take(rec treeRec) {
 	}
 }
 
+func skippedTurnStart(e map[string]json.RawMessage) bool {
+	if rawString(e["type"]) != "user" || string(e["isCompactSummary"]) == "true" || string(e["isMeta"]) == "true" {
+		return false
+	}
+	_, toolResult := e["toolUseResult"]
+	return !toolResult
+}
+
 // Skipped is told about a line the caller left unparsed for its size (a prompt with an image or a long paste, a big
 // tool result). The line still takes its place in the tree: without it a turn whose prompt is one is not found gone
 // back over, and one with a big tool result in it is hidden only up to there (the chain breaks at the line). What makes
@@ -425,6 +436,7 @@ func (t *Tail) Skipped(line []byte) {
 	if json.Unmarshal(line, &e) != nil {
 		return
 	}
+	start := skippedTurnStart(e)
 	delete(e, "toolUseResult")
 	if raw, ok := e["message"]; ok {
 		var msg map[string]json.RawMessage
@@ -449,7 +461,7 @@ func (t *Tail) Skipped(line []byte) {
 		return
 	}
 	var m Meta
-	t.line(&m, parseLine(0, small, &m), false)
+	t.line(&m, parseLine(0, small, &m), false, start)
 }
 
 // Settle puts into meta the agent's last words on the lines still in the conversation, when words on an abandoned
@@ -485,9 +497,14 @@ func (t *Tail) Settle(meta *Meta) bool {
 			continue
 		}
 		ParseLine(0, rec.raw, &replay)
+		if rec.turnStart {
+			replay.ClaudeTurnStarted(replay.LastTurnWake)
+			replay.TurnOpen, replay.TurnClosed = true, false
+		}
 	}
 	meta.TurnOpen, meta.TurnClosed = replay.TurnOpen, replay.TurnClosed
 	meta.localTurn, meta.beforeLocal = replay.localTurn, replay.beforeLocal
+	meta.LastTurnWake, meta.ModelFallback = replay.LastTurnWake, replay.ModelFallback
 	meta.turnWorked, meta.turnSucceeded = replay.turnWorked, replay.turnSucceeded
 	meta.TurnError, meta.TurnErrorKind, meta.TurnErrorCode = replay.TurnError, replay.TurnErrorKind, replay.TurnErrorCode
 	meta.TurnErrorResetsAt, meta.TurnErrorResumes, meta.TurnErrorAfterWork = replay.TurnErrorResetsAt, replay.TurnErrorResumes, replay.TurnErrorAfterWork
