@@ -536,6 +536,17 @@ by their own deadlines) and act on the first signal that settles it (the 200), n
 fixing a suspected leak, count: a stress test over every exit path with the counter read afterwards settles it
 faster than reading the code again.
 
+The count did have one way to go wrong that the stress test could not meet: a panic unwinding through a request
+skipped `done`. Where the caller dies with it nothing is left to strand, but the knowledge base loop (`kbRun`) and
+its job pool recover and carry on, so the request stayed counted as out for good. As the request finding out, nobody
+found out after it; as any other, the next busy answer capped the connection at what was "in flight". Either way every
+later request was put off as busy with nothing sent and nothing in the log, the state the report describes
+(`TestInboxTriageRecoversAfterAPanicOnItsConnection`). What would panic there is not known. A count that a recovered
+panic can leave wrong is given back with `defer`; a random walk over the events (`TestTheGateCountsRightInAnyOrder`)
+checks the orders a stress test meets only by chance; and a status that says "at its limit" needs a number in the log
+that can say otherwise: the requests out, the cap, and how long the longest has been out, since none outlives its
+caller's deadline.
+
 ## A send whose answer came too late may have gone in (2026-11-12)
 
 The manager waits 90 s for a relayed message (`drainRelays`) and kept it queued when no answer came. The node had
