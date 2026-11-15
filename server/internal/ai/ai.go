@@ -336,7 +336,7 @@ func messageFailure(kind, code, msg string) (bool, error) {
 	}
 	// An unknown code retains the established type-based limit behavior. A recognized non-limit code (a missing model,
 	// excess context or an unsupported endpoint) is not replaced by a contradictory type.
-	recognizedNonLimit := failureKindFor(failureStatus, code, "") != FailureOther || strings.EqualFold(strings.TrimSpace(code), "unsupported_endpoint")
+	_, recognizedNonLimit := failureKindForCode(code)
 	if !recognizedNonLimit {
 		if limit := streamLimitFor("error", kind, msg); limit != nil {
 			return false, limit
@@ -533,15 +533,6 @@ func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
 	return true
 }
 
-// responseFailure keeps a Responses stream error's text and limit behavior while adding the same typed model/context
-// semantics as an HTTP rejection. The stream itself has no error status, so wording fallback uses bad-request semantics.
-func responseFailure(event, code, msg string) error {
-	if limit := streamLimitFor(event, code, msg); limit != nil {
-		return limit
-	}
-	return withFailureKind(fmt.Errorf("ai: %s: %s", event, msg), failureKindFor(http.StatusBadRequest, code, msg))
-}
-
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
 // stream=false, and the text is just the concatenated output_text deltas. The system prompt goes in as a developer
 // message rather than `instructions`, which those relays replace with their own. Events are framed as SSE
@@ -652,13 +643,13 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 			if ev.Response.Error != nil {
 				msg, code = ev.Response.Error.Message, cmp.Or(ev.Response.Error.Code, code)
 			}
-			return reply, true, responseFailure(ev.Type, code, msg)
+			return reply, true, streamFailureError(ev.Type, code, msg)
 		case "response.failed", "error":
 			msg, code := ev.Message, ev.Code
 			if e := ev.Response.Error; e != nil {
 				msg, code = e.Message, cmp.Or(e.Code, code)
 			}
-			return reply, true, responseFailure(ev.Type, code, msg)
+			return reply, true, streamFailureError(ev.Type, code, msg)
 		}
 		return reply, false, nil
 	}

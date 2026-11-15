@@ -406,7 +406,7 @@ func (g *gate) changed() {
 }
 
 // httpError is an answer other than 200. body keeps the established clipped text; code and message retain the
-// semantics from the full body, and kind carries a model/context failure through wrapping and the gate.
+// semantics from the full body for failure classification and the gate.
 type httpError struct {
 	status          int
 	body            string
@@ -415,14 +415,13 @@ type httpError struct {
 	code            string
 	message         string
 	noRetry         bool
-	kind            FailureKind
 }
 
 func newHTTPError(resp *http.Response, raw []byte) *httpError {
 	code, message := gatewayErrorDetails(raw)
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),
 		retryAfter: retryAfter(resp.Header.Get("Retry-After")), retryAfterGiven: strings.TrimSpace(resp.Header.Get("Retry-After")) != "",
-		code: code, message: message, noRetry: explicitNoRetry(resp.Header), kind: failureKindFor(resp.StatusCode, code, message)}
+		code: code, message: message, noRetry: explicitNoRetry(resp.Header)}
 }
 
 func explicitNoRetry(header http.Header) bool {
@@ -436,8 +435,10 @@ func hasExplicitQuotaCooldown(err error) bool {
 	return errors.As(err, &h) && h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven
 }
 
-func (e *httpError) Error() string            { return fmt.Sprintf("ai: HTTP %d: %s", e.status, e.body) }
-func (e *httpError) failureKind() FailureKind { return e.kind }
+func (e *httpError) Error() string { return fmt.Sprintf("ai: HTTP %d: %s", e.status, e.body) }
+func (e *httpError) failureKind() FailureKind {
+	return failureKindFor(e.status, e.code, e.message)
+}
 
 // Transient: the same request tried again may get an answer: the call ran out of time, the connection failed (before
 // the answer, or partway through it: a body shorter than it said, a stream that stopped before its end, a reset), or

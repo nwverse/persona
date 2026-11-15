@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -17,23 +14,10 @@ import (
 // count. The response is deliberately identical on every request so an unexpected compatibility retry is observable.
 func directAPIError(t *testing.T, api string, status int, body string, header ...string) (error, int) {
 	t.Helper()
-	var requests atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.NotFound(w, r)
-			return
-		}
-		requests.Add(1)
-		for i := 0; i+1 < len(header); i += 2 {
-			w.Header().Set(header[i], header[i+1])
-		}
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, body)
-	}))
-	t.Cleanup(srv.Close)
-	client := New(Config{API: api, BaseURL: srv.URL, APIKey: "example-key", Model: "example-model"})
+	u := newUpstream(t, answer(status, body, header...))
+	client := New(Config{API: api, BaseURL: u.srv.URL, APIKey: "example-key", Model: "example-model"})
 	_, err := client.Chat(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "synthetic input"}}, MaxTokens: 32})
-	return err, int(requests.Load())
+	return err, int(u.sent.Load())
 }
 
 func requireDirectPause(t *testing.T, err error, reason string) *PausedError {

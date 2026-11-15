@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -58,20 +59,39 @@ func withFailureKind(err error, kind FailureKind) error {
 	return &kindedError{error: err, kind: kind}
 }
 
+// streamFailureError keeps a stream error's text and limit behavior while adding typed model/context semantics.
+// The stream itself has no error status, so wording fallback uses bad-request semantics.
+func streamFailureError(event, code, msg string) error {
+	if limit := streamLimitFor(event, code, msg); limit != nil {
+		return limit
+	}
+	return withFailureKind(fmt.Errorf("ai: %s: %s", event, msg), failureKindFor(http.StatusBadRequest, code, msg))
+}
+
 var (
 	modelFailureWords   = lazyre.New(`(?i)model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported|unavailable)|model_not_found|invalid model|unknown model|knows no model`)
 	contextFailureWords = lazyre.New(`(?i)prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|context_length_exceeded`)
 )
 
-func failureKindFor(status int, code, message string) FailureKind {
-	// Codes are machine semantics; a type such as not_found_error is deliberately not accepted here.
+// failureKindForCode reads recognized non-limit codes. recognized is false for an unknown code, whose established
+// type or wording behavior must continue. An unsupported endpoint is recognized but deliberately has FailureOther.
+func failureKindForCode(code string) (kind FailureKind, recognized bool) {
 	switch strings.ToLower(strings.TrimSpace(code)) {
 	case "model_not_found":
-		return FailureModelUnavailable
+		return FailureModelUnavailable, true
 	case "context_length_exceeded":
-		return FailureContextTooLong
+		return FailureContextTooLong, true
 	case "unsupported_endpoint":
-		return FailureOther
+		return FailureOther, true
+	default:
+		return FailureOther, false
+	}
+}
+
+func failureKindFor(status int, code, message string) FailureKind {
+	// Codes are machine semantics; a type such as not_found_error is deliberately not accepted here.
+	if kind, recognized := failureKindForCode(code); recognized {
+		return kind
 	}
 	if status != http.StatusBadRequest && status != http.StatusNotFound {
 		return FailureOther
@@ -85,14 +105,16 @@ func failureKindFor(status int, code, message string) FailureKind {
 	return FailureOther
 }
 
+type errorEnvelope struct {
+	Code    string          `json:"code"`
+	Message string          `json:"message"`
+	Error   json.RawMessage `json:"error"`
+}
+
 // gatewayErrorDetails reads OpenAI- and Anthropic-shaped envelopes. error.code is more specific than a top-level
 // code; either may carry the message. Non-JSON bodies remain available to the established wording fallback.
 func gatewayErrorDetails(raw []byte) (code, message string) {
-	var body struct {
-		Code    string          `json:"code"`
-		Message string          `json:"message"`
-		Error   json.RawMessage `json:"error"`
-	}
+	var body errorEnvelope
 	if json.Unmarshal(raw, &body) != nil {
 		return "", string(raw)
 	}
@@ -101,33 +123,20 @@ func gatewayErrorDetails(raw []byte) (code, message string) {
 	if json.Unmarshal(body.Error, &errorText) == nil && errorText != "" {
 		message = errorText
 	}
-	var nested struct {
-		Code    string          `json:"code"`
-		Message string          `json:"message"`
-		Error   json.RawMessage `json:"error"`
-	}
-	if len(body.Error) > 0 && json.Unmarshal(body.Error, &nested) == nil {
+	// Some envelopes put the actual error one level deeper, under error.error. Keep the same bounded three levels.
+	current := body.Error
+	for depth := 0; depth < 2 && len(current) > 0; depth++ {
+		var nested errorEnvelope
+		if json.Unmarshal(current, &nested) != nil {
+			break
+		}
 		if c := strings.TrimSpace(nested.Code); c != "" {
 			code = c
 		}
 		if nested.Message != "" {
 			message = nested.Message
 		}
-		// Some envelopes put the actual error one level deeper, under error.error.
-		if len(nested.Error) > 0 {
-			var deeper struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			}
-			if json.Unmarshal(nested.Error, &deeper) == nil {
-				if c := strings.TrimSpace(deeper.Code); c != "" {
-					code = c
-				}
-				if deeper.Message != "" {
-					message = deeper.Message
-				}
-			}
-		}
+		current = nested.Error
 	}
 	return code, message
 }
