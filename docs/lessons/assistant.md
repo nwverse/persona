@@ -581,6 +581,19 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
 
+## A stopped leader's own To-do does not list its workers (#8400)
+
+Workers planned by a task leader have separate To-dos: their `todo_agents.source` is `worker` and `via` is the leader's
+To-do ID. A one-To-do scan can mistake a leader waiting on an active worker for a stopped group, or miss workers waiting
+on each other. Join the persisted links in both directions, require every current member to be observed, and reuse
+`supersededAgents` before checking inactivity. A background label is not evidence of recent activity; use timestamps and
+state the start-time approximation when a shell has no activity field. Include the resulting group key in semantic
+deduplication so identical last words do not erase a later, genuinely new period of inactivity. The short semantic
+fingerprint window cannot guarantee once per stopped group across restarts: keep only the latest group key until the
+task closes. A failed state read must remain retryable, not become a moot signal marked sent. Runtime children need the
+same starting and queued-input guards as their parent, even when their row says idle. Missing background activity times
+must not grant an indefinite exemption: the launching Agent's stop time bounds the age, including summary-only flags.
+
 ## A signal told once needs somewhere to go when its reader never acts (#8043)
 
 A side conversation supervises the tasks it hands out, and "waits for review" is told once per review. A side conversation that had stopped, or whose turn ended without `task_review`, left its task awaiting review for good: the send-time fallback to the main conversation covers only a conversation that is gone, the orphan check leaves out a task waiting for review on purpose, and the stuck-queue remedy covers only the background supervisor. When a signal is told once to a reader that may never act, give it a bounded wait and a second home (`handOverUnreviewed`, `server/internal/assistant/side_handover.go`), and record the move where a restart finds it (here the ledger's `supervisor`), so it happens once.
