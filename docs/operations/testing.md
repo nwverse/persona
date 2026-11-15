@@ -86,7 +86,8 @@ use a fallback part, while unsupported declarations fail rather than skip covera
 variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-lane Gradle
 profiles and test/lint reports are uploaded for diagnosis. Local entry points without lane options still run complete verification.
 The chat module's single-JVM tests use a 1 GB heap because their Robolectric native-graphics classes accumulate resource/theme
-tables in the shared test process. A two-worker lane can run at most two test JVMs, a 2 GB combined maximum when both use that setting.
+tables in the shared test process. A two-worker lane can run at most two test JVMs, a 2 GB combined test-heap cap when both use that
+setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
