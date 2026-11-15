@@ -258,6 +258,16 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	if p.Method == DeviceAssistantWarm && f.refuseConfigDir && strings.Contains(string(p.Params), `"config_dir"`) {
 		return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
 	}
+	if p.Method == DeviceAssistantWarm {
+		var w struct {
+			Launcher  string `json:"launcher"`
+			ConfigDir string `json:"config_dir"`
+		}
+		_ = json.Unmarshal(p.Params, &w)
+		if w.ConfigDir != "" && launcherAgent(w.Launcher) != "claude" { // node/assistant_spare.go's preflight
+			return nil, errors.New(assistantwire.ConfigDirClaudeOnly)
+		}
+	}
 	if p.Method == "session.interrupt" && f.failInterrupt != nil {
 		return nil, f.failInterrupt
 	}

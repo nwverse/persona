@@ -696,7 +696,7 @@ func (s *Service) warm(launcher string) {
 	// started in the main chat's, on a carried pick too (startMain, startOn).
 	profiled := s.withNewConversationProfile(ctx, machine, "assistant", params)
 	err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
-	if profiled && nodeOutdated(err) {
+	if profiled && (nodeOutdated(err) || profileRefused(err)) { // as startOn: an old node, or another agent than Claude Code
 		delete(params, "config_dir")
 		err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
 	}

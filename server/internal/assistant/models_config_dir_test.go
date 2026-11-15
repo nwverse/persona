@@ -134,6 +134,26 @@ func TestNewConversationStartsInTheMainChatsProfile(t *testing.T) {
 			}
 		})
 	}
+	// A launcher whose agent the hub cannot tell (the machine's list did not come) is asked for in the profile: the node
+	// refuses one before starting anything for another agent than Claude Code, and the start goes again without it, as
+	// on a node too old for one (#6884).
+	t.Run("codex the hub cannot tell", func(t *testing.T) {
+		f := newFakeHub().withMachine()
+		f.settings = &Settings{MachineID: "server"}
+		f.launcherList = nil
+		var asked []any // config_dir of every assistant.send, refused or not (written under f.mu)
+		f.onAssistantSend = func(_ *fakeHub, p map[string]any) { asked = append(asked, p["config_dir"]) }
+		s := newTestService(t, f)
+		setModel(t, s, "assistant", ModelBinding{ConfigDir: assistantConfigDirLegacy})
+		if _, err := s.Start(context.Background(), StartParams{Text: "hello", Untitled: true, Launcher: "codex-work"}); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if want := []any{assistantConfigDirLegacy, nil}; !slices.Equal(asked, want) || len(f.sends) != 1 || f.sends[0]["launcher"] != "codex-work" {
+			t.Fatalf("asked the node in %v, started as %v", asked, f.sends)
+		}
+	})
 	t.Run("not chosen", func(t *testing.T) {
 		f := newFakeHub().withMachine()
 		f.settings = &Settings{MachineID: "server"}
@@ -174,6 +194,30 @@ func TestWarmSpareStartsInTheMainChatsProfile(t *testing.T) {
 		if want := any(assistantConfigDirLegacy); older && last["config_dir"] != nil || !older && last["config_dir"] != want {
 			t.Fatalf("older=%v: warmed %v", older, warms)
 		}
+	}
+}
+
+// The spare on a launcher whose agent the hub cannot tell is asked for in the main chat's profile: the node refuses one
+// for another agent than Claude Code before starting anything, and the spare is warmed again without it (#6884).
+func TestWarmSpareOnALauncherTheHubCannotTell(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.settings = &Settings{MachineID: "server", Launcher: "codex-work"}
+	f.launcherList = nil
+	s := newTestService(t, f)
+	setModel(t, s, "assistant", ModelBinding{ConfigDir: assistantConfigDirLegacy})
+	s.warm("")
+	var warms []any // config_dir of every assistant.warm, refused or not
+	f.mu.Lock()
+	for _, c := range f.calls {
+		if c.Method == DeviceAssistantWarm {
+			var p map[string]any
+			_ = json.Unmarshal(c.Params, &p)
+			warms = append(warms, p["config_dir"])
+		}
+	}
+	f.mu.Unlock()
+	if want := []any{assistantConfigDirLegacy, nil}; !slices.Equal(warms, want) {
+		t.Fatalf("warmed in %v, want %v", warms, want)
 	}
 }
 

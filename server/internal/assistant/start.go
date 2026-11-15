@@ -315,8 +315,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
 	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel
-	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent, and
-	// startSignedIn starts again without it (#6884).
+	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent before
+	// starting anything, and the start goes again without it: startSignedIn's, and the main chat's below (#6884).
 	if _, asked := params["config_dir"]; asked && used != "" && used != "claude" {
 		if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && agent != "claude" {
 			delete(params, "config_dir")
@@ -335,8 +335,10 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		SessionID string `json:"session_id"`
 	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
-	if fromSetting && nodeOutdated(err) {
-		delete(params, "config_dir") // a node too old to be told a profile starts it where it always has
+	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
+		// A node too old to be told a profile starts it where it always has; a launcher running another agent than
+		// Claude Code, which alone has profiles, starts without one.
+		delete(params, "config_dir")
 		err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
 	}
 	s.startRefused(ctx, machine, used, err) // Claude Code or the launcher missing: the readiness's claude step
