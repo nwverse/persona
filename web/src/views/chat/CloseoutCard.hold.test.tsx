@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-// The Command evidence chunk (#8139): it starts from the store, before a card mounts; a card whose session read beats it
-// keeps its did, Verified and evidence rows back until it is in (HOLD_MS at most), so the card grows once; after a failed
-// load they draw without the row. Each test imports the card afresh: the chunk's state belongs to the module.
+// The Command evidence chunk (#8139): it starts from the store, before a card mounts; a card whose session read beats it,
+// or the transcript's exchange, keeps its did, Verified and evidence rows back until both are in (HOLD_MS at most), so
+// the card grows once; after a failed load they draw without the row. Each test imports the card afresh: the chunk's
+// state belongs to the module.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
+import type { Segment } from "../../lib/turns";
 import type { Session } from "../../lib/types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -38,13 +40,16 @@ const read = {
 } as Session;
 // what a session list carries: where the closeout stands, without did and verified
 const row = { ...read, work: { phase: "done", closeout: { status: "done", missing: "A real payment" } } } as Session;
+// the closeout's exchange, once the transcript has it
+const exchange = { id: "last", steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] } as unknown as Segment;
 
 let host: HTMLDivElement;
 let root: Root;
 
-async function card(session: Session) {
+// null: the transcript has no exchange yet
+async function card(session: Session, segment: Segment | null = exchange) {
   const { CloseoutCard } = await import("./CloseoutCard");
-  await act(async () => root.render(<CloseoutCard session={session} />));
+  await act(async () => root.render(<CloseoutCard session={session} segment={segment ?? undefined} />));
 }
 const shows = (key: string) => Array.from(host.querySelectorAll("dt")).some((dt) => dt.textContent === t(key));
 const evidence = () => host.querySelector("[data-closeout-evidence]") !== null;
@@ -76,6 +81,21 @@ describe("CloseoutCard and its evidence chunk", () => {
     chunk.open();
     await turns(evidence);
     expect(shows("chat-chatview.closeout_did")).toBe(true);
+    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    expect(evidence()).toBe(true);
+  });
+
+  it("keeps them back until the transcript has the closeout's exchange too, and not again once they showed", async () => {
+    await card(read, null);
+    await asked(1);
+    chunk.open();
+    await turns(() => false);
+    expect(shows("chat-chatview.closeout_verified")).toBe(false); // the chunk is in, the exchange is not
+    await card(read);
+    expect(shows("chat-chatview.closeout_did")).toBe(true);
+    expect(shows("chat-chatview.closeout_verified")).toBe(true);
+    expect(evidence()).toBe(true);
+    await card(read, null); // a transcript read again
     expect(shows("chat-chatview.closeout_verified")).toBe(true);
     expect(evidence()).toBe(true);
   });

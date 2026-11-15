@@ -26,8 +26,9 @@ const CloseoutEvidence = lazyPage(() => import("./CloseoutEvidence").then((m) =>
 // card mounts (preloadCloseoutEvidence, #8139). Session lists carry only where a closeout stands; did and Verified come
 // with the session's own read, so the chunk is normally in before a card has a Verified line to draw the row under. When
 // that read still comes first, the card keeps drawing without its did, Verified and evidence rows until the chunk is in
-// (HOLD_MS at most): it grows once, as it does when the read arrives, and not again when the chunk lands. After a failed
-// load they draw without the row, which joins them when a later card's load brings the chunk in.
+// and so is the closeout's exchange (the row's facts come from it): HOLD_MS at most, and never again once they showed.
+// The card grows once, as it does when the read arrives, and not again when the chunk or the transcript lands. After a
+// failed load they draw without the row, which joins them when a later card's load brings the chunk in.
 const HOLD_MS = 1000;
 type Chunk = "idle" | "loading" | "failed" | "retrying";
 let chunk: Chunk = "idle";
@@ -88,16 +89,21 @@ export function CloseoutCard({ session, segment, expandFold }: { session: Sessio
   const [open, setOpen] = useState(true);
   const evidenceChunk = useSyncExternalStore(onChunk, chunkNow, chunkNow);
   const hasVerified = Boolean(c?.verified);
-  const [waited, setWaited] = useState(false);
-  const hold = hasVerified && (evidenceChunk === "idle" || evidenceChunk === "loading") && !waited;
+  const waiting = hasVerified && (evidenceChunk === "idle" || evidenceChunk === "loading" || !segment);
+  const [released, release] = useState(false);
+  const hold = waiting && !released;
   useEffect(() => {
     if (hasVerified) loadEvidence();
   }, [hasVerified]);
   useEffect(() => {
-    if (!hold) return;
-    const timer = setTimeout(() => setWaited(true), HOLD_MS);
+    if (!hasVerified) return;
+    if (!waiting) {
+      release(true);
+      return;
+    }
+    const timer = setTimeout(() => release(true), HOLD_MS);
     return () => clearTimeout(timer);
-  }, [hold]);
+  }, [hasVerified, waiting]);
   if (!c) return null;
   const merged = closeoutClaim(c, "merged");
   const deployed = closeoutClaim(c, "deployed");
