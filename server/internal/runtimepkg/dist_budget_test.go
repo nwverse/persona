@@ -13,11 +13,13 @@ import (
 // 445,466 B on untouched main and 447,388 B after its ordering, marker and linear-accounting fixes; the budget is the latter
 // plus the same 334 B of headroom main had. Raised by 2,405 B for pi's ask_user that never hangs on an unseen dialog,
 // an interrupt that waits for the turn to end, and the SDK's queued / settled / runtime.driven (#8097: 449,837 B over
-// main's 447,432 B, with main's 290 B of headroom). Raised by 1,641 B for the Paseo bridge's state across a reconnect:
-// no page older than what Paseo said meanwhile, the archive read again, live text ended, archived agents' deletions,
-// a keepalive that sleep does not trip (#8129: 451,478 B over main's 449,837 B, with main's 290 B of headroom).
+// main's 447,432 B, with main's 290 B of headroom). Raised by 3,011 B for the Paseo bridge keeping cards and their
+// answers across link drops, and the SDK's wait for the next node counted from the drop (#8128: 452,848 B over main's
+// 449,837 B, with main's 290 B of headroom). Raised by 1,647 B for the Paseo bridge's state across a reconnect: no page
+// older than what Paseo said meanwhile, the archive read again, live text ended, archived agents' deletions, a keepalive
+// that sleep does not trip (#8129: 454,614 B over main's 452,967 B, with main's 171 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 451_768
+	const budget = 454_785
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
