@@ -211,6 +211,7 @@ internal class PaneSplitter(private val tab: AppTab?, private val store: PaneSpl
  * nearby, kept per tab as a share of the width, and (where [collapsible], with something open beside it) dragged far
  * left to close the list; a separating fold fixes the split there and shows no handle. [width] is the panes' area and
  * [hinges] the vertical folds across it, both in dp. [tab] null: the settings sheet's, whose divider is not kept.
+ * [keepScaffoldWhenSingle]: keep the list-detail scene when only one pane fits, instead of the single-page scene.
  */
 @Composable
 internal fun rememberShellListDetail(
@@ -221,6 +222,7 @@ internal fun rememberShellListDetail(
     detailOpen: Boolean,
     store: PaneSplitStore?,
     collapsible: Boolean,
+    keepScaffoldWhenSingle: Boolean = false,
 ): ListDetailSceneStrategy<NavKey> {
     val density = LocalDensity.current.density
     val scope = rememberCoroutineScope()
@@ -253,6 +255,7 @@ internal fun rememberShellListDetail(
         }
     }
     return rememberListDetailSceneStrategy<NavKey>(
+        shouldHandleSinglePaneLayout = keepScaffoldWhenSingle,
         backNavigationBehavior = BackNavigationBehavior.PopUntilContentChange,
         directive = directive,
         paneExpansionDragHandle = if (fixed) null else handle,

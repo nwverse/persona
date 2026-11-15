@@ -818,24 +818,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                   }
                   // In a regular window the list of settings stays beside the page it opens, as on an open iPhone Duo
                   // (its divider is not kept: the sheet starts from the usual split each time). Elsewhere one page.
-                  var sheetLeft by remember { mutableFloatStateOf(0f) }
-                  BoxWithConstraints(Modifier.fillMaxSize().onGloballyPositioned { sheetLeft = it.positionInWindow().x }) {
-                      val sheetHinges = adaptive.windowPosture.hingeList.filter { it.isVertical }.map { hinge ->
-                          PaneHinge((hinge.bounds.left - sheetLeft) / paneDensity, (hinge.bounds.right - sheetLeft) / paneDensity, hinge.isSeparating)
-                      }
-                      val settingsDetail = detailOf(settingsSheetStack)
-                      val settingsListDetail = rememberShellListDetail(null, if (regular) directive else directive.onePane(),
-                          maxWidth, sheetHinges, detailOpen = settingsDetail != null, store = null, collapsible = false)
-                      CompositionLocalProvider(LocalDetailKey provides settingsDetail) {
-                          NavDisplay(backStack = settingsSheetStack, onBack = settingsNavigator::back,
-                              entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator()),
-                              sceneStrategies = listOf(settingsListDetail),
-                              entryProvider = { key ->
-                                  val entry = settingsEntries(key)
-                                  NavEntry(key, entry.contentKey, entry.metadata + paneMetadata(key)) { entry.Content() }
-                              })
-                      }
-                  }
+                  SettingsSheetPanes(settingsSheetStack, settingsNavigator::back, regular,
+                      if (regular) directive else directive.onePane(),
+                      adaptive.windowPosture.hingeList.filter { it.isVertical }, settingsEntries) { paneMetadata(it) }
                 }
               }
           }
@@ -860,7 +845,7 @@ private fun pretendFold(real: androidx.compose.material3.adaptive.WindowAdaptive
  * parallel roles; Agents and Settings keep their existing metadata.
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
-private fun paneMetadata(key: NavKey, singleRightStack: Boolean = false): Map<String, Any> {
+internal fun paneMetadata(key: NavKey, singleRightStack: Boolean = false): Map<String, Any> {
     if (singleRightStack && isInboxDestination(key)) return emptyMap()
     return when (key) {
         AgentsRoute -> ListDetailSceneStrategy.listPane(detailPlaceholder = {
@@ -878,7 +863,7 @@ private fun paneMetadata(key: NavKey, singleRightStack: Boolean = false): Map<St
 
 /** The same directive with one pane across (a copy would lose that the scaffold never moves focus). */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
-private fun PaneScaffoldDirective.onePane() = PaneScaffoldDirective(
+internal fun PaneScaffoldDirective.onePane() = PaneScaffoldDirective(
     maxHorizontalPartitions = 1,
     horizontalPartitionSpacerSize = horizontalPartitionSpacerSize,
     maxVerticalPartitions = maxVerticalPartitions,
