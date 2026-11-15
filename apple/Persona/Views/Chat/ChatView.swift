@@ -5440,7 +5440,7 @@ struct Composer: View, Equatable {
     }
 
     private func typeMention() {
-        // An unfocused field's selection is stale (`PathInsert.edit`): then at the end.
+        // An unfocused field's selection is stale (a restored draft's): then at the end.
         let caret = focused ? PathInsert.range(selection, in: text)?.lowerBound : nil
         let r = MentionToken.typing(in: text, caret: caret ?? text.utf16.count)
         text = r.text

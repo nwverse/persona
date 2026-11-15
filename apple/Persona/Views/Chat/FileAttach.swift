@@ -6,36 +6,13 @@ import UniformTypeIdentifiers
 // each as a `<persona-file kind="file">` tag after what was typed; nothing goes into the text. `FileUploads` and
 // `PathInsert` remain for what still wants paths as words: Health's reports, New Agent's first message, the share sheet.
 
-/// Where paths go in the input box. Offsets are UTF-16 (what TextSelection converts to and from cleanly).
+/// Paths as words (Health's reports, New Agent's first message, the share sheet) and the composer's cursor as offsets.
+/// Offsets are UTF-16 (what TextSelection converts to and from cleanly).
 nonisolated enum PathInsert {
-    /// `paths` replace `range` (the end when nil), space-separated and set off from the text around them; returns the
-    /// new text and the cursor after the inserted paths.
-    static func insert(_ paths: [String], into text: String, at range: Range<Int>?) -> (text: String, cursor: Int) {
-        let units = Array(text.utf16)
-        let r = range.map { max(0, min($0.lowerBound, units.count))..<max(0, min($0.upperBound, units.count)) } ?? units.count..<units.count
-        let before = String(decoding: units[..<r.lowerBound], as: UTF16.self)
-        let after = String(decoding: units[r.upperBound...], as: UTF16.self)
-        var insert = paths.map(quoted).joined(separator: " ")
-        if let c = before.last, !c.isWhitespace { insert = " " + insert }
-        if after.first.map({ !$0.isWhitespace }) ?? true { insert += " " } // at the end too: ready for the next word
-        return (before + insert + after, before.utf16.count + insert.utf16.count)
-    }
-
     /// A path with spaces or quotes is single-quoted, so the agent reads it as one path.
     static func quoted(_ path: String) -> String {
         guard path.contains(where: { $0.isWhitespace || $0 == "'" || $0 == "\"" }) else { return path }
         return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    /// A composer's text with path inserted at its cursor, the cursor moved after it and the field focused.
-    /// The cursor counts only while the field is being edited: an unfocused TextField still reports a selection, and
-    /// after a relaunch with a restored draft it pointed into the middle of it.
-    @MainActor static func edit(_ path: String, text: String, selection: Binding<TextSelection?>,
-                                focused: FocusState<Bool>.Binding) -> String {
-        let r = insert([path], into: text, at: focused.wrappedValue ? range(selection.wrappedValue, in: text) : nil)
-        selection.wrappedValue = .cursor(utf16: r.cursor)
-        focused.wrappedValue = true
-        return r.text
     }
 
     /// The selection as UTF-16 offsets into text, nil when there is none.
@@ -47,7 +24,7 @@ nonisolated enum PathInsert {
         case .multiSelection(let set): guard let first = set.ranges.first else { return nil }; r = first
         @unknown default: return nil
         }
-        // The selection may come from an earlier text (an upload ends after the draft changed): an index past the
+        // The selection may come from an earlier text (the draft changed since): an index past the
         // end traps in utf16Offset, so clamp it first.
         let offset = { (i: String.Index) in min(i, text.endIndex).utf16Offset(in: text) }
         let lo = offset(r.lowerBound), hi = offset(r.upperBound)
@@ -316,7 +293,7 @@ final class FileAttachments {
             if owned { urls.forEach(Self.discardOwned) }
             return
         }
-        let dest = dest ?? (features.contains("upload_attachment") ? "attachment" : nil)
+        let dest = Self.destination(dest, features: features)
         let room = max(0, Self.most - items.count)
         if urls.count > room {
             model.toast = Toast(String(localized: "Up to \(Self.most) files in one message"), style: .error)
@@ -336,6 +313,12 @@ final class FileAttachments {
             jobs[item.id] = Job(url: url, scoped: scoped, owned: owned, machine: machine, dest: dest, model: model)
         }
         pump()
+    }
+
+    /// Where a file goes: the composer's own destination (a health conversation's reports), else kept with the chat's
+    /// pictures where the hub knows how (`upload_attachment`), else the temp directory (nil) as before.
+    nonisolated static func destination(_ own: String?, features: Set<String>) -> String? {
+        own ?? (features.contains("upload_attachment") ? "attachment" : nil)
     }
 
     /// Cancels one on its way, or takes it off the message.
