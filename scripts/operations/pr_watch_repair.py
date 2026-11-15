@@ -537,9 +537,10 @@ def repair_repository_copy(worktree, additional_commits=()):
         head = checked(["git", "rev-parse", "HEAD"], cwd=source).strip()
         checked(["git", "clone", "--quiet", "--no-hardlinks", "--no-local", "--no-checkout",
                  "--config", "core.hooksPath=" + os.devnull,
+                 "--config", "remote.origin.fetch=", "--config", "remote.origin.tagOpt=--no-tags",
                  str(source), str(copy)], cwd=source.parent, timeout=180, environ=env)
-        # A normal branch clone omits a main commit that is not reachable from
-        # the PR head. The conflict path needs that exact non-ancestor parent.
+        # Do not make the second fetch depend on the initial branch-only pack:
+        # a conflict parent is normally not reachable from the PR head.
         commits = dict.fromkeys([head, *additional_commits])
         if any(not isinstance(commit, str) or not SHA.fullmatch(commit) for commit in commits):
             raise WatchError("repair clone requested an invalid commit")

@@ -74,10 +74,11 @@ class RepairIntegrationTests(unittest.TestCase):
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
 
     def test_worker_clone_cleanup_never_removes_source_checkout(self):
-        with pr_watch_repair.repair_repository_copy(str(self.repo)) as copy:
+        with pr_watch_repair.repair_repository_copy(str(self.repo), [self.main]) as copy:
             self.assertTrue(Path(copy, ".git").is_dir())
             self.assertFalse(Path(copy, ".git").is_file())
             self.assertNotEqual(Path(copy), self.repo)
+            self.assertEqual(self.git("cat-file", "-t", self.main, cwd=copy), "commit")
         self.assertTrue(self.repo.exists())
         self.assertTrue(Path(self.repo, ".git").exists())
     def test_head_change_before_repair_push_is_refused(self):
