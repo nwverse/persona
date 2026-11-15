@@ -365,7 +365,7 @@ func (g *gate) done(t turn, probe, answered bool, err error) error {
 	// the connection and the probes count.
 	counts := !g.held || probe
 	pause := after
-	if reason == ReasonQuota && pause <= 0 {
+	if reason == ReasonQuota && pause <= 0 && !hasExplicitQuotaCooldown(err) {
 		pause = quotaPause
 	}
 	if reason == ReasonBusy {
@@ -427,6 +427,13 @@ func newHTTPError(resp *http.Response, raw []byte) *httpError {
 
 func explicitNoRetry(header http.Header) bool {
 	return strings.EqualFold(strings.TrimSpace(header.Get("X-Should-Retry")), "false")
+}
+
+// hasExplicitQuotaCooldown distinguishes an explicit Retry-After of zero from no Retry-After at all. The former
+// pauses only until now; only the latter gets the default quota pause in gate.done.
+func hasExplicitQuotaCooldown(err error) bool {
+	var h *httpError
+	return errors.As(err, &h) && h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven
 }
 
 func (e *httpError) Error() string            { return fmt.Sprintf("ai: HTTP %d: %s", e.status, e.body) }
@@ -605,6 +612,9 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 		reason = ReasonQuota
 	case h.status == http.StatusTooManyRequests && h.noRetry && (h.retryAfterGiven || h.retryAfter > 0):
 		// This is an explicit cooldown, not a busy answer to back off from exponentially.
+		reason = ReasonQuota
+	case coded && codedReason == ReasonQuota:
+		// Quota exhaustion is explicit on any status; recognized busy codes still only affect the established statuses.
 		reason = ReasonQuota
 	case h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
 		return "", 0, ""
