@@ -70,7 +70,7 @@ final class QueuedAttachEditUITests: XCTestCase {
         for junk in ["[Image #", "attached_images", "path: "] {
             XCTAssertFalse(words.contains(junk), "sent again with \(junk): \(words)")
         }
-        XCTAssertTrue(words.contains("<persona-file kind=\"file\""), "the file did not go with it again: \(words)")
+        XCTAssertNotNil(words.range(of: #"<[a-z]+-file kind="file""#, options: .regularExpression), "the file did not go with it again: \(words)")
         let queuedAgain = openQueue(app)
         shot(app, "4-queued-again")
 

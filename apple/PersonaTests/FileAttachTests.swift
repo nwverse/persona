@@ -41,6 +41,9 @@ struct FileAttachTests {
     @Test func whereFilesGo() {
         #expect(FileAttachments.destination(nil, features: ["file_upload", "upload_attachment"]) == "attachment")
         #expect(FileAttachments.destination(nil, features: ["file_upload"]) == nil)
+        #expect(FileAttachments.destination(nil, features: []) == "attachment") // not in yet: tried, refused by an older hub
+        #expect(FileAttachments.refusedDest(APIError(status: 400, message: "unknown dest")))
+        #expect(!FileAttachments.refusedDest(APIError(status: 413, message: "too large")))
         #expect(FileAttachments.destination("health", features: ["file_upload", "upload_attachment"]) == "health")
     }
 

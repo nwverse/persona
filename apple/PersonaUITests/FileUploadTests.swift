@@ -68,7 +68,8 @@ final class FileUploadTests: XCTestCase {
         expectation(for: went, evaluatedWith: nil)
         waitForExpectations(timeout: 15)
         let text = try XCTUnwrap(try sent().last)
-        XCTAssertTrue(text.hasPrefix("look at\n\n<persona-file kind=\"file\" path=\"/Users/me/.persona/uploads/"), text)
+        // The tag's name follows the hub's naming (docs/protocol/rolling-upgrade-compatibility.md): either is the file.
+        XCTAssertNotNil(text.range(of: #"^look at\n\n<[a-z]+-file kind="file" path="/Users/me/\.persona/uploads/"#, options: .regularExpression), text)
         XCTAssertTrue(text.contains("name=\"季度报告.pdf\""), text)
         XCTAssertTrue(app.descendants(matching: .any)["file-card"].waitForExistence(timeout: 15), "no card in the bubble:\n\(app.debugDescription)")
         XCTAssertFalse(ready.exists, "the card stayed above the box after sending")

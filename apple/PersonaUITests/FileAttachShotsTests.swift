@@ -46,7 +46,10 @@ final class FileAttachShotsTests: XCTestCase {
         let app = launch(["-openUploadDemo", Self.picked])
         let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 30), "no composer:\n\(app.debugDescription)")
-        field.tap()
+        for _ in 0..<4 where !app.keyboards.firstMatch.exists { // the box opens up as it takes the focus
+            field.tap()
+            _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)
+        }
         field.typeText(Self.typed)
         let busy = app.descendants(matching: .any)["file-attachment-busy"].firstMatch
         XCTAssertTrue(busy.waitForExistence(timeout: 20), "no card on its way:\n\(app.debugDescription)")

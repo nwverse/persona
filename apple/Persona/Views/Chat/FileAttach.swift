@@ -267,7 +267,7 @@ final class FileAttachments {
         var scoped: Bool
         var owned: Bool
         let machine: MachineRef
-        let dest: String?
+        var dest: String?
         let model: AppModel
     }
 
@@ -316,9 +316,16 @@ final class FileAttachments {
     }
 
     /// Where a file goes: the composer's own destination (a health conversation's reports), else kept with the chat's
-    /// pictures where the hub knows how (`upload_attachment`), else the temp directory (nil) as before.
+    /// pictures where the hub knows how (`upload_attachment`) or may (its features not in yet: an older hub refuses it
+    /// and the file goes again without, `refusedDest`), else the temp directory (nil) as before.
     nonisolated static func destination(_ own: String?, features: Set<String>) -> String? {
-        own ?? (features.contains("upload_attachment") ? "attachment" : nil)
+        own ?? (features.isEmpty || features.contains("upload_attachment") ? "attachment" : nil)
+    }
+
+    /// An older hub refused dest=attachment (400 "unknown dest"): the file goes to the temp directory instead.
+    nonisolated static func refusedDest(_ error: Error) -> Bool {
+        guard let e = error as? APIError else { return false }
+        return e.status == 400 && e.message.contains("unknown dest")
     }
 
     /// Cancels one on its way, or takes it off the message.
@@ -395,8 +402,16 @@ final class FileAttachments {
             guard let api = job.model.api(job.machine.group) else {
                 throw APIError(status: 0, message: String(localized: "Not connected to the hub [App Model 93d955]"))
             }
-            let out = try await api.upload(file: copy, name: name, machine: job.machine.id, dest: job.dest) { sent in
+            let progress: @Sendable (Int64) -> Void = { sent in
                 Task { @MainActor [weak self] in self?.update(id) { if $0.step == .uploading { $0.sent = max($0.sent, sent) } } }
+            }
+            let out: APIClient.UploadedFile
+            do {
+                out = try await api.upload(file: copy, name: name, machine: job.machine.id, dest: job.dest, progress: progress)
+            } catch let refused where job.dest == "attachment" && Self.refusedDest(refused) {
+                job.dest = nil
+                jobs[id] = job
+                out = try await api.upload(file: copy, name: name, machine: job.machine.id, dest: nil, progress: progress)
             }
             try Task.checkCancellation()
             guard jobs[id] != nil else { return }
