@@ -14,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -32,7 +33,7 @@ func TestLauncherUserAgent(t *testing.T) {
 			calls := 0
 			gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				want := "Go-http-client/1.1"
+				want := modelhttp.UserAgent()
 				if tc.set {
 					want = tc.want
 				}

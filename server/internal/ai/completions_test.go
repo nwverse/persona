@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
 
 func TestUserAgentDirectRequests(t *testing.T) {
@@ -22,7 +24,7 @@ func TestUserAgentDirectRequests(t *testing.T) {
 			want    string
 			present bool
 		}{
-			{name: "default", want: "Go-http-client/1.1", present: true},
+			{name: "default", want: modelhttp.UserAgent(), present: true},
 			{name: "custom", agent: &custom, want: custom, present: true},
 			{name: "empty", agent: &empty},
 		} {
