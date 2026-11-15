@@ -151,11 +151,20 @@ func (r *Runner) BotOpenID(ctx context.Context) (string, error) {
 	}
 	var info struct {
 		OpenID string `json:"open_id"`
+		Bot    *struct {
+			OpenID string `json:"open_id"`
+		} `json:"bot"`
 	}
-	if err := decodeData(out, &info); err != nil || !strings.HasPrefix(info.OpenID, "ou_") {
+	err = decodeData(out, &info)
+	// The CLI can flatten the bot object into data. A nested bot, when present, owns the identity.
+	id := info.OpenID
+	if info.Bot != nil {
+		id = info.Bot.OpenID
+	}
+	if err != nil || !strings.HasPrefix(id, "ou_") {
 		return "", cliError(KindOther, errors.New("invalid bot info JSON"))
 	}
-	return info.OpenID, nil
+	return id, nil
 }
 
 // ThreadRoot reads the root which the thread-list shortcut omits. The raw

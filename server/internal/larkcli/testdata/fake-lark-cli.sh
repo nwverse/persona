@@ -17,7 +17,11 @@ fi
 case "${1:-}" in
   api)
     if [ "${2:-}" = GET ] && [ "${3:-}" = /open-apis/bot/v3/info ]; then
-      printf '%s\n' '{"ok":true,"data":{"open_id":"ou_example_persona_bot"}}'
+      if [ -n "${LARKCLI_FAKE_BOT_INFO:-}" ]; then
+        printf '%s\n' "$LARKCLI_FAKE_BOT_INFO"
+      else
+        printf '%s\n' '{"ok":true,"data":{"open_id":"ou_example_persona_bot"}}'
+      fi
       exit 0
     fi
     if [ "${2:-}" = GET ] && [ "${3:-}" = /open-apis/im/v1/messages/om_example_request ]; then

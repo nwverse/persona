@@ -61,6 +61,10 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 - A selected historical recovery must finish and persist normal triage before bypassing the twin's age limit.
   Run triage only for the selected rows, even when twins are disabled; queue afterwards only when the normal verdict,
   policies and current twin configuration allow it. Do not force every recovered request into Needs You.
+- Check bot-info fixtures against the CLI's output, not just an HTTP response example: the CLI can flatten the bot
+  object into `data.open_id`. Accept that projection and a nested `bot.open_id`; when a bot object is present,
+  require its own valid identity rather than falling back to an unrelated outer ID. Test both shapes and missing
+  or invalid bot identities.
 
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 
