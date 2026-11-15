@@ -737,3 +737,13 @@ the root composition, which also sees subcompositions; the caller's file and lin
 ## A failed read over an empty cache is not an empty page
 
 A page that keeps its last answer while it reloads has four things to say, and mixing them up shows wrong facts: a spinner for a first read, the content (with a pull indicator) while it reloads, one line above the kept content when the reload failed, and the whole-page failure with Retry only when there is nothing to show. The trap is the cached empty list: with `value.isEmpty()` and an error, drawing the empty state tells an offline user that they have nothing. `jLoadableContent` treats a loaded empty value that carries a failure as a failure. A retry must also leave the failure state at once: the Hub version page kept its error on screen for the whole retry until the model got a `loading` flag that the page maps back to the spinner.
+
+## A folded diff's rows are not its lines
+
+`DiffView` shows an edit's long runs of unchanged lines as one row each until Show All, so the preview's row index is no
+longer the line's index (it used to be, when the preview was just the first 40 lines). Anything that jumps to a line
+(`DiffNavigation`'s next / previous change) must wait until the list is open in full (`totalItemsCount == lines.size`)
+before `scrollToItem(line index)`, and the lazy list's keys must come from the line's place in the whole diff (`l<index>`,
+`f<first folded index>`), not from the row's position, or a growing diff re-keys its rows and the open state and scroll
+position drift. Word ranges are in the line's own UTF-16 offsets: widen tabs piece by piece (`diffText`), never on the
+whole line first.
