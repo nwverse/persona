@@ -9988,6 +9988,31 @@ def mock_tool_call(name, args):
     return {"call_id": call_id, "sent": len(phones)}
 
 
+# MOCK_CLAUDE_DESKTOP_ASK=1 (docs/integrations/claude-integration.md "Question cards outside Persona's terminals"): the
+# Claude in the desktop app on the server waits on an AskUserQuestion of four questions (one multi-select). No hook of
+# Persona's runs there; the node reads the question from its transcript and lists it as a card it answers through the
+# session's peer inbox, so the row may answer it (capabilities.approve) and says a card or a reply answers it.
+if os.environ.get("MOCK_CLAUDE_DESKTOP_ASK") == "1":
+    for _s in SESSIONS:
+        if _s["session_id"] == CLAUDE_DESKTOP:
+            _s.update(status="blocked", state="needs_you", pending_interactions=1, last_text="开工前有几点要你定：",
+                      attention_reason="它在问你一个问题：在卡片上作答，或者直接回复",
+                      capabilities=dict(_desktop_caps, interrupt=True, approve=True, modes=False))
+    INTERACTIONS.append(
+        {"id": "clq_0d5c1e0e6b7a9f21", "machine_id": "server", "session_id": CLAUDE_DESKTOP, "session_title": "整理发布说明",
+         "cwd": "/home/me/code/release", "kind": "question", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "tool_name": "AskUserQuestion", "tool_use_id": "toolu_desktop_ask", "agent": "claude",
+         "questions": [
+             {"question": "发布说明按哪个维度分组？", "header": "分组", "multi_select": False, "options": [
+                 {"label": "按模块", "description": "服务端、网页、iOS 各一段"}, {"label": "按类型", "description": "新功能、修复、性能"}]},
+             {"question": "很长的 PR 标题怎么显示？", "header": "长标题", "multi_select": False, "options": [
+                 {"label": "截成一行", "description": "鼠标悬停看全文"}, {"label": "完整显示", "description": "换行显示全部"}]},
+             {"question": "哪些内容要附上链接？", "header": "链接", "multi_select": True, "options": [
+                 {"label": "PR"}, {"label": "issue"}, {"label": "提交"}]},
+             {"question": "写完以后发到哪里？", "header": "发布", "multi_select": False, "options": [
+                 {"label": "只放在仓库里", "description": "写进 CHANGELOG.md"}, {"label": "也发到频道", "description": "附上链接"}]}]})
+
+
 def mock_interactions():
     # INTERACTIONS is the list the churn and bump switches change; MOCK_INTERACTIONS adds the expanded inbox. Both served.
     with REQUEST_LOCK:
@@ -28439,6 +28464,7 @@ MOCK_HELP.append("MOCK_RULE_SUGGESTIONS=1  A standing rule suggested after the s
                  "(with MOCK_TODO_ASKS=1), on the network tests' question card and, with MOCK_TASKS=1, on the open plan; Always and Not now answer it")
 MOCK_HELP.append("MOCK_STANDING_AUTHORIZATIONS=1  Two synthetic standing authorizations to list and revoke (#7002); "
                  "=forbidden answers 403 (no full access), =fail makes every revoke fail (503)")
+MOCK_HELP.append("MOCK_CLAUDE_DESKTOP_ASK=1  The Claude in the desktop app on the server waits on an AskUserQuestion of four questions (one multi-select): a card the node answers through its peer inbox, the row Needs you with approve")
 MOCK_HELP.append("MOCK_ASK_HELD=1  With MOCK_TODO_ASKS=1: the PR check's decision is held for the next briefing (for_briefing, #5803)")
 MOCK_HELP.append("MOCK_BRIEF_SETUP=1  With MOCK_TASKS=1: the morning briefing carries the week's recommended setup lines (#5804)")
 MOCK_HELP.append("MOCK_SUPERVISE_LISTED=1  The model catalog lists assistant.supervise itself and every built-in purpose has a description (#5806)")

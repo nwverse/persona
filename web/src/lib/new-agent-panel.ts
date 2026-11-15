@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { agentId, providerAgent } from "./agent-kind";
 import {
   ALL_EFFORTS, defaultModel, effortChoices, effortRule, followedBinding, launcherAgent, modelName, takesEffort, typedModelOffered, type AgentModel, type LauncherModels, type PickerTier,
+  type UnavailableLauncher,
 } from "./launcher-models";
 import { launcherBlock } from "./launcher-health";
 import type { ModelBinding } from "./model-config";
@@ -68,6 +69,9 @@ export interface NewAgentPanelInput {
   /** The launcher the start runs on ("" when the model settings run something that is not a launcher). */
   runs: string;
   tiers: PickerTier[];
+  /** The hub's `unavailable` for this computer (#8109): Persona-managed providers its own-service rule leaves out here,
+   *  with why. Absent from an older hub. */
+  unavailable?: UnavailableLauncher[];
 }
 
 export interface NewAgentPanel {
@@ -83,7 +87,7 @@ export interface NewAgentPanel {
  * off and its reason, never hidden. The row lit is the model picked, else the Default row of the launcher that runs.
  * No Recommended group (a new task has none in Cindy); the presets are offered as rows of their own.
  */
-export function newAgentPanel({ launchers, listOf, choice, configured, runs, tiers }: NewAgentPanelInput): NewAgentPanel {
+export function newAgentPanel({ launchers, listOf, choice, configured, runs, tiers, unavailable = [] }: NewAgentPanelInput): NewAgentPanel {
   const providers = launchers.map((l): PanelProvider => {
     const e = listOf(l.name);
     const list = e.list;
@@ -149,6 +153,12 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     p.models = models;
     return p;
   });
+  // a provider left out on this computer (#8109: its own-service rule, where Claude Code is signed in) is listed off,
+  // with why, after the ones that start here: the panel says it rather than leaving it missing
+  for (const u of unavailable) {
+    if (providers.some((p) => p.id === u.name)) continue;
+    providers.push({ id: u.name, name: providerTitle(u), engine: agentId(u.agent || "claude"), models: null, unavailable: u.reason });
+  }
 
   // the row lit: the model picked, else the launcher's Default row (which says what it runs)
   const followed = followedBinding(runs, configured);
