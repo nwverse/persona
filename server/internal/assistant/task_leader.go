@@ -422,6 +422,14 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	if err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), kept); err != nil {
+		var escalated leaderEscalated
+		if errors.As(err, &escalated) {
+			// The current process's escalation/retry owns this message. Do not restore its pending entry and escalate it
+			// twice, but release dedup and leave the turn untold so a manager restarted without either can deliver it.
+			rollback()
+			s.logf("supervise: %d signal(s) for stopped task leader %s escalated; keeping them recoverable", len(entries), short(lead.SessionID))
+			return false
+		}
 		s.logf("supervise: %d signal(s) for task leader %s: %v; trying again", len(entries), short(lead.SessionID), err)
 		rollback()
 		s.restoreDigest(kept, now, prev)
@@ -439,6 +447,13 @@ type leaderUnreachable struct{ err error }
 
 func (e leaderUnreachable) Error() string { return e.err.Error() }
 func (e leaderUnreachable) Unwrap() error { return e.err }
+
+// leaderEscalated is a refused send whose escalation and process-local retry are already running. It is not delivery:
+// the original turn stays untold and its dedup reservation is released so a restarted manager can recover it.
+type leaderEscalated struct{ err error }
+
+func (e leaderEscalated) Error() string { return e.err.Error() }
+func (e leaderEscalated) Unwrap() error { return e.err }
 
 // sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. A closed agent is
 // resumed in the background (that takes minutes): when that fails the signals are escalated and retried
@@ -466,7 +481,7 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 		if refusedWith(err, proto.CodeAgentStopped) {
 			s.logf("task leader %s: it has stopped: %v", short(lead.SessionID), err)
 			s.escalateLeaderMessage(lead, kept, text)
-			return nil
+			return leaderEscalated{err}
 		}
 		return leaderUnreachable{err}
 	}
