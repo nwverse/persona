@@ -168,6 +168,29 @@ struct DispatchHandoffFailureTests {
         #expect(DispatchHandoffCard.interruption(try session(#""state":"idle","status":"idle""#), closed: false) == nil)
     }
 
+    /// A failed start's reason in plain words on the card and the row; the raw error is the task's details' (#8237).
+    @Test func aFailedStartSaysWhyInPlainWords() {
+        typealias W = StartFailureWords
+        #expect(W.cause("rpc: connection closed") == .connectionLost)
+        #expect(W.cause("和「MacBook」的连接断了，等了一阵也没重连上：rpc: connection closed") == .connectionLost)
+        #expect(W.cause("unexpected EOF") == .connectionLost)
+        #expect(W.cause("context deadline exceeded") == .timedOut)
+        #expect(W.cause("dial tcp: connect: connection refused") == .offline)
+        #expect(W.cause("ssh: handshake failed: permission denied (publickey)") == .notAllowed)
+        #expect(W.cause("rpc: unknown method agent.start") == .needsUpdate)
+        #expect(W.cause("exit status 1") == nil)
+        // a sentence the hub wrote for people stays; a raw error nothing names says to open the task
+        #expect(W.plain("这台电脑上没装 Claude Code，装好后再试") == "这台电脑上没装 Claude Code，装好后再试")
+        let english = "Claude Code isn't installed on this computer. Install it, then retry."
+        #expect(W.plain(english) == english)
+        #expect(W.plain("exit status 1") == nil)
+        #expect(W.plain("  ") == nil)
+        #expect(W.rowLine("exit status 1") == W.details)
+        #expect(W.rowLine("rpc: connection closed") == W.words(.connectionLost))
+        #expect(W.cardLine("rpc: connection closed") == String(localized: "Didn't start: \(W.words(.connectionLost)) [Tasks Store 38bbb7]"))
+        #expect(W.cardLine("exit status 1") == W.details)
+    }
+
     @Test func theInterruptedLineSaysWhyWhenItCan() {
         let word = String(localized: "Interrupted [Chat Layout]")
         #expect(DispatchHandoffCardBody.interruptedLine("") == word)

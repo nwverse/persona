@@ -51,6 +51,9 @@ final class QuietReceiptsUITests: XCTestCase {
             let card = app.descendants(matching: .any)[id].firstMatch
             for _ in 0..<14 where !(card.exists && card.isHittable) { app.swipeDown(velocity: .slow); sleep(1) }
             XCTAssertTrue(card.exists && card.isHittable, "\(appearance) \(size): \(id) on its hand-off card:\n\(app.debugDescription)")
+            if id == "dispatch.failure" {
+                XCTAssertTrue(card.label.contains("和这台电脑的连接断了"), "\(appearance) \(size): the card's reason in plain words: \(card.label)")
+            }
             // clear of the top bar, which the chat runs under: a little further down, held so it stops there
             let window = app.windows.firstMatch.frame
             for _ in 0..<3 where card.exists && card.frame.minY < window.minY + window.height * 0.3 {
@@ -58,7 +61,7 @@ final class QuietReceiptsUITests: XCTestCase {
                 from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: window.height * 0.2)),
                            withVelocity: .slow, thenHoldForDuration: 0.3)
             }
-            for receipt in ["补了两条测试", "发布说明分好了三组", "模型服务出错，中断了"] {
+            for receipt in ["补了两条测试", "发布说明分好了三组", "模型服务出错，中断了", "rpc: connection closed"] {
                 XCTAssertFalse(labelled(receipt).exists, "\(appearance) \(size): a receipt is drawn in the chat: \(receipt)")
             }
             shot("\(name)-\(appearance)-\(size)")
@@ -92,6 +95,9 @@ final class QuietReceiptsUITests: XCTestCase {
         let retry = app.buttons["action-tray.retry"].firstMatch
         reveal(retry, in: "action-tray.needs-you")
         XCTAssertTrue(retry.exists, "\(appearance) \(size): Retry on the failed start's row")
+        // why in plain words; the raw error ("rpc: connection closed") is only in the task's details
+        XCTAssertTrue(labelled("和这台电脑的连接断了").exists, "\(appearance) \(size): the failed start's reason in plain words")
+        XCTAssertFalse(labelled("rpc: connection closed").exists, "\(appearance) \(size): the raw error on the row")
         XCTAssertTrue(app.buttons["action-tray.remove"].firstMatch.exists, "\(appearance) \(size): Remove on the failed start's row")
         shot("needs-you-failed-\(appearance)-\(size)")
     }

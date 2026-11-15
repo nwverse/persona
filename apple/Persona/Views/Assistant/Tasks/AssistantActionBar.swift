@@ -809,7 +809,8 @@ struct AssistantActionBar: View {
         case .notStarted:
             return String(localized: "Starting the agent")
         case .failed:
-            return one(store.startFailure(todo))
+            // in plain words; the raw error is the task's details' (#8237)
+            return store.startFailure(todo).map(StartFailureWords.rowLine)
         case .needsYou:
             return TaskAsk.waitingLine(store.interactions(todo))
         case .working, .waiting:

@@ -263,6 +263,10 @@ many times, and each turn's receipt was a card: the main chat filled with "<task
 assistant conversation (the main one, side ones and leaders, history included), a task has one card in the chat, the
 hand-off or plan card from when it was handed out, and that card updates in place: its state word follows the task, a
 failed start reads "Didn't start: <why>" and a turn the model service cut off "Interrupted · <why>", in the danger color.
+A failed start's why is in plain words (`StartFailureWords`): a raw error naming a known cause becomes the cause ("rpc:
+connection closed" → "The connection to this computer dropped"; a computer offline, a start that timed out, one the
+computer refused, a Persona that needs an update), a sentence the hub already wrote for people stays, and anything else
+reads "Didn't start. Open it for details."; the raw error is only in the task's details.
 Receipts, reviews and reports are no longer drawn, nothing in the chat says where progress went, and no push or prompt
 changed. The hub writes every receipt as before: the completion judgment, supervision signals, the "Today" card, the
 interruption bookkeeping below and the trays' order still read them. How a task goes on is its row:

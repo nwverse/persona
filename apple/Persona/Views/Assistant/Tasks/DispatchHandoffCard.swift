@@ -42,6 +42,7 @@ struct DispatchHandoffCard: View {
         case agent(at: Date?, state: TaskState, limit: Bool)
         /// The Agent stopped on a model service error nothing continues: when, and why in words ("" when unknown).
         case interrupted(at: Date?, reason: String)
+        /// Its Agent did not start: the line that says so, in plain words (`StartFailureWords.cardLine`).
         case failed(String)
         case gone
         case closedEarly
@@ -84,7 +85,7 @@ struct DispatchHandoffCard: View {
             }
             return .agent(at: at, state: state, limit: limit)
         }
-        if let failure = failure(todo) { return .failed(failure) }
+        if let failure = failure(todo) { return .failed(StartFailureWords.cardLine(failure)) }
         if todo?.doneAt != nil { return .closedEarly }
         if todo == nil, entry.todoID != nil, !store.todos.isEmpty { return .gone }
         return .starting
@@ -216,8 +217,9 @@ struct DispatchHandoffCardBody: View, Equatable {
             .font(Theme.Font.caption)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("dispatch.interrupted")
-        case .failed(let failure):
-            Text("Didn't start: \(failure) [Tasks Store 38bbb7]").font(Theme.Font.caption).foregroundStyle(Theme.danger).lineLimit(2)
+        case .failed(let line):
+            // the raw error is the task's details' (TaskDetailSheet), never the card's
+            Text(line).font(Theme.Font.caption).foregroundStyle(Theme.danger).lineLimit(2)
                 .accessibilityIdentifier("dispatch.failure")
         case .gone:
             Text("This task no longer exists").font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1)
