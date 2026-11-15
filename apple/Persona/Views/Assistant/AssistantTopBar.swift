@@ -580,8 +580,8 @@ struct AssistantTopBar: View {
                 Button { copy(ChatTrace.shared.text(key), String(localized: "Diagnostics copied")) } label: { Label(String(localized: "Copy Diagnostics"), systemImage: Theme.Icon.diagnostics) }
             }
         }
-        if model.canCompact(key) || model.canStartNewMain(key) {
-            Section { MainConversationMenu(key: key) } // Compact context, New Main Chat… (#1762)
+        if model.canCompact(key) || model.canClearMain(key) || model.canStartNewMain(key) {
+            Section { MainConversationMenu(key: key) } // Compact context, Clear context, New Main Chat… (#1762, #5100)
         }
         if let key {
             Section {

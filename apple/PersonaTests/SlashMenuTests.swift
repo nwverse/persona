@@ -31,6 +31,14 @@ struct SlashMenuTests {
         #expect(SlashMenuRow.matching("/上下文", in: rows).map(\.word) == ["/compact", "/context"])
     }
 
+    @Test func theMainChatOffersOnlyClear() {
+        let rows = SlashMenuRow.matching("/", in: [.clear])
+        #expect(rows.map(\.word) == ["/clear"])
+        #expect(SlashMenuRow.matching("/cl", in: [.clear]).map(\.word) == ["/clear"])
+        #expect(SlashMenuRow.matching("/继续", in: [.clear]).isEmpty)
+        #expect(SlashMenuRow.matching("/clear now", in: [.clear]).isEmpty)
+    }
+
     @Test func aQuickMessageShowsWhatItSends() {
         let rows = SlashMenuRow.rows(model: true, clear: true)
         #expect(rows.first { $0.word == "/提交" }?.preview == "把当前改动按规范提交并推送")

@@ -66,3 +66,60 @@ struct MainConversationActionsTests {
         #expect(none.compaction == nil)
     }
 }
+
+/// Clear context for the main conversation (#5100): offered only with the hub's feature, `/clear` alone, and the empty
+/// page until a different main appears.
+struct MainClearTests {
+    @Test func offeredOnlyOnTheMainConversationWhenTheHubCan() {
+        let feature = MainConversationActions.clearFeature
+        #expect(feature == "assistant_main_clear")
+        #expect(MainConversationActions.offersClear(isMain: true, features: [feature]))
+        #expect(!MainConversationActions.offersClear(isMain: false, features: [feature]))
+        #expect(!MainConversationActions.offersClear(isMain: true, features: []))
+        #expect(!MainConversationActions.offersClear(isMain: true, features: ["assistant_main_new"]))
+    }
+
+    @Test func theWordAloneIsTheCommand() {
+        #expect(MainClearCommand.isCommand("/clear", attachments: 0))
+        #expect(MainClearCommand.isCommand("  /CLEAR  ", attachments: 0))
+        #expect(!MainClearCommand.isCommand("/clear now", attachments: 0))
+        #expect(!MainClearCommand.isCommand("/clear", attachments: 1))
+        #expect(!MainClearCommand.isCommand("clear", attachments: 0))
+        #expect(!MainClearCommand.isCommand("", attachments: 0))
+    }
+
+    @Test func theEmptyPageStaysUntilAnotherMainStarts() {
+        var state = MainClearState()
+        #expect(state.begin(group: "hub", manager: "", sessionID: "old"))
+        #expect(!state.begin(group: "hub", manager: "", sessionID: "old"), "a second one while it is on its way is used up")
+        #expect(state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: "old"))
+        #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: false, mainSessionID: "old"), "an open conversation stays")
+        #expect(!state.showsPage(group: "hub", manager: "other", currentEmpty: true, mainSessionID: nil))
+        state.succeed()
+        #expect(state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: nil), "after the refresh, still the empty page")
+        #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: "new"))
+        #expect(state.note(group: "hub", manager: "", mainSessionID: nil) == false)
+        #expect(state.note(group: "other", manager: "", mainSessionID: "new") == false, "another hub does not drop this one's flag")
+        #expect(state.note(group: "hub", manager: "", mainSessionID: "new"))
+        #expect(state.cleared == nil)
+        #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: "new"))
+    }
+
+    @Test func aFailureOrARefusalDropsTheEmptyPage() {
+        var state = MainClearState()
+        #expect(state.begin(group: "hub", manager: "", sessionID: "old"))
+        state.fail()
+        #expect(state.cleared == nil)
+        #expect(!state.busy)
+        #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: nil))
+        #expect(state.begin(group: "hub", manager: "", sessionID: "old"), "it can be asked again")
+    }
+
+    @Test func clearResultDecodesTheArchivedId() throws {
+        let done = try JSON.decoder.decode(ClearMainResult.self, from: Data(#"{"ok":true,"archived":"old"}"#.utf8))
+        #expect(done.ok == true)
+        #expect(done.archived == "old")
+        let none = try JSON.decoder.decode(ClearMainResult.self, from: Data(#"{"ok":true,"archived":""}"#.utf8))
+        #expect(none.archived == "")
+    }
+}
