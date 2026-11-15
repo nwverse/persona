@@ -2914,9 +2914,11 @@ The foundation shared by the file page and the various previews (spreadsheets, O
 
 ### Sending files
 
-**+** › **Files** in the App's chat input box (for Agents and for the assistant in the chat tab): the chosen file is uploaded to a temporary directory on **the computer the session runs on** (the node's
-`os.TempDir()`: usually `/tmp` on Linux, `$TMPDIR` on macOS, and also `/tmp` for an ssh node without that variable), and its absolute path is inserted at the cursor in the input box,
-**without sending automatically**. The assistant runs on its own machine (the hub machine by default), so files go there. Images still go as image attachments; for videos from the photo library, see "Sending videos" below.
+**+** › **Files** in the App's chat input box (for Agents and for the assistant in the chat tab; iPhone and iPad since #8361): each chosen file is uploaded to **the computer the session runs on** and shows as a card above the input box, as a video does (below); nothing is inserted into the text.
+Up to 10 files go with one message, three upload at a time (the others wait), a failed one stays as a card to tap and try again, and Send waits until every file is there. The message carries what was typed exactly as typed, then a blank line and one `<persona-file kind="file" path="…" name="…" size="…"/>` per file (the tag a video uses, `kind="file"`); with nothing typed the words are "Please look at the attached files".
+Where the hub has `upload_attachment` the App uploads with `dest=attachment`, so the file stays on that computer beside the chat's pictures (below) and can be opened and downloaded again from the message; on an older hub it goes to the temp directory as before (the node's
+`os.TempDir()`: usually `/tmp` on Linux, `$TMPDIR` on macOS, and also `/tmp` for an ssh node without that variable). The assistant runs on its own machine (the hub machine by default), so files go there. Images still go as image attachments; for videos from the photo library, see "Sending videos" below.
+In the bubble each file is a card (its kind's mark, name, size) above the words; more than four show three and "N More Files". A tap opens the file viewer ("File preview": read it, Save to Files, Share); a file the computer no longer has (a temp directory cleared since) is dimmed with "No longer on the computer". Web and Android draw the same tags as file cards; older iPhone builds drew them as video cards. The web composer still puts paths into the text until its own change.
 Share › Persona on iOS uploads shared files the same way to the target's computer and sends their paths with the message (docs/apple/ios.md "Share to Persona").
 
 - `POST /api/v1/machines/{mid}/files?name=<original file name>`, the body is the file itself (`Content-Length` required) → `{path, name, size}`.
@@ -2927,7 +2929,7 @@ Share › Persona on iOS uploads shared files the same way to the target's compu
   adding a random `-xxxx` for a clash within the same second. `/`, `\` and control characters in the file name are replaced with `_`, and overlong names are shortened.
 - Old nodes don't know `file.upload.*`: 409 `code: node_outdated` ("personad on <machine> is too old… needs redeploying"); old hubs don't have this endpoint (404)
   and have no `file_upload` in hello's `features`: the App asks to update the hub.
-- Paths with spaces or quotes are wrapped in single quotes by the App, and multiple paths are space-separated. When the input box isn't being edited, the path is inserted at the end (an unfocused TextField's reported selection is unreliable).
+- Where a client still writes paths into the text (the web composer, Health's reports, New Agent's first message, the share sheet), paths with spaces or quotes are wrapped in single quotes and multiple paths are space-separated.
 - If a reverse proxy sits in front, watch its request body limit (some CDNs' free tiers only allow 100 MB).
 - `?dest=terminal` (paste / drag-and-drop in the web terminal, `docs/integrations/terminal.md` section 18): the node doesn't use the system temp directory but stores it in its own `uploads/terminal/<date>/<random>-<file name>`
   (0700 / 0600, cleared at node startup after 7 days), limit 50 MB (`proto.MaxTerminalUploadBytes`; over that also returns 413 `too_large`, with `limit`). Any other `dest` returns 400;
