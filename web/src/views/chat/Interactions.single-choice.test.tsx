@@ -44,6 +44,7 @@ const flush = async () => {
 };
 const option = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((b) => b.textContent?.includes(label))!;
 const sendArrow = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-interactions.send_answer")}"]`)!;
+const customAnswer = () => host.querySelector<HTMLInputElement>(`input[aria-label="${t("chat-interactions.custom_answer")}"]`)!;
 
 beforeEach(() => {
   calls.length = 0;
@@ -66,6 +67,23 @@ describe("question card submission", () => {
     await flush();
     expect(option("A").getAttribute("aria-pressed")).toBe("true");
     expect(calls).toEqual([{ path: "/interactions/q_single/resolve", body: { answers: { "Which library?": "A" } } }]);
+  });
+
+  it("keeps a nonblank custom answer unsubmitted when an option is picked", async () => {
+    act(() => root.render(<InteractionCard ix={single} />));
+    const field = customAnswer();
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "  Custom library  ");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => option("A").click());
+    await flush();
+    expect(option("A").getAttribute("aria-pressed")).toBe("true");
+    expect(calls).toEqual([]);
+    expect(customAnswer().value).toBe("  Custom library  ");
+    act(() => sendArrow().click());
+    await flush();
+    expect(calls).toEqual([{ path: "/interactions/q_single/resolve", body: { answers: { "Which library?": "Custom library" } } }]);
   });
 
   it("keeps a multi-select answer unsubmitted until the send arrow", async () => {
