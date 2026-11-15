@@ -120,7 +120,7 @@ describe("formProblems", () => {
     const responses = providerBody({ ...draft, api: "responses" }, null);
     expect(responses).toMatchObject({ headers: "invalid", proxy: "invalid", no_proxy: "example.com", opus_model: "tier-a", subagent_force: true });
     const models = [formModel({ id: "m1", context_window: 16000, efforts: ["high"], default_effort: "high" })];
-    expect(providerBody({ ...draft, models }, null).models).toEqual([{ id: "m1", context_window: 16000, efforts: ["high"], default_effort: "high" }]);
+    expect(providerBody({ ...draft, models }, null).models).toEqual([{ id: "m1", context_window: 16000, efforts: ["high"], default_effort: "high", no_effort: false }]);
   });
   it("sends Send through only for a direct API connection, and only when it changed", () => {
     const api = ready({ kind: "api", via_machine: "laptop" });
@@ -142,7 +142,7 @@ describe("formProblems", () => {
     expect(formProblems(mismatch, true).models).toMatch(/默认思考档位/);
     expect(formProblems({ ...mismatch, api: "messages" }, true).models).toMatch(/默认思考档位/);
     expect(formProblems({ ...mismatch, api: "responses" }, true).models).toMatch(/默认思考档位/);
-    expect(providerBody(mismatch, null).models).toEqual([{ id: "m1", efforts: ["low"], default_effort: "high" }]);
+    expect(providerBody(mismatch, null).models).toEqual([{ id: "m1", efforts: ["low"], default_effort: "high", no_effort: false }]);
     expect(mismatch.models[0].efforts).toEqual(["low"]);
     // an unchecked duplicate does not count
     expect(formProblems(ready({ models: [formModel({ id: "m1" }), formModel({ id: "m1" }, false)] }), true).models).toBe("");
@@ -166,7 +166,8 @@ describe("providerBody", () => {
   it("a new provider sends what is set, not the empty ones", () => {
     const b = providerBody(ready({ timeout_ms: "30000", subagent_force: true }), null);
     expect(b).toMatchObject({ name: "gw", base_url: "https://gw.example.com", model: "m1", auth: "bearer", api_key: "sk-test-1", timeout_ms: 30000, subagent_force: true });
-    expect(b.models).toEqual([{ id: "m1", context_window: 200000 }]);
+    // no_effort is always named: the hub clears what the web leaves out (#8796)
+    expect(b.models).toEqual([{ id: "m1", context_window: 200000, no_effort: false }]);
     for (const k of ["headers", "env", "proxy", "opus_model", "compact_window", "effort"]) expect(b).not.toHaveProperty(k);
   });
   it("a new provider with no startup ID sends it empty, for the hub to make up, with the display name (#5029)", () => {
@@ -196,13 +197,13 @@ describe("providerBody", () => {
   it("unchecking a model sends the new list", () => {
     const f = formFromView(stored);
     f.models[1] = { ...f.models[1], checked: false };
-    expect(providerBody(f, stored).models).toEqual([{ id: "m1", context_window: 1000000, efforts: ["high", "max"], default_effort: "high" }]);
+    expect(providerBody(f, stored).models).toEqual([{ id: "m1", context_window: 1000000, efforts: ["high", "max"], default_effort: "high", no_effort: false }]);
   });
   it("saves what the gateway reported of a model that the form does not show, and leaves an unchanged PUT alone (#8778)", () => {
     const reported = { id: "m1", context_window: 200000, efforts: ["low", "max"], all_efforts: ["minimal", "low", "ultra"], max_output_tokens: 32000, image_input: true, tool_calls: false };
     const plain = { id: "m2", no_effort: true };
     expect(providerBody(ready({ models: [formModel(reported), formModel(plain)] }), null).models).toEqual([
-      { id: "m1", context_window: 200000, efforts: ["low", "max"], max_output_tokens: 32000, all_efforts: ["minimal", "low", "ultra"], image_input: true, tool_calls: false },
+      { id: "m1", context_window: 200000, efforts: ["low", "max"], max_output_tokens: 32000, all_efforts: ["minimal", "low", "ultra"], image_input: true, tool_calls: false, no_effort: false },
       { id: "m2", no_effort: true },
     ]);
     const view: ProviderView = { ...stored, models: [reported, plain] };
@@ -311,7 +312,12 @@ describe("probes", () => {
     expect(merged[2]).toMatchObject({ context_window: "300", efforts: [], default_effort: "" });
     expect(merged[3]).toMatchObject({ context_window: "400", efforts: ["high"], default_effort: "high" });
   });
-  it("gives rows already there what the gateway reports now, keeping theirs when it reports nothing (#8778)", () => {
+  it("names a launcher's agent other than Claude Code, so discovery asks about the protocol it goes on (#8796)", () => {
+    expect(probeBody(ready({ agent: "codex", api: "messages" }), null).agent).toBe("codex");
+    expect(probeBody(ready(), null)).not.toHaveProperty("agent");
+    expect(probeBody(ready({ kind: "api", api: "responses" }), null)).not.toHaveProperty("agent");
+  });
+  it("gives rows already there what the gateway reports now, nothing included (#8778, #8796)", () => {
     const rows = [formModel({ id: "a", context_window: 100 }), formModel({ id: "c", no_effort: true }), formModel({ id: "d", max_output_tokens: 1 })];
     const merged = mergeDiscovered(rows, [
       { id: "a", no_effort: true, max_output_tokens: 8000, image_input: false, tool_calls: true },
@@ -321,7 +327,7 @@ describe("probes", () => {
     expect(merged.map((m) => [m.efforts, m.meta])).toEqual([
       [[], { max_output_tokens: 8000, no_effort: true, image_input: false, tool_calls: true }],
       [[], { max_output_tokens: 9000, all_efforts: ["high", "ultra"] }],
-      [[], { max_output_tokens: 1 }],
+      [[], {}],
     ]);
     const fresh = mergeDiscovered([], [{ id: "d", efforts: ["high", "max"], all_efforts: ["high", "ultra"], max_output_tokens: 4096 }]);
     expect(fresh[0]).toMatchObject({ efforts: ["high", "max"], meta: { all_efforts: ["high", "ultra"], max_output_tokens: 4096 } });

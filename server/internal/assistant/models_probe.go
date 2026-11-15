@@ -45,6 +45,9 @@ type probeInput struct {
 	Preset string `json:"preset"`
 	// ViaMachine: the computer the requests go through (models_via.go); nil keeps the stored one, "" this manager.
 	ViaMachine *string `json:"via_machine"`
+	// Agent: the agent a provider not saved yet runs (codex, …), so discovery asks a gateway's capability report about
+	// the protocol it goes on (capabilityProtocol); a stored provider's own otherwise.
+	Agent string `json:"agent"`
 }
 
 // The credential header(s) a probe sends (probeTarget.auth). A request naming none ("") gets the stored provider's
@@ -68,7 +71,7 @@ func launchAuth(auth string) string {
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
 	base, key, headers, model, effort, proxy, noProxy, api, kind, via string
-	// agent is a stored provider's agent (AgentType), "" for one not stored.
+	// agent is the agent the request names, else a stored provider's (AgentType); "" for neither.
 	agent string
 	// through sends the requests through via's node (models_via.go).
 	through http.RoundTripper
@@ -138,6 +141,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	}
 	if in.Effort != nil {
 		t.effort = strings.TrimSpace(*in.Effort)
+	}
+	if a := strings.TrimSpace(in.Agent); a != "" {
+		t.agent = a
 	}
 	if in.Preset != "" {
 		pr, ok := s.presetByID(ctx, in.Preset)
@@ -846,8 +852,13 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			}
 			m.ContextWindow = firstTokens(fields["max_model_len"], fields["context_length"], fields["context_window"],
 				fields["max_context_length"], fields["max_input_tokens"])
-			if !readModelMeta(fields, &m) {
+			chat, guessed := readModelMeta(fields, &m)
+			if !chat {
 				continue
+			}
+			// a none only guessed from a parameter list gives way to the levels the catalog knows for the model
+			if c, ok := catalogModel(id); guessed && ok && len(c.Efforts) > 0 {
+				m.NoEffort = false
 			}
 		}
 		id = strings.TrimSpace(id)
