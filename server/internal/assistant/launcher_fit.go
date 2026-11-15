@@ -34,18 +34,33 @@ func (t *PlanTask) launchPick() startPick {
 		ultracode: copyBool(t.Ultracode)}
 }
 
-// storedLaunch is the launch task t keeps in its plan: what this try resolved, as every task keeps it, or only what
-// the task named itself when a start-defaults policy filled values in on this try, the permission mode included (a
-// policy's preset can change which agent runs, and so the mode its launcher sets). A policy's values are for that one
-// start (the Agent's session shows what it runs with): kept with the task, a remedy, a queued start or a retry from
-// the card, which read the task back from the store, would take them for the task's own.
+// startFill is what a start-defaults policy filled in on one start try: a preset (which then decided the launcher,
+// model, effort, tier, and with the agent it runs the permission mode its launcher sets), the policy's effort, its
+// ultracode. A rule that fits but fills nothing leaves it empty, and the start is the one without the feature.
+type startFill struct{ preset, effort, ultracode bool }
+
+func (f startFill) any() bool { return f.preset || f.effort || f.ultracode }
+
+// storedLaunch is the launch task t keeps in its plan: what this try resolved, as every task keeps it, with the
+// task's own value instead for whatever a start-defaults policy filled in on this try. A policy's values are for that
+// one start (the Agent's session shows what it runs with): kept with the task, a remedy, a queued start or a retry
+// from the card, which read the task back from the store, would take them for the task's own.
 func (t PlanTask) storedLaunch() startPick {
-	if t.startDefaulted && t.callerPick != nil {
-		own := *t.callerPick
-		own.ultracode = copyBool(own.ultracode)
-		return own
+	kept := t.launchPick()
+	if t.callerPick == nil {
+		return kept
 	}
-	return t.launchPick()
+	own := *t.callerPick
+	if t.startFilled.preset {
+		kept.launcher, kept.model, kept.effort, kept.tier, kept.permission = own.launcher, own.model, own.effort, own.tier, own.permission
+	}
+	if t.startFilled.effort {
+		kept.effort = own.effort
+	}
+	if t.startFilled.ultracode {
+		kept.ultracode = copyBool(own.ultracode)
+	}
+	return kept
 }
 
 // copyBool is a copy of an optional switch, so the copy and the original never change together.

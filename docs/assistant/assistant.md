@@ -1498,10 +1498,12 @@ What a task Agent starts with beyond what its caller named can come from an opti
 which thinking effort, whether ultracode is on, whether a goal is set from the task's acceptance criteria, and whether
 the prompt asks the Agent to plan first. With no policy stored, one past its expiry, or no rule that fits a task, the
 task starts exactly as it would without the feature. A policy's values belong to the one start they were applied to:
-every try of a task starts again from what the task named itself, whichever rule fits it now, and the task's plan keeps
-only what the task named (its why says what the policy picked), so a remedy, a queued start, a retry from the card or
-a manager restart, which read the task back from its plan, never take an expired policy's values for the task's own,
-and the card does not show them as asked for. The Agent's session shows what it actually runs with. The owner and an
+every try of a task starts again from what the task named itself, whichever rule fits it now, and for whatever a policy
+filled in (a preset's launcher, model, effort, tier and the permission mode its agent sets; the policy's effort or
+ultracode) the task's plan keeps the task's own value (its why names a preset the policy picked), so a remedy, a queued
+start, a retry from the card or a manager restart, which read the task back from its plan, never take an expired
+policy's values for the task's own, and the card does not show them as asked for. A rule that fits but fills nothing
+in leaves the start and what the plan keeps exactly as without the feature. The Agent's session shows what it actually runs with. The owner and an
 extension granted the
 `assistant.start_defaults` hub scope read and write it with `GET`/`PUT /api/v1/assistant/start-defaults` (the owner
 also as `start_defaults` in `PUT /api/v1/assistant`); an extension-written policy must expire within one hour, so a

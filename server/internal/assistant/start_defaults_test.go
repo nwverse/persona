@@ -517,7 +517,7 @@ func TestStartDefaultsDroppedKeepsTheCallersModelAndUltracode(t *testing.T) {
 	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
 		t.Fatal(err)
 	}
-	if task.startDefaulted != true {
+	if !task.startFilled.any() {
 		t.Fatal("the first try did not take the policy")
 	}
 	// The policy may not override the caller's model or its explicit ultracode off.
@@ -652,7 +652,7 @@ func TestStartDefaultsDroppedWhenThePolicyNoLongerApplies(t *testing.T) {
 	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
 		t.Fatal(err)
 	}
-	if !task.startDefaulted || task.planFirst != true || task.Tier != "deep" || task.Effort != "max" {
+	if !task.startFilled.any() || task.planFirst != true || task.Tier != "deep" || task.Effort != "max" {
 		t.Fatalf("the first try did not take the defaults: %+v", task)
 	}
 	on = off
@@ -660,7 +660,7 @@ func TestStartDefaultsDroppedWhenThePolicyNoLongerApplies(t *testing.T) {
 	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
 		t.Fatal(err)
 	}
-	if task.startDefaulted && (task.planFirst || task.Tier == "deep" || task.Effort == "max") {
+	if task.startFilled.any() && (task.planFirst || task.Tier == "deep" || task.Effort == "max") {
 		t.Fatalf("the second try kept the dropped policy: %+v", task)
 	}
 	st := startsOf(f)[1]
@@ -869,33 +869,78 @@ func TestStartDefaultsStoredTaskKeepsItsOwnValues(t *testing.T) {
 }
 
 // A policy's preset can change which agent runs, and with it the permission mode its launcher sets (Claude Code runs
-// with bypassPermissions): the plan keeps the task's own mode, and a later start without the policy runs the task's
-// own agent with it, not with the mode the policy's agent set.
+// with bypassPermissions): through a real plan, the stored task keeps its own mode, and the task read back from the
+// store after the policy expired runs its own agent with it, not with the mode the policy's agent set.
 func TestStartDefaultsPermissionOfThePolicysAgentNotStored(t *testing.T) {
 	s, f := defaultsHub(t)
+	ctx := context.Background()
 	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "cx", Source: "zshrc", Agent: "codex"})
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.cx"}) // the task's own default runs Codex
 	policy := true
 	stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) {
-		return StartDefaults{Presets: []PresetChoice{{Name: "plain"}}}, policy // a Claude Code preset
+		return StartDefaults{Presets: []PresetChoice{{Name: "plain"}}, By: "Example"}, policy // a Claude Code preset
 	})
-	task := defaultsTask()
-	task.Permission = "acceptEdits"
-	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"Fix the build","prompt":"fix the build",
+		"machine":"box","cwd":"/Users/me/code/app","why":"the repo is on box","permission":"acceptEdits",
+		"done_when":["CI is green"],"expect_minutes":30}]}`))
+	if err != nil {
 		t.Fatal(err)
 	}
+	id := planID(t, res)
+	if p, err := s.loadPlan(ctx, id); err != nil || p.Tasks[0].Permission != "acceptEdits" {
+		t.Fatalf("the plan does not keep the task's mode: %+v %v", p, err)
+	}
+	if _, err := s.startPlan(ctx, id, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the start", func() bool { return len(startsOf(f)) == 1 })
 	if st := startsOf(f)[0]; st["launcher"] != "claude" || st["permission_mode"] != "bypassPermissions" {
 		t.Fatalf("the policy's Claude Code preset did not run: %v", st)
 	}
-	stored := task.storedLaunch()
-	if stored.permission != "acceptEdits" || stored.launcher != "" || stored.tier != "" {
-		t.Fatalf("stored launch = %+v, want the task's own (acceptEdits, no launcher, no tier)", stored)
+	todoID := todoIDOfPlan(t, s, id)
+	waitFor(t, "the agent linked", func() bool { return len(todoNow(s, todoID).Agents) == 1 })
+	p, err := s.loadPlan(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := p.Tasks[0]
+	if !strings.Contains(stored.Why, "Example") {
+		t.Fatalf("the start did not write the task back (no policy note in its why): %q", stored.Why)
+	}
+	if stored.Permission != "acceptEdits" || stored.Launcher == "claude" || stored.Tier == "plain" || stored.Model == "claude-plain" {
+		t.Fatalf("the policy's agent was stored with the task: permission %q launcher %q tier %q model %q",
+			stored.Permission, stored.Launcher, stored.Tier, stored.Model)
 	}
 	policy = false
-	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+	if _, _, err := s.startTaskAgent(ctx, &stored, true); err != nil {
 		t.Fatal(err)
 	}
 	if st := startsOf(f)[1]; st["launcher"] != "cx" || st["permission_mode"] != "acceptEdits" {
 		t.Fatalf("without the policy the task did not start as its own: %v", st)
+	}
+}
+
+// A rule that fits but fills nothing in (here: a goal for a task without criteria) leaves the start as it is without
+// the feature, and the launch the plan keeps is the one this try resolved, as without the feature.
+func TestStartDefaultsARuleThatFillsNothingStoresAsWithout(t *testing.T) {
+	stored := func(rule bool) startPick {
+		t.Helper()
+		s, _ := defaultsHub(t)
+		if rule {
+			stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) { return StartDefaults{Goal: GoalFromDoneWhen}, true })
+		}
+		task := defaultsTask()
+		task.DoneWhen = nil
+		if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+			t.Fatal(err)
+		}
+		if task.startFilled.any() {
+			t.Fatalf("the rule filled something in: %+v", task.startFilled)
+		}
+		return task.storedLaunch()
+	}
+	with, without := stored(true), stored(false)
+	if !reflect.DeepEqual(with, without) || with.launcher != "gateway" || with.model != "gw-model" {
+		t.Fatalf("with a rule that fills nothing: %+v\nwithout the feature: %+v", with, without)
 	}
 }

@@ -138,10 +138,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	caller := *t.callerPick
 	// Every try starts from what the task named: what a policy filled in on an earlier try goes back first, whichever
 	// rule fits now (start_defaults.go), so a rule that changed or no longer fits leaves nothing of the earlier one.
-	if t.startDefaulted {
+	if t.startFilled.any() {
 		t.Launcher, t.Model, t.Effort, t.Tier = caller.launcher, caller.model, caller.effort, caller.tier
-		t.Permission, t.Ultracode, t.startDefaulted = caller.permission, copyBool(caller.ultracode), false
+		t.Permission, t.Ultracode = caller.permission, copyBool(caller.ultracode)
 	}
+	t.startFilled = startFill{}
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
@@ -150,7 +151,6 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
 	presetNote := ""
 	if withDefaults {
-		t.startDefaulted = true // from here on, what t holds of its launch may be the policy's, not the task's own
 		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
 	}
 	own, err := s.resolveStart(ctx, params)
@@ -444,9 +444,9 @@ func (s *Service) adoptTaskStartSessionUntil(ctx context.Context, m Device, laun
 }
 
 // updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, its actual launch
-// permission, and its ultracode when the start went without it. When a start-defaults policy filled values in on
-// this try, the launch it keeps (launcher, model, effort, tier, ultracode and permission) is only what the task named
-// itself (storedLaunch): a later start reading the task back must not take the policy's values for its own.
+// permission, and its ultracode when the start went without it. For whatever a start-defaults policy filled in on
+// this try (a preset's launcher, model, effort, tier and permission mode, the policy's effort or ultracode) it keeps
+// the task's own value (storedLaunch): a later start reading the task back must not take the policy's for its own.
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
 	launch := t.storedLaunch()
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {

@@ -288,6 +288,7 @@ func (s *Service) applyStartPreset(ctx context.Context, t *PlanTask, caller star
 	}
 	params["launcher"], params["model"], params["effort"], params["tier"] = "", "", caller.effort, name
 	t.Tier = name
+	t.startFilled.preset = true // the preset now decides the launch, from here to the end of this try
 	return note
 }
 
@@ -307,11 +308,13 @@ func (s *Service) applyStartExtras(ctx context.Context, t *PlanTask, caller star
 	if claude && strings.TrimSpace(d.Effort) != "" && caller.effort == "" && !tierEffort {
 		params["effort"] = d.Effort
 		t.Effort = d.Effort
+		t.startFilled.effort = true
 	}
 	if claude && d.Ultracode != nil && *d.Ultracode && t.Ultracode == nil {
 		params["ultracode"] = true
 		on := true
 		t.Ultracode = &on
+		t.startFilled.ultracode = true
 	}
 	if claude && d.Goal == GoalFromDoneWhen && len(t.DoneWhen) > 0 {
 		goal := prompts.RenderTaskGoal(t.DoneWhen)
