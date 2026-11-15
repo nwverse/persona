@@ -172,7 +172,7 @@ function HubUpdates() {
         )}
         {view.kind === "working" && <Progress s={status} onNow={() => setConfirmNow(true)} />}
         {view.kind === "current" && (behind ? (
-          <p className="flex items-start gap-1.5 px-4 py-3 text-[12.5px] leading-snug break-words text-orange">
+          <p className="flex items-start gap-1.5 px-4 py-3 text-meta leading-snug break-words text-orange">
             <Icon name="info" size={13} className="mt-0.5 shrink-0" />
             <span className="min-w-0">{behind}</span>
           </p>
