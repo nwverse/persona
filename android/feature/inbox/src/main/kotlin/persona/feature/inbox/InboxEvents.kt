@@ -19,16 +19,26 @@ import java.time.ZoneId
 import java.util.Locale
 
 // Inbox phase 1 (docs/assistant/inbox.md"Events, handling chains, and suggestions", docs/android/android.md"Inbox: events, suggestions, and handling chains"): the pure parts of
-// how an event reads in the list and on its page. An item from an older hub has no event fields and none of this applies:
-// its row and its page are what they were.
+// how an event reads in the list and on its page. Older items have no event sections; chat and mail still open the detail
+// so their originals stay unmounted until an explicit source action.
 
-/** An event's own page: Summary, Recap, the suggestion with its buttons, the Handling chain; "View original" opens the item's source page. */
+/** An item's detail page: event sections when present, with "View original" opening the source above it. */
 @Serializable @SerialName("persona.feature.inbox.InboxEventRoute")
 data class InboxEventRoute(val itemId: String) : NavKey
 
-/** Opening [record] from the list: its event page when the hub sent event fields, else its own page as before. */
-fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey =
-    if (record.event.present) InboxEventRoute(record.item.id) else pages.open(record)
+/**
+ * Opening [record] from the list: its detail for event fields or a chat/mail original, so merely opening it cannot
+ * acknowledge the source. The assistant's own row goes straight to its conversation card. Other legacy items retain
+ * their own pages. Explicit source links still use [pages] directly.
+ */
+fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey {
+    if (record.isAssistantRow) return pages.open(record)
+    if (record.event.present) return InboxEventRoute(record.item.id)
+    return when (inboxItemPage(record)) {
+        is LarkRoute, is MailRoute -> InboxEventRoute(record.item.id)
+        else -> pages.open(record)
+    }
+}
 
 /** The words for a processing conversation that is on it (In progress): AI is reviewing, Agent is working, Waiting for reply. */
 @StringRes
@@ -143,7 +153,7 @@ internal fun chainTarget(entry: InboxChainEntry, record: InboxRecord): ChainTarg
             when {
                 position != null && record.feedId != null -> ChainTarget.Page(LarkRoute(record.feedId, record.item.id, position))
                 !link.url.isNullOrBlank() -> ChainTarget.Url(link.url!!)
-                link.uid != null && record.isMail && record.doc == null -> ChainTarget.Page(MailRoute(record.item.id))
+                link.uid != null && record.isMail && record.doc == null -> ChainTarget.Page(MailRoute(record.item.id, link.uid))
                 else -> ChainTarget.Source
             }
         }
@@ -172,9 +182,9 @@ internal fun chainIcon(kind: String, record: InboxRecord): PhIcon = when (kind) 
     else -> PhIcons.Info
 }
 
-/** A chain entry's time: the clock today, the date and the clock before. */
+/** A chain entry's time: the 24-hour clock today, the localized short date and 24-hour clock before. */
 internal fun chainTime(value: String?, locale: Locale, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
     val at = value?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return ""
     val today = at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
-    return LocalizedFormats.format(at, if (today) LocalizedFormats.TIME else LocalizedFormats.MONTH_DAY_TIME, locale, zone)
+    return LocalizedFormats.format24(at, if (today) LocalizedFormats.TIME_24 else LocalizedFormats.MONTH_DAY_TIME_24, locale, zone)
 }
