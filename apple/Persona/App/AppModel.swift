@@ -435,6 +435,8 @@ final class AppModel {
     var compactionShown: [SessionKey: MainConversationActions.Shown] = [:]
     /// New Main Chat… was picked (the top bar's menu, the sidebar's): the Persona page asks before doing it.
     var newMainAsked = false
+    /// Clear context on this device (#5100): set before the request, so the page stays the empty conversation.
+    var mainClear = MainClearState()
 
     @ObservationIgnored private(set) var chats: [SessionKey: ChatStore] = [:]
     /// The groups whose outbox is going out now (`flushOutbox`): one group sending does not hold back another.
@@ -1159,6 +1161,12 @@ final class AppModel {
             guard showsPage(of: api) else { return } // another group or manager was picked meanwhile
             let previousMain = assistantMain
             assistantConfig = st
+            // A different main for the manager that was cleared: the empty page is over, and someone looking at it
+            // sees what the hub has. Another manager's refresh does not drop this one's flag.
+            if mainClear.note(group: api.group, manager: assistantManagerID ?? "", mainSessionID: st.main),
+               assistantCurrent == nil {
+                assistantCurrent = assistantMain
+            }
             if let current = assistantCurrent {
                 assistantCurrent = Self.followingMainRoute(current: current, previous: previousMain, updated: assistantMain,
                                                            mainID: st.main)
