@@ -18,7 +18,8 @@ enum class OutboxState(val wire: String, val delivery: DeliveryState) {
     Shown("shown", DeliveryState.Sent),
 }
 
-data class OutboxEntry(
+@ConsistentCopyVisibility
+data class OutboxEntry internal constructor(
     val clientMessageId: String,
     val session: SessionKey,
     val text: String,
@@ -34,6 +35,8 @@ data class OutboxEntry(
     val model: String? = null,
     /** It carries out the session's waiting launcher switch ([persona.core.contracts.api.MessageSender.sendApplyingSwitch]). */
     val applySwitch: Boolean = false,
+    /** Internal delivery evidence carries this back to its originating inbox; never part of the hub request. */
+    internal val agentHandOff: InboxAgentHandOff? = null,
 ) {
     val operationId: String get() = opId ?: clientMessageId
 }
@@ -43,6 +46,15 @@ interface OutboxStore {
     val entries: Flow<List<OutboxEntry>>
     /** Persist without clearing an editor whose revision is unknown. */
     suspend fun enqueue(entry: OutboxEntry)
+    /**
+     * Commit authoritative hand-off evidence before it is published. The Room store overrides this to commit the
+     * pairing's reply journal; the returned entry always carries the evidence. Ordinary messages are unchanged.
+     */
+    suspend fun persistAgentHandOffDelivery(entry: OutboxEntry): OutboxEntry = entry.copy(
+        agentHandOff = entry.agentHandOff?.copy(delivered = true),
+    )
+    /** Whether [persistAgentHandOffDelivery] also committed the originating inbox's replay journal. */
+    fun agentHandOffOriginCommitted(entry: OutboxEntry): Boolean = true
     /** Compare the draft revision, persist the message and clear that draft in one transaction. */
     suspend fun enqueueDraft(entry: OutboxEntry, draft: DraftSnapshot?) {
         check(draft == null) { "Versioned drafts are not supported by this store" }

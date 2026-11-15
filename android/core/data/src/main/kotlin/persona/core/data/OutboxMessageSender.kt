@@ -1,5 +1,6 @@
 package persona.core.data
 
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.HubScope
 import persona.core.contracts.Item
 import persona.core.contracts.MessageEcho
@@ -28,6 +29,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -56,6 +58,9 @@ internal data class AuthoritativeMessageDelivery(
     val clientMessageId: String,
     val session: SessionKey,
     val text: String,
+    val agentHandOff: InboxAgentHandOff? = null,
+    /** False when the target outbox committed evidence but the originating inbox still must commit it before recording. */
+    val originCommitted: Boolean = true,
 )
 
 internal object AuthoritativeMessageDeliveries {
@@ -102,6 +107,8 @@ class OutboxMessageSender(
     @Volatile private var mainResolver: MainConversationResolver? = null
     /** Transcript items that already showed a message (observeTranscript): the same item never shows a second. */
     private val claimed = mutableSetOf<Pair<SessionKey, String>>()
+    /** One process-local publication per client id; the repository's durable tombstone covers process recreation. */
+    private val publishedDeliveries = mutableSetOf<String>()
     /** Whether a session is at work (connectActivity): its turn may write a delivered message only when it ends. */
     @Volatile private var busy: (SessionKey) -> Boolean = { false }
 
@@ -184,8 +191,16 @@ class OutboxMessageSender(
         check(job.isActive) { "Pairing scope is closed" }
         require(entry.text.isNotBlank() && entry.clientMessageId.isNotBlank())
         require(entry.session.machineId.isNotBlank() && entry.session.sessionId.isNotBlank())
-        store.enqueue(entry)
-        if (transport.readyToSend.value) receiptState.preparing(entry.session, entry.clientMessageId, false)
+        val handOff = currentCoroutineContext()[InboxAgentHandOffContext]?.handOff
+        val stored = if (handOff == null) entry else {
+            require(handOff.request.operationId == entry.clientMessageId && handOff.request.text == entry.text &&
+                GroupKeys.rawKey(handOff.session) == GroupKeys.rawKey(entry.session)) {
+                "Hand-off does not match its outbox message"
+            }
+            entry.copy(agentHandOff = handOff)
+        }
+        store.enqueue(stored)
+        if (transport.readyToSend.value) receiptState.preparing(stored.session, stored.clientMessageId, false)
         wake.trySend(Unit)
         Unit
     }
@@ -423,7 +438,7 @@ class OutboxMessageSender(
                 pending.remove(entry)
                 if (store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)) {
                     claimed += session to item.id
-                    AuthoritativeMessageDeliveries.publish(entry.delivery())
+                    publishAuthoritative(entry)
                     wake.trySend(Unit)
                 }
             }
@@ -436,7 +451,7 @@ class OutboxMessageSender(
         // Bound the whole catch-up so unresolved entries cannot hold the sending gate forever.
         withTimeoutOrNull(reconciliationTimeoutMillis) {
             val entries = store.entries.first()
-            for (entry in entries.filter { it.state in reconcilable }) {
+            for (entry in entries.filter { it.state in catchUpStates }) {
                 if (entry.state in uncertain) store.transition(entry.clientMessageId, uncertain, OutboxState.Verifying)
                 val evidence = try {
                     transport.reconcile(request(entry), entry.createdAt,
@@ -445,7 +460,7 @@ class OutboxMessageSender(
                 catch (_: Exception) { null }
                 when (evidence) {
                     MessageEvidence.Shown -> if (store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)) {
-                        AuthoritativeMessageDeliveries.publish(entry.delivery())
+                        publishAuthoritative(entry)
                     }
                     is MessageEvidence.Receipt -> {
                         // A late success can settle manual review; an unknown receipt must keep that choice visible.
@@ -520,17 +535,47 @@ class OutboxMessageSender(
      */
     private suspend fun settle(entry: OutboxEntry, from: Set<OutboxState>, result: MessageTransportResult): OutboxState {
         val id = entry.clientMessageId
+        // A late Accepted receipt is new evidence even after manual confirmation or an earlier settlement. Do not move
+        // Shown back to Sent (or manufacture a same-state transition): publish that evidence once for this sender.
+        if (result == MessageTransportResult.Accepted && entry.state in settled) {
+            publishAuthoritative(entry)
+            unstall(id)
+            return entry.state
+        }
         val state = classify(result)
         val error = (result as? MessageTransportResult.HubError)?.let { it.code ?: it.error }
         val moved = if ((result as? MessageTransportResult.HubError)?.delivered == "none") {
             store.transition(id, from, state, error, newOperationId())
         } else store.transition(id, from, state, error)
-        if (moved && result == MessageTransportResult.Accepted) AuthoritativeMessageDeliveries.publish(entry.delivery())
+        if (result == MessageTransportResult.Accepted) {
+            val settledNow = moved || store.entries.first().any {
+                it.clientMessageId == id && it.state in settled
+            }
+            if (settledNow) publishAuthoritative(entry)
+        }
         if (moved && state == OutboxState.WaitingForNetwork) stall(id, error) else unstall(id)
         return state
     }
 
-    private fun OutboxEntry.delivery() = AuthoritativeMessageDelivery(hubScope.path, clientMessageId, session, text)
+    private suspend fun publishAuthoritative(entry: OutboxEntry) {
+        val first = synchronized(publishedDeliveries) { publishedDeliveries.add(entry.clientMessageId) }
+        if (!first) return
+        var storeCommitted = false
+        val persisted = try {
+            store.persistAgentHandOffDelivery(entry).also { storeCommitted = true }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Recording metadata must never change an already authoritative message result.
+            entry.copy(agentHandOff = entry.agentHandOff?.copy(delivered = true))
+        }
+        val originCommitted = storeCommitted && store.agentHandOffOriginCommitted(persisted)
+        AuthoritativeMessageDeliveries.publish(persisted.delivery(originCommitted))
+    }
+
+    private fun OutboxEntry.delivery(originCommitted: Boolean = true) = AuthoritativeMessageDelivery(
+        hubScope.path, clientMessageId, session, text, agentHandOff, originCommitted,
+    )
 
     /**
      * [id] came back waiting. Waiting for the link is what the outbox is for; while the link is up it means the hub
@@ -637,7 +682,10 @@ class OutboxMessageSender(
         private val reviewable = setOf(OutboxState.Unknown, OutboxState.Verifying)
         /** Delivery unknown, with or without the review deadline passed: the user decides (confirm or discard). */
         private val undecided = reviewable + OutboxState.NeedsConfirmation
-        private val reconcilable = uncertain + setOf(OutboxState.Sent, OutboxState.NeedsConfirmation)
+        private val settled = setOf(OutboxState.Sent, OutboxState.Shown)
+        private val reconcilable = uncertain + OutboxState.Sent + OutboxState.NeedsConfirmation
+        /** Read-only catch-up may also find late evidence for an already shown message; transcript matching may not. */
+        private val catchUpStates = reconcilable + OutboxState.Shown
         private val dispatchable = setOf(OutboxState.Queued, OutboxState.WaitingForNetwork)
         private val hidden = setOf(OutboxState.Cancelled, OutboxState.Shown)
         private val refusals = setOf("agent_stopped", "input_draft", "dialog_open", "codex_not_ready", "codex_first_text", "codex_waiting", "op_id_reused", "invalid", "stale_session")

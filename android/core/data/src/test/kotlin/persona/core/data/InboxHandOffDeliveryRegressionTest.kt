@@ -17,8 +17,10 @@ import persona.core.contracts.api.MessageTransportResult
 import persona.feature.inbox.InboxHandOffRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -156,6 +158,21 @@ class InboxHandOffDeliveryRegressionTest {
             runCurrent()
             assertEquals(OutboxState.Sent, fixture.store.state(operationId))
             assertTrue("the user's manual disposition is not hub evidence", fixture.inbox.records.isEmpty())
+
+            for (result in listOf(
+                MessageTransportResult.NoReceipt,
+                MessageTransportResult.HubError("internal", "yes"),
+                MessageTransportResult.HubError("input_draft", "none"),
+            )) {
+                fixture.messages.evidence[operationId] = MessageEvidence.Receipt(result)
+                fixture.messages.readyToSend.value = false
+                runCurrent()
+                fixture.messages.readyToSend.value = true
+                runCurrent()
+                assertEquals(OutboxState.Sent, fixture.store.state(operationId))
+                assertTrue("non-Accepted reconciliation is not authoritative acceptance", fixture.inbox.records.isEmpty())
+            }
+            assertEquals(1, fixture.messages.requests.size)
         } finally {
             fixture.close()
         }
@@ -348,6 +365,91 @@ class InboxHandOffDeliveryRegressionTest {
         }
     }
 
+    @Test fun acceptedResultLosingATransitionToSentStillPublishes() = runTest {
+        val fixture = HandOffFixture(backgroundScope, pairing, online = true)
+        val accepted = CompletableDeferred<MessageTransportResult>()
+        fixture.messages.onSend = { accepted.await() }
+        try {
+            val handOff = async { fixture.repository.handOff(request) }
+            runCurrent()
+            assertEquals(OutboxState.Sending, fixture.store.state(operationId))
+            // Another authoritative path settles first. The later HTTP Accepted must not be lost with its transition.
+            assertTrue(fixture.store.transition(operationId, setOf(OutboxState.Sending), OutboxState.Sent))
+            accepted.complete(MessageTransportResult.Accepted)
+            runCurrent()
+            assertEquals(agent, handOff.await())
+            assertEquals(OutboxState.Sent, fixture.store.state(operationId))
+            assertEquals(1, fixture.messages.requests.size)
+            assertEquals(listOf(RecordedHandOff("item", agent, "Example agent", operationId)), fixture.inbox.records)
+        } finally {
+            accepted.complete(MessageTransportResult.Accepted)
+            fixture.close()
+        }
+    }
+
+    @Test fun immediateSameOperationRetryPublishesAcceptedOnlyOnce() = runTest {
+        val fixture = HandOffFixture(backgroundScope, pairing, online = true, supportsClientOps = true)
+        val publications = mutableListOf<AuthoritativeMessageDelivery>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            AuthoritativeMessageDeliveries.events.collect {
+                if (it.clientMessageId == operationId) publications += it
+            }
+        }
+        fixture.messages.answers += MessageTransportResult.NoReceipt
+        fixture.messages.answers += MessageTransportResult.Accepted
+        try {
+            val handOff = async { fixture.repository.handOff(request) }
+            runCurrent()
+            assertEquals(agent, handOff.await())
+            assertEquals(OutboxState.Sent, fixture.store.state(operationId))
+            assertEquals(2, fixture.messages.requests.size)
+            assertEquals(listOf(operationId, operationId), fixture.messages.requests.map { it.opId })
+            assertEquals(listOf(RecordedHandOff("item", agent, "Example agent", operationId)), fixture.inbox.records)
+            assertEquals(1, publications.size)
+
+            fixture.messages.evidence[operationId] = MessageEvidence.Receipt(MessageTransportResult.Accepted)
+            fixture.messages.readyToSend.value = false
+            runCurrent()
+            fixture.messages.readyToSend.value = true
+            runCurrent()
+            assertEquals(2, fixture.messages.requests.size)
+            assertEquals(1, fixture.inbox.records.size)
+            assertEquals(1, publications.size)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun acceptedReceiptAfterShownPublishesOnceWithoutMovingTheMessageBackToSent() = runTest {
+        val fixture = HandOffFixture(backgroundScope, pairing, online = false)
+        try {
+            val handOff = async { fixture.repository.handOff(request) }
+            runCurrent()
+            assertEquals(agent, handOff.await())
+            // Isolate late evidence from transcript publication: a restored Shown row alone still proves nothing.
+            assertTrue(fixture.store.transition(operationId, setOf(OutboxState.WaitingForNetwork), OutboxState.Shown))
+            runCurrent()
+            assertTrue(fixture.inbox.records.isEmpty())
+
+            fixture.messages.evidence[operationId] = MessageEvidence.Receipt(MessageTransportResult.Accepted)
+            fixture.messages.readyToSend.value = true
+            runCurrent()
+            assertEquals(OutboxState.Shown, fixture.store.state(operationId))
+            assertTrue(fixture.messages.requests.isEmpty())
+            assertEquals(listOf(RecordedHandOff("item", agent, "Example agent", operationId)), fixture.inbox.records)
+
+            fixture.messages.readyToSend.value = false
+            runCurrent()
+            fixture.messages.readyToSend.value = true
+            runCurrent()
+            assertEquals(OutboxState.Shown, fixture.store.state(operationId))
+            assertEquals(1, fixture.inbox.records.size)
+            assertTrue(fixture.messages.requests.isEmpty())
+        } finally {
+            fixture.close()
+        }
+    }
+
     @Test fun recordFailureStaysQuietAndKeepsMessageDelivered() = runTest {
         val fixture = HandOffFixture(backgroundScope, pairing, online = true)
         fixture.messages.answers += MessageTransportResult.Accepted
@@ -398,10 +500,15 @@ class InboxHandOffDeliveryRegressionTest {
         }
     }
 
-    private class HandOffFixture(owner: CoroutineScope, pairing: HubScope, online: Boolean) {
+    private class HandOffFixture(
+        owner: CoroutineScope,
+        pairing: HubScope,
+        online: Boolean,
+        supportsClientOps: Boolean = false,
+    ) {
         val events = mutableListOf<String>()
         val store = IdempotentOutboxStore()
-        val messages = ScriptedMessageTransport(online, events)
+        val messages = ScriptedMessageTransport(online, events, supportsClientOps)
         val sender = OutboxMessageSender(pairing, store, messages, owner)
         val inbox = RecordingInboxTransport(pairing.path, events)
         val repository = RealInboxRepository(
@@ -426,9 +533,9 @@ class InboxHandOffDeliveryRegressionTest {
     private class ScriptedMessageTransport(
         online: Boolean,
         private val events: MutableList<String>,
+        override val supportsClientOps: Boolean,
     ) : MessageTransport {
         override val readyToSend = MutableStateFlow(online)
-        override val supportsClientOps = false
         val requests = mutableListOf<MessageRequest>()
         val answers = ArrayDeque<MessageTransportResult>()
         val evidence = mutableMapOf<String, MessageEvidence>()
