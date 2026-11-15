@@ -601,6 +601,9 @@ Android don't decode video yet: they keep RFB and show no switcher.
   the bytes without parsing them. The iOS app's screen-sharing stream carries the pair it will bind to
   (`…/ports/5900/connect?pair=…`, `RFBWebSocket`): 16 random bytes in hex, a new one each connection, so no other
   stream can bind video to it by guessing. Hubs and nodes from before the video channel ignore the parameter.
+  A refused `screen.dial` is the handshake's status: 403 `not_signed_in`, 410 `session_gone`, 429 `busy`, 503
+  `video_unavailable`. A browser can't read that, so with `refusals=close` (the web page, #8320) the hub accepts the
+  WebSocket instead and closes it at once with 4000 + the status and the node's code as the reason (4429 `busy`).
 - **Wire** (length-prefixed messages: u32 big-endian length, u8 type, body). Helper → phone: `hello`, `format`,
   `frame`, `heartbeat`, `paused`, `resumed`, `timing`, `encoding`. Phone → helper: `start`, `report`, `keyframe`, `update`. Unknown types
   are skipped by length, so either side may add more. `PersonaScreenCore` (`apple/Packages/PersonaScreenCore`, its own
@@ -724,8 +727,9 @@ Android don't decode video yet: they keep RFB and show no switcher.
   release carries both and before #6396's iPhone policy the choice would change nothing) and runs only while one display is
   shown: the Mac's only one, or one picked from several the node numbered; all of several displays at once stay RFB.
   It pauses while Picture in Picture shows the screen or the app is in the background (RFB carries the picture then).
-  When VNC shows instead, a line under the bars says why in plain words: the video stopped, the Mac is locked, or the
-  Mac hasn't allowed video yet (`permission` missing, so no stream is opened).
+  When VNC shows instead, a line under the bars says why in plain words: the video stopped, the Mac is locked, the
+  Mac hasn't allowed video yet (`permission` missing, so no stream is opened), or two devices already watch its video
+  (the hub's 429 for the node's `busy`, read from the WebSocket task's response, #8320; tried again as a stopped one).
   Connection Stats (⋯, off by default) reads the video once a second: frames shown and megabits that arrived, the
   helper's capture, encode and network from `timing`, the phone's decode, and their total first when encode, network
   and decode are all known (a helper before `timing` gives the phone's numbers only). With quality tiers (#6396) a Tier
@@ -757,7 +761,7 @@ Android don't decode video yet: they keep RFB and show no switcher.
     clear, and keeps the pointer and keyboard), and a `report` goes back for every frame. While video shows, noVNC's
     update requests are held (`rfb-hold.ts`, a guarded hook on `RFB.messages.fbUpdateRequest`; the last one goes out
     when video stops). The iPhone's rules: video by default where it plays, one display at a time, back to VNC with the
-    same three lines (the Mac locked, video stopped, not allowed with "How to turn it on"), 3 s of silence, 30 s doubling
+    same four lines (the Mac locked, video stopped, not allowed with "How to turn it on", two devices already watching), 3 s of silence, 30 s doubling
     to 5 min, reset after a minute of video, and nothing while the tab is in the background. A decoder that fails on the
     stream before any picture means this browser can't play it: no switcher, no retry on that page.
   - **Connection stats**: video mode shows the iPhone's lines (Video · Via hub · total; with tiers, Tier · Quality ·
