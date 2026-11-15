@@ -44,6 +44,7 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import persona.core.contracts.api.*
 import persona.core.domain.engines.Engines
+import persona.feature.chat.ChatLinkHost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -339,7 +340,7 @@ fun PairingScreen(
         ReadinessScreen(sessions, diagnostics, notificationsOnly = false,
             onDiagnostics = onDiagnostics, onDone = { records.pending(false); onReady() }, onLater = later, onBack = null,
             readiness = mainReadiness, footer = footer)
-    } else PairingListPage(page, onBack = back, state = key(page) { rememberLazyListState() }) {
+    } else PairingLinkHost(hosted = !skipWelcome) { PairingListPage(page, onBack = back, state = key(page) { rememberLazyListState() }) {
         when (page) {
             PairingPage.Welcome -> {
                 item {
@@ -506,10 +507,20 @@ fun PairingScreen(
         notice?.let { id -> item { JNotice(stringResource(id), Modifier.padding(top = Tokens.Space.m)) } }
         item { JTextButton(stringResource(R.string.settings_pairing_saved_title), { info = true }, Modifier.padding(top = Tokens.Space.m)) }
         item { footer() }
-    }
+    } }
     if (info) JDialog(onDismiss = { info = false }, title = stringResource(R.string.settings_pairing_saved_title),
         text = stringResource(R.string.settings_pairing_saved_body),
         confirm = stringResource(R.string.settings_pairing_got_it) to { info = false }, dismiss = null)
+}
+
+/**
+ * The root pairing page sits outside the shell, so no link host exists for the welcome page's guide link; this one gives it
+ * the app's usual link card (full screen, dragged to 0.6 it stops blocking, further down it closes). Pages inside the shell
+ * (Settings › Pairing, Add hub: [hosted] false) already have the shell's host and are not wrapped twice.
+ */
+@Composable
+private fun PairingLinkHost(hosted: Boolean, content: @Composable () -> Unit) {
+    if (hosted) ChatLinkHost { content() } else content()
 }
 
 /** The main action of the welcome page and of the connect choices. */
