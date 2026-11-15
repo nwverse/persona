@@ -70,7 +70,8 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   including a question from a child session folded under it (`sessionCard`). Signing out, or a credential that stops
   working, sends it an empty state, as signing out clears the native notices: nothing of that account stays at the notch.
   The shell keeps a state only as long as the page that sent it: when that page is gone (a hub change destroys its
-  window, its renderer crashes), the island forgets it and stays hidden until a signed-in page sends its own.
+  window, its renderer crashes), the island forgets that page's state, not one a newer page has sent since, and stays
+  hidden until a signed-in page sends its own.
 - **Shell**: `desktop/src/island.ts` draws it from a local page (`island.html`, as the setup window), in a frameless,
   transparent, always-on-top panel that takes no focus and stays on every Space and over full-screen apps, without
   Electron's default of making the whole app a background one for that (no Dock icon or badge; the e2e checks it). The page's

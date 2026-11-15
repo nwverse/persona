@@ -16,6 +16,8 @@ const CLOSE_AFTER_MS = 250;
 export class NotchIsland {
   private window: BrowserWindow | undefined;
   private state: IslandState = EMPTY_ISLAND;
+  /** The webContents id of the page that sent `state`. */
+  private source: number | undefined;
   private open = false;
   private closing: ReturnType<typeof setTimeout> | undefined;
   private readonly placeNow = () => this.render();
@@ -32,20 +34,25 @@ export class NotchIsland {
     return this.status();
   }
 
-  /** The web's latest state; kept while the island is off, so turning it on shows the current counts at once. */
-  setState(value: unknown): void {
+  /** The web's latest state, from page `source`; kept while the island is off, so turning it on shows the current
+   *  counts at once. */
+  setState(value: unknown, source?: number): void {
     const next = islandState(value);
     if (!next) return;
     this.state = next;
+    this.source = source;
     this.render();
   }
 
-  /** Forgets the web's state: the page that sent it is gone (its window closed for another hub, its renderer
-   *  crashed), so nothing of that hub stays at the notch; hidden until a signed-in page sends its own. */
-  clear(): void {
+  /** Forgets page `source`'s state once that page is gone (its window closed for another hub, its renderer crashed),
+   *  so nothing of that hub stays at the notch; hidden until a signed-in page sends its own. A state another page sent
+   *  since stays: a retired window can be destroyed after its replacement has signed in. */
+  forget(source: number): void {
+    if (this.source !== source) return;
     if (this.closing) clearTimeout(this.closing);
     this.closing = undefined;
     this.state = EMPTY_ISLAND;
+    this.source = undefined;
     this.open = false;
     this.render();
   }

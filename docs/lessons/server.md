@@ -49,12 +49,22 @@ connection (`codexHanded`); the hub keeps such a report only from a connection i
 (`codexInventoryHanded`: `hookedAt` equal to the manager's `ConnectedAt`), which also covers older nodes. Write a test
 of the sequence, not only of each side's storage.
 
+## On macOS a process holds inheritable sockets nobody meant to hand on (2026-11-14, #7489)
+
+Sealing what a process was handed (`osproc.SealInherited`, `claimInherited` in `server/internal/hub/listen.go`) does not cover what it makes later, and on macOS two kinds of socket are inheritable without anyone clearing close-on-exec. Go's `accept` there makes the new connection close-on-exec only after the call returns, without `syscall.ForkLock` (`src/internal/poll/sys_cloexec.go` in Go; Linux uses `accept4` with `SOCK_CLOEXEC`): a child started at that moment holds the connection too, and sealing it there keeps it open. The first lookup through the system resolver, Go's default on macOS, leaves a `com.apple.netsrc` kernel control socket open for the life of the process, never close-on-exec: every child started afterwards holds it (`lsof` shows `[ctl com.apple.netsrc …]`).
+
+A test process that has run other tests holds the servers and connections they left, so a test of what a child inherits must not depend on what that process holds: have the process that starts the child seal first, as the real one does, and hand it a stray descriptor of its own to show that it does. `TestPassedSocketsReachNoChild`'s exec helper took only the listeners before its exec and failed now and then in a full `go test ./internal/hub/` on a Mac (`a child got sockets [26]`); with a server accepting in a loop beside it, about one run in 1,500.
+
 ## An empty list sent as null means "no change" to an optional field (2026-11-14)
 
 The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.
 Go marshals a nil slice as `null`, so lifting the last blocked pattern stored none on the hub but left the node blocking
 the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
 empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
+
+## A node binary's name does not prove its platform (2026-11-14, #7206)
+
+The local node package lookup trusted `personad-<os>-<arch>` and `persona-node-<os>-<arch>` filenames without reading the executable, so one misnamed Hub build could be sent to every node of that named platform. Check the Go build info before selecting a local or bundled candidate and ignore a mismatch, allowing the normal release lookup to supply the right build; do not run a cross-platform binary on the Hub. The install path needs its own failure boundary too: verify `.new` before renaming it over the active binary, through direct and nested SSH, and remove it when the check fails. A test that only checks an error message misses whether the old executable survived.
 
 ## An update waits only for what its restart interrupts (2026-11-13, #6364)
 
@@ -572,6 +582,44 @@ urgent activity updates. Defer a wake time, not a payload: at expiry read the la
 fleet, preferences, foreground state and tokens, and recheck after a slow claim.
 Empty/done, an open phone or a fresh update token suppresses a queued start. Restart
 reconstructs its deadline from the durable budget and the current manager snapshot.
+
+## A push-start the phone has not answered is an activity the hub cannot reach (#7641)
+
+A push-to-start reaches the phone through APNs even while the phone cannot reach the hub. The activity starts, its
+update token never comes back, and the hub can neither update nor end it: it goes stale and stays. "No token" is not
+"no activity": starting again each round, and after each restart, only added cards (15 starts in 22 hours, not one
+update or end). Hold the next start until the phone answers (a reported update token, its app connecting) or for as
+long as an activity can run, and keep the hold with the start budget so a restart or the other slot sees it. Put the
+hold on before sending, so an answer that follows at once is what lifts it; a claimed start that was not sent keeps
+only the cooldown. Hold only what may be on screen: a start APNs or the relay refused (any status but 200) put up
+nothing, so lift the hold when that answer comes, or the phone that cannot reach the hub goes 8 hours without an
+activity; only a start with no answer at all is in doubt and keeps it. Keep the send's outcome typed (refused, not
+sent, no answer) rather than a log line, since the transport's retries already blur "failed" into one error. A test
+that never reports a token models this case, not the usual one: have the phone answer where the test is about the
+cooldown. The hub's update and end paths were fine all along; check them with a token before
+looking for a lost push.
+
+The hold and its lift were first written against "the device's current start", on the reasoning that a refusal comes
+within the send's retries, well inside the cooldown. That is a guess about timing, not a guarantee: a slow send, a
+slow store or the slot that is leaving can deliver the write after the next start was claimed, where a late lift
+drops that start's hold and a late hold keeps a refused one back for 8 hours. A write that follows from an event
+says which event: the time the start was claimed at, or the time the phone answered, and the store applies it only
+to a start claimed up to then (`claimed_at <= asOf`, one statement under the row lock). That needs the claim time to
+name one claim, so a claim is refused unless it is later than the last one, whatever the deadline says.
+
+The hub then kept the deadline the store last told it, so as not to ask each round, and dropped it when its own lift
+moved the store's. Two slots share the store through a blue-green switch, and a lift is whichever slot's the phone
+reaches or the refusal comes back to: the other one held on for up to 8 hours on a deadline nobody had any more.
+State another process can move is read where it is kept, each time it decides something; a copy needs a way to hear
+of every writer, and "this process's own writes" is not that. Test it with two hubs over one store, not with a
+restart, which starts from nothing remembered. What the hub still keeps per device is only the last deferral it
+logged, so hours of rounds are one line.
+
+The app connecting lifted the hold by the `device_id` in `register_phone`, and an older app sends none. The id that
+registration falls back to (the connection's credential, then `legacy`) names the phone's tools, not its pushes:
+starts are claimed under the push id, so a lift by the fallback id changes no row and looks done. An id has a
+namespace; resolve the fallback into the ids of the table being written (the devices that credential registered, as
+`wakeDevices` does for the same registrations) and assert on the store's row for a registration without the id.
 
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
@@ -1957,6 +2005,10 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - After the request nothing allocates in an idle process, so no collection runs (`GODEBUG=gctrace=1` shows none in the minute after) and the pages stay. `debug.FreeOSMemory` a second after a body of 8 MiB or more returns them (`memtrim`); the second lets the request's own buffers become garbage first. A rate limit the first body claims leaves a second upload inside the window with nothing: schedule instead. Each body asks for a trim a second after it, trims run 30 s apart at the closest, and one asked for inside the window gets the next turn (`TestEveryLargeBodyGetsATrim`, on a clock moved by hand).
 - Fewer bytes allocated is not a lower peak. The manager's route allocates 64 MiB less, and its peak stayed (192 to 188 MB): what sets it comes before the route, the bus line read by doubling (64 MiB for a 30 MB line) and the envelope's `json.RawMessage` copying the params once more (30 MB), and the last collection before the peak runs at the same heap size either way. Measure the process end to end (`scripts/diag/relay_body_rss.py`), beside the function's benchmark.
 - RSS means different things per system. On Linux the runtime returns pages with `MADV_DONTNEED` and RSS falls at once. On macOS it marks them reusable: the physical footprint (Activity Monitor's Memory, `proc_pid_rusage`) falls at once, RSS only when the kernel takes the pages; and when the Mac is short of memory it compresses an idle process's pages, so RSS falls though nothing was given back (an unchanged build went from 192 to 70 MB by itself in one round of three). Compare builds by RSS and `VmHWM` on Linux and by the footprint on macOS.
+- Run the baseline again before fixing what an older measurement found (2026-11-15). Three days after the note above, the same post took the manager to 110 MB, not 193: #6574 had moved a body of 1 MiB or more off the bus line onto a stream read into one buffer of its size, so the line that note blames was no longer on that path. It still is on others: a manager that takes no body stream (an older one, a stream turned down), a large answer, and the 1 MiB chunks of a file to or from a computer (1.4 MiB lines). To measure the line end to end, compare builds whose manager leaves `http_body_stream` out of its hello (`docs/operations/testing.md`, "A relayed upload's memory"): 199 to 167 MB at the manager's peak (Linux, median of three, measured twice). The pieces are garbage once the line is put together, so the peak falls another 20 MB when a collection takes them back before the route decodes the body: two of three runs of an earlier set did, none of the last six. The bytes allocated are the same in every run (92 to 58 MiB to read the line); where the peak lands follows when the collector runs.
+- A line of unknown length read by doubling costs more than twice its size in buffers (64 MiB for a 30 MB line), each one copied into the next. Past the largest pooled buffer (1 MiB), read on in pieces of that size and put them together once in a buffer of the line's size (`lineReader.line`; `bytes.Join` makes that buffer without clearing it first): the pieces and the line, twice the line whatever its length, and lines up to 1 MiB are read exactly as before (the same bytes allocated with the GC off). Leave a long line's pieces to the GC, its first and last too: a `sync.Pool` keeps what it is given until the second collection, so two 1 MiB buffers given back at the line's end stayed through `memtrim`'s one collection (2.3 MB held after it, 0.2 MB on main, where the same buffer went back early and was gone by then). Only a line of two pieces (a file's 1 MiB chunk is a 1.4 MiB line, and they come one after another) takes both from the pool and gives both back, so each costs its own buffer and no more. A heap bound cannot see one pooled megabyte among megabytes of slack: drain the pool before the line and count what is in it after (`TestLineReaderLeavesNoPiecePooled`). The limit is now a sum over pieces, so take `bufio.Scanner` as the oracle at the limit and one byte either side, with Serve's own 64 MiB too (`TestLineReaderInPiecesIsAScanner`, `TestLineReaderLimitIsServes`), and let the fuzz pick the piece size.
+- `json.RawMessage` copies its value because the input may not stay. A line the reader gave away stays, so its params can be a part of it: a field type with `UnmarshalJSONFrom` keeps what `ReadValue` handed it and `InputOffset`, and afterwards the value's first byte must be the line's own byte at that offset (compare the addresses, not the bytes) or the line is read the old way. `json.Unmarshal` hands the decoder the caller's bytes and never writes to them; nothing documents that the value is a part of them, hence the check. Compare with `json.Unmarshal` into the old struct over a table and a fuzz (null, a key twice, a key in other letters, lines that are not messages), cap the slice so an append cannot write into the line, copy a value that is a small part of its line (whoever keeps it would keep the megabytes around it), and take only lines the reader does not reuse: a test must fail when every line is taken that way (`TestServeHandsOnLongLines` keeps short and medium params until the end).
+- Break each change on purpose and see a test fail. Nine breaks found two holes: nothing failed when short lines' params were left in the reader's buffer, because the test kept only long ones, and a test that read an expected number of results from a channel hung for the package's ten minutes instead of failing when the broken code lost one. Wait on a channel with a bound and say how many came.
 
 ## Hot paths: a node list copied three times, a list marshalled only to be compared (2026-11-10, #2826)
 

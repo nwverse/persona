@@ -28,9 +28,11 @@ data class InboxEventRoute(val itemId: String) : NavKey
 
 /**
  * Opening [record] from the list: its detail for event fields or a chat/mail original, so merely opening it cannot
- * acknowledge the source. Other legacy items retain their own pages. Explicit source links still use [pages] directly.
+ * acknowledge the source. The assistant's own row goes straight to its conversation card. Other legacy items retain
+ * their own pages. Explicit source links still use [pages] directly.
  */
 fun inboxRowPage(record: InboxRecord, pages: InboxItemPages): NavKey {
+    if (record.isAssistantRow) return pages.open(record)
     if (record.event.present) return InboxEventRoute(record.item.id)
     return when (inboxItemPage(record)) {
         is LarkRoute, is MailRoute -> InboxEventRoute(record.item.id)
