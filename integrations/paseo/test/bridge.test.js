@@ -68,6 +68,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
     models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true, same_kind: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent, l.prompt_optional]),
     [['my-claude', 'claude', undefined], ['my-codex', 'codex', true], ['grok', 'paseo', undefined]])
+  assert.deepEqual(node.hello.launchers.map((l) => l.auto_accept), [undefined, undefined, true], "Grok's approval is Paseo's Auto Accept (#8141)")
   assert.deepEqual(node.hello.launchers[0].models, [{ id: 'fable[1m]', name: 'Fable', default: true, efforts: ['low', 'high', 'max'], default_effort: 'max' }])
   const byId = Object.fromEntries(rows().map((r) => [r.session_id, r]))
   assert.deepEqual(Object.keys(byId).sort(), [SID, 'paseo-e1', `paseo-${a.codex.id}`, `paseo-${a.grok.id}`].sort(), 'a Claude agent without a session yet is not listed')
@@ -598,6 +599,15 @@ test("a refusal that comes after the start was answered keeps the session id the
   assert.deepEqual([...fake.agents.values()].filter((e) => e.agent.provider === 'grok' && e.agent.labels['persona.session']).map((e) => [e.agent.id, e.agent.labels['persona.session']]),
     [[second.agentId, placeholder]])
   assert.equal(rows().filter((r) => !known.has(r.session_id) && r.session_id !== placeholder).length, 0, 'no second session id')
+})
+
+test("the row of an agent Paseo is still creating names its provider as its listed row will (#8142)", async (t) => {
+  const { fake, node } = await setup(t)
+  fake.handlers['agent.create.request'] = () => null // Paseo still starting the provider: past the bridge's wait (callWait)
+  const grok = (await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' })).session
+  assert.deepEqual([grok.agent, grok.agent_label, grok.launcher], ['paseo', 'Grok', 'grok'], "a provider the apps don't know: its label, not the engine's name")
+  const claude = (await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })).session
+  assert.deepEqual([claude.agent, claude.agent_label, claude.launcher], ['claude', undefined, 'my-claude'], 'Claude Code: the apps name it themselves')
 })
 
 test('a new session without a usable MCP config is created as before, and the log says why', async (t) => {
@@ -1194,6 +1204,85 @@ test('continuing a session an archived agent keeps: Paseo imports it into that a
   assert.equal(fake.requestsOf('import_agent_request').length, 1)
 })
 
+// Another Claude provider of the machine's, whose agents are not the latest: a takeover by "the latest" picks another.
+const OLD_CLAUDE = {
+  providers: { ...PROVIDERS, 'old-claude': { extends: 'claude', label: 'Old Claude' } },
+  entries: [...ENTRIES, { provider: 'old-claude', enabled: true, status: 'ready', label: 'Old Claude', models: [] }],
+}
+
+test("continuing the Claude session of an archived agent named to the node: Paseo imports it into that agent, with its own provider and folder (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000a1'
+  const day = 86_400_000
+  // Started in Paseo's app on a provider other than the machine's latest, listed under its Claude session, archived.
+  const old = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'closed',
+    archivedAt: new Date(Date.now() - day).toISOString(), updatedAt: new Date(Date.now() - day).toISOString(),
+    persistence: { provider: 'old-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: old, project: PROJECT }] })
+  const pushed = () => node.last('runtime.sessions')
+  await until('named to the node', () => pushed().unlisted_transcripts?.includes(T))
+  const res = await call(node, 'session.start', { cwd: '/nowhere', resume: T })
+  const imp = fake.requestsOf('import_agent_request').at(-1)
+  assert.deepEqual([imp.provider, imp.sessionId, imp.cwd, imp.labels['persona.session']], ['old-claude', T, '/tmp', T],
+    "its own provider and directory: Paseo's record of it")
+  assert.equal(res.session.session_id, T)
+  assert.deepEqual([fake.agents.get(old.id).agent.archivedAt, fake.agents.size], [null, 6], 'the same agent, back: no second one')
+  await until('listed again', () => rows().some((r) => r.session_id === T))
+  await until('named no more', () => !pushed().unlisted_transcripts?.includes(T))
+})
+
+test("two agents on one Claude session are one conversation: under the older one's id, the newer one gets the messages, unless the older one is at work (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000b1'
+  const ago = (ms) => new Date(Date.now() - ms).toISOString()
+  const claudeOn = (provider) => ({ provider, sessionId: T, metadata: { provider: 'claude' } })
+  // Started from Persona on one provider, then moved by Paseo to another: a new agent on the same Claude session.
+  const older = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(3_600_000),
+    updatedAt: ago(1_800_000), labels: { 'persona.session': 'paseo-b1' }, persistence: claudeOn('my-claude') })
+  const newer = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(600_000),
+    updatedAt: ago(600_000), persistence: claudeOn('old-claude') })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: older, project: PROJECT }, { agent: newer, project: PROJECT }] })
+  const ours = () => rows().filter((r) => r.session_id === 'paseo-b1' || r.session_id === T)
+  await until('listed', () => ours().length > 0)
+  assert.deepEqual(ours().map((r) => [r.session_id, r.launcher]), [['paseo-b1', 'old-claude']], "one row, under the id Persona knows it by: the newer agent's")
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'go on' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id, 'to the newer agent')
+
+  // The older one at work (its turn was still going in Paseo's app): the message goes to it, no second writer starts.
+  fake.update(older.id, { status: 'running' })
+  await until('the one at work', () => ours()[0]?.launcher === 'my-claude')
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'and the tests' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, older.id)
+  fake.update(older.id, { status: 'idle' })
+  await until('the newer one again', () => ours()[0]?.launcher === 'old-claude')
+
+  // Both archived: one row, not running, under the same id; a message takes the newer one back from the archive.
+  fake.archive(older.id)
+  fake.archive(newer.id)
+  await until('archived', () => ours().length === 1 && ours()[0].status === 'offline')
+  assert.deepEqual(ours().map((r) => [r.session_id, r.launcher]), [['paseo-b1', 'old-claude']])
+  assert.equal(node.last('runtime.sessions').unlisted_transcripts?.includes(T), false, 'its transcript is no second row')
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'once more' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id)
+})
+
+test("an agent on the Claude session of an older one archived before the bridge started takes that one's id once Paseo's archive is read (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000c1'
+  const ago = (ms) => new Date(Date.now() - ms).toISOString()
+  const older = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'Fix the build', status: 'closed', createdAt: ago(7_200_000),
+    archivedAt: ago(3_600_000), updatedAt: ago(3_600_000), labels: { 'persona.session': 'paseo-c1' },
+    persistence: { provider: 'my-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const newer = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(1_800_000),
+    updatedAt: ago(1_800_000), persistence: { provider: 'old-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: older, project: PROJECT }, { agent: newer, project: PROJECT }] })
+  await until('listed under the older id', () => rows().some((r) => r.session_id === 'paseo-c1'))
+  assert.equal(rows().some((r) => r.session_id === T), false, 'no row under the Claude session')
+  assert.equal(rows().find((r) => r.session_id === 'paseo-c1').status, 'idle', "the newer agent's row, not the archived one's")
+  await call(node, 'session.send', { session_id: 'paseo-c1', text: 'go on' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id)
+})
+
 test("Paseo's archive at connect: archived agents that keep their id are rows, the latest of the week beside the list's limit; the agents Paseo lists come first; a deleted one leaves", async (t) => {
   const day = 86_400_000
   const transcript = (n) => `ffffffff-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -1615,6 +1704,52 @@ test("an Agent Persona started calls its own Persona tools without a card; every
     ['paseo-e1', 'mcp__persona__dispatch_start'], ['paseo-e1', 'mcp__persona__phone_notify'], [SID, 'mcp__persona__report_to_supervisor'],
   ].sort())
   assert.equal(fake.requestsOf('set_agent_mode_request').length, 0)
+})
+
+test("an Agent Persona started on any provider calls its own Persona tools without a card: Grok, OpenCode, Codex (#8141)", async (t) => {
+  const own = ['mcp__persona__report_to_supervisor', 'mcp__persona__todo_decision_add']
+  const providers = { ...PROVIDERS, opencode: {} }
+  const entries = [...ENTRIES, { provider: 'opencode', enabled: true, status: 'ready', label: 'OpenCode', models: [] }]
+  const { fake, node, a, rows } = await setup(t, { allowTools: own, providers, entries })
+  node.resolve = () => ({ allow: true })
+  const started = (provider, sid) => {
+    const x = agentSnapshot({ provider, cwd: '/tmp', title: sid, status: 'running', labels: { 'persona.session': sid } })
+    fake.upsert(x, PROJECT)
+    return x
+  }
+  const grok = started('grok', 'paseo-g1')
+  const opencode = started('opencode', 'paseo-o1')
+  const codex = started('my-codex', 'paseo-c1')
+  await until('listed', () => ['paseo-g1', 'paseo-o1', 'paseo-c1'].every((id) => rows().some((r) => r.session_id === id)))
+  // Grok over ACP names an MCP tool in its input; OpenCode by <server>_<tool>; Codex in its approval of the server.
+  const useTool = (tool) => ({ type: 'unknown', input: { variant: 'UseTool', tool_name: tool, tool_input: { kind: 'done', text: 'x' } }, output: null })
+  const elicitation = (server, tool) => ({ provider: 'codex', name: 'CodexMcpElicitation', kind: 'tool', title: `MCP approval: ${server}`,
+    description: `Allow the ${server} MCP server to run tool "${tool}"?`, input: { mode: 'form', requestedSchema: null, url: null },
+    metadata: { threadId: 'th-1', turnId: null, serverName: server, elicitationId: null } })
+  const mine = [
+    [grok.id, { id: 'g-own', provider: 'acp', name: 'other', kind: 'tool', title: 'Use tool', detail: useTool('persona__report_to_supervisor') }],
+    [opencode.id, { id: 'o-own', provider: 'opencode', name: 'persona_todo_decision_add', kind: 'tool', title: 'Persona todo decision add', input: {} }],
+    [codex.id, { id: 'c-own', ...elicitation('persona', 'report_to_supervisor') }],
+  ]
+  for (const [agentId, request] of mine) fake.permission(agentId, request)
+  await until('the own tools answered', () => fake.requestsOf('agent_permission_response').length === mine.length)
+  assert.deepEqual(fake.requestsOf('agent_permission_response').map((r) => [r.requestId, r.response]).sort(),
+    [['c-own', { behavior: 'allow' }], ['g-own', { behavior: 'allow' }], ['o-own', { behavior: 'allow' }]], 'allowed once each: no rule kept, no mode set')
+  // Still asked: another of Persona's tools in those Agents, another server's tool of the same name, and any tool of an
+  // agent made in Paseo's own app.
+  const asks = [
+    [grok.id, { id: 'g-phone', provider: 'acp', name: 'other', kind: 'tool', title: 'Use tool', detail: useTool('persona__phone_notify') }],
+    [opencode.id, { id: 'o-phone', provider: 'opencode', name: 'persona_phone_notify', kind: 'tool', title: 'Persona phone notify', input: {} }],
+    [codex.id, { id: 'c-other', ...elicitation('other', 'report_to_supervisor') }],
+    [a.grok.id, { id: 'g-mine', provider: 'acp', name: 'other', kind: 'tool', title: 'Use tool', detail: useTool('persona__report_to_supervisor') }],
+  ]
+  for (const [agentId, request] of asks) fake.permission(agentId, request)
+  await until('the others asked', () => node.asked.length === asks.length)
+  assert.deepEqual(node.asked.map((ix) => [ix.session_id, ix.tool_name]).sort(), [
+    ['paseo-c1', 'CodexMcpElicitation'], ['paseo-g1', 'mcp__persona__phone_notify'], ['paseo-o1', 'persona_phone_notify'],
+    [`paseo-${a.grok.id}`, 'mcp__persona__report_to_supervisor'],
+  ].sort())
+  assert.equal(fake.requestsOf('set_agent_mode_request').length + fake.requestsOf('set_agent_feature_request').length, 0)
 })
 
 for (const toolName of ['mcp__persona__report_to_supervisor', 'mcp__jarvis__report_to_supervisor']) {
