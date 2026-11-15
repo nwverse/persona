@@ -100,7 +100,7 @@ internal fun newAgentUploads(context: Context, source: ChatWiringSource) = NewAg
     },
     photosOnly = { context.getString(ChatR.string.chat_composer_photos_only) },
     filesOnly = { context.getString(ChatR.string.chat_composer_files_only) },
-    errorText = { name, error -> uploadFailure(name, error).resolve(context.resources) },
+    errorText = { name, error -> uploadFailureRow(name, error).resolve(context.resources) },
     discard = { attachment ->
         if (attachment.uri.isNotEmpty()) CoroutineScope(Dispatchers.IO).launch { deleteCapture(context, attachment.uri) }
     },
@@ -301,6 +301,17 @@ internal fun uploadFailure(name: String, error: Exception): AgentText =
         CoreText.Key.UploadTooLarge, CoreText.Key.ComposerFileTooLarge -> AgentText(ChatR.string.chat_attach_too_large, name)
         CoreText.Key.UploadNodeOutdated, CoreText.Key.UploadHubUnsupported -> AgentText(R.string.agents_text_raw, failureReasonText(error))
         else -> AgentText(R.string.agents_attach_upload_failed, name, failureReasonText(error))
+    }
+
+/**
+ * A retained row's title is already the file's name and the notice says the whole failure once; the row says only why.
+ * Size and version refusals keep their complete sentences from [uploadFailure] because those sentences are the reason.
+ */
+internal fun uploadFailureRow(name: String, error: Exception): AgentText =
+    when ((error as? CoreTextFailure)?.text?.key) {
+        CoreText.Key.UploadTooLarge, CoreText.Key.ComposerFileTooLarge,
+        CoreText.Key.UploadNodeOutdated, CoreText.Key.UploadHubUnsupported -> uploadFailure(name, error)
+        else -> AgentText(R.string.agents_text_raw, failureReasonText(error))
     }
 
 /**

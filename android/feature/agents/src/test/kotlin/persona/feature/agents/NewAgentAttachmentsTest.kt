@@ -1,6 +1,9 @@
 package persona.feature.agents
 
+import android.content.res.Configuration
+import android.content.res.Resources
 import androidx.lifecycle.viewModelScope
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +14,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import persona.core.contracts.CoreText
 import persona.core.contracts.HubScope
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
@@ -18,6 +25,9 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import persona.core.domain.AttachedFile
 import persona.core.domain.ComposerMessage
+import persona.core.designsystem.failureReasonText
+import persona.core.hub.HubError
+import persona.core.hub.HubFailure
 import persona.feature.chat.ChatAppBindings
 import persona.feature.chat.ChatComposerDraft
 import persona.feature.chat.ChatComposerState
@@ -26,15 +36,24 @@ import persona.feature.chat.ComposerAttachment
 import java.io.File
 import java.io.IOException
 import java.lang.reflect.Proxy
+import java.util.Locale
 
 /**
  * New Agent's attachments (#2321, iOS NewAgentAttachments): the first message written as the composer writes it, uploads
  * through the chat's service of the machine's hub group, the Codex rule, failures and retries, removal and another
  * computer picked.
  */
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [35], qualifiers = "en")
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class NewAgentAttachmentsTest {
+    private val resources get() = RuntimeEnvironment.getApplication().resources
     private val machines = MutableStateFlow(listOf(Machine("first", "MacBook", online = true), Machine("second", "Studio", online = true)))
+
+    private fun localizedResources(language: String): Resources {
+        val configuration = Configuration(resources.configuration).apply { setLocale(Locale.forLanguageTag(language)) }
+        return RuntimeEnvironment.getApplication().createConfigurationContext(configuration).resources
+    }
 
     private fun test(block: suspend TestScope.() -> Unit) = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
@@ -45,6 +64,45 @@ class NewAgentAttachmentsTest {
         ComposerAttachment(id, "$id.heic", "content://media/$id", image = true, path = path, uploadState = if (path != null) DraftUploadState.Uploaded else DraftUploadState.Pending)
     private fun file(id: String, path: String? = null) =
         ComposerAttachment(id, id, "content://docs/$id", image = false, path = path, size = 2048, uploadState = if (path != null) DraftUploadState.Uploaded else DraftUploadState.Pending)
+
+    @Test fun aGenericUploadFailureRowSaysOnlyWhy() {
+        val errors = listOf(
+            HubFailure(HubError.Unreachable),
+            HubFailure(HubError.Server, "No space left on the computer", status = 507, code = "insufficient_storage"),
+            IOException("The computer refused it"),
+        )
+        for (error in errors) {
+            val row = uploadFailureRow("build.log", error).resolve(resources)
+            assertEquals(failureReasonText(error).resolve(resources), row)
+            assertFalse(row.contains("build.log"))
+            assertFalse(row.contains("Couldn't send"))
+        }
+        assertEquals("No space left on the computer", uploadFailureRow("build.log", errors[1]).resolve(resources))
+    }
+
+    @Test fun sizeAndVersionRefusalRowsKeepTheWholeReason() {
+        val refusals = listOf(
+            CoreText.of(CoreText.Key.UploadTooLarge),
+            CoreText.of(CoreText.Key.ComposerFileTooLarge, 200),
+            CoreText.of(CoreText.Key.UploadNodeOutdated),
+            CoreText.of(CoreText.Key.UploadHubUnsupported),
+        )
+        for (refusal in refusals) {
+            val error = ComposerOperationException(refusal)
+            assertEquals(uploadFailure("build.log", error), uploadFailureRow("build.log", error))
+            assertEquals(uploadFailure("build.log", error).resolve(resources), uploadFailureRow("build.log", error).resolve(resources))
+        }
+    }
+
+    @Test fun anUnreachableHubRowUsesTheScreensLanguage() {
+        val error = HubFailure(HubError.Unreachable)
+        val expected = mapOf("en" to "Can't reach the hub", "zh-Hans" to "连不上 hub", "ja" to "ハブに接続できません")
+        for ((language, words) in expected) {
+            val localized = localizedResources(language)
+            assertEquals(words, failureReasonText(error).resolve(localized))
+            assertEquals(words, uploadFailureRow("build.log", error).resolve(localized))
+        }
+    }
 
     @Test fun theFirstMessageIsWrittenAsTheComposerWritesItsMessages() {
         val photosOnly = "Please look at the photos"
@@ -207,7 +265,7 @@ class NewAgentAttachmentsTest {
     }
 
     @Test fun aFailedFileStaysWithItsReasonAndRetriesWithoutLosingTheWords() = test {
-        val composer = Composer().apply { failures = 1 }
+        val composer = Composer().apply { failures = 1; failure = HubFailure(HubError.Server, "The computer refused it", status = 507) }
         val service = Service()
         val discarded = mutableListOf<String>()
         val source = Source(composer)
@@ -220,13 +278,19 @@ class NewAgentAttachmentsTest {
             model.attach(listOf(file("build.log")))
             advanceUntilIdle()
             val failed = model.state.value.attachments.single()
+            val error = HubFailure(HubError.Server, "The computer refused it", status = 507)
+            val reason = failureReasonText(error).resolve(resources)
             assertEquals("build.log", failed.id)
             assertEquals(DraftUploadState.Failed, failed.uploadState)
-            assertTrue(failed.error!!.contains("The computer refused it"))
+            assertEquals(reason, failed.error)
+            assertFalse(failed.error!!.contains("build.log"))
+            assertFalse(failed.error!!.contains("Couldn't send"))
             assertTrue(discarded.isEmpty())
             val said = notices.single()
             assertEquals(R.string.agents_attach_upload_failed, said.id)
             assertEquals("build.log", said.args.first())
+            assertEquals(uploadFailure("build.log", error).resolve(resources), said.resolve(resources))
+            assertEquals("Couldn't send “build.log”: The computer refused it", said.resolve(resources))
             assertEquals(R.string.agents_attach_uploading_hold, model.state.value.attachmentsHold?.id)
             assertEquals("看日志", model.state.value.prompt)
 
@@ -448,7 +512,7 @@ class NewAgentAttachmentsTest {
         },
         photosOnly = { "Please look at the photos" },
         filesOnly = { "Please look at the attached files" },
-        errorText = { name, error -> "$name: ${error.message}" },
+        errorText = { name, error -> uploadFailureRow(name, error).resolve(resources) },
         discard = { discarded += it.id },
     )
 
@@ -456,6 +520,7 @@ class NewAgentAttachmentsTest {
         override val deliveries = MutableStateFlow<Map<String, ComposerDelivery>>(emptyMap())
         val uploads = mutableListOf<Pair<SessionKey, String>>()
         var failures = 0
+        var failure: Exception = IOException("Upload failed")
         var gate: CompletableDeferred<Unit>? = null
         /** Only uploads to this computer wait for [gate]; null: all of them. */
         var gateMachine: String? = null
@@ -469,7 +534,7 @@ class NewAgentAttachmentsTest {
             try {
                 if (gateMachine == null || gateMachine == session.machineId) gate?.await()
                 refusal?.let { throw it }
-                if (failures > 0) { failures--; throw IOException("The computer refused it") }
+                if (failures > 0) { failures--; throw failure }
                 return if (session.machineId == "first") "/up/$name" else "/up/${session.machineId}/$name"
             } finally { active-- }
         }
