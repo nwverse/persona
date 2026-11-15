@@ -989,6 +989,9 @@ function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: b
   return <WaitingTaskRow rowKey={rowKey} todo={todo} status={status} countsOpenAttr={taskOpenAttr} />;
 }
 
+/** The buttons under a Needs you task row's words (Continue; Retry and Remove), lined up with them. */
+const ROW_ACTIONS = "flex items-center gap-4 pl-6 text-[12.5px]";
+
 /** A task in Needs you that only waits (#8237): cut off by the model service, with why and Continue (its receipt card's
  *  until then); waiting for review, with what it handed in; else what it waits for. The title opens the task. */
 function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr }: { rowKey?: string; todo: Todo; status: TodoStatus; countsOpenAttr: { "data-counts-open"?: string } }) {
@@ -1011,7 +1014,7 @@ function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr }: { rowKey?: str
       </div>
       {line && <div className={cx("truncate pl-6 text-xs", cutOff ? "text-ink" : "text-ink-2")}>{line}</div>}
       {canContinue && (
-        <div className="flex items-center gap-4 pl-6 text-[12.5px]">
+        <div className={ROW_ACTIONS}>
           <button type="button" data-continue-task={todo.id} disabled={retrying} onClick={() => retryTaskNow(todo, "continue")} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-ink hover:underline disabled:opacity-50 disabled:hover:no-underline">
             <Icon name="retry" size={12} />
             {retrying ? t("assistant-tasks.retrying") : t("assistant-tasks.continue")}
@@ -1036,7 +1039,7 @@ function FailedTaskRow({ rowKey, todo, countsOpenAttr }: { rowKey: string; todo:
       </div>
       {/* in plain words; the hub's raw error is the task's details' (#8237) */}
       {why && <div className="truncate pl-6 text-xs text-ink">{startFailureRowLine(why)}</div>}
-      <div className="flex items-center gap-4 pl-6 text-[12.5px]">
+      <div className={ROW_ACTIONS}>
         <button type="button" disabled={retrying} onClick={() => retryTaskNow(todo)} className="touch-hit inline-flex items-center gap-1 whitespace-nowrap font-semibold text-ink hover:underline disabled:opacity-50 disabled:hover:no-underline">
           <Icon name="retry" size={12} />
           {retrying ? t("assistant-tasks.retrying") : t("assistant-tasks.retry")}

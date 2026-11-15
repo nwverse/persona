@@ -123,22 +123,17 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
       ) : (
         <span className="truncate text-[12px] leading-4 text-ink-3">{t("assistant-tasks.handoff_not_active")}</span>
       )}
+      {(cut || state) && <span aria-hidden className="shrink-0 text-[12px] leading-4 text-ink-3">·</span>}
       {cut ? (
-        <>
-          <span aria-hidden className="shrink-0 text-[12px] leading-4 text-ink-3">·</span>
-          <span data-handoff-interrupted className="inline-flex min-w-0 items-center gap-1 text-[12px] leading-4 text-red">
-            <Icon name="info" size={12} className="shrink-0" />
-            <span className="truncate">{`${TODO_STATUS_INFO.interrupted.label} · ${cut.reason}`}</span>
-          </span>
-        </>
+        <span data-handoff-interrupted className="inline-flex min-w-0 items-center gap-1 text-xs text-red">
+          <Icon name="info" size={12} className="shrink-0" />
+          <span className="truncate">{`${TODO_STATUS_INFO.interrupted.label} · ${cut.reason}`}</span>
+        </span>
       ) : state && (
-        <>
-          <span aria-hidden className="shrink-0 text-[12px] leading-4 text-ink-3">·</span>
-          <span data-handoff-state={state} className={cx("inline-flex shrink-0 items-center gap-1 text-[12px] leading-4", state === "needs_you" ? "text-attention" : "text-ink-2")}>
-            <StatusMark state={state} size="sm" label={false} />
-            {stateName(state)}
-          </span>
-        </>
+        <span data-handoff-state={state} className={cx("inline-flex shrink-0 items-center gap-1 text-[12px] leading-4", state === "needs_you" ? "text-attention" : "text-ink-2")}>
+          <StatusMark state={state} size="sm" label={false} />
+          {stateName(state)}
+        </span>
       )}
     </>
   ) : failure ? (
