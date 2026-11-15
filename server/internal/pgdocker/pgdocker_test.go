@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -153,8 +154,25 @@ func TestCreateRunsPostgresWithServerArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(dbSh), "\n    "+Image+" "+strings.Join(ServerArgs, " ")+" >/dev/null\n") {
-		t.Errorf("scripts/deploy/db.sh does not start %s with %v", Image, ServerArgs)
+	// The words after the image on the line that starts with it, up to the first shell operator, are the server's
+	// arguments: compared as words, so a missing, changed or added one fails, and what follows them (a redirect, the
+	// `; then` of the failed-install cleanup, #8555) does not matter (#8624).
+	runs := 0
+	for _, line := range strings.Split(string(dbSh), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), Image+" ")
+		if !ok {
+			continue
+		}
+		runs++
+		if i := strings.IndexAny(rest, "><;&|\\"); i >= 0 {
+			rest = rest[:i]
+		}
+		if got := strings.Fields(rest); !slices.Equal(got, ServerArgs) {
+			t.Errorf("scripts/deploy/db.sh starts %s with %v, want %v", Image, got, ServerArgs)
+		}
+	}
+	if runs == 0 {
+		t.Errorf("scripts/deploy/db.sh does not start %s", Image)
 	}
 }
 
