@@ -3,6 +3,7 @@ import HealthKit
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// The registry is main-actor isolated (the app target defaults to MainActor),
 /// so every test that touches a tool runs on the main actor.
@@ -76,6 +77,8 @@ struct PhoneToolsTests {
             "phone_location_search",
             "phone_health_summary",
             "phone_health_write_sample",
+            "phone_workouts_recent",
+            "phone_workout_detail",
             "phone_photos_recent",
             "phone_photo_get",
             "phone_device_info",

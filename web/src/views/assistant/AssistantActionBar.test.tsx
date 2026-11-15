@@ -1,18 +1,21 @@
 // @vitest-environment jsdom
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
+import { loadPages } from "../../lib/lazy-page";
 import { putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
+import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import type { Interaction, Session } from "../../lib/types";
 import { AssistantActionBar, DOCK_CAPSULE, FeedLineView, TaskDock } from "./Tasks";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+beforeAll(() => loadPages(), 60_000);
 const at = "2026-11-10T08:00:00Z";
 // "Now" for every case: an hour after the fixtures, not the real clock, by which they would be long shelved
 // (SHELVE_AFTER_MS, lib/todo-triage.ts) and the trays would leave them out (#5531). Only Date is faked: timers stay real.
@@ -47,7 +50,7 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (init?.method && init.method !== "GET") writes.push(path);
-    const body = path.includes("/feed") ? { items: feed, plans: { [plan.id]: plan }, task_cards: [{ id: `plan:${plan.id}:0`, plan_id: plan.id, index: 0, todo_id: todo.id, at, updated_at: at, state: "accepted" }] } : path.includes("/todos") ? { todos: [todo, ...moreTodos] } : path.includes("/sessions") ? { sessions: [{ machine_id: "demo", session_id: "worker", title: "Demo agent", state: "working", status: "working", updated_at: at }, ...moreSessions] } : path.includes("/interactions") ? { interactions: moreInteractions } : /\/assistant(\?|$)/.test(path) && mainChat ? { machine_id: "demo", main: mainChat, conversations: [] } : {};
+    const body = path.includes("/push/ln-mode") ? { enabled: false } : path.includes("/feed") ? { items: feed, plans: { [plan.id]: plan }, task_cards: [{ id: `plan:${plan.id}:0`, plan_id: plan.id, index: 0, todo_id: todo.id, at, updated_at: at, state: "accepted" }] } : path.includes("/todos") ? { todos: [todo, ...moreTodos] } : path.includes("/sessions") ? { sessions: [{ machine_id: "demo", session_id: "worker", title: "Demo agent", state: "working", status: "working", updated_at: at }, ...moreSessions] } : path.includes("/interactions") ? { interactions: moreInteractions } : /\/assistant(\?|$)/.test(path) && mainChat ? { machine_id: "demo", main: mainChat, conversations: [] } : {};
     return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
   }));
   await act(async () => {
@@ -73,6 +76,16 @@ afterEach(() => {
   delete getFeedState().taskCards[conversation];
   vi.unstubAllGlobals();
 });
+const settleHeldPushRead = async () => {
+  await act(async () => {
+    vi.advanceTimersByTime(0);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  const fetchMock = vi.mocked(fetch);
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/push/ln-mode"))).toBe(true);
+};
+
 const entries = () => [...host.querySelectorAll<HTMLButtonElement>("[data-assistant-actionbar] [data-tray-entry]")];
 const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assistant-actionbar] [data-tray-entry="${key}"]`)!;
 
@@ -134,6 +147,71 @@ describe("Assistant Needs you / In progress trays", () => {
     });
     act(() => entry("running").click());
     expect(host.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.status_starting"));
+    expect(host.querySelector("[data-task-slot] .status-mark")!.getAttribute("data-state")).toBe("working");
+  });
+
+  /** The In progress row titled title, and the dock's pill titles. */
+  const trayRow = (title: string) => [...host.querySelectorAll<HTMLElement>("[data-task-slot]")].find((row) => row.querySelector(".font-semibold")?.textContent === title);
+  const dockTitles = () => {
+    const dockHost = document.createElement("div");
+    document.body.append(dockHost);
+    const dockRoot = createRoot(dockHost);
+    act(() => dockRoot.render(<TaskDock conversation={conversation} />));
+    const titles = [...dockHost.querySelectorAll("button .truncate")].map((el) => el.textContent);
+    act(() => dockRoot.unmount());
+    dockHost.remove();
+    return titles;
+  };
+
+  it("says Not started, with a still mark and no dock pill, on a to-do nobody dispatched (#7552)", async () => {
+    // a to-do of this conversation (a leader's piece, a todo_create) with no Agent, no plan and no start: nothing is starting
+    moreTodos = [{ id: "own-todo", title: "Decide the release", origin: conversation, created_at: at, updated_at: at, agents: [] }];
+    await act(async () => {
+      await refreshTodos();
+    });
+    act(() => entry("running").click());
+    const row = trayRow("Decide the release")!;
+    expect(row.querySelector("[data-task-status]")!.textContent).toBe(stateName("not_started"));
+    expect(row.querySelector(".status-mark")!.getAttribute("data-state")).toBe("offline");
+    // still a row of In progress, counted open as the To-dos page counts it (#3331)
+    expect(row.getAttribute("data-counts-open")).toBe("true");
+    expect(dockTitles()).not.toContain("Decide the release");
+  });
+
+  it("says Starting while a plan that took over a to-do starts its Agent, and moves it to Needs you once that start failed (#7552)", async () => {
+    // a to-do a plan reuses keeps no plan_id (tasks_recover.go): the plan's task names it
+    const reuse: TaskPlan = { id: "reuse-plan", conversation, state: "started", created_at: at, tasks: [{ title: "Reused", prompt: "Go on", cwd: "/demo", machine: "demo", todo_id: "reused-todo" }] };
+    getFeedState().plans[reuse.id] = reuse;
+    moreTodos = [{ id: "reused-todo", title: "Carry on the work", origin: conversation, created_at: at, updated_at: at, agents: [] }];
+    await act(async () => {
+      await refreshTodos();
+    });
+    act(() => entry("running").click());
+    expect(trayRow("Carry on the work")!.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.status_starting"));
+    expect(trayRow("Carry on the work")!.querySelector(".status-mark")!.getAttribute("data-state")).toBe("working");
+    expect(dockTitles()).toContain("Carry on the work");
+    // the hub ends a failed start with done_at and start_error (#1077): the owner's to retry, in Needs you
+    moreTodos = [{ ...moreTodos[0], done_at: at, start_error: "the computer is offline" }];
+    await act(async () => {
+      await refreshTodos();
+    });
+    expect(trayRow("Carry on the work")).toBeUndefined();
+    act(() => entry("needs").click());
+    expect(host.querySelector('[data-needs-row="task:reused-todo"]')?.textContent).toContain("Carry on the work");
+    delete getFeedState().plans[reuse.id];
+  });
+
+  it("says Not started on the owner's own to-do in the main conversation's In progress (#7552)", async () => {
+    mainChat = conversation;
+    moreTodos = [{ id: "owner-todo", title: "Book the dentist", created_at: at, updated_at: at, agents: [] }];
+    await act(async () => {
+      await refresh();
+      await refreshTodos();
+    });
+    act(() => entry("running").click());
+    const row = trayRow("Book the dentist")!;
+    expect(row.querySelector("[data-task-status]")!.textContent).toBe(stateName("not_started"));
+    expect(row.querySelector(".status-mark")!.getAttribute("data-state")).not.toBe("working");
   });
 
   it("keeps two entries in order, collapses by default and replaces conversation cards with the dispatch's hand-off card", () => {
@@ -412,6 +490,7 @@ describe("Assistant Needs you / In progress trays", () => {
       await refresh();
       for (const s of moreSessions) upsertSession(s);
     });
+    await settleHeldPushRead();
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}2`]);
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="agent:demo/by-hand-asks"]')?.textContent).toContain("Keep the old file?");
@@ -435,6 +514,7 @@ describe("Assistant Needs you / In progress trays", () => {
       await refresh();
       upsertSession(moreSessions[0]);
     });
+    await settleHeldPushRead();
     act(() => entry("needs").click());
     await openRows();
     const row = host.querySelector<HTMLElement>(`[data-needs-row="${kind === "task" ? "task:tray-task" : "agent:demo/by-hand-asks"}"]`)!;
