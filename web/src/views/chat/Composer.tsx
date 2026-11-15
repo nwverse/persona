@@ -5,7 +5,7 @@ import { storedValue } from "../../lib/compatibility";
 // Its bottom row is cindy's toolbar (#5324, at the owner's request): a bare round + that opens the + / @ panel
 // (ComposerPanel.tsx) and the `leading` permission picker on the left; the model pill, a second Stop while the agent
 // works and something is typed, voice and one round Send / Queue / Stop button on the right.
-import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
 import { useSavedPromptRows } from "../../lib/saved-prompt-rows";
@@ -34,6 +34,7 @@ import { ContextChips } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
+import { SkillCatalogStatus } from "./SkillCatalogStatus";
 import type { SlashPaletteHandle } from "./SlashPalette";
 import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
@@ -51,8 +52,16 @@ const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.Com
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
-// The "/" palette (cindy's, #5325), drawn once "/" is typed: its own chunk, with skill details on a second intent chunk.
-const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette));
+// The command palette is idle-preloaded as before; only its optional skill-aware stage waits for "/" intent.
+const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette), { idle: true });
+const SlashSkillPalette = lazyPage(() => import("./SlashSkillPalette").then((m) => m.SlashSkillPalette));
+
+/** A stale/offline optional skill chunk leaves the already available command palette usable. */
+class SlashSkillBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? this.props.fallback : this.props.children; }
+}
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
 const NUDGE_MS = 4000;
 
@@ -469,8 +478,16 @@ export const Composer = memo(function Composer({
   // the "/" palette opens on a lone "/word" wherever there are commands or this chat can offer skills
   const slashOpen = query !== null && (allCommands.length > 0 || Boolean(mention?.skills));
   const rows = useMemo(() => (slashOpen ? rankCommands(allCommands, query) : []), [slashOpen, query, allCommands]);
-  useEffect(() => setActive(0), [query]);
+  useEffect(() => setActive(0), [query, skillEnvironment]);
   const closeSlash = useCallback(() => setDismissed(true), []);
+  useEffect(() => {
+    if (!slashOpen) return;
+    const down = (e: Event) => {
+      if (!box.current?.contains(e.target as Node)) closeSlash();
+    };
+    document.addEventListener("pointerdown", down, true);
+    return () => document.removeEventListener("pointerdown", down, true);
+  }, [slashOpen, closeSlash]);
 
   // @: the token just before the caret (lib/mentions.ts)
   const token = mention && focused && !dismissed && query === null && caret <= draft.length ? mentionAt(draft, caret) : null;
@@ -788,6 +805,8 @@ export const Composer = memo(function Composer({
     pickRow({ kind: "skill", id: `skill:${skill.id}`, skill }, { start: 0, end: draft.length, query: query ?? "" });
   };
 
+  const slashProps = { rows, active, onHover: setActive, onPick: pick, query: query ?? "", source: mention, machineId, onSkillPick: pickSlashSkill, handle: slashPanel };
+  const commandPalette = (status?: "loading" | "error") => <SlashPalette {...slashProps} skillsLoading={status === "loading"} status={<SkillCatalogStatus status={status} />} />;
   const MentionPanel = mention?.skills ? AssistantComposerPanel : ComposerPanel;
   return (
     <div
@@ -812,7 +831,13 @@ export const Composer = memo(function Composer({
     >
       {slashOpen && (
         <Suspense fallback={null}>
-          <SlashPalette rows={rows} active={active} onHover={setActive} onPick={pick} onClose={closeSlash} within={box} query={query ?? ""} source={mention} machineId={machineId} onSkillPick={pickSlashSkill} handle={slashPanel} />
+          {mention?.skills ? (
+            <SlashSkillBoundary fallback={commandPalette("error")}>
+              <Suspense fallback={commandPalette("loading")}>
+                <SlashSkillPalette {...slashProps} />
+              </Suspense>
+            </SlashSkillBoundary>
+          ) : commandPalette()}
         </Suspense>
       )}
 
@@ -927,14 +952,16 @@ export const Composer = memo(function Composer({
               if (e.key === "Escape") e.stopPropagation();
               return;
             }
+            // A highlighted skill wins over the text shortcuts: /model and /permissions are also valid skill names.
+            const slashSkillActive = slashOpen && slashPanel.current?.skillActive();
             // `/model` alone opens the model panel instead of sending (where the agent switches models)
-            if (enterSends(e, hasFinePointer()) && isModelCommand(draft) && requestModelPicker(draftKey)) {
+            if (!slashSkillActive && enterSends(e, hasFinePointer()) && isModelCommand(draft) && requestModelPicker(draftKey)) {
               e.preventDefault();
               setDraft("");
               return;
             }
             // so does `/permissions` alone: the permission menu (#6476)
-            if (enterSends(e, hasFinePointer()) && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
+            if (!slashSkillActive && enterSends(e, hasFinePointer()) && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
               e.preventDefault();
               setDraft("");
               return;

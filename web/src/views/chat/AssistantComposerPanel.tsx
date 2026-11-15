@@ -2,7 +2,8 @@
 import { useCallback, type ComponentProps } from "react";
 import { matchingSkills } from "../../lib/skill-mentions";
 import { ComposerPanel, type MentionRow } from "./ComposerPanel";
-import { SkillCatalogStatus, SkillRow } from "./SkillRow";
+import { SkillRow } from "./SkillRow";
+import { SkillCatalogStatus } from "./SkillCatalogStatus";
 import { useSkillCatalog } from "./useSkillCatalog";
 
 export function AssistantComposerPanel(props: ComponentProps<typeof ComposerPanel>) {

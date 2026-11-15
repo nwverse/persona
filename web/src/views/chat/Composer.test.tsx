@@ -775,6 +775,8 @@ describe("the / palette", () => {
     render("p");
     typeInto("/");
     await until(() => expect(palette()).not.toBeNull());
+    act(() => box().dispatchEvent(new Event("pointerdown", { bubbles: true })));
+    expect(palette()).not.toBeNull();
     act(() => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
     expect(palette()).toBeNull();
     typeInto("/c");

@@ -20,9 +20,9 @@ const executable = flag("--chromium");
 const browser = await chromium.launch({ ...(executable ? { executablePath: executable } : { channel: "chrome" }), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
 const CHATS = [
-  { name: "claude", path: "/s/macbook/c1111111-0000-4000-8000-000000000001" },
-  { name: "codex", path: "/s/macbook/d2222222-0000-4000-8000-000000000002" },
-  { name: "persona", path: "/persona/b2e4d6f8-0000-4000-8000-000000000001" },
+  { name: "claude", path: "/s/macbook/c1111111-0000-4000-8000-000000000001", catalog: "/sessions/macbook/c1111111-0000-4000-8000-000000000001/skills" },
+  { name: "codex", path: "/s/macbook/d2222222-0000-4000-8000-000000000002", catalog: "/sessions/macbook/d2222222-0000-4000-8000-000000000002/skills" },
+  { name: "persona", path: "/persona/b2e4d6f8-0000-4000-8000-000000000001", catalog: "/assistant/skills" },
 ];
 const state = async (value) => {
   const response = await fetch(`${hub}/mock/skills?state=${value}`);
@@ -95,7 +95,7 @@ try {
     const page = await context.newPage();
     const catalogs = [];
     page.on("request", (request) => {
-      if (/\/assistant\/skills|\/sessions\/[^/]+\/[^/]+\/skills/.test(new URL(request.url()).pathname)) catalogs.push(request.url());
+      if (/\/assistant\/skills|\/sessions\/[^/]+\/[^/]+\/skills/.test(new URL(request.url()).pathname)) catalogs.push({ url: request.url(), manager: request.headers()["x-persona-manager"] });
     });
     await openChat(page, chat.path);
     assert.equal(catalogs.length, 0, `${chat.name}: no page-load catalog request`);
@@ -117,6 +117,15 @@ try {
     await pickAndSend(page, chat.name, "/interface", "Refine accessible, responsive interfaces", "fixture-design", false, `${chat.name} pointer pick`);
     await pickAndSend(page, chat.name, "/security", "Inspect security boundaries", "fixture-project", true, `${chat.name} keyboard pick`);
     assert.equal(catalogs.length, 2, `${chat.name}: one read for each of the two openings, none per keystroke`);
+    for (const record of catalogs) {
+      const url = new URL(record.url);
+      assert(url.pathname.endsWith(chat.catalog), `${chat.name}: own catalog route, got ${url.pathname}`);
+      assert.equal(record.manager, "assistant", `${chat.name}: catalog manager`);
+      if (chat.name === "persona") {
+        assert.equal(url.searchParams.get("machine_id"), "server", "Persona: catalog machine");
+        assert.equal(url.searchParams.get("session_id"), "b2e4d6f8-0000-4000-8000-000000000001", "Persona: catalog session");
+      } else assert.equal(url.search, "", `${chat.name}: session environment comes from the route, not client overrides`);
+    }
     await page.close();
   }
 
@@ -133,17 +142,31 @@ try {
   // Commands and the active row survive a delayed answer, then a failed catalog.
   const loading = await context.newPage();
   await openChat(loading, CHATS[0].path);
-  await state("loading");
+  await state("ready");
+  const skillPath = /\/skills(?:\?|$)/;
+  let heldCatalog;
+  const holdCatalog = (route) => { heldCatalog = route; };
+  await loading.route(skillPath, holdCatalog);
   await openSlash(loading);
   const commandRows = await options(loading).count();
   assert(commandRows > 0, "loading: commands render immediately");
   await waitFor(async () => (await loading.locator("body").innerText()).includes("Loading skills"), "catalog loading status");
+  await waitFor(() => heldCatalog, "catalog response held by the browser driver");
   await loading.locator("textarea").press("ArrowDown");
   const activeBefore = await loading.locator('[data-slash-palette] [aria-selected="true"]').count();
   const selectedBefore = await loading.locator('[data-slash-palette] [aria-selected="true"]').textContent();
   await theme(loading, false);
+  assert.equal(await skill(loading, "Inspect security boundaries").count(), 0, "loading capture: skills are still absent");
   await shot(loading, "claude-wide-light-loading-commands");
+  assert.equal(await skill(loading, "Inspect security boundaries").count(), 0, "loading capture completed before the response");
+  const list = loading.locator("[data-slash-palette] [role=listbox]");
+  await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  const scrolled = await list.evaluate((el) => el.scrollTop);
+  assert(scrolled > 0, "loading: the command list was manually scrolled");
+  await heldCatalog.continue();
+  await loading.unroute(skillPath, holdCatalog);
   await skill(loading, "Inspect security boundaries").waitFor({ state: "visible" });
+  assert.equal(await list.evaluate((el) => el.scrollTop), scrolled, "catalog arrival preserves manual scrolling");
   assert.equal(await loading.locator('[data-slash-palette] [aria-selected="true"]').textContent(), selectedBefore, "catalog arrival does not move the active row");
   assert.equal(activeBefore, 1, "one row is active before catalog arrival");
   await theme(loading, true);

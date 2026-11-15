@@ -1,30 +1,61 @@
 // Skill-aware second stage of the / palette, loaded only after the palette opens.
-import { useMemo, type ComponentType } from "react";
+import { useImperativeHandle, useMemo } from "react";
 import { rankCommands, SLASH_LIMIT } from "../../lib/composer-commands";
-import { SkillCatalogStatus, SkillRow } from "./SkillRow";
+import type { ComposerCommand as Command } from "../../lib/extension-prompts";
+import type { MentionSkill } from "../../lib/skill-mentions";
+import { SkillRow } from "./SkillRow";
+import { SkillCatalogStatus } from "./SkillCatalogStatus";
 import { useSkillCatalog } from "./useSkillCatalog";
-import type { Entry, SlashPaletteInput, SlashPaletteViewProps } from "./SlashPalette";
+import { SlashPaletteView, type SlashPaletteInput } from "./SlashPalette";
 
-export function SlashSkillPalette(props: SlashPaletteInput & { View: ComponentType<SlashPaletteViewProps> }) {
-  const { View, ...input } = props;
+type SkillCommand = Command & { skill: MentionSkill };
+const attached = (row: Command | undefined) => row && (row as SkillCommand).skill;
+
+export function SlashSkillPalette(input: SlashPaletteInput) {
   const { source, machineId } = input;
   const query = input.query ?? "";
   const catalog = useSkillCatalog(source?.skills, machineId, source?.cwd);
   const skillRows = useMemo(() => {
-    const candidates = (catalog.catalog?.skills ?? []).map((skill) => ({ word: skill.name, desc: skill.description ?? "", skill }));
-    return rankCommands(candidates, query, Math.max(0, SLASH_LIMIT - input.rows.length));
+    const remaining = SLASH_LIMIT - input.rows.length;
+    if (remaining <= 0) return [];
+    const candidates: SkillCommand[] = (catalog.catalog?.skills ?? []).map((skill) => ({
+      key: `skill:${skill.id}`, word: skill.name, desc: skill.description ?? "", text: skill.name, source: skill.source, skill,
+    }));
+    return rankCommands(candidates, query, remaining);
   }, [catalog.catalog, query, input.rows.length]);
-  const entries = useMemo<Entry[]>(() => [
-    ...input.rows.map((command): Entry => ({ kind: "command", command })),
-    ...skillRows.map(({ skill }): Entry => ({ kind: "skill", skill })),
-  ], [input.rows, skillRows]);
+  const entries = useMemo<Command[]>(() => [...input.rows, ...skillRows], [input.rows, skillRows]);
+  const current = Math.min(input.active, entries.length - 1);
+  const pick = (row: Command) => {
+    const skill = attached(row);
+    if (skill) input.onSkillPick?.(skill);
+    else input.onPick(row);
+  };
+  useImperativeHandle(input.handle, () => ({
+    skillActive: () => Boolean(attached(entries[current])),
+    key: (key: string): boolean => {
+      if (!entries.length) return false;
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        input.onHover((current + (key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
+        return true;
+      }
+      if (key === "Enter" || key === "Tab") {
+        pick(entries[current]);
+        return true;
+      }
+      return false;
+    },
+  }));
   return (
-    <View
+    <SlashPaletteView
       {...input}
       entries={entries}
+      onPick={pick}
       status={<SkillCatalogStatus status={catalog.status} />}
       skillsLoading={catalog.status === "loading"}
-      renderSkill={(skill, common) => <SkillRow key={skill.id} skill={skill} common={common} compact />}
+      renderRow={(row, common) => {
+        const skill = attached(row);
+        return skill && <SkillRow key={skill.id} skill={skill} common={common} compact />;
+      }}
     />
   );
 }

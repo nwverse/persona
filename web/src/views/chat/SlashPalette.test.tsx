@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The "/" palette as cindy draws it (#5325): one row per command with where it comes from, the focused command's
 // description in a card beside the panel (inside it when the window has no room beside it), "No matching commands".
-import { act, createRef } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerCommand } from "../../lib/extension-prompts";
@@ -16,13 +16,11 @@ const PROMPT: ComposerCommand = { key: "extension:kit/today", word: "/今天做�
 
 let host: HTMLDivElement;
 let root: Root;
-const within = createRef<HTMLDivElement>();
 const onHover = vi.fn();
 const onPick = vi.fn();
-const onClose = vi.fn();
 
 beforeEach(() => {
-  [onHover, onPick, onClose].forEach((f) => f.mockClear());
+  [onHover, onPick].forEach((f) => f.mockClear());
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -37,9 +35,9 @@ afterEach(() => {
 
 const render = (rows: ComposerCommand[], active = 0) =>
   act(() => root.render(
-    <div ref={within}>
+    <div>
       <textarea />
-      <SlashPalette rows={rows} active={active} onHover={onHover} onPick={onPick} onClose={onClose} within={within} />
+      <SlashPalette rows={rows} active={active} onHover={onHover} onPick={onPick} />
     </div>,
   ));
 
@@ -112,15 +110,5 @@ describe("nothing matching", () => {
     expect(host.textContent).toBe(t("chat-slashpalette.no_match"));
     expect(options()).toHaveLength(0);
     expect(card()).toBeNull();
-  });
-});
-
-describe("closing", () => {
-  it("closes on a press outside the composer, not inside it", () => {
-    render([CONTINUE]);
-    act(() => host.querySelector("textarea")!.dispatchEvent(new Event("pointerdown", { bubbles: true })));
-    expect(onClose).not.toHaveBeenCalled();
-    act(() => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
-    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

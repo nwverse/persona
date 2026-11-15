@@ -9,6 +9,8 @@ import { parseQueued } from "../../lib/queue";
 import { restoreQueued } from "./QueueStrip";
 import { t } from "../../i18n";
 import { skillContext, skillDraft } from "../../lib/skill-mentions";
+import { onModelPicker } from "../../lib/model-switch";
+import { onPermissionPicker } from "../../lib/permissions-command";
 import { Composer, type Outgoing } from "./Composer";
 import type { MentionSource } from "./ComposerPanel";
 import type { ComposerCommand } from "../../lib/extension-prompts";
@@ -28,7 +30,7 @@ let host: HTMLDivElement;
 let root: Root;
 const source: MentionSource = { files: () => [], skills: { manager: "helper-a", session: "chat", launcher: "codex", environment: "profile-a" } };
 const onSend = vi.fn(async (_m: Outgoing) => true);
-const render = (mention = source, commands?: ComposerCommand[]) => act(() => root.render(<Composer draftKey="skill-test" placeholder="" mention={mention} machineId="computer" commands={commands} onSend={onSend} />));
+const render = (mention = source, commands?: ComposerCommand[], machineId = "computer") => act(() => root.render(<Composer draftKey="skill-test" placeholder="" mention={mention} machineId={machineId} commands={commands} onSend={onSend} />));
 const box = () => host.querySelector("textarea")!;
 const options = () => [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
 const waitForOptions = (count: number) => vi.waitFor(async () => {
@@ -181,6 +183,14 @@ it("lists matching skills after commands in the slash palette and reads the cata
   expect(options()[3].textContent).toContain("user");
 });
 
+it("keeps commands usable without a machine or a skill source and never invents a catalog request", async () => {
+  render(source, COMMANDS, "");
+  await type("/");
+  await waitForOptions(2);
+  expect(options().map((o) => o.textContent)).toEqual(["alpha", "beta"]);
+  expect(api).not.toHaveBeenCalled();
+});
+
 it("keeps the slash palette command-only where the chat has no skill source", async () => {
   render({ files: () => [] }, COMMANDS);
   await type("/");
@@ -196,10 +206,11 @@ it("ranks slash skills by exact, prefix, contained and description matches after
     { id: "prefix", name: "review-later", description: "", source: "project" },
     { id: "exact", name: "review", description: "", source: "project" },
   ] }));
-  render(source, COMMANDS);
+  render(source, [...COMMANDS, { word: "/audit", desc: "Review command", text: "/audit" }]);
   await type("/review");
-  await waitForOptions(4);
+  await waitForOptions(5);
   expect(options().map((o) => o.textContent)).toEqual([
+    "audit", // every command, even a description-tier match, precedes every skill
     expect.stringContaining("review"),
     expect.stringContaining("review-later"),
     expect.stringContaining("preview"),
@@ -245,6 +256,52 @@ it("selects a slash skill with the keyboard and retains its identity through ret
   expect(getContexts("skill-test")[0].attrs?.ref).toBe("a");
 });
 
+it.each([{ name: "model", key: "Enter" }, { name: "permissions", key: "Tab" }])("picks a $name skill with $key instead of running the typed special command", async ({ name, key: pressed }) => {
+  api.mockImplementationOnce(async () => ({ catalog_version: 1, complete: true, skills: [{ id: `skill-${name}`, name, description: "Skill, not the command", source: "project" }] }));
+  const opened = vi.fn();
+  const off = name === "model" ? onModelPicker("skill-test", opened) : onPermissionPicker("skill-test", opened);
+  try {
+    render(source, [{ word: `/${name}`, desc: "Built-in command", text: `/${name}` }, COMMANDS[1]]);
+    await type(`/${name}`);
+    await waitForOptions(2);
+    key("ArrowDown");
+    expect(focused()?.textContent).toContain("Skill, not the command");
+    key(pressed);
+    expect(opened).not.toHaveBeenCalled();
+    expect(box().value).toBe("");
+    expect(getContexts("skill-test")[0].attrs?.ref).toBe(`skill-${name}`);
+  } finally { off(); }
+});
+
+it("wraps arrows across the whole command and skill list", async () => {
+  render(source, COMMANDS);
+  await type("/");
+  await waitForOptions(4);
+  expect(focused()?.textContent).toBe("alpha");
+  key("ArrowUp");
+  expect(focused()?.textContent).toContain("Check wording");
+  key("ArrowDown");
+  expect(focused()?.textContent).toBe("alpha");
+});
+
+it("resets a stale skill highlight when the execution environment changes", async () => {
+  render(source, COMMANDS);
+  await type("/");
+  await waitForOptions(4);
+  key("ArrowDown");
+  key("ArrowDown");
+  key("ArrowDown");
+  expect(focused()?.textContent).toContain("Check wording");
+  let resolve!: (value: unknown) => void;
+  api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+  render({ ...source, skills: { ...source.skills!, environment: "profile-b" } }, COMMANDS);
+  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+  expect(focused()?.textContent).toBe("alpha");
+  await act(async () => resolve({ catalog_version: 1, complete: true, skills: [{ id: "new", name: "replacement", description: "New environment", source: "project" }] }));
+  await waitForOptions(3);
+  expect(focused()?.textContent).toBe("alpha");
+});
+
 it("keeps commands and the highlighted row stable while the slash catalog loads, then keeps commands on failure", async () => {
   let resolve!: (value: unknown) => void;
   api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
@@ -261,6 +318,12 @@ it("keeps commands and the highlighted row stable while the slash catalog loads,
   key("ArrowDown");
   expect(focused()?.textContent).toContain("Inspect security boundaries");
   key("ArrowUp");
+  expect(focused()?.textContent).toBe("beta");
+  act(() => options()[0].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+  expect(focused()?.textContent).toBe("beta"); // a shifted command under a resting pointer is not a hover either
+  act(() => options()[0].dispatchEvent(new MouseEvent("mousemove", { bubbles: true })));
+  expect(focused()?.textContent).toBe("alpha");
+  key("ArrowDown");
   expect(focused()?.textContent).toBe("beta");
   act(() => options()[2].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
   expect(focused()?.textContent).toBe("beta"); // appearing under a resting pointer does not steal the row
