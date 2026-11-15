@@ -618,6 +618,47 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 	}
 }
 
+// A legacy one-shot list waits for the leader being linked, bounded; a revision-aware caller returns immediately and
+// recovers through its cursor instead. The wait alone grants rights to nobody.
+func TestLegacyTaskLeaderListWaitsForItsLink(t *testing.T) {
+	s, _ := newQuietService(t)
+	old := leaderListWait
+	leaderListWait = 400 * time.Millisecond
+	t.Cleanup(func() { leaderListWait = old })
+	ctx := context.Background()
+
+	if got := s.leaderTools(ctx, "box", "sx"); got != nil {
+		t.Fatalf("no leader is starting: %v", got)
+	}
+	s.leaderStarts.Add(1)
+	start := time.Now()
+	if got := s.leaderTools(ctx, "box", "sx"); got != nil || time.Since(start) < 300*time.Millisecond {
+		t.Fatalf("an unlinked agent while a leader starts: %v after %s", got, time.Since(start))
+	}
+	todo, err := s.createTaskTodo(ctx, "leader", "", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(100*time.Millisecond, func() {
+		_ = s.linkTodoAgentWithSource(ctx, todo.ID, "box", "sx", "leader", "/code/app", "", "", sourceLeader, "")
+		s.leaderStarts.Add(-1)
+	})
+	if got := leaderToolNames(s.leaderTools(ctx, "box", "sx")); !slices.Equal(got, []string{"task_plan", "task_review"}) {
+		t.Fatalf("the leader's list after its link: %v", got)
+	}
+
+	s.leaderStarts.Add(1)
+	defer s.leaderStarts.Add(-1)
+	start = time.Now()
+	watched := s.sessionMCPToolsSince(ctx, "box", "other", false, false, "a-revision")
+	if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
+		t.Fatalf("a revision-aware list waited for the legacy startup window: %s", elapsed)
+	}
+	if got := leaderToolNames(watched["tools"].([]proto.Tool)); slices.Contains(got, "task_plan") || slices.Contains(got, "task_review") {
+		t.Fatalf("an unrelated agent gained leader rights: %v", got)
+	}
+}
+
 // Registration after the initial list invalidates its cursor. No startup counter
 // or finite wait window is involved, and late watch subscription cannot lose it.
 func TestTaskLeaderListRefreshesAfterItsLink(t *testing.T) {
