@@ -39,6 +39,7 @@ import (
 )
 
 type Node struct {
+	memoryMu     sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer
 	updater      *nodeupdate.Manager // resident-owned, shared across attach connections

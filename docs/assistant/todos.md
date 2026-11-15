@@ -191,6 +191,7 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 - `done_when` (jsonb, NOT NULL, DEFAULT '[]'): acceptance criteria (string array); `expect_minutes` (integer, NOT NULL, DEFAULT 0): expected minutes.
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).
+- `pending_since` (timestamptz, NULL): when the task entered `pending_review`; kept by every write while the review waits, NULL in every other state. The apps read it to tell a supervisor's review under way from one that is overdue (`docs/assistant/unified-entry.md` "Needs you and In progress: each thing once (#3387)"). Rows already waiting when the column was added started from `updated_at`.
 
 ### 6. task_briefs and task_brief_todos tables
 A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
@@ -651,6 +652,7 @@ Something the owner raises in the main conversation and wants an answer to is a 
   - Counted: each is a work event `owner_cannot_answer` and `GET /api/v1/agents/work/stats` sums them per supervisor conversation (`docs/assistant/agent-work.md`, "Evaluation").
 - **Choosing an option**: `POST /api/v1/todos/{id}/accept {"asked_at", "option"}` with the recommended label is the plain OK; another option goes to the task's Agent as the owner's choice with what it leads to, is recorded in the to-do's decisions and ends the decision. The Lark card has a button per option and one per fixed answer. The `decide` push's `todo` also carries `options` (the labels, the recommended first) and `responses`, so an app can offer them from the notification; its body lists the background, the options and the cost of waiting.
 - **Answered in the chat** (#6470, `assistant/task_decided.go`): the owner often answers in their own words in the main chat instead of on the card. The main conversation, or the task's supervisor, records that answer with the assistant tool `task_decided` (`todo_id`, `option`: one of the waiting decision's labels, `said`: the owner's words, `told_agent`). Without `told_agent` the option is taken exactly as the accept route takes it (sent to the task's Agent, then recorded). With `told_agent: true` (the answer already went to the Agent with `agent_send`) nothing is sent again. Either way the decision ends as a card answer ends it: the ask is answered and leaves Needs you, its deadline default and daily raise stop, the supervision leaves `needs_user`, the to-do's decisions get a `manual` row with the conversation as its source and the owner's words as its reason, and an `owner_decided` event is written. An option that is none of the decision's, a conversation that is neither the main one nor the supervisor, and a decision no longer waiting are refused. Relaying the answer with `agent_send` alone used to leave the decision waiting.
+- **Answered in words on Lark, not delivered** (#7911, `assistant/acceptance_reply.go`): a reply in words to a decision's Lark card is recorded in the to-do's decisions and then relayed to the task's Agent. When the relay fails (a dialog open in the Agent's terminal, its computer away), the decision is still made: the supervision leaves `needs_user`, the ask is answered, and the task's supervisor gets an `idle` signal naming the owner's answer and why it did not reach the Agent, to pass it on itself. The hub never resends it, so the Agent cannot get the same answer twice; the reply tells the owner it is recorded and will be passed on. "OK" on a recommendation is unchanged: nothing is taken until it reaches the Agent.
 - **A decision is not replaced by "Please verify"**: while a decision waits, a turn of the task's Agent that says "deployed" (or a held deploy landing) no longer starts a "Please verify" round in its place; and a review that arrives while such a round is still being written keeps its decision, the round giving way. Before, either order left a `needs_user` task with no `ask`, passed by the supervising assistant as if it were a deployed task.
 - **iOS** (`DecisionRow`, `docs/apple/ios.md` "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)"): the same row as the web's in the Needs You tray and on the task board, answered through the accept route with `option` or `response`; an option of an `irreversible` or `visible_to_others` decision takes two taps. The `TODO_DECIDE` push's OK and its `options` / `responses` are not actions in the app yet.
 - Not done here: offering the options from the decision push on Android (its notification opens the conversation) and on iOS. A task that only waits is parked: "Parked tasks" below.
@@ -927,3 +929,104 @@ a new to-do. Existing historical successor chains are still guarded against dupl
 3. **Empty-workspace rename does not migrate**: when renaming through hub with no active sessions, hub cannot resolve old workspace name; `todo_spaces` does not automatically migrate, like pin/mute.
 4. **`/clear` recreates session**: Agent `/clear` creates a new session uuid underneath; new session does not auto-link to old to-do, and original session row stays listed.
 5. **Assistant disconnected**: to-do APIs and create/send with `todo_id` return 503; workspace renames through hub do not migrate and answered cards are not recorded as decisions ("Who owns what").
+
+## Repository associations
+
+Repository associations are optional metadata for ordinary to-dos and existing
+single-repository tasks. They do not create or remove directories, change the
+workspace mode, or advance task progress. Legacy `new` / `existing` / `none`,
+Engine-created workspaces, reused directories and cleanup retain their existing
+behavior. The existing `pr_url` and delivery judgment stay independent: multiple
+linked PRs never imply that a task is complete.
+
+The Web to-do creation dialog and detail use the optional **Repositories and
+work** group. The detail is read-only by default: it draws the saved
+repositories as rows with their issues and pull requests as links, so the
+associations the agent maintains are visible without opening an editor. Each
+repository row carries its provider's own mark and its project address on one
+line; a link shows its retained full title as the hyperlink, falling back to the
+localized type and number when no title is known. The association store holds no
+physical workspace path, so a row shows no filesystem path; directory aliases
+are not paths, and physical paths belong to the workspace preparation service.
+Opening the editor holds the draft and the revision it began from: a to-do
+version change while it is open never replaces them, and the newest store is
+read again when the dialog closes. Source options are disclosed per repository.
+No alias or base branch is required: an empty alias means no directory override
+and a missing ref means the remote default branch. This feature does no Git or
+remote issue lookup.
+An issue/PR URL must belong to the saved provider, instance and target repository;
+links retain numeric string IDs, including IDs beyond JavaScript's integer range.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/todos/{id}/repositories` | Returns `schema_version`, `manager`, `todo_id`, `revision` and `repositories` |
+| PUT | `/api/v1/todos/{id}/repositories` | `{expected_revision, expected_catalog_revision, repositories}` replaces business associations atomically; `[]` clears them |
+| PUT | `/api/v1/todos/{id}/repositories/{repo_id}/links` | `{expected_revision, links}` replaces one repository's links; `[]` clears them |
+
+`POST /api/v1/todos` also accepts optional `repository_bindings` containing
+`catalog_revision` and `repositories`. The Todo and associations commit in one
+transaction. Older requests omitting it retain existing behavior; ordinary PATCH
+operations never touch association storage. The catalog response and
+`repositories_list` include `catalog_revision`. Writes require exact revisions;
+conflicts preserve the client draft and require reconciliation. Read failures
+never masquerade as an empty set.
+
+`todo_repositories_get`, `todo_repositories_set`, `todo_repository_links_set` and
+`todo_repository_links_add` expose the same manager-owned store. `todo_get` includes
+its canonical associations. The additive tool accepts `{id, links: [{url, title}]}`
+with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
+total), infers repository groups offline and needs no preconfigured catalog.
+Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
+characters are rejected. The tool schemas describe this byte limit explicitly;
+their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
+A nonempty title updates a retained link and increments
+the association revision. Omitted or empty titles in URL-only reports or older
+editors preserve known titles; removing a link removes its title. Agents obtain
+titles from the related work and maintain them through the same tool. The app
+shows a localized type and number until a title is available; it never guesses
+titles or performs a remote metadata request when opening a to-do.
+It preserves source snapshots, aliases and requested refs. Assistant conversations
+can manage their manager's to-dos; task Agents can read or edit only their actively
+linked open to-do, with its ID available through `todo_decisions`. Empty ordinary
+to-dos need no catalog read. `todo_create` accepts the optional creation object; a matching
+existing Todo with supplied bindings is explicitly refused so callers can read
+and edit that Todo without silently discarding associations. Writes retain the
+existing outbound confirmation rule for health conversations.
+
+Existing `pr_url` / `prs` references are imported once before the first interactive
+association read or edit. During a meeting turn, `todo_get` and
+`todo_repositories_get` read only saved associations: they never import links or
+write association data, revisions or receipts. An ordinary user turn retains the
+historical import behavior. New Agent reports append every supported PR URL to this same store,
+including self-hosted instances; old stage and delivery fields retain their existing
+judgment semantics. A stored receipt prevents historical imports and repeated reports
+from restoring links removed by the user. An explicit additive call can restore them.
+Imports and interactive edits lock the same Todo and commit atomically; changes
+broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
+Metadata import errors are logged without blocking the legacy progress path; explicit
+tool and HTTP failures remain errors. Link-derived repositories absent from the
+catalog have `catalog_state: "unlisted"`; recording a URL performs no repository
+verification, remote lookup or catalog mutation.
+
+Shared Go types and validators: `server/internal/assistant/repository/task.go`.
+Web types/helpers: `web/src/lib/task-repositories.ts`. Fixed consumer fixture:
+`spec/fixtures/task-repositories/contract.json`. Directory aliases use one ASCII
+rule, case-insensitive uniqueness, reserved-device-name rejection and an optional
+empty override. Explicit `root` layout maps one selected repository to `.`;
+`container` layout uses a validated nonempty effective directory name. This
+opt-in mapping never changes legacy cwd inference.
+
+Each association saves identity and credential-free transport by value. Catalog
+names are independent. A removed or identity-changed catalog entry is reported
+without replacing the saved source. Catalog clients omitting `clone_url` preserve
+its previous value when identity is unchanged; a changed identity gets its own
+canonical fallback. Adopting a new source requires removing and reselecting the
+association in separate saves.
+
+Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
+select repository IDs through `repository.Snapshot`, and persist that value with
+their operation in the same transaction. The reader locks the Todo, including an
+empty set. Digests exclude links and association revision. Consumers retain the
+operation's snapshot for retries; no permanent business-association seal or
+legacy-start hook exists. Physical records, paths, resolved commits and cleanup
+belong to the workspace preparation service.

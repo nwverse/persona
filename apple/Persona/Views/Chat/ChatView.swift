@@ -180,8 +180,6 @@ struct ChatView: View {
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
-    /// A phone's tabs (iPhone Duo open, #2623): on its side the system's Show Sidebar brings a folded list back (#3680).
-    @Environment(\.pageTabSwitch) private var pageTabSwitch
     /// The Persona conversation in the shell (docs/apple/ios.md「New shell」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
@@ -4076,20 +4074,15 @@ struct ChatView: View {
         }
     }
 
-    /// The first page of a split's detail column, on the chat: nothing to go back to (the list is beside it). On iPhone
-    /// Duo open on its side also with the list folded (#3680): the chat's actions are in the system's side bars, whose
-    /// Show Sidebar at the top left brings the list back, and a ‹ that did the same read as a Back that opened the
-    /// sidebar instead of going back.
+    /// The first page of a split's detail column, on the chat: nothing to go back to (the list is beside it).
     private var hidesBack: Bool {
-        host == nil && split?.isFirstPage == true && (split?.listHidden != true || systemShowsList) && pane == .chat
+        host == nil && split?.isFirstPage == true && split?.listHidden != true && pane == .chat
     }
     /// The split's first page with its list column closed: ‹ brings the list back. There is nothing to go back to, and
     /// with this page's own header no system button to open the list (the iPad; the open Duo upright).
     private var backShowsList: Bool {
-        host == nil && split?.isFirstPage == true && split?.listHidden == true && !systemShowsList && pane == .chat
+        host == nil && split?.isFirstPage == true && split?.listHidden == true && pane == .chat
     }
-    /// The system's Show Sidebar is on screen beside a folded list: the side bars' column on a phone's tabs.
-    private var systemShowsList: Bool { pageTabSwitch && sideBars }
 
     /// The header's leading button: back to the chat from files / Git; on the chat ‹, or a hosting page's ✕ / ‹.
     private var backSymbol: String { pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back }
@@ -5366,12 +5359,18 @@ struct Composer: View, Equatable {
     }
 
     private var promptCommands: [PromptCommand] {
-        PromptItems.commands(clear: canClear && !status.isActive && !clearing, loop: canLoop) + declarations.prompts.map {
+        // The main conversation adds `/clear` (#5100). The quick messages, /loop and extension prompts stay.
+        var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop) + declarations.prompts.map {
             PromptCommand(String(localized: "/extension/\($0.title)", comment: "Menu name of a prompt an extension adds"), detail: $0.ownerName, insert: $0.text)
         }
+        if offersMainClear, !commands.contains(where: { $0.name == MainClearCommand.word }) {
+            commands.append(PromptCommand(MainClearCommand.word, detail: String(localized: "Clear the chat and start over")))
+        }
+        return commands
     }
 
     /// Quick messages and /clear in the + menu (`ComposerRow`, and an agent's in the shell).
+    /// The main conversation adds `/clear` (#5100), and it does not ask first.
     @ViewBuilder private var quickCommands: some View {
         Section("Quick Commands [Chat View c813e6]") {
             ForEach(SlashCommand.commands(loop: canLoop)) { cmd in
@@ -5379,7 +5378,12 @@ struct Composer: View, Equatable {
                     if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
                 } label: { Label(cmd.title, systemImage: cmd.symbol) }
             }
-            if canClear {
+            if offersMainClear {
+                Button { Task { await runMainClear() } } label: {
+                    Label("Clear Context /clear", systemImage: Theme.Icon.clearContext)
+                }
+                .disabled(model.mainClear.busy)
+            } else if canClear {
                 Button(role: .destructive) { confirmClear = true } label: {
                     Label("Clear Context /clear", systemImage: Theme.Icon.clearContext)
                 }
@@ -5388,21 +5392,26 @@ struct Composer: View, Equatable {
         }
     }
 
-    /// The "/" list for the draft (`SlashMenu`): an agent's chat in the composers without the prompt bar's own menu.
+    /// The "/" list for the draft (`SlashMenu`): an agent's chat in the composers without the prompt bar's own menu,
+    /// and the main conversation's, which adds `/clear` to those rows (#5100).
     /// `/model` only where typing it switches the model (`Session.takesModelCommand`): a runtime's session that takes a
     /// model through its menus would get the words as a message (#8144).
     private var slashRows: [SlashMenuRow] {
-        guard !shellChat, model.session(key)?.assistant != true, usesShellComposer || !AppStyle.current.usesBeautifulUI,
-              text.hasPrefix("/"), text != slashPicked else { return [] }
-        let typesModel = model.session(key)?.takesModelCommand == true
-        return SlashMenuRow.matching(text, in: SlashMenuRow.rows(model: typesModel, loop: canLoop, clear: canClear && !status.isActive && !clearing))
+        let plain = usesShellComposer || !AppStyle.current.usesBeautifulUI
+        let agentList = !shellChat && model.session(key)?.assistant != true && plain
+        // The prompt bar has its own "/" menu; this list is the shell's and the plain input line's.
+        let mainList = offersMainClear && plain
+        return SlashMenuRow.slashRows(draft: text, picked: slashPicked, showsList: agentList || mainList,
+                                       model: model.session(key)?.takesModelCommand == true, loop: canLoop,
+                                       agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear)
     }
 
-    /// A "/" row picked: its text in the box to send or edit, as on the web; /clear asks first, as the + menu's.
+    /// A "/" row picked: its text in the box to send or edit, as on the web; an agent's /clear asks first, as the + menu's.
+    /// The main conversation's /clear runs at once.
     private func pickSlash(_ row: SlashMenuRow) {
         if row == .clear {
             text = ""
-            confirmClear = true
+            if offersMainClear { Task { await runMainClear() } } else { confirmClear = true }
             return
         }
         text = row.text
@@ -5513,6 +5522,21 @@ struct Composer: View, Equatable {
 
     /// Persona's main conversation: it carries the readiness card and the send gate (as the web, `useReadinessGate`).
     private var isMain: Bool { model.assistantMain == key && model.session(key)?.assistant == true }
+
+    /// Clear context (#5100): the main conversation's only command, when the hub can. A turn does not hide it.
+    private var offersMainClear: Bool { model.canClearMain(key) }
+
+    /// Photos, files, videos, quotes and comments: `/clear` with any of them is a message.
+    private var ridingAlong: Int {
+        images.count + held.ready.count + videos.items.count + (model.composerContexts[key]?.count ?? 0) + (model.composerComments[key]?.count ?? 0)
+    }
+
+    /// Clears the main conversation. On a failure, `/clear` is back in the box.
+    private func runMainClear() async {
+        text = ""
+        let ok = await model.clearMainContext()
+        if !ok { text = MainClearCommand.word }
+    }
 
     /// The main conversation cannot answer yet: send goes to what is missing, the draft stays.
     private var gate: SendGate? { isMain && !status.isActive ? model.readinessGate(route: $failureRoute) : nil }
@@ -5625,7 +5649,7 @@ struct Composer: View, Equatable {
                                  openAttach: attachOpener,
                                  glows: glowsWhileReplying,
                                  dictationHints: { [model, key] in DictationLanguage.ownerTexts(model.chat(key).items) },
-                                 send: { if let gate { gate.action() } else { Task { await sendText(text) } } }) {
+                                 send: { deliverOrGate() }) {
                     #if os(iOS)
                     // The iPhone's tap opens the panel, its touch and hold this menu; the iPad's + is the menu, with
                     // Photos and Files first. The rest is the panel's More tab (#3225).
@@ -5648,7 +5672,7 @@ struct Composer: View, Equatable {
                     mentionMenuItem
                     voiceMenuItem
                     extensionPrompts
-                    if !shellChat { quickCommands } // an agent's, as its composer offered them before the shell's
+                    if !shellChat || offersMainClear { quickCommands } // an agent's, as its composer offered them before the shell's; the main chat adds /clear (#5100)
                     #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
@@ -5703,13 +5727,20 @@ struct Composer: View, Equatable {
                                        Task { @MainActor in startDraft(SlashCommand.loop.text) }
                                        return true
                                    }
-                                   guard command.name == "/clear" else { return false }
-                                   confirmClear = true
+                                   guard command.name == MainClearCommand.word else { return false }
+                                   if offersMainClear { Task { await runMainClear() } } else { confirmClear = true }
                                    return true
                                },
                                quotes: contexts,
                                send: { // the bar clears the draft right after
                                    let t = text
+                                   if offersMainClear, MainClearCommand.isCommand(t, attachments: ridingAlong) {
+                                       Task {
+                                           let ok = await model.clearMainContext()
+                                           if !ok { text = t }
+                                       }
+                                       return
+                                   }
                                    if let gate { gate.action(); Task { @MainActor in text = t }; return } // the draft stays
                                    if held.busy { return holdForUploads(restoring: t) }
                                    Task {
@@ -5721,7 +5752,7 @@ struct Composer: View, Equatable {
                 ComposerRow(placeholder: status.isActive ? String(localized: "Add a note (queued)") : (suggestion ?? placeholder ?? String(localized: "Message Claude")),
                             text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                             stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
-                            send: { if let gate { gate.action() } else { Task { await sendText(text) } } }, quotes: contexts, history: key.path,
+                            send: { deliverOrGate() }, quotes: contexts, history: key.path,
                             gate: gate) {
                     // A PhotosPicker inside a Menu never presents (the menu dismisses first): present it from here.
                     Button { showPhotos = true } label: { Label("Photos", systemImage: Theme.Icon.photos) }
@@ -5964,13 +5995,16 @@ struct Composer: View, Equatable {
                                                 // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.
                                                 meeting: isMain ? { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } } : nil,
                                                 mention: { typeMention() }, context: { contextPick = $0 })
-        if !shellChat {
+        if !shellChat || offersMainClear {
             var rows = SlashCommand.commands(loop: canLoop).map { cmd in
                 AttachMoreRow(id: "attach-command-\(cmd.title)", title: cmd.title, symbol: cmd.symbol, word: cmd.word) {
                     if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
                 }
             }
-            if canClear {
+            if offersMainClear {
+                rows.append(AttachMoreRow(id: "attach-main-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
+                                          word: "/clear", disabled: model.mainClear.busy) { Task { await runMainClear() } })
+            } else if canClear {
                 rows.append(AttachMoreRow(id: "attach-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
                                           word: "/clear", destructive: true, disabled: status.isActive || clearing) { confirmClear = true })
             }
@@ -5998,8 +6032,10 @@ struct Composer: View, Equatable {
         case .send(let picks):
             Task {
                 await addPicked(picks)
-                // As the box's Send: the gate first; videos still on their way hold the message and say so (sendText).
-                if let gate { gate.action() } else if allowsSend { await sendText(text) }
+                // As the box's Send: /clear first, then the gate; videos still on their way hold the message and say so (sendText).
+                if offersMainClear, MainClearCommand.isCommand(text, attachments: ridingAlong) {
+                    await runMainClear()
+                } else if let gate { gate.action() } else if allowsSend { await sendText(text) }
             }
         }
     }
@@ -6007,8 +6043,24 @@ struct Composer: View, Equatable {
     private func addPicked(_ picks: AttachPicks) async { await held.addPicked(picks, machine: key.machineRef, model: model) }
     #endif
 
+    /// Send, unless the draft is the main conversation's `/clear`, which clears even while a turn runs and past a send gate.
+    private func deliverOrGate() {
+        if offersMainClear, MainClearCommand.isCommand(text, attachments: ridingAlong) {
+            Task { await runMainClear() }
+            return
+        }
+        if let gate { gate.action() } else { Task { await sendText(text) } }
+    }
+
     @discardableResult
     private func sendText(_ raw: String) async -> Bool {
+        if offersMainClear, MainClearCommand.isCommand(raw, attachments: ridingAlong) {
+            let restoring = raw
+            text = ""
+            let ok = await model.clearMainContext()
+            if !ok { text = restoring }
+            return ok
+        }
         guard model.allowSend(key) else { return false }
         if held.busy { holdForUploads(); return false }
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -6165,6 +6217,15 @@ struct SlashMenuRow: Identifiable, Equatable {
         if loop { out.append(.loop) }
         if clear { out.append(.clear) }
         return out
+    }
+
+    /// The composer's "/" list. The main conversation adds `/clear` to the rows it already had (#5100);
+    /// an agent's own `/clear` stays where `rows` put it. The prompt bar does not use this list (`showsList` false).
+    static func slashRows(draft: String, picked: String?, showsList: Bool, model: Bool, loop: Bool, agentClear: Bool, mainClear: Bool) -> [SlashMenuRow] {
+        guard showsList, draft.hasPrefix("/"), draft != picked else { return [] }
+        var listed = rows(model: model, loop: loop, clear: agentClear && !mainClear)
+        if mainClear, !listed.contains(where: { $0.word == Self.clear.word }) { listed.append(.clear) }
+        return matching(draft, in: listed)
     }
 
     /// The rows for a draft: one word after a "/" at the start, matched at the start of the command or anywhere in its
