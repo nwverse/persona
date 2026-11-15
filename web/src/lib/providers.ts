@@ -23,12 +23,33 @@ export const AUTH_AUTO_FEATURE = "launcher_auth_auto";
 export const EFFORT_LEVELS = EFFORTS.map((e) => e.id);
 
 /** proto.ProviderModel. */
-export interface ProviderModel {
+export interface ProviderModel extends ReportedMeta {
   id: string;
   name?: string;
   context_window?: number;
   efforts?: string[];
   default_effort?: string;
+}
+
+/** What a gateway reported of a model that the form does not show (#8778): its output limit, every thinking level in
+ *  its own words when some fall outside `efforts`, that it takes none, and whether it takes images and tools. Carried
+ *  through the form and saved as it came; the hub keeps `all_efforts` and `no_effort` only while they agree with the
+ *  levels saved, so changing the levels by hand needs nothing from here. */
+export interface ReportedMeta {
+  max_output_tokens?: number;
+  all_efforts?: string[];
+  no_effort?: boolean;
+  image_input?: boolean;
+  tool_calls?: boolean;
+}
+
+const META_KEYS = ["max_output_tokens", "all_efforts", "no_effort", "image_input", "tool_calls"] as const;
+
+/** The reported fields of m, in a fixed order (a PUT compares models as JSON). */
+function metaOf(m: ReportedMeta): ReportedMeta {
+  const out: Record<string, unknown> = {};
+  for (const k of META_KEYS) if (m[k] !== undefined) out[k] = Array.isArray(m[k]) ? [...(m[k] as string[])] : m[k];
+  return out as ReportedMeta;
 }
 
 /** GET /api/v1/launchers' managed launcher (hub LauncherView): never the key, the headers or the environment, only
@@ -72,7 +93,7 @@ export interface ProviderView extends ScopeView {
   via_machine?: string;
 }
 
-/** One model row of step 3: numbers as typed. */
+/** One model row of step 3: numbers as typed, and what the gateway reported that the row does not show. */
 export interface FormModel {
   id: string;
   name: string;
@@ -80,6 +101,7 @@ export interface FormModel {
   efforts: string[];
   default_effort: string;
   checked: boolean;
+  meta: ReportedMeta;
 }
 
 export interface ProviderForm {
@@ -177,7 +199,19 @@ export function newForm(): ProviderForm {
 const numText = (n?: number) => (n ? String(n) : "");
 
 export function formModel(m: ProviderModel, checked = true): FormModel {
-  return { id: m.id, name: m.name ?? "", context_window: numText(m.context_window), efforts: [...(m.efforts ?? [])], default_effort: m.default_effort ?? "", checked };
+  return { id: m.id, name: m.name ?? "", context_window: numText(m.context_window), efforts: [...(m.efforts ?? [])], default_effort: m.default_effort ?? "", checked, meta: metaOf(m) };
+}
+
+/** A row's reported fields with what discovery found filled in where the row has none: the levels in the gateway's
+ *  words only when the row's levels are the ones found, "takes none" only while the row has no level. */
+function fillMeta(row: FormModel, found: ProviderModel): ReportedMeta {
+  const out: ReportedMeta = { ...row.meta };
+  if (out.max_output_tokens === undefined && found.max_output_tokens !== undefined) out.max_output_tokens = found.max_output_tokens;
+  if (out.image_input === undefined && found.image_input !== undefined) out.image_input = found.image_input;
+  if (out.tool_calls === undefined && found.tool_calls !== undefined) out.tool_calls = found.tool_calls;
+  if (out.all_efforts === undefined && found.all_efforts && sameJSON(row.efforts, found.efforts ?? [])) out.all_efforts = [...found.all_efforts];
+  if (out.no_effort === undefined && found.no_effort && !row.efforts.length) out.no_effort = true;
+  return metaOf(out);
 }
 
 /** How a saved provider signs in: what it stores, else x-api-key (providers saved before the choice existed). */
@@ -251,8 +285,11 @@ export function mergeDiscovered(models: FormModel[], found: ProviderModel[], cha
     if (i < 0) {
       const mismatch = chat && m.default_effort && m.efforts?.length && !m.efforts.includes(m.default_effort);
       out.push(formModel(mismatch ? { ...m, efforts: [], default_effort: "" } : m, first));
-    } else if (!out[i].context_window && m.context_window) {
-      out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
+    } else {
+      if (!out[i].context_window && m.context_window) {
+        out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
+      }
+      out[i] = { ...out[i], meta: fillMeta(out[i], m) };
     }
   }
   return out;
@@ -270,7 +307,7 @@ export function fillFromCatalog(models: FormModel[], found: ProviderModel[], cha
     const patch: Partial<FormModel> = {};
     if (!row.name && m.name) patch.name = m.name;
     if (!row.context_window && m.context_window) patch.context_window = String(m.context_window);
-    if (!chat && !row.efforts.length && m.efforts?.length) {
+    if (!chat && !row.efforts.length && !row.meta.no_effort && m.efforts?.length) {
       patch.efforts = [...m.efforts];
       if (!row.default_effort && m.default_effort && m.efforts.includes(m.default_effort)) patch.default_effort = m.default_effort;
     }
@@ -439,7 +476,7 @@ function modelsOf(f: ProviderForm): ProviderModel[] {
       if (int(m.context_window)) out.context_window = int(m.context_window);
       if (m.efforts.length) out.efforts = [...m.efforts];
       if (m.default_effort) out.default_effort = m.default_effort;
-      return out;
+      return { ...out, ...metaOf(m.meta) };
     });
 }
 

@@ -516,6 +516,13 @@ A successful connection probe can still hide a request the model server will rej
 
 A working inference base need not expose model discovery beneath it: DeepSeek documents Messages under `/anthropic/v1/messages` but discovery at the same origin's `/models`. Keep endpoint selection separate without rewriting the saved inference base, stripping unknown gateway prefixes or forwarding credentials to another authority. A discovery 404 needs its own explanation and a manual-model fallback, not advice to change a working Messages address.
 
+## Gateway model metadata: read shapes, keep "none" apart from "unknown" (#8778)
+
+- **One gateway, several list shapes.** A gateway may answer `GET /v1/models` in Anthropic's paginated envelope whenever the request carries any `anthropic-*` header (discovery always sends `anthropic-version`), a Codex manifest when asked with `?client_version=`, and its own flat list otherwise. The envelope carries no thinking levels, so levels for such a gateway come only from its separate capability report. Read every field by shape and test each shape with synthetic fixtures; never branch on which gateway answered.
+- **An empty list is an answer.** `reasoning_levels: []`, `reasoning: false` or a capability status `unsupported` say the model takes no level, while a missing field says nothing. `efforts` alone cannot carry that difference (empty there has always meant "unknown, offer every level", and older clients still read it so), hence `no_effort`. Catalog enrichment must check it before filling levels, and a catalog default must be one of the levels the gateway reported, or saving refuses the model.
+- **`max_tokens` is not an output limit everywhere.** Some lists use it for the whole context; one that pairs it with `max_input_tokens` may fill both with stand-ins for a model it doesn't know, which the list can't tell apart from real values. Read only names that mean one thing (`max_output_tokens`, `max_completion_tokens`, `limit.output`).
+- **An extra request breaks request-counting tests.** Adding the capability report changed the calls and headers several existing tests counted or asserted per path; route the new path explicitly in fixtures instead of loosening the counts.
+
 ## Battery investigations need attributed transport counts (#1633)
 
 A slow/error request log is not an access log, and successful Live Activity updates
