@@ -95,27 +95,31 @@ logs each request body, launched as Persona launches a provider (`ANTHROPIC_BASE
 reasoning model, whose thinking counts toward the reply, stops at "Claude's response exceeded the 32000 output token
 maximum". `CLAUDE_CODE_MAX_OUTPUT_TOKENS` raises it, up to 128,000 for such an ID (`200000` is sent as 128,000, the
 reference says the same); a Claude model already gets its own limit (128,000 for Opus 5.5) and is held to it. Claude
-Code knows a Claude ID anywhere in a name (`anthropic/claude-opus-5-5`, a dated ID), so Persona counts any ID containing
-`claude-` as known (`claudeKnows`). It is one value for the whole process, each model capped at its own limit, so
-`providerEnv` (`outputTokens`) sets it to the least `max_output_tokens` of the models the process runs that Claude Code
-does not know: the session's, each tier's, the small model's, the sub-Agent model's and the `/model` menu's extra
-entry, after the provider's `env` (which may name one). It is set only when the session's model is not a Claude one,
-when each of those models reports a limit (one with none could be asked for more than it writes, and a strict gateway
-refuses that), and when the result is over 32,000 (a lower value would lower what every model is asked for today). A
-Claude model among the tiers is then asked for no more than that value either. The provider's `env` wins (an empty
-value leaves Claude Code's own limit). `personad launch` drops the shell's copy only when it sets one, so a value the
-user exports for their own gateway still reaches a provider that reports nothing. It does not move auto-compaction:
-2.1.325 keeps `min(max output, 20000)` free below the window, and 32,000 already reserves the full 20,000.
+Code knows a Claude ID anywhere in a name (`anthropic/claude-opus-5-5`, a dated ID), so Persona treats an ID
+containing `claude-` as one it may know (`claudeKnows`). The variable is one value for the whole process, each model
+capped at its own limit, so `outputTokens` sets it to the least reported `max_output_tokens` of the models the process
+runs: the session's, each tier's, the small model's, the sub-Agent model's and the `/model` menu's extra entry, after
+the provider's `env` (which may name one). It is set only when the session's model does not look like a Claude one
+(a lower value would lower that model's own limit), when every other model reports a limit or looks like a Claude one
+(a model with none could be asked for more than it writes, and a strict gateway refuses that; a Claude-looking ID
+that does report one counts), and when the result is over 32,000 (a lower value would lower what every model is asked
+for today). A session on a Claude model whose tiers are gateway models therefore gets nothing, and its sub-Agents keep
+32,000; the provider's `env` can set the value. The provider's `env` wins (an empty value leaves Claude Code's own
+limit), and is pinned in the settings file like the rest of it.
 
-**Known gap: the start's own model.** Like the window and the `[1m]` marker, the value follows the model `providerEnv`
-is given. The Agent SDK bridge passes the conversation's model; `personad launch` and the settings file of an Agent or
-of the CLI main conversation are computed for the provider's default model, and the start's `--model` only replaces
-`ANTHROPIC_MODEL`. So a session started with `--model` on a provider model outside the set above gets the value worked
-out for the default model's set, which may be more than that model writes.
+The value follows the model the session runs, not only the provider's default. `launcher.env` sends the models'
+reported limits (`max_output_tokens`), and `personad launch` works it out again for the model the start runs (its last
+`--model`, a tier alias such as `opus` resolved to that tier's model, else `ANTHROPIC_MODEL`) beside the provider's
+tiers (`sessionOutput`); the Agent SDK bridge is given the conversation's model. So the CLI's settings file does not
+pin Persona's value, and one in the user's own settings `env` wins over it. The shell's copy is dropped only when the
+launch sets one, so a value the user exports for their own gateway still reaches a session that gets none. A model
+picked in a running session's `/model` menu that is none of the models above is still asked for the process's value.
+It does not move auto-compaction: 2.1.325 keeps `min(max output, 20000)` free below the window, and 32,000 already
+reserves the full 20,000.
 
 **Thinking levels.** The provider's default level reaches an Agent as `--effort` from `personad launch` (the `effort`
-field in `docs/integrations/launchers.md`). `launcher.env` now also lists the provider's models marked `no_effort`, and `personad launch` leaves the level out when the session runs one of them: the last `--model` of
-its arguments, else the provider's model (`launchEffort`). Claude Code still sends its own default to a model it does
+field in `docs/integrations/launchers.md`). `launcher.env` now also lists the provider's models marked `no_effort`, and `personad launch` leaves the level out when the session runs one of them (`launchEffort`, the
+session's model read as above). Claude Code still sends its own default to a model it does
 not know (`output_config.effort: high` with no `--effort`; `low`, `xhigh` and `max` are sent as given), and when the
 gateway forwards the model's refusal of the field unmodified, Claude Code retries without it and leaves it out after
 ([gateway protocol: automatic retry](https://code.claude.com/docs/en/llm-gateway-protocol#automatic-retry-and-error-forwarding)).

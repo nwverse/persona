@@ -260,8 +260,14 @@ const artifactsOff = "CLAUDE_CODE_DISABLE_ARTIFACT=1"
 
 // managedSettingsEnv is managedEnv as a settings "env" map (providerEnv). Settings env wins over the process env, so
 // the user's ~/.claude/settings.json (another gateway, another token) would otherwise replace a managed launcher's.
+// The reply limit Persona works out is left to the process env, which `personad launch` sets for the model the
+// session runs (sessionOutput); one the provider's own environment sets is pinned like the rest of it.
 func managedSettingsEnv(l proto.ManagedLauncher) map[string]string {
-	return pinnedEnv(providerEnv(l, "", "", false))
+	env := pinnedEnv(providerEnv(l, "", "", false))
+	if outputLimits(l) != nil {
+		delete(env, maxOutputEnv)
+	}
+	return env
 }
 
 var (
@@ -364,8 +370,10 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		Args   []string `json:"args"`
 		Error  string   `json:"error"`
 		// the provider's models that take no thinking level: Effort is not passed when the session runs one
-		// (launchEffort). An older node does not send it: Effort as before.
-		NoEffort []string `json:"no_effort"`
+		// (launchEffort); and its models' reported reply limits, for the limit of the model the session runs
+		// (sessionOutput). An older node sends neither: Effort and Env as before.
+		NoEffort  []string       `json:"no_effort"`
+		MaxOutput map[string]int `json:"max_output_tokens"`
 		// for a provider whose bypass list joins the inherited ones (mergesNoProxy): the user's settings env's lists, which
 		// come before the shell's. An older node does not send it: the provider's list alone.
 		NoProxyMerge map[string]string `json:"no_proxy_merge"`
@@ -389,6 +397,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		if len(resp.Clear) == 0 {
 			resp.Clear = legacyEnvClear
 		}
+		resp.Env, resp.Clear = sessionOutput(resp.Env, resp.Clear, resp.MaxOutput, sessionModel(args, resp.Args, resp.Env))
 		resp.Clear, resp.Env = launchEnvFor(resp.Clear, resp.Env, os.Getenv("PERSONA_ASSISTANT") == "1")
 		if resp.NoProxyMerge != nil { // the inherited bypasses still hold for what claude runs
 			resp.Env = withInheritedNoProxy(resp.Env, func(k string) string { return cmp.Or(resp.NoProxyMerge[k], os.Getenv(k)) })
@@ -416,7 +425,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		}
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
-	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, resp.Model, args, resp.Args), resp.Model, resp.Env)
+	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env)
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
@@ -612,6 +621,9 @@ func (n *Node) launcherEnv(name string) map[string]any {
 		if ids := noEffortModels(l); len(ids) > 0 { // the models it is not passed for (launchEffort)
 			out["no_effort"] = ids
 		}
+	}
+	if limits := outputLimits(l); limits != nil && l.AgentType() == "claude" { // the session model's limit (sessionOutput)
+		out["max_output_tokens"] = limits
 	}
 	if mergesNoProxy(l) {
 		out["no_proxy_merge"] = n.userNoProxy(l)

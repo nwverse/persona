@@ -49,8 +49,9 @@ func envClearFor(l proto.ManagedLauncher) []string {
 		clear = slices.Clone(providerEnvClear)
 	}
 	// The reply limit only when providerEnv sets it (outputTokens): otherwise the shell's stays, as it always has.
-	if _, set := providerEnv(l, "", "", false)[maxOutputEnv]; set {
-		clear = append(clear, maxOutputEnv)
+	if len(l.Models) > 0 { // only models report a limit; the launcher's own environment is cleared below
+		_, set := providerEnv(l, "", "", false)[maxOutputEnv]
+		clear = withOutputClear(clear, set)
 	}
 	for _, kv := range launcherEnvVars(l.Env) {
 		for _, k := range append([]string{kv[0]}, otherSpelling(kv[0])...) {
@@ -222,40 +223,118 @@ var processModelVars = []string{"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL
 	"ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
 	"CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_CUSTOM_MODEL_OPTION"}
 
-// claudeTierAliases: names Claude Code resolves to one of its tiers (whose model processModelVars already name).
+// claudeTierAliases: names Claude Code resolves to one of its tiers (whose model processModelVars already name), and
+// tierAliasVars the variable each tier alias passed as --model runs.
 var claudeTierAliases = []string{"opus", "sonnet", "haiku", "fable", "best", "opusplan", "default", "inherit"}
 
-// claudeKnows: Claude Code knows model m itself, so it asks m for m's own output limit: a Claude ID, also inside a
-// gateway's spelling of it (anthropic/claude-opus-5-5, a dated ID). It matches its known IDs anywhere in a name.
+var tierAliasVars = map[string]string{"opus": "ANTHROPIC_DEFAULT_OPUS_MODEL", "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "fable": "ANTHROPIC_DEFAULT_FABLE_MODEL"}
+
+// claudeKnows: m looks like one of Claude's own IDs, also inside a gateway's spelling of it (anthropic/claude-opus-5-5,
+// a dated ID): Claude Code matches its known IDs anywhere in a name and asks such a model for its own output limit.
 func claudeKnows(m string) bool { return strings.Contains(strings.ToLower(m), "claude-") }
 
-// outputTokens is CLAUDE_CODE_MAX_OUTPUT_TOKENS for l with env's models (#8798), 0 to leave Claude Code's own limit:
-// the least max_output_tokens of the models the process runs that Claude Code does not know, capped at what Claude
-// Code accepts, when that raises the 32000 it asks them for. None when the session's model is a Claude one (its
-// own limit is already its full one), and none when one of those models reports no limit: the one value serves them
-// all, and asking a model for more than it writes is refused by a strict gateway.
-func outputTokens(l proto.ManagedLauncher, env map[string]string) int {
+// outputTokens is CLAUDE_CODE_MAX_OUTPUT_TOKENS for a process with env's models (#8798), limit giving what the
+// gateway reports a model writes (0 none), and 0 to leave Claude Code's own limit: the least reported limit of the
+// models the process runs, capped at what Claude Code accepts, when that raises the 32000 it asks a model it does not
+// know for. None when the session's model looks like a Claude one (its own limit is its full one, and a lower value
+// would lower it), and none when a model that does not reports no limit: the one value serves them all, and asking a
+// model for more than it writes is refused by a strict gateway. A Claude-looking model with no reported limit is left
+// to Claude Code, which holds a model it knows to that model's own limit.
+func outputTokens(limit func(string) int, env map[string]string) int {
 	if session := env["ANTHROPIC_MODEL"]; session == "" || claudeKnows(session) {
 		return 0
 	}
 	n := 0
 	for _, k := range processModelVars {
 		m := env[k]
-		if m == "" || claudeKnows(m) || slices.Contains(claudeTierAliases, strings.ToLower(strings.TrimSuffix(m, oneMillionSuffix))) {
+		if m == "" || slices.Contains(claudeTierAliases, strings.ToLower(strings.TrimSuffix(m, oneMillionSuffix))) {
 			continue
 		}
-		pm, _ := providerModel(l, m)
-		if pm.MaxOutputTokens <= 0 {
+		switch got := limit(m); {
+		case got > 0:
+			if n == 0 || got < n {
+				n = got
+			}
+		case !claudeKnows(m):
 			return 0
-		}
-		if n == 0 || pm.MaxOutputTokens < n {
-			n = pm.MaxOutputTokens
 		}
 	}
 	if n <= unknownModelOutput {
 		return 0
 	}
 	return min(n, unknownModelOutputCap)
+}
+
+// providerLimit is outputTokens' limit for l's models ("<id>" or "<id>[1m]").
+func providerLimit(l proto.ManagedLauncher) func(string) int {
+	return func(m string) int {
+		pm, _ := providerModel(l, m)
+		return pm.MaxOutputTokens
+	}
+}
+
+// outputLimits are the reported limits of l's models by ID, for `personad launch` to work out the reply limit for the
+// model the session runs (launcher.env's max_output_tokens, sessionOutput); nil when none reports one, or l's own
+// environment sets the variable (its value stands).
+func outputLimits(l proto.ManagedLauncher) map[string]int {
+	if slices.ContainsFunc(launcherEnvVars(l.Env), func(kv [2]string) bool { return kv[0] == maxOutputEnv }) {
+		return nil
+	}
+	var out map[string]int
+	for _, pm := range l.Models {
+		if pm.MaxOutputTokens > 0 {
+			if out == nil {
+				out = map[string]int{}
+			}
+			out[pm.ID] = pm.MaxOutputTokens
+		}
+	}
+	return out
+}
+
+// withOutputClear is clear dropping the shell's reply limit exactly when the launch sets one (set): otherwise the
+// shell's stays, as it always has.
+func withOutputClear(clear []string, set bool) []string {
+	clear = slices.DeleteFunc(slices.Clone(clear), func(k string) bool { return k == maxOutputEnv })
+	if set {
+		clear = append(clear, maxOutputEnv)
+	}
+	return clear
+}
+
+// sessionModel is the model a claude `personad launch` starts runs: the last --model of the caller's arguments, else
+// of the launcher's own, else the environment's ANTHROPIC_MODEL (the provider's, its own env included); a tier alias
+// (--model opus) is that tier's model.
+func sessionModel(args, launcherArgs, env []string) string {
+	m := cmp.Or(modelArg(args), modelArg(launcherArgs), envValue(env, "ANTHROPIC_MODEL"))
+	if k, ok := tierAliasVars[strings.ToLower(strings.TrimSuffix(m, oneMillionSuffix))]; ok && envValue(env, k) != "" {
+		return envValue(env, k)
+	}
+	return m
+}
+
+// sessionOutput is launcher.env's env and clear list with the reply limit for the model the session runs (session):
+// the node works it out for the provider's model, and a start's --model may name another, which then runs beside the
+// provider's tiers. limits nil (an older node, or the provider's own environment sets it): as they are.
+func sessionOutput(env, clear []string, limits map[string]int, session string) ([]string, []string) {
+	if limits == nil {
+		return env, clear
+	}
+	m := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		m[k] = v
+	}
+	if session != "" {
+		m["ANTHROPIC_MODEL"] = session
+	}
+	n := outputTokens(func(x string) int { return cmp.Or(limits[x], limits[strings.TrimSuffix(x, oneMillionSuffix)]) }, m)
+	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, maxOutputEnv+"=") })
+	if n > 0 {
+		env = append(env, maxOutputEnv+"="+strconv.Itoa(n))
+	}
+	return env, withOutputClear(clear, n > 0)
 }
 
 // providerModel is what l knows of model m ("<id>" or "<id>[1m]").
@@ -407,7 +486,7 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	}
 	// The reply limit by the models the process ends up with (the launcher's own environment may name one), unless
 	// that environment sets it itself (empty: Claude Code's own limit).
-	if n := outputTokens(l, env); n > 0 && !given[maxOutputEnv] {
+	if n := outputTokens(providerLimit(l), env); n > 0 && !given[maxOutputEnv] {
 		env[maxOutputEnv] = strconv.Itoa(n)
 	}
 	return env
@@ -494,15 +573,13 @@ func noEffortModels(l proto.ManagedLauncher) []string {
 }
 
 // launchEffort is the default level `personad launch` passes as --effort (launcher.env's effort), "" when the
-// session's model takes none (#8798): the last --model of the caller's arguments, else of the launcher's own, else
-// the launcher's model, is one of noEffort ("<id>" or "<id>[1m]"). Claude Code would send the level to a model the
-// gateway says has none.
-func launchEffort(effort string, noEffort []string, model string, args, launcherArgs []string) string {
-	m := cmp.Or(modelArg(args), modelArg(launcherArgs), model)
-	if effort == "" || m == "" {
+// session's model (sessionModel) is one of noEffort ("<id>" or "<id>[1m]", #8798): Claude Code would send the level
+// to a model the gateway says has none.
+func launchEffort(effort string, noEffort []string, session string) string {
+	if effort == "" || session == "" {
 		return effort
 	}
-	if slices.Contains(noEffort, m) || slices.Contains(noEffort, strings.TrimSuffix(m, oneMillionSuffix)) {
+	if slices.Contains(noEffort, session) || slices.Contains(noEffort, strings.TrimSuffix(session, oneMillionSuffix)) {
 		return ""
 	}
 	return effort

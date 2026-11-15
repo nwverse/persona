@@ -332,7 +332,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   of the session running the test leaks in. On 2.1.325 this showed what no page says: an unknown model is sent
   `output_config.effort: high` with no `--effort`, and auto mode behind a gateway with nonessential traffic off refuses
   every reviewed action when no review comes back, where the permission-modes page describes a fall-back to the local
-  classifier. Another client's notes (magpie's) were right about the variables but describe a different launch
+  classifier. Another open-source client's notes were right about the variables but describe a different launch
   (`CLAUDE_CODE_USE_GATEWAY`), where the 2.1.325 code gives an unknown model no thinking level by default.
 - **A working variable is not a supported one**: `CLAUDE_CODE_MODEL_CAPABILITIES` does what it should behind
   `ANTHROPIC_BASE_URL`, but it is missing from the official reference, while the documented
@@ -341,8 +341,10 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - **A per-process value must hold for every model of the process**: `CLAUDE_CODE_MAX_OUTPUT_TOKENS` serves the
   session, its tiers, the small model and sub-Agents at once. Taking the session model's limit alone would ask a
   smaller tier for more than it writes, so the launch takes the least reported limit and sets nothing when one of them
-  reports none (`outputTokens`). The same holds for the window variables; the start's own `--model` is still a gap
-  (`docs/integrations/claude-integration.md`, "What a gateway reports about a model").
+  reports none (`outputTokens`). And the session's model is the start's `--model`, not the provider's default the
+  node's env and the settings file are written for: a value pinned in the settings file would beat the one worked out
+  for the start, so `personad launch` works it out again and the settings file leaves it out (`sessionOutput`,
+  `docs/integrations/claude-integration.md`, "What a gateway reports about a model").
 - **Check a doc's side effect in the code before acting on it**: the reference says raising the reply limit "reduces
   the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
   from 32,000 to 128,000 reserves exactly as much as before.

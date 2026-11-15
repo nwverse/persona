@@ -3,6 +3,7 @@ package node
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -92,6 +93,7 @@ func TestProviderEnvMaxOutputTokens(t *testing.T) {
 		{ID: "plain"},
 		{ID: "claude-opus-5-5", MaxOutputTokens: 64000},
 		{ID: "anthropic/claude-haiku-4-5", MaxOutputTokens: 64000},
+		{ID: "mixed-claude-distill", MaxOutputTokens: 16000},
 	}
 	base := proto.ManagedLauncher{Name: "p", BaseURL: "https://gw.example.com", APIKey: "sk-test-k", Model: "wide",
 		Models: models}
@@ -119,7 +121,9 @@ func TestProviderEnvMaxOutputTokens(t *testing.T) {
 		{"a tier with less", with(func(l *proto.ManagedLauncher) { l.OpusModel = "mid" }), "", "64000"},
 		{"a tier with none reported", with(func(l *proto.ManagedLauncher) { l.SonnetModel = "plain" }), "", "-"},
 		{"a tier under 32000", with(func(l *proto.ManagedLauncher) { l.HaikuModel = "short" }), "", "-"},
-		{"a Claude tier is not counted", with(func(l *proto.ManagedLauncher) { l.FableModel = "claude-opus-5-5" }), "", "128000"},
+		{"a Claude tier with no reported limit is Claude Code's", with(func(l *proto.ManagedLauncher) { l.FableModel = "claude-sonnet-5-5" }), "", "128000"},
+		{"a Claude-looking tier's reported limit counts", with(func(l *proto.ManagedLauncher) { l.FableModel = "claude-opus-5-5" }), "", "64000"},
+		{"so does a gateway model that only looks like one", with(func(l *proto.ManagedLauncher) { l.HaikuModel = "mixed-claude-distill" }), "", "-"},
 		{"the small model", with(func(l *proto.ManagedLauncher) { l.SmallModel = "mid" }), "", "64000"},
 		{"the sub-Agent model", with(func(l *proto.ManagedLauncher) { l.SubagentModel = "plain" }), "", "-"},
 		{"the /model extra entry", with(func(l *proto.ManagedLauncher) { l.CustomModel = "mid" }), "", "64000"},
@@ -140,10 +144,17 @@ func TestProviderEnvMaxOutputTokens(t *testing.T) {
 			}
 		}
 	}
-	// It is no per-start value: the settings file pins it over the user's settings, and `personad launch` sets it.
-	if pinnedEnv(providerEnv(base, "", "", true))[maxOutputEnv] != "128000" || !slices.Contains(managedEnv(base), maxOutputEnv+"=128000") ||
-		managedSettingsEnv(base)[maxOutputEnv] != "128000" {
+	// `personad launch` sets it for the session's model (sessionOutput), so the CLI's settings file leaves it to the
+	// process env; one the provider's env sets is pinned like the rest of that env. The Agent SDK bridge, given the
+	// conversation's model, pins its own.
+	if _, pinned := managedSettingsEnv(base)[maxOutputEnv]; pinned || !slices.Contains(managedEnv(base), maxOutputEnv+"=128000") {
 		t.Errorf("settings / launch env: %v / %q", managedSettingsEnv(base), managedEnv(base))
+	}
+	if own := with(func(l *proto.ManagedLauncher) { l.Env = "CLAUDE_CODE_MAX_OUTPUT_TOKENS=50000" }); managedSettingsEnv(own)[maxOutputEnv] != "50000" {
+		t.Errorf("provider env not pinned: %v", managedSettingsEnv(own))
+	}
+	if pinnedEnv(providerEnv(base, "mid", "", true))[maxOutputEnv] != "64000" {
+		t.Error("SDK bridge env")
 	}
 	// Reporting a limit adds this one variable and changes nothing else.
 	plain := with(func(l *proto.ManagedLauncher) {
@@ -184,43 +195,48 @@ func TestEnvClearForMaxOutputTokens(t *testing.T) {
 // The provider's default level is not passed as --effort for a session model the gateway says takes none (#8798).
 func TestLaunchEffortSkipsModelsWithoutLevels(t *testing.T) {
 	none := []string{"flat", "flat2"}
+	env := []string{"ANTHROPIC_MODEL=deep", "ANTHROPIC_DEFAULT_OPUS_MODEL=flat2", "ANTHROPIC_DEFAULT_SONNET_MODEL=deep"}
 	cases := []struct {
 		name               string
-		effort, model      string
-		noEffort           []string
+		env                []string
 		args, launcherArgs []string
 		want               string
 	}{
-		{"default model takes none", "high", "flat", none, nil, nil, ""},
-		{"default model takes some", "high", "deep", none, nil, nil, "high"},
-		{"started on one that takes none", "high", "deep", none, []string{"--session-id", "x", "--model", "flat2"}, nil, ""},
-		{"started on one that takes some", "high", "flat", none, []string{"--model", "deep"}, nil, "high"},
-		{"marked [1m]", "high", "deep", none, []string{"--model=flat[1m]"}, nil, ""},
-		{"the last --model counts", "high", "deep", none, []string{"--model", "deep", "--model", "flat"}, nil, ""},
-		{"the launcher's own --model", "high", "deep", none, nil, []string{"--model", "flat"}, ""},
-		{"the caller's wins over the launcher's", "high", "flat", none, []string{"--model", "deep"}, []string{"--model", "flat"}, "high"},
-		{"a prompt after -- is no model", "high", "deep", none, []string{"--", "--model", "flat"}, nil, "high"},
-		{"an older node lists none", "high", "flat", nil, nil, nil, "high"},
-		{"no default level", "", "flat", none, nil, nil, ""},
+		{"default model takes some", env, nil, nil, "high"},
+		{"default model takes none", []string{"ANTHROPIC_MODEL=flat"}, nil, nil, ""},
+		{"the provider's env names the model", []string{"ANTHROPIC_MODEL=flat[1m]"}, nil, nil, ""},
+		{"started on one that takes none", env, []string{"--session-id", "x", "--model", "flat"}, nil, ""},
+		{"started on one that takes some", []string{"ANTHROPIC_MODEL=flat"}, []string{"--model", "deep"}, nil, "high"},
+		{"marked [1m]", env, []string{"--model=flat[1m]"}, nil, ""},
+		{"the last --model counts", env, []string{"--model", "deep", "--model", "flat"}, nil, ""},
+		{"a tier alias is its tier's model", env, []string{"--model", "opus"}, nil, ""},
+		{"another tier alias", []string{"ANTHROPIC_MODEL=flat", "ANTHROPIC_DEFAULT_SONNET_MODEL=deep"}, []string{"--model", "sonnet"}, nil, "high"},
+		{"the launcher's own --model", env, nil, []string{"--model", "flat"}, ""},
+		{"the caller's wins over the launcher's", env, []string{"--model", "deep"}, []string{"--model", "flat"}, "high"},
+		{"a prompt after -- is no model", env, []string{"--", "--model", "flat"}, nil, "high"},
 	}
 	for _, c := range cases {
-		if got := launchEffort(c.effort, c.noEffort, c.model, c.args, c.launcherArgs); got != c.want {
+		if got := launchEffort("high", none, sessionModel(c.args, c.launcherArgs, c.env)); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+	if launchEffort("high", nil, "flat") != "high" || launchEffort("", none, "flat") != "" {
+		t.Error("an older node lists none / no default level")
 	}
 	// launcher.env names the models; argv then carries no --effort for them.
 	l := proto.ManagedLauncher{Name: "p", Kind: "api", BaseURL: "https://gw.example.com", Model: "flat", Effort: "high",
 		Models: []proto.ProviderModel{{ID: "flat", NoEffort: true}, {ID: "deep", Efforts: []string{"low", "high"}}}}
 	out := managedNode(l).launcherEnv("p")
-	if ids, _ := out["no_effort"].([]string); out["effort"] != "high" || !slices.Equal(ids, []string{"flat"}) {
+	ids, _ := out["no_effort"].([]string)
+	if out["effort"] != "high" || !slices.Equal(ids, []string{"flat"}) {
 		t.Fatalf("launcher.env: effort %v, no_effort %v", out["effort"], out["no_effort"])
 	}
-	ids := out["no_effort"].([]string)
+	launchEnv, _ := out["env"].([]string)
 	for _, c := range []struct {
 		args []string
 		want bool
 	}{{nil, false}, {[]string{"--model", "deep"}, true}} {
-		argv := launchArgv("claude", c.args, nil, launchEffort("high", ids, "flat", c.args, nil), "flat", nil)
+		argv := launchArgv("claude", c.args, nil, launchEffort("high", ids, sessionModel(c.args, nil, launchEnv)), "flat", nil)
 		if got := slices.Contains(argv, "--effort"); got != c.want {
 			t.Errorf("argv %q: --effort %v, want %v", argv, got, c.want)
 		}
@@ -229,5 +245,63 @@ func TestLaunchEffortSkipsModelsWithoutLevels(t *testing.T) {
 	l.Models[0].NoEffort = false
 	if _, sent := managedNode(l).launcherEnv("p")["no_effort"]; sent {
 		t.Error("no_effort sent for a provider without such models")
+	}
+}
+
+// `personad launch` works the reply limit out again for the model the start names (#8798): launcher.env's value is the
+// provider's model's, and a --model beside it runs with the provider's tiers.
+func TestSessionOutputFollowsTheStartsModel(t *testing.T) {
+	l := proto.ManagedLauncher{Name: "p", Kind: "api", BaseURL: "https://gw.example.com", Model: "wide",
+		Models: []proto.ProviderModel{{ID: "wide", ContextWindow: 1000000, MaxOutputTokens: 128000},
+			{ID: "mid", MaxOutputTokens: 40000}, {ID: "short", MaxOutputTokens: 16000}, {ID: "plain"}}, OpusModel: "mid"}
+	out := managedNode(l).launcherEnv("p")
+	env, _ := out["env"].([]string)
+	clear, _ := out["clear"].([]string)
+	limits, _ := out["max_output_tokens"].(map[string]int)
+	if envValue(env, maxOutputEnv) != "40000" || !slices.Contains(clear, maxOutputEnv) ||
+		!maps.Equal(limits, map[string]int{"wide": 128000, "mid": 40000, "short": 16000}) {
+		t.Fatalf("launcher.env: %q / %q / %v", env, clear, limits)
+	}
+	shell := []string{"CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000", "PATH=/bin"}
+	for _, c := range []struct {
+		name string
+		args []string
+		want string // "" unset, the shell's then kept
+	}{
+		{"the provider's model", nil, "40000"},
+		{"marked", []string{"--model", "wide[1m]"}, "40000"},
+		{"a model with less", []string{"--model", "short"}, ""},
+		{"a model reporting none", []string{"--model", "plain"}, ""},
+		{"a model the provider does not list", []string{"--model", "other"}, ""},
+		{"a Claude model", []string{"--model", "claude-opus-5-5"}, ""},
+		{"the Opus tier", []string{"--model", "opus"}, "40000"},
+	} {
+		e, cl := sessionOutput(env, clear, limits, sessionModel(c.args, nil, env))
+		got := envValue(e, maxOutputEnv)
+		if got != c.want || slices.Contains(cl, maxOutputEnv) != (c.want != "") {
+			t.Errorf("%s: %s=%q, clear %v", c.name, maxOutputEnv, got, slices.Contains(cl, maxOutputEnv))
+		}
+		if c.want == "" && !slices.Equal(withoutEnv(shell, cl), shell) {
+			t.Errorf("%s: the shell's value dropped", c.name)
+		}
+		if n := strings.Count(strings.Join(e, "\n"), maxOutputEnv+"="); n > 1 {
+			t.Errorf("%s: %d values", c.name, n)
+		}
+	}
+	// An older node sends no limits, and a provider whose env sets the value sends none: the env stands.
+	if e, cl := sessionOutput(env, clear, nil, "short"); !slices.Equal(e, env) || !slices.Equal(cl, clear) {
+		t.Errorf("no limits: %q %q", e, cl)
+	}
+	own := l
+	own.Env = "CLAUDE_CODE_MAX_OUTPUT_TOKENS=50000"
+	if _, sent := managedNode(own).launcherEnv("p")["max_output_tokens"]; sent {
+		t.Error("limits sent though the provider's env sets the value")
+	}
+	// Codex providers get none.
+	codex := l
+	codex.Agent = "codex"
+	codex.Kind = ""
+	if _, sent := managedNode(codex).launcherEnv("p")["max_output_tokens"]; sent {
+		t.Error("limits sent for a Codex provider")
 	}
 }
