@@ -144,6 +144,14 @@ func TestDirectNoRetryRateLimitUsesRetryAfterAsQuota(t *testing.T) {
 			t.Fatalf("requests = %d, pause = %+v; want one request and a pause until now", requests, paused)
 		}
 	})
+	t.Run("large cooldown caps without overflowing", func(t *testing.T) {
+		err, requests := directAPIError(t, "chat", 429, `{"error":{"code":"future_code","message":"request rejected"}}`,
+			"X-Should-Retry", "false", "Retry-After", "10000000000")
+		paused := requireDirectPause(t, err, ReasonQuota)
+		if requests != 1 || !paused.Until.Equal(now().Add(afterMost)) {
+			t.Fatalf("requests = %d, pause = %+v; want one request and the maximum pause", requests, paused)
+		}
+	})
 }
 
 func TestDirectPaymentRequiredPausesQuotaAcrossProtocols(t *testing.T) {

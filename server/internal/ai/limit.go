@@ -476,22 +476,36 @@ func Transient(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.As(err, &n)
 }
 
-// parseRetryAfter reads syntactically valid non-negative Retry-After seconds or an HTTP date. Malformed and absent
-// values are not a cooldown; valid zero remains distinct so an explicit reset can expire immediately.
+// parseRetryAfter reads digits-only Retry-After seconds or an HTTP date. Malformed and absent values are not a
+// cooldown; valid zero remains distinct so an explicit reset can expire immediately. Large values cap before the
+// duration multiplication can overflow.
 func parseRetryAfter(v string) (time.Duration, bool) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return 0, false
 	}
-	var d time.Duration
-	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-		d = time.Duration(n) * time.Second
-	} else if t, err := http.ParseTime(v); err == nil {
-		d = t.Sub(now())
-	} else {
+	digits := true
+	for i := 0; i < len(v); i++ {
+		if v[i] < '0' || v[i] > '9' {
+			digits = false
+			break
+		}
+	}
+	if digits {
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		if n >= uint64(afterMost/time.Second) {
+			return afterMost, true
+		}
+		return time.Duration(n) * time.Second, true
+	}
+	t, err := http.ParseTime(v)
+	if err != nil {
 		return 0, false
 	}
-	return min(max(d, 0), afterMost), true
+	return min(max(t.Sub(now()), 0), afterMost), true
 }
 
 // retryAfter reads Retry-After: seconds or an HTTP date, returning zero when it is absent or malformed.
