@@ -282,7 +282,8 @@ func (n *Node) sdkCommand(b sdkBridge, launcher string, s sdkStart, base []strin
 				return cmp.Or(user[k], envValue(base, k))
 			})
 		}
-		base = withoutEnv(base, envClearFor(l))
+		_, limited := s.env[maxOutputEnv] // set for this conversation's model, not the provider's (outputTokens)
+		base = withoutEnv(base, withOutputClear(envClearFor(l), limited))
 		own := envList(s.env)
 		base = identity.Environment(base, own...)
 		// as `personad launch` does: a proxy inherited that no longer answers holds every request (deadproxy.go)

@@ -21,6 +21,7 @@ import {
   importSources,
   importStays,
   importSummary,
+  legacyChatClears,
   type ImportedProvider,
   mergeDiscovered,
   newForm,
@@ -115,8 +116,10 @@ describe("formProblems", () => {
     for (const body of [providerBody(draft, null), providerBody(draft, { name: "gw", kind: "api", api: "chat", model: "m1" }), probeBody(draft, null)]) {
       expect(body).not.toHaveProperty("headers");
       expect(body).not.toHaveProperty("proxy");
-      for (const key of ["no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"]) expect(body).not.toHaveProperty(key);
+      for (const key of ["no_proxy", "env", "timeout_ms", "compact_window", "max_context", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"]) expect(body).not.toHaveProperty(key);
     }
+    expect(providerBody(draft, null)).toHaveProperty("effort", "high");
+    expect(probeBody(draft, null, "m1")).toHaveProperty("effort", "high");
     const responses = providerBody({ ...draft, api: "responses" }, null);
     expect(responses).toMatchObject({ headers: "invalid", proxy: "invalid", no_proxy: "example.com", opus_model: "tier-a", subagent_force: true });
     const models = [formModel({ id: "m1", context_window: 16000, efforts: ["high"], default_effort: "high" })];
@@ -163,6 +166,12 @@ describe("formProblems", () => {
 });
 
 describe("providerBody", () => {
+  it("keeps a supported stored Chat effort out of legacy repair and sends only real edits", () => {
+    const old: ProviderView = { name: "chat", kind: "api", api: "chat", model: "m1", base_url: "https://gw.example.com", has_key: true, effort: "high" };
+    expect(legacyChatClears(old)).toEqual({});
+    expect(providerBody(formFromView(old), old, true)).not.toHaveProperty("effort");
+    expect(providerBody({ ...formFromView(old), effort: "max" }, old, true)).toHaveProperty("effort", "max");
+  });
   it("a new provider sends what is set, not the empty ones", () => {
     const b = providerBody(ready({ timeout_ms: "30000", subagent_force: true }), null);
     expect(b).toMatchObject({ name: "gw", base_url: "https://gw.example.com", model: "m1", auth: "bearer", api_key: "sk-test-1", timeout_ms: 30000, subagent_force: true });
@@ -197,6 +206,16 @@ describe("providerBody", () => {
     const f = formFromView(stored);
     f.models[1] = { ...f.models[1], checked: false };
     expect(providerBody(f, stored).models).toEqual([{ id: "m1", context_window: 1000000, efforts: ["high", "max"], default_effort: "high" }]);
+  });
+  it("saves what the gateway reported of a model that the form does not show, and leaves an unchanged PUT alone (#8778)", () => {
+    const reported = { id: "m1", context_window: 200000, efforts: ["low", "max"], all_efforts: ["minimal", "low", "ultra"], max_output_tokens: 32000, image_input: true, tool_calls: false };
+    const plain = { id: "m2", no_effort: true };
+    expect(providerBody(ready({ models: [formModel(reported), formModel(plain)] }), null).models).toEqual([
+      { id: "m1", context_window: 200000, efforts: ["low", "max"], max_output_tokens: 32000, all_efforts: ["minimal", "low", "ultra"], image_input: true, tool_calls: false },
+      { id: "m2", no_effort: true },
+    ]);
+    const view: ProviderView = { ...stored, models: [reported, plain] };
+    expect(providerBody(formFromView(view), view)).not.toHaveProperty("models");
   });
   it.each(["responses", "chat"] as const)("%s direct API providers send no launcher-only fields", (api) => {
     const b = providerBody(ready({ kind: "api", api, small_model: "s", args: "--x" }), null);
@@ -255,7 +274,7 @@ describe("fallbackTitle", () => {
 
 describe("probes", () => {
   it("tests the provider draft's effort, including explicitly clearing its saved default", () => {
-    for (const api of ["responses", "messages"] as const) {
+    for (const api of ["responses", "messages", "chat"] as const) {
       expect(probeBody(ready({ kind: "api", api, effort: "high" }), "gw", "m1")).toMatchObject({ effort: "high" });
       expect(probeBody(ready({ kind: "api", api, effort: "" }), "gw", "m1")).toHaveProperty("effort", "");
     }
@@ -300,6 +319,26 @@ describe("probes", () => {
     expect(merged[1]).toMatchObject({ context_window: "200", efforts: [], default_effort: "" });
     expect(merged[2]).toMatchObject({ context_window: "300", efforts: [], default_effort: "" });
     expect(merged[3]).toMatchObject({ context_window: "400", efforts: ["high"], default_effort: "high" });
+  });
+  it("gives rows already there what the gateway reports now, keeping theirs when it reports nothing (#8778)", () => {
+    const rows = [formModel({ id: "a", context_window: 100 }), formModel({ id: "c", no_effort: true }), formModel({ id: "d", max_output_tokens: 1 })];
+    const merged = mergeDiscovered(rows, [
+      { id: "a", no_effort: true, max_output_tokens: 8000, image_input: false, tool_calls: true },
+      { id: "c", max_output_tokens: 9000, efforts: ["high"], all_efforts: ["high", "ultra"] },
+      { id: "d" },
+    ]);
+    expect(merged.map((m) => [m.efforts, m.meta])).toEqual([
+      [[], { max_output_tokens: 8000, no_effort: true, image_input: false, tool_calls: true }],
+      [[], { max_output_tokens: 9000, all_efforts: ["high", "ultra"] }],
+      [[], { max_output_tokens: 1 }],
+    ]);
+    const fresh = mergeDiscovered([], [{ id: "d", efforts: ["high", "max"], all_efforts: ["high", "ultra"], max_output_tokens: 4096 }]);
+    expect(fresh[0]).toMatchObject({ efforts: ["high", "max"], meta: { all_efforts: ["high", "ultra"], max_output_tokens: 4096 } });
+  });
+  it("leaves a model the gateway said takes no thinking level without the catalog's levels (#8778)", () => {
+    const rows = [formModel({ id: "glm-5.3", no_effort: true }), formModel({ id: "glm-5.3-b" })];
+    const filled = fillFromCatalog(rows, [{ id: "glm-5.3", name: "GLM-5.3", efforts: ["low", "high"] }, { id: "glm-5.3-b", efforts: ["low", "high"] }]);
+    expect(filled.map((m) => [m.name, m.efforts])).toEqual([["GLM-5.3", []], ["", ["low", "high"]]]);
   });
   it("merges discovered models without losing what was typed", () => {
     const first = mergeDiscovered([], [{ id: "a", context_window: 200000 }, { id: "b" }]);

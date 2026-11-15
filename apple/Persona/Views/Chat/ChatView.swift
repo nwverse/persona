@@ -2937,9 +2937,6 @@ struct ChatView: View {
             if style == .assistant, lines.isEmpty, !pending.isEmpty { DayLine(date: .now).flippedBack() }
             // Every message, timer line, tool count and answer is its own lazy row (a running turn can hold
             // hundreds of steps; one stack of them froze the page).
-            // The oldest dozen lines start loading the page before them: by the time you reach the top it is
-            // usually there (pages with screenshots run to megabytes and take seconds).
-            let prefetch = Set(lines.prefix(12).map(\.id))
             let openRecap = ChatLines.openRecap(lines, pending: viewing == nil ? pendingRecap : nil)
             ForEach(lines.reversed()) { line in
                 Group {
@@ -2953,7 +2950,6 @@ struct ChatView: View {
                     .debugLineY(line.id, scratch)
                     .landingFrame(line.id == landing, scratch)
                     .id(line.id)
-                    .onAppear { if prefetch.contains(line.id) { prefetchOlder() } }
                     .zIndex(menu.selected != nil && line.holds(menu.selected) ? 1 : 0)
                 // Upside down: drawn after the line is drawn above it, where it was written.
                 ForEach((placed.before[line.id] ?? []).reversed()) { msg in
@@ -3029,7 +3025,13 @@ struct ChatView: View {
         }
         // Any part of a row on screen: `visibleLines` counts a row once half of it is, and a line taller than two
         // screens never is. None at all after a landing is a blank page (`mendBlankLanding`).
-        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
+        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+            scratch.drawnLines = ids
+            // The oldest dozen lines start loading the page before them: by the time you reach the top it is usually
+            // there (pages with screenshots run to megabytes and take seconds). Here, not an `onAppear` on every row:
+            // each row the lazy list made while scrolling then ran an action and an update of the page for nothing.
+            if lines.prefix(12).contains(where: { ids.contains($0.id) }) { prefetchOlder() }
+        }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
         // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has the
@@ -7915,31 +7917,52 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
     @ViewBuilder var full: () -> Full
     @ViewBuilder var compact: () -> Compact
 
+    /// Only the fold modifiers read how far it is folded (`ChromeFold`), not this body: the fold changes on every frame
+    /// of a drag, and this body built the whole open header again each time (its agents' tabs, chips and glass), as
+    /// its content is a closure SwiftUI cannot compare.
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("ChromeHeader")
         #endif
-        let maxC = chrome.maxCollapse
-        let c = min(max(chrome.collapse, 0), maxC)
-        let p = maxC > 0 ? c / maxC : 0 // 0 open … 1 folded
         ZStack(alignment: .top) {
             ChatRegion(name: "ChromeFull.body", content: full)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome.height = $0 }
+                .modifier(ChromeFold(chrome: chrome, part: .full))
+            // Not there at all until it starts to show (it is clear below half way).
+            ChatRegion(name: "ChromeCompact.body", content: compact)
+                .modifier(ChromeFold(chrome: chrome, part: .compact))
+        }
+        .modifier(ChromeFold(chrome: chrome, part: .frame))
+        .clipped()
+        .background(.bar, ignoresSafeAreaEdges: .top)
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
+    }
+}
+
+/// One part of the header's fold, driven by `chrome.collapse`: the open header slides up and fades, the slim bar fades
+/// in past half way, and the whole is clipped to what is left. Its content is drawn by `ChromeHeader` and only moved here.
+private struct ChromeFold: ViewModifier {
+    enum Part { case full, compact, frame }
+    var chrome: ChatChrome
+    var part: Part
+
+    func body(content: Content) -> some View {
+        let maxC = chrome.maxCollapse
+        let c = min(max(chrome.collapse, 0), maxC)
+        let p = maxC > 0 ? c / maxC : 0 // 0 open … 1 folded
+        switch part {
+        case .full:
+            content
                 .offset(y: -c)
                 .opacity(Double(1 - min(1, p * 1.5)))
                 .allowsHitTesting(p < 0.5)
                 .modifier(GoneWhen(gone: p * 1.5 >= 1))
-            // Not there at all until it starts to show (it is clear below half way).
-            if p > 0.5 {
-                ChatRegion(name: "ChromeCompact.body", content: compact)
-                    .opacity(Double(max(0, (p - 0.5) * 2)))
-            }
+        case .compact:
+            if p > 0.5 { content.opacity(Double(max(0, (p - 0.5) * 2))) }
+        case .frame:
+            content.frame(height: chrome.height > 0 ? max(chrome.height - c, ChatChrome.compactHeight) : nil, alignment: .top)
         }
-        .frame(height: chrome.height > 0 ? max(chrome.height - c, ChatChrome.compactHeight) : nil, alignment: .top)
-        .clipped()
-        .background(.bar, ignoresSafeAreaEdges: .top)
-        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
     }
 }
 

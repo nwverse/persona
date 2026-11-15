@@ -260,8 +260,14 @@ const artifactsOff = "CLAUDE_CODE_DISABLE_ARTIFACT=1"
 
 // managedSettingsEnv is managedEnv as a settings "env" map (providerEnv). Settings env wins over the process env, so
 // the user's ~/.claude/settings.json (another gateway, another token) would otherwise replace a managed launcher's.
+// The reply limit Persona works out is left to the process env, which `personad launch` sets for the model the
+// session runs (sessionOutput); one the provider's own environment sets is pinned like the rest of it.
 func managedSettingsEnv(l proto.ManagedLauncher) map[string]string {
-	return pinnedEnv(providerEnv(l, "", "", false))
+	env := pinnedEnv(providerEnv(l, "", "", false))
+	if outputLimits(l) != nil {
+		delete(env, maxOutputEnv)
+	}
+	return env
 }
 
 var (
@@ -363,9 +369,18 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		Clear  []string `json:"clear"` // what to drop from the shell's env first (envClearFor)
 		Args   []string `json:"args"`
 		Error  string   `json:"error"`
+		// the provider's models that take no thinking level: Effort is not passed when the session runs one
+		// (launchEffort); and its models' reported reply limits, for the limit of the model the session runs
+		// (sessionOutput). An older node sends neither: Effort and Env as before.
+		NoEffort  []string       `json:"no_effort"`
+		MaxOutput map[string]int `json:"max_output_tokens"`
 		// for a provider whose bypass list joins the inherited ones (mergesNoProxy): the user's settings env's lists, which
 		// come before the shell's. An older node does not send it: the provider's list alone.
 		NoProxyMerge map[string]string `json:"no_proxy_merge"`
+		// for a Codex provider whose gateway serves Codex's model catalog (codex_catalog.go): its URL, and the codex
+		// whose version the node checked. An older node sends neither: no catalog, as before.
+		CodexCatalogURL   string `json:"codex_catalog_url"`
+		CodexCatalogCodex string `json:"codex_catalog_codex"`
 	}
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return err
@@ -386,6 +401,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		if len(resp.Clear) == 0 {
 			resp.Clear = legacyEnvClear
 		}
+		resp.Env, resp.Clear = sessionOutput(resp.Env, resp.Clear, resp.MaxOutput, sessionModel(args, resp.Args, resp.Env))
 		resp.Clear, resp.Env = launchEnvFor(resp.Clear, resp.Env, os.Getenv("PERSONA_ASSISTANT") == "1")
 		if resp.NoProxyMerge != nil { // the inherited bypasses still hold for what claude runs
 			resp.Env = withInheritedNoProxy(resp.Env, func(k string) string { return cmp.Or(resp.NoProxyMerge[k], os.Getenv(k)) })
@@ -413,7 +429,11 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		}
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
-	argv := launchArgv(agent, args, resp.Args, resp.Effort, resp.Model, resp.Env)
+	catalog := resp.CodexCatalogURL
+	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) && !codexReadsCatalog(codexVersionAt(ctx, exe)) {
+		catalog = "" // the node checked another codex than this one (another PATH), and this one would not read it
+	}
+	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env, catalog)
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
@@ -443,8 +463,10 @@ func LaunchWithSecrets(ctx context.Context, ticket string, argv []string) error 
 }
 
 // launchArgv builds the argument vector for starting an agent.
-// For Claude Code, provider effort is passed as --effort only when the arguments carry no --effort (#2307).
-func launchArgv(agent string, args, respArgs []string, respEffort, respModel string, respEnv []string) []string {
+// For Claude Code, provider effort is passed as --effort only when the arguments carry no --effort (#2307), and
+// Launch leaves it out for a session model the gateway says takes none (launchEffort, #8798).
+// codexCatalog is the model catalog URL of a Codex provider's gateway, "" for none (codexProviderArgs).
+func launchArgv(agent string, args, respArgs []string, respEffort, respModel string, respEnv []string, codexCatalog string) []string {
 	hasModelArg := false
 	hasSettingsArg := false
 	hasEffortArg := false
@@ -484,7 +506,7 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 			launchArgs = append(launchArgs, "--effort", respEffort)
 		}
 	} else if agent == "codex" {
-		launchArgs = insertBeforeDashDash(launchArgs, codexProviderArgs(append(slices.Clone(cleanRespArgs), args...), respEnv))
+		launchArgs = insertBeforeDashDash(launchArgs, codexProviderArgs(append(slices.Clone(cleanRespArgs), args...), respEnv, codexCatalog))
 		if respModel != "" && !hasModelArg {
 			launchArgs = insertBeforeDashDash(launchArgs, []string{"-m", respModel})
 		}
@@ -506,8 +528,11 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 // from the OPENAI_BASE_URL and OPENAI_API_KEY the launcher sets (managedEnv). Codex 0.16x no longer reads those two
 // for its built-in OpenAI provider: it went to api.openai.com over a WebSocket, without the key, and every turn ended
 // in "Reconnecting... 5/5". A provider of its own also talks plain HTTP, which a gateway answers. None when the
-// launcher names no gateway, or its arguments choose a provider or profile themselves.
-func codexProviderArgs(args, env []string) []string {
+// launcher names no gateway, or its arguments choose a provider or profile themselves. With a key and catalog (the
+// gateway's model catalog URL the node found, codex_catalog.go) the provider has its model_catalog_url too, so codex
+// lists the gateway's models and runs them with the gateway's windows and thinking levels; without, the arguments are
+// what they always were.
+func codexProviderArgs(args, env []string, catalog string) []string {
 	base := envValue(env, "OPENAI_BASE_URL")
 	if base == "" {
 		return nil
@@ -519,6 +544,9 @@ func codexProviderArgs(args, env []string) []string {
 	provider := "{name=" + q("Persona launcher") + ",base_url=" + q(base) + `,wire_api="responses"`
 	if envValue(env, "OPENAI_API_KEY") != "" {
 		provider += `,env_key="OPENAI_API_KEY"`
+		if catalog != "" { // keyless, codex would not fetch it and would list nothing
+			provider += ",model_catalog_url=" + q(catalog)
+		}
 	}
 	return []string{"-c", `model_provider="persona-launcher"`, "-c", "model_providers.persona-launcher=" + provider + "}"}
 }
@@ -605,6 +633,15 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	out := map[string]any{"env": managedEnv(l), "clear": envClearFor(l), "args": l.Args, "agent": l.AgentType(), "model": l.Model}
 	if effort := launcherDefaultEffort(l); effort != "" {
 		out["effort"] = effort
+		if ids := noEffortModels(l); len(ids) > 0 { // the models it is not passed for (launchEffort)
+			out["no_effort"] = ids
+		}
+	}
+	if limits := outputLimits(l); limits != nil && l.AgentType() == "claude" { // the session model's limit (sessionOutput)
+		out["max_output_tokens"] = limits
+	}
+	if catalog, codex := n.codexCatalog(context.Background(), l); catalog != "" {
+		out["codex_catalog_url"], out["codex_catalog_codex"] = catalog, codex
 	}
 	if mergesNoProxy(l) {
 		out["no_proxy_merge"] = n.userNoProxy(l)
