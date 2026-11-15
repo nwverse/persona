@@ -733,3 +733,13 @@ modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up
 inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
 the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
 `JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
+
+## A held list page must read its controls from the live page, not from what it draws
+
+The Agents list holds the page it drew while it scrolls (`AgentsFeedHold.kt`). Everything the screen derives from that
+held page also reads old controls: the scope that decides whether the hold still applies, and what the pill compares, must
+come from the page the hub last sent. Taken from the drawn one, a tapped fold or a changed grouping would never release the
+hold, since the held page still shows the old setting. The screen therefore keeps `latestPage` for scope, requests and the
+pill and uses the held page only as `page` for drawing. A paged list also needs its own exit: a fetched page appends rows
+that were never live, so it lands at once (`growsPage`) or it leaves a gap under the finger. Write the hold's release
+conditions as a pure function (`holdsAgainst`) so each can be tested without a list.
