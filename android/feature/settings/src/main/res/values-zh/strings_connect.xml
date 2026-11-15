@@ -15,7 +15,7 @@
     <string name="settings_pairing_welcome_assistant_title">Persona 助手</string>
     <string name="settings_pairing_welcome_assistant">连接你的知识库，手机数据会在需要时单独申请授权。</string>
     <string name="settings_pairing_welcome_push">没有 Google 服务也能收通知：手机通过常驻连接接收 Hub 的消息。</string>
-    <string name="settings_pairing_welcome_connect">连接 Hub</string>
+    <string name="settings_pairing_welcome_guide">还没有 Hub？</string>
     <string name="settings_pairing_failed_title">连接未完成</string>
     <string name="settings_pairing_failed_body">按下面的提示处理后，再试一次。</string>
     <string name="settings_pairing_stopped_at">停在「%1$s」</string>

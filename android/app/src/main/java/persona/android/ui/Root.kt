@@ -153,22 +153,25 @@ private fun PersonaRootContent(
                             if (route.key == PairingRoute || route.key is SettingsPageRoute) openNavigation.value = null
                         }
                     }
-                    // Keep the pairing state in memory while diagnostics is open.
-                    PairingScreen(services.pairing, services.sessions, initialLink = link,
-                        onReady = { MainActivity.pendingPairLink.value = null; entering = false; onPaired() },
-                        onBack = if (link != null && hub != null) ({ MainActivity.pendingPairLink.value = null }) else null,
-                        onDiagnostics = { diagnostics = true }, diagnostics = services.diagnostics,
-                        onCredentialsSaved = { MainActivity.pendingPairLink.value = null }, machines = services.machines,
-                        attempts = services.pairingAttempts, mainReadiness = services.readiness,
-                        footer = {
-                            if (hub == null) JTextButton(stringResource(R.string.app_try_demo), onClick = { scope.launch {
-                                try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
-                                catch (error: Exception) {
-                                    android.util.Log.w("PersonaShell", "Unable to start demo", error)
-                                    shell.feedback.failure(error)
-                                }
-                            } })
-                        })
+                    // Keep the pairing state in memory while diagnostics is open. The link host gives the welcome page's
+                    // "No hub yet?" guide the in-app card every other link opens in, before any shell exists.
+                    persona.feature.chat.ChatLinkHost { _ ->
+                        PairingScreen(services.pairing, services.sessions, initialLink = link,
+                            onReady = { MainActivity.pendingPairLink.value = null; entering = false; onPaired() },
+                            onBack = if (link != null && hub != null) ({ MainActivity.pendingPairLink.value = null }) else null,
+                            onDiagnostics = { diagnostics = true }, diagnostics = services.diagnostics,
+                            onCredentialsSaved = { MainActivity.pendingPairLink.value = null }, machines = services.machines,
+                            attempts = services.pairingAttempts, mainReadiness = services.readiness,
+                            footer = {
+                                if (hub == null) JTextButton(stringResource(R.string.app_try_demo), onClick = { scope.launch {
+                                    try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
+                                    catch (error: Exception) {
+                                        android.util.Log.w("PersonaShell", "Unable to start demo", error)
+                                        shell.feedback.failure(error)
+                                    }
+                                } })
+                            })
+                    }
                     if (diagnostics) {
                         val close = { diagnostics = false }
                         JFullScreen(onDismiss = close) { SettingsScreen(services, initialPage = "diag", onBack = close) }
