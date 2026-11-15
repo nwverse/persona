@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -294,6 +295,7 @@ func (t probeTarget) do(ctx context.Context, method, endpoint string, body []byt
 	for _, hd := range parseHeaders(t.headers) {
 		req.Header.Set(hd[0], hd[1])
 	}
+	modelhttp.SetDefaultUserAgent(req.Header)
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}

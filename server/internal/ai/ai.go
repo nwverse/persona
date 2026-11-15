@@ -13,12 +13,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/aiwire"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -53,7 +55,43 @@ func New(cfg Config) *Client {
 
 // NewWith is New sending its requests through transport (nil: this machine's network).
 func NewWith(cfg Config, transport http.RoundTripper) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second, Transport: transport}}
+	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second, Transport: transport, CheckRedirect: checkRedirect}}
+}
+
+// net/http copies headers from the first request on every redirect, so check the entire chain before retaining its
+// potentially private User-Agent. Once a chain leaves its original origin, all later hops use Persona's identity.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	origin := via[0].URL
+	if !sameOrigin(origin, req.URL) {
+		req.Header.Set("User-Agent", modelhttp.UserAgent())
+		return nil
+	}
+	for _, previous := range via[1:] {
+		if !sameOrigin(origin, previous.URL) {
+			req.Header.Set("User-Agent", modelhttp.UserAgent())
+			break
+		}
+	}
+	return nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			return "80"
+		case "https":
+			return "443"
+		}
+		return ""
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
 // NewRun is a client whose requests run answers instead of an HTTP API: no gate, no key (a launcher's CLI on a
@@ -219,6 +257,14 @@ func apiEndpoint(base, path string) string {
 	return base + "/" + path
 }
 
+// setUserAgent gives an explicit connection value precedence over Persona's default.
+func (c *Client) setUserAgent(req *http.Request) {
+	if c.cfg.UserAgent != nil {
+		req.Header.Set("User-Agent", *c.cfg.UserAgent)
+	}
+	modelhttp.SetDefaultUserAgent(req.Header)
+}
+
 // messages calls the Messages API; answered is whether the upstream said 200, Truncated whether the reply stopped at
 // MaxTokens. A model that thinks spends its thinking from the same MaxTokens, so a long answer can stop half written.
 // It streams (#4245): a gateway's cap on a non-streamed request's total time (often 120 s) otherwise fails every
@@ -243,6 +289,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		req.Header.Set("x-api-key", key)
 	}
 	req.Header.Set("anthropic-version", "2023-06-01")
+	c.setUserAgent(req)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return reply, false, fmt.Errorf("ai: %w", err)
@@ -538,6 +585,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	hreq.Header.Set("content-type", "application/json")
 	hreq.Header.Set("accept", "text/event-stream")
 	hreq.Header.Set("authorization", "Bearer "+key)
+	c.setUserAgent(hreq)
 	resp, err := hc.Do(hreq)
 	if err != nil {
 		return reply, false, fmt.Errorf("ai: %w", err)
