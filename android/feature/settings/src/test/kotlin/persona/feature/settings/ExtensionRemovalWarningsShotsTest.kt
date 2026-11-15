@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.filterToOne
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -49,8 +51,9 @@ class ExtensionRemovalWarningsShotsTest {
     @get:Rule val rule = createComposeRule()
 
     private val warnings = listOf(
-        "Delete /Users/example/.persona/extensions/example/data/cache/index.db manually.",
-        "The scheduled-task file remains; remove it manually.",
+        "Delete /Users/example/.persona/extensions/example/data/" + "cache/".repeat(14) + "index.db manually.",
+        "The scheduled-task file remains; remove it manually. Cleanup token: " + "x".repeat(240),
+        "The package directory could not be removed; use the hub machine to finish its cleanup.",
     )
 
     private fun out(): File = File(System.getProperty("persona.shots") ?: "build/extension-removal-warning-shots").also { it.mkdirs() }
@@ -79,13 +82,22 @@ class ExtensionRemovalWarningsShotsTest {
         "手動クリーンアップが必要な項目", "警告をすべてコピー", "OK",
     )
 
-    private fun sheet(language: String, title: String, body: String, heading: String, copyLabel: String, doneLabel: String) {
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
+    @Test fun singleWarning() = sheet(
+        "en", "Removed Example Notes", "Removed. A few things still need you to clean them up by hand.",
+        "Needs manual cleanup", "Copy warnings", "OK", items = listOf(warnings.first()), state = "single",
+    )
+
+    private fun sheet(
+        language: String, title: String, body: String, heading: String, copyLabel: String, doneLabel: String,
+        items: List<String> = warnings, state: String = "multiple-long",
+    ) {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         var done = 0
         rule.setContent {
             PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
-                ExtensionRemovalWarningsSheet(ExtensionRemovalNotice(title, warnings), onDone = { done++ })
+                ExtensionRemovalWarningsSheet(ExtensionRemovalNotice(title, items), onDone = { done++ })
             }
         }
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
@@ -95,16 +107,62 @@ class ExtensionRemovalWarningsShotsTest {
             rule.onNodeWithText(title).assertExists()
             rule.onNodeWithText(body).assertExists()
             rule.onNodeWithText(heading).assertExists()
-            warnings.forEach { rule.onNodeWithText(it).assertExists() }
+            items.forEach { rule.onNodeWithText(it).assertExists() }
             rule.onNodeWithTag("extension-removal-warning-0").assertExists()
-            capture("extension-removal-warnings-$language-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+            capture("extension-removal-warnings-$language-$state-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
         rule.onNodeWithText(copyLabel).performClick()
         assertEquals(0, done)
+        assertEquals(items.joinToString("\n"), clipboardText())
+        rule.onNodeWithText(doneLabel).performClick()
+        assertEquals(1, done)
+    }
+
+    private fun clipboardText(): String? {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        assertEquals(warnings.joinToString("\n"), clipboard.primaryClip?.getItemAt(0)?.text?.toString())
-        rule.onNodeWithText(doneLabel).performClick()
+        return clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w360dp-h640dp-xhdpi", fontScale = 2f)
+    @Test fun longWarningsScrollToTheEndAndKeepCopyAndDoneReachable() {
+        val items = (0 until 8).map { index ->
+            "Cleanup item $index: " + "x".repeat(180) + " remains under /Users/example/.persona/extensions/example/data/"
+        }
+        var done = 0
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                ExtensionRemovalWarningsSheet(ExtensionRemovalNotice("Removed Example Notes", items), onDone = { done++ })
+            }
+        }
+        rule.onNodeWithTag("extension-removal-warning-${items.lastIndex}").performScrollTo().assertIsDisplayed()
+        capture("extension-removal-warnings-en-multiple-long-compact-large-type")
+        rule.onNodeWithText("Copy warnings").performClick()
+        assertEquals(items.joinToString("\n"), clipboardText())
+        assertEquals(0, done)
+        rule.onNodeWithText("OK").performClick()
+        assertEquals(1, done)
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
+    @Test fun dragScrimAndBackDoNotDismissTheWarnings() {
+        var done = 0
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                ExtensionRemovalWarningsSheet(ExtensionRemovalNotice("Removed Example Notes", warnings), onDone = { done++ })
+            }
+        }
+        rule.onNodeWithTag("extension-removal-warnings").performTouchInput { swipeDown() }
+        rule.waitForIdle()
+        rule.onNodeWithText("Removed Example Notes").assertIsDisplayed()
+        rule.onNode(isDialog()).performTouchInput { click(androidx.compose.ui.geometry.Offset(center.x, 1f)) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Removed Example Notes").assertIsDisplayed()
+        rule.runOnIdle { org.robolectric.shadows.ShadowDialog.getLatestDialog().onBackPressed() }
+        rule.waitForIdle()
+        rule.onNodeWithText("Removed Example Notes").assertIsDisplayed()
+        assertEquals(0, done)
+        rule.onNodeWithText("OK").performClick()
         assertEquals(1, done)
     }
 
@@ -119,10 +177,11 @@ class ExtensionRemovalWarningsShotsTest {
                 }
             }
         }
-        rule.onNodeWithText("The package is deleted too; the data folder stays on the hub machine.", substring = true).assertExists()
-        rule.onNodeWithText("Anything still needing manual cleanup is listed after removal", substring = true).assertExists()
+        rule.onNodeWithText("The package will be deleted too; the data folder will stay on the hub machine.", substring = true).assertExists()
+        rule.onNodeWithText("Anything still needing manual cleanup will be listed after removal", substring = true).assertExists()
+        rule.onNodeWithText("the extension is still removed", substring = true).assertDoesNotExist()
         rule.onNodeWithTag("uninstall-keep-data").performClick()
-        rule.onNodeWithText("The package and data folder are deleted too.", substring = true).assertExists()
+        rule.onNodeWithText("The package and data folder will be deleted too.", substring = true).assertExists()
         rule.onNodeWithText("Cancel").performClick()
         assertEquals(1, dismissed)
         assertTrue(confirmed.isEmpty())
@@ -170,7 +229,7 @@ class ExtensionRemovalWarningsShotsTest {
     }
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1600dp-xhdpi")
-    @Test fun installedRemovalLeavesOnlyAfterTheWarningsAreRead() {
+    @Test fun installedRemovalHonorsWarningsAndEmptyResults() {
         val detail = ExtensionDetail(
             HubExtension("example-notes", "Example Notes", "connectors", "running", source = "installed", enabled = true),
             origin = "market:m1/example-notes",
@@ -202,5 +261,13 @@ class ExtensionRemovalWarningsShotsTest {
         rule.waitForIdle()
         assertEquals(1, api.removals)
         assertEquals(1, backs)
+
+        api.removal = ExtensionRemoval()
+        rule.onNodeWithText("Remove").performScrollTo().performClick()
+        rule.onAllNodesWithText("Remove").filterToOne(hasAnyAncestor(isDialog()) and hasClickAction()).performClick()
+        rule.waitForIdle()
+        assertEquals(2, api.removals)
+        assertEquals(2, backs)
+        rule.onNode(isDialog()).assertDoesNotExist()
     }
 }
