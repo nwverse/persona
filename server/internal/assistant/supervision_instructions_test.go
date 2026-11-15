@@ -183,8 +183,8 @@ func TestSupervisionEventsContainFactsNotPolicy(t *testing.T) {
 					t.Fatalf("event contains handling policy %q", banned)
 				}
 			}
-			if !strings.Contains(text, "todo_example") || !strings.Contains(text, "Task evidence") {
-				t.Fatal("event lost its facts")
+			if !strings.Contains(text, "todo_example") || !strings.Contains(text, "Task evidence") || !strings.Contains(text, "signal="+name) {
+				t.Fatal("event lost its task, signal or Agent facts")
 			}
 			if prompts.RenderSupervisionInstructions() != policy {
 				t.Fatal("policy bytes vary with task/event/role data")

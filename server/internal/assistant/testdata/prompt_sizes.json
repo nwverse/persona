@@ -112,12 +112,12 @@
   "supervise.background_escalated": 411,
   "supervise.brief": 747,
   "supervise.decisions": 2107,
-  "supervise.digest": 3534,
+  "supervise.digest": 3735,
   "supervise.done_when": 301,
   "supervise.inbox": 1442,
   "supervise.leader_stuck": 363,
-  "supervise.parked_due": 776,
+  "supervise.parked_due": 856,
   "supervise.review_rework": 555,
   "supervise.rework": 396,
-  "supervision_instructions": 15969
+  "supervision_instructions": 15688
 }
