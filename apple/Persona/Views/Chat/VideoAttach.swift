@@ -30,6 +30,9 @@ nonisolated struct AttachedFile: Hashable, Sendable {
         return "<persona-file kind=\"\(esc(kind))\" path=\"\(esc(path))\" name=\"\(esc(name))\" size=\"\(size)\"\(d)/>"
     }
 
+    /// A video or a recording: its card plays it. Anything else opens in the file viewer (#8361).
+    var playable: Bool { kind == "video" || kind == "audio" }
+
     /// "24.1 MB · 0:12".
     var detail: String {
         let size = size.storageText

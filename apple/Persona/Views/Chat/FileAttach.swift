@@ -378,7 +378,11 @@ final class FileAttachments {
                 defer {
                     if job.scoped { job.url.stopAccessingSecurityScopedResource(); job.scoped = false; jobs[id]?.scoped = false }
                 }
-                copy = job.owned ? job.url : try await FileUploads.stage(job.url)
+                if job.owned {
+                    copy = job.url
+                } else {
+                    copy = try await FileUploads.stage(job.url)
+                }
                 guard jobs[id] != nil else { // removed while it was being copied
                     if !job.owned { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
                     return

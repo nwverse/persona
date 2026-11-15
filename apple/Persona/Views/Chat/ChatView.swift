@@ -5873,7 +5873,8 @@ struct Composer: View, Equatable {
             if let list = UserDefaults.standard.string(forKey: "openUploadDemo") {
                 try? await Task.sleep(for: .seconds(3))
                 let megabytes = [24, 2, 9, 1, 18, 5, 3, 40]
-                let urls = list.split(separator: ",").enumerated().compactMap { i, name -> URL? in
+                let urls = list.split(separator: ",").enumerated().compactMap { pair -> URL? in
+                    let (i, name) = pair
                     let dir = FileManager.default.temporaryDirectory.appending(path: "upload-demo/" + UUID().uuidString)
                     let url = dir.appending(path: String(name))
                     guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil,

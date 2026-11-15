@@ -10,12 +10,12 @@ struct AttachedFileCards: View {
     @State private var all = false
 
     /// More than this many fold (as a queue, or several forwards, past a few).
-    static let foldAt = 4
+    nonisolated static let foldAt = 4
     /// What a folded list shows.
-    static let folded = 3
+    nonisolated static let folded = 3
 
     /// The cards shown: all of them, or the first `folded` while folded.
-    static func shown(_ files: [AttachedFile], all: Bool) -> [AttachedFile] {
+    nonisolated static func shown(_ files: [AttachedFile], all: Bool) -> [AttachedFile] {
         files.count > foldAt && !all ? Array(files.prefix(folded)) : files
     }
 
@@ -52,11 +52,6 @@ struct AttachedFileCards: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         .lookUpFiles(files.filter { !$0.playable }.map(\.path)) // is each still there (`AttachedDocumentCard`)
     }
-}
-
-extension AttachedFile {
-    /// A video or a recording: its card plays it. Anything else opens in the file viewer.
-    var playable: Bool { kind == "video" || kind == "audio" }
 }
 
 /// A file sent with a message (#8361): its kind's mark, name and size; a tap opens it in the file viewer, to read it,
