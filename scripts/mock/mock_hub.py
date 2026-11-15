@@ -16747,9 +16747,6 @@ def mock_cjk_paths():
     ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="报表放哪了？"), it("assistant", "text", 1, text=CJK_PATHS_TEXT)]
 
 
-if os.environ.get("MOCK_CJK_PATHS") == "1":
-    mock_cjk_paths()
-
 
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
@@ -18114,6 +18111,8 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long m
     for _f in ("docs/review-queue.md", "notes/status.md", "docs/brief.md", "notes/runs/20261110T165351Z/snapshot.json"):
         FILES["/Users/me/code/shop-app/" + _f] = b"# placeholder\n"
     FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
+if os.environ.get("MOCK_CJK_PATHS") == "1":  # its files are there (#8386)
+    mock_cjk_paths()
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
