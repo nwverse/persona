@@ -9,6 +9,7 @@ test("concurrent window and hub writes preserve both fields and clean temporary 
   const directory = await mkdtemp(join(tmpdir(), "persona-store-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new JSONStore(join(directory, "desktop-state.json"));
+  const other = new JSONStore(join(directory, "desktop-state.json"));
   const originalRead = store.read.bind(store);
   let releaseRead: (() => void) | undefined;
   let reads = 0;
@@ -18,7 +19,7 @@ test("concurrent window and hub writes preserve both fields and clean temporary 
     return originalRead<T>();
   };
   const windowWrite = store.saveWindow({ x: 10, y: 20, width: 1000, height: 800, maximized: false });
-  const hubWrite = Promise.resolve().then(() => store.update({ hub: "https://example.com/" }));
+  const hubWrite = Promise.resolve().then(() => other.update({ hub: "https://example.com/" }));
   await new Promise(done => setImmediate(done));
   assert.equal(reads, 1, "the second update must not read a stale snapshot before the first finishes");
   releaseRead?.();
