@@ -2,15 +2,85 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestAcceptedResearchWithIssueOnlyCloseout(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
+			st := todoTestDB(t)
+			s, f := newQuietServiceOn(t, st)
+			ctx := context.Background()
+			deliveryOn(t, s)
+			criterion := "Research findings are documented"
+			raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
+				"title": "Read-only research", "prompt": "Document the research findings",
+				"machine": "box", "cwd": "/code/app", "readonly": true, "why": "The source is here",
+				"done_when": []string{criterion},
+			}}})
+			if _, err := s.toolTaskPlan(ctx, "conv1", raw); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
+			todo := onlyTodo(s)
+			wrong := "https://github.com/o/r/pull/4"
+			s.setTaskStage(ctx, todo.ID, "review", wrong)
+			s.watchDeploy(ctx, todo.ID, deployWatch{PR: wrong, Since: time.Now()})
+			s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryMerged})
+			f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Research references issue #4; no PR was opened.\n" +
+				"<closeout status=\"done\" merged=\"n/a\" deployed=\"n/a\">\n" +
+				"artifact: url https://github.com/o/r/issues/4\n</closeout>"})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/o/r/issues/4":
+					if missing {
+						http.NotFound(w, r)
+					} else {
+						_, _ = w.Write([]byte(`{"number":4}`))
+					}
+				case "/repos/o/r/pulls":
+					_, _ = w.Write([]byte(`[]`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			s.deploy.forge = githubForge{base: server.URL, client: server.Client()}
+			s.deploy.hubBuild = func(context.Context) (string, string, error) { return "dev", "", nil }
+			s.deploy.listPaths = []string{}
+			_, err := acceptReview(s, todo.ID, map[string]any{
+				"link":   "https://github.com/o/r/issues/4",
+				"checks": []ReviewCheck{{Criterion: criterion, Met: true, Evidence: "The research findings were reviewed"}},
+			})
+			if err != nil {
+				t.Fatalf("research with no PR was not accepted: %v", err)
+			}
+			got := todoNow(s, todo.ID)
+			if got.DoneAt == nil || got.Supervision.State != reviewAccepted || got.PRURL != "" || len(got.PRs) != 0 {
+				t.Fatalf("research retained a false PR or was not accepted: %+v", got)
+			}
+			if !s.doneNeedsDelivery(ctx) {
+				t.Fatal("research acceptance disabled the global delivery gate")
+			}
+			restarted, _ := newTaskServiceOn(t, st)
+			if stage := restarted.todoStages(ctx)[todo.ID]; stage.PR != "" || len(stage.PRs) != 0 || stage.Deploy != nil || stage.Delivery != nil {
+				t.Fatalf("false PR delivery hold survived restart: %+v", stage)
+			}
+			if !s.deploy.githubDown.IsZero() {
+				t.Fatal("an issue-only research task put unrelated PR checks on cooldown")
+			}
+		})
+	}
+}
 
 func TestAcceptedRecoversActualPRFromCloseout(t *testing.T) {
 	for _, tc := range []struct {
