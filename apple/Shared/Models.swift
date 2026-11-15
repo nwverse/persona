@@ -674,8 +674,11 @@ nonisolated struct LauncherModels: Codable, Hashable, Sendable {
     var machine: String? = nil
 
     /// The agent takes a model ID typed by hand (#1644): Claude Code's `--model` / `/model` and Codex's `--model` take any
-    /// string; the hub remembers typed IDs for these two only. Other agents' lists are empty (no model row).
-    static func takesTypedModel(agent: String) -> Bool { agent == "claude" || agent == "codex" }
+    /// string, and so does a work agent started in herdr (`pi`, the Cursor CLI, the Antigravity CLI: `workagent.go`).
+    /// The hub remembers typed IDs for these. Other agents' lists are empty (no model row).
+    static func takesTypedModel(agent: String) -> Bool {
+        agent == "claude" || agent == "codex" || agent == "pi" || agent == "cursor" || agent == "agy"
+    }
 
     /// A typed ID can reach the agent: one of those two, and the launcher does not pass its own --model.
     var takesTypedModel: Bool { locked == nil && Self.takesTypedModel(agent: agent) }
@@ -1579,15 +1582,23 @@ nonisolated struct TriageSwitches: Codable, Hashable, Sendable {
         get { closeout ?? false }
         set { closeout = newValue }
     }
+    /// Ask for the Status Afterwards (#3616): ask once for the status of an unsupervised agent that stopped after work
+    /// without a closeout or a clear finish. The same missing-field rule as `closeout`, independently of that switch.
+    var closeoutAsk: Bool? = nil
+    var asksForStatusAfterwards: Bool {
+        get { closeoutAsk ?? false }
+        set { closeoutAsk = newValue }
+    }
 
     enum CodingKeys: String, CodingKey {
         case enabled, decide, wake, closeout
         case autoContinue = "auto_continue"
+        case closeoutAsk = "closeout_ask"
         case replyReminder = "reply_reminder", replyReminderMinutes = "reply_reminder_minutes"
     }
 
     init(enabled: Bool = false, decide: Bool = false, autoContinue: Bool = false, wake: Bool = false,
-         replyReminder: Bool = true, replyReminderMinutes: Int? = nil, closeout: Bool? = nil) {
+         replyReminder: Bool = true, replyReminderMinutes: Int? = nil, closeout: Bool? = nil, closeoutAsk: Bool? = nil) {
         self.enabled = enabled
         self.decide = decide
         self.autoContinue = autoContinue
@@ -1595,6 +1606,7 @@ nonisolated struct TriageSwitches: Codable, Hashable, Sendable {
         self.replyReminder = replyReminder
         self.replyReminderMinutes = replyReminderMinutes
         self.closeout = closeout
+        self.closeoutAsk = closeoutAsk
     }
 
     init(from decoder: Decoder) throws {
@@ -1606,6 +1618,7 @@ nonisolated struct TriageSwitches: Codable, Hashable, Sendable {
         replyReminder = (try? c.decodeIfPresent(Bool.self, forKey: .replyReminder)).flatMap { $0 } ?? true
         replyReminderMinutes = (try? c.decodeIfPresent(Int.self, forKey: .replyReminderMinutes)).flatMap { $0 }
         closeout = (try? c.decodeIfPresent(Bool.self, forKey: .closeout)).flatMap { $0 }
+        closeoutAsk = (try? c.decodeIfPresent(Bool.self, forKey: .closeoutAsk)).flatMap { $0 }
     }
 }
 
