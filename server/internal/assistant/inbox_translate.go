@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 
@@ -34,10 +35,11 @@ import (
 // and preview; opening the mail finds the whole translation there (storedMailTranslation).
 
 const (
-	translateBatch    = 30    // texts in one request
-	translateText     = 2000  // characters of one short text
-	translateMailText = 12000 // characters of a mail body translated
-	translateCacheMax = 4000
+	translateBatch       = 30    // texts in one request
+	translateText        = 2000  // characters of one short text
+	translateMailText    = 12000 // characters of a mail body translated
+	translateMessageText = 32000 // a complete reply; longer messages are refused, never silently clipped
+	translateCacheMax    = 4000
 )
 
 type translateCache struct {
@@ -74,6 +76,10 @@ func (s *Service) translateFingerprint(ctx context.Context) (string, error) {
 
 // translateTexts translates short texts, keeping their order; cached ones are not sent again.
 func (s *Service) translateTexts(ctx context.Context, texts []string, target string) ([]string, error) {
+	return s.translateTextsLimit(ctx, texts, target, translateText)
+}
+
+func (s *Service) translateTextsLimit(ctx context.Context, texts []string, target string, limit int) ([]string, error) {
 	lang, ok := assistantwire.TranslateLanguages[target]
 	if !ok {
 		return nil, i18n.ErrEnglish("inbox-errors.translation_target", i18n.Args{"target": strconv.Quote(target)})
@@ -90,7 +96,7 @@ func (s *Service) translateTexts(ctx context.Context, texts []string, target str
 		if t == "" {
 			continue
 		}
-		if v, ok := b.translations.get(translateKey("t", fingerprint, target, t)); ok {
+		if v, ok := b.translations.get(translateKey("t", strconv.Itoa(limit), fingerprint, target, t)); ok {
 			out[i] = v
 		} else {
 			todo = append(todo, i)
@@ -102,7 +108,7 @@ func (s *Service) translateTexts(ctx context.Context, texts []string, target str
 	in := make([]string, len(todo))
 	total := 0
 	for j, i := range todo {
-		in[j] = clip(strings.TrimSpace(texts[i]), translateText)
+		in[j] = clip(strings.TrimSpace(texts[i]), limit)
 		total += len([]rune(in[j]))
 	}
 	body, _ := json.Marshal(map[string]any{"texts": in})
@@ -122,7 +128,7 @@ func (s *Service) translateTexts(ctx context.Context, texts []string, target str
 		v := strings.TrimSpace(res.Texts[j])
 		out[i] = v
 		if v != "" {
-			b.translations.put(translateKey("t", fingerprint, target, strings.TrimSpace(texts[i])), v)
+			b.translations.put(translateKey("t", strconv.Itoa(limit), fingerprint, target, strings.TrimSpace(texts[i])), v)
 		}
 	}
 	return out, nil
@@ -208,6 +214,26 @@ func writeTranslateError(w http.ResponseWriter, err error) {
 
 // translateRoutes are the translation's routes (InboxRoutes).
 func (s *Service) translateRoutes() {
+	s.handle("POST /api/v1/translate/message", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Text   string `json:"text"`
+			Target string `json:"target"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Text) == "" || utf8.RuneCountInString(in.Text) > translateMessageText {
+			apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.translation_message_size", i18n.Args{"max": translateMessageText}))
+			return
+		}
+		out, err := s.translateTextsLimit(r.Context(), []string{in.Text}, in.Target, translateMessageText)
+		if err != nil {
+			writeTranslateError(w, err)
+			return
+		}
+		if out[0] == "" {
+			writeTranslateError(w, i18n.ErrEnglish("inbox-errors.translation_empty"))
+			return
+		}
+		apierr.WriteJSON(w, map[string]string{"text": out[0]})
+	})
 	s.handle("POST /api/v1/translate", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Texts  []string `json:"texts"`

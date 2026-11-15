@@ -18,6 +18,8 @@ import { Icon } from "../../ui/icons";
 import { REPLY_BAR_FADE_MS, REPLY_BAR_LINGER_MS } from "../../ui/motion";
 import type { Action } from "./MessageActions";
 import { TurnUsage } from "./TurnUsage";
+import type { ReplyTranslation } from "../../lib/reply-translation";
+import { ReplyTranslationButton } from "./ReplyTranslationButton";
 
 export { TurnUsage };
 
@@ -36,7 +38,7 @@ async function copyQuietly(text: string): Promise<boolean> {
 /** `fork`: "Start a new session", when the session can. `more`: the ⋯ menu's actions; no ⋯ without any. `pinned`: the
  *  chat's last message, whose time stays shown without the pointer. `usage`: what the exchange used (lib/turn-usage.ts
  *  usageKey), `usageMs` its work time, `persona` a Persona conversation's plain cost. */
-export function ReplyBar({ text, ts, fork, more, pinned, usage, usageMs, persona }: { text: string; ts?: string; fork?: Action; more: Action[]; pinned?: boolean; usage?: string; usageMs?: number; persona?: boolean }) {
+export function ReplyBar({ text, ts, fork, more, pinned, usage, usageMs, persona, translation }: { text: string; ts?: string; fork?: Action; more: Action[]; pinned?: boolean; usage?: string; usageMs?: number; persona?: boolean; translation?: ReplyTranslation }) {
   const ref = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -118,6 +120,7 @@ export function ReplyBar({ text, ts, fork, more, pinned, usage, usageMs, persona
             <Icon name={fork.icon} size={14} />
           </button>
         )}
+        {translation && <ReplyTranslationButton translation={translation} />}
         {more.length > 0 && (
           <button
             type="button"

@@ -26,6 +26,9 @@ import { isNoHover, NO_HOVER, useMedia } from "../../ui/media-query";
 import { useChatActions, type ChatActions } from "./chat-actions";
 import { pickParts } from "./picking-parts";
 import { useIsLatestMessage } from "./latest-message-time";
+import { useReplyTranslation } from "../../lib/reply-translation";
+import { Markdown } from "../../ui/Markdown";
+import { ReplyTranslationButton } from "./ReplyTranslationButton";
 
 // Hidden until the pointer comes, so it is not part of the first screen (startup-preload.ts): its row is kept while it
 // loads, so nothing moves when it comes.
@@ -203,6 +206,8 @@ export function MessageActions({
   className?: string;
 }) {
   const [selecting, setSelecting] = useState(false);
+  const translation = useReplyTranslation(text);
+  const canTranslate = bar && !isUser && Boolean(text.trim());
   const touch = useMedia(NO_HOVER);
   const latest = useIsLatestMessage(ts);
   const forwarded = itemId ?? messageId;
@@ -312,11 +317,16 @@ export function MessageActions({
           if (Date.now() - opened.current < 1000) e.preventDefault();
         }}
       >
-        {children}
+        {canTranslate && translation.shown ? (
+          <div data-reply-translation className="[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leading-[1.6]!">
+            <Markdown text={translation.text!} lineBreaks />
+          </div>
+        ) : children}
       </div>
+      {canTranslate && translation.error && <p role="alert" className="mt-1 text-xs text-red">{translation.error}</p>}
       {picking ? null : bar ? (
         <Suspense fallback={<div data-reply-bar="loading" className="mt-1.5 hidden h-6 [@media(hover:hover)]:block" />}>
-          <ReplyBar text={text} ts={ts} pinned={latest} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} usage={usage} usageMs={usageMs} persona={chat?.assistant} />
+          <ReplyBar text={text} ts={ts} pinned={latest} fork={extras.find((a) => a.key === "fork")} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} usage={usage} usageMs={usageMs} persona={chat?.assistant} translation={canTranslate ? translation : undefined} />
         </Suspense>
       ) : (side || corner) && (
       <div
@@ -366,10 +376,11 @@ export function MessageActions({
       </div>
       )}
       {touch && bar && !picking && (
-        <div className="mt-1 flex h-6 items-center gap-5">
+        <div data-reply-touch-bar className="mt-1 flex h-6 items-center gap-5">
           <button type="button" aria-label={t("chat-messageactions.copy_reply")} title={t("chat-messageactions.copy")} onClick={() => void copyText(text)} className="touch-hit flex size-6 items-center justify-center rounded-[6px] text-ink-3">
             <Icon name="copy" size={14} />
           </button>
+          {canTranslate && <ReplyTranslationButton translation={translation} touch />}
           <button
             type="button"
             aria-label={t("chat-messageactions.more")}
