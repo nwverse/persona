@@ -308,6 +308,8 @@ export function storeDraft(key: string, text: string) {
 // Storage pressure: a full or blocked localStorage must never break typing or throw out of the save timer. A failed
 // write drops the oldest other conversations' drafts and quotes first — the mounted composers' keys are protected —
 // and is retried; what still cannot be written is swallowed.
+const KEY_PREFIXES = [DRAFT_PREFIX, QUOTE_PREFIX] as const;
+
 function draftStorage(): Storage | null {
   try {
     return localStorage;
@@ -319,21 +321,15 @@ function draftStorage(): Storage | null {
 /** Storage keys of every mounted composer's draft and quote list: eviction never touches the conversation on screen. */
 function protectedDraftKeys(): Set<string> {
   const keep = new Set<string>();
-  listeners.forEach((_set, key) => {
-    keep.add(`${DRAFT_PREFIX}${key}`);
-    keep.add(`${QUOTE_PREFIX}${key}`);
-  });
+  listeners.forEach((_set, key) => KEY_PREFIXES.forEach((prefix) => keep.add(prefix + key)));
   return keep;
 }
 
 /** The conversation id a stored draft/quote key belongs to; a legacy alias key shares its canonical key's id. */
 function storedConversationId(stored: string): string | null {
   const key = canonicalStorageKey(stored);
-  return key.startsWith(DRAFT_PREFIX)
-    ? key.slice(DRAFT_PREFIX.length)
-    : key.startsWith(QUOTE_PREFIX)
-      ? key.slice(QUOTE_PREFIX.length)
-      : null;
+  const prefix = KEY_PREFIXES.find((p) => key.startsWith(p));
+  return prefix ? key.slice(prefix.length) : null;
 }
 
 /** Conversation ids holding a stored draft or quote, oldest first in storage order; protected ids are skipped. A
@@ -358,36 +354,36 @@ function evictableConversations(keep: ReadonlySet<string>): string[] {
   return ids;
 }
 
-function dropConversation(id: string) {
-  const store = draftStorage();
-  if (!store) return;
-  const draft = `${DRAFT_PREFIX}${id}`;
-  const quote = `${QUOTE_PREFIX}${id}`;
+function dropConversation(store: Storage, id: string) {
   // the legacy alias copy leaves with its canonical key, so no orphaned entry stays behind
-  for (const key of [draft, storedKeyAlias(draft), quote, storedKeyAlias(quote)]) {
-    if (!key) continue;
-    try {
-      store.removeItem(key);
-    } catch {
-      // blocked storage: nothing to do
+  for (const prefix of KEY_PREFIXES) {
+    const key = prefix + id;
+    for (const k of [key, storedKeyAlias(key)]) {
+      if (!k) continue;
+      try {
+        store.removeItem(k);
+      } catch {
+        // blocked storage: nothing to do
+      }
     }
   }
 }
 
 /** Keep the retained drafts of unmounted conversations within MAX_STORED_DRAFTS, oldest first. */
-function enforceDraftBound() {
+function enforceDraftBound(store: Storage) {
   const ids = evictableConversations(protectedDraftKeys());
-  for (let i = 0; i < ids.length - MAX_STORED_DRAFTS; i++) dropConversation(ids[i]);
+  for (let i = 0; i < ids.length - MAX_STORED_DRAFTS; i++) dropConversation(store, ids[i]);
 }
 
 /** Write a draft or quote entry, evicting older unmounted conversations' entries and retrying when storage is full.
  *  The target key itself and every mounted composer's keys survive; a write that still fails stays quiet. Other draft
  *  writers (page-level prompt boxes) route their raw localStorage writes through this so a full quota never throws. */
 export function safeDraftWrite(targetKey: string, write: () => void) {
-  if (!draftStorage()) return;
+  const store = draftStorage();
+  if (!store) return;
   try {
     write();
-    enforceDraftBound();
+    enforceDraftBound(store);
     return;
   } catch {
     // quota exceeded or storage blocked: make room below and retry
@@ -395,7 +391,7 @@ export function safeDraftWrite(targetKey: string, write: () => void) {
   const keep = protectedDraftKeys();
   keep.add(targetKey);
   for (const id of evictableConversations(keep)) {
-    dropConversation(id);
+    dropConversation(store, id);
     try {
       write();
       return;
