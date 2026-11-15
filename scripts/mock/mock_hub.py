@@ -14058,8 +14058,9 @@ if MOCK_PROVIDERS:
          "opus_model": "example-opus", "sonnet_model": "example-sonnet", "haiku_model": "example-haiku", "fable_model": "example-opus",
          "small_model": "example-haiku", "subagent_model": "example-sonnet", "subagent_force": True, "proxy": "http://127.0.0.1:7890",
          "no_proxy": "localhost,127.0.0.1", "timeout_ms": 600000, "compact_window": 400000, "max_context": 800000, "effort": "high"},
+        # pi can use it too (#8194); gw_full cannot: pi would not go through its proxy
         {"name": "anthropic_main", "source": "persona", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-4-5", "has_key": True,
-         "auth": "api_key", "models": [{"id": "claude-sonnet-4-5", "context_window": 200000}]},
+         "auth": "api_key", "models": [{"id": "claude-sonnet-4-5", "context_window": 200000}], "pi": True},
     ]
     # the aliases the import reads on macbook, as Persona lists them (cc_glm is there already)
     LAUNCHERS[-1:-1] = [
@@ -14121,7 +14122,7 @@ def machine_launchers(mid=""):
     if mid in RUN_HERE_CODEX:
         out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
-        out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
+        out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source", "pi") if l.get(k)}
                 for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
     if os.environ.get("MOCK_DESKTOP_APPS") and mid == "macbook":
         # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,

@@ -1886,13 +1886,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
   /**
    * The kind of agent launcher name starts, as a Paseo root (claude, codex, omp…): the node's word for it
    * (agent_type, which it sends for every launcher Paseo does not have), else the root of Paseo's own provider of that
-   * name (one switched off or failing), else what the name says, as the node's launcherAgentType reads it (codex,
-   * traex and omp by name, else Claude Code). '' for Paseo's catch-all agent, which names no kind.
+   * name (one switched off or failing), else what the name says, as the node's launcherAgentType reads it (pi,
+   * cursor, agy, codex, traex and omp by name, else Claude Code). '' for Paseo's catch-all agent, which names no kind.
    */
   function kindOf(name, agentType) {
     if (typeof agentType === 'string' && agentType) return agentType === RUNTIME ? '' : agentType
     if (entries.some((e) => e?.provider === name)) return roots[name] ?? name
-    return ['codex', 'traex', 'omp'].includes(name) ? name : 'claude'
+    return ['pi', 'cursor', 'agy', 'codex', 'traex', 'omp'].includes(name) ? name : 'claude'
   }
 
   /** Whether provider lists model (by its id or an alias); false while Paseo has listed none for it. */

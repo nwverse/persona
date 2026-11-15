@@ -232,7 +232,7 @@ func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) 
 			continue
 		}
 		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy",
-			PromptOptional: m.Agent == "codex" && codexOptional, RunHere: m.Agent == "codex" && codexHere})
+			PromptOptional: m.Agent == "codex" && codexOptional, RunHere: m.Agent == "codex" && codexHere, Pi: m.PiAPI() != ""})
 	}
 	return out, res.HostRuntime, nil
 }

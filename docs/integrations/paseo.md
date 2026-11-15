@@ -247,7 +247,7 @@ launcher ran on another account, and a provider added in Persona never applied i
   asked.
 - **How.** The node tells the bridge the kind of agent a launcher it does not have starts (`agent_type` on `session.start`,
   since the bridge declares `caps.same_kind`; from a node that does not say, the bridge reads the kind from the name as the
-  node does: `codex`, `traex` and `omp` by name, any other Claude Code); the bridge picks the provider and the effort, and its answer says what it ran
+  node does: `pi`, `cursor`, `agy`, `codex`, `traex` and `omp` by name, any other Claude Code); the bridge picks the provider and the effort, and its answer says what it ran
   in place of what was asked (`instead`), which the node passes on with the session. The hub turns it into the app's note,
   the manager into the task's; launcher health and a picked model's use are recorded under the launcher that ran.
 - **A computer with a terminal engine and Paseo**: the start's host decides. In the terminal the login shell's launchers run
@@ -358,6 +358,7 @@ launcher ran on another account, and a provider added in Persona never applied i
       its 30 minutes are over. A dismissal that comes at once is the hub's answer for a card it had ended (a person takes longer), so the bridge puts up a new card,
       except for a card it has just made, which was never on the hub. A hand-back holds until the request is answered.
 - **Create**: use Paseo's `agent.create`. The bridge chooses the Agent ID and includes the form's selected model, permission mode (Allow all on an Auto Accept provider as `featureValues.auto_accept`, "Capabilities"), and reasoning effort (one the model offers: "A launcher Paseo does not have"). The first message is `initialPrompt`; with none, Paseo creates the Agent idle.
+  - The apps start a provider with no first message and send it once the start is answered, as an ordinary message that can carry photos and files (iOS and the web; Android since #8143): such a start has no `initialPrompt`. A Codex provider too, since its launcher is `prompt_optional` (#8140).
   - Creating from a workspace places it in that Paseo workspace, Agents in it or not; one Paseo no longer has is refused (above).
   - If Paseo does not finish creation within 25 seconds, return the session row first and keep waiting in the background.
   - **Agent MCP tools** (#3655): the bridge reads the node's `mcp.json` (the one terminal Agents load) at each creation and puts its stdio servers (`personad mcp`) into the request's `config.mcpServers`.

@@ -879,6 +879,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if res, err, handled := n.runtimeHandle(ctx, h, method, params); handled {
 			return res, err
 		}
+	} else if a, ok := n.agent(p.SessionID); ok && (a.Agent == cursorAgent || a.Agent == agyAgent) {
+		// herdr drives the pane (workagent.go): a message is agent.prompt, an interrupt is Esc. The conversation
+		// itself is not read here, so a page is one notice saying so.
+		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params); handled {
+			return res, err
+		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)
 		if hasSelectedSkills {
 			return nil, skillSelectionError(assistantskills.ErrReference)
