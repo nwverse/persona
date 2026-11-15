@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -21,7 +22,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,7 +33,9 @@ import persona.core.domain.sort.AgentSession
 
 /**
  * A rebuilt screen (a killed process, a restored back stack) resumes by the row's key and offset, not by the index the
- * list's own saver keeps: the hub's order moves while the app is away.
+ * list's own saver keeps: the hub's order moves while the app is away. The hub's change is made when the old screen is
+ * taken down, after its place was saved and before the new one reads the list, as it would happen while the app is away;
+ * making it while the old screen is alive would only teach the old screen a new place.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
@@ -49,10 +52,13 @@ class AgentsReadingRestoreTest {
     private var loaded by mutableStateOf(true)
     private lateinit var state: LazyListState
     private lateinit var uiScope: CoroutineScope
+    /** What the hub did while the app was away: run as the old screen goes, before the new one is built. */
+    private var whileAway: (() -> Unit)? = null
 
     private fun show(restoration: StateRestorationTester) = restoration.setContent {
         state = rememberLazyListState()
         uiScope = rememberCoroutineScope()
+        DisposableEffect(Unit) { onDispose { whileAway?.invoke(); whileAway = null } }
         RestoreAgentReadingPosition(state, rows, paginationFooter = false, loaded = loaded)
         // A heading above the tree, as the page has, so the tree does not start at the list's first item.
         LazyColumn(Modifier.height(300.dp), state = state, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -64,9 +70,17 @@ class AgentsReadingRestoreTest {
     /** The first tree row in view and where it is, in the list's own measure. */
     private fun firstRow(): Pair<Any, Int> = state.layoutInfo.visibleItemsInfo.first { it.key != "search" }.let { it.key to it.offset }
 
+    /** Rests the list with [key] first in view, 17 px of it already scrolled out; the place is saved once the list is idle. */
     private fun scrollTo(key: String) {
         val index = rows.indexOfFirst { it.key == key } + 1
         rule.runOnUiThread { uiScope.launch { state.scrollToItem(index, 17) } }
+        rule.waitForIdle()
+        rule.waitForIdle()
+    }
+
+    private fun restore(restoration: StateRestorationTester, away: (() -> Unit)? = null) {
+        whileAway = away
+        restoration.emulateSavedInstanceStateRestore()
         rule.waitForIdle()
         rule.waitForIdle()
     }
@@ -78,15 +92,13 @@ class AgentsReadingRestoreTest {
         val (key, offset) = firstRow()
         assertEquals("session:demo/s-25", key)
 
-        // While the app was away the hub put that row near the top and moved others above it.
-        rule.runOnIdle { rows = (listOf(rows[25]) + rows.filterIndexed { index, _ -> index != 25 }.reversed()) }
-        restoration.emulateSavedInstanceStateRestore()
-        rule.waitForIdle()
-        rule.waitForIdle()
+        // While the app was away the hub put that row near the top and moved the others around it.
+        restore(restoration) { rows = listOf(original[25]) + original.filterIndexed { index, _ -> index != 25 }.reversed() }
 
         val (after, afterOffset) = firstRow()
-        assertEquals("the same row, found by its key", key, after)
+        assertEquals("the same row, found by its key and not by the index it had", key, after)
         assertEquals("at the same place in the window", offset, afterOffset)
+        assertFalse("and it is not where its old index would have put another row", state.firstVisibleItemIndex == 26)
     }
 
     @Test fun aRowThatIsGoneStartsTheListFromTheTop() {
@@ -95,10 +107,7 @@ class AgentsReadingRestoreTest {
         scrollTo("session:demo/s-25")
         val (key, _) = firstRow()
 
-        rule.runOnIdle { rows = rows.filterNot { it.key == key } }
-        restoration.emulateSavedInstanceStateRestore()
-        rule.waitForIdle()
-        rule.waitForIdle()
+        restore(restoration) { rows = original.filterNot { it.key == key } }
 
         assertEquals(0, state.firstVisibleItemIndex)
         assertEquals(0, state.firstVisibleItemScrollOffset)
@@ -110,33 +119,27 @@ class AgentsReadingRestoreTest {
         scrollTo("session:demo/s-40")
         val (key, offset) = firstRow()
 
-        rule.runOnIdle { rows = emptyList() }
-        rule.runOnIdle { loaded = false }
-        restoration.emulateSavedInstanceStateRestore()
-        rule.waitForIdle()
+        restore(restoration) { rows = emptyList(); loaded = false }
         assertEquals("nothing to scroll to yet, nothing decided", 0, state.firstVisibleItemIndex)
 
-        rule.runOnIdle { rows = original }
-        rule.runOnIdle { loaded = true }
+        rule.runOnIdle { rows = original; loaded = true }
         rule.waitForIdle()
         rule.waitForIdle()
-        assertEquals(key to offset, firstRow())
+        assertEquals("the place saved before the rebuild is the one put back", key to offset, firstRow())
     }
 
-    @Test fun aListThatLoadedEmptyOpensAtTheTopWithoutFailing() {
+    @Test fun aListThatLoadedEmptyOpensAtTheTopWithoutFailingAndTheNextLoadIsNotMovedBack() {
         val restoration = StateRestorationTester(rule)
         show(restoration)
         scrollTo("session:demo/s-25")
 
-        rule.runOnIdle { rows = emptyList() }
-        restoration.emulateSavedInstanceStateRestore()
-        rule.waitForIdle()
+        restore(restoration) { rows = emptyList() }
 
         assertEquals(0, state.firstVisibleItemIndex)
         assertEquals(0, state.firstVisibleItemScrollOffset)
         rule.runOnIdle { rows = original }
         rule.waitForIdle()
-        assertEquals("the user's list is the list as it is, from the top", 0, state.firstVisibleItemIndex)
+        assertEquals("the list is the list as it is, from the top", 0, state.firstVisibleItemIndex)
     }
 
     @Test fun aListLeftAtTheTopOpensAtTheTop() {
@@ -144,11 +147,24 @@ class AgentsReadingRestoreTest {
         show(restoration)
         rule.waitForIdle()
 
-        rule.runOnIdle { rows = original.reversed() }
-        restoration.emulateSavedInstanceStateRestore()
-        rule.waitForIdle()
+        restore(restoration) { rows = original.reversed() }
 
         assertEquals(0, state.firstVisibleItemIndex)
-        assertTrue(!state.canScrollBackward)
+        assertFalse(state.canScrollBackward)
+    }
+
+    @Test fun aTouchBeforeTheRowIsInKeepsTheUsersOwnPlace() {
+        val restoration = StateRestorationTester(rule)
+        show(restoration)
+        scrollTo("session:demo/s-40")
+
+        restore(restoration) { rows = emptyList(); loaded = false }
+        rule.runOnUiThread { uiScope.launch { state.scrollToItem(0, 3) } }
+        rule.waitForIdle()
+        rule.runOnIdle { rows = original; loaded = true }
+        rule.waitForIdle()
+        rule.waitForIdle()
+
+        assertEquals("the user scrolled before the list came: it is not undone", 0, state.firstVisibleItemIndex)
     }
 }

@@ -58,6 +58,8 @@ internal fun RestoreAgentReadingPosition(state: LazyListState, tree: List<AgentT
     var pending by remember { mutableStateOf(savedKey?.let { SavedReadingAnchor(it, savedOffset) }) }
     val keys = remember(tree) { tree.map { it.key } }
     val keysNow by rememberUpdatedState(keys)
+    // Built once per tree, not at every look at the list.
+    val keySetNow by rememberUpdatedState(remember(keys) { keys.toHashSet() })
     val footer by rememberUpdatedState(paginationFooter)
 
     LaunchedEffect(state) {
@@ -83,7 +85,7 @@ internal fun RestoreAgentReadingPosition(state: LazyListState, tree: List<AgentT
         snapshotFlow {
             if (state.isScrollInProgress || pending != null) null
             else if (!state.canScrollBackward) SavedReadingAnchor("", 0)
-            else savedAnchorOf(state.layoutInfo.visibleItemsInfo.map { it.key to it.offset }, keysNow.toHashSet())
+            else savedAnchorOf(state.layoutInfo.visibleItemsInfo.map { it.key to it.offset }, keySetNow)
         }.filterNotNull().distinctUntilChanged().collect { anchor ->
             savedKey = anchor.key.takeIf { it.isNotEmpty() }
             savedOffset = anchor.offset

@@ -53,7 +53,8 @@ fun JLatestPill(text: String, actionLabel: String, onClick: () -> Unit, modifier
             Spacer(Modifier.size(JChipTokens.dotSize).clip(CircleShape).background(palette.status(status).dot))
             Spacer(Modifier.width(JChipTokens.dotGap))
         }
-        Text(text, style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.SemiBold), color = ink,
+        // The words give way, never the arrow: a long text or a large font is cut short at the end.
+        Text(text, Modifier.weight(1f, fill = false), style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.SemiBold), color = ink,
             maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.width(JChipTokens.iconGap))
         JIcon(PhIcons.ArrowUp, null, size = JChipTokens.iconSize, tint = ink, decorative = true)
