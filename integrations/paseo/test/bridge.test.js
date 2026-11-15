@@ -44,7 +44,7 @@ async function setup(t, o = {}) {
   // Where Paseo's own CLI finds its daemon: the address in the home's paseo.pid.
   writeFileSync(join(home, 'paseo.pid'), JSON.stringify({ pid: process.pid, listen: `127.0.0.1:${fake.port}` }))
   const logs = []
-  const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, log: (m) => logs.push(m) })
+  const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, pingEvery: o.pingEvery, silentFor: o.silentFor, log: (m) => logs.push(m) })
   // The fake node answers a card at once, as no person can: such a dismissal is taken for a person's unless a test
   // says how soon the hub's own answer comes (atOnceMs).
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
@@ -1768,6 +1768,202 @@ test('Paseo restarting: the bridge connects again and keeps the sessions; gone f
     return gone
   }, 5000)
   assert.ok(logs.some((l) => /away/.test(l)))
+})
+
+// ---- what a reconnect leaves (#8129) ----
+
+test("a reconnect's first page does not undo what Paseo said right after it: a turn that ended, a card answered, an agent made, one archived", async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  const row = (agent) => rows().find((r) => r.session_id === `paseo-${agent.id}`)
+  node.resolve = () => new Promise(() => {}) // nobody answers on the phone
+  fake.permission(a.claude.id, { id: 'permission-1', provider: 'claude', name: 'Bash', kind: 'tool', input: { command: 'npm test' } })
+  await until('on the phone', () => node.asked.length === 1)
+  const made = agentSnapshot({ provider: 'my-codex', cwd: '/tmp', title: 'MADE', status: 'running' })
+  // While Paseo builds the next connection's first page: the Codex agent's turn ends (idle and marked for attention, its
+  // updatedAt as it was: Paseo's onStreamTurnCompleted moves none), Claude Code answers its own card (nor does
+  // onStreamPermissionResolved), an agent is made and Grok's is archived. Paseo sends those right after the page's reply
+  // (held while it built it), here in the same read; the card's event goes out at once.
+  fake.duringPage = (msg) => {
+    if (msg.type !== 'fetch_agents_request' || !msg.subscribe) return
+    fake.duringPage = undefined
+    fake.upsert({ ...fake.agents.get(a.codex.id).agent, status: 'idle', requiresAttention: true })
+    fake.upsert({ ...fake.agents.get(a.claude.id).agent, pendingPermissions: [] })
+    fake.emit('events', { type: 'agent_permission_resolved', payload: { agentId: a.claude.id, requestId: 'permission-1', resolution: { behavior: 'allow' } } },
+      (s) => s.events.includes('agent_permission_resolved'))
+    fake.upsert(made, PROJECT)
+    fake.archive(a.grok.id)
+  }
+  fake.drop()
+  await until('connected again', () => fake.hellos.length === 2)
+  await until('the archive read again', () => fake.requestsOf('fetch_agents_request').filter((r) => r.filter?.includeArchived).length === 2)
+  await until('the agent made listed', () => row(made))
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(row(a.codex)?.status, 'done', 'its turn ended: not Working again from the older page')
+  assert.ok(node.all('interaction.cancel').some((c) => c.id === node.asked[0].id), 'the card answered meanwhile left the phone')
+  assert.equal(node.asked.length, 1, 'and is not asked again from the older page')
+  assert.notEqual(rows().find((r) => r.session_id === SID)?.status, 'blocked')
+  assert.equal(row(made)?.status, 'working', 'made while the page was read: listed, though it is not on the page')
+  assert.equal(row(a.grok), undefined, 'archived while the page was read: not listed again')
+})
+
+test("a reconnect's first page of workspaces does not undo what Paseo said right after it: one archived, one made", async (t) => {
+  const dir = realpathSync(mkdtempSync('/tmp/ppaseo-ws-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const w = repoWorkspaces(dir)
+  const { fake, node, bridge } = await setup(t, { workspaces: [w.main, w.wt] })
+  await until('the workspaces', () => node.last('runtime.workspaces')?.workspaces?.length === 2)
+  const notes = workspaceDescriptor({ id: 'wks_00000000000000c1', workspaceDirectory: dir, workspaceKind: 'directory', projectId: 'prj_notes',
+    projectDisplayName: 'notes', name: 'notes', project: { projectKey: 'prj_notes', projectName: 'notes', workspaceName: null, checkout: { cwd: dir, isGit: false } } })
+  fake.duringPage = (msg) => {
+    if (msg.type !== 'fetch_workspaces_request' || !msg.subscribe) return
+    fake.duringPage = undefined
+    fake.removeWorkspace(w.wt.id)
+    fake.upsertWorkspace(notes)
+  }
+  fake.drop()
+  await until('connected again', () => fake.hellos.length === 2)
+  const ids = () => node.last('runtime.workspaces').workspaces.map((x) => x.workspace_id).sort()
+  await until('the list as Paseo has it', () => fake.requestsOf('fetch_workspaces_request').length === 2 && ids().join() === [w.main.id, notes.id].sort().join())
+  await new Promise((r) => setTimeout(r, 300))
+  assert.deepEqual(ids(), [w.main.id, notes.id].sort())
+  assert.deepEqual([...bridge.state.workspaces.keys()].sort(), [w.main.id, notes.id].sort())
+})
+
+test('the directory read again takes what Paseo has now when an update was lost, never a page older than what Paseo said meanwhile', async (t) => {
+  const { fake, a, rows, bridge } = await setup(t, { sweepMs: 60 })
+  const status = () => rows().find((r) => r.session_id === `paseo-${a.codex.id}`)?.status
+  await until('working', () => status() === 'working')
+  // Its turn ended and the bridge was not told (no updatedAt moved): the next reading of the directory heals it.
+  fake.agents.get(a.codex.id).agent = { ...fake.agents.get(a.codex.id).agent, status: 'idle', requiresAttention: true }
+  await until('taken as Paseo has it', () => status() === 'done')
+  // A turn starts while Paseo builds a page of the next reading: the list is told at once, ahead of that page's reply,
+  // whose copy is from before (and the same updatedAt). The reading after it sees what that page left.
+  let started = false
+  let left
+  fake.duringPage = (msg) => {
+    if (msg.type !== 'fetch_agents_request' || msg.subscribe || msg.filter?.includeArchived) return
+    if (!started) {
+      started = true
+      fake.upsert({ ...fake.agents.get(a.codex.id).agent, status: 'running', requiresAttention: false })
+    } else left ??= bridge.state.agents.get(a.codex.id)?.agent.status
+  }
+  await until('read again after the turn started', () => left !== undefined)
+  assert.equal(left, 'running', 'the page read before the turn started did not undo it')
+  assert.equal(status(), 'working')
+})
+
+test('the directory read again takes nothing that is the same as kept: an unloaded agent still has the features last seen', async (t) => {
+  const { fake, node, a, rows } = await setup(t, { sweepMs: 40 })
+  // Grok's agent loaded with Allow all on, then let go (closed: Paseo's projection of its record lists no features).
+  fake.update(a.grok.id, { status: 'idle', features: [autoAcceptFeature(true)] })
+  await until('Allow all', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.permission_mode === 'bypassPermissions')
+  const { features: _, ...unloaded } = fake.agents.get(a.grok.id).agent
+  fake.upsert({ ...unloaded, status: 'closed', updatedAt: new Date(Date.now() + 2).toISOString() })
+  await until('closed', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.status === 'offline')
+  // And an agent the bridge does not list: a launcher check's probe (another bridge's, still in Paseo's directory).
+  fake.upsert(agentSnapshot({ provider: 'my-claude', cwd: '/tmp', labels: { 'persona.check': '1' } }))
+  await new Promise((r) => setTimeout(r, 150)) // the sweeps after it, the list told
+  const pushes = node.all('runtime.sessions').length
+  await new Promise((r) => setTimeout(r, 400)) // ten sweeps: nothing differs, nothing is told
+  assert.equal(node.all('runtime.sessions').length, pushes, 'no sweep takes an agent again for what its page does not list')
+  assert.equal(rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.permission_mode, 'bypassPermissions')
+})
+
+test("a failed read of Paseo's archive tells the node nothing, not that there are none; the sweep reads it again", async (t) => {
+  const OLD = 'cccccccc-0000-4000-8000-000000000009'
+  const at = new Date().toISOString()
+  const archivedOne = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'archived', status: 'closed', archivedAt: at, updatedAt: at,
+    persistence: { provider: 'my-claude', sessionId: OLD, metadata: { provider: 'claude' } } })
+  let fail = true
+  const { node, logs } = await setup(t, {
+    sweepMs: 80,
+    agents: [...Object.values(agents()).map((agent) => ({ agent, project: PROJECT })), { agent: archivedOne, project: PROJECT }],
+    handlers: { fetch_agents_request: (msg) => {
+      if (msg.filter?.includeArchived && fail) return { type: 'rpc_error', payload: { requestType: msg.type, error: 'Paseo is busy', code: 'handler_error' } }
+      // The sweep's directory, a page Paseo does not give: which agents are gone cannot be told, the archive is read all the same.
+      if (!msg.subscribe && !msg.filter?.includeArchived) return { payload: { subscriptionId: null, entries: null, pageInfo: null } }
+      return undefined
+    } },
+  })
+  await until('the read at connect failed', () => logs.some((l) => /reading its archived agents: Paseo is busy/.test(l)))
+  await until('and the sweep\'s', () => logs.some((l) => /reading its directory again: Paseo is busy/.test(l)))
+  assert.ok(node.all('runtime.sessions').every((m) => m.unlisted_transcripts === undefined),
+    'no list names the archived sessions as none: the node keeps what it was told before')
+  fail = false
+  await until('read by the sweep, and named', () => node.last('runtime.sessions').unlisted_transcripts?.includes(OLD))
+})
+
+test('the live text ends when the connection to Paseo drops; after the reconnect it starts afresh', async (t) => {
+  const { fake, node, a } = await setup(t)
+  const deltas = () => node.all('session.delta').filter((d) => d.session_id === SID)
+  await call(node, 'session.watch', { session_id: SID, since_seq: 0, transcript: true })
+  await until('followed', () => [...fake.subs.values()].some((s) => s.kind === 'timeline'))
+  fake.stream(a.claude.id, { type: 'timeline', provider: 'claude', turnId: 't1', item: { type: 'assistant_message', text: 'Hello ', messageId: 'm1' } }, 5)
+  await until('the live text', () => deltas().some((d) => d.text === 'Hello '))
+  const before = deltas().length
+  fake.drop()
+  await until('ended at the drop', () => deltas().slice(before).some((d) => d.text === ''))
+  await until('connected again', () => fake.hellos.length === 2)
+  await until('followed again', () => [...fake.subs.values()].some((s) => s.kind === 'timeline'))
+  // What was written while the connection was down never comes: the next chunk is a live text of its own.
+  fake.stream(a.claude.id, { type: 'timeline', provider: 'claude', turnId: 't1', item: { type: 'assistant_message', text: 'again.', messageId: 'm1' } }, 7)
+  await until('the next live text', () => deltas().at(-1)?.text.endsWith('again.'))
+  assert.equal(deltas().at(-1).text, 'again.', 'not added to the text from before the drop')
+})
+
+test('an archived agent deleted in Paseo leaves at once: Paseo 0.15 tells every client of a deletion', async (t) => {
+  const { fake, node, a, rows } = await setup(t)
+  const pushed = () => node.last('runtime.sessions')
+  await until('the archive read', () => pushed().unlisted_transcripts)
+  // Archived: one that keeps its own id (a row not running), one named as its transcript.
+  await call(node, 'session.close', { session_id: 'paseo-e1' })
+  await until('a row not running', () => rows().find((r) => r.session_id === 'paseo-e1')?.status === 'offline')
+  fake.archive(a.claude.id)
+  await until('named', () => pushed().unlisted_transcripts?.includes(SID))
+  const asked = fake.requestsOf('fetch_agent_request').length
+  // Deleted in Paseo's own app: the list is told of the removal (no sweep in this test to find out otherwise).
+  fake.delete(a.labeled.id, { told: true })
+  fake.delete(a.claude.id, { told: true })
+  await until('its row gone', () => !rows().some((r) => r.session_id === 'paseo-e1'))
+  await until('named no more', () => !pushed().unlisted_transcripts?.includes(SID))
+  assert.equal(fake.requestsOf('fetch_agent_request').length - asked, 2, 'asked about each once')
+})
+
+test("the keepalive: a hung Paseo is the bridge's own close, a dropped socket is said so, and a sleep is no silence", async (t) => {
+  const { fake, logs } = await setup(t, { pingEvery: 50, silentFor: 200 })
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(fake.hellos.length, 1, 'pings answered: one connection')
+  // The process is held up (as across a sleep: its timers stop, the clock goes on), and nothing is read meanwhile.
+  const until500 = Date.now() + 500
+  while (Date.now() < until500) { /* held up */ }
+  await new Promise((r) => setTimeout(r, 400))
+  assert.equal(fake.hellos.length, 1, 'pinged first after the gap, and answered: the same connection')
+  assert.equal(logs.some((l) => /no answer to pings/.test(l)), false)
+  // Paseo stops answering, its socket open: the bridge closes it, and says so.
+  fake.hang()
+  await until('connected again', () => fake.hellos.length === 2)
+  assert.ok(logs.some((l) => /no answer to pings/.test(l)))
+  assert.ok(logs.includes('paseo: the bridge closed the connection (4000 keepalive timeout); trying again'), logs.join('\n'))
+  // The socket ends with no close frame (Paseo killed): a dropped connection, not one Paseo closed.
+  fake.drop()
+  await until('connected once more', () => fake.hellos.length === 3)
+  assert.ok(logs.includes('paseo: the connection to Paseo dropped (1006); trying again'), logs.join('\n'))
+  assert.equal(logs.some((l) => /Paseo closed the connection/.test(l)), false, logs.join('\n'))
+})
+
+test("the hello names no app version: Paseo would read it as a version of its own app", async (t) => {
+  const fake = await startFakePaseo(t, { providers: PROVIDERS, entries: ENTRIES })
+  const node = await startFakeNode(t, { features: FEATURES })
+  const home = mkdtempSync('/tmp/ppaseo-')
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  writeFileSync(join(home, 'paseo.pid'), JSON.stringify({ pid: process.pid, listen: `127.0.0.1:${fake.port}` }))
+  // The bridge's own client, as bridge.mjs has it.
+  const bridge = createPaseoBridge({}, { home, socketPath: node.path, retryMs: 30, pushDelayMs: 5, refreshMs: 0, sweepMs: 0 })
+  bridge.start()
+  t.after(() => bridge.stop())
+  await until('the hello', () => fake.hellos.length === 1)
+  assert.equal('appVersion' in fake.hellos[0], false)
+  assert.deepEqual([fake.hellos[0].clientType, fake.hellos[0].capabilities.all_providers], ['cli', true])
 })
 
 test("an Agent Persona started calls its own Persona tools without a card; everything else still asks (#4966)", async (t) => {

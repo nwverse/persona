@@ -44,7 +44,10 @@ takes only `plan` from it (`assistant/tasks_permission.go`). None of this reache
 Auto Accept (their launcher says `auto_accept`; Grok and Paseo's other ACP providers, OpenCode): they start with it on,
 as the owner decided (#8141, `docs/integrations/paseo.md` "Agents Persona starts"). A read-only task's first message adds
 `本任务只读：不改项目文件、不提交、不对外写入` after its own prompt, without changing the saved prompt or duplicating the
-constraint on retries. Codex read-only tasks keep `permission: plan` and the hard read-only sandbox. Planning, card edits,
+constraint on retries. Codex read-only tasks keep `permission: plan` and the hard read-only sandbox. traex and omp take no
+permission mode or effort, so their tasks start with neither and a read-only one has only the first-message constraint (#7559);
+one the call names is refused. pi, cursor and agy start the same way, but one the call names is dropped rather than
+refused, as the node ignores it for them (#8151). Planning, card edits,
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
 
@@ -59,6 +62,8 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
+pi, the Cursor CLI and the Antigravity CLI have no such mapping either, so a read-only task for them is refused the same way, before a pane opens (`docs/integrations/launchers.md`, "Work agents"). The read-only line still goes into the first message, but the start never reaches it.
+
 External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
 without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
 (#3238): a plan start runs on a Paseo provider that runs Claude Code, in Paseo's `plan` mode; a non-Claude provider, no
@@ -223,7 +228,7 @@ Only present when the session is currently associated (`released_at` and `dismis
 The internal `spawn_from` field carried in session reports is stripped before hub pushes to clients.
 
 ### Live WebSocket pushes
-- `{"type":"todos"}`: broadcast on to-do creation, edit, deletion, whole-project link/unlink, Agent association changes, a change of its chat thread, or when its `ask` comes up, is taken or ends ("Waiting for the owner"); clients refetch `GET /api/v1/todos`. The hub sends one per write, so they come in bursts: the App (`TodoStore`) and the web (`todosPushed` in `web/src/lib/store.ts`) keep one such read out at a time, and a push that lands while it is out asks for a single read after it.
+- `{"type":"todos"}`: broadcast on to-do creation, edit, deletion, whole-project link/unlink, Agent association changes, a change of its chat thread, or when its `ask` comes up, is taken or ends ("Waiting for the owner"); clients refetch `GET /api/v1/todos`. The manager sends one per write: the changes made within 100 ms of the first (`todosSettle`; one step of a task writes its to-do from several places) go out as one event, and a change made after it went out sends another, so the last read of every change starts after it (#5995). Separate writes still come in bursts: the App (`TodoStore`) and the web (`todosPushed` in `web/src/lib/store.ts`) keep one such read out at a time, and a push that lands while it is out asks for a single read after it.
 - Session-change push: when to-do/association changes affect sessions, assistant reports a new snapshot; hub compares which computer's sessions changed and re-pushes that computer's `sessions` event.
 
 ### Status codes and roles
@@ -478,7 +483,7 @@ Results still read from transcripts (receipts, `agent_read`, chat page); Unread 
 
 **Stop provenance and recovery** (#8214): only `idle`, `task_completed` and recorded `restart` stops permit this assistant path. The node persists the confirmed stop cause in existing session state; a user close (including a kept terminal or `/exit`) revokes eligibility, and observing a running session clears the old cause. A restart status, an old start timestamp or a lost connection cannot prove the cause: an unrecorded crash remains unknown and needs the owner's Resume. Legacy rows, unknown/future causes and missing provenance stay read-only to the assistant. User closure first reads its saved stop back through `state.load`; a resume similarly saves and verifies unknown provenance before starting, so a failed or interrupted attempt cannot reuse the previous idle stop. A failed or unsupported save returns `stop_not_saved` without touching the terminal. Monotonic `stop_cause_at` revisions keep late metadata writes from reviving an older cause. The node rechecks the cause under the same per-session recovery lock as user closures, so a cached eligible row cannot undo a later close. Resumable `codex_history` rows enter this path only with read/terminal capabilities and no subagent; other read-only sources stay refused. The owner's explicit Resume is unchanged. Both the node and the managers carrying its provenance must support this addition; a component that drops it fails closed, not open.
 
-When every Agent of a task has stopped, the user's message on the task's card (`route`) or the task's **Retry** starts a new Agent for it instead (`assistant/tasks_successor.go`): on the computer, in the directory and with the launcher of its latest Agent, linked to the to-do, its first message the user's after who worked on the task before and that Agent's last reply; the `routed` feed line carries `new_agent`. Persona's own follow-ups (a supervisor's rework, relayed answers to decisions, acceptance or conclusions) start nothing and are refused (`route_agents_stopped`).
+When every Agent of a task has stopped, the user's message on the task's card (`route`) or the task's **Retry** starts a new Agent for it instead (`assistant/tasks_successor.go`): on the computer, in the directory and with the launcher of its latest Agent, linked to the to-do, its first message the user's after who worked on the task before and that Agent's last reply; the `routed` feed line carries `new_agent`. Persona's own follow-ups (a supervisor's rework, relayed answers to decisions, acceptance or conclusions) start nothing and are refused (`route_agents_stopped`). One new Agent per task at a time (#8272): a second message while it is still starting (a follow-up line, or the same one sent again after the phone stopped waiting) waits for that start and is then sent to the new Agent; if that start failed, the waiting message starts the Agent itself, and a start still going after its own bound plus a minute answers `route_starting` (nothing sent).
 
 When a resumed Agent starts a turn, its completed to-do (a chat-dispatched task it still belongs to that the hub closed: `done_by` `auto` or an accepted `review`; user-completed and cancelled tasks stay completed) reopens, as **Reopen** does (`reopened_at` recorded): the task shows as in progress, the turn's end gets its interrupted or done receipt and notice as usual, and completion is judged again (#5892). If the to-do is completed again, the Agent stops again after 3 minutes idle.
 
