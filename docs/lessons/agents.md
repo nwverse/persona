@@ -1046,3 +1046,20 @@ the deployment filesystem as well as the development machine, including a settle
 ## Stopped-session ownership is not recovery permission (#8214)
 
 A `codex_history` source can be node-resumable while still rejecting ordinary messages. Keep the generic source-owned read-only guard; admit only the node-qualified terminal row to the explicit supervised Resume path. Persist user stops and fail closed on missing provenance instead of interpreting an old start time or a localized reason string as permission. A cached eligible row also needs a node-side recheck serialized with closes, and a new running observation must clear old eligibility. Keep this metadata in capabilities rather than enlarging the frequently copied Session row past its allocation size class.
+
+## Claude Code keeps one gateway model list per config directory (#8417)
+
+With `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` on, Claude Code caches the gateway's `/v1/models` in
+`<config dir>/cache/gateway-models.json` for the last base URL only, refreshes it in the background, and shows it only
+while that is the running gateway. Several providers on one computer overwrite each other's list, so a headless
+`initialize` answer is not a stable source for a provider's gateway models. Turning discovery off to hide entries is
+wrong too: it removes the gateway's list from every `/model` the user opens. Read the gateway itself
+(`node/launcher_gateway_models.go`) and compare lists from several computers before concluding a list is clean.
+
+## A Claude session without Persona's hooks still asks with AskUserQuestion (#8515)
+
+The desktop app's sessions (and claude in other terminals) run no hook of Persona's, so their questions never became
+cards; the apps showed only a "reply to answer" line, and the questions and options were nowhere to be seen. The peer
+message prompt asks the model to offer numbered options in plain text instead, but models still open AskUserQuestion,
+often with several questions. Read the open call from the transcript (`node/claudeoutside_ask.go`) rather than counting
+on the model to follow the prompt, and check a real transcript's `tool_use` input shape before parsing it.

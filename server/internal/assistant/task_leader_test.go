@@ -296,18 +296,11 @@ func TestTaskLeaderWorkersAreBounded(t *testing.T) {
 	}
 }
 
-// An agent that asks for its tools with no session (a pane the node cannot name) gets none and does not wait for a
-// leader being started.
-func TestToolListWithNoSessionDoesNotWait(t *testing.T) {
+// Unknown identities have no leader rights; discovery can be refreshed later.
+func TestLeaderToolListWithNoSessionDoesNotWait(t *testing.T) {
 	s, _ := newQuietService(t)
-	old := leaderListWait
-	leaderListWait = 3 * time.Second
-	t.Cleanup(func() { leaderListWait = old })
-	s.leaderStarts.Add(1)
-	t.Cleanup(func() { s.leaderStarts.Add(-1) })
-	start := time.Now()
-	if got := s.leaderTools(context.Background(), "box", ""); got != nil || time.Since(start) > time.Second {
-		t.Fatalf("no session: %v after %s", got, time.Since(start))
+	if got := s.leaderTools(context.Background(), "box", ""); got != nil {
+		t.Fatalf("no session: %v", got)
 	}
 }
 
@@ -623,33 +616,45 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 	}
 }
 
-// An agent being started as a leader asks for its tools before it is linked: its list waits for the link, a list of any
-// other unlinked agent waits no longer than the bound, and neither is given the tool by the wait alone.
-func TestTaskLeaderListWaitsForItsLink(t *testing.T) {
+// Registration after the initial list invalidates its cursor. No startup counter
+// or finite wait window is involved, and late watch subscription cannot lose it.
+func TestTaskLeaderListRefreshesAfterItsLink(t *testing.T) {
 	s, _ := newQuietService(t)
-	old := leaderListWait
-	leaderListWait = 400 * time.Millisecond
-	t.Cleanup(func() { leaderListWait = old })
 	ctx := context.Background()
-
-	if got := s.leaderTools(ctx, "box", "sx"); got != nil {
-		t.Fatalf("no leader is starting: %v", got)
-	}
-	s.leaderStarts.Add(1)
-	start := time.Now()
-	if got := s.leaderTools(ctx, "box", "sx"); got != nil || time.Since(start) < 300*time.Millisecond {
-		t.Fatalf("an unlinked agent while a leader starts: %v after %s", got, time.Since(start))
-	}
 	todo, err := s.createTaskTodo(ctx, "leader", "", "conv1", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.AfterFunc(100*time.Millisecond, func() {
-		_ = s.linkTodoAgentWithSource(ctx, todo.ID, "box", "sx", "leader", "/code/app", "", "", sourceLeader, "")
-		s.leaderStarts.Add(-1)
-	})
-	if got := leaderToolNames(s.leaderTools(ctx, "box", "sx")); !slices.Equal(got, []string{"task_plan", "task_review"}) {
-		t.Fatalf("the leader's list after its link: %v", got)
+	before := s.sessionMCPToolsSince(ctx, "box", "sx", false, false, "")
+	if got := leaderToolNames(before["tools"].([]proto.Tool)); slices.Contains(got, "task_plan") || slices.Contains(got, "task_review") {
+		t.Fatalf("unlinked agent has leader tools: %v", got)
+	}
+	cursor := before["revision"].(string)
+	_, changed := s.mcpChanges.snapshot()
+	if err := s.linkPlanAgent(ctx, PlanTask{TodoID: todo.ID, Role: roleLeader}, "box", "sx", false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("registration did not wake tool discovery")
+	}
+	after := s.sessionMCPToolsSince(ctx, "box", "sx", false, false, cursor)
+	names := leaderToolNames(after["tools"].([]proto.Tool))
+	if after["revision"] == cursor || !slices.Contains(names, "task_plan") || !slices.Contains(names, "task_review") {
+		t.Fatalf("late leader list: %+v", after)
+	}
+	if got := s.leaderTools(ctx, "box", "other"); got != nil {
+		t.Fatalf("another Agent gained rights: %v", got)
+	}
+
+	// Completing the task invalidates discovery too, and the tools disappear.
+	if ok, err := s.autoDoneTodo(ctx, todo.ID, "done", time.Now()); err != nil || !ok {
+		t.Fatalf("close: %v %v", ok, err)
+	}
+	closed := s.sessionMCPToolsSince(ctx, "box", "sx", false, false, after["revision"].(string))
+	if got := leaderToolNames(closed["tools"].([]proto.Tool)); slices.Contains(got, "task_plan") || slices.Contains(got, "task_review") {
+		t.Fatalf("closed task kept leader tools: %v", got)
 	}
 }
 
