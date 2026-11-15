@@ -72,8 +72,8 @@ type PlanTask struct {
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
 	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
-	// the agent must not do. Continues: the to-do this task takes over from (a retry on another computer, a rework
-	// round, a task split off it), for ContinuesWhy: it then works for that to-do's brief instead of a new one. Brief is
+	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
+	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
 	Goal         string   `json:"goal,omitempty"`
@@ -115,6 +115,10 @@ type PlanTask struct {
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
 	// Start: the start being remedied after its agent did not start, or how that ended (start_remedy.go, #2570).
 	Start *StartRemedy `json:"start,omitempty"`
+	// Queue is set while the admission gate has refused this start for now: the task stays open (not failed, no
+	// failure receipt) and the admission queue loop retries it on a timer (task_queue.go, #6909). Cleared the moment
+	// a retry starts; the task's card reads as waiting with the queue's reason while it is set.
+	Queue *TaskQueue `json:"queue,omitempty"`
 	// defaulted: Launcher was filled in from a default by an earlier try of this start (startTaskAgent), not named by
 	// whoever planned the task, so a retry may still swap it for one its computer has (launcher_fit.go).
 	defaulted bool

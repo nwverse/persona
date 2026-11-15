@@ -160,7 +160,7 @@ h1 .say path{fill:none;stroke:var(--cheek);stroke-width:7;stroke-linecap:round}
   -webkit-mask-image:linear-gradient(transparent,#000 28px);mask-image:linear-gradient(transparent,#000 28px)}
 .chat > *{flex:none;animation:in .3s ease both}
 @keyframes in{from{opacity:0;transform:translateY(6px)}}
-.mine{align-self:flex-end;max-width:88%;padding:8px 12px;border-radius:16px 16px 4px 16px;background:var(--sky-tint)}
+.chat .mine{align-self:flex-end;max-width:88%;padding:8px 12px;border-radius:16px 16px 4px 16px;background:var(--sky-tint)}
 .say-p{margin:0}
 .dimp{margin:0;font-size:12px;color:var(--gray)}
 .ctx{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
@@ -689,7 +689,7 @@ html:not(.js) .sw::after,.ext.in .sw::after{transform:translateX(16px)}
       <h3>Set up your own</h3>
       <ol class="steps">
         <li><b>Install the hub on an always-on machine</b><span>Linux and Mac both work; paste this one line. On a Mac, install Docker Desktop or OrbStack first.</span>
-          <div class="cmd"><span class="line"><span class="pr">$ </span><span id="cmd-text">curl -fsSL https://personaside.com/install.sh | sh -s -- --hub</span></span>
+          <div class="cmd"><span class="line"><span class="pr">$ </span><span id="cmd-text">curl -fsSL https://github.com/nwverse/persona/releases/latest/download/install.sh | sh -s -- --hub</span></span>
             <button class="copy" id="copy" type="button" aria-label="Copy install command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15"/></svg></button>
           </div></li>
         <li><b>Pair your phone with a QR code</b><span>When installation finishes, the terminal shows a QR code. Scan it with your iPhone camera to connect. The code is valid for 10 minutes and can be used only once. If it expires, run <code>personad hub pair</code> on the hub machine for a new one, or paste the command above again.</span></li>

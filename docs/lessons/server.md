@@ -1,5 +1,50 @@
 # Lessons: hub / node and networking
 
+## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
+
+The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
+account changed. So account A's review request stayed in the inbox, and a reply to it posted a comment with B's token. Fixing it at the place
+the user switches was not enough, because the login changes in ways nobody chooses:
+
+- A poll that gets a 401 asks the computer for its token again and retries. If `gh` was switched there, the retry is another account's request
+  carrying the first one's `If-Modified-Since`, and its answer is merged into the first one's inbox.
+- `/user` answers arrive in any order. A check of the old token that GitHub answers late wrote the old login back over the new one.
+- A read in flight when the account changes writes its answer into whatever is there afterwards: a cache that was just emptied (or a nil map).
+- A thing can be older than its keep time when the account changes (things are forgotten only when a poll reads the list), so a marker kept
+  by the thing's age is dropped by the next poll, before the hub closed the item.
+- Both accounts can have the same thread unread at the same time: the thread, and even the move's timestamp, do not tell their items apart.
+
+What holds: one owner of the identity (`account.go`). A new token reads or answers nothing that belongs to an account until GitHub named its
+account; every credential has a number and an answer to an older one is dropped; a different login moves an epoch, and the same step that
+adopts it retires and resets everything read under the old one. State and requests carry the epoch they began under (in the context), a
+request for an older epoch is refused before it is sent, and write-backs check the epoch under the state's own lock. Lock order is the
+connector's lock, then the state's; a state lock never takes the connector's. The tests hold a request at the fake GitHub on a channel and
+change the account while it waits (`account_switch_test.go`).
+
+The first version of the fix still failed an independent review, on what the hub keeps rather than on what the connector does:
+
+- The hub holds items longer than the connector's process lives and hands back only a thread and the move the item holds. Anything the
+  connector decides from what it has in memory (a marker per retired thing, "is this thread held") is wrong after a restart, for items it
+  has forgotten (older than its keep time), and for items it considers done while the hub keeps them open (answered through Persona).
+  So the account and its epoch are kept across restarts, every move read after a change carries the epoch (the reply check needs no
+  memory), and the hub's leftovers are closed by exclusion: whatever the account in use holds no thing of.
+- A mark put only where a collision was noticed (the retired thing's last move) misses the collisions nobody remembered: the hub's item
+  one move behind, or a third account meeting the first one's move. Mark every move, or none.
+- A step done once and then recorded has two wrong orders. "Tell the hub, then save that it is done" closes the wrong items after a
+  failed save and a restart; "save, then tell" at worst leaves old items open. Pick the order whose failure is the harmless one, and
+  say which it is. The same review found the record forgotten after `Reload` (whoever held the id had saved over it) and a secret that
+  no longer opens taking a computer's sign-in down: a record added to an existing store inherits every way that store is rewritten or fails.
+- Closing by thread meets the hub's own rule, which starts an item only for a move later than the thread's closed one: a round trip to
+  another account and back does not bring the first inbox back. That is a limit, written down in `docs/assistant/inbox.md`, not a bug to
+  work around by moving a thing's time.
+
+## An empty list sent as null means "no change" to an optional field (2026-11-14)
+
+The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.
+Go marshals a nil slice as `null`, so lifting the last blocked pattern stored none on the hub but left the node blocking
+the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
+empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
+
 ## An update waits only for what its restart interrupts (2026-11-13, #6364)
 
 A node update counted every session on the computer as busy: working, background tasks, running subagents, questions on the phone. On a computer whose terminal Agents always run a background workflow it never went through, and the queued update survived hub restarts. The resident node restarts by exec in place and stops only its own headless conversations (`ResidentReload.Prepare`); terminal Agents are other processes and keep running. Before adding a wait in front of a restart, list what that restart actually stops and wait for that, as the hub self-update's `updateBusy` does. When the rule lives on both sides of a connection, gate the new rule on a capability: the hub's lighter wait in front of an old node's strict commit check would re-send the whole build on every refusal. And let the side that enforces the rule report its verdict rather than have the other side rebuild it from rows: the hub first rebuilt the node's check from `sessions.list` rows, but a node never marks its headless rows `Assistant` (the hub's assistant manager adds that later), so the hub saw a busy main chat as idle and re-sent the build until it settled. The node now answers `update_busy`.
@@ -26,6 +71,60 @@ retries a version that failed in standby at the next hourly check, so two failed
 resource after what is in use now (the slot that served last), not after how many attempts were made, and let a
 process's clean-up remove only what it made: the edge notes any socket file already at a slot's path when it starts
 it and leaves that file alone. A test of one failed switch passed for this reason; test failures in a row.
+
+## An index over files answers only for the files it read, and is measured on text that varies (2026-11-13, #1273)
+
+The knowledge base's search index (`server/internal/kb/search_index.go`) is kept beside files that people, Agents and
+the import all write, so "is the index current?" has no single answer. What made it safe was asking it a smaller
+question: it may rule a file out only when the file's path, mtime and size are exactly the ones it read, and
+everything else is read by the scan that existed before. Then a missing, half-built, stale or damaged index can only
+cost time, and the tests compare results with the scan instead of trusting an invalidation scheme. Three things went
+wrong on the way. The first benchmark archive repeated one line four million times: its index was 22 MB and built in
+13 s, while text with a long tail of rare characters and words gave 155 MB and 30 s, and the first design, which kept
+every segment's key table in memory, peaked at 1.1 GB on it against a 1 GB target (the keys now stay on disk in
+blocks, with one entry per block in memory). An index that outlives the process also outlives what a cache forgave:
+a writer whose index directory is removed under it, a reader in another process after the writer merged, and entries
+of deleted text that no search uses but that stay on disk until something rewrites them each needed their own rule
+and test. And a lane that runs on every round runs on every kick: one `stat` per file is cheap once and not every five
+seconds.
+
+## Checksums inside a file do not say it is the file you read before (2026-11-13, #1273)
+
+The search index's segments were named from a counter kept in the manifest, and every part of a segment was under a
+checksum. A reader keeps a segment's file table in memory and opens the file by name for each query. Review found the
+hole between the two: remove `.search`, rename one day file, and the rebuild writes a second `seg-000001.idx` of the
+same size with its files numbered differently; a read-only store that still held the first one's table read the new
+lists through it, every checksum passed, and a search lost a result. A checksum stored in a file proves the file agrees
+with itself, not with what a reader remembers of an earlier file under that name. Two rules came out of it: a name is
+never given to other content (64 random bits in each file name; a counter starts again whenever the thing it counts
+does), and whoever keeps part of a file in memory checks on every open that the file is still that one (a random id in
+the footer, compared with the footer it read). The same review found a data race that no test had shown, because only
+an opt-in harness ran a search, an update and the removal of the directory at once: what the doc calls safe to do at
+any time needs a default test that does it at that time, under `-race`. And the new tests took 70 s on Linux and
+968 s on a shared Mac, at 20% CPU: their cost was file opens (2.4 million of them), which one machine does in
+microseconds and another in most of a millisecond. Count the system calls of a test that walks directories
+(`strace -f -c -e trace=%file,%desc`) instead of trusting its seconds on the machine it was written on.
+
+## A stat and a read are two moments, and a path is not a file (2026-11-14, #1273)
+
+The search index's update looked at every file (`stat`), then read the ones it had to, and kept each file's keys
+under the mtime and size the look had seen, checking only that the bytes read were of that size. Review found what
+lies between: the file is replaced by other text of the same size after the look, the update reads that, and the first
+text comes back under its own mtime later (moved back, or restored by a sync or backup tool). The index then held the
+second text's keys under the first one's mtime and size, the entry matched the file exactly, and searches passed over
+it for words it holds, in every later run and every new process. Nobody had set an mtime or made two versions with one
+mtime and size: the index had invented the pair itself, and on a first build the window was the whole run. What an
+entry says has to be true when it is written: these bytes had this mtime and size. So the file is opened once, asked
+through the handle before the first byte and after the last, read through the same handle, and kept only when both
+answers are the look's. Each of the three parts is needed, and each has a test that fails without it: without the
+first look a file written back in place after the read passes; without the second, one written in place before it;
+and a second `stat` of the path, instead of the handle, is answered by whatever file is there by then. A test of
+this needs a hook at the moment, not a sleep (`searchIndex.hook`). The same review found two more of the kind
+"decided once, true for ever": a flag set after the state it described had been replaced (a read-only store marked
+broken with nothing left to compare, for good; set such a flag under the lock and only if the state is still the one
+it is about), and an error class matched by type (`*json.SyntaxError`, `*json.UnmarshalTypeError`) that missed a
+third kind of decode error, so every run failed the same way and nothing was ever rebuilt (say "this file is not
+valid" where it is decoded, and match that).
 
 ## A new file in the knowledge base is searched unless `searchable` says otherwise (2026-11-13, #5991)
 
@@ -58,8 +157,50 @@ messages (terminal keys) is a one-way `notify` written in place, never a call.
 Test it by keeping the node's answer back, waiting until the call is at the node, and then checking that a message
 sent behind it is taken: the fix is told apart by whether the hub reads, not by how long something took. Run the
 scenario through the manager as well, where the wait is the manager's own
-(`server/internal/hub/subscribe_readloop_test.go`). As of this change `fs_watch` still calls the node from the read
-loop (`fsWatchSet`, up to 10 s).
+(`server/internal/hub/subscribe_readloop_test.go`).
+
+`fs_watch` needed the same treatment (#6786), with one addition: replacing a set is not the same as counting joins
+and leaves. Record the browser's set in its read loop, then use one worker per machine with one coalesced trailing
+request. The worker reads the union when its turn comes, so a burst makes at most the call in flight and one latest
+call. Disconnect cleanup and reconnect resends use that queue too. A reconnect sets a forced-resend flag rather than
+only `fswSent`: an earlier empty call can clear `fswSent` before the trailing reconnect runs, and the new node still
+needs that empty set. A failed forced resend leaves `fswSent` set, so the next empty set retries it as before
+(`server/internal/hub/fswatch_report_readloop_test.go`).
+
+A manager bus read loop has the same rule for its store. `extensions.report` keeps its in-memory report and broadcasts
+in bus order, but one worker persists only the latest pending report, with a bounded context for each write. A failed
+write is logged and left for the next report, never retried in a tight loop. Both kinds of worker join the hub's
+`nodeWorkers`, whose shutdown wait is bounded. Tests hold the node or `PutSetting`, prove a later message or bus event
+is still handled, then release the dependency and join the workers before checking the final value and call count.
+
+## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
+
+`client_hello` and `register_phone` also waited in the app connection's read loop: `hub.client_apps` did a settings
+load and save, the device and user locales did up to two of each, and every phone registration waited for
+`ReplacePhoneTools`. A slow store therefore delayed the hello ack and every later frame just as a slow node did for
+subscriptions. Record connection-local metadata in place, so the next reply and direct phone routing use the new
+language and tools at once, but move persistence to one ordered consumer per setting group. Client-app and locale
+changes are history-dependent: apply every change in message order and coalesce only the final snapshot writes. Phone
+registrations are complete replacements, so pending ones can coalesce to the newest per device. The consumers have
+their own lifetime, not `deployCtx`'s: `runHub` stops them in a bounded shutdown step only after `serveHTTP` has closed
+and joined the app socket handlers, then joins `nodeWorkers`, and closes the database last. Deploy cancellation alone
+must not strand a report read while those connections are closing. Starting and stopping the consumers is serialized,
+so a stop racing the first report is safe. A report that arrives after the stop is not written; the app sends it again
+on reconnect.
+
+Each pending set is capped at 1,024 entries; phone capacity counts distinct pending devices, so replacing one already
+queued takes no new slot. If two producers race for the same new device, the one that becomes a replacement returns
+its now-redundant admission token immediately. Normally admission is a nonblocking semaphore send. At the cap, only
+the producing read loop waits, for at most the existing Store timeout; it then drops that report and logs once for the
+affected queue rather than once per dropped report. Consumers return capacity as soon as they detach a batch, not when
+its Store write ends. Tests use a separate idle condition (pending empty and no flush in flight), so they still wait
+for the final save.
+
+A failed load is not an empty setting. `loadClientAppsLocked` used to clear the map and its caller still saved it, so
+one transient read error could drop every other device. Load into temporary state, publish it only after a complete
+successful read, and otherwise apply and save nothing; the next message retries. The same rule covers both locale
+settings together: in particular, an absent `user_locale` plus a failed `hub.device_locales` read must not publish or
+save a first device's language.
 
 ## A Go file named after a platform builds only there (#5563)
 
@@ -542,6 +683,10 @@ Sockets passed by socket activation (`LISTEN_FDS`, descriptors 3 and up) are not
 
 `syscall.Exec` keeps the pid, so every child of the old image (the update watchdog, the herdr server, bridges, the hub's manager) is the new image's child, and no `exec.Cmd` there knows it. Once one exits it stays a zombie until the process ends; `init: true` in Docker does not help, since the zombie's parent is personad, not init. The resident node, the hub and a manager all replace themselves this way, so each calls `osproc.ReapInherited` next to `osproc.SealInherited`, before it starts any child: it waits for each pid listed as its child then, never for -1, which could take a child an `exec.Cmd` waits for.
 
+## macOS's resolver opens a control socket after the startup seal (2026-11-15, #7813)
+
+On macOS the first lookup through libSystem opens `com.apple.netsrc`, an `AF_SYSTEM` kernel control socket without close-on-exec, and keeps reusing it; the separate Unix socket to mDNSResponder is close-on-exec. A startup seal before any lookup therefore misses the one socket that every later child inherits. `osproc.SealInherited` makes one `localhost` lookup through `net.DefaultResolver` with a 50 ms deadline immediately before its descriptor scan on Darwin. This leaves `GODEBUG=netdns` untouched (`netdns=go` opens no control socket), ignores resolver errors and costs each caller only one local lookup, including the short-lived stdio commands. If the deadline passes, the system lookup may finish and open the socket after the scan, retaining the old inheritance behavior rather than delaying startup further. Keep the warm-up inside `osproc` so no present or future caller can forget it. A test can identify the socket without `lsof` through `CTLIOCGINFO`: Darwin has no `SO_DOMAIN` option, and `getsockname` is unsupported on this control socket.
+
 ## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
 
 `os.TempDir()` is the per-user `$TMPDIR` on macOS but the shared `/tmp` on Linux, so a fixed name there (`persona-herdr-server.log`, `persona-orca-images`) looks private on a Mac and is not on a Linux node. Another local user can create the name first: a symlink makes the next `O_CREATE|O_TRUNC` open empty and write into a file of the node's user, and a world-writable folder receives every file written into it, since `MkdirAll` succeeds on an existing folder whatever its owner or mode. Keep such files under `privateCacheDir` (`internal/node/cachedir.go`: the user's cache folder, checked to be a private folder of this user; a per-process `os.MkdirTemp` folder when there is none).
@@ -762,6 +907,8 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 - An ownership rule between managers has to hold on every path into the hub, not just the obvious one (2026-11-06, #5923). After #5556 made `device.call` and the cards check the caller's machine, a review still found a manager reaching another's things through `ws.broadcast` (relabelling its own card as another session's question), `notify.request`, extension pushes, `app.call`, relayed Persona Links that outlived a move or a revoke, and extension events sent to every manager. When adding a bus method, event, relay or push, take the caller (`handleBus`, `c.managerID()`), check what it names with `ownsRef` / `machineOwner`, and recheck after anything a move can change in between (`withCaller`, cards and relays checked again once kept). For what a manager sends on, allowlist its types (`TestBroadcastTypes` reads them and the hub's from the code with `go/ast`) rather than denylisting the hub's, and read it with exact keys: Go's `encoding/json` matches keys regardless of case and takes the last of a repeated key, so `{"type":"interaction","Type":"x"}` read into a struct passed a denylist while the apps read `interaction`; refuse repeated and case-variant keys and pass on what was checked, re-marshalled (#5960 review).
 
 - Merging managers' to-do links must resolve each machine/session pair by `sessionOwner` before falling back to the built-in assistant (2026-11-06, #5829). A session belongs to its machine's owner (#5556), which may not be the built-in assistant. Go map iteration has no guaranteed order, so looking up the owner's and built-in assistant's entries directly prevents a later-visited fallback from overwriting the owner. Test both report arrival orders and nil versus empty reports: a failed read retains links, while a successful empty report withdraws them.
+
+- The hub half of `TestBroadcastTypes` scans every non-test `.go` file in the `hub` package for message types: any `Type: "text"` struct literal, `"type": "x"` map key, `x.Type = "x"` assignment, or in-string `"type":"x"` is treated as an app message type and must be listed in `hubMessageTypes` (2026-11-14, #7677). Code that merely builds `proto.Content` (e.g. prepending a note to a phone tool result) trips it. Build such content with the `proto.TextResult(...)` helper instead of a `proto.Content{Type: ...}` literal, so the literal lives in the `proto` package, which the scanner does not parse.
 
 - To-do Agent linking and removal must lock rows in the same order (2026-11-05, #2660): acquire a session transaction lock, then lock the target and other active to-do parent rows by id, then update Agent rows, preventing concurrent link/removal deadlocks and duplicate active links. Auto-link first confirms the target isn't an existing row or dismissed marker, releases old active links, then inserts; `todo_agents_active` is an immediate unique index, so inserting before release raises 23505. Preserve soft unlink and roll back the whole transaction on unexpected conflicts. Regressions observe real lock waits and use `FOR UPDATE NOWAIT` to check order, not added sleeps or retries.
 
@@ -1247,6 +1394,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - **JPEG pixels are stored before EXIF orientation** (#1303): apply all eight primary-image orientations, including mirrors, before sizing a thumbnail; re-encoding alone drops the orientation metadata. Keep metadata scans bounded and separate from nested/thumbnail IFDs. A derived thumbnail's ETag also needs a processing version, but clients must reach that validator: revalidate persisted disk thumbnails once per launch even when a listing's size/time match, and give browser thumbnail URLs a new page-load identity. Test both upgrade orders with a seeded old image; a new client may see an old node first. Unupdated clients can retain their private caches until they refresh or upgrade.
 - **Go `mime.TypeByExtension` varies by machine**: it reads `/etc/mime.types` and other system files; docx / xlsx / ipynb / heic may be known on one machine and empty on another, making MIME-selected viewers differ for the same file. Keep a fixed preview-type table in node (`node/filemime.go`); outside it, consult the system, then sniff initial bytes.
+- **An extension can name two formats** (#7974): `.ts` is TypeScript and MPEG transport stream, `.mts` TypeScript and AVCHD video. The system tables pick one (a Mac's `/etc/apache2/mime.types` says `video/mp2t`, Linux shared-mime-info lists `text/vnd.qt.linguist` first), so a fixed table entry would be wrong half the time too: such names are typed by their first bytes (`proto.ScriptOrStream`: sync byte `0x47` every 188 bytes, binary; else text). Older nodes keep answering by the name until their computer updates, so the hub's `file.read` relay re-checks a streamed `video/mp2t` through `file.chunk`; a type fix that lives only in the node reaches nobody whose files are on another computer.
 - **`qlmanage -t` hangs on locked Macs** (still running after 30 seconds measured), without errors. System thumbnail tools need timeouts, cooldown after a timeout, and one concurrent execution: a file list may request dozens, otherwise node fills with stuck processes waiting on every thumbnail.
 - **Hub and web share an origin; isolate inline files**: standalone `Content-Disposition: inline` SVG / HTML scripts run as the web app and can read localStorage tokens. Inline only images, audio/video, PDF, with `Content-Security-Policy: sandbox`; PDF is exempt because Chrome won't display sandboxed PDFs.
 
@@ -1650,6 +1798,8 @@ When a `httputil.ReverseProxy` has to read what it forwards (the sent-as-user le
 
 Calling both notification channels does not mean either selected a recipient: a saved device may have no usable APNs or relay route, and a connected client may not support `ws_notify`. Return selected and reachable counts from the same recipient walk, before and after its preference filters, so the API can distinguish `no_device` from `filtered` without a separate readiness check racing that selection. Preserve the earlier session-level `muted` result and count both channels: a WebSocket notification can still go out without any push credentials. These counts are not asynchronous APNs / relay acceptance or proof that a phone displayed anything.
 
+The same holds on every path that reports a push, not only the API that was fixed. `POST /api/v1/notify` learned to say `no_device` in #1910, but the assistant's `notify.request` kept dropping the counts, so `notify_user` answered "Notification sent." for days in which no device was paired, and the north star counted each of those notices as an interruption (#8138). When a function returns selected and reachable counts, carry them up to every caller that reports success, and count a browser's Web Push and an offline device's kept copy apart from "nothing".
+
 ## A push's nil "wants" means "asked for explicitly" (2026-11-06, per-manager push switches)
 
 `Pusher.send*` and the WebSocket notify take `wants func(NotifyPrefs) bool`, and nil is not just "every device": `alertWanted` lets it past Phone Muted (`mute_while_desktop`) and the pusher sends it to an open desktop too (an assistant's reminder, an extension's push). Wrapping nil in a filter to add one more condition (a muted manager) silently turns those pushes into ordinary ones, and they stop reaching a phone in Phone Muted mode. Put an extra per-device rule where the devices are walked (`Pusher.sendFrom`, `notifyWSFrom` take the manager) instead of in `wants`.
@@ -1991,7 +2141,7 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
 - When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
-- The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`).
+- The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`). A later sparse to-do id rode in that same optional pointer rather than taking `Item` past the class again (#7200); `TestItemBatchFitsItsSizeClass` now checks the 150-row batch beside the type, with no architecture-specific struct size.
 
 ## A fact about a directory does not go on every row in it (2026-11-13, #994)
 
@@ -2180,3 +2330,26 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   `server/internal/hub/settings_card_wait_test.go`), so fifteen minutes pass at once. Give the hub's end a loopback
   address (the bus refuses plaintext from an address it cannot place), and let what the hub does after a hang-up
   (`devicesGone` waits half a second) pass in a cleanup: the bubble's clock stops when the test's goroutine is done.
+
+## "A run after I asked" is not "the run I asked for" (2026-11-14, #7116)
+
+- `subscription_run` took a clock reading, recorded its request, and returned the first run whose time was not
+  before the reading. A scheduled run that started between the reading and the request passed for the requested one:
+  the caller got another run's counts and items, and when the scheduled run found the items first, the requested run
+  found none. Tell a requested run by what marks it as requested (its trigger), not by when it happened.
+- A request flag is taken by the run that honours it, never by whichever run comes next: the scheduled run cleared
+  the flag it had read as unset a moment earlier, and a "run now" made in between was lost without a trace.
+- It showed up as a test that failed 21 times in 200 under load, and the first reading was "the test's ordering".
+  Before making such a test deterministic, make the losing order happen on purpose (a store that runs the other
+  side inside the read) and look at what the caller gets.
+
+## A seal anywhere in the server is counted by the key rotation guard (2026-11-15, #7984)
+
+`internal/assistant`'s `TestPlacesThatSealAreKnown` (`keyrotate_guard_test.go`) counts every `.Seal(`, `sealKey(`,
+`.encrypt(`, `SealWith(` and `secretkey.New` per file under `internal/` and `cmd/`, so nothing new seals with the
+manager's `secret.key` without the key rotation re-sealing it. It counts AEADs with keys of their own too, in packages
+that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/screenlink`, its
+tests and its importers passed, and the hub deploy failed on this guard. When code under `internal/` or `cmd/` seals,
+run `go test -run TestPlacesThatSealAreKnown ./internal/assistant` (no database needed) and record the file there:
+with `secret.key`, after putting where it keeps the sealed value into `db.sealedTables` or `db.sealedSettings`; with
+any other key, under "other keys" with where the key comes from. Never loosen the guard.

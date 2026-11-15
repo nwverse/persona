@@ -261,6 +261,8 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
 			}
+			// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
+			// are not resumable, so this branch never has a wait reporter to restore.
 			return s.await(ctx, p)
 		}
 		s.fleet.mu.Unlock()
@@ -303,6 +305,8 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 		s.record(ix)
 		s.announce(ix)
 	}
+	resume := pushMCPInteraction(ctx, ix)
+	defer resume()
 	return s.await(ctx, p)
 }
 
@@ -1134,7 +1138,7 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	// A question may have rung the user before the restart: its timeout only puts it back on the apps. An approval is
 	// not quiet: only the user can answer it, so its timeout rings (ringAsks) instead of leaving the agent blocked
 	// with nobody told.
-	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, routedAt: now, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
 	p.ix.Delegating = true
 	shown := p.ix
 	s.fleet.mu.Unlock()

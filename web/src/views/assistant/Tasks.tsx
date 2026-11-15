@@ -60,6 +60,7 @@ import { AcceptRow, BriefCard } from "./Brief";
 
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
+const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.HeldPushesEntry));
 
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one.
@@ -94,6 +95,7 @@ import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { requestHome } from "../../lib/child-sessions";
 import { stateName } from "../../lib/state-labels";
+import { EDITABLE } from "../../lib/shortcuts";
 
 // ── what a task is now ──
 
@@ -412,6 +414,12 @@ function BackgroundReviewLine({ item, title, known }: { item: FeedItem; title: s
   );
 }
 
+/** The plan a `plan` item carries in its body (the hub writes it there with the item), when it is one of this item's. */
+function itemPlan(item: FeedItem): TaskPlan | undefined {
+  const p = item.body?.plan as TaskPlan | undefined;
+  return p && typeof p === "object" && p.id === item.ref && Array.isArray(p.tasks) ? p : undefined;
+}
+
 // Memoized: the chat re-renders on every streamed item and session push, while an item keeps its identity until its body
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
@@ -426,7 +434,13 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
   if (simplified) {
     // the Agents a dispatch handed work to, a card each that opens its page (#5096, cindy's hand-off card); never the
     // whole In progress tray (#3700)
-    if (item.kind === "plan") return plan?.state === "started" ? <PlanHandoffs plan={plan} /> : null;
+    // a plan not started yet is its card where it was made, Start / Edit / Dismiss included, as on iOS (FeedLine,
+    // #8193); it is in the Needs you tray as well. The item's own body draws it when the store has none (a missed event).
+    if (item.kind === "plan") {
+      const shown = plan ?? itemPlan(item);
+      if (!shown) return null;
+      return shown.state === "started" ? <PlanHandoffs plan={shown} /> : <PlanCard plan={shown} />;
+    }
     if (item.kind === "task") return planned ? null : <TaskHandoffs item={item} />;
     // a task's conclusion, a card for each of done / stopped / failed / interrupted (#5569); an interrupted one the hub worked
     // out stays as its record (#3834): one card for a batch, a grey line once handled
@@ -1388,10 +1402,26 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   }, [conversation]);
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
   const entryKeys: AssistantTray[] = ["needs", "running"];
+  const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
+  // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
+  // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
+  // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
+  // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
+  const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
+    if (document.querySelector("[role=dialog],[role=menu]")) return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const entry = entryButtons.current[tray];
+    setTray(null);
+    entry?.focus();
+  };
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar>
+    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
@@ -1430,11 +1460,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
         {entryKeys.map((key) => {
           const open = tray === key;
-          // An empty Needs you is drawn quiet (grey) but still opens "All caught up".
-          const quiet = key === "needs" && !counts.needs;
+          // An empty entry is drawn quiet (grey), Needs you and In progress alike, and still opens its "nothing here" line.
+          const quiet = !counts[key];
           return (
             <button
               key={key}
+              ref={(el) => void (entryButtons.current[key] = el)}
               type="button"
               data-tray-entry={key}
               aria-expanded={open}
@@ -1448,6 +1479,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             </button>
           );
         })}
+        {main === conversation && <Suspense fallback={null}><HeldPushesEntry className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink-2 hover:bg-hover")} /></Suspense>}
       </div>
       {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>

@@ -93,6 +93,9 @@ final class FrameStats: NSObject {
         // The streamed reply's cadence as the reader sees it: the gaps between frames where its text grew.
         let gaps = zip(textChanges, textChanges.dropFirst()).map { ($1.0 - $0.0) * 1000 }.sorted()
         let added = textChanges.map { Double($0.1) }.sorted()
+        // Typed, as `busyMax`: `gaps.last ?? 0` in the literal is `last(where:)`, and JSONSerialization aborts on it.
+        let gapMax: Double = gaps.last ?? 0
+        let addedMax: Double = added.last ?? 0
         func q(_ v: [Double], _ p: Double) -> Double { v.isEmpty ? 0 : v[min(v.count - 1, Int(Double(v.count) * p))] }
         let result: [String: Any] = [
             "label": label,
@@ -103,6 +106,9 @@ final class FrameStats: NSObject {
             "p50_ms": pct(0.5), "p95_ms": pct(0.95), "p99_ms": pct(0.99),
             "max_ms": (sorted.last ?? 0) * 1000,
             "busy_p50_ms": bpct(0.5), "busy_p95_ms": bpct(0.95), "busy_max_ms": busyMax,
+            // Every frame: its interval and the main thread's time before it (ms), to find which frames of an
+            // animation grew (the sidebar's toggle, #4206).
+            "deltas_ms": deltas.map { ($0 * 10_000).rounded() / 10 }, "busies_ms": busies.map { ($0 * 10).rounded() / 10 },
             // When the long frames came (seconds from the start) and how long they were (ms).
             "long": zip(deltas.indices, deltas).filter { $0.1 > 0.05 }.map { i, d in
                 [Double(deltas[..<i].reduce(0, +)), d * 1000] },
@@ -117,8 +123,8 @@ final class FrameStats: NSObject {
             "busy_ms_per_s": total > 0 ? busies.reduce(0, +) / total : 0,
             "main_cpu_ms_per_s": total > 0 ? cpu * 1000 / total : 0,
             "text_changes": textChanges.count,
-            "text_gap_p50_ms": q(gaps, 0.5), "text_gap_p95_ms": q(gaps, 0.95), "text_gap_max_ms": gaps.last ?? 0,
-            "text_added_p50": q(added, 0.5), "text_added_p95": q(added, 0.95), "text_added_max": added.last ?? 0,
+            "text_gap_p50_ms": q(gaps, 0.5), "text_gap_p95_ms": q(gaps, 0.95), "text_gap_max_ms": gapMax,
+            "text_added_p50": q(added, 0.5), "text_added_p95": q(added, 0.95), "text_added_max": addedMax,
         ]
         if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
            let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
@@ -162,6 +168,16 @@ import UIKit
     static let start = "com.persona.perf.frames.start"
     static let stop = "com.persona.perf.frames.stop"
     static let glideNotice = "com.persona.perf.frames.glide"
+    /// The other shell page comes to the front, as the switch's tap does it (`AppModel.selectedTab`, the strip slides).
+    /// A UI test's own tap costs main-thread time in the app: XCTest resolves the button from an accessibility snapshot
+    /// before it taps and again for every wait, 55–70 ms each on the `assistant` suite's data, some of them while the
+    /// strip moves (#5438). With this cue the measured frames are the app's.
+    static let switchPages = "com.persona.perf.shell.switch"
+    /// The Sidebar layout's column folded or brought back, with the animation its buttons use (#4206): a UI test's
+    /// taps and waits inside the measured frames cost the app's main thread their accessibility snapshots.
+    static let toggleSidebar = "com.persona.perf.sidebar.toggle"
+    /// Set by the Sidebar layout's split while it is on screen (`SplitNavigation`).
+    static var sidebarToggle: (() -> Void)?
 
     static func listenIfAsked() {
         guard UserDefaults.standard.bool(forKey: "showFrameProbe") else { return }
@@ -171,7 +187,7 @@ import UIKit
             let n = name?.rawValue as String?
             DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.handle(n) } }
         }
-        for name in [start, stop, glideNotice] {
+        for name in [start, stop, glideNotice, switchPages, toggleSidebar] {
             CFNotificationCenterAddObserver(center, nil, callback, name as CFString, nil, .deliverImmediately)
         }
     }
@@ -180,6 +196,11 @@ import UIKit
         let stats = FrameStats.shared
         if name == glideNotice {
             Task { await runGlide() }
+        } else if name == toggleSidebar {
+            sidebarToggle?()
+        } else if name == switchPages {
+            let model = AppModel.shared
+            model.selectedTab = model.selectedTab == .chats ? .assistant : .chats
         } else if name == start {
             if stats.running { stats.stop(label: "probe") }
             stats.start()
