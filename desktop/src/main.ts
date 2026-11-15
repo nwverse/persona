@@ -222,15 +222,44 @@ async function showSetup(): Promise<void> {
       try {
         const next = parseHubAddress(raw);
         await replaceMainWindow(next, window => window.destroy());
+        const generation = hubWindow.generation;
         hub = next;
         await showMain();
-        await store().update({ hub: next.url.href });
+        // An obsolete load may resolve normally after a replacement. It has no right to persist or close setup.
+        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
+            !mainWindow || mainWindow.isDestroyed()) {
+          return { ok: false, error: "The hub connection was replaced before it finished." };
+        }
+        try {
+          await store().update({ hub: next.url.href });
+        } catch (error) {
+          // Do not leave a live window using a hub that the setup state no longer owns.
+          if (generation === hubWindow.generation && hub?.url.href === next.url.href) {
+            hub = undefined;
+            hubWindow.replace();
+            const failedWindow = mainWindow;
+            mainWindow = undefined;
+            if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
+          }
+          if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
+          return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
+        }
+        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
+          return { ok: false, error: "The hub connection was replaced before it finished." };
+        }
         setup.close();
         return { ok: true };
       } catch (error) {
+        const failedWindow = mainWindow;
+        if (failedWindow && !failedWindow.isDestroyed()) {
+          // A failed connection must not leave a live window after its global owner is cleared.
+          mainWindow = undefined;
+          hubWindow.replace();
+          failedWindow.destroy();
+        }
         hub = undefined;
         hubWindow.replace();
-        if (!hub) void showSetup().catch(() => {});
+        if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
         return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
       }
     },
