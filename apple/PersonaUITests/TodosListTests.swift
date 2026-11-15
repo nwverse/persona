@@ -155,7 +155,7 @@ final class TodosListTests: XCTestCase {
         }
     }
 
-    /// Prove a row's section, not merely that a header happens to be loaded after an arbitrary swipe (#3582, round 5).
+    /// Prove a row's section, not merely that a header happens to be loaded after an arbitrary swipe (#3582).
     @MainActor private func assertSection(_ section: String, rowID: String) {
         let header = app.descendants(matching: .any)["todos.section.\(section)"].firstMatch
         let row = app.descendants(matching: .any)["todos.row.\(rowID)"].firstMatch
