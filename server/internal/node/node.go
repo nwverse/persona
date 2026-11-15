@@ -1279,7 +1279,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
 	case "assistant.execution":
-		return n.assistantExecution(ctx, p.SessionID), nil
+		return struct {
+			proto.AssistantExecution
+			SupervisionInstructions bool `json:"supervision_instructions"`
+		}{n.assistantExecution(ctx, p.SessionID), true}, nil
 	case "assistant.send":
 		if p.ResumeOnly && !n.assistantResumable(p.SessionID) {
 			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)

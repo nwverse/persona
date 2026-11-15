@@ -375,6 +375,14 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm) {
+		if policy, _ := p["supervision_instructions"].(string); policy != "" {
+			id, _ := p["session_id"].(string)
+			if err := s.checkSupervisionNode(ctx, device, id); err != nil {
+				return err
+			}
+		}
+	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {
