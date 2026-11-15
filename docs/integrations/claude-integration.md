@@ -577,7 +577,7 @@ file, and generation precedes the hub handshake. Doctor checks and repairs that 
 `persona_contracts_v1` optimization applies to per-process assistant configurations instead ("Headless assistant"
 below; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), "MCP namespace / tools").
 
-`personad node doctor [--json] [--fix]` performs read-only checks on this computer (`node/doctor.go`). One line per check (`正常｜名字：发现了什么；怎么办`—“OK | Name: finding; remedy”), same format as hub doctor; `正常` / `注意` / `有问题` (“OK” / “Attention” / “Problem”) correspond to JSON `ok` / `warn` / `fail`. Any fail yields a nonzero exit code (hub doctor has no `--json` and does not use exit status):
+`personad node doctor [--json] [--fix]` performs read-only checks on this computer (`node/doctor.go`). It prints one line per check in the terminal's language (`i18n.Terminal`), with the report's order and layout unchanged; the zh-Hans labels remain `正常` / `注意` / `有问题` (“OK” / “Attention” / “Problem”) and correspond to JSON `ok` / `warn` / `fail`. Any fail yields a nonzero exit code (hub doctor has no `--json` and does not use exit status):
 
 | Check | Content | Status |
 | --- | --- | --- |
@@ -594,8 +594,8 @@ below; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibil
 
 - Comparison and `--fix` share `generatedFiles`; startup `writeClaudeConfig` and fix use `writeGeneratedConfig`, so current means what node restart would write. `agent-plugin` comparison lives in `assistantskills.PluginIssues`; `WritePlugin` now skips only when no differences are reported (previous stamp-only check never repaired deleted files if the stamp remained).
 - Fix rewrites only Persona-generated files, only when stale / missing, and reports fixed. On a Mac, the command line's `--fix` also writes `ProcessType=Interactive` into the resident node's LaunchAgent and reloads it (the node restarts; the checks after it wait up to 15 s for the node's sockets to answer again); `node.doctor.fix` and a doctor running under that agent leave it alone and say so (docs/server/server.md "Scheduling and privacy on the Mac"). Does not touch global user settings or rebuild node sockets; restart node for that. **Use the binary actually running node**: generated files contain the current binary path; another binary's fix redirects hooks to itself.
-- JSON: `{"ok", "dir", "checks": [{"name", "status", "state", "detail", "hint", "items"}], "fixed": []}`. Fields always present, lists never null, check names and order fixed (`TestDoctorJSONIsStable`).
-- Web machine page “What This Computer Can Do” (#2429) receives the same report via `node.doctor` / `node.doctor.fix` (`node/doctor_rpc.go`), full-role devices only. Capability grouping rules: `docs/server/machines.md` (“Doctor: what this computer can do”).
+- JSON: `{"ok", "dir", "checks": [{"name", "status", "state", "detail", "hint", "items"}], "fixed": []}`. Fields always present, lists never null, check names and order fixed (`TestDoctorJSONIsStable`). `personad node doctor --json` is machine output and keeps the original zh-Hans human fields byte for byte under every terminal language.
+- Web machine page “What This Computer Can Do” (#2429) receives the same report shape via `node.doctor` / `node.doctor.fix` (`node/doctor_rpc.go`), full-role devices only. The RPC's optional `locale` words the human fields for a current page; without it the report remains canonical zh-Hans for old hubs, old readers and readiness. The hub forwards only an explicit `Accept-Language`, and an old node's report passes through unchanged. Capability grouping rules: `docs/server/machines.md` (“Doctor: what this computer can do”).
 - Hub doctor covers hub configuration / network, not these files. Node checks live in node doctor, not hub doctor.
 - Tests run in temporary directories (`node/doctor_test.go`); manual fix uses temporary HOME, not real `~/.persona`.
 
