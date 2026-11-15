@@ -135,7 +135,9 @@ export function formModel(m) {
 
 /**
  * The new-session form's launchers: one per provider that can start an agent (enabled, not failing, named like a
- * launcher), with the agent it starts and its models.
+ * launcher), with the agent it starts and its models; `auto_accept` when its approval is Auto Accept (#8141). A Codex
+ * provider's says it starts with no first message too (prompt_optional): Paseo creates an agent without one, where a
+ * Codex in a terminal used to need it.
  */
 export function launchersOf(entries = [], roots = {}) {
   const out = []
@@ -143,21 +145,48 @@ export function launchersOf(entries = [], roots = {}) {
     if (!e?.enabled || e.status === 'unavailable' || e.status === 'error' || !LAUNCHER_NAME.test(e.provider ?? '')) continue
     const models = (e.models ?? []).filter((m) => m && m.id && m.isSelectable !== false).map(formModel)
     const def = models.find((m) => m.default) ?? models[0]
-    const l = { name: e.provider, agent: appAgent(roots[e.provider] ?? e.provider), models }
+    const root = roots[e.provider] ?? e.provider
+    const l = { name: e.provider, agent: appAgent(root), models }
     const model = def?.name ?? e.label
     if (model) l.model = String(model)
+    if (l.agent === 'codex') l.prompt_optional = true
+    if (AUTO_ACCEPT_ROOTS.has(root)) l.auto_accept = true
     out.push(l)
   }
   return out
 }
 
 /**
- * The provider a new session runs on when the form named none Paseo has (a launcher of the login shell's): Claude
- * Code's own if it is on, else the first one running Claude Code, else the first one there is.
+ * The effort a model runs a start at, given the one asked for and the model's thinking options (Paseo's ids): the one
+ * asked when the model offers it, else the nearest lower one of Persona's it offers (xhigh → high), else the lowest
+ * one it offers; undefined when it offers none of Persona's (its own default applies). Persona's order is EFFORTS.
+ */
+export function effortFor(asked, options = []) {
+  const offered = EFFORTS.filter((e) => options.includes(e))
+  if (offered.includes(asked)) return asked
+  const rank = EFFORTS.indexOf(asked)
+  return offered.filter((e) => EFFORTS.indexOf(e) < rank).at(-1) ?? offered[0]
+}
+
+/**
+ * The provider a new session runs on when the form named no launcher: Claude Code's own if it is on, else the first
+ * one running Claude Code, else the first one there is. Also the form's first choice (Paseo's default).
  */
 export function defaultProvider(entries = [], roots = {}) {
   const usable = (entries ?? []).filter((e) => e?.enabled && e.status !== 'unavailable' && e.status !== 'error')
   return (usable.find((e) => e.provider === 'claude') ?? usable.find((e) => roots[e.provider] === 'claude') ?? usable[0])?.provider
+}
+
+/**
+ * The provider that stands in for a launcher of agent kind `kind` (a Paseo root: claude, codex, omp…) that Paseo has
+ * no usable provider of: among launchers (its usable providers, its default first) those of that kind that accept
+ * takes, Paseo's own provider of that kind first (its built-in claude or codex, when it is on), else the first one.
+ * undefined when it has none of that kind: a start never runs another kind of agent in its place.
+ */
+export function sameKindProvider(launchers = [], roots = {}, kind = '', accept = () => true) {
+  if (!kind) return undefined
+  const fits = (launchers ?? []).filter((l) => (roots[l.name] ?? l.name) === kind && accept(l.name))
+  return (fits.find((l) => l.name === kind) ?? fits[0])?.name
 }
 
 // ---- sessions ----
@@ -782,6 +811,33 @@ function alwaysLabel(suggestions) {
   if (!rules) return undefined
   const where = s.destination === 'session' ? '本会话' : s.destination === 'userSettings' ? '所有项目' : '这个项目'
   return snippet(`${where}不再问：${rules}`)
+}
+
+/** Codex 0.167's MCP approval: `Allow the <server> MCP server to run tool "<tool>"?`. */
+const CODEX_MCP_TOOL = / to run tool "([^"\n]+)"\?/
+
+/**
+ * Whether a permission request asks for MCP tool `name` (`mcp__<server>__<tool>`), whichever provider asks (#8141):
+ * Claude Code by that name, OpenCode as `<server>_<tool>`, Codex in an approval of the server naming the tool, any
+ * other by the call its card shows (Grok's UseTool).
+ */
+export function asksForTool(request, name) {
+  const r = request ?? {}
+  const m = /^mcp__(.+?)__(.+)$/.exec(name ?? '')
+  if (!m || typeof r.name !== 'string') return false
+  const [, server, tool] = m
+  switch (r.provider) {
+    case 'claude':
+      return r.name === name
+    case 'opencode': {
+      const safe = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_')
+      return r.name === `${safe(server)}_${safe(tool)}`
+    }
+    case 'codex':
+      return r.name === 'CodexMcpElicitation' && r.metadata?.serverName === server && CODEX_MCP_TOOL.exec(r.description ?? '')?.[1] === tool
+  }
+  const input = r.input && typeof r.input === 'object' ? r.input : {}
+  return toolCall(r.name, r.detail ?? { type: 'unknown', input }).name === name
 }
 
 /**
