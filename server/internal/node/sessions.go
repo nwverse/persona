@@ -320,6 +320,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	j = 0
 	for i := range out {
 		s := &out[i]
+		if !s.Assistant && s.PaneID != "" && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+			n.observedRunning(s.SessionID)
+		}
 		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
@@ -391,6 +394,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.PendingSwitch = st.PendingSwitch   // launcher_switch.go
 		s.SetEngineHistory(st.EngineHistory) // engine_switch.go
 	}
+	n.decorateModelRecovery(s) // node-owned recovery marker, and the shipped fallback-card projection (#7824)
 	if s.PendingSwitch == nil {
 		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
 	}
