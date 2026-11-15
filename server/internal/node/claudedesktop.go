@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -371,8 +372,13 @@ func linkSideSessions(list []proto.Session, parents map[string]string) {
 // The app's sessions are the ones a claude of the app runs (claude_desktop) and the transcripts it ran that nothing
 // runs now (the desktop surface, no source, no pane); a session some host placed keeps its place.
 func placeClaudeDesktop(list []proto.Session, origins map[string]string, home string) {
+	homes := []string{} // the home folder as written and by its physical path: a root may name it either way
 	if home != "" {
-		home = cmp.Or(physicalDirs.lookup(filepath.Clean(home)).root, filepath.Clean(home))
+		home = filepath.Clean(home)
+		homes = append(homes, home)
+		if real := physicalDirs.lookup(home).root; real != "" && real != home {
+			homes = append(homes, real)
+		}
 	}
 	for i := range list {
 		s := &list[i]
@@ -384,7 +390,8 @@ func placeClaudeDesktop(list []proto.Session, origins map[string]string, home st
 		if !filepath.IsAbs(root) {
 			continue
 		}
-		if root = filepath.Clean(root); home != "" && pathWithin(home, root) {
+		root = filepath.Clean(root)
+		if slices.ContainsFunc(homes, func(h string) bool { return pathWithin(h, root) }) {
 			continue
 		}
 		s.SpaceKind, s.SpaceID, s.SpaceName = proto.SourceClaudeDesktop, projectSpace+root, filepath.Base(root)
