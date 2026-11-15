@@ -587,6 +587,13 @@ Don't add a `pending.json` field for it: older edges and watchdogs read the same
 
 A completed gzip stream and `chmod 755` prove that bytes arrived, not that the target machine can execute them. The SSH deploy therefore runs the staged binary's `version` command before the atomic rename and before `pkill`: an `exec format error` or another failed self-test removes `.new`, preserves the installed binary, and leaves the working node running. Package selection still validates GOOS / GOARCH through Go build info; the remote self-test is the final target-side guard, not a duplicate package check. Exercise this boundary through the real login-shell deploy script with an isolated HOME and a fake `pkill`, never by replacing or stopping a development machine's resident node.
 
+## A release archive's checksum does not verify its version (#8338)
+
+A correctly hashed Windows ZIP can contain programs reporting another version while sharing the manifest's build number.
+Run the bundled version and node self-check commands on the target architecture, before installation or publication.
+Bind the successful results to both the ZIP and executable hashes, and reject missing or stale verification at the upload boundary.
+Cross-platform build metadata and a version-shaped string somewhere in a binary are not substitutes for those command results.
+
 ## Migrating a long-poll channel without duplicate consumers (#2020)
 
 A connector switch alone does not free a built-in extension ID for installation: the registry must explicitly
