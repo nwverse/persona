@@ -54,8 +54,10 @@ final class NewAgentUnavailableUITests: XCTestCase {
         sleep(1) // the list settles
     }
 
-    private func row(_ name: String) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+    /// A launcher's row, by the title it shows (a provider's display name, #8261), not a row listed off.
+    private func row(_ title: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND NOT (identifier BEGINSWITH %@)", title,
+                                         "launcherPicker.unavailable.")).firstMatch
     }
 
     private var skipped: XCUIElement {
@@ -77,7 +79,7 @@ final class NewAgentUnavailableUITests: XCTestCase {
                 XCTAssertTrue(app.staticTexts["Unavailable here"].exists, "no Unavailable here section")
                 XCTAssertTrue(text(containing: reason).exists, "the hub's reason is not shown")
                 XCTAssertTrue(skipped.label.contains("How to Fix"), "no How to Fix on it: \(skipped.label)")
-                XCTAssertFalse(row("deepseek").exists, "DeepSeek is offered as a launcher on the MacBook")
+                XCTAssertFalse(row("DeepSeek").exists, "DeepSeek is offered as a launcher on the MacBook")
             }
             shot("macbook-list")
             if !before {
@@ -93,7 +95,7 @@ final class NewAgentUnavailableUITests: XCTestCase {
             // The server, without a sign-in of its own: DeepSeek is a launcher like the others, nothing is listed off.
             openList("server")
             if !before {
-                XCTAssertTrue(row("deepseek").waitForExistence(timeout: 10), "DeepSeek is not offered on the server")
+                XCTAssertTrue(row("DeepSeek").waitForExistence(timeout: 10), "DeepSeek is not offered on the server")
                 XCTAssertFalse(skipped.exists, "DeepSeek is listed off on the server")
                 XCTAssertFalse(app.staticTexts["Unavailable here"].exists, "an Unavailable here section on the server")
             }

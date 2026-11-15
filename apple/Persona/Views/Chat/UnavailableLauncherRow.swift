@@ -1,10 +1,10 @@
 import SwiftUI
 
 extension UnavailableLauncher {
-    /// Its name as the pickers show it: the provider's display name, else its name.
-    var shownName: String {
-        if let d = displayName, !d.isEmpty { return d }
-        return name
+    /// What the pickers show, as `Launcher.title`: its own name, else its startup name (the web's `providerTitle`).
+    var title: String {
+        guard let d = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty else { return name }
+        return d
     }
 
     /// What New Agent's launcher list shows off after the launchers (#8109): the hub's `unavailable` for the computer
@@ -31,7 +31,7 @@ struct UnavailableLauncherRow: View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
             ThemedIcon(Theme.Icon.locked).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(item.shownName).font(Theme.Font.heading).foregroundStyle(.secondary).lineLimit(1)
+                Text(item.title).font(Theme.Font.heading).foregroundStyle(.secondary).lineLimit(1)
                 Text(item.reason).font(Theme.Font.label).foregroundStyle(.tertiary)
                 if fixable {
                     Text("How to Fix").font(Theme.Font.label).foregroundStyle(Theme.accent)

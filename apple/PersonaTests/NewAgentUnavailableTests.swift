@@ -30,7 +30,7 @@ import PersonaWire
         #expect(u.agent == "claude")
         #expect(u.code == "launcher_own_service")
         #expect(u.reason == reason)
-        #expect(u.shownName == "DeepSeek")
+        #expect(u.title == "DeepSeek")
     }
 
     @Test func anOlderHubSendsNone() throws {
@@ -38,9 +38,12 @@ import PersonaWire
         #expect(r.unavailable == nil)
     }
 
+    /// Named as `Launcher.title` names a launcher: its own name, else its startup name.
     @Test func aProviderWithoutADisplayNameShowsItsName() {
-        #expect(item("cx-gw").shownName == "cx-gw")
-        #expect(item("cx-gw", display: "").shownName == "cx-gw")
+        #expect(item("cx-gw").title == "cx-gw")
+        #expect(item("cx-gw", display: "").title == "cx-gw")
+        #expect(item("cx-gw", display: "  ").title == "cx-gw")
+        #expect(item("cx-gw", display: " Team Codex ").title == Launcher(name: "cx-gw", displayName: " Team Codex ").title)
     }
 
     // MARK: Kept with the computer's launchers
