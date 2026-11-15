@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -67,6 +68,7 @@ type treeRec struct {
 	system       bool
 	turnEnd      bool
 	turnStart    bool
+	wake         bool
 	raw          []byte
 	errorLine    string
 	hasOutcome   bool
@@ -382,6 +384,9 @@ func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool, skippedS
 	// while a skipped tool result or compact summary is tree shape only.
 	rec.hasOutcome = recordOutcome || rec.prompt || len(skippedStart) > 0 && skippedStart[0]
 	rec.turnStart = len(skippedStart) > 0 && skippedStart[0] && !rec.prompt
+	if len(skippedStart) > 1 {
+		rec.wake = skippedStart[1]
+	}
 	if meta.TurnError != "" {
 		rec.errorLine = meta.turnErrorLine
 	}
@@ -418,12 +423,25 @@ func (t *Tail) take(rec treeRec) {
 	}
 }
 
-func skippedTurnStart(e map[string]json.RawMessage) bool {
+func skippedTurnStart(e map[string]json.RawMessage) (start, wake bool) {
 	if rawString(e["type"]) != "user" || string(e["isCompactSummary"]) == "true" || string(e["isMeta"]) == "true" {
-		return false
+		return false, false
 	}
-	_, toolResult := e["toolUseResult"]
-	return !toolResult
+	var message struct {
+		Content json.RawMessage `json:"content"`
+	}
+	_ = json.Unmarshal(e["message"], &message)
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(message.Content, &blocks) == nil {
+		for _, b := range blocks {
+			if rawString(b["type"]) == "tool_result" {
+				return false, false
+			}
+		}
+	}
+	start = true
+	wake = bytes.Contains(message.Content, []byte("<task-notification>")) || bytes.Contains(e["content"], []byte("<task-notification>"))
+	return start, wake
 }
 
 // Skipped is told about a line the caller left unparsed for its size (a prompt with an image or a long paste, a big
@@ -436,7 +454,7 @@ func (t *Tail) Skipped(line []byte) {
 	if json.Unmarshal(line, &e) != nil {
 		return
 	}
-	start := skippedTurnStart(e)
+	start, wake := skippedTurnStart(e)
 	delete(e, "toolUseResult")
 	if raw, ok := e["message"]; ok {
 		var msg map[string]json.RawMessage
@@ -461,7 +479,7 @@ func (t *Tail) Skipped(line []byte) {
 		return
 	}
 	var m Meta
-	t.line(&m, parseLine(0, small, &m), false, start)
+	t.line(&m, parseLine(0, small, &m), false, start, wake)
 }
 
 // Settle puts into meta the agent's last words on the lines still in the conversation, when words on an abandoned
@@ -491,6 +509,7 @@ func (t *Tail) Settle(meta *Meta) bool {
 	}
 	// Replay the raw records that remain visible, not the parser state that an abandoned turn left behind. ParseLine
 	// supplies the real prompt/wake/local/close and error transitions, including idempotent starts and resume state.
+	fallback := meta.ModelFallback
 	var replay Meta
 	for _, rec := range t.tree.recs {
 		if t.tree.hidden[rec.uuid] || !rec.hasOutcome || len(rec.raw) == 0 || rec.errorLine != "" && t.tree.hidden[rec.errorLine] {
@@ -498,13 +517,17 @@ func (t *Tail) Settle(meta *Meta) bool {
 		}
 		ParseLine(0, rec.raw, &replay)
 		if rec.turnStart {
-			replay.ClaudeTurnStarted(replay.LastTurnWake)
+			replay.ClaudeTurnStarted(rec.wake)
 			replay.TurnOpen, replay.TurnClosed = true, false
+			replay.LastTurnWake = rec.wake
 		}
 	}
 	meta.TurnOpen, meta.TurnClosed = replay.TurnOpen, replay.TurnClosed
 	meta.localTurn, meta.beforeLocal = replay.localTurn, replay.beforeLocal
 	meta.LastTurnWake, meta.ModelFallback = replay.LastTurnWake, replay.ModelFallback
+	if meta.ModelFallback == nil && fallback != nil && fallback.Scope == "session" {
+		meta.ModelFallback = fallback // a pre-tail session fallback is not recreated by parsing a short visible tail
+	}
 	meta.turnWorked, meta.turnSucceeded = replay.turnWorked, replay.turnSucceeded
 	meta.TurnError, meta.TurnErrorKind, meta.TurnErrorCode = replay.TurnError, replay.TurnErrorKind, replay.TurnErrorCode
 	meta.TurnErrorResetsAt, meta.TurnErrorResumes, meta.TurnErrorAfterWork = replay.TurnErrorResetsAt, replay.TurnErrorResumes, replay.TurnErrorAfterWork
