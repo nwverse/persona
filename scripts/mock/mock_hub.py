@@ -2554,7 +2554,7 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # Knowledge points by topic (#3783), on by default; MOCK_KB_TOPICS_OFF=1 starts it off (#7251's empty map).
                     "kb_topics": os.environ.get("MOCK_KB_TOPICS_OFF") != "1",
                     # The sidebar's Recent lists the scheduled tasks' chats too (#8324), off by default;
-                    # MOCK_RECENT_TASK_CHATS=1 starts on. Left out with MOCK_LEGACY_HUB.
+                    # MOCK_RECENT_TASK_CHATS=1 starts on; =absent is a hub from before it. Left out with MOCK_LEGACY_HUB.
                     "recent_task_chats": os.environ.get("MOCK_RECENT_TASK_CHATS") == "1"}
 # What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
 RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
@@ -2579,7 +2579,7 @@ def assistant_state(space="", archived=False):
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
-                   recent_task_chats=cfg["recent_task_chats"])
+                   **({} if os.environ.get("MOCK_RECENT_TASK_CHATS") == "absent" else {"recent_task_chats": cfg["recent_task_chats"]}))
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -27278,7 +27278,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main"] = "" if body["main"] == "-" else body["main"]
             if isinstance(body.get("main_tasks_quiet"), bool):
                 ASSISTANT_CONFIG["main_tasks_quiet"] = body["main_tasks_quiet"]
-            if isinstance(body.get("recent_task_chats"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
+            if isinstance(body.get("recent_task_chats"), bool) and not os.environ.get("MOCK_LEGACY_HUB") \
+                    and os.environ.get("MOCK_RECENT_TASK_CHATS") != "absent":
                 ASSISTANT_CONFIG["recent_task_chats"] = body["recent_task_chats"]
             if MEETING_ATTENDANCE and "meeting_attendance_default" in body:
                 ASSISTANT_CONFIG["meeting_attendance_default"] = body["meeting_attendance_default"]
