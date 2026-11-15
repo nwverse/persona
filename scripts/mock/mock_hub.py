@@ -21,6 +21,9 @@ if os.environ.get("MOCK_CHILD_SESSIONS"):
 # MOCK_PASEO_PROVIDERS=1 (#8142) builds on it too: two of its providers the apps have no id for (Grok, Cursor).
 if os.environ.get("MOCK_PASEO_PROVIDERS"):
     os.environ.setdefault("MOCK_PASEO", "1")
+# MOCK_PASEO_NOT_LOADED=1 (#8321) as well: a Grok agent Paseo let go, read only once its chat is watched.
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):
+    os.environ.setdefault("MOCK_PASEO", "1")
 # MOCK_TEAM=1 (#5180) builds on MOCK_TAB_PANES's tab of three: it adds a worker's request, a third worker and a stopped pane.
 MOCK_TEAM = bool(os.environ.get("MOCK_TEAM"))
 if MOCK_TEAM:
@@ -46,7 +49,7 @@ CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOC
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
-            "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
+            "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
@@ -1256,20 +1259,33 @@ if os.environ.get("MOCK_PASEO"):
 # lists them: under Paseo's own id (agent "paseo"), each with its provider as launcher and the provider's label
 # (agent_label). Grok waits for an approval (its card names Grok); Cursor, whose mark the web has, is idle. The model
 # capability is the node's for a runtime that switches models (Paseo); their launchers are on the server's list
-# (machine_launchers).
+# (machine_launchers). Both have Auto Accept, so they list the two modes they take (#8261, capabilities.permission_modes)
+# beside modes false: Grok runs on its own approval (no mode reported) at its model's high effort, Cursor in Full access.
 PASEO_GROK, PASEO_CURSOR = "paseo-9a5e0000-0000-4000-8000-000000000010", "paseo-9a5e0000-0000-4000-8000-000000000011"
 PASEO_PROVIDERS = bool(os.environ.get("MOCK_PASEO_PROVIDERS"))
 if PASEO_PROVIDERS:
     _provider_caps = {"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False,
-                      "close": True, "rename": True, "model": True}
+                      "close": True, "rename": True, "model": True, "modes": False, "permission_modes": ["default", "bypassPermissions"]}
     SESSIONS += [
         _paseo(PASEO_GROK, "Check the release notes", "Triage", None, "main", "blocked", "needs_you", 1,
                "May I run the release script?", agent="paseo", agent_label="Grok", launcher="grok", model="grok-4",
-               pending_interactions=1, capabilities=_provider_caps),
+               pending_interactions=1, capabilities=_provider_caps, efforts=["low", "high"], effort="high"),
         _paseo(PASEO_CURSOR, "Tidy the settings page", "Triage", None, "main", "idle", "idle", 20,
                "Moved the toggles into one group.", agent="paseo", agent_label="Cursor", launcher="cursor", model="auto",
-               capabilities=_provider_caps),
+               capabilities=dict(_provider_caps), permission_mode="bypassPermissions"),
     ]
+# MOCK_PASEO_NOT_LOADED=1 (#8321, on the Paseo computer): a Grok agent Paseo let go (closed after an hour idle, listed
+# offline). As its bridge does since #8132, every read of its chat is refused as not_loaded until a subscribe watches
+# it: then "Paseo" loads it, which takes MOCK_PASEO_LOAD_SECONDS (default 3), and the backlog brings its history.
+# GET /mock/paseo-unload lets it go again.
+PASEO_CLOSED = "paseo-9a5e0000-0000-4000-8000-000000000012"
+PASEO_LOADED = {"on": False}
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):
+    SESSIONS.append(_paseo(PASEO_CLOSED, "Sort the holiday photos", "Triage", None, "main", "offline", "offline", 90,
+                           "Done: 212 photos in 9 albums, one per town.", agent="paseo", agent_label="Grok", launcher="grok",
+                           model="grok-4", capabilities={"read": True, "send": True, "interrupt": True, "approve": True,
+                                                         "terminal": False, "attach": False, "close": True, "rename": True,
+                                                         "model": True}))
 # MOCK_CHILD_SESSIONS=1 (#5120): the Paseo agent that created two agents created two more, both finished (one of them
 # failed), and an agent whose creator is not listed stays a row of its own. With the hub's folding (fold_hierarchy) the
 # web lists none of the children: the lead's row needs you (its waiting child) and its chat draws a card for each.
@@ -7606,6 +7622,11 @@ if os.environ.get("MOCK_CHILD_SESSIONS"):  # #5120: the lead's two exchanges, an
     ITEMS[PASEO_GRANDCHILD] = (
         [it("user", "text", 2, text="Trace why a refresh after a retry returns 401.")]
         + [it("assistant", "text", 0.2, text="Following the 401 through the retry.")])
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):  # #8321: what the closed Grok agent did before Paseo let it go
+    ITEMS[PASEO_CLOSED] = (
+        [it("user", "text", 95, text="Sort the holiday photos by place, one album per town.")]
+        + tool("Bash", {"command": "exiftool -GPSPosition -csv ~/Pictures/Holiday"}, "212 photos, 9 places", 94)
+        + [it("assistant", "text", 90, text="Done: 212 photos in 9 albums, one per town.")])
 if os.environ.get("MOCK_ORCA_CHILDREN"):
     ITEMS["c2073000-0000-4000-8000-000000000006"] = [
         it("user", "text", 61, text="Review the prior work in this workspace."),
@@ -9965,6 +9986,31 @@ def mock_tool_call(name, args):
         try: send({"type": "tool_call", "call_id": call_id, "name": name, "args": json.loads(args or "{}")})
         except OSError: pass
     return {"call_id": call_id, "sent": len(phones)}
+
+
+# MOCK_CLAUDE_DESKTOP_ASK=1 (docs/integrations/claude-integration.md "Question cards outside Persona's terminals"): the
+# Claude in the desktop app on the server waits on an AskUserQuestion of four questions (one multi-select). No hook of
+# Persona's runs there; the node reads the question from its transcript and lists it as a card it answers through the
+# session's peer inbox, so the row may answer it (capabilities.approve) and says a card or a reply answers it.
+if os.environ.get("MOCK_CLAUDE_DESKTOP_ASK") == "1":
+    for _s in SESSIONS:
+        if _s["session_id"] == CLAUDE_DESKTOP:
+            _s.update(status="blocked", state="needs_you", pending_interactions=1, last_text="开工前有几点要你定：",
+                      attention_reason="它在问你一个问题：在卡片上作答，或者直接回复",
+                      capabilities=dict(_desktop_caps, interrupt=True, approve=True, modes=False))
+    INTERACTIONS.append(
+        {"id": "clq_0d5c1e0e6b7a9f21", "machine_id": "server", "session_id": CLAUDE_DESKTOP, "session_title": "整理发布说明",
+         "cwd": "/home/me/code/release", "kind": "question", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "tool_name": "AskUserQuestion", "tool_use_id": "toolu_desktop_ask", "agent": "claude",
+         "questions": [
+             {"question": "发布说明按哪个维度分组？", "header": "分组", "multi_select": False, "options": [
+                 {"label": "按模块", "description": "服务端、网页、iOS 各一段"}, {"label": "按类型", "description": "新功能、修复、性能"}]},
+             {"question": "很长的 PR 标题怎么显示？", "header": "长标题", "multi_select": False, "options": [
+                 {"label": "截成一行", "description": "鼠标悬停看全文"}, {"label": "完整显示", "description": "换行显示全部"}]},
+             {"question": "哪些内容要附上链接？", "header": "链接", "multi_select": True, "options": [
+                 {"label": "PR"}, {"label": "issue"}, {"label": "提交"}]},
+             {"question": "写完以后发到哪里？", "header": "发布", "multi_select": False, "options": [
+                 {"label": "只放在仓库里", "description": "写进 CHANGELOG.md"}, {"label": "也发到频道", "description": "附上链接"}]}]})
 
 
 def mock_interactions():
@@ -13989,7 +14035,8 @@ LAUNCHER_MODELS["claude-desktop"] = {"agent": "claude", "models": [], "locked": 
 # MOCK_PASEO_PROVIDERS=1 (#8142): Paseo's Grok and Cursor providers, as the node lists a runtime's launcher models (agent
 # "paseo": the runtime's own id, for an agent the apps have no id for).
 if PASEO_PROVIDERS:
-    LAUNCHER_MODELS["grok"] = {"agent": "paseo", "models": [{"id": "grok-4", "name": "Grok 4", "default": True},
+    # Grok 4's thinking options among Persona's levels (#8261): New Agent offers those alone for it, none for Grok 4 Fast
+    LAUNCHER_MODELS["grok"] = {"agent": "paseo", "models": [{"id": "grok-4", "name": "Grok 4", "default": True, "efforts": ["low", "high"]},
                                                             {"id": "grok-4-fast", "name": "Grok 4 Fast"}]}
     LAUNCHER_MODELS["cursor"] = {"agent": "paseo", "models": [{"id": "auto", "name": "Auto", "default": True},
                                                               {"id": "grok-4", "name": "Grok 4"}]}
@@ -14279,8 +14326,10 @@ def machine_launchers(mid=""):
         # Its Codex App runs: its launcher starts a chat there (#5726, docs/integrations/codex.md).
         out.append({"name": "codex-app", "model": "", "source": "codex_app", "agent": "codex", "agent_type": "codex"})
     if PASEO_PROVIDERS and mid == "server":
-        # Paseo's providers the apps have no id for (#8142): the runtime's own id as their agent, the runtime as source
-        out += [{"name": n, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo"} for n, m in (("grok", "Grok 4"), ("cursor", "Auto"))]
+        # Paseo's providers the apps have no id for (#8142): the runtime's own id as their agent, the runtime as source,
+        # named as in Paseo and saying the modes a start takes (#8261)
+        out += [{"name": n, "display_name": d, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo",
+                 "permission_modes": ["default", "bypassPermissions"]} for n, d, m in (("grok", "Grok", "Grok 4"), ("cursor", "Cursor", "Auto"))]
     if machine_alerts.ON:
         return machine_alerts.with_health(mid, out)
     return launcher_health_list(out)
@@ -18417,7 +18466,8 @@ def office_pptx():
 # What the hub (node filemime.go) calls a binary file by its name; others are video/mp4 as before.
 MOCK_MIMES = {".wav": "audio/wav", ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".heic": "image/heic", ".webm": "video/webm", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel",
               ".pdf": "application/pdf", ".doc": "application/msword", ".pages": "application/vnd.apple.pages", ".png": "image/png", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-              ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
+              ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+              ".zip": "application/zip", ".csv": "text/csv"}
 
 
 def mock_mime(path):
@@ -20255,6 +20305,29 @@ if os.environ.get("MOCK_FILE_LINKS"):
     MOCK_LINKS[MOCK_REPO + "/old-settings.json"] = ("../legacy/settings.json", None)
 
 
+# MOCK_FILE_ATTACH=1 (#8361): files sent with a message as cards: in the widget conversation, a message with eight
+# <persona-file kind="file"> tags (a PDF, workbooks, a document, archives; all made up) kept in the node's uploads, and
+# an earlier one whose file the computer no longer has.
+if os.environ.get("MOCK_FILE_ATTACH"):
+    import mock_office
+    _day = "/Users/me/.persona/uploads/2026-11-15/"
+    _pdf = base64.b64decode(mock_pdf())  # bytes: FILES serves them as a file, a str as text
+    _attached = [("q3-report.pdf", _pdf), ("budget-2026.xlsx", quarterly_xlsx()), ("sales-by-region.xlsx", quarterly_xlsx()),
+                 ("meeting-notes.docx", mock_office.docx("Meeting notes", ["Made-up notes for screenshots."])),
+                 ("logs-1114.zip", b"PK\x05\x06" + b"\0" * 18), ("contract-draft.pdf", _pdf),
+                 ("季度汇总.xlsx", quarterly_xlsx()), ("screenshots.zip", b"PK\x05\x06" + b"\0" * 18)]  # i18n-ignore: a made-up file name
+    _sizes = [2411724, 88123, 1153434, 245760, 19608371, 655360, 317440, 44354765]
+    for (_name, _bytes) in _attached:
+        FILES[_day + _name] = _bytes if isinstance(_bytes, bytes) else _bytes.encode()
+    _tags = "\n".join('<persona-file kind="file" path="%s" name="%s" size="%d"/>' % (_day + n, n, z) for (n, _), z in zip(_attached, _sizes))
+    ITEMS[WIDGET] = ITEMS[WIDGET] + [
+        it("user", "text", 0, text='上周导出的数据也看一下\n\n<persona-file kind="file" path="/tmp/old-export-20261110-140200.csv" name="old-export.csv" size="12288"/>'),  # i18n-ignore
+        it("assistant", "text", 0, text="收到，两份我都对照着看。"),  # i18n-ignore
+        it("user", "text", 0, text="帮我对比这几份季度数据，重点看第三季度的支出\n\n" + _tags),  # i18n-ignore
+        it("assistant", "text", 0, text="8 个文件都收到了。先从 q3-report.pdf 和两张 xlsx 看起，第三季度的支出我单独列一张对比表。"),  # i18n-ignore
+    ]
+
+
 def link_real(rel):
     """The tree key a path through a mock symlink folder stands for (MOCK_FILE_LINKS)."""
     for k, (_, real) in MOCK_LINKS.items():
@@ -20696,7 +20769,8 @@ def net_control(path, q):
 # MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned: the hub's version and its updating itself
 # (docs/operations/hub-update.md): a newer release to install (auto-update off), an update waiting for two busy agents, "Automatic updates enabled"
 # told for the first time, a newer release auto-update holds back (its code does not contain the hub's commit, with
-# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). Unset:
+# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). behind
+# (#8108): up to date against a build-time source whose newest release is older than the hub (source_behind). Unset:
 # GET /api/v1/hub/update is 404 (a hub from before), no line anywhere.
 HUB_UPDATE_MODE = os.environ.get("MOCK_HUB_UPDATE", "")
 HUB_UPDATE = {}
@@ -20719,6 +20793,10 @@ def hub_update_state():
         elif HUB_UPDATE_MODE == "notice":
             HUB_UPDATE.update(state="idle", auto=True, auto_notice=True)
             HUB_UPDATE["latest"] = dict(latest, version=HUB_UPDATE["version"], build=HUB_UPDATE["build"], newer=False)
+        elif HUB_UPDATE_MODE == "behind":
+            HUB_UPDATE.update(state="idle", auto=True, update_url="https://site.example.com/dl", update_url_from="build", source_behind=True)
+            HUB_UPDATE["latest"] = {"version": "v0.1.17-177-g563f7fde5b-202611071005", "build": 202611071005,
+                                    "released": "2026-11-07T10:05:00Z", "newer": False, "bad": False}
         elif HUB_UPDATE_MODE in ("docker", "docker-pinned"):
             pinned = HUB_UPDATE_MODE == "docker-pinned"
             HUB_UPDATE.update(version="0.3.0", build=0, channel="docker", can_update=False, auto=False,
@@ -22108,6 +22186,39 @@ if os.environ.get("MOCK_COMPUTER", "") not in ("", "off"):
         ITEMS[WIDGET] = ITEMS[WIDGET] + [it("assistant", "tool_use", 0, tool_use_id="toolu_mock_cua_click",
                                             tool_name="mcp__cua-driver__click",
                                             tool_input={"app": "Simulator", "role": "button", "name": "小组件"})]
+
+def frame_png(w, h, top, bottom, band):
+    """A made-up video frame (stdlib only): a vertical gradient from top to bottom, with a band of one color across
+    its lower part, where a frame's burnt-in subtitle sits."""
+    import zlib
+    rows = []
+    for y in range(h):
+        if h * 0.78 <= y < h * 0.86:
+            px = bytes(band)
+        else:
+            t = y / max(h - 1, 1)
+            px = bytes(round(a + (b - a) * t) for a, b in zip(top, bottom))
+        rows.append(b"\0" + px * w)
+    def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+
+
+if os.environ.get("MOCK_TOOL_IMAGES") == "1":
+    # A connector's tool answered with pictures (#8484): the hub gives the model the text, then a line and a picture for
+    # each frame, as the transcript has them (one result, image items on the call). Made-up frames of a made-up video.
+    _frames = [("00:00 片头", (250, 214, 160), (214, 120, 72)), ("00:14 煎蛋", (255, 236, 179), (236, 170, 60)),
+               ("00:38 摆盘", (200, 228, 201), (90, 150, 110))]
+    _ask_pic = it("user", "text", 2, text="帮我看看这个早餐视频讲了什么")  # numbered first: it() numbers in order
+    _text = "视频「周末早餐」，0:42，3 帧，有声音。\n" + "\n".join(
+        "[image %d of %d] %s" % (i + 1, len(_frames), c) for i, (c, _, _) in enumerate(_frames))
+    _video = looked("mcp__persona__example_video", {"note": "n-1024", "frames": 3}, _text, 1,
+                    *[(base64.b64encode(frame_png(216, 384, a, b, (40, 40, 40))).decode(), 216, 384) for _, a, b in _frames])
+    ASK_PIC = "b2e4d6f8-0000-4000-8000-0000000000c7"  # a conversation of its own: -openAssistant server/<it>
+    ASSISTANT.append(assistant_sess(ASK_PIC, "这个早餐视频讲了什么", 1, "一段 42 秒的早餐视频：先煎蛋，最后摆盘。"))
+    ITEMS[ASK_PIC] = [_ask_pic] + _video + \
+        [it("assistant", "text", 1, text="一段 42 秒的早餐视频：开头是片头，14 秒开始煎蛋，最后在 38 秒摆盘。"
+                                         "画面里能看到的步骤就这三个，具体火候视频里没说。")]
 
 if os.environ.get("MOCK_CHURN") == "1":
     # Machines enough that the ⋯ menu scrolls, as it does with six on a phone.
@@ -25713,6 +25824,10 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"settings": CODEX_SETTINGS.setdefault(p.split("/")[4], _codex_settings())})
         if p.startswith("/api/v1/sessions/") and p.endswith("/items"):
             sid = unquote(p.split("/")[5])  # a subagent's is "<session>@<agent>" (the web app sends %40)
+            if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:  # MOCK_PASEO_NOT_LOADED: no watch has loaded it yet
+                LOG.write("  items %s refused: not_loaded\n" % sid); LOG.flush()
+                return self.send_json({"error": "This agent isn’t running in Paseo. Its conversation loads while its chat is open.",
+                                       "code": "not_loaded"}, 409)
             items = find_items(sid)
             last = items[-1]["seq"] if items else 0
             if "after_seq" in q:
@@ -25736,6 +25851,9 @@ class H(BaseHTTPRequestHandler):
             served(sid, "page", out)
             live_step_page_sent(sid)
             return self.send_json(out)
+        if p == "/mock/paseo-unload":  # MOCK_PASEO_NOT_LOADED: Paseo lets the Grok agent go again
+            PASEO_LOADED["on"] = False
+            return self.send_json({"ok": True})
         if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
             q = parse_qs(urlparse(self.path).query)
             if q.get("asked") != ["1"]: IMAGES_FAIL["on"] = q.get("ok", [""])[0] != "1"
@@ -25759,6 +25877,13 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and p.endswith("/info"):  # the chat's "Developer info" card
             s = next((s for s in all_sessions() if s["session_id"] == p.split("/")[5]), {})
             codex = s.get("agent") == "codex"
+            if s.get("agent") == "paseo":
+                # a Paseo provider's session has no transcript here: the node says nobody gives its counts (#8261), and
+                # keeps zeros for older apps
+                return self.send_json({"session_id": s["session_id"], "cwd": s.get("cwd"), "model": s.get("model"), "agent": "paseo",
+                                       "launcher": s.get("launcher"), "permission_mode": s.get("permission_mode"), "effort": s.get("effort"),
+                                       "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "usage_unknown": True,
+                                       "last_activity": ago()})
             return self.send_json({"session_id": s.get("session_id", ""), "cwd": s.get("cwd"),
                                    "model": "gpt-5.5" if codex else "claude-opus-5",
                                    "launcher": s.get("launcher"), "git_branch": "main", "version": "0.153.0" if codex else "2.1.320",
@@ -25900,7 +26025,8 @@ class H(BaseHTTPRequestHandler):
 
     def upload(self):
         """POST /api/v1/machines/{mid}/files?name=…: the body read slowly enough to watch the progress bar
-        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads."""
+        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads;
+        MOCK_UPLOAD_FAIL=<part of a name>: those fail once their bytes are in, as a full disk would (#8361)."""
         q = parse_qs(urlparse(self.path).query)
         name = (q.get("name") or ["file"])[0]
         n = int(self.headers.get("Content-Length") or 0)
@@ -25911,6 +26037,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"error": "MacBook 上的 personad 太旧，不能接收文件，需要重新部署", "code": "node_outdated"}, 409)
         if (q.get("dest") or [""])[0] == "dir":
             return file_ops_upload(self, q, n)
+        kept = (q.get("dest") or [""])[0] == "attachment"  # #8361: kept beside the chat's pictures under its own name
         kbps = int(os.environ.get("MOCK_UPLOAD_KBPS", "2048"))
         left = n
         video = name.lower().rsplit(".", 1)[-1] in ("mov", "mp4", "m4v")
@@ -25921,9 +26048,18 @@ class H(BaseHTTPRequestHandler):
             left -= len(got)
             if video: body.append(got)
             time.sleep(len(got) / 1024 / kbps)
+        if os.environ.get("MOCK_UPLOAD_FAIL") and os.environ["MOCK_UPLOAD_FAIL"] in name:
+            return self.send_json({"error": "no space left on device"}, 500)
         stem, dot, ext = name.rpartition(".")
         if not stem: stem, dot, ext = ext, "", ""
         path = "/tmp/%s-%s%s%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"), dot, ext)
+        if kept:
+            day, i = "/Users/me/.persona/uploads/" + datetime.now().strftime("%Y-%m-%d") + "/", 1
+            path = day + name
+            while path in FILES:
+                i += 1
+                path = day + "%s %d%s%s" % (stem, i, dot, ext)
+            FILES[path] = b""  # there to open and to stat; the made-up bytes are not kept
         if video: FILES[path] = b"".join(body)  # downloadable again, like a node's temp file (#981)
         UPLOADS.append({"name": name, "size": n, "path": path, "machine": urlparse(self.path).path.split("/")[4]})
         return self.send_json({"path": path, "name": path.rsplit("/", 1)[1], "size": n})
@@ -28079,7 +28215,17 @@ class H(BaseHTTPRequestHandler):
                                         except Exception:
                                             pass
                         threading.Thread(target=stream, daemon=True).start()
-                    if since:
+                    if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:
+                        # MOCK_PASEO_NOT_LOADED: the watch loads the agent, and the hub's backlog read waits for it
+                        def load(sid=sid, mid=mid, fold=bool(msg.get("fold_work"))):
+                            time.sleep(float(os.environ.get("MOCK_PASEO_LOAD_SECONDS", "3")))
+                            PASEO_LOADED["on"] = True
+                            history = find_items(sid)
+                            page, more = last_turns(history, 2) if PAGING["on"] else (history, False)
+                            send({"type": "items", "machine_id": mid, "session_id": sid, "backlog": True, "has_more": more, **span(history),
+                                  "items": lazy_images(fold_work(page) if fold else page)})
+                        threading.Thread(target=load, daemon=True).start()
+                    elif since:
                         newer = [x for x in items if x["seq"] > since]
                         send({"type": "items", "machine_id": mid, "session_id": sid, "items": lazy_images(newer), "backlog": True,
                               **span(items, since, max(since, items[-1]["seq"] if items else 0))})
@@ -28318,6 +28464,7 @@ MOCK_HELP.append("MOCK_RULE_SUGGESTIONS=1  A standing rule suggested after the s
                  "(with MOCK_TODO_ASKS=1), on the network tests' question card and, with MOCK_TASKS=1, on the open plan; Always and Not now answer it")
 MOCK_HELP.append("MOCK_STANDING_AUTHORIZATIONS=1  Two synthetic standing authorizations to list and revoke (#7002); "
                  "=forbidden answers 403 (no full access), =fail makes every revoke fail (503)")
+MOCK_HELP.append("MOCK_CLAUDE_DESKTOP_ASK=1  The Claude in the desktop app on the server waits on an AskUserQuestion of four questions (one multi-select): a card the node answers through its peer inbox, the row Needs you with approve")
 MOCK_HELP.append("MOCK_ASK_HELD=1  With MOCK_TODO_ASKS=1: the PR check's decision is held for the next briefing (for_briefing, #5803)")
 MOCK_HELP.append("MOCK_BRIEF_SETUP=1  With MOCK_TASKS=1: the morning briefing carries the week's recommended setup lines (#5804)")
 MOCK_HELP.append("MOCK_SUPERVISE_LISTED=1  The model catalog lists assistant.supervise itself and every built-in purpose has a description (#5806)")
