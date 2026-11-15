@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// One group of paired hubs as the app runs it (docs/protocol/multi-hub.md): its socket, the hello of the hub it is on, and the
 /// per-hub things that came with it. The default group's link is the only one until a second group is paired.
@@ -22,6 +23,8 @@ final class HubLink: Identifiable {
     var desktops: [DesktopDevice] = []
     /// Pinned and muted spaces / agents: each hub keeps its own.
     @ObservationIgnored let pins: PinsStore
+    /// The last good workspace snapshot for this group's @ menus; replaced, never accumulated, and dropped with the link.
+    @ObservationIgnored let workspaceMentions = MentionWorkspaceCache()
     /// Where requests go when the socket has not picked a hub yet: the group's first hub.
     @ObservationIgnored var fallback: ServerConfig
     #if DEBUG
@@ -48,6 +51,7 @@ final class HubLink: Identifiable {
         c.personaNaming = live.personaContracts
         c.sessionLookup = features.contains("sessions_lookup")
         c.sessionList = features.contains("sessions_list")
+        c.sessionsHierarchy = features.contains(ChildSessions.feature)
         #if DEBUG
         c.transport = transportForTests
         #endif

@@ -212,6 +212,9 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
 	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), Tags: t.Tags}
+	if where := whereOf(t.Tags); where != "" {
+		it.Where = where
+	}
 	if t.Tier != "" {
 		setRuleTier(it, t)
 	}
@@ -220,7 +223,7 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 // setRuleTier gives an item the tier its connector's rules decided: triage leaves it alone (it is triaged at this
 // move), the reason is the rule.
 func setRuleTier(it *InboxItem, t connector.InboxThing) {
-	it.Tier, it.Reason, it.TriagedAt = string(t.Tier), t.Why, it.Last
+	it.Tier, it.Reason, it.TriagedAt, it.TriageRev = string(t.Tier), t.Why, it.Last, inboxTriageRev
 	if it.Connector != nil {
 		it.Connector.RuleTier = string(t.Tier)
 	}

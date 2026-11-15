@@ -72,6 +72,12 @@ const (
 	DeviceLaunchersProbe = "launchers.probe"
 )
 
+// ConfigDirClaudeOnly is the node's refusal of a config_dir for a conversation whose launcher runs another agent than
+// Claude Code, which alone has profiles. The node refuses it before starting anything (node/assistant.go), so a caller
+// that asked for a profile without knowing what the launcher runs can start again without one (assistant
+// startSignedIn, #6884).
+const ConfigDirClaudeOnly = "config_dir is only supported for Claude assistant conversations"
+
 // StartParams is assistant.start's params.
 type StartParams struct {
 	Text           string        `json:"text"`
@@ -81,8 +87,10 @@ type StartParams struct {
 	ConfigDir      string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
 	PermissionMode string        `json:"permission_mode,omitempty"`
 	Effort         string        `json:"effort,omitempty"`
-	Purpose        string        `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
-	MachineID      string        `json:"machine_id,omitempty"` // "" is the assistant's machine
+	// ServiceTier: the native speed for a new Codex conversation, acknowledged before its first turn. Independent of Effort.
+	ServiceTier string `json:"service_tier,omitempty"`
+	Purpose     string `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
+	MachineID   string `json:"machine_id,omitempty"` // "" is the assistant's machine
 	// Space: "health" starts it in the health space (its own directory, instructions and memory, docs/assistant/health.md);
 	// "" is the assistant's own.
 	Space string `json:"space,omitempty"`

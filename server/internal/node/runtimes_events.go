@@ -106,6 +106,11 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 	if !caps.Send {
 		readOnly = label + " 没有开放从手机发消息"
 	}
+	// A row names the workspace it is in only for an engine runtime whose workspaces are the catalog's
+	// (runtimeworkspaces.go): the apps tie the session to that catalog row by it. Any other runtime's workspace_id is no
+	// workspace the apps know, and would only keep them from placing the session by its folder.
+	_, engine := engineRuntimes[rt]
+	ownWorkspaces := engine && caps.Workspaces && !daemon
 	seen := make(map[string]bool, len(list))
 	panes := map[string]string{}
 	defer func() {
@@ -130,7 +135,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		// (started_at); what it folds under and the rollup are the manager's, the parent a blocked child asks for the
 		// node's (below), from what a daemon's own node named (daemons.go) when the row names no other.
 		asking := s.AskingParentSessionID()
-		s.SetFold("", "", nil)
+		s.SetFold("", "", "", nil)
 		s.SetAskingParentSessionID("")
 		if s.Agent == "" {
 			s.Agent = agent
@@ -168,7 +173,10 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		if s.PaneID != "" && validPane(s.PaneID) {
 			panes[s.SessionID] = s.PaneID
 		}
-		s.PaneID, s.TabID, s.WorkspaceID = "", "", ""
+		s.PaneID, s.TabID = "", ""
+		if !ownWorkspaces || !runtimeIDRe.MatchString(s.WorkspaceID) {
+			s.WorkspaceID = ""
+		}
 		switch s.Status {
 		case proto.StatusWorking, proto.StatusDone, proto.StatusIdle, proto.StatusOffline:
 		case proto.StatusBlocked:

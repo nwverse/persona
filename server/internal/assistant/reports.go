@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -169,6 +170,14 @@ var generalTaskWords = lazyre.New(`(?i)\b(research|investigate|report|plan|triag
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
 	stage, pr := stageOf(text)
 	d, marked := deliveryMark(text)
+	if pr != "" {
+		s.learnRepoRoot(ctx, machine, session, pr)
+	} else if pr = s.prFromNumber(ctx, t, machine, session, text); pr != "" && stage == "develop" && !marked {
+		stage = "review" // as stageOf has it for a linked PR (#7921)
+		if said(mergedWords, text) {
+			stage = "merge"
+		}
+	}
 	if !marked && stageIndex(stage) < stageIndex("merge") && pr == "" && t.PRURL != "" && said(mergedWords, text) {
 		stage = "merge" // later replies need not repeat the link already kept on the task
 	}
@@ -226,6 +235,7 @@ type todoStage struct {
 	Stage    string        `json:"stage"`
 	Kind     string        `json:"stage_kind,omitempty"`
 	PR       string        `json:"pr,omitempty"`
+	PRs      []string      `json:"prs,omitempty"`      // the PRs named before PR, newest last, at most stagePRsKept (#6507)
 	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
 	Deploy   *deployWatch  `json:"deploy,omitempty"`   // deploy_check.go: held until the running hub has the work
 	Verified bool          `json:"verified,omitempty"` // explicit acceptance outranks delivery and reply keywords
@@ -233,6 +243,21 @@ type todoStage struct {
 }
 
 const reportStagesKey = "assistant.todo_stages"
+
+// empty: st keeps nothing (its row can go).
+func (st todoStage) empty() bool {
+	return st.Stage == "" && st.Kind == "" && st.PR == "" && len(st.PRs) == 0 && st.Delivery == nil && st.Deploy == nil && !st.Verified &&
+		st.Check == nil
+}
+
+// stagePRsKept bounds a task's earlier PRs (todoStage.PRs).
+const stagePRsKept = 20
+
+// keptPRs is prs with pr moved to its end (a PR named again is the newest), at most stagePRsKept.
+func keptPRs(prs []string, pr string) []string {
+	out := append(slices.DeleteFunc(slices.Clone(prs), func(p string) bool { return p == pr }), pr)
+	return out[max(0, len(out)-stagePRsKept):]
+}
 
 // taskReport notes a change of task t for the next card. ix: what it asks (needs).
 func (s *Service) taskReport(t Todo, state, machine string, session [2]string, text string, ix *proto.Interaction) {
@@ -322,6 +347,9 @@ func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind stri
 		cur.Stage, changed = stage, true
 	}
 	if pr != "" && pr != cur.PR {
+		if cur.PR != "" {
+			cur.PRs = keptPRs(cur.PRs, cur.PR)
+		}
 		cur.PR, changed = pr, true
 	}
 	if changed {
@@ -338,7 +366,7 @@ func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind stri
 	}
 	s.todos.mu.Lock()
 	if t := s.todos.todos[id]; t != nil {
-		t.Stage, t.PRURL, t.StageKind, t.stageVerified = cur.Stage, cur.PR, cur.Kind, cur.Verified
+		t.Stage, t.PRURL, t.PRs, t.StageKind, t.stageVerified = cur.Stage, cur.PR, cur.PRs, cur.Kind, cur.Verified
 	}
 	s.todos.mu.Unlock()
 	s.todosChanged(ctx)
@@ -407,6 +435,7 @@ func (s *Service) sendReports() {
 		return
 	}
 	var keep, asks []*reportItem // asks: decisions whose own card goes out without a line in the report (only_conclusions)
+	quiet := s.quietModeOn(ctx)
 	for _, it := range items {
 		t, ok := s.todoNow(it.todo)
 		if !ok {
@@ -420,6 +449,14 @@ func (s *Service) sendReports() {
 		}
 		if t.Quiet && f.Sync && it.state != reportClosed {
 			continue // told in the main conversation, whose turns the chat mirrors (sync); closing is not told there
+		}
+		if quiet {
+			// Low-distraction mode (push_quiet.go): no progress, stuck or conclusion lines in the chat; the briefing and the
+			// board have them. A decision still gets its own answerable card.
+			if it.state == reportNeeds && it.ix != nil {
+				asks = append(asks, it)
+			}
+			continue
 		}
 		if !f.ReportSteps {
 			if it.state == reportNeeds && it.ix != nil {

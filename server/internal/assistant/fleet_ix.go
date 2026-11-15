@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The interactions (docs/protocol/protocol.md "Interactions"): the cards the user answers on the phone — a hook's permission, question
@@ -260,6 +261,8 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
 			}
+			// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
+			// are not resumable, so this branch never has a wait reporter to restore.
 			return s.await(ctx, p)
 		}
 		s.fleet.mu.Unlock()
@@ -302,6 +305,8 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 		s.record(ix)
 		s.announce(ix)
 	}
+	resume := pushMCPInteraction(ctx, ix)
+	defer resume()
 	return s.await(ctx, p)
 }
 
@@ -503,6 +508,13 @@ func (s *Service) resolveApproved(id string, r proto.Resolution, approver *assis
 
 func (s *Service) resolveAnswer(id string, r proto.Resolution, remember bool, authorization *standingResolution,
 	approver *assistantwire.HandoffApprover) error {
+	// A manager work card is answered in the manager, not by the stopped agent. Its local dismiss/defer choices remain
+	// valid, but an answer that would send text must be refused before the card is claimed and its answer is retried.
+	if ix, ok := s.pendingIx(id); ok && ix.ToolName == workCardTool && workResolutionSends(ix, r) {
+		if sess, found := s.decoratedSession(ix.MachineID, ix.SessionID); found && stoppedAgent(sess) {
+			return &rpc.Error{Code: "agent_stopped", Message: "the agent has stopped and cannot receive this answer"}
+		}
+	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
 	handoff := p != nil && p.ix.ToolName == proto.SecretHandoffTool
@@ -1126,7 +1138,7 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	// A question may have rung the user before the restart: its timeout only puts it back on the apps. An approval is
 	// not quiet: only the user can answer it, so its timeout rings (ringAsks) instead of leaving the agent blocked
 	// with nobody told.
-	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, routedAt: now, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
 	p.ix.Delegating = true
 	shown := p.ix
 	s.fleet.mu.Unlock()

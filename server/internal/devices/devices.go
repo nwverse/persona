@@ -18,12 +18,14 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -586,7 +588,13 @@ func (d *Devices) BusUp() {
 		m.mu.Lock()
 		list := slices.Clone(m.sessions)
 		has := m.online || m.warmLocked(time.Now()) || len(list) > 0
+		unknown := list == nil && !m.sessionsListed
 		m.mu.Unlock()
+		if unknown {
+			// No snapshot has arrived on the current connection: nil is unknown, not an empty snapshot.
+			// The initial forward or an existing refresh path publishes the real list once a call succeeds.
+			continue
+		}
 		if has {
 			if list == nil {
 				list = []proto.Session{}
@@ -626,6 +634,9 @@ func (d *Devices) forward(machine, event string, params any) {
 // Call is devices.call: a call to a machine's node, coded for the hub (no_device, machine_offline, node_closed;
 // the node's own coded errors as they are).
 func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	if strings.HasPrefix(p.Method, "session.codex.takeover.") {
+		return nil, &rpc.Error{Code: "user_confirmation_required", Message: i18n.Err("codex-takeover.user_only").Error()}
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("no machine %q", p.MachineID)}
@@ -638,6 +649,13 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	params := p.Params
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
+	}
+	if p.Method == "session.send" {
+		var err error
+		params, err = d.prepareSessionSkills(params)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if refusesHandoff(p.Method, params) {
 		return nil, errHandoffRefused
@@ -656,8 +674,12 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
 		return nil, errHandoffRefused
 	}
+	var snapshot *sessionSnapshot
+	if p.Method == "sessions.list" {
+		snapshot = new(sessionSnapshot)
+	}
 	var out json.RawMessage
-	err := m.call(ctx, p.Method, params, &out)
+	err := m.callWithSnapshot(ctx, p.Method, params, &out, snapshot)
 	d.observeCreationCall(p, params, out, preparation, err)
 	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
@@ -669,8 +691,7 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 			Sessions []proto.Session `json:"sessions"`
 		}
 		if json.Unmarshal(out, &list) == nil && list.Sessions != nil {
-			m.setSessions(list.Sessions)
-			d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+			m.acceptSessionsList(snapshot, list.Sessions, true)
 		}
 	}
 	if out == nil {
@@ -703,6 +724,15 @@ func wireError(err error) error {
 // Notify is devices.notify: a one-way event to a machine's node, queued for it (notes.go): the bus's read loop goes
 // on at once.
 func (d *Devices) Notify(p devicewire.NodeEvent) {
+	if p.Event == proto.EventMCPWait {
+		var update proto.MCPWaitEvent
+		if json.Unmarshal(p.Params, &update) != nil || !proto.ValidMCPWaitCallID(update.CallID) {
+			return // correlation is optional, but an invalid id must never consume the machine's note budget
+		}
+	}
+	if strings.HasPrefix(p.Event, "session.codex.takeover.") {
+		return
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return
@@ -828,11 +858,11 @@ func (d *Devices) Relist(ctx context.Context, id string) error {
 	var list struct {
 		Sessions []proto.Session `json:"sessions"`
 	}
-	if err := m.call(ctx, "sessions.list", json.RawMessage(`{}`), &list); err != nil {
+	snapshot := new(sessionSnapshot)
+	if err := m.callWithSnapshot(ctx, "sessions.list", json.RawMessage(`{}`), &list, snapshot); err != nil {
 		return err
 	}
-	m.setSessions(list.Sessions)
-	d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+	m.acceptSessionsList(snapshot, list.Sessions, true)
 	return nil
 }
 

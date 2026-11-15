@@ -93,6 +93,13 @@ func waitCalls(t *testing.T, f *fakeHerdr, method string, n int) {
 	}
 }
 
+// waitReports waits until the resume report for pane has completed its per-pane turn. It follows the actual
+// asynchronous work rather than sleeping for a guessed amount of time before asserting that nothing was sent.
+func waitReports(n *Node, pane string) {
+	unlock := n.resumes.lock(pane)
+	unlock()
+}
+
 func personaDir(home string) string { return filepath.Join(home, ".persona") }
 
 func mkdir(t *testing.T, p string) string {
@@ -264,7 +271,7 @@ func TestHerdrStartIntoAGivenWorkspaceReturnsOnABlockedClaude(t *testing.T) {
 		call("session.snapshot", nil),
 	})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(startID, proto.StatusIdle, "w2:p5", "w2:t5", "w2", home, "")}, nil))
-	if l := listSessions(t, n); len(l) != 1 || l[0].Status != proto.StatusBlocked || l[0].AttentionReason != lostDialog {
+	if l := listSessions(t, n); len(l) != 1 || l[0].Status != proto.StatusBlocked || l[0].AttentionReason != lostDialogHeld {
 		t.Errorf("listed %+v", l)
 	}
 }

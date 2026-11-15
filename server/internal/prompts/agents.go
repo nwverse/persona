@@ -18,6 +18,13 @@ func RenderReadonlyTaskPlanExit() string { return render("agents/readonly_plan_e
 // RenderReadonlyTaskConstraint carries a read-only task's limit in its first prompt.
 func RenderReadonlyTaskConstraint() string { return render("agents/readonly_task", nil) }
 
+type TaskContinuation struct {
+	TodoID   string
+	Readonly bool
+}
+
+func RenderTaskContinuation(t TaskContinuation) string { return render("agents/task_continuation", t) }
+
 // AgentTriage is the system prompt that reads a stopped agent's last reply and says where its work stands
 // (agents/triage, docs/assistant/agent-work.md).
 type AgentTriage struct {
@@ -225,6 +232,8 @@ func RenderTaskLeader() string { return render("agents/task_leader", struct{}{})
 
 // RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
 func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
+
+func RenderTaskHandoff() string { return render("agents/task_handoff", struct{}{}) }
 
 // RenderWorkerSupervise is the supervision message a task leader's agent gets about its workers (agents/worker_supervise,
 // assistant/task_leader.go): what each task of its own needs, from the same entries a conversation's message lists.

@@ -87,6 +87,24 @@ type InboxItem struct {
 	// TriagedBy says who sorted an event (inbox_group.go): "model" (its title, summary and tier are the model's) or
 	// "rules" (the connector grouped it and its rule tier stands, "By rule").
 	TriagedBy string `json:"triaged_by,omitempty"`
+	// Where is where the matter happens, for people: a group's name, the other person of a direct chat, a repository
+	// ("" for mail). TitleBy says who wrote Title (TitleBy* in inbox_follow.go): once the assistant or the user did,
+	// grouping leaves the title and the summary alone; kept, not listed. Follow is what the matter waits on, its next
+	// step and when to look at it again; Now is its state key, listed only (docs/assistant/inbox.md "Following up").
+	Where   string       `json:"where,omitempty"`
+	TitleBy string       `json:"title_by,omitempty"`
+	Follow  *InboxFollow `json:"follow,omitempty"`
+	Now     string       `json:"now,omitempty"`
+	// MergedFrom lists the rows merged into this one by hand (listed); MergedInto, on such a row, names this one and hides
+	// it (kept, not listed). PreMergeTier is the tier this row had before (inbox_merge.go, #6480).
+	MergedFrom   []InboxMergeRef `json:"merged_from,omitempty"`
+	MergedInto   string          `json:"merged_into,omitempty"`
+	PreMergeTier string          `json:"pre_merge_tier,omitempty"`
+	// PreMergeTitle and PreMergeTitleBy are the title this row had before the model wrote one for the merged row
+	// (MergeTitle), so Undo puts it back (inbox_merge_title.go, #7229). Kept, not listed.
+	PreMergeTitle   string `json:"pre_merge_title,omitempty"`
+	PreMergeTitleBy string `json:"pre_merge_title_by,omitempty"`
+	MergeTitle      string `json:"merge_title,omitempty"`
 	// Parent is what the item grew out of: another item, a todo or an agent session (inbox_parent.go, #2128).
 	Parent *InboxParent `json:"parent,omitempty"`
 	// Folder is the "/"-separated folder path the item is filed under ("" none); FolderBy says who filed it, "model"
@@ -119,6 +137,13 @@ type InboxItem struct {
 	FolderOf  string `json:"folder_of,omitempty"`  // Last when the model was asked for its folder
 	// Rules are the item's own triage rules, from its connector (InboxThing.Rules): they replace inbox.rules for it.
 	Rules string `json:"rules,omitempty"`
+	// TriageRev is the tier criteria's revision (inboxTriageRev) the model last sorted the item under: an open "Needs
+	// you" item sorted under older criteria is sorted again once (inbox_triage.go retriageStale).
+	TriageRev int `json:"triage_rev,omitempty"`
+	// SettledOf is the evidence the manager filed the item on as handled elsewhere (inbox_settle.go): the newest source
+	// position it read for a conversation, "mail:<uid>" for an answered mail, "todo:<id>" for a finished to-do. Reopened
+	// by hand, the same evidence never files it again.
+	SettledOf string `json:"settled_of,omitempty"`
 	// ArrivedAt is the clock here when the item first held Last (ArrivedOf), as listed or saved: a bulk "Done" over a
 	// filter leaves what arrived after the list it acted on (inbox_bulk.go). Rows stored before have UpdatedAt.
 	ArrivedOf string    `json:"arrived_of,omitempty"`
@@ -172,7 +197,8 @@ type InboxMail struct {
 	Thread    string      `json:"thread"`           // normalized subject: replies join the same item
 }
 
-func (it *InboxItem) open() bool { return it.DoneAt == nil }
+// open: not filed, and not a member of a merged row (inbox_merge.go): a member is hidden and its survivor stands for it.
+func (it *InboxItem) open() bool { return it.DoneAt == nil && it.MergedInto == "" }
 
 // conversationOf is where a chat item opens in its messaging source: the source is the connector's id ("lark", the
 // Lark extension's source of the same id), the account the one the apps would pass as ol_account.
@@ -192,10 +218,17 @@ func conversationOf(it *InboxItem) *wire.MessagingConversationRef {
 func (it *InboxItem) listed() InboxItem {
 	c := *it
 	c.Context, c.Last, c.TriagedAt, c.BodyOf, c.JudgedAt, c.Rules, c.ArrivedOf, c.FolderOf = "", "", "", "", "", "", "", ""
+	c.TriageRev, c.SettledOf = 0, ""
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq = 0, 0
 	c.Status = it.status()
+	c.Now, c.TitleBy = it.nowKey(), ""
+	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""
+	if it.Follow != nil {
+		f := *it.Follow
+		c.Follow = &f
+	}
 	c.Chain = listedChain(it)
 	c.Related = slices.Clone(it.Related)
 	c.Handoffs = listedHandoffs(it.Handoffs)
@@ -218,6 +251,7 @@ func (it *InboxItem) listed() InboxItem {
 	if it.Agent != nil { // the copy is encoded after the lock is released
 		a := *it.Agent
 		a.Pending, a.Wake, a.SentOf, a.Lost = nil, false, "", nil
+		a.DeferredAt, a.WakeSlot = nil, false
 		c.Agent = &a
 	}
 	if it.Mail != nil {

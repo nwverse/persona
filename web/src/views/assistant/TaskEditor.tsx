@@ -25,6 +25,10 @@ const reveal = (el: HTMLElement | null) => el?.scrollIntoView({ block: "nearest"
 
 const everyOk = (m?: number) => Number.isInteger(m) && (m ?? 0) >= MIN_EVERY && (m ?? 0) <= MAX_EVERY;
 
+// The note under a field, and a quick-pick chip (a weekday shortcut, an interval, a cron example), as every one writes them.
+const HINT = "mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3";
+const CHIP = "h-6 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors";
+
 export function TaskEditor({
   task,
   onClose,
@@ -78,8 +82,18 @@ export function TaskEditor({
   const [cronProblem, setCronProblem] = useState("");
   const problem = validateTask(draft, now) || (draft.repeat === "cron" && cronProblem ? cronProblem : null);
   const changed = !saved || !sameTask(saved, draft);
-  const set = (patch: Partial<Task>) => setDraft((d) => ({ ...d, ...patch }));
+  /** The user changed a field since it opened: a new task says what is missing only from then on; until then a grey
+   *  Add is enough (a blank one opened in red before anything was typed). */
+  const [edited, setEdited] = useState(false);
+  const edit = (next: (d: Task) => Task) => {
+    setEdited(true);
+    setDraft(next);
+  };
+  const set = (patch: Partial<Task>) => edit((d) => ({ ...d, ...patch }));
   const working = busy !== "";
+  /** The time zone the hub reads a daily time and a cron expression in, named as the list's footer names it; "your time
+   *  zone" only when the hub doesn't say. */
+  const zone = useStore((s) => s.assistant?.timezone);
 
   /** Saves what changed (adds a new one); returns the task as the hub has it, null when it didn't. */
   const persist = async (): Promise<Task | null> => {
@@ -177,7 +191,7 @@ export function TaskEditor({
       {!creating && (
         <Button tone="quiet" icon="trash" className="text-red enabled:hover:text-red" disabled={working} onClick={() => setConfirmDelete(true)}>{t("assistant-taskeditor.delete")}</Button>
       )}
-      <span className={cx("mr-auto min-w-0 truncate text-[11.5px]", problem ? "text-red" : "text-ink-3")}>{changed && problem ? problem : ""}</span>
+      <span className={cx("mr-auto min-w-0 truncate text-[11.5px]", problem ? "text-red" : "text-ink-3")}>{changed && (edited || !creating) && problem ? problem : ""}</span>
       <Button tone="quiet" disabled={working} onClick={onClose}>{t("common.cancel")}</Button>
       <Button tone="primary" busy={busy === "save"} disabled={working || !!problem || (!creating && !changed)} onClick={() => void save()}>{creating ? t("assistant-taskeditor.add") : t("common.save")}</Button>
     </>
@@ -215,7 +229,7 @@ export function TaskEditor({
               <Segmented<Repeat>
                 label={t("assistant-taskeditor.repeat")}
                 value={draft.repeat}
-                onChange={(r) => setDraft((d) => withRepeat(d, r, new Date()))}
+                onChange={(r) => edit((d) => withRepeat(d, r, new Date()))}
                 options={[
                   { v: "once", label: t("assistant-taskeditor.repeat_once") },
                   { v: "daily", label: t("assistant-taskeditor.repeat_daily") },
@@ -229,21 +243,25 @@ export function TaskEditor({
               {draft.repeat === "cron" && <CronWhen cron={draft.cron ?? ""} onChange={(cron) => set({ cron })} onProblem={setCronProblem} />}
               {draft.repeat !== "once" && <UntilWhen draft={draft} now={now} onChange={(until) => set({ until })} />}
             </div>
-            <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
+            <p className={HINT}>
               {draft.enabled && next && saved && !changed
                 ? t("assistant-taskeditor.next_run", { when: momentLabel(next, now), until: untilLabel(next, now) })
                 : draft.repeat === "once"
                   ? t("assistant-taskeditor.once_hint")
                   : draft.repeat === "daily"
-                    ? t("assistant-taskeditor.daily_hint", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--" })
+                    ? zone
+                      ? t("assistant-taskeditor.daily_hint_zone", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--", zone })
+                      : t("assistant-taskeditor.daily_hint", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--" })
                     : draft.repeat === "cron"
-                    ? t("assistant-taskeditor.cron_hint", { zone: t("assistant-taskeditor.cron_hint_zone") })
+                    ? zone
+                      ? t("assistant-taskeditor.cron_hint_named", { zone })
+                      : t("assistant-taskeditor.cron_hint", { zone: t("assistant-taskeditor.cron_hint_zone") })
                     : everyOk(draft.every_minutes)
                       ? t("assistant-taskeditor.interval_hint", { every: everyLabel(draft.every_minutes ?? 0) })
                       : t("assistant-taskeditor.interval_hint_blank")}
             </p>
             {draft.repeat !== "once" && (
-              <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("assistant-taskeditor.until_hint")}</p>
+              <p className={HINT}>{t("assistant-taskeditor.until_hint")}</p>
             )}
           </section>
 
@@ -257,7 +275,7 @@ export function TaskEditor({
               aria-label={t("assistant-taskeditor.prompt_placeholder")}
               onChange={(e) => set({ prompt: e.target.value })}
             />
-            <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("assistant-taskeditor.prompt_hint")}</p>
+            <p className={HINT}>{t("assistant-taskeditor.prompt_hint")}</p>
           </section>
 
           <section>
@@ -311,8 +329,8 @@ export function TaskEditor({
                 {t("assistant-taskeditor.bypass_on")}
               </p>
             ) : (
-              <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
-                {t("assistant-taskeditor.permission_hint")}
+              <p className={HINT}>
+                {t("assistant-taskeditor.permission_hint", { mode: t("lib-session-actions.mode_auto") })}
                 {draft.session_id ? t("assistant-taskeditor.permission_hint_resume") : ""}
               </p>
             )}
@@ -337,13 +355,13 @@ export function TaskEditor({
               <Segmented<Push>
                 label={t("assistant-taskeditor.section_push")}
                 value={draft.push ?? ""}
-                onChange={(p) => setDraft((d) => withPush(d, p))}
+                onChange={(p) => edit((d) => withPush(d, p))}
                 options={[
                   { v: "", label: t("assistant-taskeditor.push_every") },
                   { v: "asked", label: t("assistant-taskeditor.push_asked") },
                 ]}
               />
-              <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
+              <p className={HINT}>
                 {draft.push === "asked" ? t("assistant-taskeditor.push_hint_asked") : t("assistant-taskeditor.push_hint_every")}
               </p>
             </section>
@@ -362,7 +380,7 @@ export function TaskEditor({
                   { v: "every", label: t("assistant-taskeditor.inbox_every") },
                 ]}
               />
-              <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
+              <p className={HINT}>
                 {draft.inbox === "every"
                   ? t("assistant-taskeditor.inbox_hint_every")
                   : draft.inbox === "worthy"
@@ -394,7 +412,7 @@ export function TaskEditor({
                   </div>
                 ))}
             </div>
-            <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
+            <p className={HINT}>
               {draft.session_id
                 ? t("assistant-taskeditor.chat_hint_resume")
                 : own
@@ -538,7 +556,7 @@ function DailyWhen({ draft, onChange }: { draft: Task; onChange: (p: Partial<Tas
         type="button"
         aria-pressed={on}
         onClick={() => onChange({ weekdays: value })}
-        className={cx("h-6 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors", on ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
+        className={cx(CHIP, on ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
       >
         {label}
       </button>
@@ -614,7 +632,7 @@ function IntervalWhen({ minutes, onChange }: { minutes: number; onChange: (m: nu
             type="button"
             aria-pressed={m === minutes}
             onClick={() => onChange(m)}
-            className={cx("h-6 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors", m === minutes ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
+            className={cx(CHIP, m === minutes ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
           >
             {m < 60 ? t("assistant-taskeditor.minutes", { count: m }) : m % 1440 === 0 ? t("assistant-taskeditor.days", { count: m / 1440 }) : t("assistant-taskeditor.hours", { count: m / 60 })}
           </button>
@@ -687,7 +705,7 @@ function CronWhen({ cron, onChange, onProblem }: { cron: string; onChange: (cron
             aria-pressed={x.cron === cron.trim()}
             title={x.cron}
             onClick={() => onChange(x.cron)}
-            className={cx("h-6 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors", x.cron === cron.trim() ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
+            className={cx(CHIP, x.cron === cron.trim() ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-3 hover:text-ink-2")}
           >
             {x.label}
           </button>

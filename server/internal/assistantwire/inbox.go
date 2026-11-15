@@ -28,6 +28,7 @@ var InboxRoutes = []string{
 	"POST /api/v1/inbox/{id}/reply",
 	"POST /api/v1/inbox/{id}/suggestion",
 	"POST /api/v1/inbox/{id}/handoff",
+	"POST /api/v1/inbox/{id}/task-link/recheck",
 	"POST /api/v1/inbox/{id}/doc/status",
 	"PUT /api/v1/inbox/{id}/parent",
 	"PUT /api/v1/inbox/{id}/folder",
@@ -37,6 +38,10 @@ var InboxRoutes = []string{
 	"POST /api/v1/inbox/refresh",
 	"POST /api/v1/inbox/done",
 	"POST /api/v1/inbox/bulk",
+	"POST /api/v1/inbox/merge",
+	"POST /api/v1/inbox/merge/undo",
+	"POST /api/v1/inbox/todo",
+	"POST /api/v1/inbox/todo/undo",
 	"GET /api/v1/inbox/mutes",
 	"POST /api/v1/inbox/mutes",
 	"DELETE /api/v1/inbox/mutes/{id}",
@@ -254,6 +259,7 @@ type InboxMailSummary struct {
 	Date      string        `json:"date"` // RFC3339, UTC
 	Snippet   string        `json:"snippet"`
 	Seen      bool          `json:"seen"`
+	Answered  bool          `json:"answered,omitempty"` // replied to from a mail client: IMAP \Answered
 }
 
 // InboxMailRef names one mail. Readable: a mail without a text part has its HTML as readable text (for translation:

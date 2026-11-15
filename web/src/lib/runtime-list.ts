@@ -15,6 +15,9 @@ export const runtimeIdentity = (s: Session) => {
   if (key === undefined) { key = tupleKey([s.machine_id, s.session_id]); identities.set(s, key); }
   return key;
 };
+/** The identity of the row a session is drawn under (`parent_agent_id`, #5935, lib/side-sessions.ts), as runtimeIdentity
+ *  keys rows: on the session's own machine. */
+export const runtimeParentIdentity = (s: Session) => s.parent_agent_id ? tupleKey([s.machine_id, s.parent_agent_id]) : undefined;
 export function runtimeRemoval(id: string): string {
   try {
     const tuple: unknown = JSON.parse(id);
@@ -38,7 +41,7 @@ export const runtimeActiveAt = (s: Session) => Date.parse(s.updated_at ?? "");
 export const runtimeNeedsYou = (s: Session) => foldedState(s) === "needs_you";
 /** Where a row is, by the attributes the hub groups and filters it by (docs/protocol/protocol.md "Bounded Agents
  *  lists"): its computer, its project directory and its space. */
-export const runtimePlace = (s: Session): SessionPlace => ({ machine: s.machine_id, project: s.repo_root || s.workspace_cwd || s.cwd || "", group: s.space_id || s.workspace_id || "" });
+export const runtimePlace = (s: Session): SessionPlace => ({ machine: s.machine_id, project: s.repo_root || s.workspace_cwd || s.cwd || "", group: s.space_id || s.workspace_id || "", todo: s.todo?.id ?? "", state: s.state });
 export const SESSIONS_LOOKUP_FEATURE = "sessions_lookup";
 export const SESSIONS_PAGE_COUNTS_FEATURE = "sessions_page_counts";
 let pageCounts = false;

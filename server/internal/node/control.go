@@ -163,6 +163,10 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if resume != "" { // a Codex thread is resumed above: this id is not one
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
+		if execution.Effort != "" && n.codexEffortInherited(ctx, argv, cwd, execution.Effort) {
+			// An inherited effort needs no override, which would leave the shared app-server.
+			execution.Effort = ""
+		}
 		return n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, execution), prompt, ws, tabName, mode)
 	}
 	if kind != "claude" { // start_agent.go
@@ -242,6 +246,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	probe := n.probeFor(ctx, id, launcher, shells)
 	probe.typed(typed)
+	probe.acceptBypass = mode == proto.ModeBypass || planThen == proto.ModeBypass
 	a, err := n.waitReady(ctx, pane, probe)
 	if rejected := (*startLineRejected)(nil); errors.As(err, &rejected) {
 		// Nothing of it ran: typed once more as it was, once the shell is at rest again. A second refusal ends the start.

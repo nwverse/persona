@@ -1,6 +1,30 @@
 # Lessons: Claude Code, Codex, and herdr
 
+# A continuation must stay on its original to-do (#6820)
+
+When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
+
+
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
+
+## A saved task name can disappear without another model failure (#7337)
+
+Automatic naming had already succeeded for several instruction-titled sessions, but a terminal spinner's
+`Claude Code` label later became the first user message. Matching both presentations against a narrow
+instruction-prefix list hid the saved name, while the successful-change limit prevented another call.
+Check the shared session response against the persisted raw title and counter before blaming the model.
+Use proven `prompt` provenance for first-message copies and preserve the saved count across presentation
+changes. An unknown source from an old node stays unknown: a hub deployment cannot establish manual intent
+that the node did not report. Failure logs use only static reasons and session identifiers, never a provider
+error body that could echo private text or credentials.
+
+## Supervised handoffs and runtime children (#5751)
+
+Codex sidecar parent/root metadata establishes display ancestry, not a to-do link. A standalone `create_thread` can
+have no parent metadata at all. Use `task_spawn` for a separate session on the current supervised task; never work
+around missing task tools by extracting the hub token. Codex's shared daemon may carry an old pane environment, so
+its per-turn `CODEX_THREAD_ID` must resolve unambiguously in the node's registry before a CLI handoff. Unknown
+threads must not fall back to whichever task an inherited pane happens to run.
 
 - An Agent SDK guest must register its session id and tools before the node starts: its bridge lists tools before
   `assistant.send` returns. A later `guestSet` makes the first list empty, and a connected MCP server with no tools
@@ -37,9 +61,20 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   (`Auto (match terminal)` first, cursor on `✔ Dark mode`), then "Security notes … Press Enter to continue…", then the folder's trust dialog (cursor on `No, exit`).
   The node's picker match expected numbered choices (a hand-written fixture), so starts on a new machine timed out after 1 minute on the picker.
   `firstRunKeys` answers the picker and the notes; fixtures now come from a real capture (`claude-2.1.318-theme-picker-120.txt`, `-security-notes-120.txt`).
+- A dialog drawn at the top of a fresh, tall pane reads as the dialog then dozens of blank rows (2026-11-11: Claude Code 2.1.322's Bypass Permissions confirmation, 36
+  blank rows in a 50-row pane). `screen.ParseDialog` and `dialogTop` looked back a fixed number of rows from the read's last row, so the dialog fell outside: no card
+  choices, and its head read as `❯ No, exit`. Count rows back from the last non-blank one (`withoutBlankTail`), and capture fixtures from a pane taller than the dialog.
+- Claude Code 2.1.322 shows the Bypass Permissions confirmation for `--allow-dangerously-skip-permissions` too (a plan that goes on in bypass), not only for
+  `--permission-mode bypassPermissions`. Several `--settings` flags don't merge: the last one wins, so a per-start settings file can't be added next to Persona's hooks file
+  or a launcher's own. Accepting the confirmation makes Claude Code write `"skipDangerousModePermissionPrompt": true` into the profile's `settings.json`
+  (`CLAUDE_CONFIG_DIR`): reproduce it only with a throwaway config directory, never your own.
 - Seeing an input box doesn't mean Claude can receive text (2026-11-05, #2423): an automatic update on Claude Code startup ("Updated to latest…") also showed an Auto mode explanation.
   After node waited for the input box, `agent prompt` swallowed the first message. The transcript was only 1 KB, with no user message, and the Agent sat idle for 1.5 hours. Check the transcript after sending;
   if it didn't arrive, wait for readiness and resend, finally mark "Needs you" (`node/firstprompt.go`). Sending alone isn't success.
+- A new reason a first message did not go in (`lostFirst`, `node/firstprompt.go`) must reach every reader of the reasons, not only the list (#7897): #5464's
+  `lostDialogHeld` (the node types the held message itself once the dialog is answered) was missed by `firstPromptHeldBack`, and a switch between Claude Code and Codex
+  stopped keeping its handoff for the next message. `grep -n 'lostDialog\b'` finds them. Whether a message went in since is a decision: read the transcript as written now
+  (`metaNow` in `promptedSince`), not the list's read of up to 3 s ago, or a handoff the held message carried goes in front of the next one again.
 - Gray text in Claude's input box (predicted next message, new-chat `Try "…"`) looks identical to user input in plain-text screen reads: detect drafts from ANSI dim (SGR 2).
   The 2.1.312 trust-directory dialog has unnumbered options (`❯ No, exit`); recognize it by the bottom `Enter to confirm · Esc to cancel` (`server/internal/screen`).
 - herdr's `agent_status` can lag behind Claude (#2069, herdr 0.9.3): after the previous turn ended (done, unread), an App message started a new turn, but herdr kept reporting done.
@@ -298,6 +333,19 @@ the same first request was under 3k tokens. The same goes for `AGENTS.md` and `.
 Code reads in place of CLAUDE.md when the guest's directory has no CLAUDE.md of its own. Check such isolation on the real CLI: pick a marker line from each source and
 count it in the run's transcript, which records the instructions the process loaded.
 
+## A private profile drops `~/.claude`'s settings, not its CLAUDE.md (2026-11-14, #7318)
+
+With `CLAUDE_CONFIG_DIR` set to a private profile, files and settings under `~/.claude` do not reach the conversation
+as the user's: the skills switched off in `~/.claude/settings.json` came back (about 5.1k tokens per request on one
+machine). The one way in is the ancestor walk: for a directory below the home, Claude Code still reads
+`~/.claude/CLAUDE.md` and `~/.claude/rules` as the home's project instructions (about 5.2k tokens there), as it does for
+a guest (above). Exclude those with `claudeMdExcludes` and carry over only what should follow the user (here the
+`skillOverrides` set to `"off"`). "Not `~/.claude`" is not the same as "private": `claude_start_dir`, a wrapper's
+`CLAUDE_CONFIG_DIR` and an explicit `config_dir` elsewhere are profiles the user set up and may run plain `claude` in,
+and the user's switches live in the one `claude_start_dir` names when it is set. Only the directories Persona creates
+count as private. To check on the real CLI without a model, point `ANTHROPIC_BASE_URL` at a local mock that records
+request bodies and count a marker line from each file in what Claude Code sends.
+
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
 After each turn, Claude Code puts a suggested next message in dim text (SGR 2), such as `❯ 现在部署一下 hub` ("deploy the hub now"). Plain-text screen reads can't distinguish it from typed text.
@@ -436,6 +484,8 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   - When herdr already detects the Agent process in the pane (Claude, Codex, pi…), `pane.report_agent_session` accepts and persists `resume_argv` directly without `pane.report_agent`. Do **not** claim detected panes with a one-shot `pane.report_agent {state: "idle"}`: in herdr 0.9.x a custom reporter's `hook_authority` overrides screen and OSC state detection in `recompute_effective_state`, locking `agent_status` to `idle` for the lifetime of the Agent (#4657). Clear any stale `custom:persona` authority with `pane.clear_agent_authority {source}` (never without `source`, which would also drop `herdr:pi`'s full-lifecycle authority), and fall back to `pane.report_agent` only when `pane.report_agent_session` returns `resume_not_accepted` (an Agent process herdr doesn't detect natively, such as a compatible CLI, where `traexAgents` reads state itself and must still merge session-less entries in `snap.Agents`). Releasing authority via CLI (`herdr pane release-agent`) also requires `--seq` greater than the last reported `seq`, or `accept_hook_report` drops the release.
   - herdr types argv into the pane shell: quote only necessary elements (an alias as the first element still expands); elements must not contain single quotes.
   - If official integration later reports the same or another session id, herdr retains the original `resume_argv`: after a session id change, explicitly report again or it restores the old session.
+  - herdr before 0.9.2 answers `ok` to `resume_argv` and drops it (2026-11-13: a dev machine ran 0.9.0 for days; the upgrade to 0.9.5 by live handoff carried nothing over, the node believed it had reported, and the next restart resumed Persona's Agents bare). A report holds only for the server that took it: the node records the server instance (`herdr.Client.ServerID`, the socket's mtime, new on every restart, handoff and upgrade) and `backfillResume` reports again when a Persona pane's server changed.
+  - The argv is `eval "<the start command with --resume <id>>"`: herdr only checks that the first word is a plain name (`eval` passes) and types it into the pane's shell, so `CLAUDE_CONFIG_DIR=…` prefixes and launchers that are shell functions work without a wrapper script on PATH. herdr also refuses control characters and more than 8 KiB (`resumeSayable`). Real-Claude check in a throwaway named session: `herdrresume_live_test.go`.
 
 
 ## Claude status line (2026-11-05, #1963)
@@ -853,6 +903,11 @@ a native agent that rejects `session/close`, and republish the closed inventory 
 
 ## Antigravity history freshness does not establish live execution (#3678)
 
+An externally driven AGY conversation needs a watched transcript poll even when Persona owns no ACP prompt. Native
+planner records can also gain response text at an existing step index. Carry those replacements through the history
+token and preserve the branch identity, then let the existing client continuity logic replace retained content. Use
+the last published sequence as an append batch's exclusive lower bound. Cover both cases through `session.watch`.
+
 A completed user-input or tool step can remain the transcript's last entry after a stopped or failed attempt. A 24-hour
 freshness window kept such history working for hours. Working requires an owned ACP turn or explicit native running state.
 Apply that native activity before internal-metadata filtering and history limits, and discover running native summaries even
@@ -932,6 +987,37 @@ prompt finishes, while that published text still exists. `streamEnd` uses the st
 watch to send its empty boundary, and cancels pending throttled text first. A native transcript may have a
 middle-truncated copy of the reply, so text reconciliation alone cannot retire the Hub's full cached copy.
 Cover unwatch before completion, a pending batch, and a later watcher in the SDK and AGY lifecycle tests.
+
+## A `-c` moves a Codex into the pane's environment (2026-11-12, #4860, codex-cli 0.167.1)
+
+- From 0.163, `codex` with any `-c` override other than a feature switch runs its own app-server in the pane instead
+  of joining the shared daemon (`codex-rs/tui/src/daemon_startup.rs`, `config_exclusion`). The tier effort
+  (`-c model_reasoning_effort=…`) counts. Besides the terminal-only route, Codex then makes its startup requests
+  with the pane's environment rather than the daemon's.
+- One computer reached `chatgpt.com` only through a proxy. The user's `codex` shell function set the proxy, and the
+  daemon had inherited it. `personad codex-start` ran the `codex` on `PATH` (#4876 covers that part), so a tier
+  with an effort made every start fail with `account/read failed during TUI bootstrap: … workspace routing discovery
+  timed out`. The same launcher with no effort worked, and so did a manual `codex`.
+- To tell the two modes apart, look in Codex's log database (`<CODEX_HOME>/logs_2.sqlite`, table `logs`). The span
+  for `account/read` says `rpc.transport="in-process"` (its own app-server) or `unix_socket` (the daemon). The TUI
+  also shows a warning that it runs without the shared background server.
+- An effort the Codex already runs at is now left out (`node/codex_start_effort.go`). A different effort still needs
+  `-c`, and that start still runs with the pane's environment.
+- Bare `codex` may instead be a shell function preserved by #4876. Its profile or `-c` can change the effective
+  effort without appearing in the node's words. Keep the tier's flag when that function exists or its resolution
+  cannot be checked; an explicit executable path does not go through the function.
+
+## herdr's published state can be a reporter's word, not the screen's (2026-11-12, #4865)
+
+- `herdr agent get` / `agent list` / the snapshot give the pane's published `agent_status`; `herdr agent explain <pane>` runs the
+  screen detection again and names the rule it matched. When they disagree (explain says `working` from `osc_title_working`,
+  get says `idle`), a reporter holds the pane and its last report wins: on herdr 0.7.5 a single `pane.report_agent` with
+  `state: idle` kept a running Codex `idle` until the reporter released it (#4657). Compare the two before suspecting Persona's
+  own judgment, and test reporter behavior only on an isolated server (`env -i`, its own HOME and XDG directories).
+- An agent Persona can judge itself must not take herdr's word alone. Claude panes already had `claudeStatus`; a Codex pane
+  joined on its app-server listed Idle for a whole turn while the node knew the turn ran (its `turn/started`), and its chat
+  page showed Working from the live words, so the two pages disagreed. `codexStatus` counts the app-server's turn and Codex's
+  title spinner over the host's done / idle / unknown.
 
 ## Native preview exports can silently truncate assistant replies (#5644)
 

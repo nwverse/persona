@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// One tool invocation with its result, as shown in a chat.
 nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
@@ -461,6 +462,9 @@ final class ChatStore {
     /// agent's live message its newest items do not hold yet (`agentStreamed`). Set through `showLive`, which a clear's
     /// fallback watches.
     private(set) var liveText: String = ""
+    /// The stream of `liveText` is over (a clear came) and it only waits for its transcript line: drawn whole at once,
+    /// no longer revealed a few characters a frame (`StreamReveal`, #6651).
+    private(set) var liveDone = false
     /// Bumped each time `liveText` is set: a clear's fallback (`clearLive`) does nothing once anything else set it.
     @ObservationIgnored private var liveStamp = 0
     /// The newest line when the live text began: its copy is written after it, so lines up to this one are not.
@@ -850,6 +854,7 @@ final class ChatStore {
     func showLive(_ text: String) {
         if liveText.isEmpty, !text.isEmpty { liveSince = items.last?.seq ?? 0 }
         liveText = text
+        if liveDone { liveDone = false }
         liveStamp += 1
     }
 
@@ -901,6 +906,7 @@ final class ChatStore {
         if let text, !text.isEmpty, text.hasPrefix(liveText) { showLive(text) }
         let shown = liveText
         guard !shown.isEmpty else { return }
+        liveDone = true
         if Self.holdsLive(items, shown, after: liveSince) { return endLive(shown) }
         let stamp = liveStamp
         Task { @MainActor [weak self] in

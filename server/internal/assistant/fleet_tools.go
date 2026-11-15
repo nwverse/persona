@@ -126,6 +126,7 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 		tools := s.mcpTools(ctx, assistant)
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...) // a task leader's task_plan (task_leader.go)
+			tools = append(tools, s.spawnTools(ctx, machine, session)...)
 		}
 		return tools
 	}
@@ -174,6 +175,13 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	if !assistant && isAgentTool(name) {
 		return s.agentTool(ctx, machine, session, name, args)
 	}
+	if !assistant && name == "task_spawn" {
+		text, err := s.taskSpawn(ctx, machine, session, args)
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+		return proto.TextResult(text, false)
+	}
 	if !assistant && name == "task_plan" { // only a task leader's agent has it (task_leader.go)
 		return s.leaderTaskPlan(ctx, machine, session, args)
 	}
@@ -207,7 +215,9 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 			}
 		}
 		var res proto.ToolResult
-		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, map[string]any{"name": name, "args": args}, &res); err != nil {
+		params := map[string]any{"name": name, "args": args}
+		mcpWaitParams(ctx, params)
+		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, params, &res); err != nil {
 			return proto.TextResult(err.Error(), true)
 		}
 		return res

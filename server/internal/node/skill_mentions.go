@@ -19,6 +19,7 @@ type skillCatalogRequest struct {
 	Launcher  string `json:"launcher"`
 	Runtime   string `json:"runtime"`
 	ConfigDir string `json:"config_dir"`
+	Scope     string `json:"-"` // additional node-derived ordinary session identity
 }
 
 type skillOwnerKey struct{}
@@ -77,7 +78,8 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 					return out, errors.New("cannot establish the launcher's skill settings")
 				}
 			}
-			entries, err = visibleClaudeSkills(entries, profile, in.Cwd, own)
+			// The user's skill switches a private profile carries (assistant_user_setup.go) come before the launcher's.
+			entries, err = visibleClaudeSkills(entries, profile, in.Cwd, map[string]any{"skillOverrides": n.userSkillsOff(profile, in.Cwd)}, own)
 		}
 	default:
 		err = errors.New("skill selection is unavailable for this runtime")
@@ -85,8 +87,12 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 	if err != nil {
 		return out, err
 	}
-	scope, _ := json.Marshal([]string{in.Owner, in.Machine, in.Cwd, in.Launcher, in.Runtime, in.ConfigDir,
-		n.executionFingerprint(in.Launcher, modelExecution{Runtime: in.Runtime})})
+	identity := []string{in.Owner, in.Machine, in.Cwd, in.Launcher, in.Runtime, in.ConfigDir,
+		n.executionFingerprint(in.Launcher, modelExecution{Runtime: in.Runtime})}
+	if in.Scope != "" {
+		identity = append(identity, in.Scope)
+	}
+	scope, _ := json.Marshal(identity)
 	out.Skills = assistantskills.Bind(string(scope), entries)
 	return out, nil
 }

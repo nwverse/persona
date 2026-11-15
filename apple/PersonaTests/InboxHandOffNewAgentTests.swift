@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Hand to AI › New Agent… (#5933; docs/assistant/inbox.md "Item actions"): New Agent's page gets the item as the same
 /// `<persona-context>` an Agent target gets, the ask as the first message, the item's title and its hub; nothing is sent
@@ -31,6 +32,7 @@ struct InboxHandOffNewAgentTests {
                 return try Self.decoded()
             },
             handOff: { _, _, _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "main") },
+            record: { _, _, _, _, _ in },
             showMain: { _, _, _ in },
             plainToMain: { _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "main") },
             startNew: { _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "new") },
@@ -45,19 +47,22 @@ struct InboxHandOffNewAgentTests {
         // The first message New Agent's page sends: the context block, then the ask, as an Agent target's text.
         #expect(p.contextBlock + "\n\n" + p.prompt == InboxHandOffSheet.message(try Self.decoded(), ask: "查一下背景"))
         #expect(p.card == InboxHandOffSheet.contextRef(try Self.decoded()).with(id: p.card.id))
-        #expect(p.prompt == "查一下背景" && p.nameHint == "Sample Contact" && p.group == "home")
+        #expect(p.prompt == "查一下背景" && p.nameHint == "Sample Contact" && p.group == "home" && !p.markDone)
         #expect(calls.loads == 1 && calls.sent == 0 && calls.done == 0 && calls.went.isEmpty)
         #expect(m.target == .main && m.error == nil && !m.preparing)
     }
 
-    @Test func alsoMarkAsDoneIsOnAsForAgentsUnlessTheUserSetIt() async throws {
+    @Test func alsoMarkAsDoneIsOffAsForEveryTargetUnlessTheUserSetIt() async throws {
         let m = model(Calls())
         #expect(!m.markDone) // the main chat's default, shown in the sheet
-        #expect(try #require(await m.newAgent(ask: "a", group: "")).markDone)
+        let initial = try #require(await m.newAgent(ask: "a", group: ""))
+        #expect(!initial.markDone)
         m.setMarkDone(false)
-        #expect(try #require(await m.newAgent(ask: "a", group: "")).markDone == false)
+        let keptOpen = try #require(await m.newAgent(ask: "a", group: ""))
+        #expect(!keptOpen.markDone)
         m.setMarkDone(true)
-        #expect(try #require(await m.newAgent(ask: "a", group: "")).markDone)
+        let checked = try #require(await m.newAgent(ask: "a", group: ""))
+        #expect(checked.markDone)
     }
 
     @Test func anItemThatCannotBeReadSaysSoWithNothingToRetry() async {

@@ -8,6 +8,7 @@ import { storedValue } from "../../lib/compatibility";
 import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
+import { useSavedPromptRows } from "../../lib/saved-prompt-rows";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
 import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { ApiError, errorText } from "../../lib/api";
@@ -36,6 +37,7 @@ import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "
 import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
+import { isPermissionsCommand, permissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from "../../lib/permissions-command";
 import { MAX_IMAGES, rankCommands } from "../../lib/composer-commands";
 import { escapeCancelsEdit, escapeCountsForEdit, upStartsEdit, type EditLastBox } from "../../lib/edit-last-key";
 import { t } from "../../i18n";
@@ -91,6 +93,8 @@ export const AGENT_COMMANDS: Command[] = [
   { word: "/compact", desc: t("chat-composer.cmd_compact_desc"), text: "/compact", agent: true },
   { word: "/context", desc: t("chat-composer.cmd_context_desc"), text: "/context", agent: true },
   { word: "/model", desc: t("chat-composer.cmd_model_desc"), text: "/model ", agent: true },
+  // Persona's own: opens the permission picker with every mode instead of sending it (#6476, lib/permissions-command.ts)
+  permissionsCommand(),
   { word: "/loop", desc: t("chat-composer.cmd_loop_desc"), text: LOOP_TEXT, agent: true },
   { word: "/clear", desc: t("chat-composer.cmd_clear_desc"), text: "/clear", confirm: t("chat-composer.cmd_clear_confirm"), agent: true },
 ];
@@ -454,7 +458,9 @@ export const Composer = memo(function Composer({
   }, [expanded]);
 
   const quickPrompts = useQuickPrompts();
-  const allCommands = useMemo(() => [...commands, ...promptCommands(quickPrompts)], [commands, quickPrompts]);
+  // your saved prompts (#7329) after the chat's own commands, read once a box has the focus or a "/"
+  const savedPrompts = useSavedPromptRows(focused || draft.startsWith("/"));
+  const allCommands = useMemo(() => [...commands, ...savedPrompts, ...promptCommands(quickPrompts)], [commands, savedPrompts, quickPrompts]);
   const query = dismissed ? null : parseSlash(draft);
   // A /loop draft gets a line under the box saying what it will do (only where the menu offers /loop: Claude agents).
   const loop = commands.some((c) => c.text === LOOP_TEXT) ? loopHint(draft) : null;
@@ -764,6 +770,12 @@ export const Composer = memo(function Composer({
 
   const pick = (c: Command) => {
     if (c.confirm && !confirm(c.confirm)) return;
+    // `/permissions` opens the permission menu at once; where the chat has no picker it goes in the box as any command
+    if (c.text === PERMISSIONS_COMMAND && requestPermissionPicker(draftKey)) {
+      setDraft("");
+      setDismissed(true);
+      return;
+    }
     setDraft(c.text);
     setDismissed(true);
     input.current?.focus({ preventScroll: true });
@@ -910,6 +922,12 @@ export const Composer = memo(function Composer({
             }
             // `/model` alone opens the model panel instead of sending (where the agent switches models)
             if (enterSends(e, hasFinePointer()) && isModelCommand(draft) && requestModelPicker(draftKey)) {
+              e.preventDefault();
+              setDraft("");
+              return;
+            }
+            // so does `/permissions` alone: the permission menu (#6476)
+            if (enterSends(e, hasFinePointer()) && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
               e.preventDefault();
               setDraft("");
               return;

@@ -303,6 +303,11 @@ type Session struct {
 	// push, deploy, send…): the apps fill it in but offer no one-tap send (#4644). Set by the manager; kept beside
 	// the flags above, where it fits in their padding: a larger Session costs every copy of a list.
 	SuggestionRisky bool `json:"suggestion_risky,omitempty"`
+	// BypassPending: Allow All was picked for this Claude Code while it cannot reach it with shift+tab (BypassAvailable
+	// false), so the node restarts it in that mode once its turn is over: it quits the agent and resumes the same
+	// conversation in the same terminal with --permission-mode bypassPermissions (node/mode_restart.go, #6476). Until
+	// then PermissionMode is the mode it still runs in. Kept here, in the flags' padding, as SuggestionRisky is.
+	BypassPending bool `json:"bypass_pending,omitempty"`
 	// TurnError: the agent's latest turn ended in a model API error (the connection lost mid-response, overloaded,
 	// rate limited, the model service down…). The node sets it when the agent's own record says the turn failed
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the
@@ -380,9 +385,10 @@ type Session struct {
 	Host string `json:"host,omitempty"`
 	// Hierarchy is where the session stands among the sessions that started one another, and when it began
 	// (docs/protocol/protocol.md "Session hierarchy"); nil for most rows. Its members are written on the row itself
-	// (folded_under, folded_as, children, started_at, asking_parent_session_id: sessionWire), so it has no key of its
-	// own. Read it with FoldedUnder, FoldedAs, Children, StartedAt and AskingParentSessionID; it is shared by every copy
-	// of the row, so it is never written in place: SetFold, SetStartedAt and SetAskingParentSessionID put a new one.
+	// (parent_agent_id, folded_under, folded_as, children, started_at, asking_parent_session_id: sessionWire), so it has
+	// no key of its own. Read it with ParentAgentID, FoldedUnder, FoldedAs, Children, StartedAt and
+	// AskingParentSessionID; it is shared by every copy of the row, so it is never written in place: SetParentAgentID,
+	// SetFold, SetStartedAt and SetAskingParentSessionID put a new one.
 	Hierarchy *SessionHierarchy `json:"-"`
 }
 
@@ -492,7 +498,7 @@ const (
 	CodeSwitchBusy = "switch_busy"
 )
 
-// TodoRef is a session's link to an active todo (docs/assistant/todos.md).
+// TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
 type TodoRef struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`

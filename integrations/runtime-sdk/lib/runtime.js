@@ -55,8 +55,12 @@ export function defaultSocketPath() {
  *   apart; default: the to_seq and history of a one-turn page.
  * @property {(params: object) => Promise<object>} [image] - session.image → {mime, data}.
  * @property {(params: object) => Promise<object>} [item] - session.item → the whole item.
- * @property {(params: {session_id: string, text: string, images?: object[], client_msg_id?: string}) => Promise<void>} [send]
- * @property {(params: {session_id: string}) => Promise<void>} [interrupt]
+ * @property {(params: {session_id: string, text: string, images?: object[], client_msg_id?: string}) => Promise<void | {queued?: boolean}>} [send] -
+ *   resolves to {queued: true} when the message waits behind the running turn rather than reaching the agent now
+ *   (session.send answers it as is, for the node to say so).
+ * @property {(params: {session_id: string}) => Promise<void | {settled?: boolean}>} [interrupt] - resolves to
+ *   {settled: true} once the turn has actually ended; throws when it could not be stopped (a turn that only might stop
+ *   resolves to nothing).
  * @property {(params: {cwd: string, prompt?: string}) => Promise<{session: object}>} [start]
  * @property {(params: {session_id: string, title: string}) => Promise<void>} [rename]
  * @property {(params: {session_id: string}) => Promise<void>} [close]
@@ -77,7 +81,24 @@ export function defaultSocketPath() {
  * @property {(params: {session_id: string}) => Promise<void>} [seen] - the user saw the session in Persona (caps.seen): a
  *   runtime that keeps an unread mark of its own (Paseo's requiresAttention) clears it, so the session is not unread
  *   there too. The node sends it only for a session the runtime lists as done (unread).
- * @property {() => boolean} [hasLocalClient] - the runtime's own UI is open (the policy gives it first turn).
+ * @property {(params: {cwd: string, workspace_id?: string, branch?: string, create_branch?: boolean, base?: string,
+ *   name?: string, key?: string}) => Promise<{workspace: object}>} [createWorkspace] - a worktree of the repository cwd is
+ *   in, made by the runtime as a workspace of its own (caps.workspaces, with prepareWorkspace): branch checked out as it
+ *   is (create_branch false), or made from base, in the folder name (a-z, 0-9 and single hyphens, at most 50) under
+ *   prepareWorkspace's; no branch: the runtime names the branch and the folder. Resolves to the new workspace's row
+ *   (rt.workspacesChanged's shape) with the folder and branch it actually has.
+ * @property {(params: {cwd: string, repo_root: string}) => Promise<{checkouts: string}>} [prepareWorkspace] - the
+ *   folder createWorkspace puts worktrees of that repository in (repo_root: its main checkout), for the dialog to show;
+ *   caps.workspaces takes both.
+ * @property {(params: {workspace_id?: string, space_id?: string, title: string}) => Promise<{workspace?: object,
+ *   space_name?: string}>} [renameWorkspace] - with caps.workspaces: a workspace's title (workspace_id; resolves to its
+ *   row as it is now), or the name of the space its sessions are grouped in (space_id; resolves to the name the space
+ *   shows now). Neither renames a branch, a folder or a session.
+ * @property {(params: {workspace_id: string}) => Promise<{archived_at?: string}>} [archiveWorkspace] - with
+ *   caps.workspaces: the workspace leaves the runtime's list, its sessions archived with it, and a worktree the runtime
+ *   made is removed from the disk (its branch stays). The node has checked what the user confirmed first.
+ * @property {(sessionId: string) => boolean} [hasLocalClient] - the runtime's own UI is open for that session (the
+ *   policy gives it first turn).
  * @property {(sessionId: string, watching: boolean, o?: { transcript: boolean }) => void} [watchChanged] - the phone
  *   started (or stopped) watching a session: a runtime that follows a session only while it is watched (Paseo's
  *   timeline subscription) starts and ends that here. transcript: the node reads its items (only live text from here).
@@ -137,6 +158,11 @@ export function createRuntime(driver, options) {
   let warnedConflict = false
   // The form's entries beside options.launcher (runtime.hello's launchers), replaced by launchersChanged.
   let launchers = Array.isArray(options.launchers) ? options.launchers : undefined
+  // Its workspaces (runtime.workspaces), as workspacesChanged last gave them: said again to every node it connects to.
+  let workspaces
+  // Workspaces of its own (caps.workspaces) take both: the node asks where the worktrees go (prepareWorkspace) before
+  // every one it has the runtime make (createWorkspace), so one without the other could make none.
+  const keepsWorkspaces = typeof driver.createWorkspace === 'function' && typeof driver.prepareWorkspace === 'function'
 
   let peer
   let stopped = false
@@ -245,6 +271,8 @@ export function createRuntime(driver, options) {
     if (typeof driver.seen === 'function') caps.seen = true
     // Its own archive, both ways: an archive Persona could not undo is not offered.
     if (typeof driver.archive === 'function' && typeof driver.unarchive === 'function') caps.archive = true
+    // Workspaces of its own, which it lists (workspacesChanged) and makes worktrees as.
+    if (keepsWorkspaces) caps.workspaces = true
     if (options.resume === true && caps.start) caps.resume = true
     // It keeps no "always allow" rule of its own: the hub remembers one per session and tool for it (#3974).
     if (options.keepAlways === true) caps.keep_always = true
@@ -298,6 +326,8 @@ export function createRuntime(driver, options) {
     }
     const p = new Peer(socket, { prefix: 'd', onRequest: (m, params) => request(m, params), onEvent: (event, params) => {
       if (event === 'runtime.hub' && peer === p && setHub(params?.connected !== false)) hubChanged()
+      // The node routed the session's start (or a send) through another runtime: it was driven from Persona all the same.
+      if (event === 'runtime.driven' && peer === p && typeof params?.session_id === 'string' && params.session_id) drivenBy(params.session_id)
     } })
     unwatchAll() // a new node asks again for what the phone watches
     listed.clear()
@@ -349,6 +379,8 @@ export function createRuntime(driver, options) {
     }
     retryMs = baseRetry
     log('persona: connected to the node')
+    // Its workspaces, which this node has not heard of: a node keeps a runtime's only while it is connected.
+    if (workspaces && keepsWorkspaces) p.notify('runtime.workspaces', { workspaces })
     schedulePush(0)
     hubChanged()
     const why = await p.done
@@ -672,7 +704,23 @@ export function createRuntime(driver, options) {
     if (answerFirst === 'local') return false
     const at = phoneDriven.get(sessionId)
     if (at !== undefined && Date.now() - at < PHONE_DRIVEN_FOR) return true
-    return typeof driver.hasLocalClient === 'function' && driver.hasLocalClient() === false
+    return typeof driver.hasLocalClient === 'function' && driver.hasLocalClient(sessionId) === false
+  }
+
+  /**
+   * The session waits on the user in the runtime's own UI (a dialog of its own, not a card): it lists as needing you
+   * until the returned release is called, as for a card on the phone.
+   */
+  function waitingOnUser(sessionId) {
+    pending.set(sessionId, (pending.get(sessionId) ?? 0) + 1)
+    schedulePush(50)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      pending.set(sessionId, Math.max(0, (pending.get(sessionId) ?? 1) - 1))
+      schedulePush(50)
+    }
   }
 
   /**
@@ -745,9 +793,10 @@ export function createRuntime(driver, options) {
         const key = typeof params.client_msg_id === 'string' && params.client_msg_id ? params.client_msg_id : undefined
         if (key && sends.has(key)) return sends.get(key)
         const p = (async () => {
-          await driver.send(params)
+          const r = await driver.send(params)
           schedulePush() // what the phone sends to is active now: the list may change (a runtime keeps it listed)
-          return { ok: true }
+          // Queued behind the running turn: said, so that nobody takes it for read.
+          return r?.queued === true ? { ok: true, queued: true } : { ok: true }
         })()
         if (key) {
           sends.set(key, p)
@@ -756,9 +805,10 @@ export function createRuntime(driver, options) {
         }
         return p
       }
-      case 'session.interrupt':
-        await need(driver.interrupt, 'interrupt')(params)
-        return { ok: true }
+      case 'session.interrupt': {
+        const r = await need(driver.interrupt, 'interrupt')(params)
+        return r?.settled === true ? { ok: true, settled: true } : { ok: true }
+      }
       case 'session.rewind': {
         const result = await need(driver.rewind, 'rewind')(params)
         schedulePush()
@@ -796,6 +846,16 @@ export function createRuntime(driver, options) {
         schedulePush()
         return res
       }
+      case 'workspace.prepare':
+        return need(keepsWorkspaces && driver.prepareWorkspace, 'workspaces')(params)
+      case 'workspace.create':
+        return need(keepsWorkspaces && driver.createWorkspace, 'workspaces')(params)
+      case 'workspace.rename':
+        need(keepsWorkspaces && driver.createWorkspace, 'workspaces')
+        return need(driver.renameWorkspace, 'workspace.rename')(params)
+      case 'workspace.archive':
+        need(keepsWorkspaces && driver.createWorkspace, 'workspaces')
+        return need(driver.archiveWorkspace, 'workspace.archive')(params)
     }
     throw new RpcError(`unknown method ${method}`, 'unsupported')
   }
@@ -846,11 +906,24 @@ export function createRuntime(driver, options) {
       launchers = Array.isArray(list) ? list : []
       if (typeof driver.start === 'function') peer?.notify('runtime.launchers', { launchers })
     },
+    /**
+     * Its workspaces changed (one made, renamed, archived, or its branch moved): the whole list, which the node keeps
+     * in place of the last (runtime.workspaces), and which every node it connects to later is told at once. Only for a
+     * driver with createWorkspace and prepareWorkspace (caps.workspaces). A row is {workspace_id, title, cwd, kind
+     * (checkout | worktree | folder), branch?, space_id?, space_name?, repo_root?, owned?}: docs/protocol/protocol.md
+     * "Runtime ↔ node".
+     * @param {object[]} list
+     */
+    workspacesChanged(list) {
+      workspaces = Array.isArray(list) ? list : []
+      if (keepsWorkspaces) peer?.notify('runtime.workspaces', { workspaces })
+    },
     append,
     stream,
     streamEnd,
     ask,
     phoneFirst,
+    waitingOnUser,
     /** Whether the phone is watching a session (no need to compute what nobody gets). */
     watching: (sessionId) => watched.has(sessionId),
     /**

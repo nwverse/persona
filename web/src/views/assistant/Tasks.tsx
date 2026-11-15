@@ -25,6 +25,7 @@ import {
   removeTask,
   retryKey,
   retryTask,
+  routeTodoId,
   startFailure,
   setRoute,
   startPlan,
@@ -59,6 +60,7 @@ import { AcceptRow, BriefCard } from "./Brief";
 
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
+const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.HeldPushesEntry));
 
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one.
@@ -93,6 +95,7 @@ import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { requestHome } from "../../lib/child-sessions";
 import { stateName } from "../../lib/state-labels";
+import { EDITABLE } from "../../lib/shortcuts";
 
 // ── what a task is now ──
 
@@ -1153,8 +1156,8 @@ function openKey(item: NeedsYouItem): string {
   return item.key;
 }
 
-/** A Needs you row. The ones with something to answer are folded to a line until opened; a click on the line, or its
- *  chevron, opens the whole card where it is, and the card leaves with the answer. */
+/** A Needs you row. Open the folded line to answer in place; its expanded title opens the asking Agent (or the task
+ *  for a task-level decision), while the chevron folds it again. */
 function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boolean; onToggle: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const opened = useRef(open);
@@ -1167,7 +1170,30 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   // is summed from this same flag, so the trays and the header tell one number.
   const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (!folded) return <NeedsYouBody item={item} />;
-  const head = (
+  const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
+    : item.kind === "task" ? () => {
+      const ask = item.asks[0];
+      if (ask) openAgent(ask.machine_id, ask.session_id);
+      else openTask(item.todo.id);
+    } : undefined;
+  const label = <>
+    <StatusMark state="needs_you" />
+    <span className="min-w-0 flex-1">
+      <span className="block truncate font-semibold">{folded.title}</span>
+      {!open && folded.line && folded.line !== folded.kicker && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
+    </span>
+  </>;
+  const chevron = <Icon name="chevronRight" size={14} className="shrink-0 text-ink-3 transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />;
+  const head = open && openTitle ? (
+    <div className="flex min-w-0 items-center rounded-control px-3 py-2 text-sm">
+      <button type="button" data-needs-title onClick={openTitle} className="flex min-w-0 flex-1 items-center gap-2 text-left hover:underline">
+        {label}
+      </button>
+      <button type="button" aria-expanded={open} aria-label={t("assistant-tasks.summary_collapse")} onClick={onToggle} className="touch-hit ml-2 flex size-6 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover">
+        {chevron}
+      </button>
+    </div>
+  ) : (
     <button
       type="button"
       data-needs-row={open ? undefined : item.key}
@@ -1176,13 +1202,9 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
       onClick={onToggle}
       className={cx("flex w-full min-w-0 items-center gap-2 rounded-control px-3 py-2 text-left text-sm hover:bg-hover", open ? "" : "bg-field")}
     >
-      <StatusMark state="needs_you" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-semibold">{folded.title}</span>
-        {!open && folded.line && folded.line !== folded.kicker && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
-      </span>
+      {label}
       {!open && <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-attention">{folded.kicker}</span>}
-      <Icon name="chevronRight" size={14} className="shrink-0 text-ink-3 transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />
+      {chevron}
     </button>
   );
   if (!open) return head;
@@ -1194,7 +1216,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   );
 }
 
-/** The way to the task or Agent page from an opened Needs you row: its title is the fold toggle there, so the card carries this link at its end. */
+/** An additional way to the task or Agent page at the end of an opened Needs you row. */
 function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
   return (
     <div className="flex justify-end px-1 pt-1">
@@ -1368,10 +1390,26 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   }, [conversation]);
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
   const entryKeys: AssistantTray[] = ["needs", "running"];
+  const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
+  // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
+  // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
+  // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
+  // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
+  const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
+    if (document.querySelector("[role=dialog],[role=menu]")) return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const entry = entryButtons.current[tray];
+    setTray(null);
+    entry?.focus();
+  };
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar>
+    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
@@ -1410,11 +1448,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
         {entryKeys.map((key) => {
           const open = tray === key;
-          // An empty Needs you is drawn quiet (grey) but still opens "All caught up".
-          const quiet = key === "needs" && !counts.needs;
+          // An empty entry is drawn quiet (grey), Needs you and In progress alike, and still opens its "nothing here" line.
+          const quiet = !counts[key];
           return (
             <button
               key={key}
+              ref={(el) => void (entryButtons.current[key] = el)}
               type="button"
               data-tray-entry={key}
               aria-expanded={open}
@@ -1428,6 +1467,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             </button>
           );
         })}
+        {main === conversation && <Suspense fallback={null}><HeldPushesEntry className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink-2 hover:bg-hover")} /></Suspense>}
       </div>
       {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>
@@ -1517,18 +1557,20 @@ export const TaskDock = memo(function TaskDock({ conversation }: { conversation:
 
 /** "Talking to "xx"" while the next message goes straight to a task; × gives it back to Persona. */
 export const RouteChip = memo(function RouteChip({ conversation }: { conversation: string }) {
-  const todoId = useFeed((s) => s.routes[conversation]);
+  const route = useFeed((s) => s.routes[conversation]);
+  const todoId = routeTodoId(route);
   const todo = useTodo(todoId);
   if (!todo) return null;
   return (
-    <div className="flex">
-      <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-accent-tint pl-3 pr-1 text-[12.5px] font-semibold text-accent">
+    <div className="flex flex-col items-start gap-1">
+      <span title={typeof route === "object" ? t("todos.ask_chat_hint") : undefined} className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full bg-accent-tint pl-3 pr-1 text-[12.5px] font-semibold text-accent">
         <Icon name="send" size={12} />
-        {t("assistant-tasks.say_to", { title: todo.title })}
+        <span className="min-w-0 truncate">{t(typeof route === "object" ? "todos.ask_chat_route" : "assistant-tasks.say_to", { title: todo.title })}</span>
         <button type="button" aria-label={t("assistant-tasks.give_back")} onClick={() => setRoute(conversation, null)} className="flex size-5 items-center justify-center rounded-full hover:bg-hover">
           <Icon name="x" size={11} />
         </button>
       </span>
+      {typeof route === "object" && <span className="text-xs text-ink-2">{t("todos.ask_chat_hint")}</span>}
     </div>
   );
 });

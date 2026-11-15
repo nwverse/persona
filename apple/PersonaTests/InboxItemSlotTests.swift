@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The inbox_item slot (docs/extensions/extensions.md「Inbox items」, #1682): which sources' items a plugin draws, the item's body as
 /// the plugin's View (`context.item`, its buttons), today's body whenever that cannot be (quietly, or with a line and
@@ -114,7 +115,7 @@ import Testing
 
         // The context says which item, with the app's UI version and platform.
         let drawn = try #require(bodies.first)
-        #expect(drawn["context"]?["item"] == .string("lark:F1:1051") && drawn["context"]?["ui_version"] == .number(3))
+        #expect(drawn["context"]?["item"] == .string("lark:F1:1051") && drawn["context"]?["ui_version"] == .number(6))
         #expect(drawn["context"]?["platform"] == .string("ios") && drawn["action"] == nil)
 
         // A button: the same item, the plugin's state, the page's fields when it submits.

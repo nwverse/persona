@@ -194,12 +194,6 @@ private struct BriefSetupRow: View {
         HStack(spacing: Theme.Space.m) {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(line.text).font(Theme.Font.secondary)
-                if line.isOnTheWebOnly {
-                    Text("That page is in the web app's settings for Persona.")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("brief.setup.web.\(line.id)")
-                }
             }
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -211,6 +205,8 @@ private struct BriefSetupRow: View {
             }
         }
         .padding(.vertical, Theme.Space.xs)
+        // A container, so its Open Settings keeps its own identifier (`brief.setup.open.<id>`) under the row's.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brief.setup.\(line.id)")
     }
 }
@@ -463,7 +459,7 @@ struct BriefAcceptRow: View {
 
 /// A decision that can wait (#4930, #5803): nothing was pushed for it, it comes with the next briefing. Only a to-do's
 /// own row carries it (`TodoAsk.row`); a briefing's rows never do.
-private struct BriefHeldMark: View {
+struct BriefHeldMark: View {
     var id: String
 
     var body: some View {
@@ -540,8 +536,11 @@ private extension View {
     @ViewBuilder func tapTargetHeightIf(_ tall: Bool) -> some View {
         if tall { buttonLabelHeight() } else { self }
     }
+}
 
-    /// A label tall enough that the glass button around it (about 14 pt of its own padding) is a finger's height.
+extension View {
+    /// A label tall enough that the glass button around it (about 14 pt of its own padding) is a finger's height
+    /// (also the decision row's Later and Don't handle, DecisionRow.swift).
     func buttonLabelHeight() -> some View {
         scaledFrame(minHeight: Theme.Size.tapTarget - 14).frame(minHeight: Theme.Size.tapTarget - 14)
     }

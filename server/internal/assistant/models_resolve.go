@@ -105,9 +105,23 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 	return from
 }
 
-// modelNoAPIStatus explains an API use with nothing to call: launchers like "Claude Code default" only start a CLI on a
-// computer, so they never show up for these uses. A catalog name.
+// modelNoAPIStatus explains an API use with nothing to call without assuming which launchers are installed.
+// modelCodexNoAPIStatus adds Codex's limitation only when a visible Codex launcher actually exists.
 const modelNoAPIStatus = "status_no_api"
+const modelCodexNoAPIStatus = "status_codex_no_api"
+
+// noAPIStatus is the catalog key for an unconfigured API use, on the settings row and on a done judge's task alike.
+// It reads the last-seen node list: explaining a failed call must not start another round of node requests.
+func (s *Service) noAPIStatus(ctx context.Context) string {
+	seen, _ := s.zshrcLaunchersLastSeen(ctx)
+	views := s.launcherViewsFrom(ctx, seen, s.storedLaunchers(ctx))
+	if slices.ContainsFunc(views, func(v LauncherView) bool {
+		return !v.Hidden && v.Kind != "api" && viewAgent(v) == "codex"
+	}) {
+		return modelCodexNoAPIStatus
+	}
+	return modelNoAPIStatus
+}
 
 // modelUnverified is the status of a use nothing is known to be wrong with. Not translated: the apps compare it to
 // this text (iOS ModelConfigurationView, Android HttpVoiceExtensions) to leave it out.
@@ -156,10 +170,14 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 }
 
 // effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
+// The In-meeting conversation takes no runtime from the main chat it follows: a room runs on Claude Code's CLI only.
 func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
 	b := mergeModel(base, over)
 	if p.ID == "inbox.triage" && b.Effort == "" {
 		b.Effort = "off"
+	}
+	if p.ID == purposeMeetingRoom {
+		b.Runtime = ""
 	}
 	return b
 }

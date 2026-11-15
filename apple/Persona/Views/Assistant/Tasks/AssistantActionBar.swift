@@ -363,16 +363,9 @@ struct AssistantActionBar: View {
     /// What the user picked on each plan row's card; the tray draws Start, Edit and Don't Start of the open one under its
     /// list (`PlanActions`), so a tall card never scrolls them away.
     @State private var planChoices: [String: PlanChoices] = [:]
-    @Environment(\.dynamicTypeSize) private var typeSize
     private var store: TasksStore { .shared }
 
-    /// The entries side by side; at the accessibility text sizes they go on to the next line when they don't fit, each
-    /// whole (`docs/design/DESIGN_SYSTEM.md` 1.2 rule 3): side by side they made the row, and with it the whole chat
-    /// page, wider than the screen, cut off at both edges (#5702). The layout changes, not the views.
-    private var entryRow: AnyLayout {
-        typeSize.isAccessibilitySize ? AnyLayout(FlowLayoutRow(spacing: Theme.Space.s))
-            : AnyLayout(HStackLayout(spacing: Theme.Space.s))
-    }
+    private var entryRow: AnyLayout { AnyLayout(HStackLayout(spacing: Theme.Space.s)) }
 
     var body: some View {
         let content = Self.content(conversation, key: key)
@@ -384,6 +377,9 @@ struct AssistantActionBar: View {
             }
             row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
+                if conversation == AppModel.shared.assistantMain?.sessionID, let api = AppModel.shared.api {
+                    PushInterceptsEntry(api: api, otherTrayOpen: open != nil, onOpen: { open = nil })
+                }
                 if ComputerActivityPill.shows(computer) {
                     ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
                 }
@@ -652,11 +648,12 @@ struct AssistantActionBar: View {
                 let state = status.taskState
                 let activity = AssistantTrayActivity(sessions: store.sessions(todo))
                 if let ask = todo.openAsk, todo.doneAt == nil {
-                    // an owner decision or a to-do to verify: folded to a line, opened it is its Accept row
+                    // an owner decision or a to-do to verify: folded to a line, opened it is its Accept row, or the answerable
+                    // decision row when the hub sent its options (`TodoAskRow`)
                     let brief = ask.row(for: todo)
                     opening(row.id, title: todo.title, detail: brief.isDecision ? String(localized: "Decision") : String(localized: "To Verify"),
                             subtitle: ask.verdict, mark: { TaskMark(state: .needsYou) }) {
-                        BriefAcceptRow(row: brief, group: AppModel.shared.hub?.group ?? "", decision: todo, showsTitle: false)
+                        TodoAskRow(todo: todo, ask: ask, group: AppModel.shared.hub?.group ?? "", deferrable: true, showsTitle: false)
                             .padding(.horizontal, Theme.Space.m)
                     }
                 } else {
