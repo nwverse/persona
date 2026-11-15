@@ -2935,7 +2935,8 @@ final class AppModel {
         held.images += photos.prefix(room).map(\.photo)
         // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still enforces the four-photo cap.
         held.images += overflow.filter { $0.path == nil }.map(\.photo)
-        left += held.videos.restore(draft.files).map(\.xml)
+        left += held.videos.restore(draft.files.filter(\.playable)).map(\.xml)
+        left += held.files.restore(draft.files.filter { !$0.playable }).map(\.xml)
         if !draft.contexts.isEmpty { composerContexts[key] = (composerContexts[key] ?? []) + draft.contexts }
         let words = ([draft.text] + left).filter { !$0.isEmpty }.joined(separator: "\n")
         if !words.isEmpty {
