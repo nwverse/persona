@@ -46,9 +46,13 @@ final class ShareFromAppsTests: XCTestCase {
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
         photos.launch()
         skipFirstRun(photos)
-        let picture = photos.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'PXGGridLayout-Info' OR label BEGINSWITH 'Photo'")).firstMatch
-        XCTAssertTrue(picture.waitForExistence(timeout: 30), "no picture in Photos (scripts/app/share-from-apps.sh seeds one)")
-        picture.tap()
+        // Photos reopens where it was left: a run before may have left one picture open, which is the one to share then.
+        let share = photos.buttons.matching(NSPredicate(format: "identifier == 'ShareButton' OR label IN {'Share', '共享', '共有'}")).firstMatch
+        if !(share.waitForExistence(timeout: 5) && share.isHittable) {
+            let picture = photos.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'PXGGridLayout-Info' OR label BEGINSWITH 'Photo'")).firstMatch
+            XCTAssertTrue(picture.waitForExistence(timeout: 30), "no picture in Photos (scripts/app/share-from-apps.sh seeds one)")
+            picture.tap()
+        }
         tapShare(in: photos)
         let sheet = pickPersona(in: photos)
         shot("share-photos")
