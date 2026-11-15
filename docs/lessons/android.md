@@ -2,12 +2,17 @@
 
 ## Rust continuity frames are not input acknowledgements (#7448)
 
-A worker can emit a fetch before it publishes a patch, and unchanged inputs can emit neither a fetch nor a wake.
-A version-only wake therefore cannot complete one submitted input or identify its chat. Keep per-owner effects,
-coalesce frame drains, consume applied snapshots in callback order, and publish the same snapshot used to verify
-coverage. Never clear a later input's uncertainty just because an earlier frame arrived. Transport failures must
-release the core's request gate; stale older/fold requests need bounded effect waits and cancellation cleanup.
-Immediate test-only flush/drain schedulers preserve fixture timing but do not prove these worker/frame races.
+A worker can emit a fetch before it publishes a patch. Use #7554's `Ack`/`acked` to distinguish an applied no-op from
+queued work, and read `ChatPatch.verified` rather than deriving coverage uncertainty in Kotlin. Submit each input and
+Ack adjacently; state wakes are chat-targeted and the Ack's ordered global wake closes that input's effect batch.
+Collect effects and drain the patch in the same driver critical section, or an Ack can overtake its effect handoff.
+
+Give every older/fold input its own bounded completion slot, remove it on timeout/cancellation, and carry `fold_id`
+through range responses and failures. Never let a late effect use a newer call's slot. A queued async fill belongs
+to its applied callback chain: only an actual failed transport emits `FillFailed`, not a coroutine exiting after
+`accept` returned null. Dispatch follow-ups outside the entry's state mutex. Rejected effects have no owner; record
+and broadcast diagnostics without cancelling another chat. Immediate test-only flush/drain schedulers do not prove
+these races: use real JNI with independently controlled worker completion, frames and transport.
 
 ## Verify intermittent test failures with the whole module
 

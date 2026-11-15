@@ -60,12 +60,18 @@ described in `android/core/rustcore-android/README.md`. `scripts/build-android.s
 and remains the production default; `-PpersonaContinuity=rust` selects Rust for repository unit tests. Rust owns one
 lazy process-wide core, starts it on a worker after a frame, and applies patches and chat-owned fetch effects on
 coalesced frame drains. Only the JVM test scheduler waits with `flush`; the app returns after dispatch, not after a
-patch acknowledgement. Version-only wakes conservatively drain all owners until targeted wakes land in #7401.
+patch acknowledgement. State wakes use their chat identity.
 
-The adapter does not change Rust, JNI or codecs. The boundary omits the gap, a native hub-change input and no-op input
-acknowledgements; Android derives scalar gap rules and conservatively re-reads hub changes heard in flight. Folds keep
-the existing serialized native request flow: different folds do not run in parallel as on iOS, because the core has
-one opening per chat and range responses carry no fold ID. These gaps remain follow-up work, not production parity.
+The adapter consumes #7554 without changing Rust, JNI or codecs: `ChatPatch.verified` owns verification,
+`Action::HubChanged` owns changes heard during a fill, and adjacent input/`Ack` submissions distinguish applied no-ops
+from queued work. Fold responses carry `fold_id`, so independent folds open concurrently. Older/fold calls install a
+single-use input slot before dispatch and wait with `withTimeoutOrNull`; effects from expired inputs cannot satisfy
+later calls. The driver tags effects at the worker's ordered Ack wake and delivers completed slots from `patch.acked`.
+
+Asynchronous fill completion belongs to the applied callback chain. Merely queuing `After` or `Reloaded` neither
+finishes nor cancels it; only a coroutine whose transport actually failed emits `FillFailed`. `Rejected` has no chat
+or input identity, so the driver records diagnostics and broadcasts a notification without failing another chat or
+releasing its gates. Bounded native waits and the core's duplicate-fill gate keep later retries possible.
 
 ## Reproducing phase-1 evidence
 

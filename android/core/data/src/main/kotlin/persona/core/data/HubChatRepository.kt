@@ -46,9 +46,12 @@ class HubChatRepository(
         val reducer get() = if (continuity.asynchronous) appliedContinuity else continuity.state
         val patches = kotlinx.coroutines.channels.Channel<ContinuityAdapter.Applied>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         val realtime = ChatRealtimeState(key)
-        val rangeRequests = kotlinx.coroutines.channels.Channel<Action>(kotlinx.coroutines.channels.Channel.UNLIMITED)
-        val olderRequests = kotlinx.coroutines.channels.Channel<Action>(kotlinx.coroutines.channels.Channel.UNLIMITED)
-        val dispatchedFolds = mutableSetOf<String>()
+        val operations = mutableMapOf<Long, CompletableDeferred<List<Action>>>()
+        var nextOperation = 0L
+        val activeFolds = mutableSetOf<String>()
+        val inputs = Mutex()
+        val older = Mutex()
+        val folds = Mutex() // The Kotlin reference has one fold opening; Rust has one per fold_id.
         val lock = Mutex()
         val requests = Mutex()
         val saving = Mutex()
@@ -111,9 +114,9 @@ class HubChatRepository(
                     is ItemsEvent -> existing(SessionKey(event.machineId, event.sessionId))?.let { entry ->
                         entry.ready.await()
                         synchronized(entries) { if (entry.subscribed) entry.subscriptionReady.complete(Unit) }
+                        val result = accept(entry, Input.Push(Batch(event.items, event.history,
+                            event.fromSeq, event.toSeq, event.backlog, event.hasMore, event.moreAfter)))
                         val actions = entry.lock.withLock {
-                            val result = entry.continuity.accept(Input.Push(Batch(event.items, event.history,
-                                event.fromSeq, event.toSeq, event.backlog, event.hasMore, event.moreAfter)))
                             entry.eventError = null
                             firstPageIn(entry) // a watch's backlog also stands in for a first read it refused
                             if (result != null) publish(entry, verified = result.gap == ContinuityReducer.Gap.None &&
@@ -186,7 +189,8 @@ class HubChatRepository(
                 if (state == ConnectionState.Online) {
                     active.forEach { entry -> entry.scope.launch {
                         entry.ready.await()
-                        dispatch(entry, entry.lock.withLock { entry.reconnected = true; entry.continuity.accept(Input.Reconnect)?.requests.orEmpty() })
+                        entry.lock.withLock { entry.reconnected = true }
+                        dispatch(entry, accept(entry, Input.Reconnect)?.requests.orEmpty())
                         catchUp(entry)
                     } }
                 } else retainedEntries().forEach { entry ->
@@ -238,11 +242,9 @@ class HubChatRepository(
             entry.opening?.join()
             entry.timer?.cancelAndJoin()
             synchronized(entries) { entry.subscribed = false }
-            entry.lock.withLock {
-                entry.continuity.accept(Input.FillFailed)
-                publish(entry, verified = false)
-                dispatch(entry, entry.continuity.accept(Input.Reconnect)?.requests.orEmpty())
-            }
+            // Cancelling our transport already reports its own failure; a queued async fill is not ours to cancel.
+            entry.lock.withLock { publish(entry, verified = false) }
+            dispatch(entry, accept(entry, Input.Reconnect)?.requests.orEmpty())
             catchUp(entry)
             entry.state.first { it.verified }
         } }.awaitAll()
@@ -324,7 +326,7 @@ class HubChatRepository(
                         // Cold opens always verify against a folded latest page, including when cache exists.
                         entry.lock.withLock { entry.reconnected = true }
                         latest(entry, initial = true)
-                        dispatch(entry, entry.lock.withLock { entry.continuity.accept(Input.Reconnect)?.requests.orEmpty() })
+                        dispatch(entry, accept(entry, Input.Reconnect)?.requests.orEmpty())
                     }
                 }
                 entry
@@ -373,28 +375,24 @@ class HubChatRepository(
     override suspend fun loadOlder(session: SessionKey) {
         val entry = existing(session) ?: return
         entry.ready.await()
-        entry.requests.withLock {
+        entry.older.withLock {
             try {
-                val result = entry.lock.withLock { entry.continuity.accept(Input.LoadOlder) }
-                val action = result?.requests?.firstOrNull() as? Action.FetchOlder
-                    ?: (if (result == null) withTimeoutOrNull(3_000) { entry.olderRequests.receive() as Action.FetchOlder } else null)
-                    ?: return@withLock
+                val action = awaitActions(entry, Input.LoadOlder)?.singleOrNull() as? Action.FetchOlder ?: return@withLock
                 entry.state.update { it.copy(loadingOlder = true, error = null) }
                 val history = entry.lock.withLock { entry.reducer.history }
                 val page = transport.items(session, ItemsQuery(beforeSeq = action.beforeSeq))
-                entry.lock.withLock {
-                    if (history != entry.reducer.history || page.history != null && history != null && page.history != history) {
-                        entry.continuity.accept(Input.OlderFailed)
-                    } else entry.continuity.accept(Input.Older(page.items, page.hasMore))
-                    publish(entry)
+                val stale = entry.lock.withLock {
+                    history != entry.reducer.history || page.history != null && history != null && page.history != history
                 }
+                if (!stale) awaitActions(entry, Input.Older(page.items, page.hasMore))
+                entry.lock.withLock { publish(entry) }
                 persist(entry)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { entry.lock.withLock { entry.state.update { it.copy(error = DataText.of(Key.ChatHistoryFailed)) } } }
-            finally { withContext(NonCancellable) { entry.lock.withLock {
-                entry.continuity.accept(Input.OlderFailed)
+            finally { withContext(NonCancellable) {
+                accept(entry, Input.OlderFailed)
                 entry.state.update { it.copy(loadingOlder = false) }
-            } } }
+            } }
         }
     }
 
@@ -418,42 +416,40 @@ class HubChatRepository(
         require(fromSeq >= 0 && toSeq >= fromSeq)
         val entry = existing(session) ?: return emptyList()
         entry.ready.await()
-        return entry.requests.withLock {
-            val fold = entry.lock.withLock { entry.reducer.items.firstOrNull {
-                it.kind == "fold" && it.seq == fromSeq && it.fold?.throughSeq == toSeq
-            } } ?: return@withLock emptyList()
-            val history = entry.lock.withLock { entry.reducer.history }
-            if (entry.continuity.asynchronous && !entry.dispatchedFolds.add(fold.id)) return@withLock emptyList()
-            val work = mutableListOf<Item>()
-            var pages = 0
-            var completed = false
-            try {
-                var actions = entry.lock.withLock { entry.continuity.accept(Input.OpenFold(fold.id))?.requests }
-                    ?: withTimeoutOrNull(3_000) { listOf(entry.rangeRequests.receive()) }
-                    ?: return@withLock emptyList()
-                while (actions.isNotEmpty()) {
-                    val action = actions.single() as Action.FetchRange
-                    val page = transport.items(session, ItemsQuery(fromSeq = action.fromSeq, throughSeq = action.throughSeq))
-                    pages++
-                    check(page.items.none { it.kind == "fold" } && (!page.more ||
-                        page.items.lastOrNull()?.seq?.let { it >= action.fromSeq && it < action.throughSeq } == true))
-                    actions = entry.lock.withLock {
-                        check(history == entry.reducer.history)
-                        check(page.history == null || history == null || page.history == history)
-                        work += page.items
-                        entry.continuity.accept(Input.Range(page.items, page.more))?.requests
-                    } ?: if (page.more && page.items.isNotEmpty() && pages < 100)
-                        withTimeout(3_000) { listOf(entry.rangeRequests.receive()) } else emptyList()
+        // The Kotlin reference still serializes folds; Rust can open independent fold_id slots concurrently.
+        return if (entry.continuity.parallelFolds) expandFold(entry, fromSeq, toSeq)
+        else entry.folds.withLock { expandFold(entry, fromSeq, toSeq) }
+    }
+
+    private suspend fun expandFold(entry: Entry, fromSeq: Int, toSeq: Int): List<Item> {
+        val fold = entry.lock.withLock { entry.reducer.items.firstOrNull {
+            it.kind == "fold" && it.seq == fromSeq && it.fold?.throughSeq == toSeq
+        } } ?: return emptyList()
+        if (!synchronized(entry.activeFolds) { entry.activeFolds.add(fold.id) }) return emptyList()
+        val history = entry.lock.withLock { entry.reducer.history }
+        val work = mutableSetOf<String>()
+        try {
+            var actions = awaitActions(entry, Input.OpenFold(fold.id)) ?: return emptyList()
+            while (actions.isNotEmpty()) {
+                val action = actions.single() as Action.FetchRange
+                val page = transport.items(entry.key, ItemsQuery(fromSeq = action.fromSeq, throughSeq = action.throughSeq))
+                check(page.items.none { it.kind == "fold" } && (!page.more ||
+                    page.items.lastOrNull()?.seq?.let { it >= action.fromSeq && it < action.throughSeq } == true))
+                entry.lock.withLock {
+                    check(history == entry.reducer.history)
+                    check(page.history == null || history == null || page.history == history)
                 }
-                entry.lock.withLock { publish(entry) }
-                persist(entry)
-                completed = true
-                work.distinctBy { it.id }
-            } finally { withContext(NonCancellable) { entry.lock.withLock {
-                entry.continuity.accept(Input.RangeFailed)
-                if (!completed) entry.dispatchedFolds.remove(fold.id)
-            } } }
-        }
+                work += page.items.map { it.id }
+                // A changed fold can request another page even when HTTP more=false. Only the applied Ack ends it.
+                actions = awaitActions(entry, Input.Range(page.items, page.more, fold.id)) ?: return emptyList()
+            }
+            val result = entry.lock.withLock { publish(entry); entry.reducer.items.filter { it.id in work } }
+            persist(entry)
+            return result
+        } finally { withContext(NonCancellable) {
+            try { accept(entry, Input.RangeFailed(fold.id)) }
+            finally { synchronized(entry.activeFolds) { entry.activeFolds.remove(fold.id) } }
+        } }
     }
 
     override suspend fun loadImage(session: SessionKey, itemId: String) =
@@ -499,17 +495,19 @@ class HubChatRepository(
                 entry.continuity = continuityFactory(key.path) { result -> entry.patches.trySend(result) }
                 entry.scope.launch {
                     for (result in entry.patches) {
-                        entry.lock.withLock {
+                        if (result.diagnosticOnly) continue
+                        val continueFill = entry.lock.withLock {
                             entry.appliedContinuity = result.state
-                            entry.eventError = null
-                            entry.dispatchedFolds.removeAll { id -> result.state.items.none { it.id == id } }
-                            val overtaken = result.state.items.any { it.seq > result.state.covered }
-                            publish(entry, verified = result.gap == ContinuityReducer.Gap.None &&
-                                result.state.loadedOnce && !overtaken)
-                            dispatch(entry, result.requests)
-                            if (overtaken && result.requests.none { it is Action.FetchAfter || it is Action.FetchLatest })
-                                entry.continuity.accept(Input.ContinueFill)
+                            if (!result.rejected) entry.eventError = null
+                            if (result.state.loadedOnce) firstPageIn(entry)
+                            publish(entry, verified = result.verified)
+                            result.reloadApplied && (result.state.items.any { it.seq > result.state.covered } || entry.continuity.behind)
                         }
+                        result.operations.forEach { operation ->
+                            synchronized(entry.operations) { entry.operations[operation.id] }?.complete(operation.requests)
+                        }
+                        dispatch(entry, result.requests)
+                        if (continueFill) dispatch(entry, accept(entry, Input.ContinueFill)?.requests.orEmpty())
                         if (entry.persistPending.compareAndSet(false, true)) entry.scope.launch { persist(entry) }
                     }
                 }
@@ -517,10 +515,8 @@ class HubChatRepository(
                 entry.scope.launch {
                 try {
                     val cached = cache.load(key)
-                    entry.lock.withLock {
-                        entry.continuity.accept(Input.Restore(ContinuityAdapter.State(cached.items, cached.history, cached.covered, cached.hasMore)))
-                        publish(entry, verified = false)
-                    }
+                    accept(entry, Input.Restore(ContinuityAdapter.State(cached.items, cached.history, cached.covered, cached.hasMore)))
+                    entry.lock.withLock { publish(entry, verified = false) }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { /* The latest page can recover an unavailable disk cache. */ }
                 finally { entry.ready.complete(Unit) }
@@ -589,8 +585,22 @@ class HubChatRepository(
         }
         entry.scope.launch {
             entry.ready.await()
-            val actions = entry.lock.withLock { entry.continuity.accept(Input.HubChanged)?.requests.orEmpty() }
+            val actions = accept(entry, Input.HubChanged)?.requests.orEmpty()
             dispatch(entry, actions)
+        }
+    }
+
+    /** Serializes native inputs, never while holding the mutex needed by the applied callback. */
+    private suspend fun accept(entry: Entry, input: Input, operation: Long? = null) =
+        entry.inputs.withLock { entry.continuity.accept(input, operation) }
+
+    private suspend fun awaitActions(entry: Entry, input: Input): List<Action>? {
+        val ready = CompletableDeferred<List<Action>>()
+        val id = synchronized(entry.operations) { (++entry.nextOperation).also { entry.operations[it] = ready } }
+        return try {
+            withTimeoutOrNull(3_000) { accept(entry, input, id)?.requests ?: ready.await() }
+        } finally {
+            synchronized(entry.operations) { entry.operations.remove(id) }
         }
     }
 
@@ -613,32 +623,33 @@ class HubChatRepository(
                 } while (!entry.continuity.asynchronous && entry.lock.withLock { entry.continuity.behind })
             }
             is Action.FetchLatest -> entry.scope.launch { latest(entry) }
-            is Action.FetchRange -> entry.rangeRequests.trySend(action)
-            is Action.FetchOlder -> entry.olderRequests.trySend(action)
+            is Action.FetchRange, is Action.FetchOlder -> Unit // Delivered only to their input's operation slot.
         } }
     }
 
     private suspend fun latest(entry: Entry, initial: Boolean = false) = entry.requests.withLock {
-        var completed = false
         try {
             val history = entry.lock.withLock { entry.reducer.history }
-            val page = transport.items(entry.key, ItemsQuery())
-            entry.lock.withLock {
-                if (history != entry.reducer.history && page.history != entry.reducer.history) {
-                    dispatch(entry, listOf(Action.FetchLatest()))
-                    return@withLock
-                }
-                val result = if (initial) entry.continuity.accept(Input.Latest(Batch(page.items, page.history, toSeq = page.toSeq, hasMore = page.hasMore)))
-                else entry.continuity.accept(Input.Reload(page.items, page.history, page.toSeq, page.hasMore))
-                completed = true
-                if (result == null) return@withLock
-                val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
-                entry.eventError = null
-                firstPageIn(entry)
-                publish(entry, verified = !overtaken)
-                if (!entry.continuity.asynchronous && (overtaken || entry.continuity.behind)) dispatch(entry, entry.continuity.accept(Input.HubChanged)?.requests.orEmpty())
+            val page = fillPage(entry, ItemsQuery())
+            val stale = entry.lock.withLock { history != entry.reducer.history && page.history != entry.reducer.history }
+            if (stale) {
+                dispatch(entry, listOf(Action.FetchLatest()))
+                return@withLock
             }
-            persist(entry)
+            val result = if (initial) accept(entry, Input.Latest(Batch(page.items, page.history, toSeq = page.toSeq, hasMore = page.hasMore)))
+                else accept(entry, Input.Reload(page.items, page.history, page.toSeq, page.hasMore))
+            // Null transfers lifecycle ownership to the applied callback; it does not complete or cancel the fill.
+            if (result != null) {
+                val continueFill = entry.lock.withLock {
+                    entry.eventError = null
+                    firstPageIn(entry)
+                    publish(entry, verified = result.verified)
+                    entry.reducer.items.any { it.seq > entry.reducer.covered } || entry.continuity.behind
+                }
+                dispatch(entry, result.requests)
+                if (continueFill) dispatch(entry, accept(entry, Input.ContinueFill)?.requests.orEmpty())
+                persist(entry)
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { entry.lock.withLock {
             if (initial && notLoaded(error)) awaitWatch(entry)
@@ -647,9 +658,14 @@ class HubChatRepository(
                 entry.state.update { it.copy(loading = false, error = DataText.of(Key.ChatSyncFailed), verified = false) }
             }
         } }
-        finally { withContext(NonCancellable) { entry.lock.withLock {
-            if (!entry.continuity.asynchronous || !completed) entry.continuity.accept(Input.FillFailed)
-        } } }
+    }
+
+    /** Only the coroutine actually performing a failed/cancelled transfer may release the core fill gate. */
+    private suspend fun fillPage(entry: Entry, query: ItemsQuery): ItemsResponse = try {
+        transport.items(entry.key, query)
+    } catch (failure: Throwable) {
+        withContext(NonCancellable) { accept(entry, Input.FillFailed) }
+        throw failure
     }
 
     /**
@@ -686,47 +702,32 @@ class HubChatRepository(
 
     /** [first]: a read the continuity already issued; without it, [ContinuityAdapter.Input.ContinueFill] opens one. */
     private suspend fun catchUp(entry: Entry, first: List<Action>? = null) = entry.requests.withLock {
-        var actions = first ?: entry.lock.withLock { entry.continuity.accept(Input.ContinueFill)?.requests.orEmpty() }
-        var completed = false
         try {
+            var actions = first ?: accept(entry, Input.ContinueFill)?.requests.orEmpty()
             while (actions.isNotEmpty()) {
-                actions = when (val action = actions.single()) {
-                    is Action.FetchAfter -> {
-                        val history = entry.lock.withLock { entry.reducer.history }
-                        val page = transport.items(entry.key, ItemsQuery(afterSeq = action.afterSeq))
-                        entry.lock.withLock {
-                            if (history != entry.reducer.history && page.history != entry.reducer.history) {
-                                return@withLock listOf(Action.FetchLatest())
-                            }
-                            val result = entry.continuity.accept(Input.After(Batch(page.items, page.history, page.fromSeq, page.toSeq, moreAfter = page.moreAfter)))
-                            completed = true
-                            if (result == null) return@withLock emptyList<Action>()
-                            val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
-                            entry.eventError = null
-                            firstPageIn(entry)
-                            publish(entry, verified = result.gap == ContinuityReducer.Gap.None && !overtaken)
-                            if (result.requests.isEmpty() && overtaken) entry.continuity.accept(Input.ContinueFill)?.requests.orEmpty() else result.requests
-                        }
-                    }
-                    is Action.FetchLatest -> {
-                        val history = entry.lock.withLock { entry.reducer.history }
-                        val page = transport.items(entry.key, ItemsQuery())
-                        entry.lock.withLock {
-                            if (history != entry.reducer.history && page.history != entry.reducer.history) {
-                                return@withLock listOf(Action.FetchLatest())
-                            }
-                            val result = entry.continuity.accept(Input.Reload(page.items, page.history, page.toSeq, page.hasMore))
-                            completed = true
-                            if (result == null) return@withLock emptyList<Action>()
-                            val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
-                            entry.eventError = null
-                            firstPageIn(entry)
-                            publish(entry, verified = !overtaken)
-                            if (!entry.continuity.asynchronous && (overtaken || entry.continuity.behind)) entry.continuity.accept(Input.ContinueFill)?.requests.orEmpty() else emptyList()
-                        }
-                    }
+                val action = actions.single()
+                val history = entry.lock.withLock { entry.reducer.history }
+                val page = when (action) {
+                    is Action.FetchAfter -> fillPage(entry, ItemsQuery(afterSeq = action.afterSeq))
+                    is Action.FetchLatest -> fillPage(entry, ItemsQuery())
                     else -> error("Unexpected catch-up action: $action")
                 }
+                val stale = entry.lock.withLock { history != entry.reducer.history && page.history != entry.reducer.history }
+                if (stale) { actions = listOf(Action.FetchLatest()); continue }
+                val result = when (action) {
+                    is Action.FetchAfter -> accept(entry, Input.After(Batch(page.items, page.history, page.fromSeq, page.toSeq, moreAfter = page.moreAfter)))
+                    else -> accept(entry, Input.Reload(page.items, page.history, page.toSeq, page.hasMore))
+                }
+                // Async continuations run from applied requests, not this transport coroutine's finally block.
+                if (result == null) break
+                val continueFill = entry.lock.withLock {
+                    entry.eventError = null
+                    firstPageIn(entry)
+                    publish(entry, verified = result.verified)
+                    entry.reducer.items.any { it.seq > entry.reducer.covered } || entry.continuity.behind
+                }
+                actions = if (result.requests.isEmpty() && continueFill) accept(entry, Input.ContinueFill)?.requests.orEmpty()
+                    else result.requests
             }
             persist(entry)
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -735,9 +736,6 @@ class HubChatRepository(
             if (entry.notLoadedWait?.isActive != true || !notLoaded(error))
                 entry.state.update { it.copy(error = DataText.of(Key.ChatSyncFailed), verified = false) }
         } }
-        finally { withContext(NonCancellable) { entry.lock.withLock {
-            if (!entry.continuity.asynchronous || !completed) entry.continuity.accept(Input.FillFailed)
-        } } }
     }
 
     private suspend fun persist(entry: Entry) = entry.saving.withLock {

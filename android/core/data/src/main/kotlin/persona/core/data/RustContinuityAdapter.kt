@@ -5,9 +5,10 @@ import android.os.Looper
 import android.view.Choreographer
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import persona.core.contracts.Item
 import persona.core.contracts.JsonCodec
-import persona.core.domain.ContinuityReducer.Gap
 import persona.core.domain.ContinuitySync.Action
 import persona.core.rustcore.CoreHost
 import persona.core.rustcore.RustCore
@@ -56,16 +57,23 @@ class RustContinuityDriver(
     private val scheduler: ContinuityFrameScheduler,
     private val create: (CoreHost) -> RustCore = { RustCore(Config(), it) },
 ) : AutoCloseable {
+    data class Rejections(val count: Long = 0, val lastReason: String? = null)
+    @Volatile var rejections = Rejections(); private set
+    internal data class Delivery(val request: Request, val sequence: ULong?)
+    private data class Submission(val chat: String, val sequence: ULong)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val owners = linkedMapOf<String, (ChatPatch, List<Request>) -> Unit>()
-    private val requests = mutableMapOf<String, MutableList<Request>>()
+    private val owners = linkedMapOf<String, (ChatPatch, List<Delivery>, Boolean) -> Unit>()
+    private val requests = mutableMapOf<String, MutableList<Delivery>>()
+    // Each submitted input and its Ack are adjacent in the worker FIFO. Fetch callbacks precede that Ack's
+    // global wake; state changes use changedChat. This tags effects before a later UI operation can start.
+    private val submissions = ArrayDeque<Submission>()
+    private val rejected = mutableSetOf<String>()
     private val dirty = linkedSetOf<String>()
     private var scheduled = false
     private var closed = false
     @Volatile private var liveCore: RustCore? = null
     private val coreDelegate = lazy {
         CompletableDeferred<RustCore>().also { ready ->
-            // Even first use during launch waits for a frame; loading/creation happens on a worker, not that frame.
             scheduler.afterFirstFrame {
                 if (scheduler.synchronous) {
                     try { ready.complete(createCore()) }
@@ -92,19 +100,40 @@ class RustContinuityDriver(
     internal val synchronous get() = scheduler.synchronous
 
     private val host = object : CoreHost {
-        override fun changed(version: Long) = this@RustContinuityDriver.changed(version)
+        override fun changed(version: Long) {
+            // publish_ack is the core's global wake; it follows the input's effects, including an applied no-op.
+            val chat = synchronized(owners) { submissions.removeFirstOrNull()?.chat }
+            if (chat != null) changedChat(chat, version) else this@RustContinuityDriver.changed(version)
+        }
+        override fun changedChat(chat: String, version: Long) = this@RustContinuityDriver.changedChat(chat, version)
         override fun run(effect: Effect) {
             when (effect) {
                 is Effect.Fetch -> {
-                    synchronized(owners) { requests.getOrPut(effect.chat) { mutableListOf() }.add(effect.request) }
+                    synchronized(owners) {
+                        val sequence = submissions.firstOrNull()?.takeIf { it.chat == effect.chat }?.sequence
+                        if (effect.chat in owners)
+                            requests.getOrPut(effect.chat) { mutableListOf() }.add(Delivery(effect.request, sequence))
+                    }
                     changedChat(effect.chat, 0)
                 }
-                is Effect.Rejected -> error("Continuity action rejected")
+                is Effect.Rejected -> {
+                    synchronized(owners) {
+                        rejections = Rejections(rejections.count + 1, effect.reason)
+                        rejected.addAll(owners.keys)
+                        dirty.addAll(owners.keys)
+                    }
+                    // Rejected has no owner. Diagnostics must not fail another chat or release its core gates.
+                    runCatching { android.util.Log.w("ContinuityCore", effect.reason) }
+                    scheduleDrain()
+                }
             }
         }
     }
 
-    internal fun register(chat: String, apply: (ChatPatch, List<Request>) -> Unit) = synchronized(owners) {
+    internal fun register(chat: String, apply: (ChatPatch, List<Request>) -> Unit) =
+        registerDetailed(chat) { patch, deliveries, _ -> apply(patch, deliveries.map { it.request }) }
+
+    internal fun registerDetailed(chat: String, apply: (ChatPatch, List<Delivery>, Boolean) -> Unit) = synchronized(owners) {
         check(chat !in owners)
         owners[chat] = apply
     }
@@ -115,7 +144,6 @@ class RustContinuityDriver(
         scheduleDrain()
     }
 
-    /** Ready to be called by CoreHost.changedChat when the targeted callback lands. */
     fun changedChat(chat: String, version: Long) {
         synchronized(owners) { if (chat in owners) dirty.add(chat) }
         scheduleDrain()
@@ -123,7 +151,7 @@ class RustContinuityDriver(
 
     private fun scheduleDrain() {
         val start = synchronized(owners) {
-            if (scheduled || dirty.isEmpty()) false else { scheduled = true; true }
+            if (closed || scheduled || dirty.isEmpty()) false else { scheduled = true; true }
         }
         if (start) scheduler.schedule(::drainFrame)
     }
@@ -136,37 +164,51 @@ class RustContinuityDriver(
         val live = liveCore ?: return
         for (chat in chats) {
             val apply = synchronized(owners) { owners[chat] } ?: continue
-            val fetches = synchronized(owners) { requests.remove(chat)?.toList().orEmpty() }
-            apply(live.drain(chat), fetches)
+            val (patch, fetches, wasRejected) = synchronized(owners) {
+                // An Ack cannot be observed without collecting all earlier Fetch callbacks in the same section.
+                Triple(live.drain(chat), requests.remove(chat)?.toList().orEmpty(), rejected.remove(chat))
+            }
+            apply(patch, fetches, wasRejected)
         }
     }
 
-    internal suspend fun dispatch(action: CoreAction) {
+    internal suspend fun dispatch(action: CoreAction) = queue(action, null)
+    internal suspend fun submit(action: CoreAction, sequence: ULong) = queue(action, sequence)
+
+    private suspend fun queue(action: CoreAction, sequence: ULong?) {
         val live = core.await()
         val chat = when (action) {
             is CoreAction.OpenChat -> action.chat
             is CoreAction.CloseChat -> action.chat
             is CoreAction.Chat -> action.chat
             is CoreAction.ContinueFill -> action.chat
+            is CoreAction.HubChanged -> action.chat
+            is CoreAction.WirePayload -> action.chat
+            is CoreAction.Ack -> action.chat
         }
         synchronized(owners) {
             if (closed || chat !in owners) throw CancellationException("Continuity owner was released")
+            if (sequence != null) submissions.addLast(Submission(chat, sequence))
             check(live.dispatch(action)) { "Continuity action was not queued" }
+            if (sequence != null) check(live.dispatch(CoreAction.Ack(chat, sequence))) { "Continuity acknowledgement was not queued" }
         }
         if (scheduler.synchronous) changedChat(chat, 0)
         scheduler.submitted(live)
     }
 
     internal fun remove(chat: String) {
-        synchronized(owners) { owners.remove(chat); requests.remove(chat); dirty.remove(chat) }
-        synchronized(owners) { if (!closed) liveCore?.dispatch(CoreAction.CloseChat(chat)) }
+        synchronized(owners) {
+            owners.remove(chat); requests.remove(chat); dirty.remove(chat); rejected.remove(chat)
+            // Already queued Acks stay in FIFO ahead of CloseChat; removing their records would retag later effects.
+            if (!closed) liveCore?.dispatch(CoreAction.CloseChat(chat))
+        }
     }
 
     override fun close() {
         val live = synchronized(owners) {
             if (closed) return
             closed = true
-            owners.clear(); requests.clear(); dirty.clear()
+            owners.clear(); requests.clear(); dirty.clear(); rejected.clear(); submissions.clear()
             liveCore.also { liveCore = null }
         }
         scope.cancel()
@@ -180,31 +222,26 @@ class RustContinuityAdapter(
     private val driver: RustContinuityDriver,
     private val applied: (ContinuityAdapter.Applied) -> Unit = {},
 ) : ContinuityAdapter {
-    // Hub pairings and evicted/reopened entries can share a public path; core ownership must not.
     private val owner = "$chat:${ids.incrementAndGet()}"
     private val publicChat = chat
     @Volatile override var state = ContinuityAdapter.State(); private set
-    @Volatile private var pendingHubChange = false
-    override val behind: Boolean get() = pendingHubChange
+    override val behind: Boolean get() = false // HubChanged and fill completion are entirely core-owned.
+    override val parallelFolds: Boolean get() = true
     override val asynchronous get() = !driver.synchronous
+    private val inputs = Mutex()
+    private val metadata = Any()
     private var opened = false
     private var version = 0UL
-    private val metadata = Any()
-    private var gap = Gap.None
-    private var uncertainThrough = 0
-    private var needsProgress = false
-    private var logical = state
+    private var nextSequence = 0UL
+    private var verified = false
+    private var reset = false
+    private data class Pending(val operation: Long?, val reload: Boolean, val foldId: String?, val requests: MutableList<Action> = mutableListOf())
+    private val pending = linkedMapOf<ULong, Pending>()
     private var immediate: ContinuityAdapter.Applied? = null
 
-    private fun record(result: ContinuityAdapter.Applied) {
-        val previous = immediate
-        immediate = result.copy(gap = if (previous != null && previous.gap.ordinal > result.gap.ordinal) previous.gap else result.gap,
-            requests = previous?.requests.orEmpty() + result.requests)
-    }
+    init { driver.registerDetailed(owner, ::apply) }
 
-    init { driver.register(owner, ::apply) }
-
-    override suspend fun accept(input: ContinuityAdapter.Input): ContinuityAdapter.Applied? {
+    override suspend fun accept(input: ContinuityAdapter.Input, operation: Long?): ContinuityAdapter.Applied? = inputs.withLock {
         immediate = null
         if (!opened && input !is ContinuityAdapter.Input.Restore) {
             opened = true
@@ -214,103 +251,86 @@ class RustContinuityAdapter(
             is ContinuityAdapter.Input.Restore -> {
                 if (opened) driver.dispatch(CoreAction.CloseChat(owner))
                 opened = true
-                synchronized(metadata) { logical = input.state }
+                synchronized(metadata) { reset = true }
                 CoreAction.OpenChat(owner, CoreSnapshot(json(input.state.items), input.state.history,
                     input.state.covered.toLong(), input.state.hasMore, input.state.loadedOnce))
             }
-            is ContinuityAdapter.Input.Push -> event(ChatEvent.Pushed(batch(input.batch.also(::observe))))
-            is ContinuityAdapter.Input.Latest -> event(ChatEvent.Latest(batch(input.batch.copy(backlog = true).also(::observe))))
-            is ContinuityAdapter.Input.After -> event(ChatEvent.After(batch(input.batch.copy(backlog = false, hasMore = null).also(::observe))))
-            is ContinuityAdapter.Input.Reload -> {
-                synchronized(metadata) { logical = logical.copy(history = input.history ?: logical.history,
-                    covered = input.toSeq ?: input.items.maxOfOrNull { it.seq } ?: 0) }
-                event(ChatEvent.Reloaded(json(input.items), input.history, input.toSeq?.toLong(), input.hasMore))
-            }
+            is ContinuityAdapter.Input.Push -> event(ChatEvent.Pushed(batch(input.batch)))
+            is ContinuityAdapter.Input.Latest -> event(ChatEvent.Latest(batch(input.batch)))
+            is ContinuityAdapter.Input.After -> event(ChatEvent.After(batch(input.batch)))
+            is ContinuityAdapter.Input.Reload -> event(ChatEvent.Reloaded(json(input.items), input.history, input.toSeq?.toLong(), input.hasMore))
             is ContinuityAdapter.Input.Older -> event(ChatEvent.Older(json(input.items), input.hasMore))
             is ContinuityAdapter.Input.OpenFold -> event(ChatEvent.OpenFold(input.id))
-            is ContinuityAdapter.Input.Range -> event(ChatEvent.Range(json(input.items), input.more))
-            ContinuityAdapter.Input.HubChanged -> { pendingHubChange = true; CoreAction.ContinueFill(owner) }
+            is ContinuityAdapter.Input.Range -> event(ChatEvent.Range(input.foldId, json(input.items), input.more))
+            ContinuityAdapter.Input.HubChanged -> CoreAction.HubChanged(owner)
             ContinuityAdapter.Input.ContinueFill -> CoreAction.ContinueFill(owner)
             ContinuityAdapter.Input.Reconnect -> event(ChatEvent.Reconnected)
             ContinuityAdapter.Input.LoadOlder -> event(ChatEvent.LoadOlder)
             ContinuityAdapter.Input.FillFailed -> event(ChatEvent.FillFailed)
             ContinuityAdapter.Input.OlderFailed -> event(ChatEvent.OlderFailed)
-            ContinuityAdapter.Input.RangeFailed -> event(ChatEvent.RangeFailed)
+            is ContinuityAdapter.Input.RangeFailed -> event(ChatEvent.RangeFailed(input.foldId))
         }
-        driver.dispatch(action)
-        // ContinueFill has no hub-change signal. FIFO makes this conservative retry follow completion, never poll.
-        if (pendingHubChange && (input is ContinuityAdapter.Input.After || input is ContinuityAdapter.Input.Reload)) {
-            pendingHubChange = false
-            driver.dispatch(CoreAction.ContinueFill(owner))
+        val sequence = synchronized(metadata) {
+            (++nextSequence).also { pending[it] = Pending(operation,
+                input is ContinuityAdapter.Input.Reload || input is ContinuityAdapter.Input.Latest,
+                when (input) {
+                    is ContinuityAdapter.Input.OpenFold -> input.id
+                    is ContinuityAdapter.Input.Range -> input.foldId
+                    else -> null
+                }) }
         }
-        return if (driver.synchronous) immediate ?: ContinuityAdapter.Applied(publicChat, state) else null
+        driver.submit(action, sequence)
+        if (driver.synchronous) immediate ?: ContinuityAdapter.Applied(publicChat, state, verified = verified) else null
     }
 
     private fun event(event: ChatEvent) = CoreAction.Chat(owner, event)
 
-    /** The boundary omits Step.gap. Derive only its scalar baseline rules; never run a second item reducer. */
-    private fun observe(b: ContinuityAdapter.Batch) = synchronized(metadata) {
-        var covered = logical.covered
-        var loaded = logical.loadedOnce
-        if (b.history != null && logical.history != null && b.history != logical.history) { covered = 0; loaded = false }
-        val reset = b.history != null && logical.history != null && b.history != logical.history
-        val nextGap = when {
-            reset && b.fromSeq != null && b.fromSeq > 0 -> Gap.Reload
-            b.toSeq == null -> if (b.moreAfter) Gap.Reload else Gap.None
-            b.fromSeq != null && covered == 0 && b.fromSeq > 0 -> if (loaded || b.backlog) Gap.Reload else Gap.None
-            b.fromSeq != null && (b.fromSeq > covered || b.moreAfter) -> Gap.Fill
-            else -> Gap.None
-        }
-        if (nextGap.ordinal > gap.ordinal) gap = nextGap
-        if (nextGap != Gap.None) {
-            uncertainThrough = maxOf(uncertainThrough, logical.covered, b.toSeq ?: b.items.maxOfOrNull { it.seq } ?: covered)
-            if (b.moreAfter || nextGap == Gap.Reload) needsProgress = true
-        }
-        if (!(reset && b.fromSeq != null && b.fromSeq > 0)) {
-            if (b.toSeq == null) covered = maxOf(covered, b.items.maxOfOrNull { it.seq } ?: 0)
-            else if (b.fromSeq == null) covered = if (covered > 0 && b.items.firstOrNull()?.seq?.toLong()?.let { it > covered.toLong() + 1 } == true) b.toSeq else maxOf(covered, b.toSeq)
-            else if (b.fromSeq <= covered) covered = maxOf(covered, b.toSeq)
-            loaded = loaded || b.backlog
-        }
-        logical = logical.copy(history = b.history ?: logical.history, covered = covered, loadedOnce = loaded)
-    }
-
-    private fun apply(patch: ChatPatch, fetches: List<Request>) {
-        val changed = patch.version != version
-        if (changed && patch.version != 0UL) {
-            version = patch.version
-            val list = state.items.toMutableList()
-            for (op in patch.ops) when (op) {
-                is ListOp.Remove -> list.removeAt(op.index.toInt())
-                is ListOp.Insert -> list.add(op.index.toInt(), item(op.id, op.json))
-                is ListOp.Update -> {
-                    check(list[op.index.toInt()].id == op.id)
-                    list[op.index.toInt()] = item(op.id, op.json)
-                }
-            }
-            state = ContinuityAdapter.State(list, patch.history, patch.covered.toInt(), patch.has_more, patch.loaded_once)
-        }
-        val requests = fetches.map { request -> when (request) {
-            is Request.FetchAfter -> Action.FetchAfter(request.after_seq.toInt())
-            is Request.FetchLatest -> Action.FetchLatest(request.fold_work)
-            is Request.Subscribe -> Action.Subscribe(request.since_seq?.toInt(), request.fold_work)
-            is Request.FetchOlder -> Action.FetchOlder(request.before_seq.toInt(), request.fold_work)
-            is Request.FetchRange -> Action.FetchRange(request.from_seq.toInt(), request.through_seq.toInt())
-        } }
-        if (!changed && requests.isEmpty() && !driver.synchronous) return
+    private fun apply(patch: ChatPatch, fetches: List<RustContinuityDriver.Delivery>, rejected: Boolean) {
         val result = synchronized(metadata) {
-            val current = gap
-            // No input acknowledgement exists: an earlier frame cannot clear later input uncertainty.
-            if (driver.synchronous || changed && state.covered >= uncertainThrough &&
-                (!needsProgress || state.covered > uncertainThrough) &&
-                state.items.none { it.seq > state.covered } && requests.none { it is Action.FetchAfter || it is Action.FetchLatest }) {
-                gap = Gap.None
-                uncertainThrough = 0
-                needsProgress = false
+            val changed = patch.version != version && patch.version != 0UL
+            if (changed) {
+                version = patch.version
+                val list = if (reset) mutableListOf() else state.items.toMutableList()
+                reset = false
+                for (op in patch.ops) when (op) {
+                    is ListOp.Remove -> list.removeAt(op.index.toInt())
+                    is ListOp.Insert -> list.add(op.index.toInt(), item(op.id, op.json))
+                    is ListOp.Update -> {
+                        check(list[op.index.toInt()].id == op.id)
+                        list[op.index.toInt()] = item(op.id, op.json)
+                    }
+                }
+                state = ContinuityAdapter.State(list, patch.history, patch.covered.toInt(), patch.has_more, patch.loaded_once)
+                verified = patch.verified
             }
-            ContinuityAdapter.Applied(publicChat, state, if (driver.synchronous) current else gap, requests)
+            val requests = fetches.mapNotNull { delivery ->
+                val expectedFold = delivery.sequence?.let { pending[it]?.foldId }
+                if (delivery.request is Request.FetchRange && expectedFold != null && delivery.request.fold_id != expectedFold)
+                    return@mapNotNull null
+                val action = when (val request = delivery.request) {
+                    is Request.FetchAfter -> Action.FetchAfter(request.after_seq.toInt())
+                    is Request.FetchLatest -> Action.FetchLatest(request.fold_work)
+                    is Request.Subscribe -> Action.Subscribe(request.since_seq?.toInt(), request.fold_work)
+                    is Request.FetchOlder -> Action.FetchOlder(request.before_seq.toInt(), request.fold_work)
+                    is Request.FetchRange -> Action.FetchRange(request.from_seq.toInt(), request.through_seq.toInt())
+                }
+                delivery.sequence?.let { pending[it]?.requests?.add(action) }
+                action
+            }
+            val acknowledged = patch.acked?.let { ack -> pending.keys.takeWhile { it <= ack } }.orEmpty()
+            val completed = acknowledged.mapNotNull { pending.remove(it) }
+            if (!changed && requests.isEmpty() && completed.isEmpty() && !rejected && !driver.synchronous) return
+            ContinuityAdapter.Applied(publicChat, state, requests = requests, verified = verified,
+                operations = completed.mapNotNull { p -> p.operation?.let { ContinuityAdapter.Operation(it, p.requests.toList()) } },
+                reloadApplied = completed.any { it.reload }, rejected = rejected,
+                diagnosticOnly = rejected && !changed && requests.isEmpty() && completed.isEmpty())
         }
-        if (driver.synchronous) record(result) else applied(result)
+        if (driver.synchronous) {
+            val previous = immediate
+            immediate = result.copy(requests = previous?.requests.orEmpty() + result.requests,
+                operations = previous?.operations.orEmpty() + result.operations,
+                reloadApplied = previous?.reloadApplied == true || result.reloadApplied)
+        } else applied(result)
     }
 
     override fun close() = driver.remove(owner)

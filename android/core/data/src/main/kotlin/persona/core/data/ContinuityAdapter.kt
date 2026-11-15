@@ -32,23 +32,34 @@ interface ContinuityAdapter {
         data class Reload(val items: List<Item>, val history: String?, val toSeq: Int?, val hasMore: Boolean) : Input
         data class Older(val items: List<Item>, val hasMore: Boolean) : Input
         data class OpenFold(val id: String) : Input
-        data class Range(val items: List<Item>, val more: Boolean = false) : Input
+        data class Range(val items: List<Item>, val more: Boolean = false, val foldId: String? = null) : Input
         data object HubChanged : Input
         data object ContinueFill : Input
         data object Reconnect : Input
         data object LoadOlder : Input
         data object FillFailed : Input
         data object OlderFailed : Input
-        data object RangeFailed : Input
+        data class RangeFailed(val foldId: String? = null) : Input
     }
 
-    data class Applied(val chat: String, val state: State, val gap: Gap = Gap.None, val requests: List<Action> = emptyList())
+    /** A single input's effect set, including an acknowledged no-op. Never reused by a later input. */
+    data class Operation(val id: Long, val requests: List<Action>)
+    data class Applied(
+        val chat: String, val state: State, val gap: Gap = Gap.None, val requests: List<Action> = emptyList(),
+        val verified: Boolean = gap == Gap.None && state.loadedOnce,
+        val operations: List<Operation> = emptyList(),
+        val reloadApplied: Boolean = false,
+        /** Diagnostic notification only; it neither cancels requests nor changes another chat's gates. */
+        val rejected: Boolean = false,
+        val diagnosticOnly: Boolean = false,
+    )
 
     val state: State
     val behind: Boolean
     val asynchronous: Boolean get() = false
+    val parallelFolds: Boolean get() = false
     /** Null means queued: the frame delivers the applied view through the adapter's callback. */
-    suspend fun accept(input: Input): Applied?
+    suspend fun accept(input: Input, operation: Long? = null): Applied?
     fun close() {}
 }
 
@@ -59,7 +70,7 @@ class KotlinContinuityAdapter(private val chat: String) : ContinuityAdapter {
     override val state get() = ContinuityAdapter.State(reducer.items, reducer.history, reducer.covered, reducer.hasMore, reducer.loadedOnce)
     override val behind get() = sync.behind
 
-    override suspend fun accept(input: ContinuityAdapter.Input): ContinuityAdapter.Applied {
+    override suspend fun accept(input: ContinuityAdapter.Input, operation: Long?): ContinuityAdapter.Applied {
         var gap = Gap.None
         val requests = when (input) {
             is ContinuityAdapter.Input.Restore -> {
@@ -97,8 +108,9 @@ class KotlinContinuityAdapter(private val chat: String) : ContinuityAdapter {
             ContinuityAdapter.Input.LoadOlder -> sync.loadOlder()
             ContinuityAdapter.Input.FillFailed -> { sync.finishFill(); emptyList() }
             ContinuityAdapter.Input.OlderFailed -> { sync.finishOlder(); emptyList() }
-            ContinuityAdapter.Input.RangeFailed -> { sync.cancelFold(); emptyList() }
+            is ContinuityAdapter.Input.RangeFailed -> { sync.cancelFold(); emptyList() }
         }
-        return ContinuityAdapter.Applied(chat, state, gap, requests)
+        return ContinuityAdapter.Applied(chat, state, gap, requests,
+            verified = gap == Gap.None && state.loadedOnce && state.items.none { it.seq > state.covered })
     }
 }
