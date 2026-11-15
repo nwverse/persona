@@ -394,7 +394,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			params["text"] = withAttachments(text, handed)
 		}
 		unsent := s.noteAgentSend(self, am.ID, c.SessionID) // more from its task's conversation reopens an accepted task (#6726)
-		if resume != "" { // the user's Resume's node call, the text as its first message (agent_resume.go)
+		// A resume goes through the user's Resume's node call, the text as its first message (agent_resume.go).
+		if resume != "" {
 			return s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task, unsent)
 		}
 		if c.Status != proto.StatusOffline {
