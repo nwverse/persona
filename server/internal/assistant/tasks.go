@@ -145,6 +145,16 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
+	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
+	// serialized, this try only.
+	planFirst bool
+	// callerPick: the launcher, model, effort, tier, permission mode and ultracode the task named itself, kept from its
+	// first start try in this process, so every try starts from them again whichever start-defaults rule fits it.
+	// Never serialized: the task as stored keeps its own value for whatever a policy filled in (storedLaunch).
+	callerPick *startPick
+	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
+	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
+	startFilled startFill
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).
