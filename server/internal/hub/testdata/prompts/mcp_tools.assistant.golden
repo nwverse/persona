@@ -2189,7 +2189,7 @@
                   "auto",
                   "bypassPermissions"
                 ],
-                "description": "permission mode; empty: the default for writable tasks. Set an explicit writable mode (for example bypassPermissions) with readonly=false when a replacement Agent must implement fixes on the same todo. Claude-family launchers use bypassPermissions; Codex readonly=true uses plan unless assistant.readonly_mode=prompt; prompt keeps normal runtime permissions. traex and omp take none"
+                "description": "permission mode; empty: the default for writable tasks. Set an explicit writable mode (for example bypassPermissions) with readonly=false when a replacement Agent must implement fixes on the same todo. Read-only modes: see the description. traex and omp take none"
               },
               "role": {
                 "type": "string",
