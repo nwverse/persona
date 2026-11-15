@@ -62,8 +62,10 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `renameWorkspace({workspace_id, title})` / `renameWorkspace({space_id, title})`, `archiveWorkspace({workspace_id})` | With `caps.workspaces`: a workspace's title (resolves to `{workspace}`, its row now) or a space's name (resolves to `{space_name}`, the name it shows now) / the workspace archived, a worktree it made removed from the disk (its branch kept). Without them those requests are `unsupported`; see "Workspaces" below |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
-In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models}]`: besides `launcher`, the new-session form then has these entries, one per provider,
-each with the Agent and models it starts; when they change later, call `rt.launchersChanged(list)`. `resume: true`: `start` accepts `{resume: <Claude session id>}` to take over a Claude session it doesn't have
+In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models, auto_accept}]`: besides `launcher`, the new-session form then has these entries, one per provider,
+each with the Agent and models it starts; when they change later, call `rt.launchersChanged(list)`. `auto_accept: true` marks an entry whose Agents ask for approval
+unless a switch is on, which its `start` turns on for `permission_mode: "bypassPermissions"` (Paseo's Auto Accept): the manager starts its own Agents there in
+`bypassPermissions`, as it starts Claude Code's (#8141). `resume: true`: `start` accepts `{resume: <Claude session id>}` to take over a Claude session it doesn't have
 and keep that id (`caps.resume`, for runtimes acting as the engine to continue "Not running" sessions). `start` also receives the form's choices (`launcher`, `model`, `permission_mode`, `effort`,
 `workspace_id`) and the id the hub named for the new session (`session_id`, #8130): give the session that id when it is valid and no
 session of the runtime's has it, so that a start whose answer the hub never got is found by it; otherwise pick one's own. See

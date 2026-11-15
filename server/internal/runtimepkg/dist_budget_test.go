@@ -24,11 +24,13 @@ import (
 // model lacks goes down to one it offers, and the answer says both; 459,059 B over main's 456,910 B, with main's 290 B
 // of headroom). Raised by 1,048 B for the Paseo bridge's agents on one Claude session (one id, the newer agent takes the
 // messages) and its takeover of an archived agent with that agent's own provider (#8131: 460,362 B over main's 459,314 B,
-// with main's 35 B of headroom). Raised by 4,371 B for the Paseo bridge's starts that answer before Paseo is done or
-// lose a connection (#8130: rows kept as starting, late refusals shown and logged, idempotent creation asked again after
-// a reconnect, imports without a hard limit; 464,763 B over main's 460,392 B, with main's 5 B of headroom).
+// with main's 35 B of headroom). Raised by 484 B for the Paseo bridge answering Persona's own tools on every provider
+// and marking Auto Accept launchers (#8141: 460,876 B over main's 460,392 B, with main's 5 B of headroom). Raised by
+// 4,391 B for the Paseo bridge's starts that answer before Paseo is done or lose a connection (#8130: rows kept as
+// starting, late refusals shown and logged, idempotent creation asked again after a reconnect, imports without a hard
+// limit; 465,267 B over main's 460,876 B, with main's 5 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 464_768
+	const budget = 465_272
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
