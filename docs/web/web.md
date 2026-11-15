@@ -24,7 +24,11 @@ keeps the token equal to the icon and `--ink-3`.
 
 An Assistant task's only card is its **Progress** tray row. Plan, execution, blocked progress, PR and acceptance update
 that stable row; tapping it opens the task. The conversation, including historical task events, shows no
-plan/task/receipt/review/report cards. A dispatch is a **hand-off card** for each Agent it started or took over (#5096, after
+plan/task/receipt/review/report cards, with one exception: a plan still waiting for **Start** is its plan card where it
+was made (#8193, as iOS's `FeedLine`), with **Start**, **Edit** (computer, model and the rest) and **Don't start**, drawn
+from the feed item's own `plan` when the store has none; it stays a row in the Pending tray as well, and a dismissed one
+reads as its one-line outcome. Browser check with synthetic hub traffic only, wide and phone width, light and dark:
+`python3 web/e2e/plan-card-chat.py <loopback web URL> --shots <directory> [--chromium <executable>]`. A dispatch is a **hand-off card** for each Agent it started or took over (#5096, after
 cindy's `SessionHandoffCard`; `views/assistant/Handoff.tsx`). Where a card or a row opens is Settings › General › Agent
 preferences › **How Agents open**, kept by this browser (#5424, `lib/agent-open.ts`): the **side panel** beside the chat,
 the default (over the chat on a phone-sized window), or the Agent's own **full page**
