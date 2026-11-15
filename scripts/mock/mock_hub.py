@@ -8838,6 +8838,24 @@ if MOCK_TASKS:
             TASK_FEED[ASK1].append(_feed("feed_receipt_review_%d" % _n, 0.2 - _n / 100, "receipt", _tid,
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
+    # MOCK_TASKS_FINISHED=1 (#8237): two handed-out tasks closed in the last hour and not looked at since, so In Progress
+    # lists them under Just Finished: one the hub closed with its reason, one its review accepted, each with its receipt.
+    if os.environ.get("MOCK_TASKS_FINISHED") == "1":
+        for _tid, _title, _min, _extra, _summary in [
+            ("todo_done_login", "修复登录页闪退", 12, {"done_by": "auto", "done_reason": "改好了：登录页不再闪退，PR #43 已合并"},
+             "改好了：登录页不再闪退，补了两条测试，PR #43 已合并。"),
+            ("todo_done_notes", "整理本周发布说明", 40, {"done_by": "review", "supervision": {
+                "supervisor": ASK1, "state": "accepted", "round": 0, "done_when": [], "updated_at": ago(minutes=40),
+                "reviews": [{"at": ago(minutes=40), "verdict": "accepted", "note": "写好了：7 个 PR 分成新功能、修复和其他三组"}]}},
+             "发布说明分好了三组，放在 docs/release-notes.md。"),
+        ]:
+            _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 30, ""), agents=[],
+                         done_at=ago(minutes=_min), **_extra)
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+            TASK_FEED[ASK1].append(_feed("feed_finished_" + _tid, _min, "receipt", _tid,
+                                        {"title": _title, "state": "done", "machine": "MacBook", "summary": _summary}))
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
 
 
 # MOCK_USAGE_LIMIT=1: two agents stopped on a subscription usage limit (docs/assistant/agent-work.md "Usage limits").
