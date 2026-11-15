@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -126,6 +127,7 @@ func probeCodexCatalog(ctx context.Context, base, key, version string, env map[s
 			}
 			req.Header.Set("Authorization", "Bearer "+key)
 			req.Header.Set("Accept", "application/json")
+			modelhttp.SetDefaultUserAgent(req.Header) // Persona's own request, as its other gateway requests (#8775)
 			resp, err := client.Do(req)
 			if err != nil {
 				ok[i] <- false

@@ -163,6 +163,9 @@ func TestCodexCatalogFoundByShape(t *testing.T) {
 				if r.Method != http.MethodGet || r.URL.RawQuery != "client_version=0.167.0" || r.Header.Get("Authorization") != "Bearer sk-test" {
 					t.Fatalf("asked %s %s with %q, want what codex asks", r.Method, r.URL, r.Header.Get("Authorization"))
 				}
+				if ua := r.Header.Get("User-Agent"); !strings.HasPrefix(ua, "Persona/") {
+					t.Fatalf("User-Agent %q, want Persona's own", ua)
+				}
 			}
 		})
 	}
