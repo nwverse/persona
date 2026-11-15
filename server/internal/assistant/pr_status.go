@@ -263,27 +263,8 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			othersOpen = true
 		}
 	}
-	if terminal && (wasOpen || legacyHold) && !othersOpen && t.Supervision != nil {
-		v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			if v.State == reviewNeedsUser || v.State == reviewAccepted || v.State == reviewCancelled {
-				return false
-			}
-			if p := v.parking(); p != nil && p.WaitingOn != parkExternalEvent && p.WaitingOn != parkSomeoneElse {
-				return false
-			}
-			if v.State == reviewPending {
-				return false
-			}
-			v.State = reviewPending
-			return true
-		})
-		if err != nil {
-			return err
-		}
-		if changed {
-			s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "PR " + status.State + ": " + status.URL})
-		}
-	}
+	// The stage's PRs are checked under the stage lock first (below): an observation of a PR an Agent reply replaced
+	// while the request was in flight changes nothing, neither the facts nor the supervision.
 	b := &s.reports
 	b.stageWriting.Lock()
 	b.mu.Lock()
@@ -329,8 +310,73 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	s.todos.mu.Unlock()
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
+	if terminal && (wasOpen || legacyHold) && !othersOpen && t.Supervision != nil {
+		// Only the hold that waits on this PR wakes: a park waiting on an outside event or someone else whose reason
+		// names this PR (parkWaitsOnPR), the same park (its review's time) as when the PR was read, and the task still
+		// following this PR. Anything else (ongoing work, rework, a review in progress, a park for something else, a
+		// later park, a replaced PR) stays as it is, and a park comes due at its own time.
+		held, prs := t.Supervision.parking(), append([]string{status.URL}, polledPRs(t)...)
+		if parkWaitsOnPR(held, prs...) {
+			at := held.At
+			v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+				p := v.parking()
+				if p == nil || !p.At.Equal(at) || !parkWaitsOnPR(p, prs...) {
+					return false
+				}
+				now, ok := s.todoNow(t.ID)
+				if !ok || now.DoneAt != nil || now.PRURL != status.URL && !slices.Contains(now.PRs, status.URL) || !s.stageFollows(t.ID, status.URL) {
+					return false
+				}
+				v.State = reviewPending
+				return true
+			})
+			if err != nil {
+				return err
+			}
+			if changed {
+				s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "PR " + status.State + ": " + status.URL})
+			}
+		}
+	}
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
-		s.setTaskStage(ctx, t.ID, "merge", "")
+		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
 	return nil
+}
+
+// stageFollows says whether task id's stage still follows the PR at url: its current PR or an earlier one.
+func (s *Service) stageFollows(id, url string) bool {
+	b := &s.reports
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st := b.stages[id]
+	return st.PR == url || slices.Contains(st.PRs, url)
+}
+
+// parkWaitsOnPR says whether park r waits on one of the task's PRs at urls: it waits on an outside event or someone
+// else, and its reason names one of them, by its link or as "#N" with its number. A park for anything else (a design
+// decision, another PR, a release) is not the PRs' merge wait, even while they are open.
+func parkWaitsOnPR(r *TaskReview, urls ...string) bool {
+	if r == nil || r.WaitingOn != parkExternalEvent && r.WaitingOn != parkSomeoneElse {
+		return false
+	}
+	reason := strings.ToLower(r.Reason)
+	links, refs := ciPRURL.FindAllStringSubmatch(reason, -1), prBareRef.FindAllStringSubmatch(reason, -1)
+	for _, url := range urls {
+		m := ciPRURL.FindStringSubmatch(url)
+		if m == nil {
+			continue
+		}
+		for _, link := range links {
+			if strings.EqualFold(link[1], m[1]) && link[2] == m[2] {
+				return true
+			}
+		}
+		for _, ref := range refs {
+			if ref[1] == m[2] {
+				return true
+			}
+		}
+	}
+	return false
 }

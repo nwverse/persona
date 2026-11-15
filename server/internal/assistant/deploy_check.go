@@ -366,6 +366,16 @@ func (s *Service) saveStagesLocked(ctx context.Context, id string) {
 	}
 }
 
+// prStatusPassMost bounds one pass of PR observations (sweepPRStatusesBounded), apart from the deploy checks' time.
+var prStatusPassMost = time.Minute
+
+// sweepPRStatusesBounded is sweepPRStatuses with its own deadline (prStatusPassMost).
+func (s *Service) sweepPRStatusesBounded(now time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), prStatusPassMost)
+	defer cancel()
+	s.sweepPRStatuses(ctx, now)
+}
+
 // sweepDeploys looks again at the held tasks: once the running hub contains the work, the task is deployed (its
 // delivery live, its stage deploy) and asked to be verified; a task gone or watched too long is let go.
 func (s *Service) sweepDeploys(now time.Time) {
@@ -384,7 +394,10 @@ func (s *Service) sweepDeploys(now time.Time) {
 		}
 	}
 	b.mu.Unlock()
-	s.sweepPRStatuses(ctx, now)
+	// The PR facts come after the deploy checks, with a time of their own: slow or hanging forge reads for many PRs
+	// never use up this pass's time before the hub's commit, sweepPRs and the watches have run. They run even when the
+	// hub's health cannot be read (they do not need it).
+	defer s.sweepPRStatusesBounded(now)
 	hub, err := s.runningHubCommit(ctx)
 	if err != nil {
 		s.logf("deploys: the hub's health: %v", err)
