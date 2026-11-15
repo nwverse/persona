@@ -33473,6 +33473,29 @@
         }
       }
     },
+    "Change Model…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change Model…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルを変更…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改模型…"
+          }
+        }
+      }
+    },
     "Change Permissions…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -147957,6 +147980,29 @@
       },
       "extractionState" : "manual"
     },
+    "Switching from %@ to %@ needs a new conversation" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching from %@ to %@ needs a new conversation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ から %2$@ への切り替えには新しい会話が必要です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 %1$@ 换到 %2$@ 需要新开对话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Switching questions…" : {
       "localizations" : {
         "en" : {
@@ -162696,6 +162742,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这个对话正在工作，没有关闭任何东西。等它停下再试。"
+          }
+        }
+      }
+    },
+    "This conversation's launcher is no longer available. Follow the Main Chat default or choose another launcher." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation's launcher is no longer available. Follow the Main Chat default or choose another launcher."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話のランチャーは利用できなくなりました。メインチャットのデフォルトに戻すか、別のランチャーを選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话的启动器已不可用。请跟随 Main Chat 默认设置，或另选启动器。"
           }
         }
       }

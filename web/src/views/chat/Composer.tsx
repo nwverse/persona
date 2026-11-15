@@ -11,14 +11,14 @@ import { promptCommands, type ComposerCommand as Command } from "../../lib/exten
 import { useSavedPromptRows } from "../../lib/saved-prompt-rows";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
 import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
-import { ApiError, errorText } from "../../lib/api";
 import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-drag";
 import { uuid } from "../../lib/format";
 import { lazyPage } from "../../lib/lazy-page";
 import { enterSends, hasFinePointer, useMedia } from "../../lib/viewport";
 import { COMPACT_COMPOSER, COMPOSER_LINES, lineCount, offersExpand } from "./composer-grow";
 import { INPUT_MAX } from "./dock";
-import { imagePayload, MAX_IMAGE, quotePath, releaseAttachments, sendFile } from "../../lib/attachments";
+import { imagePayload, MAX_IMAGE, releaseAttachments } from "../../lib/attachments";
+import { addFiles as addComposerFiles, filesBusy, MAX_FILES, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ComposerHandle } from "../../lib/links";
 import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, withUnsent, type DraftImage } from "../../lib/drafts";
 import type { EditedImage } from "../../lib/image-edit";
@@ -27,6 +27,7 @@ import { machineWithHub } from "../../lib/mesh";
 import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
 import { getState } from "../../lib/store";
 import { AttachmentTray } from "../../ui/AttachmentTray";
+import { FileTiles } from "./FileTiles";
 import { cx, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ContextChips } from "../link/ContextChips";
@@ -205,9 +206,10 @@ export const Composer = memo(function Composer({
   }, [working]);
   // "Quote" and comments (lib/comments.ts): bars above the input, sent as `> ` blocks in front of the message (lib/drafts.ts)
   const quotes = useQuotes(draftKey).list;
-  // files still on their way to the machine, per conversation: the spinner belongs to the one they were picked in
-  const [uploads, setUploads] = useState<Record<string, number>>({});
-  const uploading = uploads[draftKey] ?? 0;
+  // files picked for this conversation (lib/composer-files.ts, #8361): tiles above the input, uploading or there
+  const files = useComposerFiles(draftKey);
+  const uploading = files.some((f) => f.state === "waiting" || f.state === "uploading");
+  const filesReady = files.some((f) => f.file);
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -341,8 +343,11 @@ export const Composer = memo(function Composer({
         // other words in place of an edit's (Edit as new, a rewind's message): no longer an edit
         const startsEdit = e.type === "replace" && Boolean(e.edit);
         if (e.type === "replace" && !startsEdit) editNow.current?.cancel();
+        // "Edit" a message sent with files: they go back to their tiles (#8361), the words to the input
+        const sentFiles = e.type === "replace" ? splitFileTags(e.text) : null;
+        if (sentFiles?.files.length) restoreFiles(draftKey, sentFiles.files);
         // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
-        const selected = e.type === "replace" ? splitSkillDraft(e.text) : null;
+        const selected = sentFiles ? splitSkillDraft(sentFiles.text) : null;
         const split = e.type === "replace" ? splitQuotes(selected!.text) : null;
         const nextQuotes = e.type === "replace" ? (split ? parseQuotes(split.quotes) : []) : null;
         const next = split ? split.rest : selected ? selected.text : applyDraft(draftNow.current, e);
@@ -535,7 +540,7 @@ export const Composer = memo(function Composer({
   const editBox = (): EditLastBox => ({
     offered: Boolean(onEditLastMessage),
     busy: Boolean(working || needsYou || disabled || blocked || loadingDraft),
-    holds: Boolean(draft || atts.length || uploading || reading.current || contexts.length || quotes.length),
+    holds: Boolean(draft || atts.length || files.length || reading.current || contexts.length || quotes.length),
     menu: Boolean(slashOpen || mOpen || history.searching || document.querySelector("[role=dialog],[role=menu]")),
   });
 
@@ -637,12 +642,13 @@ export const Composer = memo(function Composer({
     return true;
   };
 
-  const addFiles = async (files: FileList | File[]) => {
+  const addFiles = async (picked: FileList | File[]) => {
     if (disabled) return;
     // at most MAX_IMAGES pictures a message, as on the phone: the ones past it are turned away with a word
     // (the count takes in pictures still being read by an earlier paste or drop)
     let refused = false;
-    for (const f of Array.from(files)) {
+    const others: File[] = [];
+    for (const f of Array.from(picked)) {
       if (f.type.startsWith("image/")) {
         if (!roomForImage()) {
           refused = true;
@@ -663,46 +669,21 @@ export const Composer = memo(function Composer({
         if (mounted.current && keyNow.current === draftKey) appendImage(a);
         else releaseAttachments([a]);
       } else if (machineId) {
-        void upload(f);
+        others.push(f);
       } else {
         toast(t("chat-composer.images_only"), "error");
       }
     }
     if (refused) refuseImages();
-  };
-
-  // a file goes to the session's machine; its path lands in the input (docs/protocol/protocol.md "Sending files")
-  const upload = async (f: File) => {
-    const count = (key: string, by: number) =>
-      setUploads((u) => {
-        const { [key]: n = 0, ...rest } = u;
-        return n + by > 0 ? { ...rest, [key]: n + by } : rest;
-      });
-    count(draftKey, 1);
-    try {
-      const path = await sendFile(machineId!, f, { dest: uploadDest });
-      const p = quotePath(path);
-      // finished after the box closed or moved to another conversation: into the draft it was picked for (its open
-      // box, else the stored draft), not into the one shown now
-      if (!mounted.current || keyNow.current !== draftKey) sendDraft(draftKey, { type: "append", text: p });
-      else {
-        const el = input.current;
-        setDraft((d) => {
-          const at = el && document.activeElement === el ? Math.min(el.selectionStart, d.length) : d.length;
-          const before = d.slice(0, at),
-            after = d.slice(at);
-          return `${before}${before && !before.endsWith(" ") ? " " : ""}${p}${after.startsWith(" ") || !after ? "" : " "}${after}`;
-        });
-      }
-      toast(t("chat-composer.uploaded", { path }), "ok");
-    } catch (e) {
-      toast(e instanceof ApiError && e.code === "too_large" ? t("chat-composer.file_too_large") : t("chat-composer.upload_failed", { error: errorText(e) }), "error");
-    } finally {
-      if (mounted.current) count(draftKey, -1);
+    // other files go to the session's machine as tiles above the input, never words in it (lib/composer-files.ts, #8361)
+    if (others.length) {
+      const r = addComposerFiles(draftKey, machineId!, others, uploadDest);
+      if (r.tooMany) toast(t("chat-composer.too_many_files", { max: MAX_FILES }), "error");
+      if (r.tooBig.length) toast(t("chat-composer.file_too_large"), "error");
     }
   };
 
-  const canSend = (draft.trim().length > 0 || atts.length > 0 || contexts.length > 0 || quote) && !disabled && !loadingDraft;
+  const canSend = (draft.trim().length > 0 || atts.length > 0 || filesReady || contexts.length > 0 || quote) && !uploading && !disabled && !loadingDraft;
   // Claude's suggested next message (iOS SuggestionPill): while the box is empty and the agent waits for a message
   // (not working, not on a card); a tap fills it
   // in, "Send now" sends it as it is (the node drops it once the agent works again)
@@ -718,7 +699,7 @@ export const Composer = memo(function Composer({
       el.setSelectionRange(text.length, text.length);
     });
   };
-  const typed = Boolean(draft.trim() || atts.length || contexts.length || quote);
+  const typed = Boolean(draft.trim() || atts.length || files.length || contexts.length || quote);
   // the round button is Stop while the agent works and nothing is typed; with something typed Send queues it and a
   // second Stop sits left of voice (cindy's mainSlotIsStop / showSecondaryStop)
   const showStop = working && !typed && onStop;
@@ -730,7 +711,13 @@ export const Composer = memo(function Composer({
   const submit = async (text = draft) => {
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
-    if (disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !refs.length && !q.length)) return;
+    // a file still on its way holds the message, as a video does on the phone (#8361); the words stay in the box
+    if (filesBusy(draftKey)) {
+      toast(t("chat-composer.files_uploading"));
+      return;
+    }
+    const hasFiles = readyFiles(draftKey).length > 0;
+    if (disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !hasFiles && !refs.length && !q.length)) return;
     // Any message spends the suggestion shown: it stays on the hub until the agent starts (#4644).
     if (suggestion) setSentPill(suggestion);
     // An edit of the last message: the rewind to before the old one first, the box kept as it is (read-only meanwhile).
@@ -748,6 +735,7 @@ export const Composer = memo(function Composer({
     // hand it to the agent (seconds when it starts up) left the same words in both places. A send that never went
     // (onSend false) puts them back; one that failed stays in the chat as a failed bubble.
     const sent = atts;
+    const sentFiles = takeReadyFiles(draftKey);
     setDraft("");
     draftNow.current = "";
     unsaved.current = null;
@@ -760,8 +748,11 @@ export const Composer = memo(function Composer({
     // the waiting cards (dock.ts).
     const at = document.activeElement;
     if (hasFinePointer() && (!at || at === document.body || box.current?.contains(at))) input.current?.focus({ preventScroll: true });
-    // picked contexts ride in front as <persona-context> tags (docs/protocol/protocol.md "Tags in messages"), the quote as `> ` lines
-    const ok = await onSend({ text: withContexts(refs, withQuoteBlock(q, text), sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })), ...(committed ? { edit: committed } : {}) });
+    // picked contexts ride in front as <persona-context> tags (docs/protocol/protocol.md "Tags in messages"), the quote as `> ` lines,
+    // files after the words as <persona-file> tags, the words as typed (with none, a line saying to look at them)
+    const said = !text.trim() && !sent.length && sentFiles.length ? t("chat-composer.see_files") : text;
+    const body = withFiles(withQuoteBlock(q, said), sentFiles);
+    const ok = await onSend({ text: withContexts(refs, body, sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })), ...(committed ? { edit: committed } : {}) });
     if (ok) {
       history.record(skillDraft(refs, text));
       releaseAttachments(sent);
@@ -776,6 +767,8 @@ export const Composer = memo(function Composer({
         releaseAttachments(sent);
       }
       refs.forEach((r) => addContext(draftKey, r));
+      // the files back above this conversation's box: they are on the machine, ready to go again
+      restoreFiles(draftKey, sentFiles);
       // the quotes back above this conversation's box (kept for it when the box shows another one or closed)
       if (q.length && !getQuotes(draftKey).list.length) setQuotes(draftKey, q);
     }
@@ -884,6 +877,11 @@ export const Composer = memo(function Composer({
               if (att) releaseAttachments([att]);
               setAtts((cur) => cur.filter((a) => a.id !== id));
             }} />
+          </div>
+        )}
+        {files.length > 0 && (
+          <div className="px-0.5 pt-0.5">
+            <FileTiles draftKey={draftKey} files={files} />
           </div>
         )}
         {/* a field that turns disabled loses focus with no blur event: the keyboard is down, say so */}
