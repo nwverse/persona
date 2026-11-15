@@ -90,29 +90,37 @@ struct MainClearTests {
 
     @Test func theEmptyPageStaysUntilAnotherMainStarts() {
         var state = MainClearState()
-        #expect(state.begin(group: "hub", manager: "", sessionID: "old"))
-        #expect(!state.begin(group: "hub", manager: "", sessionID: "old"), "a second one while it is on its way is used up")
+        // #expect cannot call a mutating method: it invokes the call on an immutable copy.
+        let started = state.begin(group: "hub", manager: "", sessionID: "old")
+        #expect(started)
+        let again = state.begin(group: "hub", manager: "", sessionID: "old")
+        #expect(!again, "a second one while it is on its way is used up")
         #expect(state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: "old"))
         #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: false, mainSessionID: "old"), "an open conversation stays")
         #expect(!state.showsPage(group: "hub", manager: "other", currentEmpty: true, mainSessionID: nil))
         state.succeed()
         #expect(state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: nil), "after the refresh, still the empty page")
         #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: "new"))
-        #expect(state.note(group: "hub", manager: "", mainSessionID: nil) == false)
-        #expect(state.note(group: "other", manager: "", mainSessionID: "new") == false, "another hub does not drop this one's flag")
-        #expect(state.note(group: "hub", manager: "", mainSessionID: "new"))
+        let sameMain = state.note(group: "hub", manager: "", mainSessionID: nil)
+        #expect(sameMain == false)
+        let otherHub = state.note(group: "other", manager: "", mainSessionID: "new")
+        #expect(otherHub == false, "another hub does not drop this one's flag")
+        let replaced = state.note(group: "hub", manager: "", mainSessionID: "new")
+        #expect(replaced)
         #expect(state.cleared == nil)
         #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: "new"))
     }
 
     @Test func aFailureOrARefusalDropsTheEmptyPage() {
         var state = MainClearState()
-        #expect(state.begin(group: "hub", manager: "", sessionID: "old"))
+        let started = state.begin(group: "hub", manager: "", sessionID: "old")
+        #expect(started)
         state.fail()
         #expect(state.cleared == nil)
         #expect(!state.busy)
         #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: nil))
-        #expect(state.begin(group: "hub", manager: "", sessionID: "old"), "it can be asked again")
+        let again = state.begin(group: "hub", manager: "", sessionID: "old")
+        #expect(again, "it can be asked again")
     }
 
     @Test func clearResultDecodesTheArchivedId() throws {
