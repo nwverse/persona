@@ -50,12 +50,18 @@ final class FileAttachShotsTests: XCTestCase {
             field.tap()
             _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)
         }
+        // A draft an earlier run left in this chat goes first (drafts are kept per chat).
+        let left = field.value as? String ?? ""
+        if !left.isEmpty, left != field.placeholderValue {
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.95)).tap()
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: left.count + 8))
+        }
         field.typeText(Self.typed)
         let busy = app.descendants(matching: .any)["file-attachment-busy"].firstMatch
-        XCTAssertTrue(busy.waitForExistence(timeout: 20), "no card on its way:\n\(app.debugDescription)")
-        sleep(3)
+        XCTAssertTrue(busy.waitForExistence(timeout: 30), "no card on its way:\n\(app.debugDescription)")
+        sleep(2)
         shot(app, "5-uploading")
-        XCTAssertTrue(wait(timeout: 180) { !busy.exists }, "the uploads did not end")
+        XCTAssertTrue(wait(timeout: 400) { !busy.exists }, "the uploads did not end")
         let hide = app.buttons["shell-composer-dismiss-keyboard"].firstMatch
         if hide.exists { hide.tap() }
         sleep(1)

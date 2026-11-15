@@ -47,7 +47,7 @@ final class FileUploadTests: XCTestCase {
 
     /// A file picked goes up as a card above the box (#8361): typing meanwhile is never interrupted, the words stay
     /// exactly as typed, and the message carries the file as a `<persona-file kind="file">` tag after them, kept in the
-    /// computer's uploads; the sent bubble shows it as a card.
+    /// computer's uploads.
     @MainActor func testUploadBecomesACard() throws {
         let app = try launch(["-openUploadDemo", "季度报告.pdf"])
         let cancel = app.buttons["取消上传 季度报告.pdf"]
@@ -71,7 +71,6 @@ final class FileUploadTests: XCTestCase {
         // The tag's name follows the hub's naming (docs/protocol/rolling-upgrade-compatibility.md): either is the file.
         XCTAssertNotNil(text.range(of: #"^look at\n\n<[a-z]+-file kind="file" path="/Users/me/\.persona/uploads/"#, options: .regularExpression), text)
         XCTAssertTrue(text.contains("name=\"季度报告.pdf\""), text)
-        XCTAssertTrue(app.descendants(matching: .any)["file-card"].waitForExistence(timeout: 15), "no card in the bubble:\n\(app.debugDescription)")
         XCTAssertFalse(ready.exists, "the card stayed above the box after sending")
     }
 

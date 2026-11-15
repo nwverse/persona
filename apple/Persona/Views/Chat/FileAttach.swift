@@ -301,14 +301,7 @@ final class FileAttachments {
         }
         for url in urls.prefix(room) {
             let scoped = !owned && url.startAccessingSecurityScopedResource()
-            let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-            if size > FileUploads.limit {
-                if scoped { url.stopAccessingSecurityScopedResource() }
-                if owned { Self.discardOwned(url) }
-                model.toast = Toast(String(localized: "“\(url.lastPathComponent)” is \(size.storageText), over the 200 MB limit, and can't be sent"), style: .error)
-                continue
-            }
-            let item = Item(name: url.lastPathComponent, size: size)
+            let item = Item(name: url.lastPathComponent, size: 0) // its size is read off the main actor (`run`)
             items.append(item)
             jobs[item.id] = Job(url: url, scoped: scoped, owned: owned, machine: machine, dest: dest, model: model)
         }
@@ -382,9 +375,18 @@ final class FileAttachments {
             if let made = copies[id] {
                 copy = made
             } else {
-                defer {
-                    if job.scoped { job.url.stopAccessingSecurityScopedResource(); job.scoped = false; jobs[id]?.scoped = false }
+                defer { // the picked file is needed only until it is copied
+                    if jobs[id]?.scoped == true { job.url.stopAccessingSecurityScopedResource(); jobs[id]?.scoped = false }
                 }
+                let picked = await Self.size(of: job.url)
+                if picked > FileUploads.limit {
+                    let size = picked.storageText
+                    job.model.toast = Toast(String(localized: "“\(name)” is \(size), over the 200 MB limit, and can't be sent"), style: .error)
+                    items.removeAll { $0.id == id }
+                    drop(id)
+                    return
+                }
+                if picked > 0 { update(id) { $0.size = picked } }
                 if job.owned {
                     copy = job.url
                 } else {
@@ -397,7 +399,7 @@ final class FileAttachments {
                 copies[id] = copy
             }
             try Task.checkCancellation()
-            let size = (try? copy.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+            let size = await Self.size(of: copy)
             if size > 0 { update(id) { $0.size = size } }
             guard let api = job.model.api(job.machine.group) else {
                 throw APIError(status: 0, message: String(localized: "Not connected to the hub [App Model 93d955]"))
@@ -438,6 +440,11 @@ final class FileAttachments {
         } else if let copy {
             try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) // FileUploads.stage's own folder
         }
+    }
+
+    /// A file's size, read off the main actor (docs/apple/performance.md P1); 0 when it can't be read.
+    nonisolated static func size(of url: URL) async -> Int64 {
+        await Task.detached { Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }.value
     }
 
     /// The app's own copy of a file, with the directory made for it.
