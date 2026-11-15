@@ -115,7 +115,7 @@ final class ExtensionNavEntryTests: XCTestCase {
         let window = app.windows.firstMatch
         XCTAssertGreaterThan(window.frame.width, window.frame.height)
         let udid = try XCTUnwrap(env["PERSONA_SIM_UDID"], "the task-owned simulator id")
-        let capture = Process()
+        let capture = Foundation.Process()
         capture.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         capture.arguments = ["simctl", "io", udid, "screenshot", dir + "/ipad-usage-landscape-simctl.png"]
         try capture.run()
