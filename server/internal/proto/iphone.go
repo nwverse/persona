@@ -55,6 +55,9 @@ type IPhoneDevice struct {
 	// DeveloperMode is what the iPhone last said of its Developer Mode (at pairing, then whenever it answered); absent
 	// when it never said.
 	DeveloperMode *bool `json:"developer_mode,omitempty"`
+	// AutoPrepare: its owner prepared it once from the app (its developer disk image mounted), so this computer mounts
+	// the image again by itself whenever it comes back without it, as after a restart (#8199).
+	AutoPrepare bool `json:"auto_prepare,omitempty"`
 	// Allowed is the manager's: the computer is on and this iPhone consented.
 	Allowed bool `json:"allowed"`
 }
