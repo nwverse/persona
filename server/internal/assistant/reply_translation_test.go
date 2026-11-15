@@ -14,16 +14,18 @@ import (
 
 func TestReplyTranslationUsesTranslatePurposeAndCache(t *testing.T) {
 	h := newInboxHub(t)
-	model, calls := captureModel(t, `{"texts":["A translated **reply**"]}`)
+	translated := "    npm test\n\nA translated **reply**\n"
+	answer, _ := json.Marshal(map[string][]string{"texts": {translated}})
+	model, calls := captureModel(t, string(answer))
 	h.in.mu.Lock()
 	h.in.models[purposeTranslate] = model
 	h.in.models[purposeTriage] = fakeModel(t, `{"texts":["Wrong purpose"]}`)
 	h.in.mu.Unlock()
-	input := "**Original** " + strings.Repeat("A long reply with Markdown.\n", 100)
+	input := "    npm test\n\n**Original** " + strings.Repeat("A long reply with Markdown.\n", 100)
 	body, _ := json.Marshal(map[string]string{"text": input, "target": "zh-Hans"})
 	for i := range 2 {
 		code, result := inboxCall(t, h.routes(), "POST", "/api/v1/translate/message", string(body))
-		if code != http.StatusOK || result["text"] != "A translated **reply**" {
+		if code != http.StatusOK || result["text"] != translated {
 			t.Fatalf("click %d: %d %v", i, code, result)
 		}
 	}
@@ -33,7 +35,7 @@ func TestReplyTranslationUsesTranslatePurposeAndCache(t *testing.T) {
 	var request struct {
 		Texts []string `json:"texts"`
 	}
-	if err := json.Unmarshal([]byte(calls()[0].User), &request); err != nil || len(request.Texts) != 1 || request.Texts[0] != strings.TrimSpace(input) {
+	if err := json.Unmarshal([]byte(calls()[0].User), &request); err != nil || len(request.Texts) != 1 || request.Texts[0] != input {
 		t.Fatalf("long reply was clipped or context was sent: %d texts (%v)", len(request.Texts), err)
 	}
 	if !strings.Contains(calls()[0].System, "简体中文") { // i18n-ignore: the prompt's target language
@@ -76,12 +78,15 @@ func TestReplyTranslationRejectsInvalidInputWithoutCallingModel(t *testing.T) {
 }
 
 func TestReplyTranslationRejectsEmptyModelOutput(t *testing.T) {
-	h := newInboxHub(t)
-	h.in.mu.Lock()
-	h.in.models[purposeTranslate] = fakeModel(t, `{"texts":[""]}`)
-	h.in.mu.Unlock()
-	if code, _ := inboxCall(t, h.routes(), "POST", "/api/v1/translate/message", `{"text":"Original","target":"en"}`); code != http.StatusBadGateway {
-		t.Fatalf("empty translation returned HTTP %d", code)
+	for _, text := range []string{"", " \t "} {
+		h := newInboxHub(t)
+		answer, _ := json.Marshal(map[string][]string{"texts": {text}})
+		h.in.mu.Lock()
+		h.in.models[purposeTranslate] = fakeModel(t, string(answer))
+		h.in.mu.Unlock()
+		if code, _ := inboxCall(t, h.routes(), "POST", "/api/v1/translate/message", `{"text":"Original","target":"en"}`); code != http.StatusBadGateway {
+			t.Fatalf("empty translation returned HTTP %d", code)
+		}
 	}
 }
 

@@ -90,10 +90,15 @@ func (s *Service) translateTextsLimit(ctx context.Context, texts []string, targe
 	}
 	b := &s.inbox
 	out := make([]string, len(texts))
+	source := make([]string, len(texts))
 	var todo []int
 	for i, t := range texts {
-		t = strings.TrimSpace(t)
-		if t == "" {
+		// A reply's leading indentation can be Markdown code, unlike a normalized short text.
+		if limit == translateText {
+			t = strings.TrimSpace(t)
+		}
+		source[i] = t
+		if strings.TrimSpace(t) == "" {
 			continue
 		}
 		if v, ok := b.translations.get(translateKey("t", strconv.Itoa(limit), fingerprint, target, t)); ok {
@@ -108,7 +113,7 @@ func (s *Service) translateTextsLimit(ctx context.Context, texts []string, targe
 	in := make([]string, len(todo))
 	total := 0
 	for j, i := range todo {
-		in[j] = clip(strings.TrimSpace(texts[i]), limit)
+		in[j] = clip(source[i], limit)
 		total += len([]rune(in[j]))
 	}
 	body, _ := json.Marshal(map[string]any{"texts": in})
@@ -125,10 +130,13 @@ func (s *Service) translateTextsLimit(ctx context.Context, texts []string, targe
 		return nil, i18n.ErrEnglish("inbox-errors.translation_count", i18n.Args{"actual": len(res.Texts), "expected": len(in)})
 	}
 	for j, i := range todo {
-		v := strings.TrimSpace(res.Texts[j])
+		v := res.Texts[j]
+		if limit == translateText {
+			v = strings.TrimSpace(v)
+		}
 		out[i] = v
-		if v != "" {
-			b.translations.put(translateKey("t", strconv.Itoa(limit), fingerprint, target, strings.TrimSpace(texts[i])), v)
+		if strings.TrimSpace(v) != "" {
+			b.translations.put(translateKey("t", strconv.Itoa(limit), fingerprint, target, source[i]), v)
 		}
 	}
 	return out, nil
@@ -228,7 +236,7 @@ func (s *Service) translateRoutes() {
 			writeTranslateError(w, err)
 			return
 		}
-		if out[0] == "" {
+		if strings.TrimSpace(out[0]) == "" {
 			writeTranslateError(w, i18n.ErrEnglish("inbox-errors.translation_empty"))
 			return
 		}
