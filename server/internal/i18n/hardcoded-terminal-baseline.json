@@ -1,5 +1,4 @@
 {
-  "cmd/password-wasm/main.go": 3,
   "cmd/persona-link/discover.go": 4,
   "cmd/persona-link/explain.go": 9,
   "cmd/persona-link/logfile.go": 2,
