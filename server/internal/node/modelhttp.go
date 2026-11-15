@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -58,7 +60,19 @@ func modelHTTP(ctx context.Context, params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, errors.New("model.http: bad request")
 	}
-	req.Header = http.Header(p.Header)
+	if p.Header != nil {
+		req.Header = http.Header(p.Header)
+	}
+	// Forwarded header names can have any casing; normalize only User-Agent before applying its default.
+	for k, values := range req.Header {
+		if k != "User-Agent" && strings.EqualFold(k, "User-Agent") {
+			if _, exists := req.Header["User-Agent"]; !exists {
+				req.Header["User-Agent"] = values
+			}
+			delete(req.Header, k)
+		}
+	}
+	modelhttp.SetDefaultUserAgent(req.Header)
 	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("model.http: %w", err)
