@@ -1259,19 +1259,20 @@ if os.environ.get("MOCK_PASEO"):
 # lists them: under Paseo's own id (agent "paseo"), each with its provider as launcher and the provider's label
 # (agent_label). Grok waits for an approval (its card names Grok); Cursor, whose mark the web has, is idle. The model
 # capability is the node's for a runtime that switches models (Paseo); their launchers are on the server's list
-# (machine_launchers).
+# (machine_launchers). Both have Auto Accept, so they list the two modes they take (#8261, capabilities.permission_modes)
+# beside modes false: Grok runs on its own approval (no mode reported) at its model's high effort, Cursor in Full access.
 PASEO_GROK, PASEO_CURSOR = "paseo-9a5e0000-0000-4000-8000-000000000010", "paseo-9a5e0000-0000-4000-8000-000000000011"
 PASEO_PROVIDERS = bool(os.environ.get("MOCK_PASEO_PROVIDERS"))
 if PASEO_PROVIDERS:
     _provider_caps = {"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False,
-                      "close": True, "rename": True, "model": True}
+                      "close": True, "rename": True, "model": True, "modes": False, "permission_modes": ["default", "bypassPermissions"]}
     SESSIONS += [
         _paseo(PASEO_GROK, "Check the release notes", "Triage", None, "main", "blocked", "needs_you", 1,
                "May I run the release script?", agent="paseo", agent_label="Grok", launcher="grok", model="grok-4",
-               pending_interactions=1, capabilities=_provider_caps),
+               pending_interactions=1, capabilities=_provider_caps, efforts=["low", "high"], effort="high"),
         _paseo(PASEO_CURSOR, "Tidy the settings page", "Triage", None, "main", "idle", "idle", 20,
                "Moved the toggles into one group.", agent="paseo", agent_label="Cursor", launcher="cursor", model="auto",
-               capabilities=_provider_caps),
+               capabilities=dict(_provider_caps), permission_mode="bypassPermissions"),
     ]
 # MOCK_PASEO_NOT_LOADED=1 (#8321, on the Paseo computer): a Grok agent Paseo let go (closed after an hour idle, listed
 # offline). As its bridge does since #8132, every read of its chat is refused as not_loaded until a subscribe watches
@@ -14009,7 +14010,8 @@ LAUNCHER_MODELS["claude-desktop"] = {"agent": "claude", "models": [], "locked": 
 # MOCK_PASEO_PROVIDERS=1 (#8142): Paseo's Grok and Cursor providers, as the node lists a runtime's launcher models (agent
 # "paseo": the runtime's own id, for an agent the apps have no id for).
 if PASEO_PROVIDERS:
-    LAUNCHER_MODELS["grok"] = {"agent": "paseo", "models": [{"id": "grok-4", "name": "Grok 4", "default": True},
+    # Grok 4's thinking options among Persona's levels (#8261): New Agent offers those alone for it, none for Grok 4 Fast
+    LAUNCHER_MODELS["grok"] = {"agent": "paseo", "models": [{"id": "grok-4", "name": "Grok 4", "default": True, "efforts": ["low", "high"]},
                                                             {"id": "grok-4-fast", "name": "Grok 4 Fast"}]}
     LAUNCHER_MODELS["cursor"] = {"agent": "paseo", "models": [{"id": "auto", "name": "Auto", "default": True},
                                                               {"id": "grok-4", "name": "Grok 4"}]}
@@ -14299,8 +14301,10 @@ def machine_launchers(mid=""):
         # Its Codex App runs: its launcher starts a chat there (#5726, docs/integrations/codex.md).
         out.append({"name": "codex-app", "model": "", "source": "codex_app", "agent": "codex", "agent_type": "codex"})
     if PASEO_PROVIDERS and mid == "server":
-        # Paseo's providers the apps have no id for (#8142): the runtime's own id as their agent, the runtime as source
-        out += [{"name": n, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo"} for n, m in (("grok", "Grok 4"), ("cursor", "Auto"))]
+        # Paseo's providers the apps have no id for (#8142): the runtime's own id as their agent, the runtime as source,
+        # named as in Paseo and saying the modes a start takes (#8261)
+        out += [{"name": n, "display_name": d, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo",
+                 "permission_modes": ["default", "bypassPermissions"]} for n, d, m in (("grok", "Grok", "Grok 4"), ("cursor", "Cursor", "Auto"))]
     if machine_alerts.ON:
         return machine_alerts.with_health(mid, out)
     return launcher_health_list(out)
@@ -22158,6 +22162,39 @@ if os.environ.get("MOCK_COMPUTER", "") not in ("", "off"):
                                             tool_name="mcp__cua-driver__click",
                                             tool_input={"app": "Simulator", "role": "button", "name": "小组件"})]
 
+def frame_png(w, h, top, bottom, band):
+    """A made-up video frame (stdlib only): a vertical gradient from top to bottom, with a band of one color across
+    its lower part, where a frame's burnt-in subtitle sits."""
+    import zlib
+    rows = []
+    for y in range(h):
+        if h * 0.78 <= y < h * 0.86:
+            px = bytes(band)
+        else:
+            t = y / max(h - 1, 1)
+            px = bytes(round(a + (b - a) * t) for a, b in zip(top, bottom))
+        rows.append(b"\0" + px * w)
+    def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+
+
+if os.environ.get("MOCK_TOOL_IMAGES") == "1":
+    # A connector's tool answered with pictures (#8484): the hub gives the model the text, then a line and a picture for
+    # each frame, as the transcript has them (one result, image items on the call). Made-up frames of a made-up video.
+    _frames = [("00:00 片头", (250, 214, 160), (214, 120, 72)), ("00:14 煎蛋", (255, 236, 179), (236, 170, 60)),
+               ("00:38 摆盘", (200, 228, 201), (90, 150, 110))]
+    _ask_pic = it("user", "text", 2, text="帮我看看这个早餐视频讲了什么")  # numbered first: it() numbers in order
+    _text = "视频「周末早餐」，0:42，3 帧，有声音。\n" + "\n".join(
+        "[image %d of %d] %s" % (i + 1, len(_frames), c) for i, (c, _, _) in enumerate(_frames))
+    _video = looked("mcp__persona__example_video", {"note": "n-1024", "frames": 3}, _text, 1,
+                    *[(base64.b64encode(frame_png(216, 384, a, b, (40, 40, 40))).decode(), 216, 384) for _, a, b in _frames])
+    ASK_PIC = "b2e4d6f8-0000-4000-8000-0000000000c7"  # a conversation of its own: -openAssistant server/<it>
+    ASSISTANT.append(assistant_sess(ASK_PIC, "这个早餐视频讲了什么", 1, "一段 42 秒的早餐视频：先煎蛋，最后摆盘。"))
+    ITEMS[ASK_PIC] = [_ask_pic] + _video + \
+        [it("assistant", "text", 1, text="一段 42 秒的早餐视频：开头是片头，14 秒开始煎蛋，最后在 38 秒摆盘。"
+                                         "画面里能看到的步骤就这三个，具体火候视频里没说。")]
+
 if os.environ.get("MOCK_CHURN") == "1":
     # Machines enough that the ⋯ menu scrolls, as it does with six on a phone.
     for _i, _n in enumerate(["构建机", "测试机", "Mac mini", "Mac mini 2", "训练机"]):
@@ -25815,6 +25852,13 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/sessions/") and p.endswith("/info"):  # the chat's "Developer info" card
             s = next((s for s in all_sessions() if s["session_id"] == p.split("/")[5]), {})
             codex = s.get("agent") == "codex"
+            if s.get("agent") == "paseo":
+                # a Paseo provider's session has no transcript here: the node says nobody gives its counts (#8261), and
+                # keeps zeros for older apps
+                return self.send_json({"session_id": s["session_id"], "cwd": s.get("cwd"), "model": s.get("model"), "agent": "paseo",
+                                       "launcher": s.get("launcher"), "permission_mode": s.get("permission_mode"), "effort": s.get("effort"),
+                                       "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "usage_unknown": True,
+                                       "last_activity": ago()})
             return self.send_json({"session_id": s.get("session_id", ""), "cwd": s.get("cwd"),
                                    "model": "gpt-5.5" if codex else "claude-opus-5",
                                    "launcher": s.get("launcher"), "git_branch": "main", "version": "0.153.0" if codex else "2.1.320",
