@@ -53,6 +53,9 @@ internal const val GitHubTokenUrl = "https://github.com/settings/personal-access
 /** A successful uninstall with cleanup left for the user, held until its OK. */
 internal data class ExtensionRemovalNotice(val title: String, val warnings: List<String>, val operation: String? = null)
 
+/** Enough terminal operations to order delayed packets without retaining the hub's whole history in the page. */
+private const val REMOVAL_HISTORY_LIMIT = 32
+
 /** Only actionable hub warnings open the cleanup sheet; null, empty and blank results keep the ordinary success path. */
 internal fun extensionRemovalNotice(
     res: Resources,
@@ -284,8 +287,15 @@ internal class CatalogExtensionModel(
     private val earlyRemovalEvents = mutableMapOf<String, ExtensionOperation>()
     /** Warnings and terminal outcomes are cumulative: a late packet can add warnings but cannot revive an old operation. */
     private val removalWarnings = mutableMapOf<String, List<String>>()
-    private val finishedRemovals = mutableMapOf<String, FinishedRemoval>()
-    private data class FinishedRemoval(val operation: ExtensionOperation, val members: Boolean)
+    private val acknowledgedRemovalWarnings = mutableMapOf<String, List<String>>()
+    private val removalNoticeQueue = ArrayDeque<ExtensionRemovalNotice>()
+    private val finishedRemovals = linkedMapOf<String, FinishedRemoval>()
+    private data class FinishedRemoval(
+        val operation: ExtensionOperation,
+        val keepData: Boolean,
+        val members: Boolean,
+        val notify: Boolean,
+    )
     /** What the last uninstall that went through at once removed (its members, #1154). */
     var removal: ExtensionRemoval? = null
         private set
@@ -311,7 +321,15 @@ internal class CatalogExtensionModel(
         // The manager keeps operations only in memory: one it no longer lists was lost with a restart of it (#1832), and
         // no push will end it. The page lets go of it, so Install / Upgrade can start again.
         state.value.operation?.let { held -> if (list.none { it.id == held.id }) gone(held) }
-        list.filter { mine(it, requestOwned = true) }.maxByOrNull { OperationText.instant(it.startedAt) }?.let { track(it, requestOwned = true) }
+        val mine = list.filter { mine(it, requestOwned = true) }
+        val latest = mine.maxByOrNull { OperationText.instant(it.startedAt) }
+        // Every listed terminal operation orders later packets, not just the one the page displays. Historical outcomes
+        // are tombstones only: reconnecting must not replay a toast or a cleanup sheet.
+        mine.filter { it.id != latest?.id && it.kind == "uninstall" && removalEnded(it) }.forEach { incoming ->
+            val (op, _) = rememberRemovalWarnings(incoming)
+            recordFinishedRemoval(op, keepData = true, members = false, notify = false)
+        }
+        latest?.let { track(it, requestOwned = true) }
     }
 
     /** An operation the manager does not know (any more): nothing to wait for, cancel or retry. */
@@ -335,11 +353,17 @@ internal class CatalogExtensionModel(
         val merged = (previous + op.warnings.orEmpty().filter { it.isNotBlank() }).distinct()
         if (merged.isNotEmpty()) removalWarnings[op.id] = merged
         val warnings = if (merged.isEmpty()) op.warnings else merged
-        return op.copy(warnings = warnings) to merged.size > previous.size
+        return op.copy(warnings = warnings) to (merged.size > previous.size)
     }
 
     private fun removalEnded(op: ExtensionOperation): Boolean =
         op.state == ExtensionOperation.Succeeded || op.state == ExtensionOperation.Failed || op.state == ExtensionOperation.Canceled
+
+    private fun recordFinishedRemoval(op: ExtensionOperation, keepData: Boolean, members: Boolean, notify: Boolean) {
+        finishedRemovals.remove(op.id)
+        finishedRemovals[op.id] = FinishedRemoval(op, keepData, members, notify)
+        while (finishedRemovals.size > REMOVAL_HISTORY_LIMIT) finishedRemovals.remove(finishedRemovals.keys.first())
+    }
 
     /** While the start request is in flight, only this extension's removal packets are held for its response's operation id. */
     private fun cacheEarlyRemoval(op: ExtensionOperation) {
@@ -361,21 +385,35 @@ internal class CatalogExtensionModel(
         val newer = OperationText.newer(op, previous)
         val updated = if (newer && op.state == previous.state) op.copy(warnings = removalWarnings[op.id].orEmpty())
         else previous.copy(warnings = removalWarnings[op.id].orEmpty())
-        finishedRemovals[op.id] = finished.copy(operation = updated)
+        recordFinishedRemoval(updated, finished.keepData, finished.members, finished.notify)
         if (previous.state == ExtensionOperation.Failed && op.state == ExtensionOperation.Failed && newer && state.value.operation?.id == op.id) {
             mutable.update { it.copy(operation = updated) }
         }
-        if (previous.state == ExtensionOperation.Succeeded && hasNewWarnings) presentLateRemovalWarnings(updated, finished.members)
+        if (previous.state == ExtensionOperation.Succeeded && hasNewWarnings && finished.notify) queueRemovalNotice(updated, finished.members)
     }
 
-    /** Late warnings supplement the original success without a second toast or replacing another operation's notice. */
-    private fun presentLateRemovalWarnings(op: ExtensionOperation, members: Boolean) {
-        val held = state.value.removalNotice
-        if (held?.operation != null && held.operation != op.id) return
+    /** Queues each operation's unacknowledged cleanup lines; only OK consumes them, never their arrival or another sheet. */
+    private fun queueRemovalNotice(op: ExtensionOperation, members: Boolean) {
+        val acknowledged = acknowledgedRemovalWarnings[op.id].orEmpty()
+        val pending = removalWarnings[op.id].orEmpty().filter { it !in acknowledged }
+        if (pending.isEmpty()) return
         val name = state.value.extension?.label ?: op.name ?: op.extension
-        removal = ExtensionRemoval(warnings = op.warnings)
+        removal = ExtensionRemoval(warnings = pending)
         val notice = extensionRemovalNotice(res, name, members, removal, stepped = true, operation = op.id) ?: return
-        mutable.update { it.copy(removalNotice = notice) }
+        if (state.value.removalNotice?.operation == op.id) {
+            mutable.update { it.copy(removalNotice = notice) }
+            return
+        }
+        val queued = removalNoticeQueue.indexOfFirst { it.operation == op.id }
+        if (queued >= 0) removalNoticeQueue[queued] = notice else removalNoticeQueue.addLast(notice)
+        presentNextRemovalNotice()
+    }
+
+    private fun presentNextRemovalNotice() {
+        if (state.value.removalNotice != null || state.value.operation?.active == true || removalNoticeQueue.isEmpty()) return
+        val next = removalNoticeQueue.removeFirst()
+        removal = ExtensionRemoval(warnings = next.warnings)
+        mutable.update { it.copy(removalNotice = next) }
     }
 
     /** Keeps op when it is this extension's and newer than what the page has; what it waits for or how it ended follows. */
@@ -397,39 +435,46 @@ internal class CatalogExtensionModel(
         val was = state.value.operation
         if (was != null && was.id == op.id && !OperationText.newer(op, was)) return
         // A historical success from relisting is not news; this start's own response and pushes still are.
-        if (was?.id != op.id && !op.active && !op.failed && !startedHere && removing?.operation != op.id) return
+        if (was?.id != op.id && !op.active && !op.failed && !startedHere && removing?.operation != op.id) {
+            if (op.kind == "uninstall" && removalEnded(op)) recordFinishedRemoval(op, keepData = true, members = false, notify = false)
+            return
+        }
         val refused = op.failed && op.kind == "uninstall" && op.errorCode == "has_dependents"
         val asked = removing?.takeIf { it.operation == op.id }
         if (!op.active && !refused && asked != null) removing = null
         when (op.state) {
             ExtensionOperation.Succeeded -> {
                 val name = state.value.extension?.label ?: op.name ?: op.extension
+                val members = asked?.members == true
                 if (op.kind == "uninstall") {
                     removal = ExtensionRemoval(warnings = op.warnings)
-                    finishedRemovals[op.id] = FinishedRemoval(op, asked?.members == true)
+                    recordFinishedRemoval(op, asked?.keepData ?: true, members, notify = true)
+                    queueRemovalNotice(op, members)
                 }
                 // A pack's removal with its members ends only once every member is gone (#1154).
-                val message = if (op.kind == "uninstall" && asked?.members == true)
+                val message = if (op.kind == "uninstall" && members)
                     ExtensionText.uninstalled(res, name, members = true, stepped = true) else OperationText.done(res, op, name)
-                val notice = if (op.kind == "uninstall")
-                    extensionRemovalNotice(res, name, asked?.members == true, removal, stepped = true, operation = op.id) else null
                 mutable.update {
-                    it.copy(operation = null, consentFor = null, preview = if (it.consentFor == op.id) null else it.preview,
-                        removalNotice = if (op.kind == "uninstall") notice else it.removalNotice)
+                    it.copy(operation = null, consentFor = null, preview = if (it.consentFor == op.id) null else it.preview)
                 }
-                // Cleanup warnings replace the success toast; the sheet is the acknowledgement, not a retry prompt.
-                if (op.kind != "uninstall" || notice == null) onDone(message)
+                presentNextRemovalNotice()
+                val acknowledged = acknowledgedRemovalWarnings[op.id].orEmpty()
+                val hasCleanup = op.kind == "uninstall" && removalWarnings[op.id].orEmpty().any { it !in acknowledged }
+                // Cleanup warnings replace the success toast; each sheet waits for its own acknowledgement.
+                if (op.kind != "uninstall" || !hasCleanup) onDone(message)
                 // Installed but not signed in: straight on to its sign-in.
                 if (op.next == "auth" && op.kind != "uninstall") onSignIn(op.extension.ifBlank { id })
                 load()
             }
             ExtensionOperation.Canceled -> {
-                if (op.kind == "uninstall") finishedRemovals[op.id] = FinishedRemoval(op, asked?.members == true)
+                if (op.kind == "uninstall") recordFinishedRemoval(op, asked?.keepData ?: true, asked?.members == true, notify = true)
                 mutable.update { it.copy(operation = null, consentFor = null, preview = if (it.consentFor == op.id) null else it.preview) }
+                presentNextRemovalNotice()
             }
             else -> {
-                if (op.kind == "uninstall" && op.failed) finishedRemovals[op.id] = FinishedRemoval(op, asked?.members == true)
+                if (op.kind == "uninstall" && op.failed) recordFinishedRemoval(op, asked?.keepData ?: true, asked?.members == true, notify = true)
                 mutable.update { it.copy(operation = op) }
+                presentNextRemovalNotice()
                 if (op.state == ExtensionOperation.NeedsConsent && state.value.consentFor != op.id) askConsent(op)
                 // The operation carries only the code, not who depends on it.
                 if (refused && asked != null) mutable.update { it.copy(cascade = ExtensionCascade(emptyList(), asked.keepData, asked.members)) }
@@ -454,6 +499,31 @@ internal class CatalogExtensionModel(
         state.value.operation?.takeIf { it.state == ExtensionOperation.NeedsConsent }?.let { askConsent(it) }
     }
 
+    /** A first removal and its Retry share the same in-flight pairing: early pushes join the response's new operation id. */
+    private suspend fun startSteppedRemoval(
+        keepData: Boolean,
+        members: Boolean,
+        start: suspend () -> ExtensionOperation,
+    ): ExtensionOperation {
+        removing = null
+        startingRemoval = true
+        earlyRemovalEvents.clear()
+        try {
+            val op = start()
+            startingRemoval = false
+            removing = Removal(op.id, keepData, members)
+            val early = earlyRemovalEvents[op.id]
+            earlyRemovalEvents.clear()
+            track(op, requestOwned = true, startedHere = true)
+            // A terminal push that beat the HTTP answer wins over its older running snapshot, and is applied once.
+            if (early != null && early != op) track(early, requestOwned = true, startedHere = true)
+            return op
+        } finally {
+            startingRemoval = false
+            earlyRemovalEvents.clear()
+        }
+    }
+
     /** A failed operation again, from where it can. */
     suspend fun retry(): Boolean {
         val op = state.value.operation?.takeIf { it.failed && it.retryable } ?: return false
@@ -466,8 +536,12 @@ internal class CatalogExtensionModel(
         }
         mutable.update { it.copy(acting = true, actionError = null) }
         return try {
-            val next = api.retryOperation(op.id)
-            track(next, requestOwned = true, startedHere = op.kind == "uninstall")
+            if (op.kind == "uninstall") {
+                val previous = finishedRemovals[op.id]
+                startSteppedRemoval(previous?.keepData ?: true, previous?.members == true) { api.retryOperation(op.id) }
+            } else {
+                track(api.retryOperation(op.id), requestOwned = true)
+            }
             true
         }
         catch (cancelled: CancellationException) { throw cancelled }
@@ -578,26 +652,11 @@ internal class CatalogExtensionModel(
     suspend fun uninstall(keepData: Boolean, cascade: Boolean = false, members: Boolean = false): Boolean {
         if (state.value.busy) return false
         removal = null
-        mutable.update { it.copy(acting = true, actionError = null, partial = null, removalNotice = null) }
+        mutable.update { it.copy(acting = true, actionError = null, partial = null) }
         return try {
             if (stepped()) {
-                removing = null
-                startingRemoval = true
-                earlyRemovalEvents.clear()
-                try {
-                    val op = api.startUninstall(id, keepData, cascade, members)
-                    startingRemoval = false
-                    removing = Removal(op.id, keepData, members)
-                    val early = earlyRemovalEvents[op.id]
-                    earlyRemovalEvents.clear()
-                    track(op, requestOwned = true, startedHere = true)
-                    // A terminal push that beat the HTTP answer wins over its older running snapshot, and is applied once.
-                    if (early != null && early != op) track(early, requestOwned = true, startedHere = true)
-                    return false
-                } finally {
-                    startingRemoval = false
-                    earlyRemovalEvents.clear()
-                }
+                startSteppedRemoval(keepData, members) { api.startUninstall(id, keepData, cascade, members) }
+                return false
             }
             val completed = api.uninstall(id, keepData, cascade, members)
             removal = completed
@@ -631,10 +690,16 @@ internal class CatalogExtensionModel(
 
     fun dismissPartial() = mutable.update { it.copy(partial = null) }
 
-    /** The cleanup sheet's OK: only now may its result be forgotten. */
+    /** The cleanup sheet's OK: only now are its lines consumed and the next operation's cleanup shown. */
     fun dismissRemovalNotice() {
+        val acknowledged = state.value.removalNotice
+        acknowledged?.operation?.let { id ->
+            acknowledgedRemovalWarnings[id] = (acknowledgedRemovalWarnings[id].orEmpty() + acknowledged.warnings).distinct()
+            removalNoticeQueue.removeAll { it.operation == id }
+        }
         removal = null
         mutable.update { it.copy(removalNotice = null) }
+        presentNextRemovalNotice()
     }
 }
 

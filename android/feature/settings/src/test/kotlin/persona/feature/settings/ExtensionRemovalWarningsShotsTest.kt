@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.filterToOne
 import androidx.compose.ui.test.hasAnyAncestor
@@ -19,7 +21,6 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -36,7 +37,6 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.api.CatalogExtension
-import persona.core.contracts.api.ExtensionApiStub
 import persona.core.contracts.api.ExtensionDetail
 import persona.core.contracts.api.ExtensionRemoval
 import persona.core.contracts.api.HubExtension
@@ -191,7 +191,9 @@ class ExtensionRemovalWarningsShotsTest {
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h1400dp-xhdpi")
     @Test fun marketRemovalShowsOnlyReturnedWarnings() {
-        val api = FakeOperations(stepped = false).apply {
+        val api = object : FakeOperations(stepped = false) {
+            override suspend fun extension(id: String) = ExtensionDetail(HubExtension(id, "Example Notes", "ui", "running"))
+        }.apply {
             catalog = listOf(
                 CatalogExtension(
                     "m1", id = "example-notes", name = "Example Notes", version = "1.2.0", installed = "1.2.0",
