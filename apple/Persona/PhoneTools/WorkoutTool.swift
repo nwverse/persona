@@ -341,3 +341,4 @@ enum WorkoutTool {
     }
 }
 #endif
+import PersonaWire

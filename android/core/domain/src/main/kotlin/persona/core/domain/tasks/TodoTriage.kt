@@ -38,15 +38,21 @@ const val JUST_DONE_MS: Long = 24 * 3_600_000L
 private fun ms(at: String?): Long = parseTime(at)?.toEpochMilli() ?: 0L
 
 /** The web's todo status (`web/src/lib/todos.ts` `todoStatus`), which the triage reads: an open ask does not make it Needs you. */
-enum class TriageStatus { Failed, Done, NotStarted, NeedsYou, Interrupted, Unread, Working, FollowUp }
+enum class TriageStatus { Failed, Done, NotStarted, NeedsYou, Interrupted, UsageLimit, Unread, Working, FollowUp }
 
-/** The status the triage reads from the to-do and its current agents' sessions, as the web computes it. */
-fun Todo.triageStatus(lookup: (SessionKey) -> Session?): TriageStatus {
+/**
+ * The status the triage reads from the to-do and its current agents' sessions, as the web computes it.
+ * A subscription usage limit ([Session.isUsageLimited]) is its own status (iOS `AgentsStatus.usageLimit`): it is not
+ * [Session.interrupted], which stays the shared flag the capsule and the Agents list already use. [now] is epoch
+ * millis, so a limit past its grace reads as interrupted on the next tick.
+ */
+fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.currentTimeMillis()): TriageStatus {
     if (!startError.isNullOrEmpty()) return TriageStatus.Failed
     if (isDone) return TriageStatus.Done
     val active = currentAgents
     if (active.isEmpty()) return TriageStatus.NotStarted
     var interrupted = false
+    var limit = false
     var unread = false
     var working = false
     for (a in active) {
@@ -55,6 +61,7 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?): TriageStatus {
         val st = s?.agentState ?: AgentState.Offline
         if (st == AgentState.NeedsYou) return TriageStatus.NeedsYou
         when {
+            s?.isUsageLimited(now) == true -> limit = true
             s?.interrupted == true -> interrupted = true
             st == AgentState.Unread -> unread = true
             st == AgentState.Working || s?.starting == true -> working = true
@@ -62,6 +69,7 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?): TriageStatus {
     }
     return when {
         interrupted -> TriageStatus.Interrupted
+        limit -> TriageStatus.UsageLimit
         unread -> TriageStatus.Unread
         working -> TriageStatus.Working
         else -> TriageStatus.FollowUp
@@ -100,6 +108,7 @@ val Todo.hasOpenPR: Boolean
 
 /** A task (an agent was linked, or a conversation handed it out) with no due date ahead: the user's own reminders never shelve. */
 private fun Todo.shelvable(now: Long, zone: ZoneId): Boolean {
+    if (kind == "concern") return false
     val due = dueBy(zone)?.toEpochMilli()
     if (due != null && due >= now) return false
     return agents.isNotEmpty() || !origin.isNullOrEmpty()
@@ -121,6 +130,9 @@ private fun Todo.shelvable(now: Long, zone: ZoneId): Boolean {
  *  9a. Seen          rule 8, seen since it last moved, no PR open       → Done
  * 10. Stale          a task with no activity for 48 h                   → Shelved
  * 11. Rest           anything else                                      → Other open
+ *
+ * An open concern keeps rules 1–4, 8 and 9, never uses 6, 7, 9a or 10, and an old failed start is Rest.
+ * A closed concern follows rule 5 like any closed to-do (#3582).
  */
 fun Todo.triage(
     lookup: (SessionKey) -> Session?,
@@ -130,7 +142,7 @@ fun Todo.triage(
     superseded: Boolean = false,
 ): Triage {
     val last = lastActivity(lookup, restoredAt)
-    val status = triageStatus(lookup)
+    val status = triageStatus(lookup, now)
     // seen: the owner looked at it (`seen_at`, #5707) at or after `at`; fresh: it got to Just finished at `at`, under a day
     // ago, and is not seen since
     val seenMs = ms(this.seenAt)
@@ -139,23 +151,27 @@ fun Todo.triage(
     val ask = openAsk
     fun at(section: TriageSection, rule: TriageRule) = Triage(section, rule, last)
     val review = reviewState
+    // Only its report closes a concern: no other signal files an open one with finished work or shelves it.
+    val concern = kind == "concern" && !isDone
 
     if (status == TriageStatus.Failed) {
         // the same piece of work finished in a related to-do ([supersededFailedStarts]): history, nothing to retry
         if (superseded) return at(if (fresh(ms(doneAt).takeIf { it > 0 } ?: last)) TriageSection.JustDone else TriageSection.Done, TriageRule.Superseded)
-        return at(if (now - last < SHELVE_AFTER_MS) TriageSection.Waiting else TriageSection.Done, TriageRule.FailedStart)
+        if (now - last < SHELVE_AFTER_MS) return at(TriageSection.Waiting, TriageRule.FailedStart)
+        if (concern) return at(TriageSection.Other, TriageRule.Rest)
+        return at(TriageSection.Done, TriageRule.FailedStart)
     }
     if (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted) return at(TriageSection.Waiting, TriageRule.AgentAsks)
     if (!isDone && (review == "needs_user" || ask?.outcome == "decide" || ask?.outcome == "cannot")) return at(TriageSection.Waiting, TriageRule.OwnerDecides)
     if (status == TriageStatus.Working) return at(TriageSection.Working, TriageRule.AgentRunning)
     if (isDone) return at(if (fresh(ms(doneAt))) TriageSection.JustDone else TriageSection.Done, TriageRule.Closed)
-    if (acceptanceStands) return at(if (fresh(ms(supervision?.latestReview?.at))) TriageSection.JustDone else TriageSection.Done, TriageRule.Accepted)
-    if (delivery?.state == "live") return at(if (fresh(ms(delivery?.at).takeIf { it > 0 } ?: last)) TriageSection.JustDone else TriageSection.Done, TriageRule.Deployed)
+    if (!concern && acceptanceStands) return at(if (fresh(ms(supervision?.latestReview?.at))) TriageSection.JustDone else TriageSection.Done, TriageRule.Accepted)
+    if (!concern && delivery?.state == "live") return at(if (fresh(ms(delivery?.at).takeIf { it > 0 } ?: last)) TriageSection.JustDone else TriageSection.Done, TriageRule.Deployed)
     val finished = status == TriageStatus.Unread || review == "pending_review" || (ask != null && ask.outcome.isNullOrEmpty()) || ask?.outcome == "done"
     if (finished && !seen(last)) return at(TriageSection.JustDone, TriageRule.FinishedUnseen)
     if (hasOpenPR) return at(TriageSection.Pr, TriageRule.PrOpen)
-    // seen since it last moved, and no PR waits on the owner
-    if (finished) return at(TriageSection.Done, TriageRule.Seen)
+    // seen since it last moved, and no PR waits on the owner; an open concern is never Done
+    if (finished && !concern) return at(TriageSection.Done, TriageRule.Seen)
     if (shelvable(now, zone) && now - last >= SHELVE_AFTER_MS) return at(TriageSection.Shelved, TriageRule.Stale)
     return at(TriageSection.Other, TriageRule.Rest)
 }
@@ -196,10 +212,11 @@ fun Todo.bucket(lookup: (SessionKey) -> Session?, now: Long, restoredAt: Long = 
 fun Todo.checksAsOpen(t: Triage?): Boolean =
     !isDone || !startError.isNullOrEmpty() && t?.rule == TriageRule.FailedStart && t.section == TriageSection.Waiting
 
-/** An accepted task its hub reopened with more work, with nothing of it running or asking: it reads Accepted, not Follow up. */
+/** An accepted task its hub reopened with more work, with nothing of it running or asking: it reads Accepted, not Follow up.
+ * An open concern still waits for its report, so neither Accepted nor its done styling applies (#3582). */
 fun Todo.acceptedAtRest(lookup: (SessionKey) -> Session?): Boolean =
-    !isDone && acceptanceStands && triageStatus(lookup).let {
-        it == TriageStatus.FollowUp || it == TriageStatus.Unread || it == TriageStatus.NotStarted
+    kind != "concern" && !isDone && acceptanceStands && triageStatus(lookup).let {
+        it == TriageStatus.FollowUp || it == TriageStatus.Unread || it == TriageStatus.NotStarted || it == TriageStatus.UsageLimit
     }
 
 // ── Related to-dos ────────────────────────────────────────────
@@ -272,7 +289,8 @@ data class TriageResult(
     }
 }
 
-/** The row each to-do is in: the root of its related to-dos (union of shared keys), open and closed kept apart. */
+/** The row each to-do is in: the root of its related to-dos (union of shared keys), open and closed kept apart.
+ * An open concern always has its own row: it neither joins a related row nor lets another to-do join through its keys. */
 fun relatedRoots(list: List<Todo>): Map<String, String> {
     val parent = HashMap<String, String>().apply { list.forEach { put(it.id, it.id) } }
     fun find(id: String): String {
@@ -283,6 +301,7 @@ fun relatedRoots(list: List<Todo>): Map<String, String> {
     }
     val owner = HashMap<String, String>()
     for (td in list) {
+        if (td.kind == "concern" && !td.isDone) continue
         val side = if (td.isDone) "c" else "o"
         for (k in td.relatedKeys()) {
             val key = "$side|$k"

@@ -215,6 +215,27 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
     }))
     .ok()
     .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects static transcript rows into turns from a JSON input string. Pure function, no runtime handle needed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectTurns<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::turns::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::turns::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
     .unwrap_or_default()
 }
 

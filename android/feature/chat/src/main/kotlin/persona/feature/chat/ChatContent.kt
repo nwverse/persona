@@ -171,6 +171,8 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
                     markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
                     listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table,
+                    enabled = !LocalInPicture.current) },
                 codeFence = { model ->
                     MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset), color, bodyStyle) {
                         // A card fence the hub's rules do not take as standalone (in a list or a quote): an example, drawn as
@@ -343,6 +345,9 @@ internal fun ChatLineContent(
                 // only the block goes; a reply that said nothing else is not drawn at all
                 if (!hideCloseout || !onlyCloseout(textUpdates[it.id]?.text ?: it.text, cut = it.fullSize != null)) {
                     MessageContent(it, false, textUpdates[it.id], boxed = true, hideCloseout = hideCloseout)
+                    val usage = LocalReplyUsage.current[it.id]
+                    // A reply still streaming has no total yet (the web hides the bar while the turn is live).
+                    if (usage != null && textUpdates[it.id]?.streaming != true) ReplyUsageFooter(it, usage)
                 }
             }
             "thinking" -> if (!style.hidesThoughts()) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)

@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
-import { onHubEvent } from "../../lib/store";
+import { onShownHint } from "../../lib/shown-hints";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
@@ -156,7 +156,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const summaryMode = root.isSummary();
   // a hub that folds child sessions (#5120): every read and count of this list leaves them out, as the root's do
   const rootsMode = root.isRoots();
-  const countsPath = rootsMode ? `${path}?roots=1&` : `${path}?`;
+  const queryPath = `${path}${path.includes("?") ? "&" : "?"}`;
+  const countsPath = rootsMode ? `${queryPath}roots=1&` : queryPath;
   const list = useMemo(() => filtered ? new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary: summaryMode, roots: rootsMode, pageCounts: () => root.usesPageCounts() }) : root, [filtered, path, identity, compare, removeIdentity, summaryMode, rootsMode, root, filters]);
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
   const [facets, setFacets] = useState<ListCounts | null>(null);
@@ -203,7 +204,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       }, (e) => { if (live && request === sequence) setFacetError(errorText(e)); });
     };
     read();
-    const off = onHubEvent(event, read);
+    const off = onShownHint(event, read);
     return () => { live = false; controller.abort(); off(); };
   }, [countsPath, event, facetScoped, facetsFromList, facetQuery, facetAttempt]);
   useEffect(() => {
@@ -230,16 +231,18 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       }, (e) => { if (request === sequence) setScopeError(errorText(e)); });
     };
     read();
-    const off = onHubEvent(event, read);
+    const off = onShownHint(event, read);
     return () => { sequence++; abort.abort(); off(); };
   }, [scopeQuery, scopeFromFacets, countsPath, event]);
   useEffect(() => {
-    // the root list is kept loaded either way (its counts are the unscoped facets); a filtered one only while shown
-    if (filtered && sections) return;
-    if (filtered) void list.setFilters(filters).catch(() => {});
-    else if (!list.getSnapshot().loaded) void list.load().catch(() => {});
-    const off = filtered ? onHubEvent(event, () => list.invalidate()) : () => {};
-    return () => { off(); if (filtered) list.reset(); };
+    // Even a grouped, filtered list needs the root counts for the unfiltered chips.
+    if (!root.getSnapshot().loaded) void root.load().catch(() => {});
+  }, [root, summaryMode, rootsMode]);
+  useEffect(() => {
+    if (!filtered || sections) return;
+    void list.setFilters(filters).catch(() => {});
+    const off = onShownHint(event, () => list.invalidate());
+    return () => { off(); list.reset(); };
   }, [list, filters, filtered, sections, event]);
 
   // The groups of the chosen dimension, for the value pill and the sections: everything that narrows the list but the

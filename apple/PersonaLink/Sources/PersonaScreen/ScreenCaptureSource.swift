@@ -3,14 +3,16 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
-import PersonaScreenKit
+import PersonaScreenCore
 @preconcurrency import ScreenCaptureKit // SCShareableContent and SCStream predate Sendable; used only on `queue`
 import VideoToolbox
 
 /// The real capture source for the live-screen video channel (#3954): ScreenCaptureKit captures one display and
-/// VideoToolbox encodes it with the low-latency settings gate ① measured on a real Mac (≈5 ms p50 / ≈10 ms p95 from a
-/// screen change to an encoded frame at 1080p60): `RealTime`, low-latency rate control, no frame reordering,
-/// `MaxFrameDelayCount` 0, and a capture queue depth of 3.
+/// VideoToolbox encodes it with the low-latency settings gate ① measured on a real Mac: `RealTime`, low-latency rate
+/// control, no frame reordering, and a capture queue depth of 3. From a screen change to an encoded frame that is ≈5 ms
+/// p50 / ≈10 ms p95 at 1080p60, because ScreenCaptureKit hands a frame over about 4.5 ms before its display time; the
+/// encode alone (the phone's Connection Stats) is about 7–8 ms on an M1-class media engine, plus about 1 ms for
+/// VideoToolbox to hand the frame back. That is the engine's floor at this quality (#8713).
 ///
 /// It answers `start` with `hello`, then `format` (the parameter sets) and a keyframe, then a `frame` for each screen
 /// change, and a `heartbeat` each second nothing changed. It pauses (`paused`) when it has no Screen Recording
@@ -44,6 +46,9 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     private var codec = "h264"
     private var rate = RateController(cap: 0)
     private var generation = 0
+    /// Whether a new configuration can go to the stream yet (#7856): not before `startCapture` has completed, when
+    /// ScreenCaptureKit can lose it. A change waits in `config` and is applied when capture has started.
+    private var configGate = CaptureConfigGate()
     /// The last frame's number; frames count from 1 for the whole helper run.
     private var number: UInt32 = 0
     /// When the last frame or heartbeat went out, µs on the monotonic clock.
@@ -157,14 +162,17 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     }
 
     func stop() {
-        queue.sync {
+        // A work item, not a trailing closure: a non-escaping closure handed to `sync` as a block makes the compiler check
+        // that it didn't escape, with this file's full path as the place, so the helper's bytes would depend on where it
+        // was built and its Screen Recording grant wouldn't survive a rebuild elsewhere (#7927, mac-link.sh verify-screen).
+        queue.sync(execute: DispatchWorkItem { [self] in
             timer?.cancel()
             timer = nil
             refineTimer?.cancel()
             refineTimer = nil
             stopCapture()
             request = nil
-        }
+        })
     }
 
     // MARK: Capture
@@ -248,12 +256,17 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         announce()
         lastSent = Self.nowMicros
         let gen = generation
+        configGate.reset()
         stream.startCapture { [weak self] error in
-            guard let self, let error else { return }
+            guard let self else { return }
             self.queue.async {
                 guard gen == self.generation else { return }
-                self.warn("start capture: \(error)")
-                self.pause(CGPreflightScreenCaptureAccess() ? "busy" : "permission")
+                if let error {
+                    self.warn("start capture: \(error)")
+                    self.pause(CGPreflightScreenCaptureAccess() ? "busy" : "permission")
+                    return
+                }
+                if self.configGate.captureStarted() { self.applyConfig() } // a change made while it started (#7856)
             }
         }
     }
@@ -261,6 +274,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     /// Stops the stream and the encoder, if any. Bumps `generation`, so their late completions do nothing.
     private func stopCapture() {
         generation += 1
+        configGate.reset()
         timing = TimingWindow()
         if let stream {
             self.stream = nil
@@ -299,10 +313,12 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             warn("\(codec) encoder: \(status)")
             return nil
         }
+        // Low-latency rate control selects VideoToolbox's real-time encoder, which holds no frame back and refuses the
+        // speed settings (`MaxFrameDelayCount`, `PrioritizeEncodingSpeedOverQuality`, `MaximumRealTimeFrameRate`, slice
+        // sizes) with kVTPropertyNotSupportedErr, so none is set (#8713).
         func set(_ key: CFString, _ value: CFTypeRef) { VTSessionSetProperty(session, key: key, value: value) }
         set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set(kVTCompressionPropertyKey_MaxFrameDelayCount, NSNumber(value: 0))
         set(kVTCompressionPropertyKey_ProfileLevel,
             codec == "hevc" ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, NSNumber(value: fps))
@@ -325,7 +341,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     /// after a `format`; a frame ScreenCaptureKit still has at the old size is scaled by VideoToolbox. Not capturing
     /// (paused, or still opening): nothing now, the next `begin` opens at the new size.
     private func reconfigure(resized: Bool, fpsChanged: Bool) {
-        guard let stream, let config, let request else { return }
+        guard stream != nil, let config, let request else { return }
         let fps = CapturePlan.fps(request.fps)
         var changed = fpsChanged
         if resized, let points = displayPoints, let pixels = displayPixels {
@@ -356,6 +372,12 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
                 VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: NSNumber(value: fps))
             }
         }
+        if configGate.changed() { applyConfig() } // else once startCapture has completed (#7856)
+    }
+
+    /// Gives the stream its configuration as it is now.
+    private func applyConfig() {
+        guard let stream, let config else { return }
         stream.updateConfiguration(config) { [weak self] error in
             if let error { self?.warn("reconfigure: \(error)") }
         }

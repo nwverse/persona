@@ -44,6 +44,33 @@ func TestNextRun(t *testing.T) {
 	}
 }
 
+func TestNextRunAcrossClockChanges(t *testing.T) {
+	daily := Task{Repeat: repeatDaily, Time: "02:30", Enabled: true}
+	for _, tc := range []struct {
+		name, zone   string
+		after, first time.Time
+		following    time.Time
+	}{
+		{name: "spring gap", zone: "America/New_York",
+			after: time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC),
+			first: time.Date(2026, 3, 8, 7, 30, 0, 0, time.UTC), following: time.Date(2026, 3, 9, 6, 30, 0, 0, time.UTC)},
+		{name: "fall repeated hour", zone: "Europe/Berlin",
+			after: time.Date(2026, 10, 24, 22, 0, 0, 0, time.UTC),
+			first: time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC), following: time.Date(2026, 10, 26, 1, 30, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loc := mustZone(t, tc.zone)
+			first := nextRun(daily, tc.after, loc)
+			if !first.Equal(tc.first) {
+				t.Fatalf("first run = %v (%v), want %v", first, first.In(loc), tc.first)
+			}
+			if following := nextRun(daily, first, loc); !following.Equal(tc.following) {
+				t.Fatalf("following run = %v (%v), want %v", following, following.In(loc), tc.following)
+			}
+		})
+	}
+}
+
 func TestParseWhen(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	now := time.Date(2026, 10, 26, 16, 0, 0, 0, loc)
@@ -538,7 +565,7 @@ func TestScheduleRoutineTool(t *testing.T) {
 	f := newFakeHub()
 	f.settings = &Settings{Timezone: "Asia/Shanghai"}
 	h := newStorelessService(t, f)
-	out, err := h.toolScheduleRoutine(context.Background(), "", json.RawMessage(`{"title":"周报","prompt":"起草周报","time":"17:00","weekdays":[5]}`))
+	out, err := h.toolScheduleRoutine(context.Background(), "", "", json.RawMessage(`{"title":"周报","prompt":"起草周报","time":"17:00","weekdays":[5]}`))
 	if err != nil || !strings.Contains(out, "周五 17:00") {
 		t.Fatalf("create: %q, %v", out, err)
 	}
@@ -547,16 +574,16 @@ func TestScheduleRoutineTool(t *testing.T) {
 	if r.CreatedBy != "assistant" || !r.Enabled || r.Title != "周报" || r.Repeat != repeatDaily {
 		t.Fatalf("routine %+v", r)
 	}
-	if _, err := h.toolScheduleRoutine(context.Background(), "", json.RawMessage(`{"id":"`+r.ID+`","enabled":false,"weekdays":[1,2,3,4,5,6,7]}`)); err != nil {
+	if _, err := h.toolScheduleRoutine(context.Background(), "", "", json.RawMessage(`{"id":"`+r.ID+`","enabled":false,"weekdays":[1,2,3,4,5,6,7]}`)); err != nil {
 		t.Fatal(err)
 	}
 	if r2 := sc.tasks[len(sc.tasks)-1]; r2.Enabled || r2.Weekdays != nil || r2.Prompt != "起草周报" {
 		t.Fatalf("an update changes only the fields given: %+v", r2)
 	}
-	if _, err := h.toolScheduleRoutine(context.Background(), "", json.RawMessage(`{"title":"x","prompt":"y","time":"9am"}`)); err == nil {
+	if _, err := h.toolScheduleRoutine(context.Background(), "", "", json.RawMessage(`{"title":"x","prompt":"y","time":"9am"}`)); err == nil {
 		t.Fatal("a bad time is refused")
 	}
-	if _, err := h.toolScheduleRoutine(context.Background(), "", json.RawMessage(`{"title":"x","prompt":"y","time":"09:00","weekdays":[0]}`)); err == nil {
+	if _, err := h.toolScheduleRoutine(context.Background(), "", "", json.RawMessage(`{"title":"x","prompt":"y","time":"09:00","weekdays":[0]}`)); err == nil {
 		t.Fatal("weekday 0 is refused")
 	}
 	if !strings.Contains(h.describeSchedule(context.Background(), ""), r.ID) {
@@ -835,7 +862,7 @@ func TestScheduleReadFailureNeverOverwrites(t *testing.T) {
 	h := newServiceOn(t, newFakeHub(), store)
 	m := "server"
 
-	if _, err := h.toolScheduleRoutine(ctx, "", json.RawMessage(`{"title":"x","prompt":"y","time":"09:00"}`)); !errors.Is(err, errScheduleUnavailable) {
+	if _, err := h.toolScheduleRoutine(ctx, "", "", json.RawMessage(`{"title":"x","prompt":"y","time":"09:00"}`)); !errors.Is(err, errScheduleUnavailable) {
 		t.Fatalf("schedule_routine while unreadable: %v", err)
 	}
 	if _, err := h.toolScheduleFollowup(ctx, m, "s1", json.RawMessage(`{"at":"30m","prompt":"y"}`)); !errors.Is(err, errScheduleUnavailable) {

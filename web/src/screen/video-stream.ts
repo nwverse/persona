@@ -7,15 +7,20 @@
 import { BASE } from "../lib/base";
 import { decoderSetup } from "./video-bitstream";
 import { decodeOptions } from "./video-probe";
-import { encode, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
+import type { Budget } from "./data-use";
+import type { Change } from "./tiers/policy";
+import type { Bias } from "./tiers/ladder";
+import { updateOf, type ScreenVideoTiers } from "./video-tiers";
+import { encode, FRAME_KEYFRAME, FRAME_REFINEMENT, VideoParser, VideoWireError, decode, type Encoding, type Hello, type Start, type Timing, type Update } from "./video-wire";
 
 /** A duplex of bytes, one stream's worth; the relay WebSocket now, a direct route later (#6398 step 6). */
 export type VideoTransport = {
   send(bytes: Uint8Array): void;
   close(): void;
-  /** Bytes as they come; `closed` once, when it is over (never after `close()`). */
+  /** Bytes as they come; `closed` once, when it is over (never after `close()`), with the node's code when the hub
+   *  refused the stream (`busy`: two others already watch, #8320). */
   onBytes: (bytes: Uint8Array) => void;
-  onClosed: () => void;
+  onClosed: (refused?: string) => void;
 };
 
 /** What the stream needs of a decoder: WebCodecs' VideoDecoder, or a test's. */
@@ -30,7 +35,8 @@ export type DecoderMaker = (output: (picture: Picture) => void, error: (e: unkno
 /** A decoded picture: what WebCodecs gives (a VideoFrame), closed by whoever holds it last. */
 export type Picture = { timestamp: number; close(): void; displayWidth?: number; displayHeight?: number };
 
-export type Ending = "closed" | "silent" | "undecodable";
+/** How a stream ended; `busy`: the hub refused it because the Mac already sends video to two others (#8320). */
+export type Ending = "closed" | "silent" | "undecodable" | "busy";
 export type StreamEvent =
   | { type: "hello"; hello: Hello }
   | { type: "picture"; picture: Picture; decodeMs: number }
@@ -38,6 +44,7 @@ export type StreamEvent =
   | { type: "resumed" }
   | { type: "timing"; timing: Timing }
   | { type: "encoding"; encoding: Encoding }
+  | { type: "tier"; change: Change }
   | { type: "ended"; why: Ending };
 
 export const SILENCE_MS = 3000;
@@ -74,20 +81,31 @@ export class ScreenVideoStream {
   private began = new Map<number, number>();
   private newest: { picture: Picture; decodeMs: number } | null = null;
   private flushQueued = false;
+  /** When the message still incomplete after the last read began arriving (a large frame over several reads), µs. */
+  private partialSince: number | null = null;
+  /** The quality tiers (#6558), when the page drives them; they start once the helper's hello lists them too. */
+  readonly tiers: ScreenVideoTiers | null;
+  /** A frame came since the last `hello` or `paused`: the helper's capture is running. Before that a tier waits
+   *  (`held`), as on the iPhone: an `update` that reaches Persona Screen before its capture has started can be lost
+   *  (#7856), and capture starts again on resume. A new `hello` drops a held tier: its policy picks its own start. */
+  private framed = false;
+  private held: Change | null = null;
 
   constructor(
     private transport: VideoTransport,
     start: Start,
     private onEvent: (e: StreamEvent) => void,
-    private opts: { makeDecoder?: DecoderMaker; silenceMs?: number; openingMs?: number; now?: () => number; nowMicros?: () => number } = {},
+    private opts: { makeDecoder?: DecoderMaker; silenceMs?: number; openingMs?: number; now?: () => number; nowMicros?: () => number; tiers?: ScreenVideoTiers | null } = {},
   ) {
+    this.tiers = opts.tiers ?? null;
     this.heardAt = this.now();
     transport.onBytes = (b) => this.bytes(b);
-    transport.onClosed = () => this.finish("closed");
+    transport.onClosed = (refused) => this.finish(refused === "busy" ? "busy" : "closed");
     transport.send(encode(start));
     this.watch = setInterval(() => {
       const limit = this.heardAny ? (this.opts.silenceMs ?? SILENCE_MS) : (this.opts.openingMs ?? OPENING_MS);
-      if (!this.quiet && this.now() - this.heardAt > limit) this.finish("silent");
+      if (!this.quiet && this.now() - this.heardAt > limit) return this.finish("silent");
+      if (!this.quiet && this.tiers) this.apply(this.tiers.tick(this.nowMicros())); // the tier's 250 ms decision
     }, 250);
   }
 
@@ -111,6 +129,31 @@ export class ScreenVideoStream {
   /** `update` to the helper: pause, a new cap or frame rate. */
   send(update: Omit<Update, "type">): void {
     if (!this.over) this.transport.send(encode({ type: "update", ...update }));
+  }
+
+  /** A tier the policy chose: to the helper, then to the link; before the first frame after `hello`, the newest waits
+   *  for it (each change carries the whole tier). */
+  private apply(change: Change | null) {
+    if (!change || this.over) return;
+    if (!this.framed) {
+      this.held = change;
+      return;
+    }
+    this.send(updateOf(change));
+    this.onEvent({ type: "tier", change });
+  }
+
+  /** ⋯ › Quality or the data cap changed: the policy looks again. */
+  tierBias(b: Bias): void {
+    if (this.tiers) this.apply(this.tiers.setBias(b, this.nowMicros()));
+  }
+  tierBudget(b: Budget): void {
+    if (this.tiers) this.apply(this.tiers.setBudget(b, this.nowMicros()));
+  }
+
+  /** A decoded picture reached the screen, or a newer one replaced it before it did (the page's draw loop). */
+  shown(replaced: boolean): void {
+    this.tiers?.shown(replaced, this.nowMicros());
   }
 
   private stop() {
@@ -143,13 +186,19 @@ export class ScreenVideoStream {
     if (this.over) return;
     this.received += chunk.length;
     this.sinceReport += chunk.length;
+    const arrived = this.nowMicros();
+    const waiting = this.parser.pendingBytes > 0 ? this.partialSince : null;
     let raws;
     try {
       raws = this.parser.push(chunk);
     } catch {
       return this.finish("undecodable");
     }
+    this.partialSince = this.parser.pendingBytes > 0 ? (raws.length ? arrived : (this.partialSince ?? arrived)) : null;
+    let firstOfRead = true;
     for (const raw of raws) {
+      const first = firstOfRead;
+      firstOfRead = false;
       let m;
       try {
         m = decode(raw.type, raw.body);
@@ -161,8 +210,11 @@ export class ScreenVideoStream {
         case "hello":
           this.heard();
           this.codec = m.codec;
+          this.framed = false; // a new capture: its first frame says it runs
+          this.held = null;
           this.newDecoder();
           this.onEvent({ type: "hello", hello: m });
+          if (this.tiers) this.apply(this.tiers.hello(m, this.nowMicros() / 1_000_000));
           break;
         case "format": {
           const setup = decoderSetup(this.codec, m.parameter_sets);
@@ -179,6 +231,14 @@ export class ScreenVideoStream {
           this.heard();
           this.transport.send(encode({ type: "report", last_frame: m.number, capture_micros: m.capture_micros, arrival_micros: this.nowMicros(), bytes_since_last: this.sinceReport, flags: 0 }));
           this.sinceReport = 0;
+          if (!this.framed) {
+            this.framed = true;
+            const tier = this.held;
+            this.held = null;
+            this.apply(tier);
+          }
+          // Only the read's first message can have begun in an earlier read.
+          this.tiers?.frame(m.capture_micros, arrived, first ? waiting : null, raw.body.length + 5, (m.flags & FRAME_REFINEMENT) !== 0, (m.flags & FRAME_KEYFRAME) !== 0);
           if (!this.decoder || !this.configured) return this.finish("undecodable");
           this.began.set(m.number, this.now());
           try {
@@ -193,6 +253,7 @@ export class ScreenVideoStream {
           break;
         case "paused":
           this.heard(true);
+          this.framed = false; // capture starts again on resume: changes wait for its first frame
           this.newest?.picture.close();
           this.newest = null;
           this.onEvent({ type: "paused", reason: m.reason });
@@ -202,6 +263,7 @@ export class ScreenVideoStream {
           this.onEvent({ type: "resumed" });
           break;
         case "timing":
+          this.tiers?.helper(m);
           this.onEvent({ type: "timing", timing: m });
           break;
         case "encoding":
@@ -236,6 +298,7 @@ export class ScreenVideoStream {
     this.began.delete(picture.timestamp);
     this.newest?.picture.close();
     this.newest = { picture, decodeMs: began === undefined ? 0 : this.now() - began };
+    if (began !== undefined) this.tiers?.decoded(this.newest.decodeMs, this.nowMicros());
     if (this.flushQueued) return;
     this.flushQueued = true;
     queueMicrotask(() => {
@@ -250,10 +313,11 @@ export class ScreenVideoStream {
 }
 
 /** The WebSocket of the Mac's live-screen video channel (#3954): bound to the RFB connection that carried `pair` and
- *  signed in, so no password travels anywhere new. */
+ *  signed in, so no password travels anywhere new. `refusals=close`: a refused stream opens and closes at once with
+ *  4000 + the HTTP status and the node's code (#8320), since a page can't read a refused handshake's status. */
 export function videoSocket(location: { protocol: string; host: string }, mid: string, token: string, pair: string): string {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
-  return `${scheme}://${location.host}${BASE}/api/v1/machines/${encodeURIComponent(mid)}/screen/video/connect?token=${encodeURIComponent(token)}&pair=${encodeURIComponent(pair)}`;
+  return `${scheme}://${location.host}${BASE}/api/v1/machines/${encodeURIComponent(mid)}/screen/video/connect?token=${encodeURIComponent(token)}&pair=${encodeURIComponent(pair)}&refusals=close`;
 }
 
 /** The relay WebSocket as a video transport. */
@@ -277,8 +341,8 @@ export function relayTransport(url: string): VideoTransport {
   ws.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) t.onBytes(new Uint8Array(e.data));
   };
-  ws.onclose = () => {
-    if (!closed) t.onClosed();
+  ws.onclose = (e) => {
+    if (!closed) t.onClosed(e.code >= 4000 && e.code < 5000 ? e.reason : undefined);
   };
   return t;
 }
