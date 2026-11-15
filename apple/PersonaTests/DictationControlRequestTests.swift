@@ -68,6 +68,40 @@ import Testing
         #expect(model.dictationRequest != nil)
     }
 
+    @Test func plainNewChatRoutesThroughBothRoutersAndClearsWithoutOne() throws {
+        let previous = SessionKey(machineID: "m", sessionID: "previous")
+
+        let phone = try Self.model()
+        defer { Self.close(phone) }
+        let shell = ShellState()
+        shell.attach(to: phone)
+        defer { shell.detach(from: phone) }
+        shell.drawer.progress = 1
+        phone.assistantCurrent = previous
+        phone.openNewAssistant()
+        #expect(shell.request?.page == .newConversation)
+        #expect(!shell.drawer.isOpen)
+        #expect(phone.selectedTab == .assistant)
+
+        let wide = try Self.model()
+        defer { Self.close(wide) }
+        let pad = PadRouter()
+        pad.attach(to: wide)
+        defer { pad.detach(from: wide) }
+        wide.assistantCurrent = previous
+        wide.openNewAssistant()
+        #expect(pad.request?.page == .newConversation)
+        #expect(wide.selectedTab == .assistant)
+
+        let cold = try Self.model()
+        defer { Self.close(cold) }
+        cold.assistantCurrent = previous
+        cold.openNewAssistant()
+        #expect(cold.tabRouter == nil)
+        #expect(cold.assistantCurrent == nil)
+        #expect(cold.selectedTab == .assistant)
+    }
+
     @Test func theNewStarterTakesTheRequestOnlyOnce() throws {
         let model = try Self.model()
         defer { Self.close(model) }
@@ -199,6 +233,27 @@ import Testing
 
         bar.reset(dictation, text: text)
         #expect(draft == "typed spoken words")
+    }
+
+    @Test func leavingDuringSendWaitAfterJoinDoesNotAppendWordsAgain() async {
+        let dictation = FakeDictation(heard: "spoken words")
+        let bar = DictationBarModel()
+        var draft = "typed"
+        var sendCalls = 0
+        let text = Binding(get: { draft }, set: { draft = $0 })
+        bar.start(dictation, hints: [], reduceMotion: true)
+
+        // The send has accepted the joined draft but not cleared it yet: the bar stays on for its short hand-off window.
+        bar.end(.send, dictation, text: text, reduceMotion: true, send: { sendCalls += 1; return true })
+        for _ in 0..<1000 where sendCalls == 0 { await Task.yield() }
+        #expect(sendCalls == 1)
+        #expect(draft == "typed spoken words")
+        #expect(bar.on)
+        #expect(bar.ending == .send)
+
+        bar.reset(dictation, text: text)
+        #expect(draft == "typed spoken words")
+        #expect(!bar.on)
     }
 
     @Test func theNewestNewChatCompletionAdoptsNavigatesAndClearsAsBefore() {
