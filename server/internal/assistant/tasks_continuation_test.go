@@ -286,6 +286,98 @@ func TestReadonlyCodexContinuationBecomesWritableOnSameTodo(t *testing.T) {
 			if strings.Contains(childPrompt, "本任务只读") {
 				t.Fatalf("writable continuation's child was constrained to read-only: %q", childPrompt)
 			}
+			from := "m1"
+			for _, to := range []string{"m2", "m3"} {
+				if moved := e.s.handOverMainTasks(ctx, from, to); moved != 1 {
+					t.Fatalf("main handover %s -> %s moved %d tasks", from, to, moved)
+				}
+				from = to
+			}
+			if handed := todoNow(e.s, id); handed.Origin != "m3" || handed.Supervision.Supervisor != "m3" {
+				t.Fatalf("the to-do did not follow the main handovers: %+v", handed)
+			}
+			spawn = e.s.mcpCall(ctx, "box", replacement.SessionID, "task_spawn", json.RawMessage(spawnArgs), false)
+			if spawn.IsError {
+				t.Fatalf("the replacement could not spawn after main handovers: %+v", spawn.Content)
+			}
+			e.f.mu.Lock()
+			starts = append([]map[string]any(nil), e.f.starts...)
+			e.f.mu.Unlock()
+			if len(starts) != 4 || starts[3]["permission_mode"] != "bypassPermissions" {
+				t.Fatalf("handovers lost the current continuation assignment: %+v", starts)
+			}
+		})
+	}
+}
+
+func TestContinuationAfterMainHandoverRetiresFormerConversationBinding(t *testing.T) {
+	for _, backend := range []string{"memory", "database"} {
+		t.Run(backend, func(t *testing.T) {
+			var store Store
+			if backend == "database" {
+				store = taskRecoveryDatabase(t)
+			}
+			e := newThreadEnv(t, store)
+			ctx := context.Background()
+			e.f.launcherList = []proto.Launcher{{Name: "codex", Agent: "codex"}}
+			e.f.ownModels = true
+			first := readonlyTestTask("bypassPermissions")
+			first.Launcher, first.Goal, first.ExpectMinutes = "codex", "Implement a fix, then verify it", 10
+			first.Readonly, first.Permission = false, "bypassPermissions"
+			if _, err := e.s.toolTaskPlan(ctx, "m1", readonlyTaskArgs(t, first)); err != nil {
+				t.Fatal(err)
+			}
+			original := planOf(t, e.s, "m1")
+			if original.State == planOpen {
+				started, startErr := e.s.startPlan(ctx, original.ID, nil, false)
+				if startErr != nil {
+					t.Fatal(startErr)
+				}
+				original = started
+			}
+			id := original.Tasks[0].TodoID
+			waitFor(t, "the former main conversation's agent", func() bool { return len(todoNow(e.s, id).Agents) == 1 })
+			old := todoNow(e.s, id).Agents[0]
+			e.sessions("box", proto.Session{SessionID: old.SessionID, Agent: "codex", Status: proto.StatusWorking})
+			if moved := e.s.handOverMainTasks(ctx, "m1", "m2"); moved != 1 {
+				t.Fatalf("main handover moved %d tasks", moved)
+			}
+			setSettings(t, e.s, func(v *Settings) { v.Main = "m2" })
+			e.sessions("server", proto.Session{SessionID: "m2", Assistant: true})
+			next := first
+			next.Readonly, next.Permission = true, "plan"
+			next.Continues, next.ContinuesWhy = id, "Continue the same work with read-only verification."
+			next.Prompt = "Verify the fix without changing files."
+			if _, err := e.s.toolTaskPlan(ctx, "m2", readonlyTaskArgs(t, next)); err != nil {
+				t.Fatal(err)
+			}
+			plan := planOf(t, e.s, "m2")
+			if plan.State == planOpen {
+				started, startErr := e.s.startPlan(ctx, plan.ID, nil, false)
+				if startErr != nil {
+					t.Fatal(startErr)
+				}
+				plan = started
+			}
+			waitFor(t, "the read-only replacement after the handover", func() bool { return len(todoNow(e.s, id).Agents) == 2 })
+			previous, err := e.s.loadPlan(ctx, original.ID)
+			if err != nil || previous.Tasks[0].TodoID != "" {
+				t.Fatalf("the former conversation's execution binding was not retired: %+v (%v)", previous, err)
+			}
+			current := todoNow(e.s, id)
+			replacement := current.Agents[1]
+			e.sessions("box", proto.Session{SessionID: replacement.SessionID, Agent: "codex", Launcher: "codex",
+				Cwd: plan.Tasks[0].Cwd, Status: proto.StatusWorking})
+			spawn := e.s.mcpCall(ctx, "box", replacement.SessionID, "task_spawn", json.RawMessage(spawnArgs), false)
+			if spawn.IsError {
+				t.Fatalf("the read-only continuation could not spawn: %+v", spawn.Content)
+			}
+			e.f.mu.Lock()
+			starts := append([]map[string]any(nil), e.f.starts...)
+			e.f.mu.Unlock()
+			if len(starts) != 3 || starts[2]["permission_mode"] != "plan" {
+				t.Fatalf("the former conversation's writable assignment escaped into the child: %+v", starts)
+			}
 		})
 	}
 }
