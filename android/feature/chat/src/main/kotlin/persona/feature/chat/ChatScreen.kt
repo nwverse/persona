@@ -103,6 +103,8 @@ fun ChatScreen(
     historyFooter: (@Composable () -> Unit)? = null,
     /** Display metadata for a history entry that is absent from the live session list. */
     historySession: Session? = null,
+    /** The host already knows this is Health; do not briefly route its files as ordinary attachments while the row loads. */
+    healthChat: Boolean = false,
 ) {
     PersonaTheme(darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f) {
         LaunchedEffect(sessionKey, chrome.childSessionId) {
@@ -121,7 +123,7 @@ fun ChatScreen(
                 scopedReadingKey, anchorStore ?: local?.anchors,
                 renderStyle, textUpdates,
                 composerService, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
-                embedded, showTopBar, historyReadOnly, historyFooter, historySession)
+                embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat)
         }
     }
 }
@@ -139,7 +141,7 @@ private fun ChatPage(
     statusBindings: ChatStatusBindings,
     embedded: Boolean, showTopBar: Boolean,
     historyReadOnly: Boolean, historyFooter: (@Composable () -> Unit)?,
-    historySession: Session?,
+    historySession: Session?, healthChat: Boolean,
 ) {
     val pageSources = rememberChatPageSources(key, repository, sender, interactions, sessions, chrome, textUpdates,
         statusBindings)
@@ -1102,7 +1104,8 @@ private fun ChatPage(
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
-                                    service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
+                                    service = composerService, uploadDestination = if (healthChat || session?.isHealth == true) "health" else null,
+                                    onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(),
                                     assistantChat = assistantChat,
                                     enabled = canSend, placeholder = when {
