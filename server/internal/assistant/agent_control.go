@@ -99,8 +99,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	// closed agent is resumed first (as agent_send does), which can take minutes.
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	defer cancel()
-	note := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", then) // more from its task's conversation reopens an accepted task (#6726, #7539)
-	err = s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, then, false), nil)
+	note, err := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", then) // more from its task's conversation reopens an accepted task (#6726, #7539)
+	if err == nil {
+		err = s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, then, false), nil)
+	}
 	note.sent(sctx, err) // an unknown answer counts for a turn that starts soon: it may still arrive
 	if err != nil {
 		if working {

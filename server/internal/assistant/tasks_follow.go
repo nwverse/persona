@@ -758,7 +758,11 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 	}
 	// The owner's words to the task reopen it (#6726, #7539): this task only, should its agent have gone to another one
 	// since its agents were read above.
-	note := s.noteAgentSend(sctx, conversation, c.MachineID, c.SessionID, todoID, text)
+	note, err := s.noteAgentSend(sctx, conversation, c.MachineID, c.SessionID, todoID, text)
+	if err != nil { // not sent: it would not reopen the task after a manager restart
+		s.logf("task %s: card message: %v", todoID, err)
+		return FeedItem{}, i18n.Err("assistant-tasks.route_not_kept")
+	}
 	err = s.call(sctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil)
 	note.sent(sctx, err)
 	if err != nil {

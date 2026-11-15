@@ -344,11 +344,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// has no deadline) and the turn is not held for good; any other send waits as long as its caller (#7539).
 			lctx, cancel := context.WithTimeout(ctx, liveSendWait)
 			defer cancel()
-			note := s.noteAgentSend(lctx, self, am.ID, c.SessionID, "", sending) // more from its task's conversation reopens an accepted task (#6726, #7539)
+			note, err := s.noteAgentSend(lctx, self, am.ID, c.SessionID, "", sending) // more from its task's conversation reopens an accepted task (#6726, #7539)
+			if err != nil {
+				return "", task.sendFailed(ctx, s, err)
+			}
 			if !note.reopens() {
 				lctx = ctx
 			}
-			err := s.call(lctx, am.ID, DeviceSessionSend, params, nil)
+			err = s.call(lctx, am.ID, DeviceSessionSend, params, nil)
 			note.sent(lctx, err) // an unknown answer counts for a turn that starts soon: it may still arrive
 			if err != nil {
 				if note.reopens() && sendUnknown(err) {
@@ -365,7 +368,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
-		note := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", sending)
+		note, err := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", sending)
+		if err != nil {
+			return "", task.sendFailed(sctx, s, err)
+		}
 		err = s.call(sctx, am.ID, DeviceSessionSend, params, nil)
 		note.sent(sctx, err)
 		if err != nil {

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -547,10 +549,16 @@ func TestOverlappingSendsKeepTheHeldTurn(t *testing.T) {
 			ctx := context.Background()
 			s, f, accepted := acceptedPlanTask(t, nil)
 			before := supervisionOf(s, f, accepted.ID)
-			first := s.noteAgentSend(ctx, "conv1", "box", longAgent, "", "Please cover the landscape case too")
+			first, err := s.noteAgentSend(ctx, "conv1", "box", longAgent, "", "Please cover the landscape case too")
+			if err != nil {
+				t.Fatal(err)
+			}
 			longTurn(s, f, proto.StatusWorking, "") // held for the first send's answer
 			closedUnchanged(t, s, accepted)
-			second := s.noteAgentSend(ctx, c.second, "box", longAgent, "", "And the portrait case")
+			second, err := s.noteAgentSend(ctx, c.second, "box", longAgent, "", "And the portrait case")
+			if err != nil {
+				t.Fatal(err)
+			}
 			longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged") // put off
 			closedUnchanged(t, s, accepted)
 			first.sent(ctx, c.first)
@@ -641,6 +649,101 @@ func TestMoreForAnAcceptedTaskSurvivesARestartBeforeItsAnswer(t *testing.T) {
 			waitFor(t, "the review again", func() bool { return todoNow(restarted, accepted.ID).Supervision.State == reviewPending })
 			waitFor(t, "the review message after the restart", func() bool { return supervisionOf(restarted, hub, accepted.ID).notices == 1 })
 		})
+	}
+}
+
+// sendsKeepFails is a database whose next read, or next write, of the kept sends (sendsOutKey) fails once when armed;
+// everything else works as the database does.
+type sendsKeepFails struct {
+	*db.DB
+	mu                  sync.Mutex
+	failRead, failWrite bool
+}
+
+func (d *sendsKeepFails) arm(read, write bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.failRead, d.failWrite = read, write
+}
+
+// take says whether *armed was set, and clears it.
+func (d *sendsKeepFails) take(armed *bool) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	was := *armed
+	*armed = false
+	return was
+}
+
+func (d *sendsKeepFails) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if key == sendsOutKey && d.take(&d.failRead) {
+		return false, errors.New("connection reset by peer")
+	}
+	return d.DB.Setting(ctx, key, out)
+}
+
+func (d *sendsKeepFails) PutSetting(ctx context.Context, key string, v any) error {
+	if key == sendsOutKey && d.take(&d.failWrite) {
+		return errors.New("connection reset by peer")
+	}
+	return d.DB.PutSetting(ctx, key, v)
+}
+
+// More for an accepted task whose note cannot be kept (the database fails, once, to write it or to read the notes kept
+// before) would be lost with a manager restart while the node holds the text, so it is not sent: the send says so,
+// nothing reaches the node, and the task stays closed, also through a turn of the agent after it. Sent again once the
+// database works, with its answer lost, it survives a restart: the turn it queued opens the task, which waits for
+// review again.
+func TestASendOfMoreThatCannotBeKeptIsNotSent(t *testing.T) {
+	for _, via := range []string{"agent_send", "agent_interrupt", "card"} {
+		for _, read := range []bool{false, true} {
+			name := via + ", its write fails"
+			if read {
+				name = via + ", the read of the notes kept before fails"
+			}
+			t.Run(name, func(t *testing.T) {
+				database := &sendsKeepFails{DB: taskRecoveryDatabase(t)}
+				s, f, accepted := acceptedPlanTask(t, database)
+				before := sessionSends(f)
+				database.arm(read, !read)
+				err := sendVia(t, s, via, "conv1", accepted.ID, "Please cover the landscape case too")
+				var msg *i18n.Message
+				switch {
+				case err == nil:
+					t.Fatal("sent, with its note not kept")
+				case via == "card" && !(errors.As(err, &msg) && msg.Key == "assistant-tasks.route_not_kept"):
+					t.Fatalf("the card message: %v, want route_not_kept", err)
+				case via != "card" && !strings.Contains(err.Error(), "nothing was sent"):
+					t.Fatalf("the %s: %v, want it to say nothing was sent", via, err)
+				}
+				if n := sessionSends(f); n != before {
+					t.Fatalf("%d session.send went out with the note not kept", n-before)
+				}
+				closedUnchanged(t, s, accepted)
+				longTurn(s, f, proto.StatusWorking, "") // other work: nothing was sent
+				closedUnchanged(t, s, accepted)
+				longTurn(s, f, proto.StatusDone, "The other dashboard looks fine")
+				closedUnchanged(t, s, accepted)
+
+				failSends(f, context.DeadlineExceeded) // the node queues it, and its answer is lost
+				if err := sendVia(t, s, via, "conv1", accepted.ID, "Please cover the landscape case too"); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("sent again: %v, want its answer lost", err)
+				}
+				if n := sessionSends(f); n != before+1 {
+					t.Fatalf("sent again: %d session.send, want 1", n-before)
+				}
+
+				// The manager restarts before the agent takes up the text it queued.
+				restarted, hub := newQuietServiceOn(t, database.DB)
+				hub.judge = `{"verdict":"done","reason":"merged"}`
+				longTurn(restarted, hub, proto.StatusWorking, "")
+				if got := todoNow(restarted, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+					t.Fatalf("after the restart, the turn the send queued left the task closed: %+v", got)
+				}
+				longTurn(restarted, hub, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+				waitFor(t, "the review again", func() bool { return todoNow(restarted, accepted.ID).Supervision.State == reviewPending })
+			})
+		}
 	}
 }
 

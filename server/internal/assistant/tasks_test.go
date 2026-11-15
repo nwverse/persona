@@ -622,14 +622,20 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 			ctx := context.Background()
 			s, f := newTaskService(t)
 			var note *agentSendNote
+			noted := func() {
+				var err error
+				if note, err = s.noteAgentSend(ctx, c.from, "box", "s1", "", "More for it"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if c.from != "" && c.early { // sent while the task was open still
-				note = s.noteAgentSend(ctx, c.from, "box", "s1", "", "More for it")
+				noted()
 			}
 			for _, td := range c.todos {
 				putTodo(s, td)
 			}
 			if c.from != "" && !c.early {
-				note = s.noteAgentSend(ctx, c.from, "box", "s1", "", "More for it")
+				noted()
 			}
 			agentTurn(s, f, proto.StatusWorking, "", 0) // its turn starts before the send returns
 			if note != nil {

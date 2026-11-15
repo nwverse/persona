@@ -2,11 +2,14 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Sending an accepted task more (#7539). A task its supervisor accepted opens again only for what its own conversation
@@ -14,7 +17,8 @@ import (
 // card. Such a send is noted before it goes (noteAgentSend), with the task, that acceptance and how long the send
 // counts for it (its own wait and sendGrace), and the note is kept in the assistant's settings (sendsOutKey) as well as
 // in memory: the agent's turn may start after a manager restart, when the node queued the text or the answer was lost
-// with the manager. How the send went decides (agentSendNote.sent, sendAnswered):
+// with the manager. A send whose note cannot be kept does not go (errSendNotKept). How the send went decides
+// (agentSendNote.sent, sendAnswered):
 //
 //   - taken: the task opens again now (reopenTodo, stored), and the note goes.
 //   - definitely failed (the node refused it, or it never went out: rpc.ErrNotSent): it asked for nothing, and the note
@@ -107,21 +111,27 @@ func (o *sendsOut) holds(id string, doneAt time.Time) bool {
 // that an agent handed to another task meanwhile reopens nothing; "" for whichever task the agent belongs to
 // (agent_send, agent_interrupt). text: what the agent gets; a bare /exit or /quit asks the task for nothing (the node
 // closes the agent, exitText), and reopens nothing.
-func (s *Service) noteAgentSend(ctx context.Context, self, mid, sid, task, text string) *agentSendNote {
+//
+// A note that could not be kept (errSendNotKept: the kept ones could not be read, or this one not written) would be
+// lost with a manager restart while the node holds the text, so the send must not go: the note is taken back as a send
+// that never went out, and the caller returns the error (the note is nil then).
+func (s *Service) noteAgentSend(ctx context.Context, self, mid, sid, task, text string) (*agentSendNote, error) {
 	n := &agentSendNote{s: s, key: [2]string{mid, sid}, from: self, at: time.Now()}
 	if exitText(text) {
-		return n
+		return n, nil
 	}
 	t, ok := s.closedTaskOf(ctx, mid, sid)
 	if !ok || task != "" && t.ID != task || t.DoneBy != db.DoneByReview || t.DoneAt == nil || !s.sendReopens(ctx, self, t) {
-		return n
+		return n, nil
 	}
 	wait := liveSendWait
 	if d, ok := ctx.Deadline(); ok {
 		wait = time.Until(d)
 	}
+	if err := s.loadSendsOut(ctx); err != nil { // what a manager before this one kept is written with it
+		return nil, errSendNotKept{task: t.ID, cause: err}
+	}
 	n.task, n.doneAt, n.until = t.ID, *t.DoneAt, n.at.Add(max(wait, 0)+sendGrace)
-	s.loadSendsOut(ctx) // what a manager before this one kept is written with it
 	s.tasks.mu.Lock()
 	o := s.tasks.sendsOut[n.key]
 	if o == nil {
@@ -130,8 +140,25 @@ func (s *Service) noteAgentSend(ctx context.Context, self, mid, sid, task, text 
 	}
 	o.notes = append(o.notes, n)
 	s.tasks.mu.Unlock()
-	s.saveSendsOut(ctx)
-	return n
+	if err := s.saveSendsOut(ctx); err != nil {
+		// It never goes out: a turn of the agent held for it meanwhile goes as for a send that failed, and the write
+		// tried again there puts right one that went through after all.
+		n.sent(ctx, rpc.NotSent(err))
+		return nil, errSendNotKept{task: t.ID, cause: err}
+	}
+	return n, nil
+}
+
+// errSendNotKept: a send of more for accepted task task was not sent, because its note could not be kept
+// (noteAgentSend). It does not wrap cause: the send never went, whatever cause says (a write's own timeout is not a
+// send's answer that never came, startResultUnknown).
+type errSendNotKept struct {
+	task  string
+	cause error
+}
+
+func (e errSendNotKept) Error() string {
+	return fmt.Sprintf("nothing was sent: could not save that this send reopens accepted task %s (%v); try again", e.task, e.cause)
 }
 
 // sendOutcome is how a noted send went (agentSendNote.sent).
@@ -145,7 +172,7 @@ const (
 
 // sent is how the noted send went (err: the send call's; the top of this file says what each outcome does).
 func (n *agentSendNote) sent(ctx context.Context, err error) {
-	if n.task == "" {
+	if n == nil || n.task == "" {
 		return
 	}
 	how := sendTaken
@@ -325,23 +352,23 @@ type sendOutRecord struct {
 // it stops counting: a turn of its agent that starts by then opens its task (closedTurnReopens). A turn held for them
 // is taken up when the manager starts (recoverSendsOut). A read that fails is tried again next time; until one
 // succeeds nothing is written (saveSendsOut), so what was kept is not lost.
-func (s *Service) loadSendsOut(ctx context.Context) {
+func (s *Service) loadSendsOut(ctx context.Context) error {
 	s.tasks.sendsSaving.Lock()
 	defer s.tasks.sendsSaving.Unlock()
 	if s.tasks.sendsLoaded {
-		return
+		return nil
 	}
 	st := s.store()
 	if st == nil {
 		s.tasks.sendsLoaded = true
-		return
+		return nil
 	}
 	var list []sendsOutRecord
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second) // not a short send's own wait
 	defer cancel()
 	if _, err := st.Setting(rctx, sendsOutKey, &list); err != nil {
 		s.logf("sends of more for accepted tasks: read: %v", err)
-		return
+		return fmt.Errorf("read the sends kept: %w", err)
 	}
 	now, taken := time.Now(), 0
 	s.tasks.mu.Lock()
@@ -373,20 +400,21 @@ func (s *Service) loadSendsOut(ctx context.Context) {
 	if taken > 0 {
 		s.logf("sends of more for accepted tasks: %d still out when the manager before this one stopped: answers unknown", taken)
 	}
+	return nil
 }
 
 // saveSendsOut writes the sends of more that still count as they are now, and forgets the others. Writes are ordered
-// (sendsSaving), so the latest state is the one kept. Without a store they live in memory only. s.tasks.mu must not be
-// held.
-func (s *Service) saveSendsOut(ctx context.Context) {
+// (sendsSaving), so the latest state is the one kept. Without a store they live in memory only. The error says what is
+// in memory was not kept (only noteAgentSend acts on it). s.tasks.mu must not be held.
+func (s *Service) saveSendsOut(ctx context.Context) error {
 	st := s.store()
 	if st == nil {
-		return
+		return nil
 	}
 	s.tasks.sendsSaving.Lock()
 	defer s.tasks.sendsSaving.Unlock()
 	if !s.tasks.sendsLoaded {
-		return // what the manager before kept is not read yet: this write would drop it
+		return errors.New("the sends kept before are not read yet") // this write would drop them
 	}
 	now, list := time.Now(), []sendsOutRecord{}
 	s.tasks.mu.Lock()
@@ -410,7 +438,9 @@ func (s *Service) saveSendsOut(ctx context.Context) {
 	defer cancel()
 	if err := st.PutSetting(wctx, sendsOutKey, list); err != nil {
 		s.logf("sends of more for accepted tasks: write: %v", err)
+		return fmt.Errorf("write the sends: %w", err)
 	}
+	return nil
 }
 
 // recoverSendsOut takes up, as the manager starts (Run), a turn the manager before held for a send whose answer it
@@ -418,7 +448,7 @@ func (s *Service) saveSendsOut(ctx context.Context) {
 // (sendAnswered): the task opens again unless it moved meanwhile, the turn is followed, and its end is looked at, since
 // it may have come while no manager listened. A turn held for sends that stopped counting meanwhile is let go.
 func (s *Service) recoverSendsOut(ctx context.Context) {
-	s.loadSendsOut(ctx)
+	_ = s.loadSendsOut(ctx) // a read that failed is tried again by the next send of more
 	type heldTurn struct {
 		key      [2]string
 		id, from string
