@@ -23,9 +23,19 @@ import (
 // and not copied. With the switch off every notice is copied, a repeated key too. A copied notice's answer says the
 // copy was delivered.
 func TestNotifyUserFeishuCopyFollowsLowDistractionOverTheBus(t *testing.T) {
-	h, srv, _ := newBusHub(t)
+	h, srv, hubDB := newBusHub(t)
 	store := managerDB(t, h)
 	ctx := context.Background()
+	// The push grading keeps its switch and held list in hub_settings: the test hub's pusher was built before it had a
+	// database. Each run starts and ends with the switch off and nothing held.
+	h.push.store = hubDB
+	resetLn := func() {
+		for _, k := range []string{lnModeSettingKey, lnInterceptsSettingKey, pushSentSettingKey} {
+			_ = hubDB.PutSetting(context.Background(), k, nil)
+		}
+	}
+	resetLn()
+	t.Cleanup(resetLn)
 	keys := []string{"assistant", "assistant.tasks", "assistant.routines", "assistant.followups", "assistant.runs",
 		"assistant.titles", "assistant.archived", "assistant.relay"}
 	clear := func() {
@@ -36,6 +46,7 @@ func TestNotifyUserFeishuCopyFollowsLowDistractionOverTheBus(t *testing.T) {
 	clear()
 	t.Cleanup(clear)
 	n := newAssistantNode(t, h)
+	n.m.info.Home = "/home/me" // the conversations' folder (convDir) is the assistant's on this machine
 	now := time.Now().UTC()
 	editSessions(n.m, func([]proto.Session) []proto.Session {
 		return []proto.Session{{SessionID: "main-1", Cwd: convDir, Title: "main", Status: proto.StatusIdle, UpdatedAt: now},
