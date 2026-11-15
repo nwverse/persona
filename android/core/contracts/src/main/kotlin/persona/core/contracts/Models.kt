@@ -17,6 +17,22 @@ import java.time.OffsetDateTime
 
 // Wire types mirror docs/protocol/protocol.md and tolerate optional enhancements according to D5.
 
+/** How long past its reset a usage-limit wait still counts (the hub's limitResumeGrace). */
+internal const val USAGE_LIMIT_GRACE_MS = 10 * 60 * 1000L
+
+/**
+ * The time half of a usage-limit line (iOS `usageLimitWhen`): "Resets <time>", "Resumes <time>", or "Resumes after
+ * the reset". The assistant's rows and card format it; the shared [Session.interrupted] flag does not.
+ */
+sealed class UsageLimitWhen {
+    /** "Resets <time>": nothing continues the turn on its own. */
+    data class Resets(val at: Instant) : UsageLimitWhen()
+    /** "Resumes <time>": the Agent or the hub continues it. */
+    data class Resumes(val at: Instant) : UsageLimitWhen()
+    /** No reset time, and something continues it after the reset. */
+    data object AfterReset : UsageLimitWhen()
+}
+
 val JsonCodec = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
@@ -250,6 +266,12 @@ data class SessionCapabilities(
     val rewind: Boolean? = null,
     /** A rewind may put the files back too ("Code and conversation"); null from an older node: as its [rewind] rule says. */
     @SerialName("rewind_code") val rewindCode: Boolean? = null,
+    /**
+     * The permission modes it takes when its agent is not Claude Code (#8261, Paseo's Grok, OpenCode or Codex): `default`,
+     * its own approval, and `bypassPermissions` where it has an Allow everything. With two the chat offers a switch
+     * between them (`persona.core.domain.sort.listedModes`); null from an older node and wherever Claude Code's modes stand.
+     */
+    @SerialName("permission_modes") val permissionModes: List<String>? = null,
 )
 
 /**
@@ -265,6 +287,8 @@ data class WorkState(
     val wait: String? = null,
     val then: String? = null,
     @WireTime @SerialName("wake_at") val wakeAt: String? = null,
+    /** When a usage limit that blocked this turn resets, if the session's own time is absent. */
+    @WireTime @SerialName("resets_at") val resetsAt: String? = null,
     val attempts: Int? = null,
     val max: Int? = null,
     @SerialName("interaction_id") val interactionId: String? = null,
@@ -479,6 +503,15 @@ data class Session(
     /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
     @SerialName("turn_error") val turnError: String? = null,
     /**
+     * What the agent or the hub called [turnError] (docs/protocol/protocol.md): `usage_limit` is a subscription limit
+     * until it resets, not a turn to continue as an interruption. Older hubs never send it.
+     */
+    @SerialName("turn_error_kind") val turnErrorKind: String? = null,
+    /** When a `usage_limit` resets (RFC3339). Absent when that time is not known. */
+    @WireTime @SerialName("turn_error_resets_at") val turnErrorResetsAt: String? = null,
+    /** The CLI goes on by itself once a usage limit resets. Absent or false: nothing of the CLI will. */
+    @SerialName("turn_error_resumes") val turnErrorResumes: Boolean? = null,
+    /**
      * What the hub recognized of [turnError] (docs/protocol/protocol.md): not_logged_in, auth_failed, model_route,
      * rate_limited or model_fallback_unavailable (the model Claude Code fell back to after a refusal can't be used, #2528:
      * "Continue" would only go to it again). Older hubs never send it.
@@ -606,6 +639,41 @@ data class Session(
     }
     /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
     val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
+
+    /**
+     * Stopped on a subscription usage limit whose reset is still ahead, or not known (#8237). A known reset more than
+     * [USAGE_LIMIT_GRACE_MS] ago is over: the turn reads as interrupted again. [now] is epoch millis.
+     */
+    fun isUsageLimited(now: Long = System.currentTimeMillis()): Boolean {
+        if (turnError.isNullOrBlank() || turnErrorKind != "usage_limit") return false
+        if (agentState != AgentState.Unread && agentState != AgentState.Idle) return false
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)?.toEpochMilli() ?: return true
+        return now <= at + USAGE_LIMIT_GRACE_MS
+    }
+
+    /** The CLI said it goes on by itself, or the hub scheduled this limit's continuation. */
+    fun usageLimitContinues(): Boolean {
+        if (turnErrorResumes == true) return true
+        val waiting = work ?: return false
+        return waiting.phase == "blocked" && parseTime(waiting.resetsAt) != null && parseTime(waiting.wakeAt) != null
+    }
+
+    /**
+     * Only the time half of a usage-limit line (iOS `usageLimitWhen`), for a row that already says "Usage Limit".
+     * Null when this is not a usage-limit wait, or nothing says when. [now] is epoch millis: callers pass the
+     * minute tick, so the line changes at the grace boundary.
+     */
+    fun usageLimitWhen(now: Long = System.currentTimeMillis()): UsageLimitWhen? {
+        if (!isUsageLimited(now)) return null
+        val goesOn = usageLimitContinues()
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)
+        return when {
+            at == null && goesOn -> UsageLimitWhen.AfterReset
+            at == null -> null
+            goesOn -> UsageLimitWhen.Resumes(at)
+            else -> UsageLimitWhen.Resets(at)
+        }
+    }
     val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
@@ -938,7 +1006,12 @@ object TurnDurationSerializer : WireSerializer<TurnDuration>(TurnDuration.genera
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionOptionSerializer::class)
-data class QuestionOption(@SerialName("label") val label: String = "", @SerialName("description") val description: String? = null)
+data class QuestionOption(
+    @SerialName("label") val label: String = "",
+    @SerialName("description") val description: String? = null,
+    /** A manager-local answer (`defer`); absent from older hubs and from choices that message the Agent. */
+    @SerialName("action") val action: String? = null,
+)
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionSerializer::class)

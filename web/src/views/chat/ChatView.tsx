@@ -14,7 +14,7 @@ import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, toggleBackgroundPanel, WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { machineWithHub } from "../../lib/mesh";
 import { useLayout } from "../../lib/layout";
-import { hasModes, isMuted, toggleMute } from "../../lib/session-actions";
+import { hasModes, isMuted, listedModesOf, toggleMute } from "../../lib/session-actions";
 import { attachLive, flipPin } from "../../lib/agent-actions";
 import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch } from "../../lib/new-agent";
@@ -1841,9 +1841,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [assistant, clears, session, embedded],
   );
   // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
-  // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row
+  // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row. An agent that
+  // lists its own modes (#8261) gets the picker with those two, and no Plan mode.
   const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && stateOf(session!) !== "offline"));
-  const leading = useMemo(() => (session && modesOn ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, assistant]);
+  const listedOn = Boolean(session) && !assistant && Boolean(listedModesOf(session)) && stateOf(session!) !== "offline";
+  const leading = useMemo(() => (session && (modesOn || listedOn) ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, listedOn, assistant]);
   const planMode = usePlanMode(modesOn ? session : undefined, assistant);
   // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
   const trailing = useMemo(() => (session ? assistant ? <AssistantModelPill session={session} /> : <AgentModelPill session={session} /> : null), [session, assistant]);

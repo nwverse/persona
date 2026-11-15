@@ -30,9 +30,13 @@ ADMIN_CIDRS="${PERSONA_ADMIN_CIDRS:-}"
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --admin-access) ADMIN_ACCESS="${2:-}"; shift ;;
+    --admin-access)
+      [ $# -ge 2 ] || { echo "--admin-access needs a value" >&2; exit 2; }
+      ADMIN_ACCESS="$2"; shift ;;
     --admin-access=*) ADMIN_ACCESS="${1#*=}" ;;
-    --admin-cidrs) ADMIN_CIDRS="${2:-}"; shift ;;
+    --admin-cidrs)
+      [ $# -ge 2 ] || { echo "--admin-cidrs needs a value" >&2; exit 2; }
+      ADMIN_CIDRS="$2"; shift ;;
     --admin-cidrs=*) ADMIN_CIDRS="${1#*=}" ;;
     *) ARGS+=("$1") ;;
   esac
@@ -262,17 +266,19 @@ install_bin() {
       eval "$previous"
       [ ! -f "$_PERSONA_HUB_BIN" ] || cp -p "$_PERSONA_HUB_BIN" "$root/bin/personad.prev" || return 1
     fi
-    { cp "$bin" "$root/bin/personad.new" && mv "$root/bin/personad.new" "$root/bin/personad"; } || return 1
-    if ! out=$(PERSONA_HOME="$root" "$root/bin/personad" version 2>&1); then
+    { cp "$bin" "$root/bin/personad.new"; } || return 1
+    if ! out=$(PERSONA_HOME="$root" "$root/bin/personad.new" version 2>&1); then
+      rm -f "$root/bin/personad.new"
       echo "$id: the $plat build does not run there: $out" >&2
       return 1
     fi
+    mv "$root/bin/personad.new" "$root/bin/personad" || return 1
     python3 ../scripts/persona_identity.py --alias-binaries "$root/bin" || return 1
     PERSONA_HOME="$root" restart_resident
   else
     keep=
     [ "$role" = hub ] && keep='{ [ ! -f "$_PERSONA_HUB_BIN" ] || cp -p "$_PERSONA_HUB_BIN" "$PERSONA_HOME/bin/personad.prev"; } && '
-    command=$keep'mkdir -p "$PERSONA_HOME/bin" && cat > "$PERSONA_HOME/bin/personad.new" && chmod 755 "$PERSONA_HOME/bin/personad.new" && mv "$PERSONA_HOME/bin/personad.new" "$PERSONA_HOME/bin/personad" && persona_alias_binaries "$PERSONA_HOME/bin" && "$PERSONA_HOME/bin/personad" version >/dev/null'
+    command=$keep'mkdir -p "$PERSONA_HOME/bin" && cat > "$PERSONA_HOME/bin/personad.new" && chmod 755 "$PERSONA_HOME/bin/personad.new" && if "$PERSONA_HOME/bin/personad.new" version >/dev/null; then mv "$PERSONA_HOME/bin/personad.new" "$PERSONA_HOME/bin/personad" && persona_alias_binaries "$PERSONA_HOME/bin"; else result=$?; rm -f "$PERSONA_HOME/bin/personad.new"; exit "$result"; fi'
     if [ -n "$via" ]; then
       local vh quoted
       vh=$(field "$via" ssh); vh=${vh:-$via}

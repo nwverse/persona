@@ -54,6 +54,8 @@ type Options struct {
 type Service struct {
 	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
 	inboxExt inboxExtensionCache
+	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
+	extTr extTranscriptions
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
@@ -67,10 +69,14 @@ type Service struct {
 	nodeAnswering atomic.Int64
 	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
 	taskStarting atomic.Int64
-	// leaderStarts counts task leaders being started: until one is linked its agent is no leader to the hub (task_leader.go).
+	// leaderStarts counts leaders through linking: only legacy one-shot discovery waits for them (task_leader.go).
 	leaderStarts atomic.Int64
+	// mcpChanges wakes tool discovery when task membership or leader rights change.
+	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// startDefaultsFor answers a task start's defaults from the extension layer (start_defaults.go); nil: no defaults.
+	startDefaultsFor func(ctx context.Context, facts StartFacts) (StartDefaults, bool, error)
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
 	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
@@ -238,6 +244,9 @@ type Service struct {
 
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
+	// taken up (tests).
+	sendsSettleHook func()
 	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
 	sessionsSeen func(DeviceSessions)
 
@@ -278,6 +287,8 @@ func New(o Options) *Service {
 	s.reporterRoutes()
 	s.directionRoutes()
 	s.dispatchPolicyRoutes() // dispatch_policy_routes.go
+	s.startPresetRoutes()
+	s.startDefaultsRoutes() // start_defaults_routes.go
 	s.directionTreeRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()
@@ -376,6 +387,18 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		id, _ := p["session_id"].(string)
+		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
+			return err
+		}
+		if method == DeviceSessionSend {
+			cfg := s.settings(ctx)
+			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+			}
+		}
+	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {

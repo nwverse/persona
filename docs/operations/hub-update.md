@@ -316,7 +316,7 @@ Package contract:
   ordinary files/directories are accepted. No links, special files, traversal, absolute/drive/UNC/backslash paths,
   reserved names, duplicate entries, case/Unicode-normalization collisions or internal provisioning stamps.
 - Preview extracts into a private temporary sibling and removes it before replying; only bounded, expiring metadata
-  receipts remain (32 per node, ten minutes). Install rechecks the exact same ZIP, current environment and conflicts,
+  receipts remain (32 operations per node, ten minutes, with lookup aliases for completed installs). Install rechecks the exact same ZIP, current environment and conflicts,
   then publishes by an exclusive atomic rename. No existing directory, built-in, plugin or local runtime skill is
   overwritten or shadowed. Unsupported exclusive-rename platforms fail closed. Failure/cancellation removes staging.
 
@@ -331,6 +331,21 @@ A canceled preview has no durable staged files. Cancellation before the atomic p
 after publish may mean the whole installation completed, so refresh the list before retrying. Writes are never
 automatically retried. Repeated/concurrent installation cannot replace the winning name.
 
+Assistant-only MCP `skill_import` exposes `preview`, `install`, `status`, `cancel` and `undo` through that same manager
+service and importer. It accepts base64 ZIP bytes, not download URLs or local paths. Preview returns an environment
+and receipt; install sends the identical bytes with both. Before install or undo, the manager reads the exact node
+receipt and shows a localized permission card naming the validated skill, computer and shared-account impact.
+Only the user's own approval counts; no archive bytes or skill instructions appear in the card. The settings lock
+is released while waiting and reacquired to recheck the target before the node call. New tools remain subject to
+existing assistant/meeting restrictions; ordinary coding Agents do not receive them.
+
+`status` accepts the original preview or install reference and environment. It records `previewed`, `installed` or
+`undone` and recovers the installation's undo receipt or retained recovery location after a lost response. It does
+not replay the effect or claim to be a live inventory. Receipt metadata survives only for its ten-minute node
+lifetime; expiration or node restart requires inspecting Settings › Skills instead of assuming failure. Older
+nodes without receipt status require an update before MCP installation. HTTP clients keep their existing flow and
+may also query status; the additive result fields are backward compatible.
+
 Discovery uses existing provisioning: `assistantLarkEnv` links the user store into `.claude/skills`, and
 `assistantRuntimeSkills` links it into `.agents/skills`. Claude reads the existing assistant directory; Codex's
 existing `skills/extraRoots/set` points at `.claude/skills`. No new discovery engine or `@skill` behavior is added.
@@ -344,19 +359,65 @@ environment/credential changes, strict server-derived targeting and the confirma
 and a temporary directory; unrelated routes use `scripts/mock/mock_hub.py`. It is UI integration evidence, not a
 production or live-model test. Its header documents loopback ports and shutdown; run with `SKILL_IMPORT_QA=1`.
 
+The Skills group keeps only the list in its card; where the skills live, who shares them and when changes apply are
+its one footer line. The upload dialog reuses existing web patterns: LookUpload's drop zone (choose or drop a ZIP, the
+check's progress in its place), ProviderImport's preview card and Cancel/primary footer, and `ErrorNotice` for a refused
+package.
+
 Curated synthetic captures, actually inspected in a browser (not production assets):
 
-| Preview | Light | Dark |
+| Capture | Light | Dark |
 | --- | --- | --- |
 | Desktop, standard text | [Light](../web/screenshots/skill-zip/preview-light.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/preview-dark.png) |
 | 390 px, largest supported text setting | [Light](../web/screenshots/skill-zip/narrow-light-large.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/narrow-dark-large.png) |
-| Localized narrow layout | [Simplified Chinese](../web/screenshots/skill-zip/zh-preview.png) | [Japanese](../web/screenshots/skill-zip/ja-preview.png) |
+| 390 px, Simplified Chinese | [Light](../web/screenshots/skill-zip/zh-preview.png) | [Dark](../web/screenshots/skill-zip/zh-preview-dark.png) |
+| 390 px, Japanese | [Light](../web/screenshots/skill-zip/ja-preview.png) | [Dark](../web/screenshots/skill-zip/ja-preview-dark.png) |
+| Skills group, Simplified Chinese | [Light](../web/screenshots/skill-zip/zh-group-light.png) | [Dark](../web/screenshots/skill-zip/zh-group-dark.png) |
+| Choosing a ZIP | [Light](../web/screenshots/skill-zip/zh-choose-light.png) | [Dark, a file dragged over](../web/screenshots/skill-zip/zh-drop-dark.png) |
+| Checking the ZIP | [Light](../web/screenshots/skill-zip/zh-checking-light.png) | [Dark](../web/screenshots/skill-zip/zh-checking-dark.png) |
+| Refused package | [Light](../web/screenshots/skill-zip/zh-refused-light.png) | [Dark](../web/screenshots/skill-zip/zh-refused-dark.png) |
+| Installed | [Light](../web/screenshots/skill-zip/zh-installed-light.png) | [Dark](../web/screenshots/skill-zip/zh-installed-dark.png) |
+| Undone, recovery retained | [Light](../web/screenshots/skill-zip/zh-undone-light.png) | [Dark](../web/screenshots/skill-zip/zh-undone-dark.png) |
+| Post-install Undo row, 390 px Large | [Light](../web/screenshots/skill-zip/zh-undo-row-light.png) | [Dark](../web/screenshots/skill-zip/zh-undo-row-dark.png) |
+
+The 2026-11-15 capture run uses `web/e2e/skill-zip-visual.py` through Browser Use against the opt-in Go fixture above
+and Vite. Its 22 captures were opened and visually inspected by Codex: text and status marks remain readable in both
+appearances, the long install and recovery paths wrap, localized buttons stay on one line, and the dark preview has a
+visible keyboard focus ring. `docs/web/screenshots/skill-zip/verification.json` records the source commit, source and
+PNG hashes, viewport checks and inspection observations. The evidence commit changes no application source.
+
+All Skills actions use `touch-hit`: the drawn buttons remain 32 px tall while their targets expand to at least
+44 x 44 px on coarse-pointer devices. The browser run measures the pseudo-element's target bounds and hit-tests
+points across that area, including the separate post-install Undo row. Native touch events below the painted button
+activate Upload ZIP, Choose ZIP, Cancel, Install, Close and both Undo actions. The file input's click is intercepted
+to keep the operating-system picker out of the automated run; CDP supplies the real ZIP afterwards.
+
+To reproduce, start an exclusively owned mock on `<mock port>`, run the fixture from `server/` with
+`SKILL_IMPORT_QA=1 SKILL_IMPORT_QA_ADDR=127.0.0.1:<manager port> SKILL_IMPORT_QA_MOCK=http://127.0.0.1:<mock port>
+go test ./internal/assistant -run '^TestSkillImportBrowserHarness$' -count=1 -v -timeout=30m`, and start Vite with
+`PERSONA_HUB_URL=http://127.0.0.1:<manager port>`. Then, from the repository root:
+
+```sh
+PERSONA_SKILL_ZIP_ORIGIN=http://127.0.0.1:<web port> \
+PERSONA_SKILL_ZIP_SHOTS=<evidence directory> \
+PERSONA_SKILL_ZIP_WORK=<scratch directory> \
+browser-use < web/e2e/skill-zip-visual.py
+```
+
+After inspecting the PNGs, record the observations in `verification.json`; the capture script initially marks visual
+inspection pending. POST `/_qa/stop` to the manager fixture, then stop the owned Vite and mock processes. The browser
+check delays one real preview response to exercise the busy state; native CDP file drag events must still cancel the
+browser defaults without another preview request. The real importer supplies all validation, install and Undo replies.
+Native link and plain-text drags also cancel `dragover` and `drop` without navigating, highlighting the zone or
+starting an upload; only file drags can highlight it.
+The screenshot report is evidence for review, not an automated-review credential: the maintainer's watcher still needs
+its trusted `ui_evidence_command` adapter (`docs/operations/pr-review-automation.md`, "Configure").
 
 Browser observations: Cancel initially owns preview focus; Tab reaches Install with a visible ring; Escape closes
-and restores Upload ZIP focus. No horizontal overflow at 390 px, including Large. A missing-string description
-shows an actionable validation error; a duplicate name shows conflict with no overwrite action. Installation adds
-`example-review` to the real fixture store/list, and Undo removes only the new `example-cancel` while retaining its
-resources in the reported recovery sibling. These are local fixture results, not live Claude/Codex discovery.
+and restores Upload ZIP focus. No horizontal overflow at 390 px, including Large. An empty description shows an
+actionable validation error. Installation creates `example-visual` in the real fixture store/list; Undo removes its
+list entry and retains its resources in the reported recovery sibling. These are local fixture results, not live
+Claude/Codex discovery.
 
 ## 2. Build channels
 
