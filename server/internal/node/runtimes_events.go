@@ -282,9 +282,13 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 		label = rt
 	}
 	// A runtime running several agents (Paseo: Claude Code and others) says which one each session runs: the card is
-	// that agent's.
-	if s, ok := h.row(ix.SessionID); ok && s.Agent != "" && s.Agent != agent {
-		agent = s.Agent
+	// that agent's, and called by the name its row gives it whenever it gives one. Paseo's other providers (Grok, Kimi,
+	// Cursor…) all run under Paseo's own id, each named by its provider's label: the card and its push say "Grok", not
+	// the runtime's "Paseo" (#8142).
+	if s, ok := h.row(ix.SessionID); ok {
+		if s.Agent != "" && s.Agent != agent {
+			agent = s.Agent
+		}
 		if s.AgentLabel != "" {
 			label = s.AgentLabel
 		}
