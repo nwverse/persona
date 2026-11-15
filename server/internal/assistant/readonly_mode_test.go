@@ -158,21 +158,25 @@ func TestReadonlyModeToolConfirmation(t *testing.T) {
 
 func TestReadonlyModeTaskPlan(t *testing.T) {
 	for _, mode := range []string{"", readonlySandbox, readonlyPrompt, "unknown"} {
-		for _, agent := range []string{"codex", "claude"} {
+		for _, launcher := range []proto.Launcher{
+			{Name: "task-runtime", Agent: "codex"},
+			{Name: "task-runtime", Agent: "claude"},
+			{Name: "task-runtime", Agent: "paseo", Source: "paseo", AutoAccept: true},
+		} {
 			for _, permission := range []string{"", "plan", "bypassPermissions"} {
-				t.Run(mode+"/"+agent+"/"+permission, func(t *testing.T) {
+				t.Run(mode+"/"+launcher.Agent+"/"+permission, func(t *testing.T) {
 					synctest.Test(t, func(t *testing.T) {
 						s, f := readonlyTaskService(t)
-						f.launcherList = []proto.Launcher{{Name: "task-runtime", Agent: agent}}
+						f.launcherList = []proto.Launcher{launcher}
 						setSettings(t, s, func(v *Settings) { v.ReadonlyMode, v.DefaultPermissionMode = mode, "plan" })
 						task := readonlyTestTask(permission)
-						task.Launcher = "task-runtime"
+						task.Launcher = launcher.Name
 						if _, err := s.toolTaskPlan(context.Background(), "readonly-chat", readonlyTaskArgs(t, task)); err != nil {
 							t.Fatal(err)
 						}
 						synctest.Wait()
 						want := "plan"
-						if agent == "claude" {
+						if launcher.Agent == "claude" || launcher.AutoAccept {
 							want = "bypassPermissions"
 						} else if mode == readonlyPrompt {
 							want = "default"

@@ -62,6 +62,7 @@ it("defaults a missing value to runtime protection and saves the selected mode f
   await render();
   expect(selector().value).toBe("sandbox");
   expect(selector().className).toContain("pointer-coarse:min-h-11");
+  expect(selector().classList.contains("text-meta")).toBe(true);
   expect([...selector().options].map((o) => [o.value, o.textContent])).toEqual([
     ["sandbox", "Runtime protection (default)"], ["prompt", "Instructions only"],
   ]);

@@ -135,7 +135,7 @@ type PlanTask struct {
 }
 
 // Keep the default protection unless the owner opted into instructions only. Spawned helpers keep their caller's mode.
-// Launcher fitting still applies the existing Claude-family bypassPermissions behavior in either mode.
+// Launcher fitting still applies the Claude-family and Auto Accept bypassPermissions behavior in either mode.
 func (t *PlanTask) normalizeReadonlyPermission(mode string) {
 	if t.Readonly && !t.preservePermission {
 		t.Permission = "plan"

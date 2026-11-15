@@ -417,7 +417,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         <Row label={t("settings-assistantsettings.readonly_mode")} hint={t("settings-assistantsettings.readonly_mode_hint")} wrapHint stackOnNarrow anchor="readonly-mode">
           <select aria-label={t("settings-assistantsettings.readonly_mode")} value={info?.readonly_mode ?? "sandbox"}
             disabled={!info || info.manager !== manager || readonlyBusy}
-            className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field pointer-coarse:min-h-11"
+            className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-meta text-ink shadow-inset-field pointer-coarse:min-h-11"
             onChange={(e) => void setReadonlyMode(e.target.value as "sandbox" | "prompt")}>
             <option value="sandbox">{t("settings-assistantsettings.readonly_mode_sandbox")}</option>
             <option value="prompt">{t("settings-assistantsettings.readonly_mode_prompt")}</option>
