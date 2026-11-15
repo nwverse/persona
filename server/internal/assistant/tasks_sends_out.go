@@ -19,9 +19,9 @@ import (
 //   - taken: the task opens again now (reopenTodo, stored), and the note goes.
 //   - definitely failed (the node refused it, or it never went out: rpc.ErrNotSent): it asked for nothing, and the note
 //     goes.
-//   - unknown (no answer within its wait, a dropped link): the text may still arrive. The note stays until the send
-//     stops counting, and a turn of the agent that starts by then opens the task (closedTurnReopens). If none does,
-//     the task stays closed.
+//   - unknown (no answer within its wait, a dropped link, or the node says the text may have arrived: nodeMayHaveTaken):
+//     the text may still arrive. The note stays until the send stops counting, and a turn of the agent that starts by
+//     then opens the task (closedTurnReopens). If none does, the task stays closed.
 //
 // A turn of the agent that starts while such a send is out is held for the answer (closedTurnHeld), and so is its end
 // (endHeld). Taken or unknown, the turn is the task's: the task opens and the turn is followed from then. Failed, with
@@ -139,7 +139,7 @@ type sendOutcome int
 
 const (
 	sendTaken  sendOutcome = iota // the node took it
-	sendUnsure                    // its answer never came, though it may have reached the node (sendUnknown)
+	sendUnsure                    // it may have reached the agent: no answer came, or the node could not say (sendUnknown)
 	sendFailed                    // refused, or it never went out: it asked for nothing
 )
 

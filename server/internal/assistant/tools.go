@@ -662,11 +662,27 @@ func startResultUnknown(err error) bool {
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
 
-// sendUnknown: a session.send or session.start whose answer never came back, though it may have reached the node
-// (startResultUnknown), unless the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait
-// ran out, or the connection closed, before it was written, or the node's not-started refusals outlasted the retries).
+// sendUnknown: a session.send or session.start that failed though its text may have reached the agent: its answer
+// never came back (startResultUnknown), or the node's error says the text may have arrived or did (nodeMayHaveTaken).
+// Not when the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait ran out, or the
+// connection closed, before it was written, or the node's not-started refusals outlasted the retries).
 func sendUnknown(err error) bool {
-	return startResultUnknown(err) && !errors.Is(err, rpc.ErrNotSent)
+	return (startResultUnknown(err) || nodeMayHaveTaken(err)) && !errors.Is(err, rpc.ErrNotSent)
+}
+
+// nodeMayHaveTaken: err is the node's, and its delivered says the text may have arrived ("unknown": typing failed part
+// way, or a Claude's inbox read it but the session has not confirmed it yet, peer_unconfirmed) or did ("yes"). A refusal
+// says "none" (nothing was typed); an error that says neither is read by its kind alone (startResultUnknown).
+func nodeMayHaveTaken(err error) bool {
+	var re *rpc.Error
+	if !errors.As(err, &re) || len(re.Data) == 0 {
+		return false
+	}
+	var d struct {
+		Delivered string `json:"delivered"`
+	}
+	_ = json.Unmarshal(re.Data, &d)
+	return d.Delivered == "unknown" || d.Delivered == "yes"
 }
 
 // liveSendWait bounds a send to an agent that runs when the send may reopen its accepted task (agent_send), and the
