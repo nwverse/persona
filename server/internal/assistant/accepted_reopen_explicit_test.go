@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -150,13 +151,51 @@ func failSends(f *fakeHub, err error) {
 	f.failSend = err
 }
 
-// shortSends makes a live send wait at most wait, and a send of more for an accepted task count grace past its own
-// wait, for this test.
-func shortSends(t *testing.T, wait, grace time.Duration) {
+// shortSends makes a live send wait at most wait, for this test.
+func shortSends(t *testing.T, wait time.Duration) {
 	t.Helper()
-	oldWait, oldGrace := liveSendWait, sendGrace
-	liveSendWait, sendGrace = wait, grace
-	t.Cleanup(func() { liveSendWait, sendGrace = oldWait, oldGrace })
+	old := liveSendWait
+	liveSendWait = wait
+	t.Cleanup(func() { liveSendWait = old })
+}
+
+// ageSends makes the sends of more for accepted tasks that s keeps, in memory and in its database st (nil: none), by
+// older, as if they had been sent that much earlier: the agent reads the text that long after the send.
+func ageSends(t *testing.T, s *Service, st Store, by time.Duration) {
+	t.Helper()
+	if by == 0 {
+		return
+	}
+	s.tasks.mu.Lock()
+	for _, o := range s.tasks.sendsOut {
+		for _, n := range o.notes {
+			n.at, n.until = n.at.Add(-by), n.until.Add(-by)
+		}
+	}
+	s.tasks.mu.Unlock()
+	if st == nil {
+		return
+	}
+	list := keptSends(t, st)
+	for i := range list {
+		for j := range list[i].Sends {
+			e := &list[i].Sends[j]
+			e.At, e.Until = e.At.Add(-by), e.Until.Add(-by)
+		}
+	}
+	if err := st.PutSetting(context.Background(), sendsOutKey, list); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// keptSends is what database st keeps of the sends of more for accepted tasks, by agent.
+func keptSends(t *testing.T, st Store) []sendsOutRecord {
+	t.Helper()
+	var list []sendsOutRecord
+	if _, err := st.Setting(context.Background(), sendsOutKey, &list); err != nil {
+		t.Fatal(err)
+	}
+	return list
 }
 
 // clockPast waits until the clock is past at.
@@ -222,9 +261,10 @@ func TestBackgroundSupervisorReopensATaskItAccepted(t *testing.T) {
 
 // More for an accepted task reaches its live agent (the owner's message on its card, or agent_send from its
 // conversation), which only queues it; the manager restarts before the agent takes it up. The turn it starts then is
-// the task's: open, followed, judged, waiting for review. A send that definitely failed asked nothing: the task stays
-// closed through the restart and the agent's next turn, also when a turn of the agent started (other work) while that
-// send was out and ends after the restart.
+// the task's: open, followed, judged, waiting for review, also a day later (a Claude's inbox held the text until the
+// person at the computer let it in). A send that definitely failed asked nothing: the task stays closed through the
+// restart and the agent's next turn, also when a turn of the agent started (other work) while that send was out and
+// ends after the restart.
 func TestMoreForAnAcceptedTaskSurvivesARestart(t *testing.T) {
 	failed := errors.New("no such session")
 	for _, c := range []struct {
@@ -233,17 +273,20 @@ func TestMoreForAnAcceptedTaskSurvivesARestart(t *testing.T) {
 		fails     bool  // it definitely failed
 		// meanwhile: a turn of the agent starts while the send is out
 		meanwhile bool
+		later     time.Duration // how long after the send the agent takes the text up
 	}{
-		{"card", "card", nil, false, false},
-		{"agent_send", "agent_send", nil, false, false},
-		{"card, failed", "card", failed, true, false},
-		{"agent_send, failed", "agent_send", failed, true, false},
-		{"card, failed while a turn started", "card", failed, true, true},
-		{"agent_send, failed while a turn started", "agent_send", failed, true, true},
+		{"card", "card", nil, false, false, 0},
+		{"agent_send", "agent_send", nil, false, false, 0},
+		{"card, failed", "card", failed, true, false, 0},
+		{"agent_send, failed", "agent_send", failed, true, false, 0},
+		{"card, failed while a turn started", "card", failed, true, true, 0},
+		{"agent_send, failed while a turn started", "agent_send", failed, true, true, 0},
 		// The node's inbox holds the text for the person at the computer, who lets it in after the restart.
-		{"agent_send, the node could not confirm it", "agent_send", nodeUnconfirmed, false, false},
-		{"agent_interrupt, the node could not confirm it", "agent_interrupt", nodeUnconfirmed, false, false},
-		{"card, the node could not confirm it", "card", nodeUnconfirmed, false, false},
+		{"agent_send, the node could not confirm it", "agent_send", nodeUnconfirmed, false, false, 0},
+		{"agent_interrupt, the node could not confirm it", "agent_interrupt", nodeUnconfirmed, false, false, 0},
+		{"card, the node could not confirm it", "card", nodeUnconfirmed, false, false, 0},
+		{"agent_send, the node could not confirm it, let in a day later", "agent_send", nodeUnconfirmed, false, false, 24 * time.Hour},
+		{"card, the node could not confirm it, let in a day later", "card", nodeUnconfirmed, false, false, 24 * time.Hour},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			database := taskRecoveryDatabase(t)
@@ -261,6 +304,7 @@ func TestMoreForAnAcceptedTaskSurvivesARestart(t *testing.T) {
 			if c.fails {
 				closedUnchanged(t, s, accepted)
 			}
+			ageSends(t, s, database, c.later)
 
 			// The manager restarts before the agent takes up the text it queued.
 			restarted, hub := newQuietServiceOn(t, database)
@@ -354,58 +398,63 @@ func TestATurnDuringASendWaitsForItsAnswer(t *testing.T) {
 }
 
 // A send of more whose answer never came (the wait ran out, the link dropped), or that the node could not confirm (a
-// Claude's inbox holds the text for the person at the computer), may still reach the agent. The accepted task stays
-// closed until a turn of the agent starts while the send still counts (its own wait and a grace after it): that turn
-// opens the task and is the task's. When no turn starts by then, the text never arrived as far as the task goes: a
-// later turn leaves it closed, and its supervisor hears nothing.
-func TestAnUnknownSendReopensOnlyForATurnSoonAfter(t *testing.T) {
+// Claude's inbox holds the text for the person at the computer), may still reach the agent, however long after: queued
+// behind a long turn, or let in once that person looks. The accepted task stays closed until the agent's next turn,
+// which opens it and is the task's, whether it starts soon after the send or an hour later, long past the send's own
+// wait. Only an agent that starts no turn for longer than sendKeep (a week) leaves the task closed through a later
+// turn, and its supervisor hears nothing.
+func TestAnUnknownSendReopensOnTheAgentsNextTurn(t *testing.T) {
 	for _, c := range []struct {
 		via, why string
 		err      error
-		late     bool // no turn starts before the send stops counting
+		later    time.Duration // how long after the send the agent's turn starts
 	}{
-		{"agent_send", "no answer", context.DeadlineExceeded, false},
-		{"card", "no answer", context.DeadlineExceeded, false},
-		{"agent_send", "no answer", context.DeadlineExceeded, true},
-		{"card", "no answer", context.DeadlineExceeded, true},
-		{"agent_send", "the node could not confirm it", nodeUnconfirmed, false},
-		{"agent_interrupt", "the node could not confirm it", nodeUnconfirmed, false},
-		{"card", "the node could not confirm it", nodeUnconfirmed, false},
-		{"agent_send", "the node could not confirm it", nodeUnconfirmed, true},
-		{"card", "the node could not confirm it", nodeUnconfirmed, true},
+		{"agent_send", "no answer", context.DeadlineExceeded, 0},
+		{"card", "no answer", context.DeadlineExceeded, 0},
+		{"agent_send", "no answer", context.DeadlineExceeded, time.Hour},
+		{"card", "no answer", context.DeadlineExceeded, time.Hour},
+		{"agent_send", "no answer", context.DeadlineExceeded, sendKeep + time.Minute},
+		{"card", "no answer", context.DeadlineExceeded, sendKeep + time.Minute},
+		{"agent_send", "the node could not confirm it", nodeUnconfirmed, 0},
+		{"agent_interrupt", "the node could not confirm it", nodeUnconfirmed, 0},
+		{"card", "the node could not confirm it", nodeUnconfirmed, 0},
+		{"agent_send", "the node could not confirm it", nodeUnconfirmed, time.Hour},
+		{"agent_interrupt", "the node could not confirm it", nodeUnconfirmed, time.Hour},
+		{"card", "the node could not confirm it", nodeUnconfirmed, sendKeep + time.Minute},
 	} {
-		name := c.via + ", " + c.why + ", its turn starts soon after"
-		if c.late {
-			name = c.via + ", " + c.why + ", no turn before it stops counting"
-		}
+		late := c.later > sendKeep
+		name := fmt.Sprintf("%s, %s, its turn starts %v after", c.via, c.why, c.later)
 		t.Run(name, func(t *testing.T) {
-			if c.late {
-				shortSends(t, 200*time.Millisecond, 100*time.Millisecond)
-			}
+			shortSends(t, 200*time.Millisecond)
 			s, f, accepted := acceptedPlanTask(t, nil)
 			before := supervisionOf(s, f, accepted.ID)
 			failSends(f, c.err)
 			if err := sendVia(t, s, c.via, "conv1", accepted.ID, "Please cover the landscape case too"); err == nil {
 				t.Fatal("the send's answer came")
 			}
-			returned := time.Now()
 			closedUnchanged(t, s, accepted) // nothing arrived yet
-			if c.late {
-				clockPast(t, returned.Add(liveSendWait+sendGrace))
-				longTurn(s, f, proto.StatusWorking, "")
+			ageSends(t, s, nil, c.later)
+			longTurn(s, f, proto.StatusWorking, "")
+			if late {
 				closedUnchanged(t, s, accepted)
 				longTurn(s, f, proto.StatusDone, "The other dashboard looks fine")
 				closedUnchanged(t, s, accepted)
 				nothingToldAfter(t, s, f, accepted.ID, before)
 				return
 			}
-			longTurn(s, f, proto.StatusWorking, "")
 			if got := todoNow(s, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
-				t.Fatalf("the turn soon after a send that may have arrived left the task closed: %+v", got)
+				t.Fatalf("the turn %v after a send that may have arrived left the task closed: %+v", c.later, got)
 			}
 			longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
 			waitFor(t, "the review again", func() bool { return todoNow(s, accepted.ID).Supervision.State == reviewPending })
 			waitFor(t, "the next review message", func() bool { return supervisionOf(s, f, accepted.ID).notices > before.notices })
+
+			// That turn was the one the send asked for: the next one, after the task is accepted again, is other work.
+			again := reviewAndWait(t, s, accepted.ID, reviewAccepted)
+			longTurn(s, f, proto.StatusWorking, "")
+			if got := todoNow(s, accepted.ID); got.DoneAt == nil || !got.DoneAt.Equal(*again.DoneAt) || got.DoneBy != db.DoneByReview {
+				t.Fatalf("the turn after the task was accepted again moved it: %+v", got)
+			}
 		})
 	}
 }
@@ -421,7 +470,7 @@ func TestALiveSendNeverAnsweredEndsWithItsWait(t *testing.T) {
 			name = "the turn ends during the wait"
 		}
 		t.Run(name, func(t *testing.T) {
-			shortSends(t, 300*time.Millisecond, time.Minute)
+			shortSends(t, 300*time.Millisecond)
 			s, f, accepted := acceptedPlanTask(t, nil)
 			before := supervisionOf(s, f, accepted.ID)
 			f.mu.Lock()
@@ -470,7 +519,7 @@ func TestOnlyASendOfMoreForAnAcceptedTaskEndsWithItsOwnWait(t *testing.T) {
 		{"an agent with no task", "conv1", false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			shortSends(t, 200*time.Millisecond, time.Minute)
+			shortSends(t, 200*time.Millisecond)
 			var s *Service
 			var f *fakeHub
 			if c.accepted {
@@ -574,28 +623,27 @@ func TestOverlappingSendsKeepTheHeldTurn(t *testing.T) {
 
 // More for an accepted task reaches its live agent, and the manager restarts before the node's answer to the send came
 // back (the node had queued the text). The restarted manager takes the kept send as one whose answer is unknown: the
-// agent's turn that starts while it counts is the task's (open, followed, judged, waiting for review), and one that
-// starts after it stopped counting leaves the task closed. A turn that started while the send was out, before the
-// restart, is the task's too once the manager starts (recoverSendsOut, as Run does), also when it ended before.
+// agent's next turn is the task's (open, followed, judged, waiting for review), also when the agent takes the queued
+// text up only an hour later, behind a long turn, long past the send's own wait. A turn that started while the send
+// was out, before the restart, is the task's too once the manager starts (recoverSendsOut, as Run does), also when it
+// ended before.
 func TestMoreForAnAcceptedTaskSurvivesARestartBeforeItsAnswer(t *testing.T) {
 	for _, c := range []struct {
 		name, via string
 		// before: what the agent did while the send was out, before the restart: "" nothing, "started" a turn,
 		// "ended" a turn that started and ended
 		before string
-		late   bool // the turn starts after the send stopped counting
+		later  time.Duration // how long after the send the agent takes the text up
 	}{
-		{"card", "card", "", false},
-		{"agent_send", "agent_send", "", false},
-		{"agent_interrupt", "agent_interrupt", "", false},
-		{"agent_send, a turn started before the restart", "agent_send", "started", false},
-		{"card, a turn started and ended before the restart", "card", "ended", false},
-		{"agent_send, its turn starts after the send stopped counting", "agent_send", "", true},
+		{"card", "card", "", 0},
+		{"agent_send", "agent_send", "", 0},
+		{"agent_interrupt", "agent_interrupt", "", 0},
+		{"agent_send, a turn started before the restart", "agent_send", "started", 0},
+		{"card, a turn started and ended before the restart", "card", "ended", 0},
+		{"agent_send, its turn starts an hour later", "agent_send", "", time.Hour},
+		{"card, its turn starts an hour later", "card", "", time.Hour},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if c.late {
-				shortSends(t, 200*time.Millisecond, 100*time.Millisecond)
-			}
 			ctx := context.Background()
 			database := taskRecoveryDatabase(t)
 			s, f, accepted := acceptedPlanTask(t, database)
@@ -617,8 +665,8 @@ func TestMoreForAnAcceptedTaskSurvivesARestartBeforeItsAnswer(t *testing.T) {
 				<-answered
 			}()
 			<-out
-			sent := time.Now()
 			closedUnchanged(t, s, accepted)
+			ageSends(t, s, database, c.later)
 
 			// The manager restarts while the send is out.
 			restarted, hub := newQuietServiceOn(t, database)
@@ -632,12 +680,6 @@ func TestMoreForAnAcceptedTaskSurvivesARestartBeforeItsAnswer(t *testing.T) {
 			restarted.recoverSendsOut(ctx) // as Run does when the manager starts
 			if c.before == "" {
 				closedUnchanged(t, restarted, accepted) // the restart alone opens nothing
-				if c.late {
-					clockPast(t, sent.Add(liveSendWait+sendGrace))
-					longTurn(restarted, hub, proto.StatusWorking, "")
-					closedUnchanged(t, restarted, accepted)
-					return
-				}
 				longTurn(restarted, hub, proto.StatusWorking, "")
 			}
 			if got := todoNow(restarted, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
@@ -664,6 +706,13 @@ func (d *sendsKeepFails) arm(read, write bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.failRead, d.failWrite = read, write
+}
+
+// writeArmed says whether the next write of the kept sends is still to fail.
+func (d *sendsKeepFails) writeArmed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.failWrite
 }
 
 // take says whether *armed was set, and clears it.
@@ -745,6 +794,137 @@ func TestASendOfMoreThatCannotBeKeptIsNotSent(t *testing.T) {
 				waitFor(t, "the review again", func() bool { return todoNow(restarted, accepted.ID).Supervision.State == reviewPending })
 			})
 		}
+	}
+}
+
+// A send of more the node refused asked for nothing, and its note goes from what is kept as well as from memory. When
+// that write fails (the database refuses it once, after it took the note itself), it is written again until it goes
+// through: a manager that restarts afterwards finds nothing kept for the send, and the agent's turns after the restart
+// leave the task closed, also one that started while the send was out and ends after the restart, with nothing judged
+// or told.
+func TestARefusedSendIsForgottenWhenItsCleanupWriteFails(t *testing.T) {
+	every := sendsRetryEvery
+	sendsRetryEvery = 10 * time.Millisecond
+	t.Cleanup(func() { sendsRetryEvery = every })
+	for _, via := range []string{"agent_send", "agent_interrupt", "card"} {
+		for _, meanwhile := range []bool{false, true} {
+			name := via
+			if meanwhile {
+				name += ", a turn started while it was out"
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx := context.Background()
+				database := &sendsKeepFails{DB: taskRecoveryDatabase(t)}
+				s, f, accepted := acceptedPlanTask(t, database)
+				failSends(f, nodeRefused)
+				beforeSend(f, func() {
+					if meanwhile {
+						longTurn(s, f, proto.StatusWorking, "") // held for the answer
+					}
+					if n := len(keptSends(t, database.DB)); n != 1 {
+						t.Errorf("%d agents with sends kept while the send is out, want 1", n)
+					}
+					database.arm(false, true) // the write after the refusal fails
+				})
+				if err := sendVia(t, s, via, "conv1", accepted.ID, "Please cover the landscape case too"); err == nil {
+					t.Fatal("the send the node refused succeeded")
+				}
+				if database.writeArmed() {
+					t.Fatal("nothing was written after the refusal")
+				}
+				closedUnchanged(t, s, accepted)
+				waitFor(t, "the refused send to go from what is kept", func() bool { return len(keptSends(t, database.DB)) == 0 })
+
+				// The manager restarts.
+				restarted, hub := newQuietServiceOn(t, database.DB)
+				hub.judge = `{"verdict":"done","reason":"merged"}`
+				before := supervisionOf(restarted, hub, accepted.ID)
+				if meanwhile {
+					longRow(hub, proto.StatusWorking, "")
+				}
+				restarted.recoverSendsOut(ctx) // as Run does when the manager starts
+				closedUnchanged(t, restarted, accepted)
+				if meanwhile { // the turn that started while the send was out ends
+					longTurn(restarted, hub, proto.StatusDone, "The other dashboard looks fine")
+					closedUnchanged(t, restarted, accepted)
+				}
+				judged := judgeCalls(hub)
+				longTurn(restarted, hub, proto.StatusWorking, "")
+				closedUnchanged(t, restarted, accepted)
+				longTurn(restarted, hub, proto.StatusDone, "The other dashboard looks fine")
+				closedUnchanged(t, restarted, accepted)
+				if n := judgeCalls(hub); n != judged {
+					t.Fatalf("a turn after the restart was judged: %d judgments, %d before", n, judged)
+				}
+				nothingToldAfter(t, restarted, hub, accepted.ID, before)
+			})
+		}
+	}
+}
+
+// A turn of the agent starts while a send of more for its accepted task is out, and is held for the send's answer;
+// before the turn ends, the agent goes to another task, an open one. The turn's end is that task's (taken and judged:
+// done), not put off for the answer, and nothing stays kept for the accepted task; the answer, unknown, leaves the
+// accepted task closed.
+func TestAHeldTurnOfAnAgentThatWentToAnotherTaskIsThatTasks(t *testing.T) {
+	ctx := context.Background()
+	database := taskRecoveryDatabase(t)
+	s, f, accepted := acceptedPlanTask(t, database)
+	note, err := s.noteAgentSend(ctx, "conv1", "box", longAgent, "", "Please cover the landscape case too")
+	if err != nil {
+		t.Fatal(err)
+	}
+	longTurn(s, f, proto.StatusWorking, "") // held for the send's answer
+	closedUnchanged(t, s, accepted)
+	other, err := s.createTaskTodo(ctx, "Tidy the release notes", "Group the entries by area.", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(ctx, other.ID, "box", longAgent, "", "/code/app", "claude"); err != nil {
+		t.Fatalf("hand the agent to the other task: %v", err)
+	}
+	longRow(f, proto.StatusDone, "Release notes tidied")
+	if got := s.settleTurn(ctx, "box", longAgent, ""); got != settleTaken {
+		t.Fatalf("the end of the other task's turn: %v, want taken (settleLater: put off for the accepted task's send)", got)
+	}
+	if kept := keptSends(t, database); len(kept) != 0 {
+		t.Fatalf("still kept for the accepted task: %+v", kept)
+	}
+	note.sent(ctx, context.DeadlineExceeded)
+	closedUnchanged(t, s, accepted)
+	if got := todoNow(s, other.ID); got.DoneAt == nil || got.DoneBy != db.DoneByAuto {
+		t.Fatalf("the other task's turn end was not judged: %+v", got)
+	}
+}
+
+// A send of more for an accepted task whose answer is unknown is kept for the agent's next turn. When the task opens
+// by other means first (the owner reopens it), the send asks nothing of it any more: the next write of the kept sends
+// (here, as the manager restarts) forgets it, and once the task is accepted again, the agent's next turn leaves it
+// closed.
+func TestASendForATaskReopenedMeanwhileIsForgotten(t *testing.T) {
+	ctx := context.Background()
+	database := taskRecoveryDatabase(t)
+	s, f, accepted := acceptedPlanTask(t, database)
+	failSends(f, context.DeadlineExceeded)
+	if err := sendTo(t, s, "agent_send", "conv1", "Please cover the landscape case too"); err == nil {
+		t.Fatal("the send's answer came")
+	}
+	if n := len(keptSends(t, database)); n != 1 {
+		t.Fatalf("%d agents with sends kept, want 1", n)
+	}
+	if err := s.reopenTodo(ctx, accepted.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, hub := newQuietServiceOn(t, database)
+	restarted.recoverSendsOut(ctx) // as Run does when the manager starts
+	if kept := keptSends(t, database); len(kept) != 0 {
+		t.Fatalf("still kept for a task that opened again: %+v", kept)
+	}
+	again := reviewAndWait(t, restarted, accepted.ID, reviewAccepted)
+	longTurn(restarted, hub, proto.StatusWorking, "")
+	if got := todoNow(restarted, accepted.ID); got.DoneAt == nil || !got.DoneAt.Equal(*again.DoneAt) || got.DoneBy != db.DoneByReview {
+		t.Fatalf("the turn after the task was accepted again moved it: %+v", got)
 	}
 }
 

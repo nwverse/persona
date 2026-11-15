@@ -219,10 +219,12 @@ type tasksState struct {
 	// still counts, and a turn of the agent held for them (closedTurnHeld). A task its supervisor accepted opens again
 	// only for those (closedTurnReopens, #6726, #7539). Kept in the database too (sendsOutKey, tasks_sends_out.go): a
 	// manager that restarts with one out takes it as a send whose answer is unknown. sendsSaving orders reading and
-	// writing them, the latest state last; sendsLoaded: what the manager before kept was read.
-	sendsOut    map[[2]string]*sendsOut
-	sendsSaving sync.Mutex
-	sendsLoaded bool
+	// writing them, the latest state last, and guards the three flags: sendsLoaded, what the manager before kept was
+	// read; sendsDirty, the latest write failed, so what is kept is not what is in memory; sendsRetrying,
+	// retrySendsOut is writing them again.
+	sendsOut                               map[[2]string]*sendsOut
+	sendsSaving                            sync.Mutex
+	sendsLoaded, sendsDirty, sendsRetrying bool
 	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
 	retrying map[string]bool
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).

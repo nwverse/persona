@@ -352,7 +352,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				lctx = ctx
 			}
 			err = s.call(lctx, am.ID, DeviceSessionSend, params, nil)
-			note.sent(lctx, err) // an unknown answer counts for a turn that starts soon: it may still arrive
+			note.sent(lctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
 			if err != nil {
 				if note.reopens() && sendUnknown(err) {
 					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads

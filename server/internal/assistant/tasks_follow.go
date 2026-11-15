@@ -219,8 +219,9 @@ const (
 // conversation, its supervisor or the background supervisor acting for it (sendReopens) sent the agent after the
 // acceptance: agent_send, agent_interrupt with then, or the owner's message on the task's card (which, when its agents
 // have all stopped, reopens the task once its new agent started, routeToTaskAs). A send the node took reopens the task
-// itself (agentSendNote.sent, tasks_sends_out.go). A turn that starts while a send whose answer was unknown still counts
-// opens it here; one that starts while a send is out is held for the answer. The owner can still reopen one by hand,
+// itself (agentSendNote.sent, tasks_sends_out.go). The agent's next turn after a send whose answer was unknown opens it
+// here, however late (the agent may read the text much later); one that starts while a send is out is held for the
+// answer. The owner can still reopen one by hand,
 // and todo_reopen does too. That covers an acceptance by the judge's own spot check (supervise_sample.go), which is a
 // review too.
 func (s *Service) closedTurnReopens(t Todo, mid, sid string) closedTurn {

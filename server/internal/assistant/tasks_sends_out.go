@@ -14,28 +14,40 @@ import (
 
 // Sending an accepted task more (#7539). A task its supervisor accepted opens again only for what its own conversation
 // sends its agent (sendReopens, closedTurnReopens): agent_send, agent_interrupt with then, the owner's message on its
-// card. Such a send is noted before it goes (noteAgentSend), with the task, that acceptance and how long the send
-// counts for it (its own wait and sendGrace), and the note is kept in the assistant's settings (sendsOutKey) as well as
-// in memory: the agent's turn may start after a manager restart, when the node queued the text or the answer was lost
-// with the manager. A send whose note cannot be kept does not go (errSendNotKept). How the send went decides
-// (agentSendNote.sent, sendAnswered):
+// card. Such a send is noted before it goes (noteAgentSend), with the task and that acceptance, and the note is kept in
+// the assistant's settings (sendsOutKey) as well as in memory: the agent's turn may start after a manager restart, when
+// the node queued the text or the answer was lost with the manager. A send whose note cannot be kept does not go
+// (errSendNotKept). How the send went decides (agentSendNote.sent, sendAnswered):
 //
 //   - taken: the task opens again now (reopenTodo, stored), and the note goes.
 //   - definitely failed (the node refused it, or it never went out: rpc.ErrNotSent): it asked for nothing, and the note
 //     goes.
 //   - unknown (no answer within its wait, a dropped link, or the node says the text may have arrived: nodeMayHaveTaken):
-//     the text may still arrive. The note stays until the send stops counting, and a turn of the agent that starts by
-//     then opens the task (closedTurnReopens). If none does, the task stays closed.
+//     the text may still arrive, whenever the agent reads it: queued behind a long turn, or held in a Claude's inbox
+//     until the person at the computer lets it in. The note stays, and the agent's next turn opens the task
+//     (closedTurnReopens). It goes once the task is no longer the agent's closed task on that acceptance (it opened
+//     again, was accepted again, or the agent went to another task: sendsPrune), and at the latest after sendKeep.
 //
 // A turn of the agent that starts while such a send is out is held for the answer (closedTurnHeld), and so is its end
 // (endHeld). Taken or unknown, the turn is the task's: the task opens and the turn is followed from then. Failed, with
 // no other send of more for the task out or counting, it was other work: the task stays closed through it and its end.
 // A manager that starts with notes the one before kept takes each as a send whose answer is unknown (loadSendsOut), and
-// a turn held for one as the task's (recoverSendsOut).
+// a turn held for one as the task's (recoverSendsOut). A write of the notes that fails is tried again (retrySendsOut):
+// what it would have removed, a refused send's note say, must not come back with a restart as a send whose answer is
+// unknown.
 
-// sendGrace is how long past its own wait a send of more for an accepted task still counts (agentSendNote.until): a
-// turn of its agent that starts by then may be the one it asked for.
-var sendGrace = time.Minute
+// sendKeep is how long a send of more for an accepted task counts at most (agentSendNote.until) when no turn of its
+// agent has started since and its task stayed as it was: long past any wait for its answer, since an agent may read the
+// text much later (a Claude's inbox holds a message for the person at the computer as long as they take). It only
+// bounds what is kept for an agent that never works again.
+const sendKeep = 7 * 24 * time.Hour
+
+// sendsRetryEvery is how soon a write of the sends of more that failed is first tried again (retrySendsOut), and
+// sendsRetries how many times; vars so tests shorten them.
+var (
+	sendsRetryEvery = 5 * time.Second
+	sendsRetries    = 30
+)
 
 // sendsOutKey is the settings key the sends of more for accepted tasks are kept under (saveSendsOut).
 const sendsOutKey = "assistant.sends_out"
@@ -49,9 +61,9 @@ type agentSendNote struct {
 	// task, doneAt: the accepted task the send asks more of, and that acceptance; "" for a send that reopens nothing.
 	task   string
 	doneAt time.Time
-	// until: when the send stops counting for the task (its own wait, then sendGrace). answered: its answer is in and
-	// is not sure (unknown), or the reopen it asked for could not be written: a turn of the agent that starts before
-	// until opens the task. Under s.tasks.mu.
+	// until: when the send stops counting for the task at the latest (sendKeep). answered: its answer is in and is
+	// not sure (unknown), or the reopen it asked for could not be written: the agent's next turn opens the task. Under
+	// s.tasks.mu.
 	until    time.Time
 	answered bool
 }
@@ -73,7 +85,8 @@ type sendsOut struct {
 // card message, 5 minutes for agent_interrupt's then, a not-running agent or a card message's offline row). n may be nil.
 func (n *agentSendNote) reopens() bool { return n != nil && n.task != "" }
 
-// counts: n asks task id, accepted at doneAt (that acceptance, not a later one), for more, and still counts at now.
+// counts: n asks task id, accepted at doneAt (that acceptance, not a later one), for more, and is not past sendKeep at
+// now.
 func (n *agentSendNote) counts(id string, doneAt, now time.Time) bool {
 	return n.task == id && sameInstant(n.doneAt, doneAt) && now.Before(n.until)
 }
@@ -106,12 +119,13 @@ func (o *sendsOut) holds(id string, doneAt time.Time) bool {
 
 // noteAgentSend records that conversation self is sending agent mid/sid text now (agent_send, agent_interrupt with
 // then, or the owner's message on a task's card, routeToTaskAs), before the send goes: its turn may start before the
-// call returns. ctx is the send's own: its deadline is the send's wait. When the agent still belongs to an accepted task
+// call returns. ctx is the send's own (its deadline is the send's wait). When the agent still belongs to an accepted task
 // that self may ask for more (sendReopens), decided now as self stands now, the note names that task and that
 // acceptance, and it is kept (saveSendsOut) before the send goes. task: the one task the send is for (the card's), so
 // that an agent handed to another task meanwhile reopens nothing; "" for whichever task the agent belongs to
 // (agent_send, agent_interrupt). text: what the agent gets; a bare /exit or /quit asks the task for nothing (the node
-// closes the agent, exitText), and reopens nothing.
+// closes the agent, exitText), and reopens nothing. The note counts until the agent's next turn, not for the send's own
+// wait: that only bounds how long a turn is held for the answer.
 //
 // A note that could not be kept (errSendNotKept: the kept ones could not be read, or this one not written) would be
 // lost with a manager restart while the node holds the text, so the send must not go: the note is taken back as a send
@@ -125,14 +139,10 @@ func (s *Service) noteAgentSend(ctx context.Context, self, mid, sid, task, text 
 	if !ok || task != "" && t.ID != task || t.DoneBy != db.DoneByReview || t.DoneAt == nil || !s.sendReopens(ctx, self, t) {
 		return n, nil
 	}
-	wait := liveSendWait
-	if d, ok := ctx.Deadline(); ok {
-		wait = time.Until(d)
-	}
 	if err := s.loadSendsOut(ctx); err != nil { // what a manager before this one kept is written with it
 		return nil, errSendNotKept{task: t.ID, cause: err}
 	}
-	n.task, n.doneAt, n.until = t.ID, *t.DoneAt, n.at.Add(max(wait, 0)+sendGrace)
+	n.task, n.doneAt, n.until = t.ID, *t.DoneAt, n.at.Add(sendKeep)
 	s.tasks.mu.Lock()
 	o := s.tasks.sendsOut[n.key]
 	if o == nil {
@@ -193,8 +203,9 @@ func (n *agentSendNote) sent(ctx context.Context, err error) {
 // the send was taken or its answer is unknown, or when it failed while an earlier send of more for the task, answered
 // unknown, still counts: the task opens, and the turn is followed from here, its end too when it came meanwhile. A failed
 // send leaves that turn held while another send for the task is still out, and as other work when none is: the task
-// stays closed, and the turn's end is dropped. An unknown answer with no turn held keeps the note, for a turn that
-// starts before the send stops counting.
+// stays closed, and the turn's end is dropped. An unknown answer with no turn held keeps the note, for the agent's next
+// turn. A failed send's note is gone from what is kept too: should that write fail, it is tried again (retrySendsOut),
+// since the note read back after a restart would be a send whose answer is unknown.
 func (s *Service) sendAnswered(ctx context.Context, n *agentSendNote, how sendOutcome) {
 	s.tasks.completionMu.Lock()
 	defer s.tasks.completionMu.Unlock()
@@ -228,7 +239,7 @@ func (s *Service) sendAnswered(ctx context.Context, n *agentSendNote, how sendOu
 		s.logf("task %s: the turn its agent %s/%s started while more for it was being sent is other work: the send failed; left closed",
 			n.task, n.key[0], short(n.key[1]))
 	case how == sendFailed:
-		s.saveSendsOut(ctx) // its note is gone
+		s.saveSendsOut(ctx) // its note is gone (retried when the write fails)
 	}
 }
 
@@ -305,15 +316,26 @@ func (s *Service) sendsOpened(ctx context.Context, t Todo, mid, sid string) {
 // endHeld: agent mid/sid ended a turn held for the answers of sends of more for its task (closedTurnReopens). The end
 // is put off and noted, and the answer that decides the turn takes it up again once the task is open (sendsSettle);
 // when the sends failed, the turn was other work, and its end is dropped with it. A turn held for sends that no longer
-// count (each counts a little past its own wait) is let go: its end is a closed task's, and dropped. A turn the
-// manager before this one held is looked at again as the manager starts (recoverSendsOut), its end included, so this
-// reads only what is in memory: every turn's end comes here.
+// count (past sendKeep) is let go: its end is a closed task's, and dropped. So is one held for a task the agent no
+// longer belongs to on that acceptance (sendsPrune): the agent went to another task, whose turn ends are its own, or
+// the task opened again, and the end is the open task's. A turn the manager before this one held is looked at again as
+// the manager starts (recoverSendsOut), its end included, so this reads only what is in memory: every turn's end comes
+// here.
 func (s *Service) endHeld(ctx context.Context, mid, sid string) bool {
 	key := [2]string{mid, sid}
 	s.tasks.mu.Lock()
 	o := s.tasks.sendsOut[key]
+	holding := o != nil && o.held != ""
+	s.tasks.mu.Unlock()
+	if !holding {
+		return false
+	}
+	s.sendsPrune(ctx)
+	s.tasks.mu.Lock()
+	o = s.tasks.sendsOut[key]
 	if o == nil || o.held == "" {
 		s.tasks.mu.Unlock()
+		s.saveSendsOut(ctx)
 		return false
 	}
 	pending, answered := o.asking(o.held, o.heldAt, time.Now())
@@ -349,8 +371,8 @@ type sendOutRecord struct {
 }
 
 // loadSendsOut reads, once, the sends of more the manager before this one kept (sendsOutKey) into memory, before
-// anything here reads or writes them. Their answers are lost with that manager, so each counts as answered unknown until
-// it stops counting: a turn of its agent that starts by then opens its task (closedTurnReopens). A turn held for them
+// anything here reads or writes them. Their answers are lost with that manager, so each counts as answered unknown: the
+// next turn of its agent opens its task (closedTurnReopens), unless the task moved meanwhile. A turn held for them
 // is taken up when the manager starts (recoverSendsOut). A read that fails is tried again next time; until one
 // succeeds nothing is written (saveSendsOut), so what was kept is not lost.
 func (s *Service) loadSendsOut(ctx context.Context) error {
@@ -404,16 +426,19 @@ func (s *Service) loadSendsOut(ctx context.Context) error {
 	return nil
 }
 
-// saveSendsOut writes the sends of more that still count as they are now, and forgets the others. Writes are ordered
-// (sendsSaving), so the latest state is the one kept. Without a store they live in memory only. The error says what is
-// in memory was not kept (only noteAgentSend acts on it). s.tasks.mu must not be held.
+// saveSendsOut writes the sends of more that still count as they are now, and forgets the others (sendsPrune, and those
+// past sendKeep). Writes are ordered (sendsSaving), so the latest state is the one kept. Without a store they live in
+// memory only. The error says what is in memory was not kept (only noteAgentSend acts on it); a write that fails is
+// tried again in the background (retrySendsOut) until one goes through. s.tasks.mu must not be held.
 func (s *Service) saveSendsOut(ctx context.Context) error {
-	st := s.store()
-	if st == nil {
-		return nil
-	}
+	s.sendsPrune(ctx)
 	s.tasks.sendsSaving.Lock()
 	defer s.tasks.sendsSaving.Unlock()
+	st := s.store()
+	if st == nil {
+		s.tasks.sendsDirty = false
+		return nil
+	}
 	if !s.tasks.sendsLoaded {
 		return errors.New("the sends kept before are not read yet") // this write would drop them
 	}
@@ -439,15 +464,103 @@ func (s *Service) saveSendsOut(ctx context.Context) error {
 	defer cancel()
 	if err := st.PutSetting(wctx, sendsOutKey, list); err != nil {
 		s.logf("sends of more for accepted tasks: write: %v", err)
+		s.tasks.sendsDirty = true
+		if !s.tasks.sendsRetrying {
+			s.tasks.sendsRetrying = true
+			go s.retrySendsOut()
+		}
 		return fmt.Errorf("write the sends: %w", err)
 	}
+	s.tasks.sendsDirty = false
 	return nil
+}
+
+// retrySendsOut writes the sends of more again after a write of them failed, until one goes through (any write does:
+// each writes them all as they are in memory), the service stops, or sendsRetries tries failed, waiting longer each
+// time, up to a minute. What the failed write would have changed is kept as before meanwhile: a refused send's note,
+// say, which a manager that restarts would read as a send whose answer is unknown, and reopen its task on the agent's
+// next turn. One of them runs at a time (sendsRetrying).
+func (s *Service) retrySendsOut() {
+	ctx := s.runCtx()
+	wait := sendsRetryEvery
+	for try := 1; ; try++ {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		s.tasks.sendsSaving.Lock()
+		if !s.tasks.sendsDirty || ctx.Err() != nil || try > sendsRetries {
+			if s.tasks.sendsDirty {
+				s.logf("sends of more for accepted tasks: write given up after %d tries; the next change writes them again", try-1)
+			}
+			s.tasks.sendsRetrying = false
+			s.tasks.sendsSaving.Unlock()
+			return
+		}
+		s.tasks.sendsSaving.Unlock()
+		s.saveSendsOut(ctx)
+		wait = min(2*wait, time.Minute)
+	}
+}
+
+// sendsPrune forgets the sends of more for a task that is no longer its agent's closed task on the acceptance they ask
+// more of (closedTaskOf), and the turns held for them: the task opened again (its agent's turns are followed as an open
+// task's), was accepted again (that acceptance asked for nothing yet), or the agent went to another task. Only what was
+// noted before the to-dos are read is looked at, and nothing is forgotten when they cannot be read. s.tasks.mu must
+// not be held.
+func (s *Service) sendsPrune(ctx context.Context) {
+	type seen struct {
+		notes  []*agentSendNote
+		held   string
+		heldAt time.Time
+	}
+	s.tasks.mu.Lock()
+	snap := make(map[[2]string]seen, len(s.tasks.sendsOut))
+	for key, o := range s.tasks.sendsOut {
+		snap[key] = seen{notes: slices.Clone(o.notes), held: o.held, heldAt: o.heldAt}
+	}
+	s.tasks.mu.Unlock()
+	if len(snap) == 0 || s.ensureTodosLoaded(ctx) != nil {
+		return
+	}
+	stale, letGo := map[*agentSendNote]bool{}, map[[2]string]seen{}
+	for key, v := range snap {
+		t, ok := s.closedTaskOf(ctx, key[0], key[1])
+		on := func(id string, doneAt time.Time) bool {
+			return ok && t.ID == id && t.DoneAt != nil && sameInstant(*t.DoneAt, doneAt)
+		}
+		for _, n := range v.notes {
+			if !on(n.task, n.doneAt) {
+				stale[n] = true
+			}
+		}
+		if v.held != "" && !on(v.held, v.heldAt) {
+			letGo[key] = v
+		}
+	}
+	if len(stale) == 0 && len(letGo) == 0 {
+		return
+	}
+	s.tasks.mu.Lock()
+	defer s.tasks.mu.Unlock()
+	for key, o := range s.tasks.sendsOut {
+		o.notes = slices.DeleteFunc(o.notes, func(n *agentSendNote) bool { return stale[n] })
+		if v, ok := letGo[key]; ok && o.holds(v.held, v.heldAt) {
+			o.held, o.heldAt, o.ended = "", time.Time{}, false
+		}
+		if len(o.notes) == 0 && o.held == "" {
+			delete(s.tasks.sendsOut, key)
+		}
+	}
 }
 
 // recoverSendsOut takes up, as the manager starts (Run), a turn the manager before held for a send whose answer it
 // never got (loadSendsOut). That answer is unknown, and a turn held for an unknown answer is the task's
 // (sendAnswered): the task opens again unless it moved meanwhile, the turn is followed, and its end is looked at, since
-// it may have come while no manager listened. A turn held for sends that stopped counting meanwhile is let go.
+// it may have come while no manager listened. A turn held for sends that stopped counting meanwhile (past sendKeep) is
+// let go; one whose task moved meanwhile opens nothing (sendsSettle), and is followed when its task is open again.
 func (s *Service) recoverSendsOut(ctx context.Context) {
 	_ = s.loadSendsOut(ctx) // a read that failed is tried again by the next send of more
 	type heldTurn struct {

@@ -103,7 +103,7 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if err == nil {
 		err = s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, then, false), nil)
 	}
-	note.sent(sctx, err) // an unknown answer counts for a turn that starts soon: it may still arrive
+	note.sent(sctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
 	if err != nil {
 		if working {
 			return "", fmt.Errorf("stopped it, but sending the new instruction failed: %w", err)
