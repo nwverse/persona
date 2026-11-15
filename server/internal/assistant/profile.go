@@ -699,7 +699,7 @@ func (s *Service) warm(launcher string) {
 	if err != nil {
 		return
 	}
-	params := map[string]any{"cwd": cwd, "launcher": launcher}
+	params := map[string]any{"cwd": cwd, "launcher": launcher, "is_main": true}
 	if picked {
 		err = s.applyPick(ctx, params, pick)
 	} else {
@@ -709,6 +709,7 @@ func (s *Service) warm(launcher string) {
 		s.logf("warm model: %v", err)
 		return
 	}
+	ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
 	if err := s.call(ctx, machine, DeviceAssistantWarm, params, nil); err != nil {
 		s.logf("warm assistant: %v", err)
 	}
