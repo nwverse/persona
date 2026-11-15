@@ -1528,6 +1528,21 @@ The apps find an assistant chat by what was said in it through `GET /api/v1/assi
 - **Reading it again** (#6340): `personad assistant search-reindex` (the built-in manager; `persona-manager assistant search-reindex`) or `personad manager search-reindex [--dir D]` (a manager made in the app, `--dir` left out when the computer has one) empties both tables in the database the manager runs on and counts the reset (`db.ResetSearch`, the manager setting `assistant_search.reset`). The built-in manager's database is its own once its data moved there, else the hub's (`builtinDatabaseNow`, as `builtinDatabase` decides at its start); another manager's is its `manager.json`'s, never the hub's. A running manager sees the count move at its next sweep (`searchLoad`): it empties what it wrote meanwhile from its old cursors, drops the cursors it held and reads every chat again from the start, so it need not be stopped; a stopped one reads them when it starts. A database without the index (a manager from before chat search) is left as it is. There is no separate `--purge`: the manager always fills the index again from the transcripts, so emptying it and rebuilding it are the same act.
 - **Not yet**: the earlier stretches of a chat that moved between Claude Code and Codex are not indexed, only the session it runs in now.
 
+## Memory dreaming
+
+Set `"assistant": {"memory_dreaming": true}` in the assistant manager's `manager.json` to enable a background pass inspired by
+[pi-memory-dreaming](https://github.com/yukukotani/pi-memory-dreaming). Every five minutes the manager checks whether the main
+chat on the selected personal computer is idle. It makes at most one attempt per day when it finds new user-authored text
+in the latest eight turns. It sends those messages, the memory index and the previous dreaming note to Persona's configured
+Data processing model. The pass excludes Health, other conversations, tool output and automated messages.
+It reads eligible messages from oldest to newest, up to 12,000 bytes of user text per pass. Long messages are sent as
+marked excerpts of up to 3,000 bytes. A message that does not fit in the remaining batch waits for the next pass
+while it is within the latest eight turns.
+
+The model consolidates durable preferences and explicit corrections into `dreaming.md` in the existing assistant memory,
+visible and editable in the app. It may return no change. The node updates the dedicated note and its index link only if
+the note and index still match the version reviewed by the model. The assistant stores the last attempt time and checkpoints processed messages so they survive a restart. If the transcript is replaced, the new history starts a fresh checkpoint.
+
 ## Codex (2026-11-01, `codex app-server`)
 
 Selecting a Codex launcher in Settings › Assistant (or top-bar menu / scheduled tasks) replaces `claude -p` with Codex's persistent IDE JSON-RPC service,
