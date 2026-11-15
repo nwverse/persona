@@ -70,6 +70,52 @@ func TestSupervisionPRConflictDedupKeepsPermanentEntriesDuringOrdinaryExpiry(t *
 	}
 }
 
+func TestSupervisionPRConflictAndAllStoppedDedupHaveIndependentLifetimes(t *testing.T) {
+	ctx, now := context.Background(), time.Now()
+	st := &memStore{}
+	s, _ := newQuietServiceOn(t, st)
+	task, agents := stoppedFixture(now)
+	stopped, ok := allStoppedSignal(task, nil, agents, now)
+	if !ok {
+		t.Fatal("fixture did not produce an all-stopped signal")
+	}
+	conflict := superviseSignal{Todo: task.ID, Kind: sigPRConflict, Key: "https://github.com/example/app/pull/12@head-a"}
+	entries := []prompts.SuperviseEntry{{ID: task.ID, Kind: stopped.Kind}, {ID: task.ID, Kind: conflict.Kind}}
+	signals := []superviseSignal{stopped, conflict}
+	if out, _, _, err := s.reserveSupervision(ctx, entries, signals, now); err != nil || len(out) != 2 {
+		t.Fatalf("initial reservation = %d, %v", len(out), err)
+	}
+	if !stopped.urgent() || !conflict.urgent() {
+		t.Fatal("both actionable signals must remain urgent")
+	}
+
+	restarted, _ := newQuietServiceOn(t, st)
+	if out, _, _, err := restarted.reserveSupervision(ctx, entries, signals, now.Add(time.Hour)); err != nil || len(out) != 0 {
+		t.Fatalf("restart or ordinary expiry repeated durable signals: %d, %v", len(out), err)
+	}
+	if err := restarted.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	task.DoneAt = &now
+	restarted.todos.mu.Lock()
+	restarted.todos.todos[task.ID] = &task
+	restarted.todos.mu.Unlock()
+	restarted.pruneAllStoppedDedup(ctx)
+
+	var history map[string]superviseFingerprint
+	if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil {
+		t.Fatal(err)
+	}
+	stoppedKey, _ := digestFingerprint(entries[0], stopped)
+	conflictKey, _ := digestFingerprint(entries[1], conflict)
+	if _, exists := history[stoppedKey]; exists {
+		t.Fatal("closed task retained its all-stopped fingerprint")
+	}
+	if seen, exists := history[conflictKey]; !exists || !seen.Permanent || seen.Todo != "" {
+		t.Fatalf("all-stopped pruning removed or changed conflict history: %+v", history)
+	}
+}
+
 func TestSupervisionPRConflictReservationRollbackAndFailure(t *testing.T) {
 	st := &memStore{}
 	s, _ := newQuietServiceOn(t, st)
