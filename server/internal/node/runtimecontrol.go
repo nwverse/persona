@@ -26,6 +26,9 @@ type runtimeLauncher struct {
 	Agent string `json:"agent,omitempty"`
 	// Models are its models for the form (launchers.models), the default marked.
 	Models []proto.AgentModel `json:"models,omitempty"`
+	// AutoAccept: its agents' approval is a switch a start in bypassPermissions turns on (Paseo's Auto Accept), passed on
+	// in launchers.list (proto.Launcher.AutoAccept, #8141).
+	AutoAccept bool `json:"auto_accept,omitempty"`
 }
 
 // Bounds on a runtime's launchers.
@@ -93,6 +96,7 @@ func (h *runtimeConn) launcherList() []runtimeLauncher {
 				}
 				entry.Agent = l.Agent
 				entry.Models = l.Models
+				entry.AutoAccept = l.AutoAccept
 				break
 			}
 		}

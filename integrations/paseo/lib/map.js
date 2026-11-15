@@ -118,7 +118,8 @@ export function formModel(m) {
 
 /**
  * The new-session form's launchers: one per provider that can start an agent (enabled, not failing, named like a
- * launcher), with the agent it starts and its models.
+ * launcher), with the agent it starts and its models. One whose approval is Paseo's Auto Accept switch says so
+ * (`auto_accept`): the Agents Persona itself starts there run with it on, as Claude Code's run in bypassPermissions (#8141).
  */
 export function launchersOf(entries = [], roots = {}) {
   const out = []
@@ -126,9 +127,11 @@ export function launchersOf(entries = [], roots = {}) {
     if (!e?.enabled || e.status === 'unavailable' || e.status === 'error' || !LAUNCHER_NAME.test(e.provider ?? '')) continue
     const models = (e.models ?? []).filter((m) => m && m.id && m.isSelectable !== false).map(formModel)
     const def = models.find((m) => m.default) ?? models[0]
-    const l = { name: e.provider, agent: appAgent(roots[e.provider] ?? e.provider), models }
+    const root = roots[e.provider] ?? e.provider
+    const l = { name: e.provider, agent: appAgent(root), models }
     const model = def?.name ?? e.label
     if (model) l.model = String(model)
+    if (AUTO_ACCEPT_ROOTS.has(root)) l.auto_accept = true
     out.push(l)
   }
   return out
@@ -748,6 +751,35 @@ function alwaysLabel(suggestions) {
   if (!rules) return undefined
   const where = s.destination === 'session' ? '本会话' : s.destination === 'userSettings' ? '所有项目' : '这个项目'
   return snippet(`${where}不再问：${rules}`)
+}
+
+/** The tool Codex 0.167 names in the MCP approval it asks for: `Allow the <server> MCP server to run tool "<tool>"?`. */
+const CODEX_MCP_TOOL = / to run tool "([^"\n]+)"\?/
+
+/**
+ * Whether a permission request asks for the MCP tool Claude Code calls `name` (`mcp__<server>__<tool>`), whichever
+ * provider asks (#8141). Claude Code asks by that name. OpenCode asks by its own name for the tool, `<server>_<tool>`
+ * (what Paseo's tool policy grants it), and Codex through an approval of the server (Paseo's CodexMcpElicitation)
+ * whose message names the tool. Any other provider asks for the call its card shows (toolCall: Grok's UseTool names
+ * `<server>__<tool>`). A request that names the tool no way here is not it.
+ */
+export function asksForTool(request, name) {
+  const r = request ?? {}
+  const m = /^mcp__(.+?)__(.+)$/.exec(name ?? '')
+  if (!m || typeof r.name !== 'string') return false
+  const [, server, tool] = m
+  switch (r.provider) {
+    case 'claude':
+      return r.name === name
+    case 'opencode': {
+      const safe = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_')
+      return r.name === `${safe(server)}_${safe(tool)}`
+    }
+    case 'codex':
+      return r.name === 'CodexMcpElicitation' && r.metadata?.serverName === server && CODEX_MCP_TOOL.exec(r.description ?? '')?.[1] === tool
+  }
+  const input = r.input && typeof r.input === 'object' ? r.input : {}
+  return toolCall(r.name, r.detail ?? { type: 'unknown', input }).name === name
 }
 
 /**

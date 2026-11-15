@@ -518,7 +518,7 @@ func (b *runtimeRegistry) launchers() []proto.Launcher {
 			agent = ""
 		}
 		out = append(out, proto.Launcher{Name: name, Model: l.Model, Source: h.hello.Runtime, Agent: agent,
-			Assistant: h.hello.Caps.Assistant && name == h.hello.Launcher})
+			Assistant: h.hello.Caps.Assistant && name == h.hello.Launcher, AutoAccept: l.AutoAccept})
 		h.mu.Unlock()
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
