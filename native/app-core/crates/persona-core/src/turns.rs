@@ -140,13 +140,22 @@ fn protects_user(text: &str) -> bool {
         let Some((body, after_body)) = after_attributes.split_once(&format!("</{tag}>")) else {
             return false;
         };
-        if attributes
-            .split_whitespace()
-            .any(|attribute| attribute == "kind=\"message-source\"")
-        {
+        if attributes.contains("kind=\"message-source\"") {
             let Ok(metadata) = serde_json::from_str::<Value>(body) else {
                 return true;
             };
+            // Foundation's JSONDecoder rejects non-finite Doubles when serde_json accepts an overflowing number.
+            fn has_non_finite_number(value: &Value) -> bool {
+                match value {
+                    Value::Number(number) => number.as_f64().is_none_or(|number| !number.is_finite()),
+                    Value::Array(values) => values.iter().any(has_non_finite_number),
+                    Value::Object(values) => values.values().any(has_non_finite_number),
+                    _ => false,
+                }
+            }
+            if has_non_finite_number(&metadata) {
+                return true;
+            }
             return metadata.get("author").and_then(Value::as_str) == Some("user")
                 || !metadata
                     .get("kind")
@@ -350,13 +359,12 @@ fn rows(items: &[Item]) -> Vec<Row> {
                 let timestamp = item.ts.as_deref().and_then(utc_timestamp);
                 let result_end = ordered
                     .iter()
-                    .filter(|other| {
+                    .rfind(|other| {
                         other.kind == "tool_result"
                             && other.tool_use_id.is_some()
                             && other.tool_use_id == item.tool_use_id
                     })
-                    .filter_map(|other| other.ts.as_deref().and_then(utc_timestamp))
-                    .next_back();
+                    .and_then(|result| result.ts.as_deref().and_then(utc_timestamp));
                 tools.push(Row {
                     id: item.id.clone(),
                     kind: Kind::Tool,
@@ -477,6 +485,14 @@ impl Turn {
                     .cloned()
                     .collect();
                 self.process = self.ordered.iter().filter(|row| !row.user_input()).cloned().collect();
+            } else if let Some(pick) = all.iter().rposition(Row::assistant) {
+                // With no assistant after the wake, Apple returns early. A later non-wake answer is therefore still
+                // tail, rather than a post-wake response promoted into ordered.
+                self.tail = all[pick + 1..]
+                    .iter()
+                    .filter(|row| !row.user_input())
+                    .cloned()
+                    .collect();
             }
         }
         self.steps = self.process.clone();

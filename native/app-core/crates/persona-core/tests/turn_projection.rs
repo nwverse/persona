@@ -227,6 +227,54 @@ mod apple_source_regressions {
     }
 
     #[test]
+    fn latest_untimestamped_result_falls_back_to_the_call_time() {
+        let turns = project(json!([
+            {"id":"u1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"t2#0","seq":2,"role":"assistant","kind":"tool_use","tool_use_id":"call2","ts":"2026-01-01T00:00:01Z"},
+            {"id":"r3#0","seq":3,"role":"user","kind":"tool_result","tool_use_id":"call2","ts":"2026-01-01T00:00:05Z"},
+            {"id":"r4#0","seq":4,"role":"user","kind":"tool_result","tool_use_id":"call2"},
+        ]));
+        assert_eq!(turns[0]["end"], "2026-01-01T00:00:01Z");
+    }
+
+    #[test]
+    fn pending_wake_only_moves_its_work_not_a_later_non_wake_answer() {
+        let input = json!([
+            {"id":"u1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+            {"id":"w3#0","seq":3,"role":"system","kind":"notice","wake":true},
+            {"id":"a4#0","seq":4,"role":"assistant","kind":"text"},
+        ]);
+        let turns = project(input);
+        assert_eq!(turns[0]["ordered_ids"], json!(["u1#0", "a2#0", "w3#0", "a4#0"]));
+        assert_eq!(turns[0]["answer_id"], "a4#0");
+        assert_eq!(turns[0]["tail_ids"], json!([]));
+        assert_eq!(turns[0]["has_pending_wake"], false);
+
+        let turns = project(json!([
+            {"id":"u1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text","ts":"2026-01-01T00:00:02Z"},
+            {"id":"w3#0","seq":3,"role":"system","kind":"notice","wake":true,"ts":"2026-01-01T00:00:03Z"},
+            {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use","ts":"2026-01-01T00:00:04Z"},
+        ]));
+        assert_eq!(turns[0]["answer_id"], "a2#0");
+        assert_eq!(turns[0]["tail_ids"], json!(["w3#0", "tools-t4#0"]));
+        assert_eq!(turns[0]["end"], "2026-01-01T00:00:04Z");
+        assert_eq!(turns[0]["has_pending_wake"], true);
+
+        let turns = project(json!([
+            {"id":"u1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+            {"id":"w3#0","seq":3,"role":"system","kind":"notice","wake":true},
+            {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use"},
+            {"id":"a5#0","seq":5,"role":"assistant","kind":"text"},
+        ]));
+        assert_eq!(turns[0]["answer_id"], "a5#0");
+        assert_eq!(turns[0]["tail_ids"], json!([]));
+        assert_eq!(turns[0]["has_pending_wake"], false);
+    }
+
+    #[test]
     fn tool_result_wake_reopens_the_turn_without_becoming_a_user_message() {
         let items = json!([
             {"id":"q1#0","seq":1,"role":"user","kind":"text"},
@@ -258,7 +306,7 @@ mod apple_source_regressions {
             {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use","tool_use_id":"call4"},
         ]));
         assert_eq!(pending[0]["answer_id"], "a2#0");
-        assert_eq!(pending[0]["tail_ids"], json!([]));
+        assert_eq!(pending[0]["tail_ids"], json!(["w3#0", "tools-t4#0"]));
         assert_eq!(pending[0]["has_pending_wake"], true);
     }
 
@@ -396,7 +444,7 @@ mod apple_source_regressions {
             ("from", json!("fictional-peer")),
         ] {
             let mut value = json!({"items":[
-                {"id":"u1#0","seq":1,"role":"user","kind":"text","text":text,"queued":true},
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","text":text},
                 {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
             ]});
             value["items"][0]
@@ -425,6 +473,7 @@ mod apple_source_regressions {
         for (tag, metadata) in [
             ("persona-context", "{\"kind\":42}"),
             ("persona-context", "not json"),
+            ("persona-context", "{\"kind\":1e400}"),
             ("jarvis-context", "{\"author\":\"user\"}"),
         ] {
             let turns = project(json!([
@@ -451,6 +500,10 @@ mod apple_source_regressions {
         assert_eq!(legacy_supervision.as_array().unwrap().len(), 3);
 
         for (prefix, expected_turns) in [
+            (
+                "<persona-context kind=\"message-source\"extra>{\"kind\":42}</persona-context>\n",
+                1,
+            ),
             (
                 "<persona-context kind=\"context\">Fictional context</persona-context>\n",
                 3,
