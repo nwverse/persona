@@ -251,6 +251,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	// The tail's lines in the transcript's tree: a turn the user went back over (a rewind in the terminal, then a recap
 	// beside it) is not where the agent's last words come from (transcript/branch.go).
 	var tail transcript.Tail
+	tail.PriorModelFallback(tm.ModelFallback)
 	tail.Rewound(prev.rewound)
 	m.rewound = prev.rewound
 	buf := make([]byte, st.Size()-off)
@@ -397,6 +398,10 @@ func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
 		return
 	}
 	m.outputTokens = sc.meta.OutputTokens
+	if m.codex && sc.meta.EffortAt.After(m.effortAt) {
+		// A long tool result can push the latest turn_context out of the quick tail.
+		m.effort, m.effortAt = sc.meta.Effort, sc.meta.EffortAt
+	}
 	if sc.meta.TitleManual {
 		m.title, m.titleManual, m.titleSource = sc.meta.Title, true, "manual"
 	} else if sc.meta.TitleSource != "" {
