@@ -122,8 +122,13 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			}
 			open, done = exact, nil
 		}
-		if scoped && open != nil && open.Last != t.Last && !t.At.After(open.UpdatedAt) {
-			continue // recovery cannot replace or retier another, newer or unordered move
+		if scoped && open != nil && open.Last != t.Last {
+			if t.At.IsZero() || t.At.Before(open.UpdatedAt) {
+				continue // recovery cannot replace or retier another, newer or undated move
+			}
+			if t.At.Equal(open.UpdatedAt) {
+				open = nil // coarse timestamps cannot order these IDs; retain the selected move separately
+			}
 		}
 		if t.Done != "" {
 			if open != nil && b.settleThing(open, t, now) {

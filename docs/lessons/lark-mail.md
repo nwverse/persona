@@ -61,6 +61,10 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 - A selected historical recovery must finish and persist normal triage before bypassing the twin's age limit.
   Run triage only for the selected rows, even when twins are disabled; queue afterwards only when the normal verdict,
   policies and current twin configuration allow it. Do not force every recovered request into Needs You.
+- Equal source timestamps do not order different message IDs. Keep an explicitly recovered equal-time move
+  separately instead of dropping it or overwriting an unselected row. Keep older/undated move and completed-thread
+  guards. Select only open rows for replay follow-up, checking again after mutes; `handled()` means active handling,
+  not completion, and must not exclude an open conversation from continuation.
 - Check bot-info fixtures against the CLI's output, not just an HTTP response example: the CLI can flatten the bot
   object into `data.open_id`. Accept that projection and a nested `bot.open_id`; when a bot object is present,
   require its own valid identity rather than falling back to an unrelated outer ID. Test both shapes and missing

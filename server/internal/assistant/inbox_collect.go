@@ -100,7 +100,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		for _, src := range r.Sources {
 			for _, thing := range src.Things {
 				for _, it := range b.items {
-					if it.Source == src.ID && it.Connector != nil && it.Connector.Thread == thing.Thread && it.Last == thing.Last {
+					if it.open() && it.Source == src.ID && it.Connector != nil && it.Connector.Thread == thing.Thread && it.Last == thing.Last {
 						batch.only[it.ID] = true
 					}
 				}
@@ -130,7 +130,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	ws := b.roundSaved(changed)
 	var replayIDs []string
 	for id := range batch.only {
-		replayIDs = append(replayIDs, id)
+		if it := b.items[id]; it != nil && it.open() { // the mute pass may have filed a selected item
+			replayIDs = append(replayIDs, id)
+		}
 	}
 	b.batch = nil
 	b.mu.Unlock()
