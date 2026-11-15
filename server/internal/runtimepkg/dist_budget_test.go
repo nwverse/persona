@@ -17,7 +17,7 @@ import (
 // answers across link drops, and the SDK's wait for the next node counted from the drop (#8128: 452,848 B over main's
 // 449,837 B, with main's 290 B of headroom). Raised by 1,055 B for the Paseo bridge's agents on one Claude session (one
 // id, the newer agent takes the messages) and its takeover of an archived agent with that agent's own provider (#8131:
-// 453,903 B over main's 452,848 B, with main's 290 B of headroom).
+// 454,022 B over main's 452,967 B, with main's 171 B of headroom).
 func TestDistBudget(t *testing.T) {
 	const budget = 454_193
 	_, out := generateIntegrations(t)
