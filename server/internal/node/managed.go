@@ -430,13 +430,10 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
 	catalog := resp.CodexCatalogURL
-	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) {
-		// The node checked another codex than this one (another PATH): asked here, as briefly as the node waits.
-		vctx, cancel := context.WithTimeout(context.Background(), codexCatalogWait)
-		if !codexReadsCatalog(codexVersionAt(vctx, exe)) {
-			catalog = ""
-		}
-		cancel()
+	// The node checked another codex than this one (another PATH): this one is asked, within codexVersionTimeout. That
+	// is after the node answered (not part of LaunchNodeWait), and a fresh process has no version kept.
+	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) && !codexReadsCatalog(codexVersionAt(context.Background(), exe)) {
+		catalog = ""
 	}
 	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env, catalog)
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {

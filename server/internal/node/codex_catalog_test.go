@@ -75,7 +75,7 @@ func forgetCodexCatalogs(t *testing.T) {
 		codexCatalogCache.got = map[string]codexCatalogAnswer{}
 		codexCatalogCache.Unlock()
 		codexVersionCache.Lock()
-		codexVersionCache.stamp, codexVersionCache.version, codexVersionCache.until = "", "", time.Time{}
+		codexVersionCache.stamp, codexVersionCache.version, codexVersionCache.read, codexVersionCache.until = "", "", false, time.Time{}
 		codexVersionCache.Unlock()
 		codexMissingUntil.Lock()
 		codexMissingUntil.until = time.Time{}
@@ -477,6 +477,8 @@ func TestIsCodexCatalogNeedsWhatCodexNeeds(t *testing.T) {
 		"slug a number":          catalogJSON(with("slug", 7)),
 		"nothing listed":         catalogJSON(catalogEntry("a", "hide")),
 		"priority a string":      catalogJSON(with("priority", "1")),
+		"priority a fraction":    catalogJSON(with("priority", 1.5)),
+		"limit in exponent form": catalogJSON(with("truncation_policy", map[string]any{"mode": "tokens", "limit": json.RawMessage("1e4")})),
 		"levels null":            catalogJSON(with("supported_reasoning_levels", nil)),
 		"a level no description": catalogJSON(with("supported_reasoning_levels", []any{map[string]any{"effort": "low"}})),
 		"a level a word":         catalogJSON(with("supported_reasoning_levels", []any{"low"})),
@@ -588,17 +590,20 @@ func TestCodexCatalogKeptThroughACutOffAnswer(t *testing.T) {
 	}
 }
 
-// A codex behind a shim is the same file before and after an upgrade: its version is read again after codexCatalogTTL.
+// A codex behind a shim is the same file before and after an upgrade: its version is read again after
+// codexCatalogTTL, in the background, the version read before given meanwhile, so a slow shim holds no start.
 func TestCodexVersionReadAgainBehindAShim(t *testing.T) {
 	fakeCodex(t, "0.167.0")
 	exe, _ := agentExecutable("codex")
-	said := filepath.Join(t.TempDir(), "version")
+	dir := t.TempDir()
+	said, slow := filepath.Join(dir, "version"), filepath.Join(dir, "slow")
 	writeFile(t, said, "codex-cli 0.160.0\n")
-	writeFile(t, exe, "#!/bin/sh\n/bin/cat '"+said+"'\n")
+	writeFile(t, exe, "#!/bin/sh\nif [ -e '"+slow+"' ]; then /bin/sleep 1; fi\n/bin/cat '"+said+"'\n")
 	if _, v := codexVersion(context.Background()); v != "0.160.0" {
 		t.Fatalf("version %q", v)
 	}
 	writeFile(t, said, "codex-cli 0.167.0\n") // upgraded behind the shim; the shim is unchanged
+	writeFile(t, slow, "")
 	if _, v := codexVersion(context.Background()); v != "0.160.0" {
 		t.Fatalf("read again at once: %q", v)
 	}
@@ -609,8 +614,55 @@ func TestCodexVersionReadAgainBehindAShim(t *testing.T) {
 	if kept <= 0 || kept > codexCatalogTTL {
 		t.Fatalf("the version is kept %s, want at most %s", kept, codexCatalogTTL)
 	}
-	if _, v := codexVersion(context.Background()); v != "0.167.0" {
-		t.Fatalf("after codexCatalogTTL: %q", v)
+	start := time.Now()
+	if _, v := codexVersion(context.Background()); v != "0.160.0" || time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("past codexCatalogTTL: %q after %s, want the one read before at once", v, time.Since(start))
+	}
+	waitWithin(t, 10*time.Second, "the version read again", func() bool {
+		_, v := codexVersion(context.Background())
+		return v == "0.167.0"
+	})
+}
+
+// A run its caller gave up on says nothing of codex: it is not kept as a failure.
+func TestCodexVersionCallerGivingUpKeepsNothing(t *testing.T) {
+	fakeCodex(t, "0.167.0")
+	exe, _ := agentExecutable("codex")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if v := codexVersionAt(ctx, exe); v != "" {
+		t.Fatalf("version %q", v)
+	}
+	if v := codexVersionAt(context.Background(), exe); v != "0.167.0" {
+		t.Fatalf("after a caller gave up: %q", v)
+	}
+}
+
+// A provider whose gateway and key come only from its own env is looked up like any other.
+func TestCodexCatalogForAGatewayInTheProvidersEnv(t *testing.T) {
+	fakeCodex(t, "0.167.0")
+	g := newCatalogGateway(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" && r.Header.Get("Authorization") == "Bearer sk-env" {
+			io.WriteString(w, codexCatalogBody)
+		}
+	})
+	n := quietNode()
+	n.setManaged([]proto.ManagedLauncher{{Name: "gw", Agent: "codex", Env: "OPENAI_BASE_URL=" + g.URL + "/v1\nOPENAI_API_KEY=sk-env"}})
+	if got := n.launcherEnv("gw")["codex_catalog_url"]; got != g.URL+"/v1/models" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// A panic in a lookup's own goroutine is logged, not the end of the node.
+func TestCodexCatalogLookupSurvivesAPanic(t *testing.T) {
+	var logged strings.Builder
+	n := &Node{logger: log.New(&logged, "", 0)}
+	func() {
+		defer n.survive("gw", "looking")
+		panic("boom")
+	}()
+	if !strings.Contains(logged.String(), "launcher gw: looking failed: boom") {
+		t.Fatalf("logged %q", logged.String())
 	}
 }
 

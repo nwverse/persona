@@ -185,8 +185,9 @@ the gateway's models from it (`server/internal/node/codex_catalog.go`).
   `/v1/models`), at once, with the provider's key and proxy and this computer's `codex --version`, in 5 seconds in all.
   The first, in that order, whose answer is a catalog Codex can read is taken: a `models` list whose entries each have a
   unique slug and every field Codex 0.161–0.169 requires, of its JSON kind (`display_name`, `supported_reasoning_levels`
-  with an `effort` and a `description` in each, `shell_type`, `visibility`, `supported_in_api`, `priority`,
-  `support_verbosity`, `truncation_policy` with a `mode` and a `limit`, `experimental_supported_tools`), one of them
+  with an `effort` and a `description` in each, `shell_type`, `visibility`, `supported_in_api`, `priority` (a whole
+  number), `support_verbosity`, `truncation_policy` with a `mode` and a whole-number `limit`,
+  `experimental_supported_tools`), one of them
   listed. The words inside (a level, a shell type) are left to the gateway, which was told the version. An entry with
   only some of them is none: codex-cli 0.167.0 fails such a catalog whole ("failed to decode models response"), lists
   nothing and runs the model on fallback metadata, worse than no catalog. OpenAI's `{"data":[…]}`, an error or a
@@ -199,12 +200,15 @@ the gateway's models from it (`server/internal/node/codex_catalog.go`).
   time, a body that does not arrive whole, a 5xx, 408 or 429) keeps the catalog found before and is tried again after a
   minute; only a gateway that answers without a catalog drops it. A codex that is not found, or whose `--version` fails
   or hangs (its run gets a second to give up the output after it is stopped), is looked for again after a minute, not on
-  every start. A version read is kept 10 minutes: a shim (volta, mise, asdf) stays the same file when the codex behind
-  it is upgraded.
+  every start; a run its caller gave up on keeps nothing. A version read is fresh for 10 minutes, then still given at
+  once while `codex --version` runs again in the background: a shim (volta, mise, asdf) stays the same file when the
+  codex behind it is upgraded, and a slow one must not hold a start. A panic in the lookup's own goroutines is logged
+  and finds no catalog; it does not end the node. One lookup runs at a time per gateway, key and proxy as codex will
+  see them, the provider's own `env` included (a gateway set only there is looked up too).
 - **Which codex**: the node checks the codex it finds, and `launcher.env` names it (`codex_catalog_codex`). The codex
   `personad launch` runs comes from the shell's `PATH`, which may name another install: then `personad launch` asks
-  that one its version, for at most the same 2 seconds, and passes no catalog to one before 0.161 or one that does not
-  answer.
+  that one its version (within 5 seconds, after the node has answered, so not part of `LaunchNodeWait`) and passes no
+  catalog to one before 0.161 or one that does not answer.
 - **Exactly as before** without one: no gateway, no key (codex would not fetch it and would list nothing), a codex
   before 0.161 or a prerelease of it, arguments that choose their own provider or profile (the provider and everything
   in it are left out then), a base URL with a query, or a probe that found nothing. The arguments are then the same,
@@ -222,7 +226,8 @@ the gateway's models from it (`server/internal/node/codex_catalog.go`).
   no codex, no key, the launcher's own provider or profile; kept per key; given at once when stale and asked again;
   kept through a probe that cannot tell, dropped by a gateway without one; a failing `codex --version` not rerun on
   every start; #8814: every required field of its kind, a cut-off body, `launcher.env`'s bounded wait for a slow gateway
-  or `codex --version`, a `--version` whose child keeps the output open, a shim's upgrade, a missing codex, the log line),
+  or `codex --version`, a `--version` whose child keeps the output open, a shim's upgrade read again in the background,
+  a caller giving up, a missing codex, a gateway set in the provider's `env`, a panic in the lookup, the log line),
   `nodecmd` `TestLaunchWaitsLongerThanTheCatalogLookup`, `node/managed_test.go`
   `TestLaunchArgsCodexGateway` (the catalog goes in the provider table only; arguments unchanged without it),
   `node/launcher_models_test.go` `TestManagedCodexModelsAskTheAppServer`, and `cmd/personad`
