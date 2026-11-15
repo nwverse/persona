@@ -147,6 +147,8 @@ type Device struct {
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`
+	// HomeReal is Home with its links followed, when the node says it is another path (proto.NodeInfo.HomeReal).
+	HomeReal string `json:"home_real,omitempty"`
 }
 
 // ClientApp is one Persona app as it last described itself in client_hello (docs/protocol/protocol.md "Client
