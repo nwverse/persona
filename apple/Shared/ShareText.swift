@@ -26,9 +26,11 @@ nonisolated enum ShareText {
         return Page(title: clean(results["title"]), url: url, selection: selection)
     }
 
-    /// What is sent: the page ("Title\nURL", then the selection quoted), then the item's own text (`attributedContentText`),
-    /// the links and the texts, leaving out any that repeat what is already there (the same link, the title again).
-    static func compose(page: Page?, captions: [String] = [], links: [String] = [], texts: [String] = []) -> String {
+    /// What is sent: the page ("Title\nURL", then the selection quoted), then every other piece in the order it was shared
+    /// (each item's own text, `attributedContentText`, then its links and texts as its attachments come), leaving out any
+    /// that repeat what is already there (the same link, the title again). Without a page that is the order Share › Persona
+    /// always sent: another app's text before its link stays before it.
+    static func compose(page: Page?, pieces: [String] = []) -> String {
         var parts: [String] = []
         var seen: Set<String> = []
         func add(_ s: String) {
@@ -45,7 +47,7 @@ nonisolated enum ShareText {
             parts.append(block)
             for s in [title, page.url, page.selection] where !s.isEmpty { seen.insert(key(s)) }
         }
-        for s in captions + links + texts { add(s) }
+        for s in pieces { add(s) }
         return parts.joined(separator: "\n")
     }
 

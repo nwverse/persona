@@ -117,15 +117,14 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    /// What was shared, in order. Safari's page comes as a property list from `SharePage.js` (its title, link and
-    /// selection) beside the plain link and the item's text; `ShareText.compose` keeps each piece once (#2282).
+    /// What was shared, in order: each item's text, then its attachments' links and texts as they come. Safari's page
+    /// comes as a property list from `SharePage.js` (its title, link and selection) beside the plain link and the item's
+    /// text; `ShareText.compose` puts it first and keeps each piece once (#2282).
     private func loadItems() async {
         var page: ShareText.Page?
-        var captions: [String] = []
-        var links: [String] = []
-        var texts: [String] = []
+        var pieces: [String] = []
         for item in items {
-            if let caption = item.attributedContentText?.string, !caption.isEmpty { captions.append(caption) }
+            if let caption = item.attributedContentText?.string, !caption.isEmpty { pieces.append(caption) }
             for provider in item.attachments ?? [] {
                 // Before `fileType`: the page's property list is data, and would otherwise go as a file.
                 if provider.hasItemConformingToTypeIdentifier(UTType.propertyList.identifier), let p = await provider.page() {
@@ -138,14 +137,14 @@ final class ShareViewController: UIViewController {
                     if url.isFileURL {
                         await add(try? await NSItemProvider.staged(url, into: staging))
                     } else {
-                        links.append(url.absoluteString)
+                        pieces.append(url.absoluteString)
                     }
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-                    if let s = try? await provider.text() { texts.append(s) }
+                    if let s = try? await provider.text() { pieces.append(s) }
                 }
             }
         }
-        text = ShareText.compose(page: page, captions: captions, links: links, texts: texts)
+        text = ShareText.compose(page: page, pieces: pieces)
     }
 
     private func add(_ copy: URL?) async {

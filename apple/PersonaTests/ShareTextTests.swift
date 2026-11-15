@@ -31,13 +31,13 @@ struct ShareTextTests {
     @Test func titleThenLinkWithoutRepeats() {
         let page = ShareText.Page(title: "A Page Worth Reading", url: "https://example.com/a")
         // Safari also hands over the link itself and the title as the item's text.
-        let text = ShareText.compose(page: page, captions: ["A Page Worth Reading"], links: ["https://example.com/a/"])
+        let text = ShareText.compose(page: page, pieces: ["A Page Worth Reading", "https://example.com/a/"])
         #expect(text == "A Page Worth Reading\nhttps://example.com/a")
     }
 
     @Test func theSelectionIsQuotedAfterTheLink() {
         let page = ShareText.Page(title: "Notes", url: "https://example.com/n", selection: "first line\nsecond line")
-        let text = ShareText.compose(page: page, captions: ["first line\nsecond line"], links: ["https://example.com/n"])
+        let text = ShareText.compose(page: page, pieces: ["first line\nsecond line", "https://example.com/n"])
         #expect(text == "Notes\nhttps://example.com/n\n\n> first line\n> second line")
     }
 
@@ -48,16 +48,36 @@ struct ShareTextTests {
 
     @Test func otherPiecesFollowThePageOnce() {
         let page = ShareText.Page(title: "T", url: "https://example.com/t")
-        let text = ShareText.compose(page: page, captions: ["What I think"], links: ["https://example.com/other"],
-                                     texts: ["What I think", "  "])
+        let text = ShareText.compose(page: page, pieces: ["What I think", "https://example.com/other",
+                                                                  "What I think", "  "])
         #expect(text == "T\nhttps://example.com/t\nWhat I think\nhttps://example.com/other")
     }
 
     @Test func withoutAPageTheTextComesFirstThenTheLink() {
         // Another app's share: its title as the item's text, then the link (no script ran).
-        #expect(ShareText.compose(page: nil, captions: ["A Page Worth Reading"], links: ["https://example.com/a"],
-                                  texts: ["https://example.com/a"]) == "A Page Worth Reading\nhttps://example.com/a")
+        #expect(ShareText.compose(page: nil, pieces: ["A Page Worth Reading", "https://example.com/a",
+                                                      "https://example.com/a"]) == "A Page Worth Reading\nhttps://example.com/a")
         #expect(ShareText.compose(page: nil) == "")
+    }
+
+    /// Regression (#7964 review): another app whose text provider comes before its link keeps text, then link; the
+    /// pieces are not regrouped by kind.
+    @Test func withoutAPageATextBeforeALinkStaysFirst() {
+        #expect(ShareText.compose(page: nil, pieces: ["Read this before Friday", "https://example.com/doc"])
+                == "Read this before Friday\nhttps://example.com/doc")
+        #expect(ShareText.compose(page: nil, pieces: ["https://example.com/doc", "Read this before Friday"])
+                == "https://example.com/doc\nRead this before Friday")
+    }
+
+    /// Regression (#7964 review): with several items each caption stays beside its own attachments, in the order shared,
+    /// rather than every caption first.
+    @Test func captionsStayBesideTheirOwnAttachments() {
+        let pieces = ["First item's note", "https://example.com/one", "Second item's note", "Some selected text",
+                      "https://example.com/two"]
+        #expect(ShareText.compose(page: nil, pieces: pieces) == pieces.joined(separator: "\n"))
+        // A page still goes first, the rest keeping their order.
+        let page = ShareText.Page(title: "T", url: "https://example.com/t")
+        #expect(ShareText.compose(page: page, pieces: pieces) == "T\nhttps://example.com/t\n" + pieces.joined(separator: "\n"))
     }
 
     @Test func largeUploadsSayTheyTakeAWhile() {

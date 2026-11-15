@@ -12,7 +12,17 @@ cd "$(dirname "$0")/../.." || exit 2
 APPEARANCE="${1:-light}"
 SHOTS="${2:-}"
 # A test name runs that test of ShareFromAppsTests; a suite (…Tests) or Suite/test runs that against the same mock hub.
-case "${3:-}" in */*|*Tests) ONLY="PersonaUITests/$3" ;; *) ONLY="PersonaUITests/ShareFromAppsTests${3:+/$3}" ;; esac
+# An argument that already names the bundle (PersonaUITests/…) is used as it is, never prefixed twice.
+only_testing() {
+  case "${1:-}" in
+    "") echo "PersonaUITests/ShareFromAppsTests" ;;
+    PersonaUITests/*) echo "$1" ;;
+    */*|*Tests) echo "PersonaUITests/$1" ;;
+    *) echo "PersonaUITests/ShareFromAppsTests/$1" ;;
+  esac
+}
+if [ "${1:-}" = "--only-testing" ]; then only_testing "${2:-}"; exit 0; fi # prints what a third argument selects
+ONLY=$(only_testing "${3:-}")
 case "$APPEARANCE" in light|dark) ;; *) echo "share-from-apps: appearance is light or dark" >&2; exit 2 ;; esac
 eval "$(python3 scripts/persona_config.py env)"
 python3 scripts/persona_config.py xcconfig >/dev/null
