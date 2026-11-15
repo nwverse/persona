@@ -76,7 +76,7 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 		}
 		err := c.peer.Call(cctx, "session.items", map[string]any{"session_id": id, "limit": 1}, &page)
 		cancel()
-		if err == nil {
+		if hasSession(err) {
 			n.runtimes.claim(c, id)
 			return c, nil
 		}
@@ -86,6 +86,13 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 	}
 	n.runtimes.unclaim(id, gone)
 	return nil, gone
+}
+
+// hasSession: a runtime's answer to session.items {limit: 1} says the session is its own. A page does, and so does a
+// refusal to read it without starting its agent (proto.CodeNotLoaded: an agent Paseo let go, #8132), which only the
+// runtime that has the session gives; the call itself then goes to it, and a watch or a send there starts the agent.
+func hasSession(err error) bool {
+	return err == nil || rpcCode(err) == proto.CodeNotLoaded
 }
 
 // codeNotFound is what a node, or a runtime it asks, answers for a session it does not have (the manager's
@@ -231,9 +238,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		_ = json.Unmarshal(params, &opts)
 		var said json.RawMessage // what the runtime answered: it may say the message only queued behind the turn
 		err := n.sends.once(opts.ClientMsgID, func() error {
-			var after int
+			var after echoAfter
 			if opts.ClientMsgID != "" {
-				after = n.runtimes.lastPushed(p.SessionID)
+				after = echoAfter{seq: n.runtimes.lastPushed(p.SessionID), in: echoInRuntime}
 				if n.runtimeTranscript(p.SessionID) != "" { // its items are the transcript's: its copy comes after its end
 					after = n.echoBase(p.SessionID)
 				}
@@ -298,10 +305,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 	case "session.screen":
 		return map[string]any{"text": "", "status": n.runtimeStatus(h, p.SessionID)}, nil, true
 	case "session.info":
-		// The counts a transcript gives are unknown here: zero, which the apps read as "none yet" (an iOS app older
-		// than this decodes them as required numbers).
+		// The counts a transcript gives are unknown here, and usage_unknown says so: the apps leave them out rather than
+		// show "0 tokens, 0 turns" (#8261). They stay zero for the apps older than that, which decode them as required
+		// numbers and read them as "none yet".
 		info := map[string]any{"session_id": p.SessionID, "agent": h.agent(), "context_tokens": 0, "output_tokens": 0,
-			"compactions": 0, "turns": 0}
+			"compactions": 0, "turns": 0, "usage_unknown": true}
 		for _, s := range h.sessionsCopy() {
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
@@ -373,7 +381,7 @@ func (n *Node) handOver(ctx context.Context, from *runtimeConn, id string, param
 				cctx, cancel := context.WithTimeout(ctx, runtimeClaimTimeout)
 				err := c.peer.Call(cctx, "session.items", map[string]any{"session_id": id, "limit": 1}, nil)
 				cancel()
-				if err == nil {
+				if hasSession(err) {
 					n.runtimes.claim(c, id)
 					return forward(c)
 				}
