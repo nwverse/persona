@@ -19,6 +19,7 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
@@ -159,12 +160,19 @@ class AgentsReadingRestoreTest {
         scrollTo("session:demo/s-40")
 
         restore(restoration) { rows = emptyList(); loaded = false }
-        rule.runOnUiThread { uiScope.launch { state.scrollToItem(0, 3) } }
+        val userScroll = CompletableDeferred<Unit>()
+        rule.runOnUiThread { uiScope.launch { state.scroll { userScroll.await() } } }
         rule.waitForIdle()
-        rule.runOnIdle { rows = original; loaded = true }
-        rule.waitForIdle()
-        rule.waitForIdle()
+        try {
+            org.junit.Assert.assertTrue("the production scroll state stays visible to the restoration observer", state.isScrollInProgress)
+            rule.runOnIdle { rows = original; loaded = true }
+            rule.waitForIdle()
+            rule.waitForIdle()
 
-        assertEquals("the user scrolled before the list came: it is not undone", 0, state.firstVisibleItemIndex)
+            assertEquals("the user scrolled before the list came: it is not undone", 0, state.firstVisibleItemIndex)
+        } finally {
+            userScroll.complete(Unit)
+            rule.waitForIdle()
+        }
     }
 }

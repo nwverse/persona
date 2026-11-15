@@ -36,8 +36,11 @@ internal class AgentsFeedBaseline(val mark: AgentsFeedMark, val scope: List<Any?
 internal class AgentsFeed {
     var frozen: AgentsFeedFrozen? = null
         private set
-    /** A scroll the screen itself makes (back to the latest): it is not the user reading, and holds nothing. */
-    var programmatic = false
+    /** Scrolls the screen itself makes (back to the latest): nested or repeated jumps all hold nothing. */
+    private var programmaticDepth = 0
+    val programmatic: Boolean get() = programmaticDepth > 0
+    fun beginProgrammatic() { programmaticDepth++ }
+    fun endProgrammatic() { programmaticDepth-- }
     var revision by mutableIntStateOf(0)
         private set
     var baseline by mutableStateOf<AgentsFeedBaseline?>(null)
@@ -127,13 +130,13 @@ internal fun rememberAgentsFeed(latest: AgentsPageState, needsYou: (AgentsPageSt
     val reduceMotion = PersonaTheme.reduceMotion
     return AgentsFeedView(shown, {
         // Everything that waits lands first, and the scroll that follows is the screen's, not the user's reading.
-        feed.programmatic = true
+        feed.beginProgrammatic()
         feed.land(latestNow, scopeNow, holdAgain = false)
         scroll.launch {
             try {
                 if (reduceMotion) list.scrollToItem(0) else list.animateScrollToItem(0)
             } finally {
-                feed.programmatic = false
+                feed.endProgrammatic()
                 // The user took the list over mid-way: from here it is theirs, and what comes waits.
                 if (list.isScrollInProgress && list.canScrollBackward) feed.hold(latestNow, scopeNow)
             }

@@ -18,7 +18,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -117,12 +116,18 @@ class AgentsFeedHoldTest {
         advance(50)
     }
 
+    private fun update(change: () -> Unit) {
+        rule.runOnUiThread(change)
+        // The mutation is seen on one frame; the following frame applies its composition and side effects.
+        advance(100)
+        advance(100)
+    }
+
     private fun push(change: (Session) -> Session = { it }, extra: List<Session> = emptyList(), reorder: Boolean = false) {
-        rule.runOnUiThread {
+        update {
             val changed = base.map(change)
             latest = feedPage((if (reorder) changed.reversed() else changed) + extra)
         }
-        advance(100)
     }
 
     private fun titleOf(id: String) = shownPage.sessions.single { it.sessionId == id }.title
@@ -184,8 +189,7 @@ class AgentsFeedHoldTest {
         holdScroll()
         push(line("s03"))
         assertEquals("s03", titleOf("s03"))
-        rule.runOnUiThread { scope = listOf("another grouping") }
-        advance(100)
+        update { scope = listOf("another grouping") }
         assertEquals("a control changed: what the list draws is the new list", "s03, more", titleOf("s03"))
         push(line("s03", "s03, again"))
         assertEquals("the scroll goes on, so the next push waits", "s03, more", titleOf("s03"))
@@ -198,8 +202,7 @@ class AgentsFeedHoldTest {
         holdScroll()
         push(line("s03"))
         assertEquals("s03", titleOf("s03"))
-        rule.runOnUiThread { windowHeight = 300.dp }
-        advance(100)
+        update { windowHeight = 300.dp }
         assertEquals("the window changed: the hold starts over from the latest", "s03, more", titleOf("s03"))
         push(line("s03", "s03, again"))
         assertEquals("the scroll goes on, so the next push waits", "s03, more", titleOf("s03"))
@@ -208,27 +211,22 @@ class AgentsFeedHoldTest {
 
     @Test fun aFetchedPageLandsAtOnceWhileScrollingAndTheNextPushWaitsAgain() {
         start()
-        rule.runOnUiThread { latest = feedPage(base, paged = true) }
-        advance(100)
+        update { latest = feedPage(base, paged = true) }
         scrollAway()
         holdScroll()
-        rule.runOnUiThread { latest = feedPage(base + feedSession("more1") + feedSession("more2"), paged = true) }
-        advance(100)
+        update { latest = feedPage(base + feedSession("more1") + feedSession("more2"), paged = true) }
         assertTrue("the page is in under the finger, with no gap", shownPage.sessions.any { it.sessionId == "more2" })
-        rule.runOnUiThread { latest = feedPage(base.map(line("s03")) + feedSession("more1") + feedSession("more2"), paged = true) }
-        advance(100)
+        update { latest = feedPage(base.map(line("s03")) + feedSession("more1") + feedSession("more2"), paged = true) }
         assertEquals("a push after it waits", "s03", titleOf("s03"))
         release()
     }
 
     @Test fun aSessionAPushPutsInFrontOfAPagedListWaitsAndIsNotTakenForAPage() {
         start()
-        rule.runOnUiThread { latest = feedPage(base, paged = true) }
-        advance(100)
+        update { latest = feedPage(base, paged = true) }
         scrollAway()
         holdScroll()
-        rule.runOnUiThread { latest = feedPage(listOf(feedSession("fresh")) + base, paged = true) }
-        advance(100)
+        update { latest = feedPage(listOf(feedSession("fresh")) + base, paged = true) }
         assertFalse("held, not released as a fetched page", shownPage.sessions.any { it.sessionId == "fresh" })
         release()
         advance(AgentsFeedTiming.SETTLE_MILLIS + 200)
@@ -239,11 +237,9 @@ class AgentsFeedHoldTest {
         start()
         scrollAway()
         holdScroll()
-        rule.runOnUiThread { latest = feedPage(listOf(feedSession("x1"), feedSession("x2"))) }
-        advance(100)
+        update { latest = feedPage(listOf(feedSession("x1"), feedSession("x2"))) }
         assertEquals(setOf("x1", "x2"), shownPage.sessions.map { it.sessionId }.toSet())
-        rule.runOnUiThread { latest = feedPage(emptyList()) }
-        advance(100)
+        update { latest = feedPage(emptyList()) }
         assertTrue(shownPage.sessions.isEmpty())
         release()
     }
@@ -312,19 +308,16 @@ class AgentsFeedHoldTest {
     @Test fun anotherComputersNeedsYouIsNoPillWhenTheListIsFilteredToOne() {
         start()
         val onlyMac = AgentListSettings(machineFilter = "mac")
-        rule.runOnUiThread { latest = feedPage(base, settings = onlyMac) }
-        advance(100)
+        update { latest = feedPage(base, settings = onlyMac) }
         scrollAway()
-        rule.runOnUiThread { latest = feedPage(base + feedSession("far", "needs_you", machine = "box"), settings = onlyMac) }
-        advance(100)
+        update { latest = feedPage(base + feedSession("far", "needs_you", machine = "box"), settings = onlyMac) }
         rule.onNodeWithTag("note").assertDoesNotExist()
     }
 
     @Test fun aNewRowNearTheTopIsTheQuietKindOfNote() {
         start()
         scrollAway()
-        rule.runOnUiThread { latest = feedPage(listOf(feedSession("fresh")) + base) }
-        advance(100)
+        update { latest = feedPage(listOf(feedSession("fresh")) + base) }
         rule.onNodeWithTag("note").assertIsDisplayed().assertTextContains("1 new")
     }
 
@@ -337,11 +330,9 @@ class AgentsFeedHoldTest {
     @Test fun theNoteStartsOverFromWhereTheUserIsWhenAControlChanges() {
         start()
         scrollAway()
-        rule.runOnUiThread { latest = feedPage(listOf(feedSession("fresh")) + base) }
-        advance(100)
+        update { latest = feedPage(listOf(feedSession("fresh")) + base) }
         rule.onNodeWithTag("note").assertIsDisplayed()
-        rule.runOnUiThread { scope = listOf("another grouping") }
-        advance(100)
+        update { scope = listOf("another grouping") }
         rule.onNodeWithTag("note").assertDoesNotExist()
     }
 
@@ -367,6 +358,21 @@ class AgentsFeedHoldTest {
         assertFalse("back at the latest", state.canScrollBackward)
         rule.onNodeWithTag("note").assertDoesNotExist()
         assertEquals("s06, more", titleOf("s06"))
+    }
+
+    @Test fun repeatedJumpsKeepTheWholeProgrammaticScrollFreeOfHolds() {
+        start(reduceMotion = false)
+        scrollAway()
+        push(needsYou("s20"))
+        rule.runOnUiThread { view.showLatest() }
+        advance(30)
+        rule.runOnUiThread { view.showLatest() }
+        advance(30)
+        assertTrue("the second jump is still moving", state.isScrollInProgress && state.canScrollBackward)
+        push(line("s07"))
+        assertEquals("the first jump ending does not make the second one a user scroll", "s07, more", titleOf("s07"))
+        advance(3_000)
+        assertFalse(state.canScrollBackward)
     }
 
     @Test fun tappingThePillGoesToTheLatestAndTheNoteGoes() {

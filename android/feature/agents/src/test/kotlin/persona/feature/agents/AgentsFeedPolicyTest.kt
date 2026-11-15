@@ -12,6 +12,7 @@ import persona.core.contracts.Machine
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.domain.sort.AgentListSettings
+import persona.core.domain.sort.AgentMachineGroup
 import persona.core.domain.sort.AgentQuickFilter
 
 /** The Agents feed's rules with no list under them: when a hold stands, what lands at once, what counts as news, and where a rebuilt list resumes. */
@@ -121,12 +122,27 @@ class AgentsFeedPolicyTest {
     }
 
     @Test fun theComputersLandWhileTheRowsWait() {
-        val held = page(session("a"))
+        val heading = AgentMachineGroup(mac, listOf("g"), sessionCount = 1, spaceCount = 1, stateCounts = emptyMap(), folded = false)
+        val held = page(session("a")).let { it.copy(list = it.list.copy(machines = listOf(heading))) }
         val down = page(session("a"), machines = listOf(mac.copy(online = false)))
         val landed = landCritical(held, down)
         assertNotSame(held, landed)
         assertEquals(down.machines, landed.machines)
+        assertFalse("the computer heading's online dot lands too", landed.list.machines.single().machine.online)
+        assertEquals("the heading's other grouping facts wait", heading.stateCounts, landed.list.machines.single().stateCounts)
         assertEquals(rowStates(held), rowStates(landed))
+    }
+
+    @Test fun aGroupWhoseOnlyNeedsYouRowLeavesDoesNotKeepAnEmptyHeading() {
+        val original = page(session("ask", "needs_you"), session("work"))
+        val all = original.list.groups.single()
+        val held = original.copy(list = original.list.copy(groups = listOf(
+            all.copy(id = "ask", rows = all.rows.take(1), visibleRows = all.visibleRows.take(1)),
+            all.copy(id = "work", rows = all.rows.drop(1), visibleRows = all.visibleRows.drop(1)),
+        )))
+        val landed = landCritical(held, page(session("work")))
+        assertEquals(listOf("work"), landed.list.groups.map { it.id })
+        assertEquals(listOf("work"), landed.list.groups.single().rows.map { it.session.sessionId })
     }
 
     // What counts as news

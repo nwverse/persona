@@ -6,7 +6,6 @@ import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.AgentQuickFilter
-import persona.core.domain.sort.agentNeedsYouRows
 
 // What the Agents list shows of the hub while someone reads it (docs/android/android.md "Reading position"): the page as
 // it was when they began to scroll, for a bounded time, with what needs them landed at once, and a quiet note of what
@@ -89,12 +88,15 @@ internal fun landCritical(held: AgentsPageState, latest: AgentsPageState): Agent
     if (changed.isEmpty() && gone.isEmpty() && arrived.isEmpty() && held.machines == latest.machines) return held
 
     val fresh = changed.mapValues { it.value.listSession(latest.preferences) }
+    val latestMachines = latest.machines.associateBy { it.id }
     fun AgentSession.landed(): AgentSession {
         val row = fresh[session.key] ?: return this
         return copy(session = session.copy(state = row.session.state, status = row.session.status,
             pendingInteractions = row.session.pendingInteractions, children = row.session.children), stateSince = row.stateSince)
     }
     fun List<AgentSession>.landed() = mapNotNull { if (it.session.key in gone) null else it.landed() }
+    val landedGroups = held.list.groups.map { it.copy(rows = it.rows.landed(), visibleRows = it.visibleRows.landed()) }
+    val groups = landedGroups.filter { group -> group.rows.isNotEmpty() || landedGroups.any { it.under == group.id && it.rows.isNotEmpty() } }
     return held.copy(
         sessions = held.sessions.mapNotNull { old ->
             if (old.key in gone) null
@@ -102,7 +104,8 @@ internal fun landCritical(held: AgentsPageState, latest: AgentsPageState): Agent
         } + arrived,
         machines = latest.machines,
         list = held.list.copy(
-            groups = held.list.groups.map { it.copy(rows = it.rows.landed(), visibleRows = it.visibleRows.landed()) },
+            groups = groups,
+            machines = held.list.machines.map { group -> latestMachines[group.machine.id]?.let { group.copy(machine = it) } ?: group },
             children = held.list.children.mapValues { it.value.landed() },
         ),
     )
