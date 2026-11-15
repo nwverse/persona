@@ -1290,7 +1290,7 @@ iOS shell and regular-width card inputs retain their original tree: single-line�
 
 ### 全页面性能 UI 测试（#5730）
 
-`./scripts/app/perf-test.sh [launch|agents|assistant|composer|inbox|settings|machines …]` 用优化 Debug 构建、各套件独立 mock 和共享模拟器锁运行。指定已有的专用模拟器 `PERF_SIM`，`PERF_ONLY=PerfMachinesTests/testMachineDetailScroll` 可只运行一项；`PERF_SKIP_BUILD=1` 只在确认 DerivedData 与当前源码一致时使用。编译和执行均经过 `xcode-slot`，输出目录已存在时拒绝覆盖。
+`./scripts/app/perf-test.sh [launch|agents|assistant|composer|inbox|settings|machines|sidebar …]` 用优化 Debug 构建、各套件独立 mock 和共享模拟器锁运行。指定已有的专用模拟器 `PERF_SIM`，`PERF_ONLY=PerfMachinesTests/testMachineDetailScroll` 可只运行一项；`PERF_SKIP_BUILD=1` 只在确认 DerivedData 与当前源码一致时使用。编译和执行均经过 `xcode-slot`，输出目录已存在时拒绝覆盖。
 
 | 测试文件（`apple/PersonaUITests/`） | 入口及主要跳转 |
 | --- | --- |
