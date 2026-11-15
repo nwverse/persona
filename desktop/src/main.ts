@@ -215,15 +215,23 @@ async function showSetup(): Promise<void> {
     },
   });
   setupWindow = setup;
+  let connectQueue: Promise<unknown> = Promise.resolve();
   setup.setMenu(null);
   setup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   setup.webContents.on("will-navigate", event => event.preventDefault());
-  setup.once("closed", () => { removeIPC(); if (setupWindow === setup) setupWindow = undefined; if (!mainWindow) void showMain().catch(() => { if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {}); }); });
+  setup.once("closed", () => {
+    removeIPC();
+    if (setupWindow === setup) setupWindow = undefined;
+    // Do not re-enter a connection whose setup was closed while its creation was still pending.
+    if (!mainWindow && !hubWindow.pending) void showMain().catch(() => { if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {}); });
+  });
   const removeIPC = installSetupIPC(setup, {
     hub: () => hub,
     connect: async (raw: string) => {
       const next = parseHubAddress(raw);
+      const previous = connectQueue;
       let generation: number | undefined;
+      const run = async (): Promise<{ ok: boolean; error?: string }> => {
       try {
         await replaceMainWindow(next, window => window.destroy());
         const generationValue = hubWindow.generation;
@@ -253,7 +261,7 @@ async function showSetup(): Promise<void> {
             loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
           return { ok: false, error: "The hub connection was replaced before it finished." };
         }
-        setup.close();
+        if (!setup.isDestroyed()) setup.close();
         return { ok: true };
       } catch (error) {
         if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
@@ -271,6 +279,10 @@ async function showSetup(): Promise<void> {
         if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
         return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
       }
+      };
+      const result = previous.catch(() => {}).then(run);
+      connectQueue = result.catch(() => {});
+      return result;
     },
   });
   await setup.loadFile(join(import.meta.dirname, "setup.html"));
