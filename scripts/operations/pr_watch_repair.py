@@ -376,7 +376,9 @@ def repair_merge_conflict(repo, pr, worktree, base, config):
                 # final stage-zero mode. The worker's file is still bounded.
                 source = Path(isolated, safe_checkout_path(path))
                 if not source.exists() and not source.is_symlink():
-                    raise WatchError("conflict worker left an unresolved deletion")
+                    # Absence is a complete delete/delete resolution. The
+                    # trusted outer stager records it without a worker index.
+                    continue
                 continue
             entries = checked(["git", "ls-files", "-s", "--", path], cwd=isolated)
             records = [line.split(None, 3) for line in entries.splitlines() if line]
@@ -482,11 +484,13 @@ def repair_worker_argv(argv, worktree, home=None, writable_paths=()):
         # the containing directory must permit replacement. Only conflict-file
         # directories are writable. Every other tracked path and .git is an
         # explicit read-only mount; new paths are rejected by the outer checks.
-        directories = sorted({str(path.parent) for path in writable}, key=lambda path: (len(Path(path).parts), path))
+        directories = sorted({path.parent for path in writable}, key=lambda path: (len(path.parts), str(path)))
         for directory in directories:
-            if directory != worktree and not Path(directory).is_relative_to(worktree):
+            if directory != worktree and not directory.is_relative_to(worktree):
                 raise WatchError("conflict directory escapes the temporary checkout")
-            result.extend(["--bind", directory, directory])
+        # The directory containing a conflict must be writable for atomic
+        # replacement. Protect .git separately, and never cover it with a
+        # read-only parent mount.
         for path in Path(worktree).rglob("*"):
             if path in writable or any(path == directory or directory in path.parents for directory in directories):
                 continue
@@ -495,9 +499,13 @@ def repair_worker_argv(argv, worktree, home=None, writable_paths=()):
             elif path.exists() or path.is_symlink():
                 result.extend(["--ro-bind", str(path), str(path)])
         for directory in directories:
+            result.extend(["--bind", str(directory), str(directory)])
             for path in Path(directory).iterdir():
-                if path not in writable and path.name != ".git":
-                    result.extend(["--ro-bind", str(path), str(path)])
+                if path in writable:
+                    continue
+                if any(child != path and child.is_relative_to(path) for child in directories):
+                    continue
+                result.extend(["--ro-bind", str(path), str(path)])
         for path in writable:
             # A delete/delete or delete/modify conflict may have no file yet;
             # its existing parent directory is the writable mount, not a

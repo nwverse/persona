@@ -322,11 +322,31 @@ class RepairIntegrationTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
 
+    def test_nested_conflict_directory_stays_writable_in_real_bwrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "src" / "deep"
+            nested.mkdir(parents=True)
+            (nested / "file.txt").write_text("base\n")
+            (root / "other.txt").write_text("keep\n")
+            home = root / "home"
+            home.mkdir()
+            script = nested / "write.py"
+            script.write_text("from pathlib import Path\nPath('src/deep/file.txt').write_text('resolved\\n')\n")
+            argv = pr_watch_repair.repair_worker_argv(["/usr/bin/python3", str(script)], root,
+                                                      home=home, writable_paths=["src/deep/file.txt"])
+            result = pr_watch_repair.run(argv, cwd=root, timeout=45,
+                                         environ={key: value for key, value in os.environ.items() if key in ("PATH", "LANG")})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((nested / "file.txt").read_text(), "resolved\n")
+            self.assertEqual((root / "other.txt").read_text(), "keep\n")
+
     def test_conflict_worker_can_resolve_a_deletion(self):
         self.conflicting_merge()
         def resolve(root):
             (root / "file.txt").unlink()
-            self.git("add", "-A", "file.txt", cwd=root)
+            # The real edit-only worker cannot stage through its read-only
+            # index. Leave the conflict in the index for the outer stager.
         with self.conflict_worker(resolve), patch.object(pr_watch_repair, "pr_snapshot", return_value=self.pr), \
                 patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}):
             updated = pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main, {"repair_command": "repair-worker"})
