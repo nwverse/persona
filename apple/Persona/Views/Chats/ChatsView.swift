@@ -300,6 +300,10 @@ struct ChatsView: View {
     @State private var rootShown = false
     /// Whether the stack is in the middle of a push or a pop: a chat opened from outside waits for it (#1941).
     @State private var stackStill = StackStillWatcher()
+    /// Whether the list under the stack is built (#8467). A launch onto a chat (`-openSession`, a notification, the chat
+    /// open last time) on a phone leaves it out: the chat goes over it at once, and building the list's view types took
+    /// ~60 ms of the first frame. Built once the list is about to show (`AgentsListPending`).
+    @State private var listBuilt = AppModel.shared.openChat == nil && AppModel.shared.openPersonalAgent == nil
 
     /// An active search keeps the system navigation bar up over what is pushed (the chat showed it over its own
     /// header; closing the search once pushed is too late): opening something from the results closes the search
@@ -571,8 +575,12 @@ struct ChatsView: View {
         if let unified {
             UnifiedSidebarColumn(state: unified) { rows in agentsList(rows: rows.map { AnyView($0) }) }
                 .toolbarVisibility(.hidden, for: .navigationBar)
-        } else {
+        } else if listBuilt || !ownsTop {
             agentsList(rows: nil)
+        } else {
+            AgentsListPending(atRoot: { path.isEmpty }, pending: { model.openChat != nil || model.openPersonalAgent != nil },
+                              build: { listBuilt = true })
+                .onChange(of: path.isEmpty) { _, atRoot in if atRoot { listBuilt = true } }
         }
         #else
         agentsList(rows: nil)
@@ -5192,6 +5200,55 @@ private struct TopBar<Bar: View>: ViewModifier {
         }
         return nil
     }
+}
+
+/// The Agents list's place while a launch opens a chat over it (#8467): nothing drawn. The list is built as soon as it
+/// could be seen: the root coming back into the window (a back swipe starting, ‹ tapped: before the first frame of the
+/// pop), the path emptied (`ChatsView.agentsColumn`), or no chat coming after all (the open dropped).
+private struct AgentsListPending: View {
+    let atRoot: () -> Bool
+    let pending: () -> Bool
+    let build: () -> Void
+
+    var body: some View {
+        Color.clear
+            .background { WindowEntryProbe(entered: build) }
+            .task {
+                // Over its first seconds a launch's open is still on its way (`StackStillWatcher` waits up to 2 s).
+                let start = Date.now
+                while !Task.isCancelled {
+                    if atRoot(), !pending() || Date.now.timeIntervalSince(start) > 3 { return build() }
+                    if !atRoot() { return } // the chat is over it: built when the root shows again
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+            }
+    }
+}
+
+/// Calls `entered` when its view goes into a window again after its first time: a stack's root page is taken out of
+/// the window under what is pushed over it and put back as a pop or a back swipe starts.
+private struct WindowEntryProbe: UIViewRepresentable {
+    let entered: () -> Void
+
+    final class Probe: UIView {
+        var entered: () -> Void = {}
+        private var entries = 0
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            entries += 1
+            if entries > 1 { entered() }
+        }
+    }
+
+    func makeUIView(context: Context) -> Probe {
+        let v = Probe()
+        v.isUserInteractionEnabled = false
+        v.entered = entered
+        return v
+    }
+
+    func updateUIView(_ uiView: Probe, context: Context) { uiView.entered = entered }
 }
 
 /// Where `StackStillWatcher` finds the stack from.
