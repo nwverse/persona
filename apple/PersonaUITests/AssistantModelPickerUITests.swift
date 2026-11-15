@@ -2,10 +2,10 @@ import XCTest
 
 /// The main conversation's model (#6542, #7857): the composer's model button names the effective model, its menu's
 /// Change Model… opens the conversation's model sheet, and after a pick there the button names the new model. Against
-/// scripts/mock/mock_hub.py with MOCK_MODEL_PICK=1 (PERSONA_MOCK_HUB): the main conversation follows Main Chat's default
-/// alias Opus (the sheet's catalog row reads "Opus 5.5") until Haiku (sheet row "Haiku 5.5") is picked; every pick is
-/// dropped before each launch and after the test (`/mock/model_pick?reset=1`). With PERSONA_SHOTS set it writes
-/// `model-picker-<1-entry|2-menu|3-sheet|4-picked>-<light|dark>.png` there.
+/// scripts/mock/mock_hub.py with MOCK_MODEL_PICK=1 (PERSONA_MOCK_HUB): the main conversation runs Opus, which is also
+/// Main Chat's default alias (the sheet's catalog row reads "Opus 5.5"), until Haiku (sheet row "Haiku 5.5") is picked;
+/// every pick is dropped before each launch and after the test (`/mock/model_pick?reset=1`), and the typed draft after
+/// it. With PERSONA_SHOTS set it writes `model-picker-<1-entry|2-menu|3-sheet|4-picked>-<light|dark>.png` there.
 final class AssistantModelPickerUITests: XCTestCase {
     /// The mock's main conversation (`ASSISTANT_CONFIG["main"]`), on the hub's own machine.
     private static let session = "b2e4d6f8-0000-4000-8000-000000000001"
@@ -19,10 +19,12 @@ final class AssistantModelPickerUITests: XCTestCase {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_MODEL_PICK=1 (PERSONA_MOCK_HUB)")
         }
         self.hub = hub
+        _ = try mock("hits") // every mock answers this: an unreachable hub fails here rather than skipping
         // Without MOCK_MODEL_PICK the mock has no /mock/model_pick, and the main conversation offers no pick.
         guard (try? mock("model_pick?reset=1"))?["requests"] != nil else {
             throw XCTSkip("the mock hub runs without MOCK_MODEL_PICK=1")
         }
+        dropDraftsAfterwards()
     }
 
     override func tearDownWithError() throws {
@@ -35,13 +37,23 @@ final class AssistantModelPickerUITests: XCTestCase {
             _ = try mock("model_pick?reset=1")
             let app = launch(scheme)
             let modes = modelButton(app, scheme)
-            let namedDefault = waitForValue(modes, containing: "Opus")
+            // The mock's main conversation runs Opus and Main Chat's default is Opus too, so this names Opus either way.
+            let namesOpus = waitForValue(modes, containing: "Opus")
             try shot(app, scheme, "1-entry")
-            XCTAssertTrue(namedDefault, "\(scheme): the button does not name Main Chat's default: \(String(describing: modes.value))")
+            XCTAssertTrue(namesOpus, "\(scheme): the button does not name Opus: \(String(describing: modes.value))")
 
-            modes.tap()
+            // Change Model… is offered once the picker knows the main conversation; a menu opened before then is opened
+            // again once.
             let change = changeModel(app)
-            let listed = change.waitForExistence(timeout: 5)
+            var listed = false
+            for attempt in 0..<2 where !listed {
+                if attempt > 0 {
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap() // closes the menu
+                    sleep(2)
+                }
+                modes.tap()
+                listed = change.waitForExistence(timeout: 5)
+            }
             sleep(1) // the menu finishes opening
             try shot(app, scheme, "2-menu")
             XCTAssertTrue(listed, "\(scheme): no Change Model… in the model menu:\n\(app.debugDescription)")
@@ -61,6 +73,7 @@ final class AssistantModelPickerUITests: XCTestCase {
             sleep(1)
             try shot(app, scheme, "4-picked")
             XCTAssertTrue(closed, "\(scheme): the sheet stayed open after the pick:\n\(app.debugDescription)")
+            // The menu's Change Model… row reads the same effective name as the button (ChatView `assistantEffectiveName`).
             XCTAssertTrue(renamed, "\(scheme): the button does not name the pick: \(String(describing: modes.value))")
             XCTAssertEqual(try haikuPicks(), before + 1,
                            "\(scheme): the hub has no new PUT claude/haiku: \((try? mock("model_pick")) ?? [:])")
@@ -83,7 +96,7 @@ final class AssistantModelPickerUITests: XCTestCase {
 
     /// The composer's model button, in the box's open row: a short draft opens it, with the keyboard put away so the menu
     /// and the sheet have room (as `AttachMenuTests.testHealthModelMenu`). The launch uses `-openDraftsFresh`, so the box
-    /// starts empty and there is no restored draft to clear.
+    /// starts empty, and `dropDraftsAfterwards` takes the draft away again once the test ends.
     @MainActor private func modelButton(_ app: XCUIApplication, _ scheme: String) -> XCUIElement {
         let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 40), "\(scheme): no composer in the main conversation:\n\(app.debugDescription)")
@@ -99,6 +112,22 @@ final class AssistantModelPickerUITests: XCTestCase {
         let modes = app.buttons["shell-composer-modes"].firstMatch
         XCTAssertTrue(modes.waitForExistence(timeout: 10), "\(scheme): no model button in the composer:\n\(app.debugDescription)")
         return modes
+    }
+
+    /// The draft typed into the main conversation is saved to disk, so a later suite that opens this chat without
+    /// `-openDraftsFresh` would start with it in the box. After the test (a failed one too, unlike `defer`) a launch with
+    /// that switch drops every draft and stays up for the debounced save of the empty list. Typing deletes is not enough:
+    /// on a relaunch the caret can sit before the draft, and they delete nothing.
+    private func dropDraftsAfterwards() {
+        addTeardownBlock {
+            await MainActor.run {
+                let app = XCUIApplication()
+                app.launchArguments = ["-openDraftsFresh", "YES", "-dev.openChat", ""]
+                app.launchPinned()
+                sleep(2) // drafts are written a second after they change
+                app.terminate()
+            }
+        }
     }
 
     /// The menu's Change Model…, by its identifier or, as a menu's item may carry none, by the title the tests' Chinese
