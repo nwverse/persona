@@ -518,3 +518,86 @@ func TestPRStatusConflictTellsEachHeadOnlyOnce(t *testing.T) {
 		t.Fatalf("the current observation did not return to head-a: %+v", got.PRStatus)
 	}
 }
+
+func TestPRStatusConflictResolvedWhileSupervisorBusyIsNotDelivered(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing relay %v", existing), func(t *testing.T) {
+			s, f, task := newPRConflictTask(t, nil)
+			ctx := context.Background()
+			supervisor, ok := s.session(ctx, "server", "conv1")
+			if !ok {
+				t.Fatal("missing supervisor")
+			}
+			supervisor.Status = "working"
+			f.setSessions("server", supervisor)
+			want := 0
+			if existing {
+				s.signal(superviseSignal{Todo: task.ID, Kind: sigStalled, Key: "earlier", Detail: "Earlier status event."})
+				sendPendingPRConflicts(s)
+				want = 1
+			}
+			status := TodoPRStatus{URL: task.PRURL, State: "open", HeadOID: "head-a", Conflicts: true, CheckedAt: time.Now()}
+			if err := s.applyPRStatus(ctx, task, status); err != nil {
+				t.Fatal(err)
+			}
+			sendPendingPRConflicts(s)
+			if _, pending := pendingPRConflict(s, task.ID); !pending || s.queuedFor("conv1") != want || len(f.notices()) != 0 {
+				t.Fatal("the conflict was not left pending outside the rendered relay queue")
+			}
+			for _, msg := range queuedRelays(s, "conv1") {
+				if strings.Contains(msg.Text, "head-a") {
+					t.Fatal("the conflict was merged into an existing rendered relay")
+				}
+			}
+			status.Conflicts = false
+			if err := s.applyPRStatus(ctx, task, status); err != nil {
+				t.Fatal(err)
+			}
+			supervisor.Status = "idle"
+			f.setSessions("server", supervisor)
+			sessions, err := s.sessions(ctx, "server")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.drainRelays("server", sessions)
+			if existing {
+				waitFor(t, "the unrelated relay to drain", func() bool { return len(f.notices()) == want })
+			}
+			sendPendingPRConflicts(s)
+			if len(f.notices()) != want {
+				t.Fatalf("a resolved conflict escaped while its supervisor was busy: %q", f.notices())
+			}
+		})
+	}
+}
+
+func TestPRStatusConflictRetriesAfterBusySupervisor(t *testing.T) {
+	st := &memStore{}
+	s, f, task := newPRConflictTask(t, st)
+	ctx := context.Background()
+	supervisor, ok := s.session(ctx, "server", "conv1")
+	if !ok {
+		t.Fatal("missing supervisor")
+	}
+	supervisor.Status = "working"
+	f.setSessions("server", supervisor)
+	if err := s.applyPRStatus(ctx, task, TodoPRStatus{
+		URL: task.PRURL, State: "open", HeadOID: "head-a", Conflicts: true, CheckedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sendPendingPRConflicts(s)
+	var history map[string]superviseFingerprint
+	if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil || len(history) != 0 {
+		t.Fatalf("a busy supervisor permanently consumed the conflict: %+v, %v", history, err)
+	}
+	supervisor.Status = "idle"
+	f.setSessions("server", supervisor)
+	sendPendingPRConflicts(s)
+	if len(f.notices()) != 1 || s.queuedFor("conv1") != 0 {
+		t.Fatalf("the still-current conflict did not retry once: %q", f.notices())
+	}
+	if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil || len(history) != 1 {
+		t.Fatalf("the delivered conflict was not kept: %+v, %v", history, err)
+	}
+}

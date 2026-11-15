@@ -214,7 +214,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	queued := b.queued[to]
 	b.mu.Unlock()
 	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
-	if len(queued) > 0 {
+	if len(queued) > 0 && !slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigPRConflict }) {
 		// The last message may still wait in the queue: this one takes its place with both.
 		all := mergeSignals(queued, kept)
 		var allEntries []prompts.SuperviseEntry
@@ -288,6 +288,12 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 // place), the message still queued for it (supervise.queued) stays as it was, the last message is prev again (nothing went
 // out), and the digest is tried again in the urgent gap, or later when the gap after prev has not passed yet.
 func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, at, prev time.Time) bool {
+	if slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigPRConflict }) {
+		// Rendered relays cannot recheck PR facts when drained. Keep these signals pending, so the next
+		// dispatch revalidates them; deliverDigest releases the unaccepted dedup reservation.
+		s.restoreDigest(kept, at, prev)
+		return false
+	}
 	b := &s.supervise
 	if s.queueRelay(to, msg) > 0 {
 		b.mu.Lock()
