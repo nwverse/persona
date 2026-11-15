@@ -360,6 +360,12 @@ func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
 }
 
 func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind string, verified bool) {
+	s.setTaskStageOn(ctx, id, stage, pr, kind, verified, "")
+}
+
+// setTaskStageOn is setTaskStageKind, and when onPR is set it does nothing unless, under the stage lock, the open to-do
+// and its stage still name that PR: an observation of a PR that was replaced meanwhile moves no stage (#7614 review).
+func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string, verified bool, onPR string) {
 	if !verified && stage == "verify" {
 		if t, ok := s.todoNow(id); ok && t.Supervision != nil {
 			v := t.Supervision
@@ -371,6 +377,12 @@ func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind stri
 	b := &s.reports
 	b.stageWriting.Lock()
 	defer b.stageWriting.Unlock()
+	if onPR != "" {
+		// The to-do's PR changes only under stageWriting (below), so it is read before b.mu, in the usual lock order.
+		if t, ok := s.todoNow(id); !ok || t.DoneAt != nil || t.PRURL != onPR {
+			return
+		}
+	}
 	b.mu.Lock()
 	if !s.loadStagesLocked(ctx) {
 		b.mu.Unlock()
@@ -378,6 +390,10 @@ func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind stri
 		return
 	}
 	cur := b.stages[id]
+	if onPR != "" && cur.PR != onPR {
+		b.mu.Unlock()
+		return
+	}
 	changed := false
 	if verified && !cur.Verified {
 		cur.Verified, changed = true, true

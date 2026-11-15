@@ -37,7 +37,7 @@ Review a task you handed out from this conversation (its todo id), after you che
     },
     "reason": {
       "type": "string",
-      "description": "accepted: the conclusion card's one sentence of why, in the user's language; default the note's first line. needs_user (required): one sentence saying what is to be decided, in the user's language. parked (required): one sentence saying what the task waits for, in the user's language"
+      "description": "accepted: the conclusion card's one sentence of why, in the user's language; default the note's first line. needs_user (required): one sentence saying what is to be decided, in the user's language. parked (required): one sentence saying what the task waits for, in the user's language; when it waits on a PR being reviewed or merged, name that PR's link, and the hub hands the task back when it merges or closes"
     },
     "waiting_on": {
       "type": "string",
