@@ -366,7 +366,8 @@ func TestSavedEffortsFollowTheProvidersVocabulary(t *testing.T) {
 		{"words outside every list", m([]string{"low"}, []string{"light", "low", "extreme"}, false, ""), codex,
 			m([]string{"low"}, nil, false, "")},
 		{"chosen levels undo none", m([]string{"low"}, nil, true, ""), claude, m([]string{"low"}, nil, false, "")},
-		{"none keeps no default", m(nil, []string{"minimal"}, true, "low"), codex, m(nil, nil, true, "")},
+		{"a chosen default undoes none", m(nil, []string{"minimal"}, true, "low"), codex, m(nil, nil, false, "low")},
+		{"none keeps no levels", m(nil, []string{"minimal"}, true, ""), codex, m(nil, nil, true, "")},
 	} {
 		got := settleSavedEfforts(tc.in, tc.vocab)
 		if !slices.Equal(got.Efforts, tc.want.Efforts) || !slices.Equal(got.AllEfforts, tc.want.AllEfforts) ||
@@ -463,5 +464,104 @@ func TestCindyModelMetadata(t *testing.T) {
 	if pm := cindyProviderModel(cindyModel{ID: "unsaid", ReasoningEfforts: []string{"high"}}); pm.NoEffort || pm.MaxOutputTokens != 0 ||
 		pm.ImageInput != nil || pm.ToolCalls != nil {
 		t.Fatalf("nothing said: %+v", pm)
+	}
+}
+
+// What says nothing is not read as a statement (#8796): null, an empty parameter or input list, a list with an entry
+// of a shape it can't read, a partial parameter list; a none guessed from a whole parameter list gives way to the
+// catalog's levels. Only an empty level list and the report's protocols: [] say "none".
+func TestDiscoveryReadsOnlyWhatIsSaid(t *testing.T) {
+	exact, ok := catalogModel("glm-5.3")
+	if !ok || len(exact.Efforts) == 0 {
+		t.Fatalf("catalog: %+v", exact)
+	}
+	models, failure, _ := discoverFrom(t, probeInput{}, map[string]string{"": `{"data":[
+		{"id":"example-nulls","reasoning":null,"supports_reasoning":null,"supports_vision":null,"tool_call":null,
+		 "supported_parameters":null,"reasoning_levels":null,"modalities":{"input":null,"output":null}},
+		{"id":"example-empty-lists","supported_parameters":[],"modalities":{"input":[],"output":["text"]}},
+		{"id":"example-odd-levels","reasoning_levels":[{"level":"low"}],"supported_reasoning_levels":[{"effort":"high"},{"rank":2}]},
+		{"id":"example-partial-params","supported_parameters":["tools","tool_choice"]},
+		{"id":"example-whole-params","supported_parameters":["tools","temperature","max_tokens"]},
+		{"id":"glm-5.3","supported_parameters":["temperature","max_tokens"]},
+		{"id":"example-said-none","reasoning_levels":[]},
+		{"id":"example-odd-protocols"},
+		{"id":"example-guess-then-report","supported_parameters":["temperature","max_tokens"]},
+		{"id":"example-guess-then-entry","supported_parameters":["temperature"]},
+		{"id":"example-guess-then-entry","reasoning_levels":["high"]},
+		{"id":"example-empty-then-other-input","modalities":{"input":[]},"architecture":{"input_modalities":["text","image"]}},
+		{"id":"example-blanks","supported_parameters":["temperature","tools",""],"reasoning_levels":["",""]}]}`},
+		`{"data":[{"model_id":"example-odd-protocols","protocols":[{"protocol":"messages"}],"reasoning":{"status":"supported","allowed":["low"]}},
+		  {"model_id":"example-guess-then-report","protocols":["messages"],"reasoning":{"status":"supported","allowed":["low","high"]}}]}`)
+	if failure != nil || len(models) != 12 { // the repeated entry is one model
+		t.Fatalf("%v %+v", failure, models)
+	}
+	want := []discovered{
+		{id: "example-nulls", inheritedFromEmpty: true},
+		{id: "example-empty-lists", inheritedFromEmpty: true},
+		{id: "example-odd-levels", inheritedFromEmpty: true},
+		{id: "example-partial-params", tools: "true", inheritedFromEmpty: true},
+		{id: "example-whole-params", none: true, tools: "true", inheritedFromEmpty: true},
+		{id: "glm-5.3", name: exact.Name, window: exact.ContextWindow, efforts: exact.Efforts, def: exact.DefaultEffort, tools: "false", inheritedFromEmpty: true},
+		{id: "example-said-none", none: true, inheritedFromEmpty: true},
+		{id: "example-odd-protocols", efforts: []string{"low"}, inheritedFromEmpty: true},
+		// a guessed none loses to levels the report or a repeated entry gives
+		{id: "example-guess-then-report", efforts: []string{"low", "high"}, tools: "false", inheritedFromEmpty: true},
+		{id: "example-guess-then-entry", efforts: []string{"high"}, tools: "false", inheritedFromEmpty: true},
+		{id: "example-empty-then-other-input", images: "true", inheritedFromEmpty: true},
+		// blank entries are skipped; a list of only blanks says nothing
+		{id: "example-blanks", none: true, tools: "true", inheritedFromEmpty: true},
+	}
+	for i, m := range models {
+		if got := discoveredOf(m); !sameDiscovered(got, want[i]) {
+			t.Errorf("model %d:\n got  %+v\n want %+v", i, got, want[i])
+		}
+	}
+}
+
+// A Codex launcher not saved yet is asked about Responses: the web names its agent, while its api is still messages.
+func TestDiscoveryAsksAboutTheNamedAgentsProtocol(t *testing.T) {
+	_, _, asked := discoverFrom(t, probeInput{API: "messages", Agent: ptr("codex")}, map[string]string{"": `{"data":[{"id":"example-codex-1"}]}`}, "")
+	if asked != "protocol=responses|Bearer "+fakeKey {
+		t.Fatalf("asked as %q", asked)
+	}
+	// a stored Codex launcher the form turns into a Claude Code one is asked about Messages
+	s, _ := launcherTestService(t)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", BaseURL: "https://gw.example.com/v1", Model: "m"}})
+	for want, agent := range map[string]*string{"responses": nil, "messages": ptr("claude")} {
+		tg, err := s.probeTarget(context.Background(), probeInput{Name: "cx", Agent: agent})
+		if err != nil || tg.capabilityProtocol() != want {
+			t.Errorf("agent %v: %s, %v; want %s", agent, tg.capabilityProtocol(), err, want)
+		}
+	}
+}
+
+// A default level chosen for a model that takes none undoes the none, as levels chosen do; the web, which names the
+// reported fields for every model, clears what it leaves out, while an app that names none of them keeps them.
+func TestSavingClearsWhatTheWebLeavesOut(t *testing.T) {
+	if got := settleSavedEfforts(proto.ProviderModel{ID: "m", NoEffort: true, DefaultEffort: "high"}, proto.EffortLevels); got.NoEffort ||
+		got.DefaultEffort != "high" {
+		t.Fatalf("chosen default: %+v", got)
+	}
+	s, mux := launcherTestService(t)
+	ctx := context.Background()
+	put := func(models string) proto.ProviderModel {
+		t.Helper()
+		if code, raw := launcherCall(t, mux, "PUT", "/api/v1/launchers/gw", `{"base_url":"https://gw.example.com","model":"m","models":`+models+`}`); code != 200 {
+			t.Fatal(code, raw)
+		}
+		return s.storedLaunchers(ctx)[0].Models[0]
+	}
+	if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers", `{"name":"gw","base_url":"https://gw.example.com","model":"m","api_key":"`+fakeKey+`",
+		"models":[{"id":"m","no_effort":true,"max_output_tokens":8000,"image_input":false,"tool_calls":true}]}`); code != 200 {
+		t.Fatal(code, raw)
+	}
+	if m := put(`[{"id":"m","context_window":64000}]`); !m.NoEffort || m.MaxOutputTokens != 8000 || m.ImageInput == nil || m.ToolCalls == nil {
+		t.Fatalf("an older app's models keep the stored report: %+v", m)
+	}
+	if m := put(`[{"id":"m","default_effort":"high"}]`); m.NoEffort || m.DefaultEffort != "high" || m.MaxOutputTokens != 8000 {
+		t.Fatalf("a chosen default undoes none: %+v", m)
+	}
+	if m := put(`[{"id":"m","no_effort":false}]`); m.NoEffort || m.MaxOutputTokens != 0 || m.ImageInput != nil || m.ToolCalls != nil {
+		t.Fatalf("the web's models clear what they leave out: %+v", m)
 	}
 }
