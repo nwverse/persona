@@ -958,7 +958,9 @@ class BinaryPlistTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(cbp.plist_xml(plists[name]), "")
 
-    @unittest.skipUnless(shutil.which("plutil"), "plutil is macOS only")
+    # The reference is macOS's plutil: swift-corelibs-foundation's Linux plutil reads a string with NUL and refuses
+    # some values macOS prints.
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("plutil"), "plutil is macOS only")
     def test_the_xml_view_matches_plutil(self):
         samples = dict(self.odd_plists(), every=plistlib.dumps(EVERY_VALUE, fmt=plistlib.FMT_BINARY, sort_keys=False))
         with tempfile.TemporaryDirectory(prefix="bundle-privacy-plutil-") as directory:

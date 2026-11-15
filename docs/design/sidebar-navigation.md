@@ -100,8 +100,10 @@ Keep every presentation as it is; wait for the drawer to finish closing before p
   to the conversation means choosing a conversation in the drawer (or the edge-swipe below). A place still keeps its
   stack while the user is elsewhere. The top-trailing side also has at most one control on iPhone: Inbox's Select,
   Knowledge's tag filter and map, an Inbox item's Done, a Lark chat's Pins and summary, and Browser Sign-ins' Select
-  join their respective ⋯ menus. Multi-hub Inbox's hub picker joins that menu too, and selection's Select All moves to
-  the bottom action bar. These menu layouts change only in the iPhone shell; the iPad and Mac keep their original ones.
+  join their respective ⋯ menus. Multi-hub Inbox's hub picker joins that menu too, and only on iPhone does selection's
+  Select All move to the bottom action bar; outside the iPhone shell it stays at the original top leading, beside Back
+  or the hub picker (`IPadInboxSelectionTests`). These menu layouts change only in the iPhone shell; the iPad and Mac
+  keep their original ones.
 - **Edge gestures:** the app's existing `UINavigationController` pop-gesture delegate still permits Back with its
   button hidden, and `DrawerPan.pushed` yields a sub-page's drag to that gesture. Thus an edge-swipe on a place's root
   still returns to the conversation; it does not open the drawer. On a sub-page it goes back one level. A sideways
