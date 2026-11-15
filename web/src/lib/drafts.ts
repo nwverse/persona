@@ -1,4 +1,4 @@
-import { storedValue, storeValue, removeStoredValue } from "./compatibility";
+import { canonicalStorageKey, storedKeyAlias, storedValue, storeValue, removeStoredValue } from "./compatibility";
 // Changes to a composer's draft from outside it: the message menu's "Quote" / "Edit", a queued message pulled back, an
 // edited image put in for the next message (iOS: ChatView.bindMenu, AppModel.editQueued, ImageViewer's attach).
 // The composer for that draft key listens; with none mounted, text goes to the stored draft (it is read on mount).
@@ -326,7 +326,18 @@ function protectedDraftKeys(): Set<string> {
   return keep;
 }
 
-/** Conversation ids holding a stored draft or quote, oldest first in storage order; protected ids are skipped. */
+/** The conversation id a stored draft/quote key belongs to; a legacy alias key shares its canonical key's id. */
+function storedConversationId(stored: string): string | null {
+  const key = canonicalStorageKey(stored);
+  return key.startsWith(DRAFT_PREFIX)
+    ? key.slice(DRAFT_PREFIX.length)
+    : key.startsWith(QUOTE_PREFIX)
+      ? key.slice(QUOTE_PREFIX.length)
+      : null;
+}
+
+/** Conversation ids holding a stored draft or quote, oldest first in storage order; protected ids are skipped. A
+ *  legacy alias pair (draft:persona-new / draft:jarvis-new) is one conversation, so it is never counted twice. */
 function evictableConversations(keep: ReadonlySet<string>): string[] {
   const store = draftStorage();
   const ids: string[] = [];
@@ -335,11 +346,10 @@ function evictableConversations(keep: ReadonlySet<string>): string[] {
     for (let i = 0; i < store.length; i++) {
       const stored = store.key(i);
       if (!stored || keep.has(stored)) continue;
-      const id = stored.startsWith(DRAFT_PREFIX)
-        ? stored.slice(DRAFT_PREFIX.length)
-        : stored.startsWith(QUOTE_PREFIX)
-          ? stored.slice(QUOTE_PREFIX.length)
-          : null;
+      // the mounted conversation's canonical key is protected even when this entry is its legacy alias
+      const alias = storedKeyAlias(stored);
+      if (alias && keep.has(alias)) continue;
+      const id = storedConversationId(stored);
       if (id !== null && !ids.includes(id)) ids.push(id);
     }
   } catch {
@@ -351,15 +361,16 @@ function evictableConversations(keep: ReadonlySet<string>): string[] {
 function dropConversation(id: string) {
   const store = draftStorage();
   if (!store) return;
-  try {
-    store.removeItem(`${DRAFT_PREFIX}${id}`);
-  } catch {
-    // blocked storage: nothing to do
-  }
-  try {
-    store.removeItem(`${QUOTE_PREFIX}${id}`);
-  } catch {
-    // blocked storage: nothing to do
+  const draft = `${DRAFT_PREFIX}${id}`;
+  const quote = `${QUOTE_PREFIX}${id}`;
+  // the legacy alias copy leaves with its canonical key, so no orphaned entry stays behind
+  for (const key of [draft, storedKeyAlias(draft), quote, storedKeyAlias(quote)]) {
+    if (!key) continue;
+    try {
+      store.removeItem(key);
+    } catch {
+      // blocked storage: nothing to do
+    }
   }
 }
 
@@ -370,8 +381,9 @@ function enforceDraftBound() {
 }
 
 /** Write a draft or quote entry, evicting older unmounted conversations' entries and retrying when storage is full.
- *  The target key itself and every mounted composer's keys survive; a write that still fails stays quiet. */
-function safeDraftWrite(targetKey: string, write: () => void) {
+ *  The target key itself and every mounted composer's keys survive; a write that still fails stays quiet. Other draft
+ *  writers (page-level prompt boxes) route their raw localStorage writes through this so a full quota never throws. */
+export function safeDraftWrite(targetKey: string, write: () => void) {
   if (!draftStorage()) return;
   try {
     write();
@@ -394,7 +406,7 @@ function safeDraftWrite(targetKey: string, write: () => void) {
 }
 
 /** Remove a draft or quote entry without throwing when storage is blocked (drafts keep their alias write path). */
-function safeDraftRemove(storedKey: string) {
+export function safeDraftRemove(storedKey: string) {
   if (!draftStorage()) return;
   try {
     if (storedKey.startsWith(DRAFT_PREFIX)) removeStoredValue(storedKey);

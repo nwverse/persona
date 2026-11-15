@@ -1,6 +1,7 @@
 // Draft/quote writes against a nearly full localStorage: quota errors evict the oldest unmounted conversations'
 // entries first, never the mounted conversation's keys, and a write that still fails stays quiet so typing never breaks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { canonicalStorageKey, storedValue } from "./compatibility";
 import { MAX_STORED_DRAFTS, onDraftEvent, storeDraft, storeQuotes } from "./drafts";
 
 /** A Storage-shaped mock with a character capacity: setItem throws QuotaExceededError once it would overflow. */
@@ -170,5 +171,63 @@ describe("quota-safe draft storage", () => {
 
     expect(storage.getItem("draft:kept")).toBe("stay");
     expect(storage.removed).not.toContain("draft:kept");
+  });
+
+  it("evicts a legacy alias pair as one conversation under quota, leaving no orphaned alias", () => {
+    const storage = new QuotaStorage(Number.MAX_SAFE_INTEGER);
+    vi.stubGlobal("localStorage", storage);
+    storeDraft("persona-new", "p".repeat(20)); // writes draft:persona-new and its draft:jarvis-new alias
+    storage.setItem("draft:old1", "x".repeat(30));
+    storage.setItem("draft:old2", "x".repeat(30));
+    storage.capacity = storage.used + 10; // the next draft no longer fits
+
+    expect(() => storeDraft("active", "z".repeat(20))).not.toThrow();
+
+    // the aliased pair is one evictable slot and both keys leave together
+    expect(storage.removed).toContain("draft:persona-new");
+    expect(storage.removed).toContain("draft:jarvis-new");
+    expect(storage.getItem("draft:persona-new")).toBeNull();
+    expect(storage.getItem("draft:jarvis-new")).toBeNull();
+    // one slot was enough, so younger conversations stay and the active draft landed
+    expect(storage.getItem("draft:old1")).not.toBeNull();
+    expect(storage.getItem("draft:old2")).not.toBeNull();
+    expect(storage.getItem("draft:active")).toBe("z".repeat(20));
+  });
+
+  it("counts a legacy alias pair once against the retained-draft bound", () => {
+    const storage = new QuotaStorage(Number.MAX_SAFE_INTEGER);
+    vi.stubGlobal("localStorage", storage);
+    storeDraft("persona-new", "p"); // the aliased pair, oldest in storage
+    for (let i = 0; i < MAX_STORED_DRAFTS - 2; i++) storeDraft(`old${i}`, "x");
+
+    expect(() => storeDraft("young", "x")).not.toThrow(); // exactly MAX conversations now
+
+    // one pair, one bound slot: the bound sweep evicts neither alias key nor any ordinary conversation
+    expect(storage.getItem("draft:persona-new")).toBe("p");
+    expect(storage.getItem("draft:jarvis-new")).toBe("p");
+    expect(storage.getItem("draft:young")).toBe("x");
+    const ids = new Set(
+      [...Array.from({ length: storage.length }, (_, i) => storage.key(i)!)]
+        .filter((k) => k.startsWith("draft:"))
+        .map(canonicalStorageKey),
+    );
+    expect(ids).toHaveLength(MAX_STORED_DRAFTS);
+  });
+
+  it("returns the legacy alias on a remount read while storage stays full, without throwing or resurrecting the canonical key", () => {
+    const storage = new QuotaStorage(Number.MAX_SAFE_INTEGER);
+    vi.stubGlobal("localStorage", storage);
+    // an old build left only the legacy key; storage is now full, so the canonical restore write cannot fit
+    storage.setItem("draft:jarvis-new", "unsent words");
+    storage.capacity = storage.used;
+    expect(storage.getItem("draft:persona-new")).toBeNull();
+
+    let read: string | null = null;
+    expect(() => {
+      read = storedValue("draft:persona-new"); // a Composer mounting again runs exactly this read
+    }).not.toThrow();
+    expect(read).toBe("unsent words"); // the words still reach the composer
+    expect(storage.getItem("draft:persona-new")).toBeNull(); // no failed restore resurrected the canonical key
+    expect(storage.getItem("draft:jarvis-new")).toBe("unsent words");
   });
 });
