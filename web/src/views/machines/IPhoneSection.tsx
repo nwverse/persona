@@ -104,13 +104,13 @@ export function IPhoneSection({ mid, iphone, online, mac }: { mid: string; iphon
   return (
     <section data-testid="iphone-section">
       <div className="mb-2.5 flex min-h-7 items-center gap-2 px-1">
-        <h2 className="text-[13px] font-medium text-ink">{t("machines-iphonesection.title")}</h2>
+        <h2 className="text-meta font-medium text-ink">{t("machines-iphonesection.title")}</h2>
       </div>
       <div className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} both` }}>
         <div className="flex items-center gap-3 px-4 py-3">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[13px] text-ink">{t("machines-iphonesection.allow")}</div>
-            <div className="mt-0.5 truncate text-[11.5px] text-ink-3">{t("machines-iphonesection.allow_detail")}</div>
+            <div className="truncate text-meta text-ink">{t("machines-iphonesection.allow")}</div>
+            <div className="mt-0.5 truncate text-submeta text-ink-3">{t("machines-iphonesection.allow_detail")}</div>
           </div>
           {saving && <Spinner />}
           <Switch on={enabled} onChange={(on) => void set(on)} disabled={saving || !online} label={t("machines-iphonesection.allow")} />
@@ -214,22 +214,22 @@ function Row({ r, busy, cancelling, run, menuOpen, openMenu }: {
     <li className="flex items-start gap-3 py-2.5" data-testid={`iphone-device-${d.id}`}>
       <Icon name="phone" size={16} className={cx("mt-0.5 shrink-0", r.tone === "ok" ? "text-green" : "text-ink-3")} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] text-ink">
+        <div className="truncate text-meta text-ink">
           {name}
-          {d.ios && <span className="text-[11.5px] text-ink-3"> · {t("lib-iphone.ios", { version: d.ios })}</span>}
+          {d.ios && <span className="text-submeta text-ink-3"> · {t("lib-iphone.ios", { version: d.ios })}</span>}
         </div>
-        <p className="mt-0.5 flex items-start gap-1.5 text-[11.5px] leading-relaxed text-ink-3" role="status">
+        <p className="mt-0.5 flex items-start gap-1.5 text-submeta leading-relaxed text-ink-3" role="status">
           {r.tone === "work" && <Spinner size={10} />}
           <span className="min-w-0 break-words">{r.text}</span>
         </p>
         {r.prepare && (
           <>
-            <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-2">{t("lib-iphone.prepare_detail")}</p>
-            <button type="button" className="mt-1 flex items-center gap-1 text-[11.5px] text-ink-3 hover:text-ink" aria-expanded={more} onClick={() => setMore((m) => !m)}>
+            <p className="mt-1.5 text-submeta leading-relaxed text-ink-2">{t("lib-iphone.prepare_detail")}</p>
+            <button type="button" className="mt-1 flex items-center gap-1 text-submeta text-ink-3 hover:text-ink" aria-expanded={more} onClick={() => setMore((m) => !m)}>
               <Icon name="chevronRight" size={10} className={cx("transition-transform", more && "rotate-90")} />
               {t("machines-iphonesection.details")}
             </button>
-            {more && <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">{t("lib-iphone.prepare_more")}</p>}
+            {more && <p className="mt-1 text-submeta leading-relaxed text-ink-3">{t("lib-iphone.prepare_more")}</p>}
           </>
         )}
       </div>
@@ -249,12 +249,12 @@ function Chip({ tone }: { tone: IPhoneTone }) {
 }
 
 function Detail({ text }: { text: string }) {
-  return <p className="text-[11.5px] leading-relaxed text-ink-3">{text}</p>;
+  return <p className="text-submeta leading-relaxed text-ink-3">{text}</p>;
 }
 
 function Line({ text, tone }: { text: string; tone: IPhoneTone }) {
   return (
-    <p className="flex items-start gap-2 text-[12.5px]" role="status">
+    <p className="flex items-start gap-2 text-label" role="status">
       {tone === "work" ? (
         <span className="mt-[3px] shrink-0"><Spinner /></span>
       ) : (
