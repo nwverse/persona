@@ -221,14 +221,29 @@ func TestEngineRuntimeWatchesASessionItTookOverWhileOpen(t *testing.T) {
 	if w["session_id"] != sdkSession || w["transcript"] != true {
 		t.Fatalf("watched with %v", w)
 	}
-	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{row}})
-	waitFor(t, "the runtime's now", func() bool { return listed(t, n)[sdkSession].SourceKind == proto.SourceRuntime })
-	time.Sleep(200 * time.Millisecond)
+	// The runtime was asked to watch it already, so its list asks for no second watch (setSessions' rewatch).
+	n.runtimes.mu.Lock()
+	h := n.runtimes.byRuntime(proto.EnginePaseo)
+	n.runtimes.mu.Unlock()
 	n.mu.Lock()
-	_, following := n.watches[sdkSession]
+	before := n.watches[sdkSession]
 	n.mu.Unlock()
-	if got := len(host.got("session.watch")); got != 1 || !following || len(host.got("session.unwatch")) != 0 {
-		t.Fatalf("after the list: %d watches, %d unwatches, the transcript followed %v", got, len(host.got("session.unwatch")), following)
+	if h == nil || !n.runtimes.watchedOn(h, sdkSession) || before == nil {
+		t.Fatalf("before the list: the runtime watches it %v, the transcript followed %v", h != nil && n.runtimes.watchedOn(h, sdkSession), before != nil)
+	}
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{row}})
+	// The node takes a runtime's events in order, each before the request that follows it: once this request is
+	// answered (refused: no such package), the list has been taken in, and a transcript it moved would have been
+	// unwatched and watched again (transcriptMoved).
+	_ = host.peer.Call(context.Background(), "runtime.package", map[string]any{"name": "-"}, &struct{}{})
+	if listed(t, n)[sdkSession].SourceKind != proto.SourceRuntime {
+		t.Fatal("the runtime's list did not make the session its own")
+	}
+	n.mu.Lock()
+	after := n.watches[sdkSession]
+	n.mu.Unlock()
+	if got := len(host.got("session.watch")); got != 1 || after != before || len(host.got("session.unwatch")) != 0 {
+		t.Fatalf("after the list: %d watches, %d unwatches, the same transcript watch %v", got, len(host.got("session.unwatch")), after == before)
 	}
 	// The phone closes the chat: the runtime stops watching too.
 	runtimeSessionCall(t, hub, "session.unwatch", map[string]any{"session_id": sdkSession})
