@@ -49,7 +49,7 @@ CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOC
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
-            "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
+            "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
@@ -18437,7 +18437,8 @@ def office_pptx():
 # What the hub (node filemime.go) calls a binary file by its name; others are video/mp4 as before.
 MOCK_MIMES = {".wav": "audio/wav", ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".heic": "image/heic", ".webm": "video/webm", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel",
               ".pdf": "application/pdf", ".doc": "application/msword", ".pages": "application/vnd.apple.pages", ".png": "image/png", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-              ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
+              ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+              ".zip": "application/zip", ".csv": "text/csv"}
 
 
 def mock_mime(path):
@@ -20273,6 +20274,29 @@ if os.environ.get("MOCK_FILE_LINKS"):
     MOCK_TREE[MOCK_REPO + "/deploy.sh"] = "#!/bin/sh\nswift build -c release\n"
     MOCK_LINKS[MOCK_REPO + "/shared/"] = ("../shared", "code/shared/")
     MOCK_LINKS[MOCK_REPO + "/old-settings.json"] = ("../legacy/settings.json", None)
+
+
+# MOCK_FILE_ATTACH=1 (#8361): files sent with a message as cards: in the widget conversation, a message with eight
+# <persona-file kind="file"> tags (a PDF, workbooks, a document, archives; all made up) kept in the node's uploads, and
+# an earlier one whose file the computer no longer has.
+if os.environ.get("MOCK_FILE_ATTACH"):
+    import mock_office
+    _day = "/Users/me/.persona/uploads/2026-11-15/"
+    _pdf = base64.b64decode(mock_pdf())  # bytes: FILES serves them as a file, a str as text
+    _attached = [("q3-report.pdf", _pdf), ("budget-2026.xlsx", quarterly_xlsx()), ("sales-by-region.xlsx", quarterly_xlsx()),
+                 ("meeting-notes.docx", mock_office.docx("Meeting notes", ["Made-up notes for screenshots."])),
+                 ("logs-1114.zip", b"PK\x05\x06" + b"\0" * 18), ("contract-draft.pdf", _pdf),
+                 ("季度汇总.xlsx", quarterly_xlsx()), ("screenshots.zip", b"PK\x05\x06" + b"\0" * 18)]  # i18n-ignore: a made-up file name
+    _sizes = [2411724, 88123, 1153434, 245760, 19608371, 655360, 317440, 44354765]
+    for (_name, _bytes) in _attached:
+        FILES[_day + _name] = _bytes if isinstance(_bytes, bytes) else _bytes.encode()
+    _tags = "\n".join('<persona-file kind="file" path="%s" name="%s" size="%d"/>' % (_day + n, n, z) for (n, _), z in zip(_attached, _sizes))
+    ITEMS[WIDGET] = ITEMS[WIDGET] + [
+        it("user", "text", 0, text='上周导出的数据也看一下\n\n<persona-file kind="file" path="/tmp/old-export-20261110-140200.csv" name="old-export.csv" size="12288"/>'),  # i18n-ignore
+        it("assistant", "text", 0, text="收到，两份我都对照着看。"),  # i18n-ignore
+        it("user", "text", 0, text="帮我对比这几份季度数据，重点看第三季度的支出\n\n" + _tags),  # i18n-ignore
+        it("assistant", "text", 0, text="8 个文件都收到了。先从 q3-report.pdf 和两张 xlsx 看起，第三季度的支出我单独列一张对比表。"),  # i18n-ignore
+    ]
 
 
 def link_real(rel):
@@ -25932,7 +25956,8 @@ class H(BaseHTTPRequestHandler):
 
     def upload(self):
         """POST /api/v1/machines/{mid}/files?name=…: the body read slowly enough to watch the progress bar
-        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads."""
+        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads;
+        MOCK_UPLOAD_FAIL=<part of a name>: those fail once their bytes are in, as a full disk would (#8361)."""
         q = parse_qs(urlparse(self.path).query)
         name = (q.get("name") or ["file"])[0]
         n = int(self.headers.get("Content-Length") or 0)
@@ -25943,6 +25968,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"error": "MacBook 上的 personad 太旧，不能接收文件，需要重新部署", "code": "node_outdated"}, 409)
         if (q.get("dest") or [""])[0] == "dir":
             return file_ops_upload(self, q, n)
+        kept = (q.get("dest") or [""])[0] == "attachment"  # #8361: kept beside the chat's pictures under its own name
         kbps = int(os.environ.get("MOCK_UPLOAD_KBPS", "2048"))
         left = n
         video = name.lower().rsplit(".", 1)[-1] in ("mov", "mp4", "m4v")
@@ -25953,9 +25979,18 @@ class H(BaseHTTPRequestHandler):
             left -= len(got)
             if video: body.append(got)
             time.sleep(len(got) / 1024 / kbps)
+        if os.environ.get("MOCK_UPLOAD_FAIL") and os.environ["MOCK_UPLOAD_FAIL"] in name:
+            return self.send_json({"error": "no space left on device"}, 500)
         stem, dot, ext = name.rpartition(".")
         if not stem: stem, dot, ext = ext, "", ""
         path = "/tmp/%s-%s%s%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"), dot, ext)
+        if kept:
+            day, i = "/Users/me/.persona/uploads/" + datetime.now().strftime("%Y-%m-%d") + "/", 1
+            path = day + name
+            while path in FILES:
+                i += 1
+                path = day + "%s %d%s%s" % (stem, i, dot, ext)
+            FILES[path] = b""  # there to open and to stat; the made-up bytes are not kept
         if video: FILES[path] = b"".join(body)  # downloadable again, like a node's temp file (#981)
         UPLOADS.append({"name": name, "size": n, "path": path, "machine": urlparse(self.path).path.split("/")[4]})
         return self.send_json({"path": path, "name": path.rsplit("/", 1)[1], "size": n})
