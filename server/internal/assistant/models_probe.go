@@ -69,6 +69,7 @@ func launchAuth(auth string) string {
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
 	base, key, headers, model, effort, proxy, noProxy, api, kind, via string
+	models                                                            []proto.ProviderModel
 	// agent is a stored provider's agent (AgentType), "" for one not stored.
 	agent string
 	// through sends the requests through via's node (models_via.go).
@@ -104,7 +105,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
 		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, effort: l.Effort, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine,
-			agent: l.AgentType()}
+			models: l.Models, agent: l.AgentType()}
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
@@ -197,6 +198,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	t.base = strings.TrimRight(strings.TrimSpace(t.base), "/")
 	if t.via != "" {
 		t.through = viaNode{s: s, machine: t.via}
+	}
+	if t.api == "chat" {
+		t.effort = chatEffortForModel(t.models, t.model, t.effort)
 	}
 	return t, nil
 }
@@ -496,21 +500,33 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		out["code"] = "unsupported_effort"
 		return out
 	}
-	body, _ := json.Marshal(payload)
 	started := time.Now()
 	auto := t.auth == probeAuthAuto
-	res, err := t.send(ctx, http.MethodPost, t.endpoint(path), body)
-	if err == nil && t.api == "chat" && res.StatusCode == http.StatusBadRequest {
+	var res *http.Response
+	renamedTokens, droppedEffort := false, false
+	for {
+		body, _ := json.Marshal(payload)
+		res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
+		if err != nil || t.api != "chat" || res.StatusCode != http.StatusBadRequest {
+			break
+		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		if readErr == nil && ai.ChatRequiresCompletionTokens(raw) {
+		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && ai.ChatRejectsReasoningEffort(raw) {
+			droppedEffort = true
+			delete(payload, "reasoning_effort")
+			t.effort = "" // the answer did not verify the requested effort
+			s.logf("assistant: chat connection test: gateway rejected reasoning_effort; retrying once without it")
+			continue
+		}
+		if readErr == nil && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
+			renamedTokens = true
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256
-			body, _ = json.Marshal(payload)
-			res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
-		} else {
-			res.Body = io.NopCloser(bytes.NewReader(raw))
+			continue
 		}
+		res.Body = io.NopCloser(bytes.NewReader(raw))
+		break
 	}
 	if err != nil || res.StatusCode/100 != 2 {
 		msg, code := t.failure(ctx, res, err)

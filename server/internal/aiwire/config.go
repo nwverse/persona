@@ -14,8 +14,9 @@ type Config struct {
 	// UserAgent overrides the HTTP default when non-nil, including when it points to an empty string.
 	UserAgent *string `json:"-"`
 	Model     string  `json:"model"`
-	// ReasoningEffort is sent to Responses as reasoning.effort and to Messages as output_config.effort. "off" maps
-	// to Responses "none" and the model's supported Messages no-thinking mode, or low effort when it cannot disable it.
+	// ReasoningEffort is sent to Chat Completions as reasoning_effort, Responses as reasoning.effort and Messages as
+	// output_config.effort. "off" maps to Chat/Responses "none" and the model's supported Messages no-thinking mode,
+	// or low effort when it cannot disable it.
 	ReasoningEffort string `json:"reasoning_effort"`
 	// Bearer sends the key to the Messages API as Authorization: Bearer instead of x-api-key, for gateways that take
 	// only that (what Claude Code does with ANTHROPIC_AUTH_TOKEN). Responses and Chat Completions always use Bearer.
