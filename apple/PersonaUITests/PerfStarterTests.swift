@@ -18,7 +18,8 @@ final class PerfStarterTests: PerfTestCase {
 
     @MainActor private func openStarter() {
         launch(["-dev.openChat", "", "-app.tab", "assistant", "-tab", "assistant", "-newAssistant", "YES",
-                "-showDictationSample", Self.words], ready: any("assistant-welcome"), timeout: 30, settle: 2)
+                "-showDictationSample", Self.words], timeout: 30, settle: 2)
+        see(any("assistant-welcome"), "the starter", timeout: 30)
         see(field, "the starter composer")
     }
 
