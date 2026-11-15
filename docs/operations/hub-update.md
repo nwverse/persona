@@ -9,7 +9,12 @@ Implemented in 4 steps; after each step, the corresponding "Plan" is rewritten a
 ### Web development updates
 
 For operators running the Web client with the built-in child manager, Settings › hub offers
-**Update source › Web development**. This uses the existing update endpoints, hourly scheduler,
+**Update source › Web development**. This feature is scoped to the Web development UI and
+its Hub/Node backend update chain. It does not add or validate native macOS, iOS, Android,
+or other client update flows. A Linux/macOS **Hub host** and registered computers' service
+binaries are backend installation targets, distinct from native client adaptation.
+
+This uses the existing update endpoints, hourly scheduler,
 idle checks, binary verification, blue-green switch/watchdog, confirmation and node deployment
 transactions. Public release updates keep their existing gates. Development automation is
 off until explicitly enabled and is turned off whenever the source changes. An update already

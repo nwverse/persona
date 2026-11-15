@@ -179,7 +179,7 @@ function HubUpdates() {
       )}
 
       <Group title={t("settings-hubsettings.version")} anchor="hub-version">
-        <Row label={t("settings-hubsettings.version")} mono>
+        <Row label={t("settings-hubsettings.version")} mono stackOnNarrow>
           <span className="max-w-[320px] truncate" title={status.version}>{status.version}</span>
         </Row>
         <Row label={t("settings-hubsettings.channel")} anchor="hub-channel">{status.version.startsWith("web-dev-") ? t("settings-hubsettings.web_dev") : channelTitle(status.channel)}</Row>
