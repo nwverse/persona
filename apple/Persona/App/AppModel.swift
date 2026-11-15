@@ -407,7 +407,12 @@ final class AppModel {
         set {
             let old = currentStore
             currentStore = newValue
-            if newValue != old, newValue != nil { dictationRequest = nil }
+            if newValue != old, newValue != nil {
+                #if DEBUG
+                if dictationRequest != nil { ShellTrace.shared.note("dictation request cleared by a conversation") }
+                #endif
+                dictationRequest = nil
+            }
             if newValue != old { withMutation(keyPath: \.assistantCurrent) {} }
             UserDefaults.standard.set(newValue?.path ?? "", forKey: "assistant.current")
             #if DEBUG
@@ -421,6 +426,9 @@ final class AppModel {
     /// Only the main assistant's new-conversation starter may take this exact request. Health leaves it for that page;
     /// an existing conversation cancels it, and taking it before starting dictation makes failure one-shot too.
     func takeDictationRequest(_ request: DictationRequest, uploadDest: String?) -> Bool {
+        #if DEBUG
+        ShellTrace.shared.note("dictation take match=\(dictationRequest == request) current=\(assistantCurrent != nil) health=\(uploadDest != nil)")
+        #endif
         guard dictationRequest == request, uploadDest == nil else { return false }
         guard assistantCurrent == nil else {
             dictationRequest = nil

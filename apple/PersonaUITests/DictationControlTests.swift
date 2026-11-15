@@ -32,16 +32,17 @@ final class DictationControlTests: XCTestCase {
         for (name, scheme, textSize) in [("light", "light", [String]()), ("dark", "dark", [String]()),
                                          ("light-largest", "light", largest), ("dark-largest", "dark", largest)] {
             let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-            let base = ["-pairURL", pair, "-tab", "assistant", "-ui.scheme", scheme, "-showDictationSample", words] + textSize
+            let base = ["-pairURL", pair, "-tab", "assistant", "-probes", "YES", "-ui.scheme", scheme, "-showDictationSample", words] + textSize
             app = XCUIApplication()
             app.launchArguments = base + ["-openDictationControl", "YES"]
             app.launchPinned()
+            LiveActivityShots.allowNotifications()
 
             assertNewConversation()
             let mic = app.buttons["shell-composer-mic"].firstMatch
             let cancel = app.buttons["dictation-bar-cancel"].firstMatch
             XCTAssertTrue(mic.waitForExistence(timeout: 10), "no composer mic")
-            XCTAssertTrue(wait { mic.label == "停止听写" && cancel.isHittable }, "dictation did not start:\n\(app.debugDescription)")
+            XCTAssertTrue(wait { mic.label == "停止听写" && cancel.isHittable }, "dictation did not start:\n\(app.shellTrace)\n\(app.debugDescription)")
             XCTAssertTrue(app.buttons["dictation-bar-stop"].firstMatch.isHittable)
             XCTAssertTrue(app.buttons["dictation-bar-send"].firstMatch.isHittable)
             shot("dictation-control-\(name)")
@@ -50,6 +51,7 @@ final class DictationControlTests: XCTestCase {
             app = XCUIApplication()
             app.launchArguments = base
             app.launchPinned()
+            LiveActivityShots.allowNotifications()
             assertNewConversation()
             let secondMic = app.buttons["shell-composer-mic"].firstMatch
             let secondCancel = app.buttons["dictation-bar-cancel"].firstMatch
@@ -62,7 +64,8 @@ final class DictationControlTests: XCTestCase {
 
     @MainActor private func assertNewConversation() {
         let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 30), "no starter composer:\n\(app.debugDescription)")
+        let dictating = app.buttons["dictation-bar-cancel"].firstMatch
+        XCTAssertTrue(wait(30) { field.exists || dictating.exists }, "no starter composer:\n\(app.debugDescription)")
         let greeting = app.staticTexts.matching(NSPredicate(format: "label IN %@", ["早上好", "中午好", "下午好", "晚上好"])).firstMatch
         XCTAssertTrue(greeting.waitForExistence(timeout: 5), "the control did not open a new conversation:\n\(app.debugDescription)")
     }

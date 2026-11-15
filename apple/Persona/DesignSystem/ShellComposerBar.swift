@@ -293,6 +293,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         #endif
         .onDisappear {
             #if os(iOS)
+            #if DEBUG
+            if dictationBar.on { ShellTrace.shared.note("dictation composer disappeared") }
+            #endif
             dictationBar.reset(dictation, text: $text)
             #endif
             dictation.stop() // a start still asking for permission too (#3407)
@@ -308,9 +311,15 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             if !Task.isCancelled, barOn { rowOutOfTree = true }
         }
         .tabActiveTask(id: dictationRequest) {
+            #if DEBUG
+            ShellTrace.shared.note("dictation starter task request=\(dictationRequest != nil)")
+            #endif
             guard let request = dictationRequest, takeDictation?(request) == true else { return }
             guard !dictation.isListening else { return }
             startDictationBar(focusOnFailure: true)
+            #if DEBUG
+            ShellTrace.shared.note("dictation bar start requested")
+            #endif
         }
         .onChange(of: dictation.isListening) { _, on in
             if !on { dictationBar.listeningEnded(dictation, text: $text, reduceMotion: reduceMotion) }

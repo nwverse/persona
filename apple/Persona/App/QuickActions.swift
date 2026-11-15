@@ -82,6 +82,9 @@ enum QuickAction: String, CaseIterable {
     func openNewAssistantForDictation() {
         assistantCurrent = nil
         dictationRequest = DictationRequest()
+        #if DEBUG
+        ShellTrace.shared.note("dictation request installed")
+        #endif
         openNewAssistant()
     }
 }
