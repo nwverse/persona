@@ -7,7 +7,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::state::utc_timestamp;
+use crate::{compat::CONTEXT_TAGS, state::utc_timestamp};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Input {
@@ -124,20 +124,20 @@ pub struct Task {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Injected {
     pub state: Option<String>,
-    pub level: Option<String>,
 }
 
 /// `MessageSource.protectsUser`: the first leading message-source envelope is authoritative. An explicit user author,
 /// malformed JSON or a non-string/missing kind vetoes legacy injection classification, even over explicit metadata.
 fn protects_user(text: &str) -> bool {
-    const OPEN: &str = "<persona-context";
-    const CLOSE: &str = "</persona-context>";
     let mut rest = text.trim_start();
-    while let Some(after_open) = rest.strip_prefix(OPEN) {
-        let Some((attributes, after_attributes)) = after_open.split_once('>') else {
+    while let Some(tag) = CONTEXT_TAGS
+        .iter()
+        .find_map(|tag| rest.strip_prefix(format!("<{tag}").as_str()).map(|_| tag))
+    {
+        let Some((attributes, after_attributes)) = rest.split_once('>') else {
             return false;
         };
-        let Some((body, after_body)) = after_attributes.split_once(CLOSE) else {
+        let Some((body, after_body)) = after_attributes.split_once(&format!("</{tag}>")) else {
             return false;
         };
         if attributes
@@ -148,10 +148,10 @@ fn protects_user(text: &str) -> bool {
                 return true;
             };
             return metadata.get("author").and_then(Value::as_str) == Some("user")
-                || metadata
+                || !metadata
                     .get("kind")
                     .and_then(Value::as_str)
-                    .is_none_or(|kind| kind.trim().is_empty());
+                    .is_some_and(|kind| !kind.trim().is_empty());
         }
         rest = after_body.trim_start();
     }
@@ -160,11 +160,14 @@ fn protects_user(text: &str) -> bool {
 
 fn leading_context_stripped(text: &str) -> &str {
     let mut rest = text.trim();
-    while let Some(after_open) = rest.strip_prefix("<persona-context") {
+    while let Some((tag, after_open)) = CONTEXT_TAGS.iter().find_map(|tag| {
+        rest.strip_prefix(format!("<{tag}").as_str())
+            .map(|after_open| (tag, after_open))
+    }) {
         let Some((_, after_attributes)) = after_open.split_once('>') else {
             break;
         };
-        let Some((_, after_body)) = after_attributes.split_once("</persona-context>") else {
+        let Some((_, after_body)) = after_attributes.split_once(&format!("</{tag}>")) else {
             break;
         };
         rest = after_body.trim();

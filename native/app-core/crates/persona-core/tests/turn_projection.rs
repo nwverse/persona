@@ -29,14 +29,14 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
             let name = case["name"].as_str().unwrap().to_owned();
             if matches!(
                 name.as_str(),
-                "three_users_apart_without_steps"
-                    | "regular_user_images"
+                "regular_user_images"
                     | "absorbed_user_images"
                     | "live_tail_runs_behind_chip"
                     | "photos_after_wake_stay_with_message"
+                    | "tool_images_belong_to_call"
             ) {
-                // These derived shapes predate current ChatBlock.build: different seqs/entries are not re-associated
-                // with one user message. #8239 owns the executable Apple replacements, never Rust-generated fixtures.
+                // Current Apple treats these user images as input, never process, and does not re-associate different
+                // seqs; pending wakes also no longer duplicate ordered rows into tail. #8239 owns current-Apple replay.
                 continue;
             }
             let input: Input = serde_json::from_value(case["input"].clone()).expect(&name);
@@ -101,8 +101,8 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
         "task_without_loaded_call_uses_title",
         "thinking_before_between_after_tools",
         "thinking_narration_preserved",
+        "three_users_apart_without_steps",
         "timed_work_ends_at_answer",
-        "tool_images_belong_to_call",
         "trailing_tool_after_answer",
         "unknown_item_is_ignored",
         "wake_after_recap_reopens_turn",
@@ -114,7 +114,7 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
     .collect();
     assert_eq!(
         replayed, expected,
-        "exact static turn set; four operation cases and five stale derived turn shapes are excluded"
+        "exact legacy-compatible turn set; four operations and five source-disproved turn shapes are excluded"
     );
     assert_eq!(replayed.len(), 52);
     assert!(replayed.contains("wake_after_recap_reopens_turn"));
@@ -263,6 +263,47 @@ mod apple_source_regressions {
     }
 
     #[test]
+    fn only_agent_tool_result_wakes_reopen_a_recap_closed_turn() {
+        for (task, wake, expected_turns) in [
+            (json!({"kind":"agent"}), true, 1),
+            (json!({"kind":"agent"}), false, 2),
+            (json!({"kind":"shell"}), true, 2),
+            (Value::Null, true, 2),
+        ] {
+            let turns = project(json!([
+                {"id":"q1#0","seq":1,"role":"user","kind":"text"},
+                {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+                {"id":"rc3#0","seq":3,"role":"system","kind":"recap"},
+                {"id":"r4#0","seq":4,"role":"user","kind":"tool_result","task":task,"wake":wake},
+                {"id":"a5#0","seq":5,"role":"assistant","kind":"text"},
+            ]));
+            assert_eq!(turns.as_array().unwrap().len(), expected_turns, "{task}/{wake}");
+            assert_eq!(
+                turns[0]["wake_ids"],
+                if expected_turns == 1 {
+                    json!(["r4#0"])
+                } else {
+                    json!([])
+                },
+                "{task}/{wake}"
+            );
+        }
+
+        let turns = project(json!([
+            {"id":"q1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+            {"id":"rc3#0","seq":3,"role":"system","kind":"recap"},
+            {"id":"rc4#0","seq":4,"role":"system","kind":"recap"},
+            {"id":"w5#0","seq":5,"role":"system","kind":"notice","wake":true},
+            {"id":"t6#0","seq":6,"role":"assistant","kind":"tool_use"},
+            {"id":"a7#0","seq":7,"role":"assistant","kind":"text"},
+        ]));
+        assert_eq!(turns.as_array().unwrap().len(), 1, "{turns}");
+        assert_eq!(turns[0]["wake_ids"], json!(["w5#0"]));
+        assert_eq!(turns[0]["answer_id"], "a7#0");
+    }
+
+    #[test]
     fn compaction_notices_are_one_source_derived_step() {
         let input: Input = serde_json::from_value(json!({"items":[
             {"id":"u1#0","seq":1,"role":"user","kind":"text"},
@@ -287,6 +328,51 @@ mod apple_source_regressions {
         assert_eq!(turns[0]["ordered_ids"], json!(["n1#0"]));
         assert_eq!(turns[0]["process_ids"], json!(["n1#0"]));
         assert_eq!(turns[0]["answer_id"], Value::Null);
+    }
+
+    #[test]
+    fn compaction_eligibility_and_interruption_preserve_other_notices() {
+        for (suffix, task, wake) in [
+            ("", Value::Null, false),
+            ("", json!({"kind":"agent"}), false),
+            ("", Value::Null, true),
+            (" extra", Value::Null, false),
+        ] {
+            let turns = project(json!([
+                {"id":"u1#0","seq":1,"role":"user","kind":"text"},
+                {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+                {"id":"n3#0","seq":3,"role":"system","kind":"notice","text":format!("上下文已压缩{suffix}"), // i18n-ignore
+                 "task":task,"wake":wake},
+                {"id":"n4#0","seq":4,"role":"system","kind":"notice","text":"已从压缩的上下文继续"}, // i18n-ignore
+                {"id":"n5#0","seq":5,"role":"system","kind":"notice","text":"Compacted while idle, fictional example"},
+            ]));
+            assert_eq!(turns.as_array().unwrap().len(), 1, "{task}/{wake}/{suffix}");
+            let expected = if suffix.is_empty() && task.is_null() && !wake {
+                json!(["u1#0", "a2#0", "n3#0"])
+            } else {
+                // With no eligible open boundary, the continuation itself becomes one and absorbs the idle note.
+                json!(["u1#0", "a2#0", "n3#0", "n4#0"])
+            };
+            assert_eq!(turns[0]["ordered_ids"], expected, "{task}/{wake}/{suffix}");
+        }
+
+        let turns = project(json!([
+            {"id":"u1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+            {"id":"n3#0","seq":3,"role":"system","kind":"notice","text":"上下文已压缩"}, // i18n-ignore
+            {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use"},
+            {"id":"n5#0","seq":5,"role":"system","kind":"notice","text":"Compacted while idle, fictional example"},
+        ]));
+        assert_eq!(
+            turns[0]["ordered_ids"],
+            json!(["u1#0", "a2#0", "n3#0", "tools-t4#0", "n5#0"])
+        );
+
+        let turns = project(json!([{
+            "id":"c1#0","seq":1,"role":"system","kind":"custom",
+            "compact":{"trigger":"manual","notes":[]}
+        }]));
+        assert_eq!(turns, json!([]));
     }
 
     #[test]
@@ -330,5 +416,73 @@ mod apple_source_regressions {
             {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
         ]));
         assert_eq!(protected[0]["user_ids"], json!(["u0#0", "u1#0", "u2#0"]));
+    }
+
+    #[test]
+    fn malformed_source_and_previous_context_tags_protect_user_input() {
+        // i18n-ignore: canonical injected protocol text, not localized UI copy.
+        let text = "📋 督办：你派出去的任务有 2 个要你处理\n这是 Persona 的督办消息";
+        for (tag, metadata) in [
+            ("persona-context", "{\"kind\":42}"),
+            ("persona-context", "not json"),
+            ("jarvis-context", "{\"author\":\"user\"}"),
+        ] {
+            let turns = project(json!([
+                {"id":"u0#0","seq":0,"role":"user","kind":"text","text":"First real request"},
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","queued":true,
+                 "text":format!("<{tag} kind=\"message-source\">{metadata}</{tag}>\n{text}"),
+                 "injected":{"state":"supervise"}},
+                {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
+            ]));
+            assert_eq!(turns.as_array().unwrap().len(), 1, "{tag}/{metadata}");
+            assert_eq!(
+                turns[0]["user_ids"],
+                json!(["u0#0", "u1#0", "u2#0"]),
+                "{tag}/{metadata}"
+            );
+        }
+
+        let legacy_supervision = project(json!([
+            {"id":"u0#0","seq":0,"role":"user","kind":"text","text":"First real request"},
+            {"id":"u1#0","seq":1,"role":"user","kind":"text","queued":true,
+             "text":format!("<jarvis-context kind=\"context\">Fictional context</jarvis-context>\n{text}")},
+            {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
+        ]));
+        assert_eq!(legacy_supervision.as_array().unwrap().len(), 3);
+
+        for (prefix, expected_turns) in [
+            (
+                "<persona-context kind=\"context\">Fictional context</persona-context>\n",
+                3,
+            ),
+            (
+                "<persona-context kind=\"message-source\">{\"kind\":\"patrol\"}</persona-context>\n",
+                3,
+            ),
+            (
+                "<persona-context kind=\"message-source\">{\"author\":\"user\"}</persona-context>\n<persona-context kind=\"message-source\">{\"kind\":\"patrol\"}</persona-context>\n",
+                1,
+            ),
+        ] {
+            let turns = project(json!([
+                {"id":"u0#0","seq":0,"role":"user","kind":"text","text":"First real request"},
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","queued":true,
+                 "text":format!("{prefix}{text}")},
+                {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
+            ]));
+            assert_eq!(turns.as_array().unwrap().len(), expected_turns, "{prefix}");
+        }
+
+        for text in [
+            "📋 督办：你派出去的任务有 two 个要你处理\n这是 Persona 的督办消息",
+            "📋 督办：你派出去的任务有 2 个要你处理",
+        ] {
+            let turns = project(json!([
+                {"id":"u0#0","seq":0,"role":"user","kind":"text","text":"First real request"},
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","text":text,"queued":true},
+                {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
+            ]));
+            assert_eq!(turns.as_array().unwrap().len(), 1, "{text}");
+        }
     }
 }

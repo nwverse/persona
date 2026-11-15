@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod compat;
 pub mod continuity;
 pub mod item;
 pub mod recents;
