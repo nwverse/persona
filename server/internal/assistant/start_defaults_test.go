@@ -360,6 +360,7 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	plan("conv1", "lead1", map[string]any{"title": "C", "prompt": "fix that", "readonly": false, "done_when": []string{"CI is green"},
 		"expect_minutes": 30})
 	planWait(3)
+	waitFor(t, "the starts to finish their bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 	got := seen()
 	if a := got[0]; a.Supervisor != dispatchClassLeader || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
 		t.Fatalf("leader's task: %+v", a)
@@ -440,6 +441,7 @@ func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 	if ro["ultracode"] != nil || ro["goal"] != nil || ro["effort"] == "max" {
 		t.Fatalf("a read-only task got the defaults: %v", ro)
 	}
+	waitFor(t, "the starts to finish their bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 }
 
 // The route's rules: an extension's policy must expire within an hour; the owner may keep one without expiry; a
@@ -811,6 +813,7 @@ func TestStartDefaultsNotStoredWithTheTask(t *testing.T) {
 	}
 	todoID := todoIDOfPlan(t, s, id)
 	waitFor(t, "the agent linked", func() bool { return len(todoNow(s, todoID).Agents) == 1 })
+	waitFor(t, "the start to finish its bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 	p, err := s.loadPlan(ctx, id)
 	if err != nil {
 		t.Fatal(err)
@@ -899,6 +902,7 @@ func TestStartDefaultsPermissionOfThePolicysAgentNotStored(t *testing.T) {
 	}
 	todoID := todoIDOfPlan(t, s, id)
 	waitFor(t, "the agent linked", func() bool { return len(todoNow(s, todoID).Agents) == 1 })
+	waitFor(t, "the start to finish its bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 	p, err := s.loadPlan(ctx, id)
 	if err != nil {
 		t.Fatal(err)
