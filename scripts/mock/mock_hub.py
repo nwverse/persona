@@ -22956,6 +22956,9 @@ PLUGINS = {
                         "source": "installed", "enabled": True, "error": "这个扩展要 hub 的构建号 >=202612010000，这台是 202611041200",
                         "contributes": {"connectors": ["exampleweather"]}, "form": {"fields": []}, "config": {}, "secrets": [], "permissions": [_RUNS]},
 }
+import volc_mock  # noqa: E402  MOCK_VOLC: the built-in Volcengine speech extension (docs/extensions/volcengine-speech.md)
+if volc_mock.ENABLED:
+    PLUGINS[volc_mock.EXT] = volc_mock.plugin(_RUNS)
 PLUGINS["example-gateway"] = {
     "id": "example-gateway", "name": "Example 网关面板", "kind": "ui", "status": "running", "version": "1.0.0", "source": "installed",
     "enabled": True, "description": "在启动器页上显示 Example 网关的余额、Key 和用量。", "contributes": {"ui": ["home", "panel", "usage", "today", "gpu", "notes"]},
@@ -23983,6 +23986,8 @@ def markets_route(handler, p, body):
                 ui = [{"plugin": "example-gateway", "id": "panel", "title": "Example 网关", "placement": "launcher_section"},
                       {"plugin": "example-gateway", "id": "elsewhere", "title": "别家网关", "placement": "launcher_section"}]
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
+        if volc_mock.ENABLED and PLUGINS.get(volc_mock.EXT, {}).get("enabled") and placement in ("", "plugin_page", "extension_page"):
+            ui += PLUGINS[volc_mock.EXT]["ui"]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -23993,6 +23998,9 @@ def markets_route(handler, p, body):
     if len(parts) == 8 and parts[4] == "example-chat" and parts[5:7] == ["-", "ui"] and method == "POST" and INBOX_ITEM_UI:
         code, out = inbox_item_ui(parts[7], req)
         handler.send_json(out, code); return True
+    if volc_mock.ENABLED and len(parts) == 8 and parts[3] == "plugins" and parts[4] == volc_mock.EXT and parts[5:7] == ["-", "ui"] \
+            and method == "POST" and PLUGINS.get(volc_mock.EXT, {}).get("enabled"):
+        handler.send_json(volc_mock.page_post(PLUGINS[volc_mock.EXT], req)); return True
     if len(parts) == 8 and parts[3] == "plugins" and parts[5] == "-" and parts[6] == "ui" and method == "POST":
         if parts[4] != "example-gateway" or "example-gateway" not in PLUGINS:
             handler.send_json({"error": "no such plugin", "code": "not_found"}, 404); return True
@@ -24356,6 +24364,8 @@ def features():
 
 
 def _plugin_needs(pl):
+    if volc_mock.ENABLED and pl["id"] == volc_mock.EXT:
+        return volc_mock.view(pl, ASSISTANT_CONFIG)
     missing = ["密钥「%s」" % s["title"] for s in pl.get("secrets", []) if s.get("required") and not s.get("set")]
     if pl["enabled"] and pl["status"] in ("needs_setup", "running") and pl["source"] == "installed":
         pl["status"] = "needs_setup" if missing else "running"
@@ -24435,6 +24445,13 @@ def plugins_route(handler, p, body):
         elif pl["id"] in _EXTENSION_PACK_OFF:
             _EXTENSION_PACK_OFF.remove(pl["id"])
         _auto_upgrade_paused(pl)
+    elif volc_mock.ENABLED and pl["id"] == volc_mock.EXT and rest == ["config"] and method == "PUT":
+        volc_mock.config_put(pl, req.get("config") or {}, ASSISTANT_CONFIG)
+    elif volc_mock.ENABLED and pl["id"] == volc_mock.EXT and rest == ["secrets", "key"] and method == "PUT" and not req.get("reference"):
+        why = volc_mock.secret_put(pl, req.get("value") or "")
+        if why:
+            handler.send_json({"error": why, "code": "check_failed"}, 400)
+            return True
     elif rest == ["config"] and method == "PUT":
         cfg = req.get("config") or {}
         if pl["id"] == "example-gateway-quota":

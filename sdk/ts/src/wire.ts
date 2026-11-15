@@ -316,6 +316,7 @@ export interface Contributes {
   connectors?: ConnectorItem[];
   voice?: NamedItem[];
   transcription?: NamedItem[];
+  speech?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
   iphone?: NamedItem[];
@@ -624,7 +625,7 @@ export interface ConnectorItem {
 }
 
 /**
- * A contribution with only an id and a name: voice, transcription, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 export interface NamedItem {
   id: string;
