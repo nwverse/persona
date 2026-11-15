@@ -235,6 +235,12 @@ def check_release_manifest(assets):
         for program, platforms in (manifest.get(group) or {}).items():
             listed += [(program, plat, item) for plat, item in (platforms or {}).items()]
     listed += [("persona-link", plat, item) for plat, item in (manifest.get("links") or {}).items()]
+    # Helpers (persona-iphone-bridge) carry their own version, not the build number: only their bytes are checked.
+    helpers = set()
+    for program, platforms in (manifest.get("helpers") or {}).items():
+        for plat, item in (platforms or {}).items():
+            listed.append((program, plat, item))
+            helpers.add((program, plat))
     here, ran = host_platform(), False
     if not any(program == "personad" for program, _, _ in listed):
         raise ConfigError("latest.json lists no personad")
@@ -255,7 +261,7 @@ def check_release_manifest(assets):
             if inner != item.get("binary_sha256"):
                 raise ConfigError("%s does not unpack to the binary latest.json lists" % name)
             if run is None:
-                if not stamped:
+                if not stamped and (program, plat) not in helpers:
                     raise ConfigError("%s is not build %d: latest.json was written for another build than it" % (name, build))
                 continue
             run.chmod(0o755)
