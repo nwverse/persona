@@ -242,6 +242,7 @@ Outside the scale: composer 32 (`Shell.composerRadius`, `apple/Shared/Design/The
 - The conversation kept in view over the pending cards: `voiceThreadRoom` 44 in a voice call, `cardThreadRoom` 72 over a lone question card (section 4.8, #6277).
 - The Mac's pointer over its picture in the app's VNC: at least `pointer` 22 tall, about macOS's own size (`VNCPointerArt`, #3075).
 - Widths: `readable` 560 (web chat column 880, pages 760), sidebar 340/400/480, drawer `min(0.82 x width, 380)` (Android the same).
+- Android rich-message table columns: `RichTextTokens.tableColumnMinimum` 160 dp and `tableColumnMaximum` 220 dp include the cell padding and scale with the message's font size; they do not alter a table that fits the upstream renderer unchanged.
 - `cardColumn` 330 is the minimum logical column width of an adaptive machine card: iOS pt and Android dp, with the shared token's `px` representing each platform's design unit rather than a physical pixel. `spec/tokens/dimension.json` is the cross-platform record; Android reads the generated `Tokens.Size.cardColumn`.
 - Sidebar rows: `Theme.Sidebar` (`apple/Shared/Design/SidebarMetrics.swift`), 44 on iOS; 24/28/32 on Mac; web 32 (touch 44 via a hit-area expander).
 - Retired native Mac sizes: the former target had a Mac-only token file; that target and its tokens were removed.
@@ -350,6 +351,12 @@ the row's words ≥ 4.5:1, the white letter ≥ 3:1 on every hue.
 For every component: use the design-system one, not a lookalike. Counts are approximate uses at the snapshot. "Platforms" lists web and Android equivalents.
 
 ### 3.1 Composer
+
+The web model panel's current Codex row keeps the session's recorded thinking effort, independently of whether it can
+change the model. When only effort can change, tapping the row opens its existing setup flyout instead of presenting
+a grey, inert choice. Unsupported effort has a visible reason (offline, read-only, parent-controlled, terminal-only,
+or unsupported by the model); supported changes say they apply to the next turn. These details belong to the Agent's
+on-demand model panel, not the everyday Assistant home (#6887).
 
 - Use: the one message input for Assistant and Agents chats on iPhone, iPad and Mac.
 - Anatomy: collapsed line `[+] field [mic] [voice/stop]`; expanded card with the field on top and a row `[+] ... [model/effort] [mic] [send]`. Both shapes share one text field so focus and IME text survive the change, and one +, mic, voice and stop (`ComposerBoxLayout`, #7278): they sit at the box's bottom corners and move with it between the shapes, in the box's own motion, rather than one copy leaving as another arrives. Only what the card alone has (Hide Keyboard, model, send) fades in and out where it stands.
@@ -553,6 +560,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   `shadow-hairline`) over what comes next; a transparent bridge over the 4 px gap keeps the hover, and hidden it takes
   no clicks. Where it goes is measured when the pointer or the focus comes into the bubble's row, and only its classes
   change, so the button Tab reached keeps the focus (`docs/web/web.md`, "The hover bar beside your bubbles").
+- Android Markdown tables in chat and file previews (`ReadableMarkdownTable`): a table that fits the upstream renderer stays unchanged. In a wide one, short columns keep their natural width, long columns wrap between the font-scaled `RichTextTokens` minimum and maximum, and only the table scrolls sideways. Share pictures keep the unchanged static table.
 - Web Markdown tables in replies: a column is as narrow as its words. Headers never wrap and have no minimum width; a
   cell whose words fit one line in about 5.5em stays on one line with no minimum; only longer cells keep 7em, so a
   squeezed table never stacks a sentence a word per line. The copy button (hover or keyboard focus; always on a screen
