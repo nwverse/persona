@@ -84,9 +84,15 @@ func (c *Connector) ReplayMessages(ctx context.Context, chatID, start, end strin
 	sort.SliceStable(messages, func(i, j int) bool { return messageLess(messages[i], messages[j]) })
 	things := []connector.InboxThing{}
 	for _, group := range c.groupMessages(messages, auth, topics) {
-		group.pinned = true
-		if thing := c.thingForGroup(ctx, group, auth); thing.Thread != "" {
-			things = append(things, thing)
+		for _, message := range group.messages {
+			// Grouping determines eligibility; each selected message owns its activity and rules.
+			activity := *group
+			activity.messages, activity.latest, activity.pinned = []adapter.Message{message}, message, true
+			activity.addressed = mentionsBot(message, auth) || cardAddressesOwner(message, auth)
+			activity.mentioned = messageMentions(message, auth.OpenID) || activity.addressed
+			if thing := c.thingForGroup(ctx, &activity, auth); thing.Thread != "" {
+				things = append(things, thing)
+			}
 		}
 	}
 	return things, nil

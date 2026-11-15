@@ -102,6 +102,53 @@ func TestInboxReplayOrdinaryOwnerAndUnaddressedPeerDoNotEnter(t *testing.T) {
 	}
 }
 
+func TestInboxReplayKeepsEachSelectedActivityInSameConversation(t *testing.T) {
+	for _, tc := range []struct {
+		name, chatType, topic string
+	}{
+		{"direct chat", "p2p", ""},
+		{"known topic", "group", "omt_example_topic"},
+		{"mention followed by reply", "group", "omt_example_topic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := addressedMessage("om_example_first", "ou_example_peer", "Example Peer", `"First request"`, tc.topic, nil)
+			second := addressedMessage("om_example_second", "ou_example_other", "Example Other", `"Second request"`, tc.topic, nil)
+			unselected := addressedMessage("om_example_context", "ou_example_other", "Example Other", `"Context only"`, tc.topic, nil)
+			first.ChatType, second.ChatType, unselected.ChatType = tc.chatType, tc.chatType, tc.chatType
+			first.CreateTime, second.CreateTime, unselected.CreateTime = "2030-01-01T00:01:00Z", "2030-01-01T00:02:00Z", "2030-01-01T00:03:00Z"
+			if tc.name == "mention followed by reply" {
+				first.Mentions = []adapter.Mention{{ID: "cli_example"}}
+			}
+			c := addressedTestConnector(t, []adapter.Message{second, unselected, first}, []adapter.Message{first, second, unselected})
+			if tc.name == "known topic" {
+				c.inboxTopics = map[string]struct{}{tc.topic: {}}
+			}
+			items, err := c.ReplayMessages(context.Background(), first.ChatID, "2030-01-01T00:00:00Z",
+				"2030-01-01T00:05:00Z", []string{second.MessageID, first.MessageID})
+			if err != nil || len(items) != 2 {
+				t.Fatalf("selected activities were combined: items=%+v err=%v", items, err)
+			}
+			for i, want := range []adapter.Message{first, second} {
+				it := items[i]
+				if it.Last != want.MessageID || it.Sender != want.Sender.Name || it.Done != "" ||
+					!strings.Contains(it.Context, "Context only") {
+					t.Fatalf("activity lost its source or shared context: %+v", it)
+				}
+				wantTier := connector.Tier("")
+				if tc.name == "mention followed by reply" && i == 0 {
+					wantTier = connector.TierAction
+				}
+				if it.Tier != wantTier {
+					t.Fatalf("activity inherited another message's tier: %+v", it)
+				}
+			}
+			if items[0].Thread != items[1].Thread {
+				t.Fatalf("replay changed the source conversation: %+v", items)
+			}
+		})
+	}
+}
+
 func TestInboxReplayRejectsUnknownOrOutsideSourceTimestamp(t *testing.T) {
 	for _, at := range []string{"", "not a timestamp", "2029-12-31T23:59:00Z", "2030-01-01T00:05:00Z"} {
 		t.Run(at, func(t *testing.T) {

@@ -74,7 +74,8 @@ func (s *Service) settleConnector(ctx context.Context, id string) []*InboxItem {
 }
 
 // applyConnector turns a connector's things into items, under b.mu: one open item per thread gathers its later
-// moves until it is done; a move after that starts a new item; a thing that is over closes its open item.
+// moves until it is done; an exact-ID recovery retains its selected moves separately. A move after done starts
+// a new item; a thing that is over closes its open item.
 func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThing, now time.Time) []*InboxItem {
 	var changed, renamed []*InboxItem
 	scoped := b.batch != nil && b.batch.only != nil
@@ -88,14 +89,39 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			}
 		}
 	}
+	type move struct{ thread, last string }
+	var selected map[move]*InboxItem
+	if scoped {
+		selected = make(map[move]*InboxItem, len(things))
+		for _, t := range things {
+			selected[move{t.Thread, t.Last}] = nil
+		}
+		b.each(func(it *InboxItem) {
+			if it.Source == id && it.Connector != nil {
+				key := move{it.Connector.Thread, it.Last}
+				if prior, ok := selected[key]; ok && (prior == nil || newerItem(it, prior)) {
+					selected[key] = it
+				}
+			}
+		})
+	}
 	index := b.threads(func(it *InboxItem) (string, bool) {
 		if it.Source != id || it.Connector == nil {
 			return "", false
+		}
+		if _, ok := selected[move{it.Connector.Thread, it.Last}]; ok {
+			return "", false // another selected move must not absorb this activity, even on a retry
 		}
 		return it.Connector.Thread, true
 	})
 	for _, t := range things {
 		open, done := index.openFor(t.Thread)
+		if exact := selected[move{t.Thread, t.Last}]; exact != nil {
+			if exact.DoneAt != nil {
+				continue // recovery must not reopen an already handled selected activity
+			}
+			open, done = exact, nil
+		}
 		if scoped && open != nil && open.Last != t.Last && !t.At.After(open.UpdatedAt) {
 			continue // recovery cannot replace or retier another, newer or unordered move
 		}
