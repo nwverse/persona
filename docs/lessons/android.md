@@ -733,3 +733,9 @@ modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up
 inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
 the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
 `JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
+
+## A build value a library page needs, without threading it through the shell
+
+The pairing page lives in `feature:settings` but the build config (application id, OAuth scheme, the getting-started address) belongs to `:app`, and a library has no `BuildConfig` of its own. Pass such a value as a Gradle property into a manifest placeholder, carry it in a `<meta-data>`, and read it with `PackageManager.getApplicationInfo(..., GET_META_DATA)` in the library (`GettingStarted.kt`). Give the placeholder a marker default (`"unset"`) that the parser refuses, so a build without the value hides the feature instead of showing a dead link, and keep the value out of the code, docs and tests (tests inject a placeholder address through a parameter).
+
+A page shown before any shell exists (pairing, first run) is outside `ShellLinkHost`, so its links would leave the app through the system handler. Wrap it in `ChatLinkHost` so they open in the same in-app card as everywhere else.
