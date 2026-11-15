@@ -189,6 +189,10 @@ func TestAgentSendRescopeRestoresMainSupervision(t *testing.T) {
 	waitFor(t, "the original review message", func() bool { return len(f.noticesTo("conv1")) == 1 })
 	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{
 		"todo_id": todo.ID, "verdict": reviewAccepted, "note": "The original work is accepted",
+		"checks": []ReviewCheck{{
+			Criterion: "The investigation report is delivered", Met: true,
+			Evidence: "The investigation report is complete",
+		}},
 	}); err != nil {
 		t.Fatal(err)
 	}
