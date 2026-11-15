@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -1035,6 +1036,9 @@ func storelessService(t testing.TB, f *fakeHub) *Service {
 // newServiceOn is an assistant on f with st as its database.
 func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 	t.Helper()
+	if database, ok := st.(*db.DB); ok {
+		st = repositorystore.New(database)
+	}
 	return withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
 }
 
