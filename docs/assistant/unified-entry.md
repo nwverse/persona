@@ -813,17 +813,24 @@ the owner turns on by making a leader. Code: `server/internal/assistant/ask_rout
   the main chat). The 5 minutes do not count while the conversation holding the card is on a
   turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends. A
   conversation still on a turn an hour (`askBusyMax`) after the card came is counted as stuck instead, and the card
-  climbs all the same, so no card waits on a conversation for ever. With the hub's push tiering on (the
-  low-distraction switch, `docs/server/server.md`) a card never reaches the user on a timeout: past the last rung it
-  goes back to the task's supervisor once (the entry says so; the owner gets a held P1 notice for the briefing), then
-  stays with the last rung until it is answered or escalated; with the switch turned off it climbs on as before.
+  climbs all the same. These ordinary timing rules are unchanged for questions. A permission or plan also has one
+  absolute 15-minute deadline (`askOwnerOnlyDeadline`) from its first route: moving rungs and busy pauses never reset
+  it, and at the deadline it goes straight to the user even while its current supervisor is busy. If that supervisor
+  itself is `needs_you`, an owner-only card moves to the next rung (or to the user) on the existing 30-second routing
+  tick instead of staying behind another decision. Neither path answers the card for the user. With the hub's push
+  tiering on (the low-distraction switch, `docs/server/server.md`), a card that runs past its last rung before any
+  absolute deadline goes back to the task's supervisor once (the entry says so; the owner gets a held P1 notice for
+  the briefing), then stays with that supervisor until it is answered or escalated. This quiet hold can keep an
+  ordinary question from ever reaching the user on a timeout, and also applies to a permission or plan before its
+  deadline; it never extends the owner-only deadline or suppresses the `needs_you` release above. With the switch
+  turned off every card climbs on as before, still subject to the owner-only deadline.
   `ask_escalate` takes `why_owner` and `p0`: with the switch on only `irreversible`, `visible_to_others`,
   `only_owner_knows` or `p0` push, the rest go to the Needs you list and the briefing without a push, bot card or
   channel message.
 - **Limits**: the route lives on the pending card, not in the store. After a manager restart the card is back on the
   apps without a push (as every card is); its route is made again from the task's supervisor, so the supervisor can
   still answer it or escalate it. Whether the user was told of the card before the restart is not kept either, so a
-  restored approval (a permission or a plan) whose time is up is handed to the user and rings once, as any: no
+  restored approval (a permission or a plan) starts a fresh absolute 15-minute deadline from restoration; when its time is up it is handed to the user and rings once, as any: no
   conversation may answer it, so silence would leave the agent blocked with nobody told. A restored question whose
   time is up only goes back on the apps (it may have rung before), and its supervisor can still answer it. An approval
   stays the user's: its timeout neither approves it nor becomes a decision. The supervisor may answer a question the
