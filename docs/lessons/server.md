@@ -62,6 +62,25 @@ Go marshals a nil slice as `null`, so lifting the last blocked pattern stored no
 the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
 empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
 
+## Nothing on a handshake path may wait on system_profiler (2026-11-13, #6028)
+
+`sysmon.ReadSystem` ran `system_profiler SPHardwareDataType` for the Mac's model name, under a 10 s timeout, on the
+assumption that it takes half a second. On a Mac whose Activation Lock check does not answer (macOS 26.6.2) it prints
+"Timed out waiting for the Activation Lock Capable check" and returns after 10.2-11 s, using 0.2 s of CPU: it waits,
+so load does not explain it and a faster machine does not help. It was killed just before it answered, every time,
+and `node.info` paid the 10 s on each hub connection, since a resident node makes a new `Node` per connection and the
+hub shows the computer online only after `node.info`. Per-`Node` caches (`sync.Once` on the Node) start over with each
+connection: anything slow a handshake needs must be cached per process, or not be on the handshake at all.
+
+On Apple silicon the IORegistry's `product` entry has the same name in about 20 ms (`ioreg -p IODeviceTree -rd1 -n
+product`); system_profiler remains for Intel Macs, run in the background, and a read waits only a second for it.
+A per-process cache must not also keep a failure: the first version cached an empty result with `sync.Once`, so one
+system_profiler that failed or was cut off (a machine busy right after login) left the identifier until the node
+restarted, where the per-connection read had at least tried again. Keep only a found name; let a later read retry an
+empty one after a backoff (five minutes), so a Mac where it always fails does not run it on every connection. Its
+output, like ioreg's, holds serial numbers: read only the one line. Tests fake both commands (`newModelLookup` takes
+the runner) and use `synctest`; a node-level test puts hanging fakes first on `PATH`.
+
 ## A node binary's name does not prove its platform (2026-11-14, #7206)
 
 The local node package lookup trusted `personad-<os>-<arch>` and `persona-node-<os>-<arch>` filenames without reading the executable, so one misnamed Hub build could be sent to every node of that named platform. Check the Go build info before selecting a local or bundled candidate and ignore a mismatch, allowing the normal release lookup to supply the right build; do not run a cross-platform binary on the Hub. The install path needs its own failure boundary too: verify `.new` before renaming it over the active binary, through direct and nested SSH, and remove it when the check fails. A test that only checks an error message misses whether the old executable survived.
