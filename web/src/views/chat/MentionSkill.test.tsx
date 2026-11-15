@@ -7,9 +7,11 @@ import { getContexts, removeContext } from "../../lib/links";
 import { sendDraft } from "../../lib/drafts";
 import { parseQueued } from "../../lib/queue";
 import { restoreQueued } from "./QueueStrip";
+import { t } from "../../i18n";
 import { skillContext, skillDraft } from "../../lib/skill-mentions";
 import { Composer, type Outgoing } from "./Composer";
 import type { MentionSource } from "./ComposerPanel";
+import type { ComposerCommand } from "../../lib/extension-prompts";
 
 vi.hoisted(() => {
   window.matchMedia = ((query: string) => ({ matches: query === "(any-pointer: fine)", media: query, onchange: null,
@@ -26,7 +28,7 @@ let host: HTMLDivElement;
 let root: Root;
 const source: MentionSource = { files: () => [], skills: { manager: "helper-a", session: "chat", launcher: "codex", environment: "profile-a" } };
 const onSend = vi.fn(async (_m: Outgoing) => true);
-const render = (mention = source) => act(() => root.render(<Composer draftKey="skill-test" placeholder="" mention={mention} machineId="computer" onSend={onSend} />));
+const render = (mention = source, commands?: ComposerCommand[]) => act(() => root.render(<Composer draftKey="skill-test" placeholder="" mention={mention} machineId="computer" commands={commands} onSend={onSend} />));
 const box = () => host.querySelector("textarea")!;
 const options = () => [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
 const waitForOptions = (count: number) => vi.waitFor(async () => {
@@ -42,7 +44,10 @@ async function type(text: string) {
   });
 }
 const key = (k: string) => act(() => { box().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
-beforeAll(() => loadPages());
+beforeAll(async () => {
+  await loadPages();
+  await loadPages(); // the slash palette registers its skill-aware second stage while the first pass loads
+});
 beforeEach(() => {
   Element.prototype.scrollIntoView ??= () => {};
   localStorage.clear();
@@ -154,5 +159,165 @@ it("keeps existing file rows reachable beside a large skill catalog and searches
   await type("@review-49");
   expect(options()).toHaveLength(1);
   expect(options()[0].textContent).toContain("review-49");
+  expect(api).toHaveBeenCalledTimes(1);
+});
+
+const COMMANDS: ComposerCommand[] = [
+  { word: "/alpha", desc: "First command", text: "/alpha" },
+  { word: "/beta", desc: "Second command", text: "/beta" },
+];
+const focused = () => host.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
+
+it("lists matching skills after commands in the slash palette and reads the catalog only on opening", async () => {
+  render(source, COMMANDS);
+  expect(api).not.toHaveBeenCalled();
+  await type("/");
+  await waitForOptions(4);
+  expect(api).toHaveBeenCalledTimes(1);
+  expect(options().slice(0, 2).map((o) => o.textContent)).toEqual(["alpha", "beta"]);
+  expect(options()[2].textContent).toContain("Inspect security boundaries");
+  expect(options()[2].textContent).toContain("project · .");
+  expect(options()[3].textContent).toContain("Check wording");
+  expect(options()[3].textContent).toContain("user");
+});
+
+it("keeps the slash palette command-only where the chat has no skill source", async () => {
+  render({ files: () => [] }, COMMANDS);
+  await type("/");
+  await waitForOptions(2);
+  expect(options().map((o) => o.textContent)).toEqual(["alpha", "beta"]);
+  expect(api).not.toHaveBeenCalled();
+});
+
+it("ranks slash skills by exact, prefix, contained and description matches after every command", async () => {
+  api.mockImplementationOnce(async () => ({ catalog_version: 1, complete: true, skills: [
+    { id: "description", name: "audit", description: "Review the result", source: "project" },
+    { id: "contains", name: "preview", description: "", source: "project" },
+    { id: "prefix", name: "review-later", description: "", source: "project" },
+    { id: "exact", name: "review", description: "", source: "project" },
+  ] }));
+  render(source, COMMANDS);
+  await type("/review");
+  await waitForOptions(4);
+  expect(options().map((o) => o.textContent)).toEqual([
+    expect.stringContaining("review"),
+    expect.stringContaining("review-later"),
+    expect.stringContaining("preview"),
+    expect.stringContaining("audit"),
+  ]);
+});
+
+it("adds the exact skill reference by pointer, removes the slash token and preserves it in drafts and Edit", async () => {
+  render(source, COMMANDS);
+  await type("/wording");
+  await waitForOptions(1);
+  await act(async () => options()[0].click());
+  expect(box().value).toBe("");
+  expect(getContexts("skill-test")[0]).toMatchObject({ kind: "skill", title: "review", attrs: { ref: "b" } });
+  expect(box().value).not.toContain("review");
+  await type("Use this");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 280)); });
+  const draft = localStorage.getItem("draft:skill-test")!;
+  expect(draft).toContain('ref="b"');
+  expect(draft).not.toContain("@review");
+  act(() => sendDraft("skill-test", { type: "replace", text: draft }));
+  expect(box().value).toBe("Use this");
+  expect(getContexts("skill-test")[0].attrs?.ref).toBe("b");
+});
+
+it("selects a slash skill with the keyboard and retains its identity through retry and send history", async () => {
+  render(source, COMMANDS);
+  await type("/security");
+  await waitForOptions(1);
+  key("Enter");
+  expect(box().value).toBe("");
+  expect(getContexts("skill-test")[0].attrs?.ref).toBe("a");
+  await type("Check this");
+  onSend.mockImplementationOnce(async () => false);
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+  const attempted = onSend.mock.calls[0][0].text;
+  expect(attempted).toContain('kind="skill" title="review" url="" ref="a"');
+  expect(getContexts("skill-test")[0].attrs?.ref).toBe("a");
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+  expect(onSend.mock.calls[1][0].text).toBe(attempted);
+  key("ArrowUp");
+  expect(box().value).toBe("Check this");
+  expect(getContexts("skill-test")[0].attrs?.ref).toBe("a");
+});
+
+it("keeps commands and the highlighted row stable while the slash catalog loads, then keeps commands on failure", async () => {
+  let resolve!: (value: unknown) => void;
+  api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+  render(source, COMMANDS);
+  await type("/");
+  await waitForOptions(2);
+  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+  expect(host.textContent).toContain("正在读取");
+  key("ArrowDown");
+  expect(focused()?.textContent).toBe("beta");
+  await act(async () => resolve({ catalog_version: 1, complete: true, skills }));
+  await waitForOptions(4);
+  expect(focused()?.textContent).toBe("beta");
+  key("ArrowDown");
+  expect(focused()?.textContent).toContain("Inspect security boundaries");
+  key("ArrowUp");
+  expect(focused()?.textContent).toBe("beta");
+  act(() => options()[2].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+  expect(focused()?.textContent).toBe("beta"); // appearing under a resting pointer does not steal the row
+  act(() => options()[2].dispatchEvent(new MouseEvent("mousemove", { bubbles: true })));
+  expect(focused()?.textContent).toContain("Inspect security boundaries");
+  key("ArrowUp");
+  expect(focused()?.textContent).toBe("beta");
+
+  key("Escape");
+  await type("text");
+  api.mockImplementationOnce(async () => { throw new Error("unavailable"); });
+  await type("/");
+  await waitForOptions(2);
+  await vi.waitFor(() => expect(host.textContent).toContain("技能暂不可用"));
+  expect(options().map((o) => o.textContent)).toEqual(["alpha", "beta"]);
+});
+
+it("opens the slash palette for a Persona chat with no commands and restores a picked skill through queue pullback", async () => {
+  render(source, []);
+  await type("/wording");
+  await waitForOptions(1);
+  key("Tab");
+  expect(getContexts("skill-test")[0].attrs?.ref).toBe("b");
+  const raw = skillDraft(getContexts("skill-test"), "Queued words");
+  await act(async () => restoreQueued("skill-test", { machine_id: "computer", session_id: "chat" } as import("../../lib/types").Session, parseQueued(raw)));
+  expect(box().value).toBe("Queued words");
+  expect(getContexts("skill-test")[0].attrs?.ref).toBe("b");
+});
+
+it("names both commands and skills when an unavailable slash catalog has no matching rows", async () => {
+  api.mockImplementationOnce(async () => { throw new Error("unavailable"); });
+  render(source, []);
+  await type("/zzz");
+  await vi.waitFor(() => expect(host.textContent).toContain("技能暂不可用"));
+  expect(options()).toHaveLength(0);
+  expect(host.textContent).toContain(t("chat-slashpalette.no_match_skills"));
+});
+
+it("waits for the first skill answer before announcing an empty skills-only palette", async () => {
+  let resolve!: (value: unknown) => void;
+  api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+  render(source, []);
+  await type("/");
+  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+  expect(options()).toHaveLength(0);
+  expect(host.textContent).not.toContain(t("chat-slashpalette.no_match_skills"));
+  expect(host.querySelectorAll('[role="status"]')).toHaveLength(1);
+  expect(host.textContent).toContain("正在读取");
+  await act(async () => resolve({ catalog_version: 1, complete: true, skills }));
+  await waitForOptions(2);
+  expect(host.textContent).not.toContain(t("chat-slashpalette.no_match_skills"));
+});
+
+it("never lets a large skill catalog push commands out of the shared slash row cap", async () => {
+  render(source, Array.from({ length: 30 }, (_, i) => ({ word: `/command-${i}`, desc: "", text: `/command-${i}` })));
+  await type("/");
+  await waitForOptions(25);
+  expect(options().map((o) => o.textContent)).toEqual(Array.from({ length: 25 }, (_, i) => `command-${i}`));
   expect(api).toHaveBeenCalledTimes(1);
 });

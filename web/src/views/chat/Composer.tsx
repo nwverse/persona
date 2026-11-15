@@ -25,7 +25,7 @@ import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote
 import type { EditedImage } from "../../lib/image-edit";
 import { mentionAt, replaceToken, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
 import { machineWithHub } from "../../lib/mesh";
-import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
+import { skillContext, skillDraft, splitSkillDraft, type MentionSkill } from "../../lib/skill-mentions";
 import { getState } from "../../lib/store";
 import { AttachmentTray } from "../../ui/AttachmentTray";
 import { cx, EASE, Spinner, toast } from "../../ui/atoms";
@@ -34,6 +34,7 @@ import { ContextChips } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
+import type { SlashPaletteHandle } from "./SlashPalette";
 import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
@@ -50,8 +51,8 @@ const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.Com
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
-// The "/" palette (cindy's, #5325), drawn once "/" is typed: its own chunk too, fetched by the idle preload.
-const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette), { idle: true });
+// The "/" palette (cindy's, #5325), drawn once "/" is typed: its own chunk, with skill details on a second intent chunk.
+const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette));
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
 const NUDGE_MS = 4000;
 
@@ -215,6 +216,7 @@ export const Composer = memo(function Composer({
   // the + panel (#5324): open while its search box has the keys
   const [plusOpen, setPlusOpen] = useState(false);
   const panel = useRef<ComposerPanelHandle>(null);
+  const slashPanel = useRef<SlashPaletteHandle>(null);
   const [editing, setEditing] = useState<Attachment | null>(null);
   // Enter while blocked (#4480): a line says why nothing went, the button and the card light up; it fades after a while
   const [nudge, setNudge] = useState(0);
@@ -464,8 +466,8 @@ export const Composer = memo(function Composer({
   const query = dismissed ? null : parseSlash(draft);
   // A /loop draft gets a line under the box saying what it will do (only where the menu offers /loop: Claude agents).
   const loop = commands.some((c) => c.text === LOOP_TEXT) ? loopHint(draft) : null;
-  // the "/" palette is open on a lone "/word" wherever there are commands, "No matching commands" included (cindy's)
-  const slashOpen = query !== null && allCommands.length > 0;
+  // the "/" palette opens on a lone "/word" wherever there are commands or this chat can offer skills
+  const slashOpen = query !== null && (allCommands.length > 0 || Boolean(mention?.skills));
   const rows = useMemo(() => (slashOpen ? rankCommands(allCommands, query) : []), [slashOpen, query, allCommands]);
   useEffect(() => setActive(0), [query]);
   const closeSlash = useCallback(() => setDismissed(true), []);
@@ -780,6 +782,11 @@ export const Composer = memo(function Composer({
     setDismissed(true);
     input.current?.focus({ preventScroll: true });
   };
+  const pickSlashSkill = (skill: MentionSkill) => {
+    setDismissed(true);
+    // The lone /word is the same kind of token as @word: replace it with no text and keep the exact opaque reference.
+    pickRow({ kind: "skill", id: `skill:${skill.id}`, skill }, { start: 0, end: draft.length, query: query ?? "" });
+  };
 
   const MentionPanel = mention?.skills ? AssistantComposerPanel : ComposerPanel;
   return (
@@ -805,7 +812,7 @@ export const Composer = memo(function Composer({
     >
       {slashOpen && (
         <Suspense fallback={null}>
-          <SlashPalette rows={rows} active={Math.min(active, Math.max(rows.length - 1, 0))} onHover={setActive} onPick={pick} onClose={closeSlash} within={box} />
+          <SlashPalette rows={rows} active={active} onHover={setActive} onPick={pick} onClose={closeSlash} within={box} query={query ?? ""} source={mention} machineId={machineId} onSkillPick={pickSlashSkill} handle={slashPanel} />
         </Suspense>
       )}
 
@@ -953,6 +960,12 @@ export const Composer = memo(function Composer({
               }
             }
             if (slashOpen) {
+              // Once its lazy chunk is ready, the palette owns keys across both command and skill rows.
+              if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === "Tab") && slashPanel.current?.key(e.key)) {
+                e.preventDefault();
+                return;
+              }
+              // The command-only fallback keeps the keys working while that chunk is on its way.
               if ((e.key === "ArrowDown" || e.key === "ArrowUp") && rows.length) {
                 e.preventDefault();
                 setActive((a) => (a + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);
