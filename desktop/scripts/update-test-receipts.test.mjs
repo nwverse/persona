@@ -3,6 +3,7 @@ import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { finishUpdateTest, isNsisInstallAt, packagedUpdateConfigPath, readPackagedUpdateConfig, readUpdateTestEvents, watchForNsisInstall, watchUpdateTestEvents } from "./update-test-receipts.mjs";
 
 async function fixture(t) {
@@ -203,7 +204,7 @@ test("test-only instrumentation forwards the real updater's full restart argumen
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { value: "win32" });
   t.after(() => Object.defineProperty(process, "platform", platform));
-  await import(join(directory, "update-test/main.mjs"));
+  await import(pathToFileURL(join(directory, "update-test/main.mjs")).href);
   assert.equal(autoUpdater.install(true, true), "real updater return");
   assert.deepEqual(received, [[true, true]]);
   const receipt = (await readUpdateTestEvents(profile)).find(entry => entry.event === "nsis-install");
