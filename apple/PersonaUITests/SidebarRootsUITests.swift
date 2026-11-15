@@ -48,9 +48,10 @@ final class SidebarRootsUITests: XCTestCase {
         return last ?? Page(root: "", path: 0, transitions: 0, depth: 0)
     }
 
-    /// UIKit's own back button on the page in front.
+    /// UIKit's own back button on the page in front: in the navigation bar, or in the system's side bars (the open Duo on
+    /// its side).
     @MainActor private var systemBack: Bool {
-        app.navigationBars.buttons.matching(identifier: "BackButton").allElementsBoundByIndex.contains { $0.exists && $0.isHittable }
+        app.buttons.matching(identifier: "BackButton").allElementsBoundByIndex.contains { $0.exists && $0.isHittable }
     }
 
     /// The sidebar can be tapped: beside the page it always is; laid over the page (the open Duo upright) or in a phone's
@@ -59,7 +60,7 @@ final class SidebarRootsUITests: XCTestCase {
         if target.exists && target.isHittable { return }
         let systemToggle = app.buttons.matching(NSPredicate(format: "identifier == 'ToggleSidebar' OR label IN %@",
                                                             ["Show Sidebar", "显示边栏", "显示侧边栏"])).firstMatch
-        for opener in [element("assistant-sidebar-button"), element("sidebar-drawer-button"), element("chat-back"), systemToggle]
+        for opener in [element("assistant-sidebar-button"), element("sidebar-drawer-button"), element("chevron.left"), systemToggle]
         where opener.exists && opener.isHittable {
             opener.tap()
             if target.waitForExistence(timeout: 3), target.isHittable { return }
@@ -68,7 +69,8 @@ final class SidebarRootsUITests: XCTestCase {
         let window = app.windows.firstMatch
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)))
-        _ = target.waitForExistence(timeout: 3)
+        XCTAssertTrue(target.waitForExistence(timeout: 3) && target.isHittable,
+                      "the sidebar could not be brought out; the bar's buttons: \(app.navigationBars.buttons.debugDescription)\n\(app.debugDescription)")
     }
 
     /// Picks a sidebar row by its identifier, scrolling the column to it (and unfolding Pages if it is folded).
@@ -80,6 +82,8 @@ final class SidebarRootsUITests: XCTestCase {
             element("sidebar-fold-places").tap()
         }
         let column = element("unified-sidebar")
+        // Above or below where the column was left scrolled.
+        for _ in 0..<6 where !(target.exists && target.isHittable) { column.swipeDown(velocity: .fast) }
         for _ in 0..<8 where !(target.exists && target.isHittable) { column.swipeUp(velocity: .slow) }
         XCTAssertTrue(target.exists && target.isHittable, "\(step): \(id) not reachable in the sidebar:\n\(app.debugDescription)")
         target.tap()
