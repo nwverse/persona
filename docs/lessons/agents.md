@@ -1056,7 +1056,7 @@ while that is the running gateway. Several providers on one computer overwrite e
 wrong too: it removes the gateway's list from every `/model` the user opens. Read the gateway itself
 (`node/launcher_gateway_models.go`) and compare lists from several computers before concluding a list is clean.
 
-## A Claude session without Persona's hooks still asks with AskUserQuestion (#ISSUE)
+## A Claude session without Persona's hooks still asks with AskUserQuestion (#8515)
 
 The desktop app's sessions (and claude in other terminals) run no hook of Persona's, so their questions never became
 cards; the apps showed only a "reply to answer" line, and the questions and options were nowhere to be seen. The peer
