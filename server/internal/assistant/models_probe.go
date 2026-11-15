@@ -3,6 +3,7 @@ package assistant
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,6 +68,8 @@ func launchAuth(auth string) string {
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
 	base, key, headers, model, effort, proxy, noProxy, api, kind, via string
+	// agent is a stored provider's agent (AgentType), "" for one not stored.
+	agent string
 	// through sends the requests through via's node (models_via.go).
 	through http.RoundTripper
 	// auth is the credential header(s) the requests send (probeAuth*); send settles auto on the first request.
@@ -99,7 +102,8 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if err != nil {
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
-		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, effort: l.Effort, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine}
+		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, effort: l.Effort, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine,
+			agent: l.AgentType()}
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
@@ -628,7 +632,8 @@ func chatProbeCompleted(body io.Reader) bool {
 	return hasText && finished
 }
 
-// providerDiscover reads the provider's model-list endpoint, its models filled in from the catalog.
+// providerDiscover reads the provider's model-list endpoint and, when the gateway has one, its capability report
+// (applyCapabilities), its models filled in from the catalog.
 func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[string]any {
 	models := []proto.ProviderModel{}
 	enriched := func() []proto.ProviderModel {
@@ -763,6 +768,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		case meta.HasMore:
 			return fail(pt(i18n.From(ctx), "models_pagination"))
 		default:
+			models = t.applyCapabilities(ctx, models)
 			// no auth: a model list may answer without looking at the key, so only the test says what a launch needs
 			return map[string]any{"models": enriched()}
 		}
@@ -783,12 +789,14 @@ func mergeDiscoveredMetadata(first, next proto.ProviderModel) proto.ProviderMode
 	if first.ContextWindow == 0 {
 		first.ContextWindow = next.ContextWindow
 	}
-	return first
+	return mergeModelMeta(first, next)
 }
 
 // enrichDiscoveredModel prefers an exact catalog window and keeps the server's other metadata.
-// A window inherited from an earlier generation only fills a gap; a window the server reported wins.
+// A window inherited from an earlier generation only fills a gap; a window the server reported wins, and so do the
+// thinking levels it reported (settleDiscoveredEfforts), its output limit and what it takes.
 func enrichDiscoveredModel(m proto.ProviderModel) proto.ProviderModel {
+	m = settleDiscoveredEfforts(m)
 	if c, ok := catalogModel(m.ID); ok && c.InheritedFrom == "" && c.ContextWindow > 0 {
 		m.ContextWindow = c.ContextWindow
 	}
@@ -796,7 +804,9 @@ func enrichDiscoveredModel(m proto.ProviderModel) proto.ProviderModel {
 }
 
 // parseModelsList reads the three shapes of a model list (cindy's parseModelsListResponse): {"data":[…]},
-// {"models":[…]} and a bare array, of objects or of id strings; duplicates dropped, order kept.
+// {"models":[…]} and a bare array, of objects or of id strings; duplicates dropped, order kept, and entries the list
+// marks as no chat model left out. An object's other metadata is read in the gateway's own words (readModelMeta),
+// which enrichDiscoveredModel settles.
 func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 	var list []json.RawMessage
 	if json.Unmarshal(raw, &list) != nil {
@@ -826,37 +836,18 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			if json.Unmarshal(item, &fields) != nil {
 				continue
 			}
-			str := func(k string) string {
-				var s string
-				_ = json.Unmarshal(fields[k], &s)
-				return strings.TrimSpace(s)
-			}
-			num := func(k string) int {
-				var f float64
-				if json.Unmarshal(fields[k], &f) != nil || f <= 0 || f > 1e9 {
-					return 0
-				}
-				return int(f)
-			}
-			for _, k := range []string{"id", "slug", "key", "model_name", "model_id"} {
-				if id = str(k); id != "" {
-					break
-				}
-			}
+			id = cmp.Or(rawString(fields["id"]), rawString(fields["slug"]), rawString(fields["key"]), rawString(fields["model_name"]),
+				rawString(fields["model_id"]))
 			if id == "" {
 				continue
 			}
-			m.Name = str("display_name")
-			if m.Name == "" {
-				m.Name = str("name")
-			}
-			if m.Name == id {
+			if m.Name = cmp.Or(rawString(fields["display_name"]), rawString(fields["name"])); m.Name == id {
 				m.Name = ""
 			}
-			for _, k := range []string{"max_model_len", "context_length", "context_window", "max_context_length", "max_input_tokens"} {
-				if m.ContextWindow = num(k); m.ContextWindow != 0 {
-					break
-				}
+			m.ContextWindow = firstTokens(fields["max_model_len"], fields["context_length"], fields["context_window"],
+				fields["max_context_length"], fields["max_input_tokens"])
+			if !readModelMeta(fields, &m) {
+				continue
 			}
 		}
 		id = strings.TrimSpace(id)
