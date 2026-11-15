@@ -753,3 +753,29 @@ whole line first.
 The pairing page lives in `feature:settings` but the build config (application id, OAuth scheme, the getting-started address) belongs to `:app`, and a library has no `BuildConfig` of its own. Pass such a value as a Gradle property into a manifest placeholder, carry it in a `<meta-data>`, and read it with `PackageManager.getApplicationInfo(..., GET_META_DATA)` in the library (`GettingStarted.kt`). Give the placeholder a marker default (`"unset"`) that the parser refuses, so a build without the value hides the feature instead of showing a dead link, and keep the value out of the code, docs and tests (tests inject a placeholder address through a parameter).
 
 A page shown before any shell exists (pairing, first run) is outside `ShellLinkHost`, so its links would leave the app through the system handler. Wrap the page itself in `ChatLinkHost` (`PairingLinkHost` in `PairingScreen.kt`, only where the page has no shell around it) so they open in the same in-app card as everywhere else, without touching `Root.kt`. Read `LocalUriHandler.current` inside the host's content, never above it: a handler read in the page's own body is the activity's and the tap goes to the system browser. Wrap only when the page has a link to open: the host starts a WebView pool and warms the renderer as soon as it is composed.
+
+## A held list page: read its controls from the live page, let what needs the user through, and hold again
+
+The Agents list holds the page it drew while it scrolls (`AgentsFeedHold.kt`). Four things went wrong in the first version, and
+each is a rule for the next one:
+
+- Everything the screen derives to decide whether the hold still applies, and what the pill compares, must come from the page
+  the hub last sent. Taken from the drawn page, a tapped fold or a changed grouping would never release the hold, since the held
+  page still shows the old setting.
+- What needs the user (and what is offline) must not wait with the rest. Holding the whole page left a row saying Working
+  after it needed the user, and a pill is no substitute for a row that says so. `landCritical` gives those rows their state and
+  leaves the order and the rest of the page held; it is a copy of a few fields, not a second projection.
+- A release is not the end of the scroll. A release by the cap, a changed control or a fetched page, with the list still moving,
+  must hold again from the page that landed, or every later push lands under the finger until the next gesture. The
+  `isScrollInProgress` flow only reports a change, so the code that releases has to re-hold itself. The same goes for a scroll
+  the screen starts itself (the jump to the latest): it is not the user reading and holds nothing, and a user who takes the list
+  over mid-way gets a hold from that moment.
+- Which page is held must not be Compose state read where the page is drawn. A state read there composes the whole screen at the
+  start and end of every scroll, the moment the finger is most sensitive; keep it a plain field and bump one counter only when a
+  landing changes what is drawn.
+
+A paged list also needs its own exit: a fetched page appends rows that were never live, so it lands at once, but only when the old
+window is the start of the new one in the same order (`growsPage`); a session a push put in front is a live insertion. Write the
+release conditions as pure functions (`holdsAgainst`, `landCritical`) so each can be tested without a list. A restoration test must
+change the hub's data when the old screen is taken down (`DisposableEffect.onDispose`), not while it is alive, or the old screen
+saves the new place and the test passes on the wrong thing.
