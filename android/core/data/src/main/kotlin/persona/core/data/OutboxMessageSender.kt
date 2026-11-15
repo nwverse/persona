@@ -66,10 +66,37 @@ internal data class AuthoritativeMessageDelivery(
 internal object AuthoritativeMessageDeliveries {
     private val mutable = MutableSharedFlow<AuthoritativeMessageDelivery>(extraBufferCapacity = Int.MAX_VALUE)
     val events: SharedFlow<AuthoritativeMessageDelivery> = mutable
+    /** Unacknowledged hand-offs only: a same-process origin reopen need not wait for its disk replay. */
+    private val awaitingOrigin = LinkedHashMap<Pair<String, String>, AuthoritativeMessageDelivery>()
 
     /** Buffered so recording a hand-off can never hold up or change message delivery. */
     suspend fun publish(delivery: AuthoritativeMessageDelivery) {
-        mutable.emit(delivery)
+        val handOff = delivery.agentHandOff
+        val originCommitted = when {
+            handOff == null -> delivery.originCommitted
+            delivery.originCommitted -> true
+            else -> InboxReplyJournal.commitAgentHandOffDelivery(handOff, delivery.scope)
+        }
+        val committed = delivery.copy(originCommitted = originCommitted)
+        if (handOff != null) synchronized(awaitingOrigin) {
+            val key = handOff.scope to handOff.request.operationId
+            awaitingOrigin.remove(key)
+            awaitingOrigin[key] = committed
+            while (awaitingOrigin.size > 256) awaitingOrigin.remove(awaitingOrigin.keys.first())
+        }
+        mutable.emit(committed)
+    }
+
+    internal fun replay(scope: String): List<AuthoritativeMessageDelivery> = synchronized(awaitingOrigin) {
+        awaitingOrigin.filterKeys { it.first == scope }.values.toList()
+    }
+
+    internal fun acknowledge(delivery: AuthoritativeMessageDelivery) {
+        val handOff = delivery.agentHandOff ?: return
+        synchronized(awaitingOrigin) {
+            val key = handOff.scope to handOff.request.operationId
+            if (awaitingOrigin[key] === delivery) awaitingOrigin.remove(key)
+        }
     }
 }
 
@@ -109,6 +136,8 @@ class OutboxMessageSender(
     private val claimed = mutableSetOf<Pair<SessionKey, String>>()
     /** One process-local publication per client id; the repository's durable tombstone covers process recreation. */
     private val publishedDeliveries = mutableSetOf<String>()
+    /** A publication interrupted at an unknown store point is recovered by the origin, not blocked on that store again. */
+    private val interruptedDeliveries = mutableSetOf<String>()
     /** Whether a session is at work (connectActivity): its turn may write a delivered message only when it ends. */
     @Volatile private var busy: (SessionKey) -> Boolean = { false }
 
@@ -467,8 +496,10 @@ class OutboxMessageSender(
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
                 when (evidence) {
-                    MessageEvidence.Shown -> if (store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)) {
-                        publishAuthoritative(entry)
+                    MessageEvidence.Shown -> {
+                        val moved = store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)
+                        // Fresh validated evidence still counts when a restored row was already Shown.
+                        if (moved || entry.state == OutboxState.Shown) publishAuthoritative(entry)
                     }
                     is MessageEvidence.Receipt -> {
                         // A late success can settle manual review; an unknown receipt must keep that choice visible.
@@ -568,17 +599,32 @@ class OutboxMessageSender(
     private suspend fun publishAuthoritative(entry: OutboxEntry) {
         val first = synchronized(publishedDeliveries) { publishedDeliveries.add(entry.clientMessageId) }
         if (!first) return
-        var storeCommitted = false
-        val persisted = try {
-            store.persistAgentHandOffDelivery(entry).also { storeCommitted = true }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            // Recording metadata must never change an already authoritative message result.
-            entry.copy(agentHandOff = entry.agentHandOff?.copy(delivered = true))
+        val recovering = synchronized(interruptedDeliveries) { interruptedDeliveries.remove(entry.clientMessageId) }
+        var published = false
+        try {
+            var storeCommitted = false
+            val persisted = if (recovering) {
+                entry.copy(agentHandOff = entry.agentHandOff?.copy(delivered = true))
+            } else try {
+                store.persistAgentHandOffDelivery(entry).also { storeCommitted = true }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Recording metadata must never change an already authoritative message result.
+                entry.copy(agentHandOff = entry.agentHandOff?.copy(delivered = true))
+            }
+            val originCommitted = (storeCommitted || recovering) && store.agentHandOffOriginCommitted(persisted)
+            AuthoritativeMessageDeliveries.publish(persisted.delivery(originCommitted))
+            published = true
+        } finally {
+            // Cancellation or another publication failure must not consume the only later chance to recover.
+            if (!published) {
+                synchronized(publishedDeliveries) { publishedDeliveries.remove(entry.clientMessageId) }
+                if (entry.agentHandOff != null) synchronized(interruptedDeliveries) {
+                    interruptedDeliveries += entry.clientMessageId
+                }
+            }
         }
-        val originCommitted = storeCommitted && store.agentHandOffOriginCommitted(persisted)
-        AuthoritativeMessageDeliveries.publish(persisted.delivery(originCommitted))
     }
 
     private fun OutboxEntry.delivery(originCommitted: Boolean = true) = AuthoritativeMessageDelivery(

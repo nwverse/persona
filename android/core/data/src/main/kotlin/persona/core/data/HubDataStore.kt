@@ -280,11 +280,14 @@ class HubDataStore(
         check(job.isActive) { "Hub data store is closed" }
         check(!opened.containsKey(storage.path) && current?.scope != storage) { "Close the group before moving its data" }
         val file = File(context.filesDir, "hub-data/${storage.path}/data.db")
-        if (!file.exists()) return@withLock UnsentData(emptyList(), emptyList())
+        val replies = InboxReplyJournal(
+            File(context.noBackupFilesDir, "hub-data/${storage.path}/inbox-replies"), storage.path)
+        val handOffs = replies.read(storage.path).agentHandOffs
+        if (!file.exists()) return@withLock UnsentData(emptyList(), emptyList(), handOffs)
         val database = Room.databaseBuilder(context, PersistentDatabase::class.java, file.absolutePath).build()
         try {
             val dao = database.records()
-            unsentOf(dao.outbox(storage.path), dao.drafts(storage.path))
+            unsentOf(dao.outbox(storage.path), dao.drafts(storage.path), handOffs)
         } finally { database.close() }
     } }
 

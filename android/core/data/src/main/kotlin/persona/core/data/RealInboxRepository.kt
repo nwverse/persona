@@ -158,6 +158,7 @@ class RealInboxRepository(
                     if (transport != null) restore(transport)
                 }
                 if (transport != null) {
+                    replayBufferedAgentHandOffs(transport.scope)
                     sendLock.withLock {
                         val saved = journal.update(transport.scope) { document ->
                             var restored = document.copy(outbox = document.outbox.map {
@@ -687,9 +688,11 @@ class RealInboxRepository(
             )
             agentHandOffs[delivery.clientMessageId] = delivered
             // Only the originating inbox scope accepts outbox-carried metadata; the Agent may be on another hub group.
-            delivered.takeUnless { it.recorded }
+            delivered
         }
-        if (handOff != null) {
+        if (handOff == null) return
+        AuthoritativeMessageDeliveries.acknowledge(delivery)
+        if (!handOff.recorded) {
             if (!delivery.originCommitted) try {
                 // A cross-pairing target committed its outbox first. Commit the origin before its record can run.
                 journal.update(transport.scope) { saved ->
@@ -711,8 +714,14 @@ class RealInboxRepository(
         }
     }
 
+    private suspend fun replayBufferedAgentHandOffs(scope: String) {
+        AuthoritativeMessageDeliveries.replay(scope).forEach { agentHandOffDelivered(it) }
+    }
+
     /** Replay only durable authoritative evidence, never a restored Sent/Shown outbox state. */
     private suspend fun replayAgentHandOffs(transport: InboxAssistantTransport) {
+        replayBufferedAgentHandOffs(transport.scope)
+        journal.reconcileAgentHandOffDeliveries(transport.scope)
         val restored = journal.read(transport.scope).agentHandOffs
         val pending = agentHandOffLock.withLock {
             restored.forEach { handOff -> if (handOff.request.operationId !in agentHandOffs) {

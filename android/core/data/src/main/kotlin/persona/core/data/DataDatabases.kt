@@ -140,16 +140,19 @@ class RoomOutboxStore(
     override suspend fun enqueue(entry: OutboxEntry) = enqueueDraft(entry, null)
 
     override suspend fun enqueueDraft(entry: OutboxEntry, draft: DraftSnapshot?) {
-        val handOff = entry.agentHandOff
+        val handOff = entry.agentHandOff?.let { it.copy(deliveryScopes = it.deliveryScopes + scope.path) }
         if (handOff != null && handOff.scope != scope.path) {
             // The target journal restores the outbox metadata; the origin journal drives recording and crash replay.
             checkNotNull(kotlinx.coroutines.currentCoroutineContext()[InboxAgentHandOffContext]?.originPersisted) {
                 "Cross-pairing hand-off origin is not persisted"
             }.await()
+            check(InboxReplyJournal.linkAgentHandOffTarget(handOff, scope.path, journal)) {
+                "Cross-pairing hand-off origin is not linked"
+            }
         }
         if (handOff != null && journal != null) {
-            // The message's internal identity and item route are durable before the outbox row can be sent.
-            journal.update(scope.path) { it.enqueue(handOff) }
+            // The message's internal identity, item route and replay linkage are durable before the row can be sent.
+            journal.update(scope.path) { it.enqueue(handOff).linkAgentHandOffTarget(handOff.request.operationId, scope.path) }
         }
         database.withTransaction {
             require(draft == null || draft.scope == scope) { "Draft belongs to another pairing" }
@@ -179,16 +182,10 @@ class RoomOutboxStore(
 
     override suspend fun persistAgentHandOffDelivery(entry: OutboxEntry): OutboxEntry {
         val handOff = entry.agentHandOff ?: return entry
-        val delivered = entry.copy(agentHandOff = handOff.copy(delivered = true))
+        val delivered = entry.copy(agentHandOff = handOff.copy(
+            delivered = true, deliveryScopes = handOff.deliveryScopes + scope.path))
         if (journal != null) journal.update(scope.path) { saved ->
-            val current = saved.agentHandOffs.firstOrNull { it.request.operationId == handOff.request.operationId }
-            when {
-                current?.recorded == true -> saved
-                current != null -> saved.copy(agentHandOffs = saved.agentHandOffs.map {
-                    if (it.request.operationId == handOff.request.operationId) it.copy(delivered = true) else it
-                })
-                else -> saved.enqueue(checkNotNull(delivered.agentHandOff))
-            }
+            saved.commitAgentHandOffDelivery(checkNotNull(delivered.agentHandOff))
         }
         return delivered
     }

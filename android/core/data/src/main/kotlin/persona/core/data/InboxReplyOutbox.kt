@@ -47,6 +47,8 @@ internal data class InboxAgentHandOff(
     val manager: String? = null,
     val delivered: Boolean = false,
     val recorded: Boolean = false,
+    /** Target outbox journals which can independently prove delivery when the origin reopens. */
+    val deliveryScopes: Set<String> = emptySet(),
 ) {
     val session: SessionKey get() = SessionKey(checkNotNull(request.machineId), checkNotNull(request.sessionId))
 }
@@ -86,6 +88,50 @@ internal data class InboxReplyDocument(
         }
         // A caller retry keeps the original delivery and recording state.
         return if (previous == null) copy(agentHandOffs = agentHandOffs + handOff) else this
+    }
+
+    /** Persist the target's journal location before its outbox row can produce delivery evidence. */
+    fun linkAgentHandOffTarget(clientId: String, targetScope: String): InboxReplyDocument = copy(
+        agentHandOffs = agentHandOffs.map {
+            if (it.request.operationId == clientId) it.copy(deliveryScopes = it.deliveryScopes + targetScope) else it
+        },
+    )
+
+    /** Merge a moved journal entry without ever turning a delivery or completion tombstone back off. */
+    fun mergeAgentHandOff(handOff: InboxAgentHandOff): InboxReplyDocument {
+        val previous = agentHandOffs.firstOrNull { it.request.operationId == handOff.request.operationId }
+        require(previous == null || previous.scope == handOff.scope && previous.request == handOff.request &&
+            previous.hubItemId == handOff.hubItemId && previous.manager == handOff.manager) {
+            "Hand-off identifier is already in use"
+        }
+        if (previous == null) return copy(agentHandOffs = agentHandOffs + handOff)
+        val merged = previous.copy(
+            delivered = previous.delivered || handOff.delivered,
+            recorded = previous.recorded || handOff.recorded,
+            deliveryScopes = previous.deliveryScopes + handOff.deliveryScopes,
+        )
+        return copy(agentHandOffs = agentHandOffs.map {
+            if (it.request.operationId == handOff.request.operationId) merged else it
+        })
+    }
+
+    /** A target's authoritative evidence credits the origin without replacing its committed item route. */
+    fun commitAgentHandOffDelivery(handOff: InboxAgentHandOff): InboxReplyDocument {
+        val delivered = handOff.copy(delivered = true)
+        val previous = agentHandOffs.firstOrNull { it.request.operationId == delivered.request.operationId }
+        require(previous == null || previous.scope == delivered.scope && previous.request == delivered.request &&
+            previous.hubItemId == delivered.hubItemId && previous.manager == delivered.manager) {
+            "Hand-off identifier is already in use"
+        }
+        if (previous == null) return copy(agentHandOffs = agentHandOffs + delivered)
+        val merged = previous.copy(
+            delivered = true,
+            recorded = previous.recorded || delivered.recorded,
+            deliveryScopes = previous.deliveryScopes + delivered.deliveryScopes,
+        )
+        return copy(agentHandOffs = agentHandOffs.map {
+            if (it.request.operationId == delivered.request.operationId) merged else it
+        })
     }
 
     /** A failed local enqueue leaves no hand-off that later, unrelated evidence could release. */
