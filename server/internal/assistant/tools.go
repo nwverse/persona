@@ -501,7 +501,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := s.applyModel(ctx, "agent.new", run); err != nil {
 			return "", err
 		}
-		swapped, agent, err := s.fitLauncher(ctx, am, own, run)
+		swapped, fit, err := s.fitLauncher(ctx, am, own, run)
 		if err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
@@ -538,6 +538,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		var res struct {
 			Session proto.Session `json:"session"`
+			// What an engine that runs only its own launchers ran in place of what was asked (#8140).
+			Instead *proto.StartInstead `json:"instead"`
 		}
 		// The node builds the session and starts the agent before answering; a machine waking from sleep or a
 		// launcher cold start can take minutes. Like agent_send's resume branch, this wait is detached from the
@@ -565,11 +567,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Cwd = rehome(a.Cwd, am, alt)
 			params["cwd"], am = a.Cwd, alt
 			// The same launcher name may mean a different agent on the destination. Reuse its list before choosing permissions.
-			if _, agent, err = s.fitLauncher(ctx, am, own, params); err != nil {
+			if _, fit, err = s.fitLauncher(ctx, am, own, params); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
 		}
-		if agent == "claude" {
+		// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
+		if fit.allowAll() {
 			params["permission_mode"] = "bypassPermissions"
 		}
 		if note != "" {
@@ -627,7 +630,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// their own ids, so they keep the heuristic fallback (session_adopt.go). The id is generated once, so an
 		// ultracode refusal's retry still names the same session.
 		expectID := ""
-		if agent == "claude" {
+		if fit.agent == "claude" {
 			expectID = newStartSessionID()
 			params["session_id"] = expectID
 		}
@@ -678,7 +681,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return "", err
 		}
-		s.recordStartSuccess(ctx, am.ID, launcher)
+		s.recordStartSuccess(ctx, am.ID, ranLauncher(launcher, res.Instead, res.Session))
+		if said := s.startInsteadNote(ctx, am, res.Instead, res.Session); said != "" {
+			note += " Note: " + said + "." // the engine ran another of the same kind, its default model, a lower effort (#8140)
+		}
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
 		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
