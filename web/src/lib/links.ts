@@ -130,6 +130,14 @@ export function hubOrigins(endpoints: unknown): string[] {
 
 const pageOrigin = () => (typeof location !== "undefined" ? [location.origin, ...advertised] : advertised);
 
+/** Whether an image URL is this page's or an advertised hub's own (its attachments and extension images), so it loads
+ *  inline. Relative and non-http(s) URLs are the hub's too; every other host stays behind the tap-to-load gate. */
+export function isOwnImageURL(src: string): boolean {
+  const u = parse(src.trim());
+  if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return true;
+  return pageOrigin().includes(u.origin);
+}
+
 /** An agent, task or conversation page of the hub this page is served by (router.ts's /s/…, /todos, /persona/…, under the
  * sub-path the page is served at), or null. */
 function hubPage(u: URL, origin: string | string[], base: string): LinkRoute | null {
