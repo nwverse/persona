@@ -237,8 +237,7 @@ class PersonaOnlyTests(unittest.TestCase):
 
     def test_plists_have_unique_keys_and_exact_compatible_url_schemes(self):
         registered = set()
-        expected = {"Persona/Resources/Info.plist",
-                    "Vision/Resources/Info.plist", "PersonaLink/Info.plist", "PersonaWatch/Info.plist"}
+        expected = {"Persona/Resources/Info.plist", "Vision/Resources/Info.plist", "PersonaWatch/Info.plist"}
         for path in apple_files():
             if path.suffix not in {".plist", ".entitlements"}:
                 continue
@@ -341,7 +340,7 @@ class PersonaOnlyTests(unittest.TestCase):
         launch = source("PersonaUITests/UITestStyle.swift")
         self.assertEqual(len(re.findall(r"\bfunc launchPersona\(\)", launch)), 1)
         self.assertNotRegex(launch, r"func launchPersona\(\)\s*\{\s*launchPersona\(\)")
-        wire = source("Shared/Generated/ExtensionWire.swift")
+        wire = source("Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift")
         look = re.search(r"enum ExtensionBuiltinLook\s*\{([^}]+)\}", wire).group(1)
         names = re.findall(r"static let (\w+)\s*=", look)
         self.assertEqual(len(names), len(set(names)))
@@ -400,7 +399,7 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertIn('path: "Sources/PersonaScreen"', package)
         self.assertNotIn('path: "Sources/PersonaLink"', package)
         service = APPLE.parent / "server/cmd/persona-link/service_mac.go"
-        self.assertIn('"PERSONA_HOME"', service.read_text())
+        self.assertIn('<key>PERSONA_HOME</key>', service.read_text())
         route = source("Shared/HubPageLink.swift")
         self.assertIn('case "persona", LegacyNames.conversationPath:', route)
         for path in ["Shared/APIClient.swift", "Shared/ExtensionSystemLink.swift"]:
