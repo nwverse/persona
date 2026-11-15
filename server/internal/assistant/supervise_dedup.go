@@ -16,11 +16,18 @@ const superviseDedupKey = "assistant.supervision_dedup"
 const superviseDedupWindow = 30 * time.Minute
 
 type superviseFingerprint struct {
-	Hash string    `json:"hash"`
-	At   time.Time `json:"at"`
+	Hash      string    `json:"hash"`
+	At        time.Time `json:"at"`
+	Permanent bool      `json:"permanent,omitempty"`
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
+	if g.Kind == sigPRConflict {
+		// Keep every task/PR/head independently, including a head that returns after another one.
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
+		sum := sha256.Sum256(key)
+		return string(key), hex.EncodeToString(sum[:])
+	}
 	// State timestamps and elapsed minutes deliberately do not participate: a new
 	// turn or a periodic sweep is not new information when the last summary is unchanged.
 	parts := []string{g.Todo, g.Machine, e.Machine, g.Session, e.AgentID, g.Kind, g.Report}
@@ -72,7 +79,7 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 	previous := maps.Clone(history)
 	next := maps.Clone(history)
 	for key, seen := range next {
-		if now.Sub(seen.At) >= superviseDedupWindow {
+		if !seen.Permanent && now.Sub(seen.At) >= superviseDedupWindow {
 			delete(next, key)
 		}
 	}
@@ -80,10 +87,10 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 	var kept []superviseSignal
 	for i, entry := range entries {
 		key, hash := digestFingerprint(entry, signals[i])
-		if seen, ok := next[key]; ok && seen.Hash == hash && now.Sub(seen.At) < superviseDedupWindow {
+		if seen, ok := next[key]; ok && seen.Hash == hash && (seen.Permanent || now.Sub(seen.At) < superviseDedupWindow) {
 			continue
 		}
-		next[key] = superviseFingerprint{Hash: hash, At: now.UTC()}
+		next[key] = superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict}
 		out, kept = append(out, entry), append(kept, signals[i])
 	}
 	if len(out) == 0 {
