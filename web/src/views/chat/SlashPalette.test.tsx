@@ -45,8 +45,15 @@ const render = (rows: ComposerCommand[], active = 0) =>
 
 const options = () => [...host.querySelectorAll<HTMLButtonElement>("[role=option]")];
 
-/** Only useId's generated values differ between the two independently rendered views. */
-function markupWithoutGeneratedIds(palette: Element): string {
+// The ratchet keeps the split file on named utilities; each legacy/named pair is the same pixel size at the default root size.
+const FONT_CLASS_PARITY = new Map([
+  ["text-[14px]", "text-sm"],
+  ["text-[12px]", "text-xs"],
+  ["text-[13px]", "text-meta"],
+]);
+
+/** Normalize generated ids and exactly the three documented font-class pairs; every other difference remains visible. */
+function comparableMarkup(palette: Element): string {
   const copy = palette.cloneNode(true) as Element;
   const ids = new Map<string, string>();
   copy.querySelectorAll("[id]").forEach((node) => {
@@ -58,6 +65,11 @@ function markupWithoutGeneratedIds(palette: Element): string {
   copy.querySelectorAll("[aria-describedby]").forEach((node) => {
     const old = node.getAttribute("aria-describedby")!;
     node.setAttribute("aria-describedby", ids.get(old) ?? old);
+  });
+  copy.querySelectorAll("[class]").forEach((node) => {
+    for (const [legacy, named] of FONT_CLASS_PARITY) {
+      if (node.classList.contains(legacy)) node.classList.replace(legacy, named);
+    }
   });
   return copy.innerHTML;
 }
@@ -71,7 +83,7 @@ function expectCommandMarkupParity(rows: ComposerCommand[], active = 0) {
   ));
   const reference = host.querySelector("[data-reference] > [data-slash-palette]")!;
   const skill = host.querySelector("[data-skill] > [data-slash-palette]")!;
-  expect(markupWithoutGeneratedIds(skill)).toBe(markupWithoutGeneratedIds(reference));
+  expect(comparableMarkup(skill)).toBe(comparableMarkup(reference));
 }
 // the card beside the panel, or the line inside it
 const card = () => host.querySelector<HTMLElement>("[data-slash-card]");

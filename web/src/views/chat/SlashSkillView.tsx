@@ -168,23 +168,23 @@ export function SlashSkillView({ rows, entries = rows, active, onHover, onPick, 
                   key={c.key ?? c.word}
                   {...common}
                   className={cx(
-                    "relative flex h-9 w-full items-center justify-between gap-3 rounded-control px-2.5 text-left text-[14px] leading-[1.43] text-ink [@media(pointer:coarse)]:h-11",
+                    "relative flex h-9 w-full items-center justify-between gap-3 rounded-control px-2.5 text-left text-sm leading-[1.43] text-ink [@media(pointer:coarse)]:h-11",
                     i === current ? "font-medium" : "font-normal",
                   )}
                 >
                   <span className="min-w-0 truncate">{commandName(c)}</span>
-                  {c.source && <span className="max-w-[50%] shrink-0 truncate text-[12px] font-normal text-ink-3">{c.source}</span>}
+                  {c.source && <span className="max-w-[50%] shrink-0 truncate text-xs font-normal text-ink-3">{c.source}</span>}
                 </button>
               );
             })}
           </div>
         ) : status !== "loading" ? (
-          <div role="status" className="flex h-10 items-center justify-center text-[13px] text-ink-3">
+          <div role="status" className="flex h-10 items-center justify-center text-meta text-ink-3">
             {t(source?.skills ? "chat-slashpalette.no_match_skills" : "chat-slashpalette.no_match")}
           </div>
         ) : null}
         {place?.side === "inside" && focused && described(focused) && (
-          <div data-slash-card aria-hidden className="mt-1.5 shrink-0 border-t border-line px-2.5 pt-2 pb-1 text-[13px] leading-[1.5]">
+          <div data-slash-card aria-hidden className="mt-1.5 shrink-0 border-t border-line px-2.5 pt-2 pb-1 text-meta leading-[1.5]">
             <Description c={focused} />
           </div>
         )}
@@ -207,8 +207,8 @@ export function SlashSkillView({ rows, entries = rows, active, onHover, onPick, 
           className="absolute overflow-y-auto rounded-xl bg-surface p-3.5 shadow-overlay"
           style={{ width: CARD_W, left: place.side === "right" ? PANEL_W + GAP : -(GAP + CARD_W), top: place.top, maxHeight: place.maxHeight }}
         >
-          <div className="truncate text-[14px] font-medium text-ink">{commandName(focused)}</div>
-          <Description c={focused} className="mt-2 text-[13px] leading-[1.5]" />
+          <div className="truncate text-sm font-medium text-ink">{commandName(focused)}</div>
+          <Description c={focused} className="mt-2 text-meta leading-[1.5]" />
         </div>
       )}
     </div>
