@@ -68,6 +68,7 @@ func TestLarkProgramsAsWritten(t *testing.T) {
 		{"HOME set in the command", `HOME=/tmp/x; T=$HOME/tool; $T im +messages-send --text hi`, 1},
 		{"assignment in a pipe", `T=~/tools/a.py | true; $T im +messages-send`, 1},
 		{"last command of a pipe reads the variable", `T=~/tools/a.py; echo lark-cli | read T; $T im +messages-send`, 1},
+		{"dynamic command inside arithmetic", `n=$(( $($CMD) + 1 ))`, 1},
 		{"send inside arithmetic", `n=$(( $(lark-cli im +messages-send --text hi | wc -l) + 1 ))`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
