@@ -65,8 +65,9 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   assert.equal(node.hello.name, 'Paseo')
   assert.equal(node.hello.version, '0.14.0', "Paseo's version")
   assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, model: true,
-    models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true })
-  assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent]), [['my-claude', 'claude'], ['my-codex', 'codex'], ['grok', 'paseo']])
+    models: true, check: true, rewind: true, seen: true, workspaces: true, resume: true, readonly: true, same_kind: true })
+  assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent, l.prompt_optional]),
+    [['my-claude', 'claude', undefined], ['my-codex', 'codex', true], ['grok', 'paseo', undefined]])
   assert.deepEqual(node.hello.launchers[0].models, [{ id: 'fable[1m]', name: 'Fable', default: true, efforts: ['low', 'high', 'max'], default_effort: 'max' }])
   const byId = Object.fromEntries(rows().map((r) => [r.session_id, r]))
   assert.deepEqual(Object.keys(byId).sort(), [SID, 'paseo-e1', `paseo-${a.codex.id}`, `paseo-${a.grok.id}`].sort(), 'a Claude agent without a session yet is not listed')
@@ -709,10 +710,12 @@ test('a new session: an agent of the launcher\'s provider, with the form\'s choi
   assert.equal(res.session.session_id, `paseo-${req.agentId}`)
   assert.equal(req.labels['persona.session'], res.session.session_id)
   assert.equal(res.session.agent, 'claude')
+  assert.equal(res.instead, undefined, 'everything as asked: nothing to say')
   await until('listed', () => rows().some((r) => r.session_id === res.session.session_id))
-  // A launcher of the login shell's that Paseo does not have: Paseo's default provider.
-  await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'cc_gateway', shell_launcher: true })
+  // A launcher of the login shell's that Paseo does not have: Paseo's provider of the same kind, said on the answer.
+  const other = await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'cc_gateway', agent_type: 'claude' })
   assert.equal(fake.requestsOf('agent.create.request')[1].config.provider, 'my-claude')
+  assert.deepEqual([other.session.launcher, other.instead], ['my-claude', { launcher: 'cc_gateway' }])
   await assert.rejects(call(node, 'session.start', { cwd: '/nonexistent/dir', prompt: 'x' }), /没有这个目录/)
   fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: 'Provider unavailable' } })
   await assert.rejects(call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /Paseo 没能新建：Provider unavailable/)
@@ -793,29 +796,47 @@ test("Allow all stays on a row Paseo unloaded or read again after a restart: the
   assert.equal(mode(a.grok.id), undefined)
 })
 
-test('a resolved preset whose launcher Paseo lacks uses the replacement provider defaults', async (t) => {
+// #6192 had a launcher Paseo lacks start on Paseo's default provider (a Claude one) with that provider's own model and
+// effort: a Codex launcher started a Claude agent, a gateway ran on another account. The owner's rule since #8140: one
+// of the same kind, chosen by Persona and said, or a refusal.
+test('a launcher Paseo lacks starts on its provider of the same kind, said on the answer; none of that kind is refused, never another kind (#8140)', async (t) => {
   const { fake, node } = await setup(t, {
     providers: { ...PROVIDERS, codex: { enabled: false } },
     entries: [...ENTRIES, { provider: 'codex', enabled: false, status: 'unavailable', models: [] }],
   })
-  // The manager has already expanded task_plan/agent_start's tier before the node sends session.start. A managed
-  // launcher can pass its availability check even when the engine does not have a provider of the same name.
-  for (const params of [
-    { launcher: 'codex', shell_launcher: true },
-    { launcher: 'codex' },
-    { launcher: 'cc_gateway', shell_launcher: true },
-  ]) {
-    const res = await call(node, 'session.start', {
-      cwd: '/tmp', prompt: 'Check the project', model: 'preset-only-model', effort: 'high',
-      permission_mode: 'acceptEdits', workspace_id: 'wks_1', ...params,
-    })
-    const req = fake.requestsOf('agent.create.request').at(-1)
-    assert.deepEqual(req.config, { provider: 'my-claude', cwd: '/tmp', modeId: 'acceptEdits' })
-    assert.equal(req.initialPrompt, 'Check the project')
-    assert.equal(req.workspaceId, 'wks_1')
-    assert.equal(res.session.launcher, 'my-claude')
-    assert.notEqual(res.session.model, 'preset-only-model')
+  // The manager has expanded a task's or agent_start's tier before the node sends session.start; the node names the
+  // kind of agent the launcher starts (agent_type).
+  const start = (params) => call(node, 'session.start', { cwd: '/tmp', prompt: 'Check the project', permission_mode: 'acceptEdits', workspace_id: 'wks_1', ...params })
+  const created = () => fake.requestsOf('agent.create.request').at(-1)
+  // A Codex launcher (a preset's, a managed one, the login shell's): Paseo's Codex provider, never its Claude default.
+  // The preset's model is the launcher's own, which my-codex does not offer: it runs its default, and the answer says so.
+  let res = await start({ launcher: 'codex', agent_type: 'codex', model: 'preset-only-model', effort: 'high' })
+  assert.deepEqual(created().config, { provider: 'my-codex', cwd: '/tmp', thinkingOptionId: 'high' })
+  assert.equal(created().initialPrompt, 'Check the project')
+  assert.equal(created().workspaceId, 'wks_1')
+  assert.deepEqual([res.session.launcher, res.session.agent, res.session.model], ['my-codex', 'codex', undefined])
+  assert.deepEqual(res.instead, { launcher: 'codex', model: 'preset-only-model' })
+  // Paseo's own provider of that name, switched off: its kind, with no word from the node.
+  res = await start({ launcher: 'codex' })
+  assert.equal(created().config.provider, 'my-codex')
+  assert.deepEqual(res.instead, { launcher: 'codex' })
+  // A Claude Code gateway of the login shell's: Paseo's Claude Code provider, keeping the model it offers too.
+  res = await start({ launcher: 'cc_gateway', agent_type: 'claude', model: 'fable[1m]', effort: 'high' })
+  assert.deepEqual(created().config, { provider: 'my-claude', cwd: '/tmp', model: 'fable[1m]', modeId: 'acceptEdits', thinkingOptionId: 'high' })
+  assert.deepEqual(res.instead, { launcher: 'cc_gateway' })
+  // With no word from the node (one older than #8140), the name says the kind as the node reads it: another name is
+  // Claude Code's.
+  res = await start({ launcher: 'cc_other' })
+  assert.equal(created().config.provider, 'my-claude')
+  assert.deepEqual(res.instead, { launcher: 'cc_other' })
+  // A kind none of Paseo's providers runs: refused, nothing created; Paseo's catch-all agent names no kind at all.
+  const before = fake.requestsOf('agent.create.request').length
+  for (const [launcher, agentType] of [['traex', 'traex'], ['traex', undefined], ['gone-acp', 'paseo']]) {
+    const err = await start({ launcher, agent_type: agentType }).catch((e) => e)
+    assert.equal(err.code, 'launcher_kind_missing', launcher)
+    assert.match(err.message, new RegExp(`no provider ${launcher}.*nothing was started`), launcher)
   }
+  assert.equal(fake.requestsOf('agent.create.request').length, before)
 })
 
 test('an unchanged or unspecified launcher keeps the requested model and effort', async (t) => {
@@ -828,16 +849,39 @@ test('an unchanged or unspecified launcher keeps the requested model and effort'
   }
 })
 
-test('launcher fallback to a non-Claude provider also drops the replaced model and effort', async (t) => {
-  const { fake, node } = await setup(t, {
-    entries: ENTRIES.map((e) => e.provider === 'my-claude' ? { ...e, status: 'error' } : e),
-  })
-  await call(node, 'session.start', {
-    cwd: '/tmp', prompt: 'x', launcher: 'my-claude', model: 'fable[1m]', effort: 'high', permission_mode: 'bypassPermissions',
-  })
-  assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, {
-    provider: 'my-codex', cwd: '/tmp', modeId: 'full-access',
-  })
+test('a provider in error is replaced only by one of its own kind; with none, the start is refused rather than run on another kind (#8140)', async (t) => {
+  const failing = (entries) => entries.map((e) => e.provider === 'my-claude' ? { ...e, status: 'error' } : e)
+  const { fake, node } = await setup(t, { entries: failing(ENTRIES) })
+  const params = { cwd: '/tmp', prompt: 'x', launcher: 'my-claude', agent_type: 'claude', model: 'fable[1m]', effort: 'high', permission_mode: 'bypassPermissions' }
+  const err = await call(node, 'session.start', params).catch((e) => e)
+  assert.equal(err.code, 'launcher_kind_missing')
+  assert.match(err.message, /my-claude cannot start agents now \(error\)/)
+  assert.equal(fake.requestsOf('agent.create.request').length, 0, 'never my-codex in its place')
+
+  // Another Claude Code provider there: it stands in, said on the answer.
+  const backup = { provider: 'backup-claude', enabled: true, status: 'ready', models: [{ id: 'fable[1m]', isDefault: true, thinkingOptions: [{ id: 'high' }] }] }
+  const second = await setup(t, { providers: { ...PROVIDERS, 'backup-claude': { extends: 'claude' } }, entries: [...failing(ENTRIES), backup] })
+  const res = await call(second.node, 'session.start', params)
+  assert.deepEqual(second.fake.requestsOf('agent.create.request').at(-1).config,
+    { provider: 'backup-claude', cwd: '/tmp', model: 'fable[1m]', modeId: 'bypassPermissions', thinkingOptionId: 'high' })
+  assert.deepEqual(res.instead, { launcher: 'my-claude' })
+})
+
+test("an effort the model does not offer goes down to the nearest lower one it offers; the answer says so and the row runs at it (#8140)", async (t) => {
+  const { fake, node, rows } = await setup(t)
+  const start = (params) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude', ...params })
+  const created = () => fake.requestsOf('agent.create.request').at(-1).config
+  // fable[1m], my-claude's default model, offers low, high and max.
+  let res = await start({ effort: 'xhigh' })
+  assert.deepEqual([created().thinkingOptionId, res.session.effort, res.instead], ['high', 'high', { effort: 'xhigh' }])
+  await until('listed at the effort it runs at', () => rows().find((r) => r.session_id === res.session.session_id)?.effort === 'high')
+  res = await start({ effort: 'medium', model: 'fable[1m]' })
+  assert.deepEqual([created().thinkingOptionId, res.instead], ['low', { effort: 'medium' }])
+  res = await start({ effort: 'max' })
+  assert.deepEqual([created().thinkingOptionId, res.instead], ['max', undefined])
+  // A model whose efforts Paseo has not listed: as asked.
+  res = await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-codex', effort: 'xhigh' })
+  assert.deepEqual([created().thinkingOptionId, res.instead], ['xhigh', undefined])
 })
 
 test('a read-only (plan) start: Paseo\'s plan mode on a Claude provider, never a writable fallback (#3238)', async (t) => {
@@ -845,13 +889,16 @@ test('a read-only (plan) start: Paseo\'s plan mode on a Claude provider, never a
   const plan = (params) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', permission_mode: 'plan', ...params })
   await plan({ launcher: 'my-claude' })
   assert.equal(fake.requestsOf('agent.create.request').at(-1).config.modeId, 'plan')
-  // A launcher Paseo does not have, or none: a Claude provider in plan mode, not just the default one.
-  await plan({ launcher: 'cc_gateway', shell_launcher: true, model: 'preset-only-model', effort: 'high' })
-  assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, { provider: 'my-claude', cwd: '/tmp', modeId: 'plan' })
+  // A Claude Code launcher Paseo does not have: its Claude provider in plan mode, without the model it does not offer.
+  const stood = await plan({ launcher: 'cc_gateway', agent_type: 'claude', model: 'preset-only-model', effort: 'high' })
+  assert.deepEqual(fake.requestsOf('agent.create.request').at(-1).config, { provider: 'my-claude', cwd: '/tmp', modeId: 'plan', thinkingOptionId: 'high' })
+  assert.deepEqual(stood.instead, { launcher: 'cc_gateway', model: 'preset-only-model' })
   const before = fake.requestsOf('agent.create.request').length
-  for (const launcher of ['my-codex', 'grok']) {
-    const err = await plan({ launcher }).catch((e) => e)
-    assert.equal(err.code, 'readonly_unsupported', launcher)
+  // A non-Claude provider, or a Codex launcher Paseo lacks (its Codex provider holds no plan mode): refused, never a
+  // writable stand-in.
+  for (const params of [{ launcher: 'my-codex' }, { launcher: 'grok' }, { launcher: 'codex', agent_type: 'codex' }]) {
+    const err = await plan(params).catch((e) => e)
+    assert.equal(err.code, 'readonly_unsupported', params.launcher)
   }
   assert.equal(fake.requestsOf('agent.create.request').length, before, 'refused before anything was created')
   // Paseo starting it in another mode after all: archived, and refused.
@@ -1232,6 +1279,85 @@ test('continuing a session an archived agent keeps: Paseo imports it into that a
   const again = await call(node, 'session.start', { cwd: '/tmp', resume: 'paseo-e1' })
   assert.equal(again.session.session_id, 'paseo-e1')
   assert.equal(fake.requestsOf('import_agent_request').length, 1)
+})
+
+// Another Claude provider of the machine's, whose agents are not the latest: a takeover by "the latest" picks another.
+const OLD_CLAUDE = {
+  providers: { ...PROVIDERS, 'old-claude': { extends: 'claude', label: 'Old Claude' } },
+  entries: [...ENTRIES, { provider: 'old-claude', enabled: true, status: 'ready', label: 'Old Claude', models: [] }],
+}
+
+test("continuing the Claude session of an archived agent named to the node: Paseo imports it into that agent, with its own provider and folder (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000a1'
+  const day = 86_400_000
+  // Started in Paseo's app on a provider other than the machine's latest, listed under its Claude session, archived.
+  const old = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'closed',
+    archivedAt: new Date(Date.now() - day).toISOString(), updatedAt: new Date(Date.now() - day).toISOString(),
+    persistence: { provider: 'old-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: old, project: PROJECT }] })
+  const pushed = () => node.last('runtime.sessions')
+  await until('named to the node', () => pushed().unlisted_transcripts?.includes(T))
+  const res = await call(node, 'session.start', { cwd: '/nowhere', resume: T })
+  const imp = fake.requestsOf('import_agent_request').at(-1)
+  assert.deepEqual([imp.provider, imp.sessionId, imp.cwd, imp.labels['persona.session']], ['old-claude', T, '/tmp', T],
+    "its own provider and directory: Paseo's record of it")
+  assert.equal(res.session.session_id, T)
+  assert.deepEqual([fake.agents.get(old.id).agent.archivedAt, fake.agents.size], [null, 6], 'the same agent, back: no second one')
+  await until('listed again', () => rows().some((r) => r.session_id === T))
+  await until('named no more', () => !pushed().unlisted_transcripts?.includes(T))
+})
+
+test("two agents on one Claude session are one conversation: under the older one's id, the newer one gets the messages, unless the older one is at work (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000b1'
+  const ago = (ms) => new Date(Date.now() - ms).toISOString()
+  const claudeOn = (provider) => ({ provider, sessionId: T, metadata: { provider: 'claude' } })
+  // Started from Persona on one provider, then moved by Paseo to another: a new agent on the same Claude session.
+  const older = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(3_600_000),
+    updatedAt: ago(1_800_000), labels: { 'persona.session': 'paseo-b1' }, persistence: claudeOn('my-claude') })
+  const newer = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(600_000),
+    updatedAt: ago(600_000), persistence: claudeOn('old-claude') })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: older, project: PROJECT }, { agent: newer, project: PROJECT }] })
+  const ours = () => rows().filter((r) => r.session_id === 'paseo-b1' || r.session_id === T)
+  await until('listed', () => ours().length > 0)
+  assert.deepEqual(ours().map((r) => [r.session_id, r.launcher]), [['paseo-b1', 'old-claude']], "one row, under the id Persona knows it by: the newer agent's")
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'go on' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id, 'to the newer agent')
+
+  // The older one at work (its turn was still going in Paseo's app): the message goes to it, no second writer starts.
+  fake.update(older.id, { status: 'running' })
+  await until('the one at work', () => ours()[0]?.launcher === 'my-claude')
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'and the tests' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, older.id)
+  fake.update(older.id, { status: 'idle' })
+  await until('the newer one again', () => ours()[0]?.launcher === 'old-claude')
+
+  // Both archived: one row, not running, under the same id; a message takes the newer one back from the archive.
+  fake.archive(older.id)
+  fake.archive(newer.id)
+  await until('archived', () => ours().length === 1 && ours()[0].status === 'offline')
+  assert.deepEqual(ours().map((r) => [r.session_id, r.launcher]), [['paseo-b1', 'old-claude']])
+  assert.equal(node.last('runtime.sessions').unlisted_transcripts?.includes(T), false, 'its transcript is no second row')
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'once more' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id)
+})
+
+test("an agent on the Claude session of an older one archived before the bridge started takes that one's id once Paseo's archive is read (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000c1'
+  const ago = (ms) => new Date(Date.now() - ms).toISOString()
+  const older = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'Fix the build', status: 'closed', createdAt: ago(7_200_000),
+    archivedAt: ago(3_600_000), updatedAt: ago(3_600_000), labels: { 'persona.session': 'paseo-c1' },
+    persistence: { provider: 'my-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const newer = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(1_800_000),
+    updatedAt: ago(1_800_000), persistence: { provider: 'old-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: older, project: PROJECT }, { agent: newer, project: PROJECT }] })
+  await until('listed under the older id', () => rows().some((r) => r.session_id === 'paseo-c1'))
+  assert.equal(rows().some((r) => r.session_id === T), false, 'no row under the Claude session')
+  assert.equal(rows().find((r) => r.session_id === 'paseo-c1').status, 'idle', "the newer agent's row, not the archived one's")
+  await call(node, 'session.send', { session_id: 'paseo-c1', text: 'go on' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id)
 })
 
 test("Paseo's archive at connect: archived agents that keep their id are rows, the latest of the week beside the list's limit; the agents Paseo lists come first; a deleted one leaves", async (t) => {

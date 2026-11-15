@@ -68,6 +68,15 @@ and keep that id (`caps.resume`, for runtimes acting as the engine to continue "
 `workspace_id`); see `docs/protocol/protocol.md` ("Runtime ↔ node"). `readonly: true` (`caps.readonly`): a `start` with `permission_mode: "plan"` (an ordinary
 plan-mode start, or a read-only task on a non-Claude runtime, #3238) runs in a read-only mode before its first prompt, or throws `readonly_unsupported` — never falling back to a writable
 provider, and a takeover that cannot set the mode refuses too. Without it the node refuses plan starts for the runtime itself. Claude task dispatches use `bypassPermissions` and do not require this capability.
+A launcher entry may carry `prompt_optional: true`: a Codex one the runtime starts with no first message too, so the apps do not ask for one.
+`sameKind: true` (`caps.same_kind`, #8140, Paseo): its starts run only its own launchers. A `start` naming a launcher it does not have carries
+`agent_type`, the kind of agent that launcher starts (`claude`, `codex`…): the runtime starts one of its own launchers of that kind, or throws
+`launcher_kind_missing`, never another kind of agent nor a default of its own. Whatever the start asked for that it does not run with (that
+launcher, a model its stand-in does not offer, an effort the model does not offer, lowered to the nearest it does) its answer says as
+`instead: {launcher?, model?, effort?}`, the row saying what it runs with; the node passes it on, and the hub and the manager tell the user.
+Where such a runtime is the machine's engine, its launchers are then all the new-session form lists for a start there (`launchers.list` with
+that host), and a name it shares with a launcher of the login shell or of Persona is its own there (`docs/integrations/paseo.md` "A launcher
+Paseo does not have"). Without it, a launcher it does not have reaches it as `shell_launcher` (it picks its own of that name, or its default).
 
 Call the SDK when things happen:
 
@@ -162,7 +171,7 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
 - If the runtime runs an Agent the App knows (say, a platform running Claude Code), set `agent` to that (`claude`) and the App displays it accordingly; otherwise leave it unset.
 - A runtime id can be used by only one process per machine: to run the same program twice on one machine (two DSH profiles), make the id, `name` and `launcher` configurable;
   node rejects a second process with the same id (`runtime_conflict`). If a runtime changes its id but still runs the same kind of Agent, set `agent` to that Agent (a renamed DSH sets `dsh`), and session rows carry `agent_label`.
-- Session ids are unique on the machine, at most 128 characters, and can't be paths. `launcher` names shouldn't clash with launchers in `~/.zshrc` (on a clash the shell's wins and the runtime's isn't listed);
+- Session ids are unique on the machine, at most 128 characters, and can't be paths. `launcher` names shouldn't clash with launchers in `~/.zshrc` (on a clash the shell's wins and the runtime's isn't listed, except where every start goes to the runtime as an engine with `caps.same_kind`: there its own wins);
   if two runtimes' launchers clash, only the one that connected first provides it.
 
 ## Minimal example
@@ -205,17 +214,24 @@ that say `sdk-cli`, like a script's one-shot `claude -p` run, and node leaves th
 Once it stops listing it (archived in the runtime), only the transcript is left and nothing in it says whose it was. So the runtime names them: `unlistedTranscripts()` returns
 their Claude session ids, the SDK sends them with every list (`unlisted_transcripts` beside `sessions`, the feature `unlisted_transcripts`), and node lists those transcripts as
 sessions not running, under the usual limits (7 days, the 80 newest). Name only the user's own sessions: not the ones another session started, not ones the user deleted. At
-most 2000 count, the last ones named; a transcript that a row also names is that row. A message to one starts it in the engine again (`start({resume})`).
+most 2000 count, the last ones named; a transcript that a row also names is that row. A named transcript is node's from then on, even when the runtime listed it before under
+that id: node reads its content, and a message to it starts it in the engine again (`start({resume})`), never a call to the runtime about a session it no longer has (#8131).
 
 - An empty list says there are none. While the runtime cannot say (it was just started and has not read its archive), `unlistedTranscripts()` returns nothing, the SDK leaves
   the field out, and node keeps what the runtime named before. If the method throws, the list still goes out, with the ones named last.
-- Node keeps them for ten minutes after the runtime disconnects, so a runtime that restarts does not take its archived sessions off the list and bring them back. One that
-  stays away takes them with it, as it takes the sessions it lists.
+- After the runtime disconnects, node keeps them for as long as its list of sessions not running goes back (7 days), and with them the runtime's rows that name a transcript
+  here (#8131): those stay listed under their ids, not running, read from their transcripts, with no controls but reading and sending, until the runtime lists again. A
+  message, a rename or closing one is refused as `runtime_away`, nothing sent. So a runtime that restarts does not take its sessions off the list and bring them back, and
+  one that stays away (its program stopped, the computer moved to another engine) leaves its Claude conversations readable meanwhile. Rows that name no transcript here
+  leave with it. Node remembers none of this across its own restart.
 - Name only a session whose id is its transcript's. Node lists a named transcript under the transcript's id, so a session the runtime lists under an id of its own (a session
   Persona started before Claude Code had a session id, as Paseo's `paseo-<agent id>`) would come back under another id once archived, and everything Persona keeps under
   its id (a to-do's link, a pin, an archive mark, its read state) would be left behind (#4771). Keep listing such a session yourself instead: an `offline` row under the same
   id, with `transcript`, bounded like node's own list (Paseo: the latest 80 of the last 7 days, beside its other rows). Node reads its content from the transcript and lists
   no second row for it, as for any row naming a transcript, so this needs nothing new from node. A message to it reaches the runtime, which continues it under that id.
+- A row under an id of its own also names, for the manager, the other ids its conversation went by: node puts the transcript and the sessions it was forked from (each
+  transcript's first record names its source in `forkedFrom`) in the row's `aliases`, lists none of them beside it, and the manager shows no archive record under one
+  (`docs/protocol/protocol.md` "Agent session archives", #8131).
 
 ## Runtimes that run Codex (optional)
 
