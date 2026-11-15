@@ -582,6 +582,53 @@ func (e offlineError) Error() string        { return e.msg.Error() }
 func (e offlineError) Unwrap() error        { return e.msg }
 func (e offlineError) Is(target error) bool { return target == errMachineOffline }
 
+// currentPlanAssignment resolves the execution binding, which is not the to-do's historical PlanID after a same-to-do
+// continuation. Keep the ordinary direct lookup cheap. Only when that binding was retired, look for a unique exact
+// TodoID in started plans owned by the to-do's conversation or current supervisor; guessing or merging candidates could
+// restore the wrong permission, so absence and ambiguity both fail closed with errTaskNotInPlan.
+func (s *Service) currentPlanAssignment(ctx context.Context, todo Todo) (*TaskPlan, int, error) {
+	p, err := s.loadPlan(ctx, todo.PlanID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if i := slices.IndexFunc(p.Tasks, func(t PlanTask) bool { return t.TodoID == todo.ID }); i >= 0 {
+		return p, i, nil
+	}
+	conversations := []string{todo.Origin}
+	if todo.Supervision != nil && todo.Supervision.Supervisor != "" && todo.Supervision.Supervisor != todo.Origin {
+		conversations = append(conversations, todo.Supervision.Supervisor)
+	}
+	var found *TaskPlan
+	foundAt := -1
+	for _, conversation := range conversations {
+		if conversation == "" {
+			continue
+		}
+		plans, err := s.conversationPlans(ctx, conversation)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, candidate := range plans {
+			if candidate.State != planStarted {
+				continue
+			}
+			for i, task := range candidate.Tasks {
+				if task.TodoID != todo.ID {
+					continue
+				}
+				if found != nil {
+					return nil, 0, errTaskNotInPlan
+				}
+				found, foundAt = candidate, i
+			}
+		}
+	}
+	if found == nil {
+		return nil, 0, errTaskNotInPlan
+	}
+	return found, foundAt, nil
+}
+
 // retryTask starts again the agent of a task that did not start (#1396): the same task as its plan has it (machine,
 // directory, prompt, launcher, model, permission, title), in the same todo — reopened, its error and the plan's
 // cleared — so the task shows as starting where it was, not as a second one. A task already
@@ -626,13 +673,9 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 			s.tasks.mu.Unlock()
 		}
 	}()
-	p, err := s.loadPlan(ctx, cur.PlanID)
+	p, i, err := s.currentPlanAssignment(ctx, cur)
 	if err != nil {
 		return nil, err
-	}
-	i := slices.IndexFunc(p.Tasks, func(t PlanTask) bool { return t.TodoID == todoID })
-	if i < 0 {
-		return nil, errTaskNotInPlan
 	}
 	p.Tasks[i].normalizeReadonlyPermission()
 	t := p.Tasks[i]
