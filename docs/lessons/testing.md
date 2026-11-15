@@ -444,6 +444,10 @@ setup.
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
 
+## A client's wire fixture comes from the hub's real answer (2026-11-15, #8310)
+
+The iPhone's Add to To-Dos decoded `todos[].item` as `{"id": …}` while the hub sent the bare row id, so every tap made the to-do, filed the row and then showed "The data couldn't be read because it isn't in the correct format" (`DecodingError.typeMismatch`). The app's unit test and `scripts/mock/mock_hub.py` were both written from the client's guess, so everything passed until a real hub answered. When a client starts reading a new answer, take its fixture from the hub's own handler output (a Go test's response body) or the protocol table, and pin the shape on the hub side with a test that decodes it the way the shipped client does (`TestInboxTodoReplyItemIsAnObject`). A decoding error on a 200 means the shapes disagree: fix the hub first so installed apps work again, then make the client accept both.
+
 ## Live-only Go tests need their own compile pass (2026-11-11, #4654)
 
 Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helper signature change can leave live-only callers uncompilable while every default test stays green. After changing such a signature, compile the whole node test package with `go test -c -tags herdrlive -o /tmp/node-live.test ./internal/node`; `-run` selects which test executes but does not reduce which source files must compile. Run the live tests themselves only on demand in an isolated herdr session, never against the working one.
