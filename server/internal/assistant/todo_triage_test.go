@@ -169,12 +169,22 @@ func TestTriageWaitingForMergeUsesFreshMatchingPRFacts(t *testing.T) {
 		}
 	}
 
-	// Current observations outweigh stage/delivery hints while the task is still open.
+	// Current observations outweigh stage hints while the task is still open.
 	open := withFacts()
 	open.Stage = "deploy"
-	open.Delivery = &TodoDelivery{State: deliveryLive, At: now}
 	if got := triageTodo(open, nil, now, time.Time{}, time.UTC, false); got.Section != triagePR || got.Rule != rulePROpen {
-		t.Fatalf("fresh open PR facts lost to stage/delivery: %+v", got)
+		t.Fatalf("fresh open PR facts lost to the stage: %+v", got)
+	}
+	// Accepted or deployed work stays finished and out of the open count, whatever its PR facts say (#7614 review).
+	live := withFacts()
+	live.Delivery = &TodoDelivery{State: deliveryLive, At: now}
+	accepted := withFacts()
+	accepted.Supervision = &Supervision{Supervisor: "main", State: reviewAccepted, Reviews: []TaskReview{{At: now.Add(-time.Minute), Verdict: reviewAccepted}}}
+	for name, td := range map[string]listedTodo{"deployed": live, "accepted": accepted} {
+		got := triageTodo(td, nil, now, time.Time{}, time.UTC, false)
+		if got.Rule != name || triageCountsAsOpen(td.Todo, got) {
+			t.Errorf("%s task with a fresh open PR: %+v (counts as open: %v)", name, got, triageCountsAsOpen(td.Todo, got))
+		}
 	}
 
 	stale := withFacts()

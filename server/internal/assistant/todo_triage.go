@@ -360,6 +360,8 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	concern := t.Kind == db.KindConcern && t.DoneAt == nil
 	// rule 8's signals: a turn nobody has seen, a review not done yet, an ask that says done / please verify
 	finished := status == "unread" || review == reviewPending || ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone)
+	// accepted or deployed work is finished whatever its PR facts say: rule 9 never outranks those rules (#7614 review)
+	settled := !concern && (acceptanceStands(t.Todo) || t.Delivery != nil && t.Delivery.State == deliveryLive)
 
 	switch {
 	case status == "failed":
@@ -377,7 +379,7 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageWaiting, ruleAgentAsks)
 	case t.DoneAt == nil && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
 		return at(triageWaiting, ruleOwnerDecides)
-	case !(finished && !seen(last) && review != reviewParked) && triageWaitingForMerge(t, status, now):
+	case !settled && !(finished && !seen(last) && review != reviewParked) && triageWaitingForMerge(t, status, now):
 		// rule 9 after rule 8: a turn or review nobody has looked at stays Just finished even with its PR open. A parked
 		// hold is its supervisor's reading of the latest turn, so an agent session left unread does not hide its PR.
 		return at(triagePR, rulePROpen)

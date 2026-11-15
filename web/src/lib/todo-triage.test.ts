@@ -170,14 +170,15 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(at(todo("t", { ...old, pr_url: "https://example.com/pull/1", delivery: { state: "merged" } })).section).toBe("shelved");
   });
 
-  it("fresh open PR facts take precedence over stage and delivery hints", () => {
+  it("fresh open PR facts take precedence over stage hints, not over a live delivery", () => {
     const fresh = { updated_at: hoursAgo(1), agents: [agent("old")] };
     const url = "https://example.com/pull/1";
     const pr_status = { url, state: "open" as const, draft: false, review: "approved" as const, checks: "success" as const, conflicts: false, checked_at: new Date(NOW).toISOString() };
     for (const stage of ["merge", "deploy", "verify"]) {
       expect(at(todo("t", { ...fresh, pr_url: url, pr_status, stage })).rule).toBe("pr_open");
     }
-    expect(at(todo("t", { ...fresh, pr_url: url, pr_status, delivery: { state: "live", at: hoursAgo(1) } })).rule).toBe("pr_open");
+    // accepted or deployed work stays finished whatever its PR facts say (#7614 review)
+    expect(at(todo("t", { ...fresh, pr_url: url, pr_status, delivery: { state: "live", at: hoursAgo(1) } })).rule).toBe("deployed");
     for (const state of ["merged", "closed"] as const) {
       expect(at(todo("t", { ...fresh, pr_url: url, pr_status: { ...pr_status, state } })).rule).not.toBe("pr_open");
     }
