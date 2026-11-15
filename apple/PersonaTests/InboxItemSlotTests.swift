@@ -40,6 +40,20 @@ import PersonaWire
         }
     }
 
+    @Test func detailIdentityIncludesTheManager() throws {
+        let base = try item("mail:acc1:t1:501", source: "mail")
+        var first = base
+        var second = base
+        first.manager = "manager-a"
+        second.manager = "manager-b"
+
+        #expect(first.id == second.id)
+        #expect(first.key != second.key)
+
+        second.manager = first.manager
+        #expect(first.key == second.key)
+    }
+
     @Test func theSourcesAnExtensionDraws() async throws {
         let hub = FakeHub()
         listing(hub)

@@ -1408,9 +1408,10 @@ struct InboxAgentRow: View {
 
 // MARK: - Detail
 
-/// One inbox item opened: on iOS a native chat or mail stays behind View original until asked for, so the detail alone
-/// reports nothing read; the other sources keep their existing body (placement inbox_item, `InboxItemSlotContent`). The
-/// AI's summary with AI Draft Reply / Hand to AI is on top, Done in the toolbar, whoever draws the body.
+/// One inbox item opened: on iOS an ordinary native chat or mail stays behind View original until asked for, so the detail
+/// alone reports nothing read; an extension's source action opens that native source directly. Other sources keep their
+/// existing body (placement inbox_item, `InboxItemSlotContent`). The AI's summary with AI Draft Reply / Hand to AI is on
+/// top, Done in the toolbar, whoever draws the body.
 struct InboxDetailView: View {
     var item: InboxItem
     var accounts: [MailAccount]
@@ -1508,7 +1509,7 @@ struct InboxDetailView: View {
     }
 
     /// An event (inbox phase 1: recap, a suggestion, the chain) opens as its own page, the source behind 'view original';
-    /// anything else keeps the actions over its body, with a native chat or mail collapsed on iOS until its row is tapped.
+    /// anything else keeps the actions over its body, with an ordinary native chat or mail collapsed on iOS until opened.
     @ViewBuilder private var page: some View {
         if current.isEvent {
             InboxEventPage(item: current, accounts: accounts, draft: { drafting = true })
@@ -1531,7 +1532,11 @@ struct InboxDetailView: View {
             LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(current.manager)) // the post and its comments, as a shared Moments card opens
         } else if item.larkConversation != nil || item.mailSummary != nil {
             #if os(iOS)
-            collapsibleSource
+            if slot.showsSource {
+                originalSource
+            } else {
+                collapsibleSource
+            }
             #else
             originalSource
             #endif
@@ -1540,7 +1545,7 @@ struct InboxDetailView: View {
         }
     }
 
-    /// The unchanged source, shared by the platforms that open it directly and by iOS once it is explicitly expanded.
+    /// The unchanged source, opened directly on other platforms and by an extension, or explicitly expanded on iOS.
     @ViewBuilder private var originalSource: some View {
         if let c = item.larkConversation {
             LarkChatView(conversation: c, manager: model.linkManager(current.manager))
@@ -1642,7 +1647,7 @@ struct InboxDestinations: ViewModifier {
             // unkeyed one is updated in place with the last item's state — a Feishu chat kept the chat before's messages
             // and draft under the new chat's title (#885).
             .navigationDestination(for: InboxItem.self) {
-                InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage()
+                InboxDetailView(item: $0, accounts: accounts).id($0.key).splitDetailPage()
                     .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.manager))
                     .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
