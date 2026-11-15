@@ -658,9 +658,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.handlePlugins(ctx, method, params)
 	}
 	switch method { // sharing the clipboard with the phone (clipshare/)
-	case "clipboard.get":
+	case methodClipboardGet:
 		return clipshare.Get(ctx)
-	case "clipboard.set":
+	case methodClipboardSet:
 		return clipshare.Set(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
