@@ -1,5 +1,13 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A finite startup wait cannot make a one-shot MCP tool list reliable (#8470). Registering a task leader and resolving
+  its pane can both happen after discovery. Capture a change cursor before building the list, wake it from persisted
+  task-link changes, and refresh only when the tool definitions actually differ. Re-resolve identity on heartbeat,
+  invalidate cursors across manager restarts, back off on outages, and exclude discovery watches from idle accounting.
+  Leadership is the active `todo_agents.source`, set from the new plan even for `continues`; there is no to-do role
+  column to update. A sharing `node_receipt=identity_missing` instead concerns creation/incarnation receipts, not MCP
+  pane identity, and is not evidence of the latter's failure.
+
 - A GitHub number is not proof of a delivery PR (#8248). Resolve number-only references through issue metadata before recording them; an ordinary issue has no `pull_request` object. Prefer an explicit closeout PR artifact over incidental references, and recover a PR hidden by a clipped preview from the linked agent's full closeout when repairing a false record. Do not turn a masked permission 404 into proof of absence: confirm PR access, preserve real historical PRs, and persist correction before publishing it. Item-level misses must not put unrelated PR checks on an outage cooldown.
 
 - A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
@@ -580,6 +588,19 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 ## A hidden effective cadence overrides the interval the user configured (#7619)
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
+
+## A stopped leader's own To-do does not list its workers (#8400)
+
+Workers planned by a task leader have separate To-dos: their `todo_agents.source` is `worker` and `via` is the leader's
+To-do ID. A one-To-do scan can mistake a leader waiting on an active worker for a stopped group, or miss workers waiting
+on each other. Join the persisted links in both directions, require every current member to be observed, and reuse
+`supersededAgents` before checking inactivity. A background label is not evidence of recent activity; use timestamps and
+state the start-time approximation when a shell has no activity field. Include the resulting group key in semantic
+deduplication so identical last words do not erase a later, genuinely new period of inactivity. The short semantic
+fingerprint window cannot guarantee once per stopped group across restarts: keep only the latest group key until the
+task closes. A failed state read must remain retryable, not become a moot signal marked sent. Runtime children need the
+same starting and queued-input guards as their parent, even when their row says idle. Missing background activity times
+must not grant an indefinite exemption: the launching Agent's stop time bounds the age, including summary-only flags.
 
 ## A signal told once needs somewhere to go when its reader never acts (#8043)
 
