@@ -89,6 +89,16 @@ class KnowledgeSelectionDocumentTest {
         assertEquals(listOf("mine", "dm"), edited.order(KnowledgeSelectionPart.Messages)[1])
     }
 
+    @Test fun joinPreviousKeepsTheOtherRulesInTheirOriginalOrder() {
+        val shared = base.regroup(KnowledgeSelectionPart.Messages, "dm", joinPrevious = true)
+            .moveLevel(KnowledgeSelectionPart.Messages, "mentions", 1)
+        val edited = shared.regroup(KnowledgeSelectionPart.Messages, "mine", joinPrevious = true)
+        assertEquals(listOf("group", "mine"), edited.order(KnowledgeSelectionPart.Messages)[0])
+        assertEquals(listOf("mentions", "dm"), edited.order(KnowledgeSelectionPart.Messages)[1])
+        assertEquals(listOf("bot"), edited.order(KnowledgeSelectionPart.Messages)[2])
+        assertValid(edited)
+    }
+
     @Test fun joinPreviousAtTheTopIsANoOp() {
         assertSame(base, base.regroup(KnowledgeSelectionPart.Messages, "mentions", joinPrevious = true))
     }
@@ -124,6 +134,18 @@ class KnowledgeSelectionDocumentTest {
         val document = base.setRuleOn(KnowledgeSelectionPart.Documents, "viewed", false)
         assertValid(document)
         assertFalse(document.rule(KnowledgeSelectionPart.Documents, "viewed")!!.on)
+    }
+
+    @Test fun onOnlyRuleEditKeepsDaysAndAttachmentDaysAbsent() {
+        val messages = base.root.getValue("messages").jsonObject
+        val rules = messages.getValue("rules").jsonObject
+        val sparse = JsonObject(rules.getValue("dm").jsonObject - "days" - "attachment_days")
+        val document = KnowledgeSelectionDocument(JsonObject(base.root + ("messages" to JsonObject(
+            messages + ("rules" to JsonObject(rules + ("dm" to sparse)))
+        ))))
+        val edited = document.setRule(KnowledgeSelectionPart.Messages, "dm", on = false, days = null)
+        assertEquals(JsonObject(sparse + ("on" to JsonPrimitive(false))),
+            edited.rule(KnowledgeSelectionPart.Messages, "dm")!!.raw)
     }
 
     @Test fun ruleDaysAndAttachmentDaysSetAndClear() {
@@ -173,6 +195,22 @@ class KnowledgeSelectionDocumentTest {
         assertValid(removed)
         assertNull(removed.item(first.id))
         assertNotNull(removed.item(sameIdAnotherSource.id))
+    }
+
+    @Test fun removeItemUsesTheWholeIdentityAndPreservesOtherRawItems() {
+        val removed = KnowledgeSelectionItem.newChat("lark", "shared", "Remove")
+        val sameIdDocument = KnowledgeSelectionItem.newDocument("lark", "shared", "Keep document")
+        val sameSourceChat = KnowledgeSelectionItem.newChat("lark", "other", "Keep chat")
+        fun raw(item: KnowledgeSelectionItem, marker: String) = JsonObject(item.raw +
+            ("future" to JsonPrimitive(marker)) + ("nullable" to JsonNull))
+        val removedRaw = raw(removed, "removed")
+        val documentRaw = raw(sameIdDocument, "document")
+        val chatRaw = raw(sameSourceChat, "chat")
+        val document = KnowledgeSelectionDocument(JsonObject(base.root +
+            ("items" to JsonArray(listOf(removedRaw, documentRaw, chatRaw)))))
+        val edited = document.removeItem(removed.id)
+        assertNull(edited.item(removed.id))
+        assertEquals(JsonArray(listOf(documentRaw, chatRaw)), edited.root["items"])
     }
 
     @Test fun itemModesMapToReadStoreAndClearDaysWhenNeeded() {

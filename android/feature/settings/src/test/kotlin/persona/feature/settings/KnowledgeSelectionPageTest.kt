@@ -156,6 +156,28 @@ class KnowledgeSelectionPageTest {
         rule.onNodeWithTag("knowledge-priority-messages-0").assertDoesNotExist()
     }
 
+    @Test fun levelSheetMovesDownAndDisablesMovementPastEitherEnd() {
+        val api = FakeSelection(KnowledgeSelectionDocument.defaults().root)
+        show(api)
+        rule.onNodeWithTag("knowledge-priority-messages-1").performClick()
+        rule.onNodeWithText("Move down").assertIsEnabled().performClick()
+        rule.waitUntil(5_000) { api.puts.size == 1 }
+        rule.waitForIdle()
+        val moved = putDocument(api).order(KnowledgeSelectionPart.Messages)
+        assertEquals(listOf("mentions", "mine"), moved[0])
+        assertEquals(listOf("group"), moved[1])
+        assertEquals(listOf("dm"), moved[2])
+
+        rule.onNodeWithTag("knowledge-priority-messages-0").performClick()
+        rule.onNodeWithText("Move up").assertIsNotEnabled()
+        rule.onNodeWithText("Move down").assertIsEnabled().performClick()
+        rule.waitUntil(5_000) { api.puts.size == 2 }
+        rule.waitForIdle()
+        rule.onNodeWithTag("knowledge-priority-messages-7").performClick()
+        rule.onNodeWithText("Move down").assertIsNotEnabled()
+        rule.onNodeWithText("Move up").assertIsEnabled()
+    }
+
     @Test fun openLevelActionsFollowTheirFirstRuleAcrossAReloadReorder() {
         val original = KnowledgeSelectionDocument.defaults()
         val api = FakeSelection(original.root)
