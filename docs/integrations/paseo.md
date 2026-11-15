@@ -223,6 +223,7 @@ and the engine's note under Settings › Machines asks to update it.
 | Close | ✅ | Archives the Agent in Paseo, stopping it and removing it from Paseo's list. An Agent of Claude Code stays under Not running (above); any other leaves Persona's list. iOS, Android and web show Close from the row's `capabilities.close` (#6294) |
 | Change permission mode and reasoning effort | ✅ | Claude Code's five modes; on Codex, `bypassPermissions` switches to Paseo's `full-access` and a Codex agent in `full-access` reports `bypassPermissions`; on a provider whose approval is Auto Accept (Grok has no permission modes at all), `bypassPermissions` and `default` turn Auto Accept on and off (`set_agent_feature`, #7758), and an agent with it on reports `bypassPermissions`. One with it off reports no mode, since the agent's own settings may still approve everything (Grok's always-approve). Paseo lists no features for an Agent it has not loaded (closed, after Paseo restarts, a change to its stored record), though the switch stays on: the row keeps the state the bridge last saw (#8133); a bridge started while Paseo has not loaded the Agent sees none until Paseo loads it. The apps keep the mode chips hidden on these rows: the chips offer Claude Code's modes, and node gives the modes capability to Claude Code rows only; reasoning effort includes only the levels supported by the model. The row of an Agent that is not Claude Code's lists its model's levels (`efforts`, the thinking options Paseo lists for it that are Persona's), so iOS offers the effort alone there as web and Android do (#8133) |
 | Change model | ✅ | The model panel's choice goes to Paseo (`set_agent_model`, before an effort chosen with it, which must be the new model's): Claude Code takes it at once, Codex at its next turn. Only a model Paseo lists for the agent's provider (or one of its aliases); not for an archived agent |
+| Switch a running Agent to another launcher, or between Claude Code and Codex | ❌ | The node refuses it for every runtime's session (`switch_unsupported`): the web's model panel lists the other providers off with why, and switches only the session's own provider's model (#8142) |
 | Rewind | ✅ | Back to before one of your messages (`agent.rewind`), found in Paseo's timeline by its text, its occurrence and how many of your messages came after it: a conversation that moved meanwhile is refused, nothing changed. Claude Code can put the files back too; Codex, pi and omp rewind the conversation only; other providers none. Each row says which (`capabilities.rewind` / `rewind_code`). Claude Code forks its session to rewind: an agent listed under its Claude session id first keeps that id on the `persona.session` label (with `persona.kept`, "Session IDs"), so it stays the same session in Persona. Refused while it works or waits for you, and for an archived agent. A message whose turn was interrupted before Claude Code took it in cannot be a target until Paseo reloads the agent (Paseo: "Cannot rewind before the provider acknowledges the submitted prompt") |
 | Test a launcher (Settings › Models) | ✅ | One real prompt through the provider, with the provider's own login (`caps.check`): a probe agent in a background Paseo workspace for the node's empty check directory, in plan mode where the provider has it, without Persona's tools, never listed. Afterwards the probe is deleted, the workspace archived, and the project Paseo made for that directory removed (one Paseo already had stays) |
 | Models of a launcher | ✅ | Asked from Paseo when a picker opens (`list_provider_models`); refresh has Paseo look again first (`refresh_providers_snapshot`) |
@@ -330,6 +331,16 @@ launcher ran on another account, and a provider added in Persona never applied i
 
 ## Mapping
 
+- **Providers → agents** (#8142): an agent of Claude Code is `agent: "claude"`, one of Codex `"codex"`; every other
+  provider (Grok, Kimi, Cursor, TRAE, pi, OpenCode…) runs under Paseo's own id, `agent: "paseo"`, with its provider as
+  `launcher` and the provider's label in Paseo as `agent_label`. `paseo` names the engine, never an agent: the apps call
+  and draw such a row by its provider. The web (`lib/agent-kind.ts` `providerAgent`) takes the provider as its agent:
+  the mark the web has for it (Cursor, TRAE, Pi, OpenCode, Gemini, by the provider's id or its label), else its
+  label's letter; its label as its name on cards, pushes, the model pill and panel, subagent cards and the composer's
+  source line; one Agents filter entry and one model-panel engine per provider; one Harness choice per provider in the
+  work-session form. The web offers nothing the node refuses on a runtime's session: no other launcher or engine in
+  the model panel, no "Copy resume command", and its queued messages are only shown (no Send now, Edit, Delete or
+  reorder: `session.queue.*` is refused).
 - **timeline → items**: seq uses Paseo timeline's seq. Content is assigned to seq as follows:
   - Messages, thinking, notifications: the row where they start.
   - Tool calls: the call uses its start row; the result uses its completion row.
@@ -368,6 +379,9 @@ launcher ran on another account, and a provider added in Persona never applied i
     - Denial includes the reason you entered.
   - Card IDs are derived from Paseo request IDs: after a node restart the next bridge asks with the same ID, and the hub hangs that on the card the phone already shows.
     A card put up again (below) has an ID of its own.
+  - A card says whose it is by the session's row: Claude Code's is Claude's card, any other the card of the agent the row
+    names, by the row's label. The node takes the row's `agent_label` whenever it has one, so a Grok agent's push reads
+    "Grok needs your permission", not "Paseo…" (#8142).
   - Plan requests Claude Code gives Paseo contain no plan body (`ExitPlanMode` input is empty). The bridge reads the body from that tool call in the timeline.
   - **Across link drops** (#8128): while Paseo waits on a request, its card is on the phone, whatever happened to the links in between ("each pending request has one
     home", `docs/design/DESIGN_SYSTEM.md`).
@@ -388,6 +402,8 @@ launcher ran on another account, and a provider added in Persona never applied i
   - The apps start a provider with no first message and send it once the start is answered, as an ordinary message that can carry photos and files (iOS and the web; Android since #8143): such a start has no `initialPrompt`. A Codex provider too, since its launcher is `prompt_optional` (#8140).
   - Creating from a workspace places it in that Paseo workspace, Agents in it or not; one Paseo no longer has is refused (above).
   - If Paseo does not finish creation within 25 seconds, return the session row first and keep waiting in the background.
+    That row is named as the listed one will be: a provider the apps do not know carries its label (`agent_label`), so
+    the apps never call it "Paseo" while it starts (#8142).
   - **Agent MCP tools** (#3655): the bridge reads the node's `mcp.json` (the one terminal Agents load) at each creation and puts its stdio servers (`personad mcp`) into the request's `config.mcpServers`.
     The tool list is the hub's, as for terminal Agents: it decides per computer (personal machine: phone, connector and agent tools; work machine: agent tools only), and the bridge adds no filter.
     Each server's environment gets `PERSONA_SESSION_ID` set to that Agent's own `persona.session` label (`paseo-<uuid>`, from the first Paseo agent ID of that start), not the provider's session ID, so `report_to_supervisor` and the other
@@ -458,6 +474,10 @@ launcher ran on another account, and a provider added in Persona never applied i
     removed through Paseo with its branch.
   - Use only temporary directories, without touching the active local Paseo or `~/.claude`.
   - Add `KEEP=1` to retain temporary directories, or `DEBUG=1` to print the bridge lines from node's log.
+- How the web names and draws providers (#8142): the mock hub's `MOCK_PASEO_PROVIDERS=1` (`scripts/mock/mock_hub.py`, on the
+  Paseo computer of `MOCK_PASEO=1`) adds two of Paseo's providers the apps have no id for, Grok waiting on an approval and
+  Cursor idle, with their launchers and model lists on the server: the sidebar's marks, the pill and the model panel, the
+  Inbox card and the Agents filter show "Grok" and "Cursor", never "paseo".
 - Codex archive lifecycle: with the same generated `personad` binary, run `PERSONAD=/tmp/personad CODEX_BIN=<a Codex executable> PASEO_BIN=<a Paseo executable> node integrations/paseo/e2e/codex.mjs`.
   It uses a real temporary Paseo daemon and Codex with a scripted local Responses API, isolated homes and synthetic data. It checks that archiving,
   reconnecting and continuing preserve the Agent and thread identity and leave only one conversation row. It never uses the active Paseo daemon or a real model account.

@@ -1709,6 +1709,7 @@ your permission" (section 5, "Notifications"); moving them to the card's words i
 
 - A session's title is its top-bar title and its row's first line.
 - Primary screens (list rows, top-bar titles, the Assistant home and notifications) never show raw model IDs, session IDs, paths or engine names (herdr, Orca, Paseo); this is principle 2 applied to Agent work. A row may name the model by its short name.
+- An agent an engine runs under the engine's own id (Paseo's providers: Grok, Kimi, Cursor…, whose `agent` is `paseo`) is called by its provider's label (`agent_label`) and drawn with the mark the client has for that provider, else its label's letter; cards, pushes, filters and model pickers name it the same way (#8142).
 - Views grouped by location (By Repository, By Machine, By Project) may show workspaces, tabs, worktrees and branches. The web Agents row may also carry an associated terminal tab as the secondary **Tab {name}** metadata described in 3.4; it is not the session title and requires a real tab association. Other location details stay in the session's info sheet, opened from its title, and in tool views (terminal, files, changes).
 - State words come from one place per platform, `StateName` on Apple and `web/src/lib/state-labels.ts` on the web; no screen invents its own.
 - An Agent page says the agent's state once. On iOS and Android that is the header's title line (dot and words); other
