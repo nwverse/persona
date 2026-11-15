@@ -41,7 +41,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if i < len(edits) {
 			applyPlanEdit(&p.Tasks[i], edits[i])
 		}
-		p.Tasks[i].normalizeReadonlyPermission()
+		p.Tasks[i].normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		if err := p.Tasks[i].normalizeMachinePolicy(); err != nil {
 			return nil, planInvalid{err}
 		}
@@ -706,7 +706,7 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if err != nil {
 		return nil, err
 	}
-	p.Tasks[i].normalizeReadonlyPermission()
+	p.Tasks[i].normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	t := p.Tasks[i]
 	t.Permission = strings.TrimSpace(t.Permission)
 	m, ok := s.machineByName(ctx, t.Machine)

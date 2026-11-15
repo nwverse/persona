@@ -1,5 +1,18 @@
 # Lessons: web UI and interactions
 
+## Compact buttons need their touch targets when moved into a dialog (#7446)
+
+The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-picker and Undo action when replacing
+an older `min-h-11` button. Its pseudo-element expands the target without changing the drawn box: browser acceptance
+must check coarse-pointer hit testing and actual edge taps, rather than the button's bounding rectangle alone.
+
+## Drop targets must cancel navigation before filtering drag types or busy states (#7446)
+
+Cancel every `dragover` and `drop` default before filtering for files or a busy state: ignoring a link, text or a
+second file must not let the browser navigate away from the app. Keep the file-type and busy guards on the upload
+and drag highlight. `Skills.test.tsx` checks link/text drags without upload or highlight, and both file events while
+a ZIP preview is pending, including that the first check completes and no second check starts.
+
 ## A paging hub pushes no sessions: a computer's Agents are not in `sessions[mid]` (web audit items 3 and 30)
 
 A connection that asked for `sessions_list` gets no `sessions` / `sessions_delta` pushes (docs/protocol/protocol.md

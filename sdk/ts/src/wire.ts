@@ -6018,6 +6018,77 @@ export interface UIPageSnapshot {
   view: View;
 }
 
+/**
+ * error.code of the transcription calls besides permission_denied (data {scope: "transcription"}): invalid_params (a
+ * field missing or wrong, audio that is not base64 PCM16 or over 256 KiB a call, a job that is not this extension's
+ * or no longer runs); assistant_offline (the manager is away: try again); transcription_unavailable (no transcription
+ * is chosen, ready or able to replay: the owner sets it up in Settings › Meetings); busy (this extension has a job
+ * running, or two extensions have); too_long (more than 15 minutes of audio: the job is ended); timeout (the
+ * transcription stopped answering: the job is ended); transcription_failed (the transcription failed the job; data
+ * {code}: its error code).
+ */
+export type TranscriptionErrorCode = "invalid_params" | "assistant_offline" | "transcription_unavailable" | "busy" | "too_long" | "timeout" | "transcription_failed" | (string & {});
+export const TRANSCRIPTION_ERROR_CODES = ["invalid_params", "assistant_offline", "transcription_unavailable", "busy", "too_long", "timeout", "transcription_failed"] as const;
+
+/**
+ * transcription.start: a job for one piece of audio.
+ */
+export interface TranscriptionStartParams {
+  /**
+   * A BCP 47 hint (zh-CN, en-US); the transcription still follows the speech. Empty: the transcription's own guess.
+   */
+  language?: string;
+  /** A short name of what this is, for the manager's log (its first 40 characters); never what is said. */
+  label?: string;
+}
+
+export interface TranscriptionStartResult {
+  /** The job's id, for the calls after; it is this extension's only. */
+  job: string;
+}
+
+/**
+ * transcription.audio: the next piece of the audio, contiguous with the last: PCM16 little-endian, mono, 16 kHz,
+ * base64 (standard, with padding), at most 256 KiB of PCM (8 seconds) a call. The call returns once the audio is with
+ * the transcription and no more than 60 seconds wait ahead of it, so sending as fast as it returns paces the job.
+ */
+export interface TranscriptionAudioParams {
+  job: string;
+  data: string;
+}
+
+/**
+ * transcription.finish (every piece is sent: wait for the text) and transcription.cancel (drop the job and its text).
+ */
+export interface TranscriptionJobParams {
+  job: string;
+}
+
+/**
+ * One sentence, from and to in seconds from the start of the audio.
+ */
+export interface TranscriptionSegment {
+  from: number;
+  to: number;
+  text: string;
+}
+
+/**
+ * A span the transcription did not trust any text for (its sessions did not agree: noise, music, crosstalk): say so,
+ * never guess.
+ */
+export interface TranscriptionGap {
+  from: number;
+  to: number;
+}
+
+export interface TranscriptionFinishResult {
+  segments: TranscriptionSegment[];
+  gaps?: TranscriptionGap[];
+  /** How much audio the job took. */
+  seconds: number;
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -6112,4 +6183,8 @@ export const CALLS: Record<string, Call> = {
   "storage.blob.finish": { from: "program", params: "StorageBlobMutateParams", result: "StorageBlobFinishResult" },
   "storage.blob.delete": { from: "program", params: "StorageBlobMutateParams", result: "StorageDeleteResult" },
   "storage.blob.read": { from: "program", params: "StorageBlobReadParams", result: "StorageBlobReadResult" },
+  "transcription.start": { from: "program", params: "TranscriptionStartParams", result: "TranscriptionStartResult" },
+  "transcription.audio": { from: "program", params: "TranscriptionAudioParams", result: "Empty" },
+  "transcription.finish": { from: "program", params: "TranscriptionJobParams", result: "TranscriptionFinishResult" },
+  "transcription.cancel": { from: "program", params: "TranscriptionJobParams", result: "Empty" },
 };
