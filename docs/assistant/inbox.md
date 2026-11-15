@@ -606,6 +606,8 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
   Without `item` the tool works as before. A suggestion from a hand-off records where it came from (`suggestion.conversation`), its chain entry links that
   conversation, and the item's `agent` / `handling` stay as they were (no message card, no old-App draft).
 - **Task-related items**: for linked tasks (2′), prompts include task progress; a reply suggestion inserts a message card into the chat that started the task (`message`, retaining sent state after sending).
+  A Lark CLI `bot_handoff` is the owner's request for the main conversation, not somebody else's task update: neither task-link router nor the task judge associates it with a task (#8351).
+  A stored stale association cannot raise a supervisor signal or follow a task's continuation. The link recheck clears only that association, preserving handling, suggestions and handoff history without resending the request.
   When the linked task is supervised and the assistant's `inbox_signals` is on (off by default, #4293), each pass that takes new messages from other people into the item also tells the task's supervisor:
   the signal `inbox` in its next supervision message, naming the item (id, title, sender, one line) and how many messages came ([unified-entry.md](unified-entry.md), "Supervision (#3124)").
   Persona's own confirmed reply and bot chats never raise one, and nothing the handling chat does goes into the Inbox.
