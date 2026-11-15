@@ -15,7 +15,7 @@ the computer can connect to the hub or accept a connection from it. The recommen
 On a computer, Persona has an Electron desktop app and an independently installable Persona Link ([desktop.md](../desktop/desktop.md)).
 
 - **The desktop app** wraps the hub-hosted web UI and adds native notifications, presence and desktop integration. A computer you only chat from, or use another computer's Agents from, does not need a local node or Link.
-- **Persona Link** runs on a computer whose Agents the hub should reach, and does what a browser cannot: it connects the hub to the resident node service and owns the Persona Screen helper. Its CLI/service works without the desktop app, including on Linux and headless computers.
+- **Persona Link** runs on a computer whose Agents the hub should reach, and does what a browser cannot: it connects the hub to the resident node service and owns the Persona Screen and Persona Input helpers. Its CLI/service works without the desktop app, including on Linux and headless computers.
 - The local setup window offers fixed status/pairing/reconnect/node-service operations for a separately installed Link. It does not silently install a service. The Mac launchd agent and Windows scheduled task run independently of the desktop app. The former menu bar and Windows tray implementations are archived in [link-menu-tray.md](../archive/operations/link-menu-tray.md).
 
 A desktop need goes into the shared web UI first, and into Persona Link only when the browser cannot meet it (for example local node connectivity, pairing or a recording helper). The desktop app and Link are not a bundled installation.
@@ -584,6 +584,10 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 
 
 ## Status line
+
+The status line is a machine contract and is not translated. The same applies to `status --json`, `node status --json`, `ssh --test --json`, the saved `link.status.json`, passive HTTP `message` fields, and the pairing URL written by `pair --listen` on stdout. Candidate errors retain the full-width-semicolon delimiter (`；`) that current and older clients split. Human `status` and `install` output may translate a copy of a recognized saved error, but unknown hub, peer, OS and parser details pass through unchanged.
+
+Plain terminal output uses `i18n.Terminal()`: `PERSONA_LANG`, then `LC_ALL`, `LC_MESSAGES` and `LANG`, with English for C, POSIX, an unset locale or an unknown language. The `link-cli` catalogs ship `en`, `zh-Hans` and `ja`; Chinese terminal output retains its previous wording. Maintainer logs are English. An early `persona-link run` failure follows the terminal language when stderr is a terminal, but is English when a service redirects stderr into a log. One pre-existing exception to locale-independent JSON is `service.missing`: the unavailable-systemd reason was already locale-coupled and keeps that behavior for compatibility.
 
 ```json
 {"state":"connected","machine":"macbook","hub_name":"Home","mesh_hubs":1,"address":"https://192.0.2.10:18662","kind":"lan",
