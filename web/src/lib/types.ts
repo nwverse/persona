@@ -873,6 +873,9 @@ export interface Launcher {
   /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
    *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
   health?: LauncherHealth;
+  /** A Persona-managed provider pi on this computer can use too (docs/integrations/pi.md "Persona's model providers");
+   *  absent for every other launcher and from an older hub. */
+  pi?: boolean;
 }
 
 /** A launcher's health record on one computer (#1643). */

@@ -52,7 +52,7 @@ not recorded for sessions launched by other programs, such as `pi --mode rpc` or
 On the computer running pi / pi-web (it must be in the hub's machine list, and node must be able to run). The companion requires node support for `prefer_running` (personad after this PR).
 It does not connect to old nodes; it connects automatically after node restarts (upgrades). The extension keeps working (but without on-disk sessions or session creation from the phone):
 
-1. Install pi and pi-web: `npm i -g @earendil-works/pi-coding-agent @agegr/pi-web`; configure models (`~/.pi/agent/models.json`, see pi's documentation).
+1. Install pi and pi-web: `npm i -g @earendil-works/pi-coding-agent @agegr/pi-web`. Models: nothing to configure when Persona's model providers cover this computer ("Persona's model providers" below); otherwise, or for models of your own, configure them in pi (`~/.pi/agent/models.json`, see pi's documentation).
 2. Install with automatic-update support (“Automatic updates” below): `node <Persona repository>/integrations/pi/install.mjs`. This installs the package into
    `~/.persona/runtime-packages/persona-pi-runtime/current/` and prints the exact paths for the next two steps.
    Then run `pi install ~/.persona/runtime-packages/persona-pi-runtime/current/pi` (it uses the adjacent `runtime-sdk` through a relative path).
@@ -73,7 +73,32 @@ It does not connect to old nodes; it connects automatically after node restarts 
 | `askUser` | `true` | Gives the model an `ask_user` tool: ask the user a question (optionally with choices). The card goes to the phone whenever a hub is connected, and pi's own dialog (terminal / pi-web page) opens beside it: the first answer wins and the other is taken back. A message sent to the session while it waits is the answer. The session shows as needing you meanwhile, and stopping the turn withdraws the question (#8097) |
 | `answerFirst` | `auto` | Who gets approvals first: `auto` = the phone if it has driven this session within the last 6 hours (a session the hub started through the companion counts: the node tells pi-web's extension, `runtime.driven`), or no local UI is open (in pi-web: no browser has the session open, read from pi-web's `GET /api/agent/debug`); otherwise local first (pi terminal / pi-web page); `phone` / `local` fixes one side. If no local dialog is available (`pi -p`, JSON mode), approval cards go to the phone (when connected to the hub); if the phone also does not answer, execution is blocked. A local approval dialog shows the session as needing you and is withdrawn when the turn is stopped |
 | `socket` | `~/.persona/runtime.sock` | node runtime socket; the `PERSONA_RUNTIME_SOCKET` environment variable also works |
+| `providers` | `true` | Register Persona's model providers in pi ("Persona's model providers"); `false` leaves pi to its own configuration |
 | `autoUpdate` | `true` | Extensions installed from the package store accept versions supplied by node (“Automatic updates”); `false` prevents switching. The companion uses `--no-update` |
+
+### Persona's model providers
+
+A computer whose pi has no `models.json` still runs pi and pi-web sessions on the providers in Settings › Model providers (#8194),
+as Claude Code does (`docs/integrations/launchers.md`, "Device scope and on-demand delivery"):
+
+- **What pi gets**: each Persona-managed provider this computer is in scope for and that speaks a protocol pi has: a Messages provider for
+  Claude Code or Oh My Pi becomes an `anthropic-messages` provider (bearer providers also send `Authorization: Bearer`), a Codex provider an
+  `openai-responses` one. Not offered: Antigravity providers, Responses / Chat Completions API connections (the node never gets them), providers with a
+  proxy of their own (pi sends straight to the gateway), and providers without a key. They are registered as `persona-<provider id>` with the
+  provider's models (its default model first, context windows from what the provider knows, no prices).
+- **How**: when pi loads the extension (`lib/providers.js`; every pi process, `pi -p` included, and every pi-web session), it reads the node's launch
+  key beside `node.sock` and asks `launcher.pi`. The node (`server/internal/node/pi_providers.go`) pulls what it does not have yet with `launchers.pull`,
+  under the provider's scope and own-service rule, and answers. The extension passes the keys to `pi.registerProvider()`: they live in pi's memory
+  and the node's, never in a file (no `models.json`, no `auth.json`). A process that cannot read the launch key (a sandbox hiding the data directory),
+  a computer with no node, or one out of every provider's scope registers nothing and pi behaves as before.
+- **Your own configuration wins**: a provider id already in your `models.json` is left to it; a `defaultProvider` / `defaultModel` in pi's settings
+  (global or the project's `.pi/settings.json`), or `--model` / `--provider` / `--models` on the command line, keeps pi's choice; so does a model of your
+  own provider that is already selected and signed in, and a resumed session keeps its model. Otherwise a new session starts on Model Settings ›
+  Agents (manager `launchers.agents_default`) with its thinking level, when that is one of these providers.
+- **Where you see it**: the web's Settings › Model providers marks these providers "pi too"; New Agent's model panel says "pi can use it too" on their group.
+- **Limits**: the manager must be reachable the first time a provider is used since the node started (choose "Keep a copy on each computer" for
+  providers that must work while it is away). Needs an updated node, manager and extension; an older node refuses `launcher.pi` and an older manager
+  names no default.
 
 ### Automatic updates
 
