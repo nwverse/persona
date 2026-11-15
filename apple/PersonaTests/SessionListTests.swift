@@ -365,6 +365,68 @@ import PersonaWire
         #expect(model.latest(key) == nil)
     }
 
+    /// A complete (non-paged) hub's filtered Agents list never lands another manager's row; opening that chat still
+    /// fetches it (#8748), so the composer can send when the Agent allows it.
+    @Test func openingAMissingRowOnACompleteHubFetchesItEnabled() async throws {
+        let hub = FakeHub()
+        let id = UUID().uuidString.lowercased()
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","state":"working","status":"working"}]}"#)
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
+        let model = await completeChatModel(hub, key: key)
+        model.open(key)
+        await eventually { model.latest(key) != nil }
+        #expect(model.latest(key)?.canSend == true)
+        #expect(model.missingSessionReason(key) == nil)
+        #expect(hub.sent("GET", "/api/v1/sessions").contains(where: {
+            $0.query["machine_id"] == "macbook" && $0.query["session_id"] == id
+        }))
+    }
+
+    /// After the missing row is in the index, a later filtered complete landing must not clear it while the chat is open.
+    @Test func aFilteredCompleteLandingKeepsAnOpenMissingRow() async throws {
+        let hub = FakeHub()
+        let id = UUID().uuidString.lowercased()
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","state":"working","status":"working"}]}"#)
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
+        let model = await completeChatModel(hub, key: key)
+        model.open(key)
+        await eventually { model.latest(key) != nil }
+        let other = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"state":"idle","status":"idle"}"#.utf8))
+        var stamped = other
+        stamped.group = key.group
+        model.landCompleteSessionList([stamped], group: key.group)
+        #expect(model.latest(key)?.sessionID == id, "the open other-manager row must survive a filtered landing")
+        #expect(model.latest(key)?.canSend == true)
+    }
+
+    /// When the hub answers with no row, the composer gets a reason instead of a silent disable (#8748).
+    @Test func aMissingRowShowsAComposerReason() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[],"total":0}"#)
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: UUID().uuidString.lowercased())
+        let model = await completeChatModel(hub, key: key)
+        model.open(key)
+        await eventually { model.missingSessionReason(key) != nil }
+        #expect(model.latest(key) == nil)
+        #expect(model.missingSessionReason(key) == String(localized: "This conversation isn't available"))
+    }
+
+    /// A complete-list fixture: no paged revision, so detail recovery used to no-op before #8748.
+    private func completeChatModel(_ hub: FakeHub, key: SessionKey) async -> AppModel {
+        let model = AppModel()
+        model.forgetRestoredForTests()
+        let list = SessionListModel<Session>(id: { $0.id }, removalID: { _ in nil },
+            fetch: { _, _, _ in SessionListPage(sessions: [], remove: nil, hasMore: nil, nextCursor: nil, revision: nil, total: nil) },
+            counts: { _ in counts() })
+        await list.load()
+        model.sessionLists.setForTests(list, group: key.group)
+        var client = hub.client
+        client.group = key.group
+        client.sessionLookup = true
+        model.apiForTests = client
+        return model
+    }
+
     @Test func aChatOnAListedSessionTakesItsCompleteRow() async throws {
         let hub = FakeHub()
         let id = UUID().uuidString.lowercased()
