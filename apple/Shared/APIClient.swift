@@ -719,10 +719,16 @@ nonisolated struct APIClient: Sendable {
         struct Body: Encodable { var enabled: Bool }
         return try JSON.decoder.decode(MachineIPhone.self, from: await request("PUT", "/api/v1/machines/\(machine)/iphone", body: Body(enabled: enabled), timeout: 60))
     }
-    /// Pair (an iPhone plugged into the computer), Forget, Cancel: `pair`, `forget`, `cancel`.
+    /// Pair (an iPhone plugged into the computer), Forget, Cancel, Install (the bridge), Prepare: `pair`, `forget`,
+    /// `cancel`, `install`, `prepare`.
     func iphoneJob(machine: String, _ action: String, device: String?) async throws -> MachineIPhone {
         struct Body: Encodable { var device: String? }
         return try JSON.decoder.decode(MachineIPhone.self, from: await request("POST", "/api/v1/machines/\(machine)/iphone/\(action)", body: Body(device: device), timeout: 60))
+    }
+    /// The guided setup's Try It (#8199): a screenshot of this iPhone and Weather opened, without the model.
+    func tryIPhone(device: String) async throws -> IPhoneTryResult {
+        struct Body: Encodable { var device: String }
+        return try JSON.decoder.decode(IPhoneTryResult.self, from: await request("POST", "/api/v1/iphone/try", body: Body(device: device), timeout: 120))
     }
     /// Every iPhone the computers reach, for this iPhone to find itself among them.
     func iphones() async throws -> IPhoneList {
