@@ -6,7 +6,7 @@ import { RpcError } from '../../runtime-sdk/index.js'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
 import { PaseoClient } from '../lib/paseo.js'
-import { agentSnapshot, entry, mcpServersError, startFakePaseo, workspaceDescriptor } from './fake-paseo.js'
+import { agentSnapshot, autoAcceptFeature, entry, mcpServersError, startFakePaseo, workspaceDescriptor } from './fake-paseo.js'
 
 const SID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const SID2 = 'aaaaaaaa-0000-4000-8000-000000000002'
@@ -322,6 +322,34 @@ test("rows say how far a rewind goes: Paseo's provider decides, conversation and
   assert.deepEqual(caps(`paseo-${a.codex.id}`), { rewind: true, rewind_code: false }, 'Codex: the conversation only')
   assert.deepEqual(caps(`paseo-${a.grok.id}`), { rewind: false, rewind_code: false }, 'files and conversation only at once is no rewind of Persona\'s')
   assert.deepEqual(caps('paseo-e1'), { rewind: false, rewind_code: false }, 'a Paseo that does not say')
+})
+
+test("an archived agent's row offers nothing Paseo refuses for it: no rewind, mode, effort or model (#8133)", async (t) => {
+  const { fake, node, a, bridge, rows } = await setup(t)
+  const row = () => rows().find((r) => r.session_id === 'paseo-e1')
+  fake.update(a.labeled.id, { capabilities: { supportsRewindConversation: true, supportsRewindBoth: true } })
+  await until('rewind offered', () => row()?.capabilities?.rewind_code === true)
+  assert.deepEqual(row().capabilities, { rewind: true, rewind_code: true }, 'listed: modes and model are the node\'s to give')
+  await call(node, 'session.close', { session_id: 'paseo-e1' })
+  await until('archived, still its row', () => bridge.state.archived.has(a.labeled.id) && row()?.status === 'offline')
+  assert.deepEqual(row().capabilities, { rewind: false, rewind_code: false, modes: false, model: false },
+    'the capabilities it was archived with are not what Paseo does with an archived agent')
+  assert.equal(row().efforts, undefined)
+  for (const params of [{ permission_mode: 'plan' }, { effort: 'high' }, { model: 'fable[1m]' }]) {
+    await assert.rejects(call(node, 'session.modes', { session_id: 'paseo-e1', ...params }), /archived in Paseo/, JSON.stringify(params))
+  }
+  await assert.rejects(call(node, 'session.rewind', { session_id: 'paseo-e1', prompt: 'x', occurrence: 1, restore: 'conversation' }), /archived in Paseo/)
+})
+
+test("a row that is not Claude Code's lists the efforts its model takes; one Paseo has no thinking options for lists none (#8133)", async (t) => {
+  const thinking = [{ id: 'low' }, { id: 'medium' }, { id: 'high' }, { id: 'ultra' }]
+  const entries = ENTRIES.map((e) => e.provider === 'grok' ? { ...e, models: [{ id: 'grok-4', label: 'Grok 4', isDefault: true, thinkingOptions: thinking }] }
+    : e.provider === 'my-codex' ? { ...e, models: [{ id: 'gpt', label: 'GPT', isDefault: true, thinkingOptions: [{ id: 'xhigh' }, { id: 'low' }] }] } : e)
+  const { a, rows } = await setup(t, { entries })
+  const row = (id) => rows().find((r) => r.session_id === id)
+  assert.deepEqual(row(`paseo-${a.grok.id}`).efforts, ['low', 'medium', 'high'], "its model's levels that are Persona's")
+  assert.deepEqual(row(`paseo-${a.codex.id}`).efforts, ['low', 'xhigh'], 'weakest first')
+  assert.equal(row(SID).efforts, undefined, "Claude Code's levels are the apps' own")
 })
 
 test('a rewind goes to the message the app saw, keeps the session id through Claude Code\'s fork, and refuses a conversation that moved', async (t) => {
@@ -644,6 +672,40 @@ test("Grok: Allow all starts it with Paseo's Auto Accept on and switches that, t
   await assert.rejects(call(node, 'session.modes', { session_id: sid, permission_mode: 'default' }), /没有换模式：busy/)
 })
 
+test("Allow all stays on a row Paseo unloaded or read again after a restart: the stored record lists no features, the last ones seen stand in (#8133)", async (t) => {
+  const { fake, a, bridge, rows } = await setup(t)
+  const mode = (id) => rows().find((r) => r.session_id === `paseo-${id}`)?.permission_mode
+  const other = agentSnapshot({ provider: 'grok', cwd: '/tmp', title: 'D', status: 'idle', features: [autoAcceptFeature(false)] })
+  fake.upsert(other, PROJECT)
+  fake.update(a.grok.id, { status: 'idle', features: [autoAcceptFeature(true)] })
+  await until('Allow all', () => mode(a.grok.id) === 'bypassPermissions' && rows().some((r) => r.session_id === `paseo-${other.id}`))
+  // Paseo unloads them: what it sends of an agent it has not loaded is its stored record, with no features
+  // (agent-projections buildStoredAgentPayload).
+  const store = (id) => {
+    const { features: _, ...stored } = fake.agents.get(id).agent
+    fake.agents.set(id, { ...fake.agents.get(id), agent: { ...stored, status: 'closed' } })
+    fake.upsert(fake.agents.get(id).agent)
+  }
+  store(a.grok.id)
+  store(other.id)
+  await until('unloaded', () => bridge.state.agents.get(a.grok.id)?.agent.status === 'closed' && bridge.state.agents.get(other.id)?.agent.status === 'closed')
+  await new Promise((r) => setTimeout(r, 50))
+  assert.deepEqual([mode(a.grok.id), mode(other.id)], ['bypassPermissions', undefined], 'Allow all on, Ask off: as Paseo still has them')
+  // Paseo restarts: its directory lists the stored records again.
+  fake.drop()
+  await until('connected again', () => fake.hellos.length === 2)
+  await until('subscribed again', () => [...fake.subs.values()].some((s) => s.kind === 'agents'))
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(mode(a.grok.id), 'bypassPermissions')
+  // Loaded again with the switch off: off, from then on.
+  fake.update(a.grok.id, { status: 'idle', features: [autoAcceptFeature(false)] })
+  await until('Ask', () => mode(a.grok.id) === undefined)
+  store(a.grok.id)
+  await until('unloaded again', () => bridge.state.agents.get(a.grok.id)?.agent.status === 'closed')
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(mode(a.grok.id), undefined)
+})
+
 test('a resolved preset whose launcher Paseo lacks uses the replacement provider defaults', async (t) => {
   const { fake, node } = await setup(t, {
     providers: { ...PROVIDERS, codex: { enabled: false } },
@@ -724,6 +786,30 @@ test("完成未看 follows Paseo: seen there, seen here; a new turn to look at, 
   await until('seen in Paseo', () => status() === 'idle')
   fake.update(a.claude.id, { requiresAttention: true, attentionReason: 'finished' })
   await until('a turn to look at', () => status() === 'done')
+})
+
+test('an agent Paseo unloads stays Unread, from when it finished, until it is looked at; a delegated one stays quiet (#8133)', async (t) => {
+  const { fake, a, bridge, rows } = await setup(t)
+  const row = (id) => rows().find((r) => r.session_id === id)
+  const kid = agentSnapshot({ provider: 'my-codex', cwd: '/tmp', title: 'review', status: 'idle', labels: { 'paseo.parent-agent-id': a.claude.id } })
+  fake.upsert(kid, PROJECT)
+  fake.update(a.claude.id, { requiresAttention: true, attentionReason: 'finished' })
+  await until('unread', () => row(SID)?.status === 'done' && row(`paseo-${kid.id}`))
+  const at = row(SID).updated_at
+  // Paseo lets an idle agent's process go after a while: closed, its attention mark and its time as they were.
+  const unload = (id) => fake.upsert({ ...fake.agents.get(id).agent, status: 'closed' })
+  unload(a.claude.id)
+  await until('the unload seen', () => bridge.state.agents.get(a.claude.id)?.agent.status === 'closed')
+  await new Promise((r) => setTimeout(r, 50))
+  assert.deepEqual([row(SID).status, row(SID).updated_at], ['done', at], 'still Unread, from when it finished')
+  fake.upsert({ ...fake.agents.get(kid.id).agent, requiresAttention: true, attentionReason: 'finished' })
+  unload(kid.id)
+  await until('the delegated agent unloaded', () => bridge.state.agents.get(kid.id)?.agent.status === 'closed')
+  await until('not running', () => row(`paseo-${kid.id}`)?.status === 'offline')
+  assert.equal(row(`paseo-${kid.id}`).is_subagent, true, "its creator's subtask: nobody waits for it, as in Paseo")
+  // Looked at (Paseo's mark cleared, here or in Paseo's app): not running.
+  fake.upsert({ ...fake.agents.get(a.claude.id).agent, requiresAttention: false, attentionReason: null, updatedAt: new Date(Date.now() + 5).toISOString() })
+  await until('seen: not running', () => row(SID)?.status === 'offline')
 })
 
 test('continuing a Claude session: the agent Paseo has, else Paseo imports it under the same id', async (t) => {
