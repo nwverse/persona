@@ -263,11 +263,7 @@ const artifactsOff = "CLAUDE_CODE_DISABLE_ARTIFACT=1"
 // The reply limit Persona works out is left to the process env, which `personad launch` sets for the model the
 // session runs (sessionOutput); one the provider's own environment sets is pinned like the rest of it.
 func managedSettingsEnv(l proto.ManagedLauncher) map[string]string {
-	env := pinnedEnv(providerEnv(l, "", "", false))
-	if outputLimits(l) != nil {
-		delete(env, maxOutputEnv)
-	}
-	return env
+	return unpinnedOutput(pinnedEnv(providerEnv(l, "", "", false)))
 }
 
 var (
@@ -402,6 +398,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 			resp.Clear = legacyEnvClear
 		}
 		resp.Env, resp.Clear = sessionOutput(resp.Env, resp.Clear, resp.MaxOutput, sessionModel(args, resp.Args, resp.Env))
+		resp.Clear = inheritedOutputClear(resp.Clear, resp.Env, os.Getenv) // a session Persona launched runs this one
 		resp.Clear, resp.Env = launchEnvFor(resp.Clear, resp.Env, os.Getenv("PERSONA_ASSISTANT") == "1")
 		if resp.NoProxyMerge != nil { // the inherited bypasses still hold for what claude runs
 			resp.Env = withInheritedNoProxy(resp.Env, func(k string) string { return cmp.Or(resp.NoProxyMerge[k], os.Getenv(k)) })

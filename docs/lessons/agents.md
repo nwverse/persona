@@ -345,6 +345,15 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   node's env and the settings file are written for: a value pinned in the settings file would beat the one worked out
   for the start, so `personad launch` works it out again and the settings file leaves it out (`sessionOutput`,
   `docs/integrations/claude-integration.md`, "What a gateway reports about a model").
+- **What Persona puts in the environment reaches the commands Claude runs** (#8816): Claude Code passes its environment
+  to Bash, so a `personad launch` inside a session inherits every value the outer launch set. A rule "clear it only
+  when this launch sets it" then hands the outer session's reply limit to a provider that reports none. Clearing it
+  always would also drop a value the user exported; mark the value Persona writes (`PERSONA_MAX_OUTPUT_TOKENS`) and
+  clear an inherited one only while it still equals the mark.
+- **A larger reply is also a smaller room for input**: a gateway that counts input plus `max_tokens` against the window
+  refuses long before Claude Code compacts once the reply asked for passes the 20,000 it reserves. Claude Code recovers
+  only from Anthropic's wording of the refusal; an OpenAI-compatible wording ends the turn and, behind a gateway,
+  triggers a compaction. Bound the reply by the window (an eighth, `outputLimit`), not only by what the model writes.
 - **Check a doc's side effect in the code before acting on it**: the reference says raising the reply limit "reduces
   the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
   from 32,000 to 128,000 reserves exactly as much as before.
