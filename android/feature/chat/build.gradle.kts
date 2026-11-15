@@ -11,8 +11,8 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all {
-                // The screenshot classes share one test process; Robolectric's retained resource/theme tables approach
-                // the 512 MB default after a full GC. Leave room for more captures, as feature/agents and feature/settings do.
+                // The screenshot classes share one test process; full GCs left 498 MiB live on the 512 MB default,
+                // led by Robolectric resource/theme tables. Leave room for more captures, as the other screenshot modules do.
                 it.maxHeapSize = "1g"
             }
         }
