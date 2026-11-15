@@ -209,8 +209,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   /**
-   * Which agent each session id is, when two claim one id: the one whose own id it is (not only kept, withKept), then
-   * the one not closed, else the latest.
+   * Which agent each session id is, when two claim one id: of two on one Claude session (sharedId), the one at work,
+   * else the newer, which a message goes to; of any other two, the one whose own id it is (not only kept, withKept),
+   * then the one not closed, else the latest.
    */
   function reindex() {
     bySession.clear()
@@ -223,12 +224,19 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!id) return
     const cur = agents.get(bySession.get(id))?.agent
     if (cur && cur.id !== agent.id) {
-      const better = (a) => [a[KEPT] ? 0 : 1, a.status !== 'closed' ? 1 : 0, Date.parse(a.updatedAt) || 0]
+      const shared = claudeId(agent) !== undefined && claudeId(agent) === claudeId(cur)
+      const better = shared ? (a) => [atWork(a) ? 1 : 0, Date.parse(a.createdAt) || 0]
+        : (a) => [a[KEPT] ? 0 : 1, a.status !== 'closed' ? 1 : 0, Date.parse(a.updatedAt) || 0]
       const [x, y] = [better(agent), better(cur)]
       const i = x.findIndex((v, n) => v !== y[n])
       if (i < 0 || x[i] < y[i]) return
     }
     bySession.set(id, agent.id)
+  }
+
+  /** Whether an agent is at work: running, or waiting for an answer (a second one writing its transcript must not start). */
+  function atWork(a) {
+    return a?.status === 'running' || a?.status === 'initializing' || Boolean(a?.activeTurn) || (a?.pendingPermissions?.length ?? 0) > 0
   }
 
   function sessionOf(agentId) {
@@ -246,7 +254,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     archived.delete(agent.id) // back from the archive: listed again
     const oldSession = prev ? sessionIdOf(prev.agent, roots) : undefined
     agents.set(agent.id, { agent, project: project ?? prev?.project })
-    if (oldSession && oldSession !== sessionIdOf(agent, roots)) reindex()
+    // Moved to another id, or one of two on a Claude session (its turn ended: the other may be the one again).
+    if ((oldSession && oldSession !== sessionIdOf(agent, roots)) || sharesSession(agent)) reindex()
     else {
       index(agent)
       retarget()
@@ -268,8 +277,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
    * another Claude session (docs/integrations/paseo.md "Session IDs"): Paseo forks the session to rewind it, and so when
    * the user goes on after an API error in its app. Seen here (prev: the copy listed before), the id it had; not seen
    * (the bridge was not running), the first session of the line its transcript was forked from, when the agent began
-   * that conversation itself (lineage.js; lines: whether that may be read now). The id rides on the bridge's copy (KEPT)
-   * until Paseo's record has the label (pin).
+   * that conversation itself (lineage.js; lines: whether that may be read now). One on a Claude session an older agent
+   * has takes that agent's id instead (sharedId). The id rides on the bridge's copy (KEPT) until Paseo's record has the
+   * label (pin).
    */
   function withKept(agent, prev, lines) {
     if (agentRoot(agent, roots) !== 'claude' || agent.labels?.[SESSION_LABEL]) {
@@ -278,6 +288,16 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     const now = claudeId(agent)
     if (!now) return agent
+    // On a Claude session an agent created before it has: that conversation's id, whatever its own line says.
+    const shared = sharedId(agent, now)
+    if (shared === now) {
+      keptIds.delete(agent.id)
+      return unkept(agent)
+    }
+    if (shared) {
+      keptIds.set(agent.id, shared)
+      return { ...agent, [KEPT]: shared }
+    }
     let id = keptIds.get(agent.id)
     if (!id) {
       const was = prev && !prev.agent.labels?.[SESSION_LABEL] ? sessionIdOf(prev.agent, roots) : undefined
@@ -291,6 +311,42 @@ export function createPaseoBridge(deps = {}, options = {}) {
       return { ...agent, [KEPT]: id }
     }
     return agent
+  }
+
+  /**
+   * The id of the conversation an agent of Claude Code continues when an agent created before it has the same Claude
+   * session (listed or archived): Paseo moved the conversation to another provider, or imported it again, as a new
+   * agent beside the old one. The oldest such agent's id (its label, the id kept for it, else its Claude session), so
+   * the conversation keeps the id Persona knows it by (its to-do's link, a pin, its archive mark), and the newer agent
+   * is the one listed under it (index). Undefined when no agent created before it has that session.
+   */
+  function sharedId(agent, now) {
+    const created = Date.parse(agent.createdAt)
+    if (!Number.isFinite(created)) return undefined
+    let first
+    for (const m of [agents, archived]) {
+      for (const [aid, { agent: a }] of m) {
+        if (aid === agent.id || claudeId(a) !== now || agentRoot(a, roots) !== 'claude') continue
+        const at = Date.parse(a.createdAt)
+        if (at < created && (!first || at < Date.parse(first.createdAt))) first = a
+      }
+    }
+    return first ? sessionIdOf(first, roots) : undefined
+  }
+
+  /** Whether another agent Paseo lists has an agent's Claude session (sharedId). */
+  function sharesSession(agent) {
+    const now = claudeId(agent)
+    if (!now) return false
+    for (const [aid, { agent: a }] of agents) if (aid !== agent.id && claudeId(a) === now) return true
+    return false
+  }
+
+  /** An agent without the id the bridge kept on its copy (KEPT). */
+  function unkept(agent) {
+    if (!(KEPT in agent)) return agent
+    const { [KEPT]: _, ...rest } = agent
+    return rest
   }
 
   /**
@@ -353,6 +409,19 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   /**
+   * Paseo's archive was read: an agent on a Claude session that an archived agent created before it has takes that
+   * one's id (sharedId), archived or listed, the oldest first so that each finds the ids of those before it.
+   */
+  function keepShared() {
+    const byAge = [...archived.entries()].sort(([, x], [, y]) => (Date.parse(x.agent.createdAt) || 0) - (Date.parse(y.agent.createdAt) || 0))
+    for (const [id, u] of byAge) {
+      const agent = withKept(u.agent, u, true)
+      if (agent !== u.agent) archived.set(id, { ...u, agent })
+    }
+    keepLines()
+  }
+
+  /**
    * An agent leaves the list. record: its record when Paseo archived it, when that is why, with its placement (project;
    * else the one it was listed with).
    */
@@ -399,6 +468,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
     for (const u of archived.values()) {
       if (archivedUnderOwnId(u.agent, roots) && sessionIdOf(u.agent, roots) === sessionId) found = u.agent
     }
+    return found
+  }
+
+  /** The archived agent whose Claude session is transcript (unlistedTranscripts), the one archived last; else undefined. */
+  function archivedWith(transcript) {
+    let found
+    for (const u of archived.values()) if (u.transcript === transcript) found = u.agent
     return found
   }
 
@@ -613,6 +689,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // sessions unnamed.
     void loadArchived().catch((err) => log(`paseo: reading its archived agents: ${err.message}`)).then(() => {
       archiveRead = true
+      keepShared()
       rt.sessionsChanged()
     })
   }
@@ -1939,8 +2016,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
    * Take a Claude session over (the machine's engine continuing a session not running anywhere): the Paseo agent
    * that has it already, else Paseo imports it — its conversation goes on in Paseo under the same id. A session an
    * archived agent keeps under its own id (archivedRows) is that agent, back from the archive with the id on its
-   * label: Paseo imports a session it has an archived record of into that record. Refused when a claude Paseo does
-   * not run has it open (two writers of one transcript).
+   * label: Paseo imports a session it has an archived record of into that record. So is the Claude session of an
+   * archived agent named to the node (unlistedTranscripts): imported with that agent's own provider, directory and
+   * workspace, as Paseo finds its record by provider and session; with another provider Paseo made a second agent of
+   * it beside the archived one. Refused when a claude Paseo does not run has it open (two writers of one transcript).
    */
   async function takeOver(params) {
     const id = params.resume
@@ -1951,7 +2030,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     mine ??= agents.get(bySession.get(id))?.agent // a session listed under an id of its own (Persona's label)
     const kept = mine ? undefined : archivedOf(id)
-    if (params.permission_mode === 'plan' && (mine ?? kept)?.currentModeId !== 'plan') {
+    const was = mine || kept ? undefined : archivedWith(id)
+    if (params.permission_mode === 'plan' && (mine ?? kept ?? was)?.currentModeId !== 'plan') {
       // A takeover keeps the session's own mode (an import sets none): it cannot promise read-only (caps.readonly).
       throw new RpcError('Paseo 接着已有的会话时不能保证只读（plan）模式，这次没有发送。', 'readonly_unsupported')
     }
@@ -1962,11 +2042,12 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (params.open_elsewhere) {
       throw new RpcError('这个会话正在别处的 Claude Code 里开着（Paseo 之外），Paseo 再接着它就会有两个进程写同一个会话。先在那边关掉它。这次没有发送。', 'open_elsewhere')
     }
-    const cwd = kept?.cwd || (typeof params.cwd === 'string' ? params.cwd : '')
+    const from = kept ?? was
+    const cwd = from?.cwd || (typeof params.cwd === 'string' ? params.cwd : '')
     if (!cwd || !isDir(cwd)) throw new RpcError(`接不上这个会话：它的目录不在了（${cwd || '未知'}）`, 'bad_request')
     // The provider: the archived agent's own (Paseo finds its record by provider and session), else the launcher's
     // when it runs Claude Code, else the one this machine's Claude agents use most lately.
-    const own = kept?.persistence?.provider ?? kept?.provider
+    const own = from?.persistence?.provider ?? from?.provider
     let provider = own && entries.some((e) => e.provider === own && e.enabled) ? own : undefined
     if (kept && agentRoot(kept, roots) === 'codex' && !provider) throw new RpcError('Provider unavailable', 'unavailable')
     provider ??= launchers.some((l) => l.name === params.launcher && roots[l.name] === 'claude') ? params.launcher : undefined
@@ -1980,7 +2061,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     if (!provider) throw new RpcError('Paseo 里没有跑 Claude Code 的 provider，接不了这个会话', 'unavailable')
     const imp = { provider, sessionId: kept ? (transcriptOf(kept, roots) ?? codexThreadOf(kept, roots)) : id, cwd, labels: { [SESSION_LABEL]: id } }
-    const workspaceId = workspaceFor(kept?.workspaceId, cwd)
+    const workspaceId = workspaceFor(from?.workspaceId, cwd)
     if (workspaceId) imp.workspaceId = workspaceId
     const res = await paseo.request('import_agent_request', imp,
       { expect: 'status:agent_resumed', timeoutMs: callWait })

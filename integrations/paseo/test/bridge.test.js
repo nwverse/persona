@@ -1194,6 +1194,85 @@ test('continuing a session an archived agent keeps: Paseo imports it into that a
   assert.equal(fake.requestsOf('import_agent_request').length, 1)
 })
 
+// Another Claude provider of the machine's, whose agents are not the latest: a takeover by "the latest" picks another.
+const OLD_CLAUDE = {
+  providers: { ...PROVIDERS, 'old-claude': { extends: 'claude', label: 'Old Claude' } },
+  entries: [...ENTRIES, { provider: 'old-claude', enabled: true, status: 'ready', label: 'Old Claude', models: [] }],
+}
+
+test("continuing the Claude session of an archived agent named to the node: Paseo imports it into that agent, with its own provider and folder (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000a1'
+  const day = 86_400_000
+  // Started in Paseo's app on a provider other than the machine's latest, listed under its Claude session, archived.
+  const old = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'closed',
+    archivedAt: new Date(Date.now() - day).toISOString(), updatedAt: new Date(Date.now() - day).toISOString(),
+    persistence: { provider: 'old-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: old, project: PROJECT }] })
+  const pushed = () => node.last('runtime.sessions')
+  await until('named to the node', () => pushed().unlisted_transcripts?.includes(T))
+  const res = await call(node, 'session.start', { cwd: '/nowhere', resume: T })
+  const imp = fake.requestsOf('import_agent_request').at(-1)
+  assert.deepEqual([imp.provider, imp.sessionId, imp.cwd, imp.labels['persona.session']], ['old-claude', T, '/tmp', T],
+    "its own provider and directory: Paseo's record of it")
+  assert.equal(res.session.session_id, T)
+  assert.deepEqual([fake.agents.get(old.id).agent.archivedAt, fake.agents.size], [null, 6], 'the same agent, back: no second one')
+  await until('listed again', () => rows().some((r) => r.session_id === T))
+  await until('named no more', () => !pushed().unlisted_transcripts?.includes(T))
+})
+
+test("two agents on one Claude session are one conversation: under the older one's id, the newer one gets the messages, unless the older one is at work (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000b1'
+  const ago = (ms) => new Date(Date.now() - ms).toISOString()
+  const claudeOn = (provider) => ({ provider, sessionId: T, metadata: { provider: 'claude' } })
+  // Started from Persona on one provider, then moved by Paseo to another: a new agent on the same Claude session.
+  const older = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(3_600_000),
+    updatedAt: ago(1_800_000), labels: { 'persona.session': 'paseo-b1' }, persistence: claudeOn('my-claude') })
+  const newer = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(600_000),
+    updatedAt: ago(600_000), persistence: claudeOn('old-claude') })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: older, project: PROJECT }, { agent: newer, project: PROJECT }] })
+  const ours = () => rows().filter((r) => r.session_id === 'paseo-b1' || r.session_id === T)
+  await until('listed', () => ours().length > 0)
+  assert.deepEqual(ours().map((r) => [r.session_id, r.launcher]), [['paseo-b1', 'old-claude']], "one row, under the id Persona knows it by: the newer agent's")
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'go on' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id, 'to the newer agent')
+
+  // The older one at work (its turn was still going in Paseo's app): the message goes to it, no second writer starts.
+  fake.update(older.id, { status: 'running' })
+  await until('the one at work', () => ours()[0]?.launcher === 'my-claude')
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'and the tests' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, older.id)
+  fake.update(older.id, { status: 'idle' })
+  await until('the newer one again', () => ours()[0]?.launcher === 'old-claude')
+
+  // Both archived: one row, not running, under the same id; a message takes the newer one back from the archive.
+  fake.archive(older.id)
+  fake.archive(newer.id)
+  await until('archived', () => ours().length === 1 && ours()[0].status === 'offline')
+  assert.deepEqual(ours().map((r) => [r.session_id, r.launcher]), [['paseo-b1', 'old-claude']])
+  assert.equal(node.last('runtime.sessions').unlisted_transcripts?.includes(T), false, 'its transcript is no second row')
+  await call(node, 'session.send', { session_id: 'paseo-b1', text: 'once more' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id)
+})
+
+test("an agent on the Claude session of an older one archived before the bridge started takes that one's id once Paseo's archive is read (#8131)", async (t) => {
+  const T = 'bbbbbbbb-0000-4000-8000-0000000000c1'
+  const ago = (ms) => new Date(Date.now() - ms).toISOString()
+  const older = agentSnapshot({ provider: 'my-claude', cwd: '/tmp', title: 'Fix the build', status: 'closed', createdAt: ago(7_200_000),
+    archivedAt: ago(3_600_000), updatedAt: ago(3_600_000), labels: { 'persona.session': 'paseo-c1' },
+    persistence: { provider: 'my-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const newer = agentSnapshot({ provider: 'old-claude', cwd: '/tmp', title: 'Fix the build', status: 'idle', createdAt: ago(1_800_000),
+    updatedAt: ago(1_800_000), persistence: { provider: 'old-claude', sessionId: T, metadata: { provider: 'claude' } } })
+  const base = Object.values(agents()).map((agent) => ({ agent, project: PROJECT }))
+  const { fake, node, rows } = await setup(t, { ...OLD_CLAUDE, agents: [...base, { agent: older, project: PROJECT }, { agent: newer, project: PROJECT }] })
+  await until('listed under the older id', () => rows().some((r) => r.session_id === 'paseo-c1'))
+  assert.equal(rows().some((r) => r.session_id === T), false, 'no row under the Claude session')
+  assert.equal(rows().find((r) => r.session_id === 'paseo-c1').status, 'idle', "the newer agent's row, not the archived one's")
+  await call(node, 'session.send', { session_id: 'paseo-c1', text: 'go on' })
+  assert.equal(fake.requestsOf('send_agent_message_request').at(-1).agentId, newer.id)
+})
+
 test("Paseo's archive at connect: archived agents that keep their id are rows, the latest of the week beside the list's limit; the agents Paseo lists come first; a deleted one leaves", async (t) => {
   const day = 86_400_000
   const transcript = (n) => `ffffffff-0000-4000-8000-${String(n).padStart(12, '0')}`
