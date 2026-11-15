@@ -23,8 +23,8 @@ func (h *Hub) lowDistractionSetting() selfSetting {
 			"briefing and the Held pushes list, and finished Agent turns are silent. Ask the owner before proposing it; never " +
 			"turn it on just to quiet one task",
 		value: "true or false",
-		get: func(context.Context) (string, error) { return fmt.Sprint(h.push.lnModeOn()), nil },
-		set: h.setLowDistraction}
+		get:   func(context.Context) (string, error) { return fmt.Sprint(h.push.lnModeOn()), nil },
+		set:   h.setLowDistraction}
 }
 
 func (h *Hub) setLowDistraction(_ context.Context, v json.RawMessage) (*selfChange, error) {
