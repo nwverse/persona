@@ -140,7 +140,6 @@
     <string name="settings_hub_update_turn_off">Turn off</string>
     <string name="settings_hub_update_got_it">Got it</string>
     <string name="settings_hub_update_auto">Update hub automatically</string>
-    <string name="settings_hub_update_retry">Retry</string>
     <string name="settings_hub_update_now_title">Update now?</string>
     <string name="settings_hub_update_now">Update now</string>
     <string name="settings_hub_update_now_more">Update now…</string>
