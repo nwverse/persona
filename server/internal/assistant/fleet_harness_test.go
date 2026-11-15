@@ -43,6 +43,7 @@ type fleetDevs struct {
 type fleetNode struct {
 	name, home, trust string
 	sessions          []proto.Session
+	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
 	// away: its node is not connected (Summary and List say not reachable); its sessions stay as last listed.
 	away bool
@@ -159,6 +160,7 @@ func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	if n == nil {
 		return nil, false
 	}
+	n.lists++
 	return append([]proto.Session(nil), n.sessions...), true
 }
 
@@ -302,6 +304,20 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 	return nil
 }
 
+func (m *fleetMem) MarkInteractionResumable(_ context.Context, id string) (bool, error) {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.status[id] != "pending" {
+		return false, nil
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID == id {
+			m.recs[i].Interaction.Resumable = true
+		}
+	}
+	return true, nil
+}
+
 func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *proto.Resolution) error {
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
@@ -412,11 +428,12 @@ var _ fleetStore = (*fleetMem)(nil)
 
 // fleetTest is a manager with the fleet on: s, its devices d, its hub f, its store st.
 type fleetTest struct {
-	t  *testing.T
-	s  *Service
-	d  *fleetDevs
-	f  *fakeHub
-	st *fleetMem
+	t      *testing.T
+	s      *Service
+	d      *fleetDevs
+	f      *fakeHub
+	st     *fleetMem
+	cancel context.CancelFunc
 }
 
 // newFleetTest is a manager carrying the machine "mac" (named "Mac") with a store, on a fake hub.
