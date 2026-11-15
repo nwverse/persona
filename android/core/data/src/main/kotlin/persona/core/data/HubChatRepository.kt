@@ -50,6 +50,9 @@ class HubChatRepository(
         var nextOperation = 0L
         val activeFolds = mutableSetOf<String>()
         val inputs = Mutex()
+        /** Transport epoch follows submitted history, not the possibly older applied frame. Guarded by [inputs]. */
+        var submittedHistory: String? = null
+        var historyGeneration = 0L
         val older = Mutex()
         val folds = Mutex() // The Kotlin reference has one fold opening; Rust has one per fold_id.
         val lock = Mutex()
@@ -377,14 +380,13 @@ class HubChatRepository(
         entry.ready.await()
         entry.older.withLock {
             try {
-                val action = awaitActions(entry, Input.LoadOlder)?.singleOrNull() as? Action.FetchOlder ?: return@withLock
+                val (generation, history) = entry.inputs.withLock { entry.historyGeneration to entry.submittedHistory }
+                val action = awaitActions(entry, Input.LoadOlder, generation)?.singleOrNull() as? Action.FetchOlder ?: return@withLock
                 entry.state.update { it.copy(loadingOlder = true, error = null) }
-                val history = entry.lock.withLock { entry.reducer.history }
                 val page = transport.items(session, ItemsQuery(beforeSeq = action.beforeSeq))
-                val stale = entry.lock.withLock {
-                    history != entry.reducer.history || page.history != null && history != null && page.history != history
-                }
-                if (!stale) awaitActions(entry, Input.Older(page.items, page.hasMore))
+                currentCoroutineContext().ensureActive()
+                val stale = page.history != null && history != null && page.history != history
+                if (!stale) awaitActions(entry, Input.Older(page.items, page.hasMore), generation)
                 entry.lock.withLock { publish(entry) }
                 persist(entry)
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -426,13 +428,14 @@ class HubChatRepository(
             it.kind == "fold" && it.seq == fromSeq && it.fold?.throughSeq == toSeq
         } } ?: return emptyList()
         if (!synchronized(entry.activeFolds) { entry.activeFolds.add(fold.id) }) return emptyList()
-        val history = entry.lock.withLock { entry.reducer.history }
         val work = mutableSetOf<String>()
         try {
-            var actions = awaitActions(entry, Input.OpenFold(fold.id)) ?: return emptyList()
+            val (generation, history) = entry.inputs.withLock { entry.historyGeneration to entry.submittedHistory }
+            var actions = awaitActions(entry, Input.OpenFold(fold.id), generation) ?: return emptyList()
             while (actions.isNotEmpty()) {
                 val action = actions.single() as Action.FetchRange
                 val page = transport.items(entry.key, ItemsQuery(fromSeq = action.fromSeq, throughSeq = action.throughSeq))
+                currentCoroutineContext().ensureActive()
                 check(page.items.none { it.kind == "fold" } && (!page.more ||
                     page.items.lastOrNull()?.seq?.let { it >= action.fromSeq && it < action.throughSeq } == true))
                 entry.lock.withLock {
@@ -441,7 +444,7 @@ class HubChatRepository(
                 }
                 work += page.items.map { it.id }
                 // A changed fold can request another page even when HTTP more=false. Only the applied Ack ends it.
-                actions = awaitActions(entry, Input.Range(page.items, page.more, fold.id)) ?: return emptyList()
+                actions = awaitActions(entry, Input.Range(page.items, page.more, fold.id), generation) ?: return emptyList()
             }
             val result = entry.lock.withLock { publish(entry); entry.reducer.items.filter { it.id in work } }
             persist(entry)
@@ -592,13 +595,36 @@ class HubChatRepository(
 
     /** Serializes native inputs, never while holding the mutex needed by the applied callback. */
     private suspend fun accept(entry: Entry, input: Input, operation: Long? = null) =
-        entry.inputs.withLock { entry.continuity.accept(input, operation) }
+        entry.inputs.withLock { acceptLocked(entry, input, operation) }
 
-    private suspend fun awaitActions(entry: Entry, input: Input): List<Action>? {
+    /** Holding inputs: preserve transport history identity even before the corresponding frame is applied. */
+    private suspend fun acceptLocked(entry: Entry, input: Input, operation: Long?): ContinuityAdapter.Applied? {
+        val history = when (input) {
+            is Input.Restore -> input.state.history
+            is Input.Push -> input.batch.history
+            is Input.Latest -> input.batch.history
+            is Input.After -> input.batch.history
+            is Input.Reload -> input.history
+            else -> null
+        }
+        if (input is Input.Restore || history != null && history != entry.submittedHistory) {
+            entry.historyGeneration++
+            entry.submittedHistory = history
+        }
+        return entry.continuity.accept(input, operation)
+    }
+
+    private suspend fun awaitActions(entry: Entry, input: Input, generation: Long? = null): List<Action>? {
         val ready = CompletableDeferred<List<Action>>()
         val id = synchronized(entry.operations) { (++entry.nextOperation).also { entry.operations[it] = ready } }
         return try {
-            withTimeoutOrNull(3_000) { accept(entry, input, id)?.requests ?: ready.await() }
+            withTimeoutOrNull(3_000) {
+                val result = entry.inputs.withLock {
+                    if (generation != null && generation != entry.historyGeneration) return@withTimeoutOrNull null
+                    acceptLocked(entry, input, id)
+                }
+                result?.requests ?: ready.await()
+            }
         } finally {
             synchronized(entry.operations) { entry.operations.remove(id) }
         }

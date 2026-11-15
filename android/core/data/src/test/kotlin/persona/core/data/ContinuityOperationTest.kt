@@ -23,6 +23,80 @@ class ContinuityOperationTest {
     private fun fold(seq: Int, through: Int = seq + 1) = item(seq).copy(id = "fold:$seq", kind = "fold",
         fold = Fold(items = through - seq + 1, throughSeq = through, throughId = "$through#0"))
 
+    @Test fun closingBeforeTheCreationFrameCancelsWaitersWithoutStartingTheCore() = runBlocking {
+        val scheduled = CompletableDeferred<() -> Unit>()
+        var creates = 0
+        val driver = RustContinuityDriver(object : ContinuityFrameScheduler {
+            override fun schedule(frame: () -> Unit) { scheduled.complete(frame) }
+        }) { creates++; error("A closed driver must not initialize the core") }
+        val adapter = RustContinuityAdapter("uninitialized", driver)
+        val waiter = async { adapter.accept(ContinuityAdapter.Input.ContinueFill) }
+        try {
+            val firstFrame = scheduled.await()
+            driver.close()
+            withTimeout(1_000) { waiter.join() }
+            assertTrue(waiter.isCancelled)
+            firstFrame()
+            assertEquals(0, creates)
+        } finally { waiter.cancelAndJoin(); adapter.close(); driver.close() }
+    }
+
+    @Test fun oldHistoryResponseIsDiscardedBeforeTheNewHistoryFrameArrives() = runBlocking {
+        Harness(listOf(item(10)), hasMore = true).use { h ->
+            h.open()
+            val oldPage = CompletableDeferred<ItemsResponse>()
+            var olderSubmitted = false
+            h.beforeAccept = { input -> if (input is ContinuityAdapter.Input.Older) olderSubmitted = true }
+            h.transport.fetch = { query ->
+                assertEquals(10, query.beforeSeq)
+                oldPage.await()
+            }
+            val loading = h.scope.async { h.repository.loadOlder(key) }
+            h.frames.run()
+            h.connection.events.emit(ItemsEvent(key.machineId, key.sessionId, listOf(item(20)),
+                history = "replacement", toSeq = 20, backlog = true, hasMore = true))
+            // The worker has already changed history, but the repository's applied snapshot is still old.
+            assertEquals("h", h.adapter.state.history)
+            assertEquals(listOf(10), h.snapshot.get().items.map { it.seq })
+            oldPage.complete(ItemsResponse(listOf(item(9)), history = "h", hasMore = false))
+            pump(h.frames) { loading.isCompleted && h.adapter.state.history == "replacement" }
+            loading.await()
+            assertFalse("An old history response must not reach the new core history", olderSubmitted)
+            assertEquals("replacement", h.adapter.state.history)
+            assertEquals(listOf(20), h.adapter.state.items.map { it.seq })
+        }
+    }
+
+    @Test fun cancellationBetweenFoldReservationAndHistoryReadReleasesTheReservation() = runBlocking {
+        Harness(listOf(fold(2))).use { h ->
+            h.open()
+            val entries = h.repository.javaClass.getDeclaredField("entries").apply { isAccessible = true }
+                .get(h.repository) as Map<*, *>
+            val entry = requireNotNull(entries[key])
+            val lock = entry.javaClass.getDeclaredField("lock").apply { isAccessible = true }
+                .get(entry) as kotlinx.coroutines.sync.Mutex
+            val active = entry.javaClass.getDeclaredField("activeFolds").apply { isAccessible = true }
+                .get(entry) as Set<*>
+            val held = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            lock.lock()
+            val first = h.scope.async { h.repository.expandFold(key, 2, 3) }
+            val holder = h.scope.launch { lock.lock(); try { held.complete(Unit); release.await() } finally { lock.unlock() } }
+            try {
+                // The first lookup wins the lock, then the holder blocks the history read after reservation.
+                lock.unlock()
+                held.await()
+                assertTrue(active.contains(fold(2).id))
+                first.cancelAndJoin()
+                assertFalse(active.contains(fold(2).id))
+            } finally { release.complete(Unit); holder.join(); first.cancelAndJoin() }
+            h.transport.fetch = { ItemsResponse(listOf(item(2), item(3)), history = "h") }
+            val retry = h.scope.async { h.repository.expandFold(key, 2, 3) }
+            pump(h.frames) { retry.isCompleted }
+            assertEquals(listOf(2, 3), retry.await().map { it.seq })
+        }
+    }
+
     @Test fun effectOnlyAndAcknowledgedNoOpBothReachTheirOwners() = runBlocking {
         val frames = Frames()
         val host = AtomicReference<CoreHost>()

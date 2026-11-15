@@ -73,8 +73,9 @@ class RustContinuityDriver(
     private var closed = false
     @Volatile private var liveCore: RustCore? = null
     private val coreDelegate = lazy {
-        CompletableDeferred<RustCore>().also { ready ->
+        CompletableDeferred<RustCore>(scope.coroutineContext[Job]).also { ready ->
             scheduler.afterFirstFrame {
+                if (ready.isCancelled) return@afterFirstFrame
                 if (scheduler.synchronous) {
                     try { ready.complete(createCore()) }
                     catch (failure: Throwable) { ready.completeExceptionally(failure) }
