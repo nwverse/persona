@@ -199,13 +199,15 @@ func TestIdleCompactionLatchSurvivesRestartAndRearmsAfterDrop(t *testing.T) {
 	if err := json.Unmarshal(raw, &restored); err != nil {
 		t.Fatal(err)
 	}
-	n.state = newState()
-	n.state.put(p.id, restored)
+	beforeRestart := sink.String()
+	n, p, sink = idleCompactFixture(t)
+	restored.Cwd = p.cwd
+	n.state.update(p.id, func(st *sessionState) bool { *st = restored; return true })
 	p.context = 0 // a resumed process has no current usage yet
 	if err := idleCompactCall(ctx, n, p, idleCompactPolicy, source); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(sink.String(), `"/compact"`) != 1 {
+	if strings.Count(beforeRestart+sink.String(), `"/compact"`) != 1 {
 		t.Fatal("the same idle interval compacted twice after a restart")
 	}
 
@@ -223,7 +225,7 @@ func TestIdleCompactionLatchSurvivesRestartAndRearmsAfterDrop(t *testing.T) {
 	if err := idleCompactCall(ctx, n, p, idleCompactPolicy, source); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(sink.String(), `"/compact"`) != 1 {
+	if strings.Count(beforeRestart+sink.String(), `"/compact"`) != 1 {
 		t.Fatal("context regrowth compacted before the new idle interval elapsed")
 	}
 	idleCompactStream(n, p, `{"type":"result","subtype":"success"}`)
