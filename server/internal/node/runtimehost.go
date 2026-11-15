@@ -386,8 +386,12 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		for _, id := range moved {
 			n.transcriptMoved(h, id)
 		}
-		for id, since := range rewatch {
-			go n.runtimeWatch(h, id, since)
+		for id, attempt := range rewatch {
+			go func() {
+				if err := n.runtimeWatch(h, id, attempt.since); err != nil {
+					n.runtimes.watchFailed(h, id, attempt.token)
+				}
+			}()
 		}
 		n.publish(n.sessionList(context.Background(), false))
 		return

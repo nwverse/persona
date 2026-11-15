@@ -717,7 +717,19 @@ Two failures that only show at `compileDebugUnitTestKotlin` / first composition,
 
 Running `./gradlew` Robolectric/JVM tests on a container without Android Studio needs explicit setup:
 - Toolchain is JDK 21 (AGP pins `gradle-daemon-jvm.properties toolchainVersion=21`); a machine whose default `java` is 8 fails sdkmanager with `UnsupportedClassVersionError`. Point `JAVA_HOME` at a 21 JDK.
-- Install the SDK via `cmdline-tools`; the platform package carries a minor suffix (`platforms;android-37.0`, not `android-37`), and write `sdk.dir` to `android/local.properties`.
+- Install the SDK via `cmdline-tools`; the platform package carries a minor suffix (`platforms;android-37.0`, not `android-37`). In the Android project, create the untracked `local.properties` file with `sdk.dir` pointing to the installed SDK.
 - On an IPv6-only NAT64 network curl works but the JVM throws "Network is unreachable" (it defaults to an IPv4 socket): set `_JAVA_OPTIONS=-Djava.net.preferIPv6Addresses=true` for both sdkmanager and Gradle dependency downloads.
 - In a small memory cgroup the default `-Xmx4g` daemon is OOM-killed. Constrain it: `GRADLE_OPTS="-Xmx1600m -Dorg.gradle.workers.max=1 -Dkotlin.compiler.execution.strategy=in-process"`, `--no-daemon`, and an **Groovy-syntax** init script setting every `Test` task `maxHeapSize`/`maxParallelForks = 1`. A Kotlin-syntax init (`Test::class.java`) fails with "No such property: java" — and the failure is easy to misread as a pass, so always confirm `BUILD SUCCESSFUL` and the test-results XML, never just the shell's exit code.
 - Pure-Kotlin modules (`core:domain`, `core:contracts`) expose the JVM `test` task; Android library modules expose `testDebugUnitTest`.
+
+## Under imePadding, a size read in composition recomposes on every keyboard frame (#8334)
+
+With edge-to-edge and `adjustResize` the IME inset changes on every frame of the keyboard's slide, so everything under an
+`imePadding()` is measured smaller each frame. That is cheap as layout and expensive as composition: Compose 1.12's
+`BoxWithConstraints` subcomposes its content again whenever its constraints change, so a page body inside one ran in full
+per frame, and reading `WindowInsets.ime` (or `safeDrawing`, which includes it) in composition does the same to its scope.
+Keep sizes under the keyboard out of composition: `onSizeChanged` into a state read inside `derivedStateOf`, a layout
+modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up". `ChatImeRecompositionTest` dispatches the
+inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
+the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
+`JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.

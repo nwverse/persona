@@ -340,7 +340,7 @@ func TestTodoOutcomeAfterReopening(t *testing.T) {
 	}
 	read := func() (string, []any) {
 		t.Helper()
-		output, err := s.toolTodoGet(ctx, json.RawMessage(`{"id":"td_phases"}`))
+		output, err := s.toolTodoGet(ctx, "", "", json.RawMessage(`{"id":"td_phases"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
