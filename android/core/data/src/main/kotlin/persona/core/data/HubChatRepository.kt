@@ -274,6 +274,9 @@ class HubChatRepository(
 
     /** The composer shares interruption state with menu actions. Failed requests leave it unchanged. */
     fun trackComposer(delegate: ChatComposerService): ChatComposerService = object : ChatComposerService by delegate {
+        override suspend fun upload(session: SessionKey, name: String, file: java.io.File, destination: String): String =
+            delegate.upload(session, name, file, destination)
+
         override suspend fun interrupt(session: SessionKey) {
             delegate.interrupt(session)
             update(session) { it.stopRequested = true }
