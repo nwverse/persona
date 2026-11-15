@@ -151,13 +151,13 @@ func allStoppedSignal(t Todo, tasks []Todo, sessions []proto.Session, now time.T
 				continue
 			}
 			if child.Starting || len(child.Queued) > 0 ||
-				(child.BackgroundWorking || child.BackgroundWaiting) && !backgroundRunning(child) ||
 				child.PendingInteractions > 0 || child.State == proto.StateNeedsYou || child.AwaitsReply ||
 				child.Loop != nil || child.TurnErrorResumes || child.Work != nil &&
 				(child.Work.InteractionID != "" || child.Work.WakeAt != nil && child.Work.WakeAt.After(now)) {
 				return superviseSignal{}, false
 			}
-			if child.State == proto.StateWorking || child.Status == proto.StatusWorking || backgroundRunning(child) {
+			if child.State == proto.StateWorking || child.Status == proto.StatusWorking ||
+				child.BackgroundWorking || child.BackgroundWaiting || backgroundRunning(child) {
 				at, waiting := allStoppedBackground(child, now)
 				if waiting || at.IsZero() || now.Sub(at) < superviseAllStoppedAfter {
 					return superviseSignal{}, false
@@ -224,17 +224,19 @@ func allStoppedSince(c proto.Session, now time.Time) (time.Time, bool) {
 }
 
 // Background labels alone do not prove progress. Use observed activity where it
-// exists, otherwise the start time. A monitor with a future expiry is a timed wake.
-// These timestamps also name the quiet stretch, so activity rearms deduplication.
+// exists, otherwise the start time. Without either, the parent's known stop bounds
+// the age: its background work started before it stopped. A monitor with a future
+// expiry is a timed wake. Activity timestamps also rearm deduplication.
 func allStoppedBackground(c proto.Session, now time.Time) (latest time.Time, waiting bool) {
 	latest = c.UpdatedAt
-	if (c.BackgroundWorking || c.BackgroundWaiting) && !backgroundRunning(c) {
-		return latest, true // an older source supplied only the summary flag
-	}
 	advance := func(at time.Time) {
 		if at.After(latest) {
 			latest = at
 		}
+	}
+	advance(c.StateSince)
+	if c.Work != nil {
+		advance(c.Work.TurnAt)
 	}
 	if c.ActivityAt != nil {
 		advance(*c.ActivityAt)
@@ -243,16 +245,10 @@ func allStoppedBackground(c proto.Session, now time.Time) (latest time.Time, wai
 		if b.Kind == "monitor" && b.ExpiresAt != nil && b.ExpiresAt.After(now) {
 			return latest, true
 		}
-		if b.StartedAt.IsZero() {
-			return latest, true // no timestamp is not evidence of an old background task
-		}
 		advance(b.StartedAt)
 	}
 	for _, a := range c.Subagents {
 		if a.Running {
-			if a.StartedAt.IsZero() && a.UpdatedAt.IsZero() {
-				return latest, true
-			}
 			advance(a.StartedAt)
 			advance(a.UpdatedAt)
 		}
@@ -270,9 +266,6 @@ func allStoppedBackground(c proto.Session, now time.Time) (latest time.Time, wai
 				if a.UpdatedAt.After(at) {
 					at = a.UpdatedAt
 				}
-			}
-			if at.IsZero() {
-				return latest, true
 			}
 			advance(at)
 		}

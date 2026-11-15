@@ -103,8 +103,6 @@ func TestAllStoppedRuntimeChildGuards(t *testing.T) {
 		name string
 		edit func(*proto.Session)
 	}{
-		{"summary only background", func(c *proto.Session) { c.BackgroundWorking = true }},
-		{"summary only waiting", func(c *proto.Session) { c.BackgroundWaiting = true }},
 		{"queued input", func(c *proto.Session) { c.Queued = []string{"Continue"} }},
 		{"starting", func(c *proto.Session) { c.Starting = true }},
 		{"future wake", func(c *proto.Session) { later := now.Add(time.Hour); c.Work = &proto.WorkState{WakeAt: &later} }},
@@ -214,24 +212,57 @@ func TestAllStoppedTransientReadMustRetry(t *testing.T) {
 	}
 }
 
-func TestAllStoppedReviewPendingAndUnknownActivity(t *testing.T) {
+func TestAllStoppedReviewPending(t *testing.T) {
+	now := time.Now()
+	task, agents := stoppedFixture(now)
+	task.Supervision.State = reviewPending
+	if g, ok := allStoppedSignal(task, nil, agents, now); ok {
+		t.Fatalf("unexpected signal %+v", g)
+	}
+}
+
+// Background work started during the parent's turn, so its age is at least the
+// time since that parent stopped even when no background timestamp was reported.
+func TestAllStoppedUnknownBackgroundAge(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
 		name string
-		edit func(*Todo, []proto.Session)
+		edit func(*proto.Session)
 	}{
-		{"review pending", func(task *Todo, _ []proto.Session) { task.Supervision.State = reviewPending }},
-		{"unknown shell time", func(_ *Todo, a []proto.Session) { a[0].Background = []proto.BackgroundTask{{Kind: "shell"}} }},
-		{"unknown subagent time", func(_ *Todo, a []proto.Session) { a[0].Subagents = []proto.Subagent{{Running: true}} }},
-		{"unknown workflow time", func(_ *Todo, a []proto.Session) { a[0].Workflows = []proto.Workflow{{Running: true}} }},
-		{"summary only", func(_ *Todo, a []proto.Session) { a[0].BackgroundWaiting = true }},
+		{"shell", func(c *proto.Session) { c.Background = []proto.BackgroundTask{{Kind: "shell"}} }},
+		{"subagent", func(c *proto.Session) { c.Subagents = []proto.Subagent{{Running: true}} }},
+		{"workflow", func(c *proto.Session) { c.Workflows = []proto.Workflow{{Running: true}} }},
+		{"summary working", func(c *proto.Session) { c.BackgroundWorking = true }},
+		{"summary waiting", func(c *proto.Session) { c.BackgroundWaiting = true }},
+		{"inferred working state", func(c *proto.Session) { c.State = proto.StateWorking; c.BackgroundWorking = true }},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			task, agents := stoppedFixture(now)
-			tc.edit(&task, agents)
-			if g, ok := allStoppedSignal(task, nil, agents, now); ok {
-				t.Fatalf("unexpected signal %+v", g)
+		for _, child := range []bool{false, true} {
+			for _, minutes := range []int{29, 30} {
+				t.Run(fmt.Sprintf("%s/child=%v/minutes=%d", tc.name, child, minutes), func(t *testing.T) {
+					task, agents := stoppedFixture(now.Add(-time.Hour))
+					stop := now.Add(-time.Duration(minutes) * time.Minute)
+					c := proto.Session{MachineID: "box", SessionID: agents[0].SessionID, Status: proto.StatusDone,
+						State: proto.StateIdle, UpdatedAt: now.Add(-2 * time.Hour), StateSince: stop,
+						Work: &proto.WorkState{TurnAt: stop}}
+					tc.edit(&c)
+					if child {
+						c.SessionID, c.ParentSessionID = "runtime-child", agents[0].SessionID
+						agents = append(agents, c)
+					} else {
+						agents[0] = c
+					}
+					g, ok := allStoppedSignal(task, nil, agents, now)
+					if ok != (minutes >= 30) {
+						t.Fatalf("stop-time age bound: signal=%+v holds=%v", g, ok)
+					}
+					if ok {
+						next, holds := allStoppedSignal(task, nil, agents, now.Add(time.Minute))
+						if !holds || next.Key != g.Key {
+							t.Fatalf("unknown background changed key on the next tick: %q -> %q", g.Key, next.Key)
+						}
+					}
+				})
 			}
-		})
+		}
 	}
 }

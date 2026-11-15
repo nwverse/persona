@@ -590,7 +590,8 @@ state the start-time approximation when a shell has no activity field. Include t
 deduplication so identical last words do not erase a later, genuinely new period of inactivity. The short semantic
 fingerprint window cannot guarantee once per stopped group across restarts: keep only the latest group key until the
 task closes. A failed state read must remain retryable, not become a moot signal marked sent. Runtime children need the
-same starting, queued-input and summary-only-background guards as their parent, even when their row says idle.
+same starting and queued-input guards as their parent, even when their row says idle. Missing background activity times
+must not grant an indefinite exemption: the launching Agent's stop time bounds the age, including summary-only flags.
 
 ## A signal told once needs somewhere to go when its reader never acts (#8043)
 

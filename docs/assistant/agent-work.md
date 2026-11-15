@@ -28,8 +28,10 @@ Awaiting Reply, task-decision cards, queued input, active loops, automatic error
 exclude the group. The manager overlays its work ledger on the session list so newly scheduled wakes and cards count.
 
 Background work must show activity within the same 30-minute interval: running subagents use `updated_at`, workflows use
-their own and their agents' activity times, and background tasks without activity timestamps use `started_at`. A monitor
-with a future `expires_at` is a scheduled wake. A long-running shell may therefore need supervision despite still being
+their own and their agents' activity times, and background tasks without activity timestamps use `started_at`. If those
+timestamps are absent too, the Agent's known stop time bounds the age: its background work started before it stopped.
+This also covers summary-only background flags and runtime children; missing activity times do not exempt them forever.
+A monitor with a future `expires_at` is a scheduled wake. A long-running shell may therefore need supervision despite still being
 alive; the message tells the supervisor to verify before restarting anything. No node-side output polling is added.
 
 The latest state, transcript, activity, work-turn, past wake or background-activity timestamp starts each participant's
