@@ -12,6 +12,13 @@ check. This demonstrates the confirmation gap, not the cause of any particular l
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
 
+## Task branch reuse is not forced worktree creation (#8357)
+
+An explicitly named task branch may already have a checkout outside the engine's usual directory. Discover it from Git,
+not from the generated path or an error message. Reuse needs successful clean-tree and complete live-Agent checks on the node,
+plus the hub's unfinished-task claim check under workspace admission. Missing inspection is not proof of safety.
+Persist reuse separately from creation and keep its machine/path on retry; do not relax ordinary `worktree.create` or Start approval.
+
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
@@ -176,6 +183,10 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Don't map Codex panes from "newest rollout in the same directory" (same pitfall as Claude): terminal titles are "thread name | directory"; map by thread name in `session_index.jsonl`.
   Rollouts keep writing in the directory of the thread's start date; scanning only the last two weeks' date directories misses old threads (2026-10-31: a running Codex appeared as another session with a gray dot).
   Comparing content by id won't catch this; compare against actual pane truth (`scripts/diag/live_panes_check.py`).
+- A Codex pane title that names no thread in `session_index.jsonl` is not evidence that the pane runs another thread: the index may simply lack the name.
+  Discarding herdr's reported session id for it left the pane mapped to nothing, so a Persona-started Codex joined on its app-server was listed only as the `codex_app_server` row, with no pane or terminal (#7538).
+  Drop the reported id only when the index knows that thread under a different name, and never under a name it gave the thread before (a rename leaves the earlier line in the index, and the node keeps only the latest); a remembered pane binding is still dropped.
+  Check the name of the thread herdr reported, not of the main chat a sub-Agent id was replaced with: that name says nothing about the reported thread.
   Claude panes likewise: pane bindings for Persona-started sessions live in hub's database and reload after node restart, but can be stale; `sessions/<pid>.json` takes priority.
   After changing pane identification logic, rerun verification after deployment (restart); pre- and post-restart results may differ.
 - herdr `agent.prompt` pastes, then waits about 300 ms before Enter: serialize sends to the same session, or the second screen read mistakes the first message for an input draft. Sending deduplication lives in hub Postgres (`sent_messages`):
@@ -225,6 +236,11 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   read the input box once; if it's still the just-sent text (strip `[Image #n]` / `[Pasted text #n]`, compare the first few words), press Enter once more. If empty or different, press nothing.
   Use only that post-wait read: the first version read immediately and gave up on a mismatch, which missed the 11-01 case (right after pasting the box may not yet contain this text).
 - Codex app-server integration (2026-11-02): Unix sockets carry WebSocket, not JSON-lines; external stdio has no second attach port. Directory discovery doesn't resume; control goes only to the original loaded owner. Unknown / cancelled requests must not send error / decline, which could consume the desktop approval callback. `serverRequest/resolved` withdraws cards as dismissed without fabricating approval; deduplicate using generation and typed request ID together. Generic server errors after send admission aren't "definitely not sent" and must not auto-retry; old outbox operation ids don't expire after one day (`docs/integrations/codex-app-server.md`).
+- Session effort readback is not an edit capability (#6887): keep Codex rollout effort visible for terminal/history rows,
+  and do not replace a running effort missing from a stale model list with its default. Long tool output can move the
+  latest `turn_context` beyond the quick tail; include those small setting rows in the existing incremental scan.
+  A current row unable to switch models can still open its effort controls, while genuinely unsupported changes need
+  a visible reason. Connection tests must apply the draft effort on the wire, not just echo an ignored input.
 - Codex app-server `thread/loaded/list` isn't all chats (2026-11-05, #2118, 0.166): TUI creates `ephemeral: true` threads for small background tasks in the shared managed daemon
   (`threadSource: "thread_title"`, title generation), without `path` / rollout; they stay loaded and `active` after finishing. Ignoring `ephemeral` produces a row of untitled "Working" Codex entries from the same directory and second on the Agents page.
   Skip `ephemeral` before listing sessions; they also don't support `includeTurns` (returns -32600).
@@ -536,6 +552,15 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 ## Package-level work is paid by every short personad command (2026-11-08, #1308)
 
 - Claude Code runs `personad hook` (or `persona-node hook`) on each of Persona's hook events and waits for it to exit. Most of that run was package initialization of the server it links: the i18n catalogs (parsed at start, and still parsed after they were made lazy because `extension.UISlots` and `assistant.silentTurnError` called `i18n.T` in package variables), every prompt template (parsed at start, and still parsed after they were made lazy because `prompts.peerMessageHead` rendered one in a package variable), about 460 package-level regexps (one `[\p{L}\p{N}_-]{1,64}` alone 0.8 ms and 2.5 MB), and the six garbage collections those 28 MB of allocations set off. On a busy Apple silicon Mac, where a Go program that only reads stdin took 6.8 ms, the hook took 40.4 ms (median of 50 runs; persona-node 45.3 ms); after making them lazy (`internal/lazyre` for patterns, `sync.OnceValue` for the rest and in the contract packages, which use the standard library only) it takes 15.2 ms (persona-node 16.4 ms), with init down from 29.5 ms / 28 MB to 3.6 ms / 1.4 MB and no collection. Keep package-level work out of anything personad links: `GODEBUG=inittrace=1 personad hook </dev/null` lists what each package's init costs, `GODEBUG=gctrace=1` the collections during it; a package-level `i18n.T` or prompt render defeats the lazy catalogs and templates, and `lazyre`'s guard test refuses a package-level `regexp.MustCompile`.
+
+## A session with no space is in "No project", whatever its repository (2026-11-15, #8521)
+
+The clients' Agents list by **Project** groups by `space_id` (the hub's catalog of spaces), not by `repo_root`. A source
+that never sets a space puts all its sessions under "No project" even when `repo_root` is right, so the **Repository**
+grouping looks fine and the bug shows only in the other one. Hosts set it (herdr, Orca, Paseo); a desktop app's sessions
+need the node to set one: the Codex App's always had one, the Claude desktop app's had none until #8521. A new source of
+sessions outside the engines should set a space too. On the list path, take the repository from the list's Git places
+(`fillGitPlace`, read in the background) rather than running git per row: it runs every second.
 
 ## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
 
@@ -1055,3 +1080,13 @@ while that is the running gateway. Several providers on one computer overwrite e
 `initialize` answer is not a stable source for a provider's gateway models. Turning discovery off to hide entries is
 wrong too: it removes the gateway's list from every `/model` the user opens. Read the gateway itself
 (`node/launcher_gateway_models.go`) and compare lists from several computers before concluding a list is clean.
+
+## A Claude session without Persona's hooks still asks with AskUserQuestion (#8515)
+
+The desktop app's sessions (and claude in other terminals) run no hook of Persona's, so their questions never became
+cards; the apps showed only a "reply to answer" line, and the questions and options were nowhere to be seen. The peer
+message prompt asked the model to offer numbered options in plain text instead (#5887), but models still opened
+AskUserQuestion, often with several questions. Read the open call from the transcript (`node/claudeoutside_ask.go`)
+rather than counting on the model to follow the prompt, and check a real transcript's `tool_use` input shape before
+parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
+workaround that outlives the fix it stood in for is wrong advice to the model.

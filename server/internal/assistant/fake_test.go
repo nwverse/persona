@@ -100,6 +100,7 @@ type fakeHub struct {
 	offline      map[string]bool
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
+	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -149,7 +150,8 @@ type fakeHub struct {
 	failSendOnce   map[string]error    // session.send_once fails with these, by "machine/session"
 	failInterrupt  error               // session.interrupt fails with it
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
-	// refuseConfigDir: assistant.send with a config_dir fails as the hub refuses it for a node too old for one
+	// refuseConfigDir: assistant.send or assistant.warm with a config_dir fails as the hub refuses it for a node too old
+	// for one
 	refuseConfigDir bool
 	// elsewhere: the conversations in another profile than meetingProfile, by id: a resume that asks for a config_dir
 	// fails, as the node refuses to move a conversation to another profile
@@ -261,6 +263,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
+	if p.Method == DeviceAssistantWarm && f.refuseConfigDir && strings.Contains(string(p.Params), `"config_dir"`) {
+		return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
+	}
+	if p.Method == DeviceAssistantWarm {
+		var w struct {
+			Launcher  string `json:"launcher"`
+			ConfigDir string `json:"config_dir"`
+		}
+		_ = json.Unmarshal(p.Params, &w)
+		if w.ConfigDir != "" && launcherAgent(w.Launcher) != "claude" { // node/assistant_spare.go's preflight
+			return nil, errors.New(assistantwire.ConfigDirClaudeOnly)
+		}
+	}
 	if p.Method == "session.interrupt" && f.failInterrupt != nil {
 		return nil, f.failInterrupt
 	}
@@ -495,6 +510,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.starts = append(f.starts, a)
 		if f.refuseUltra != nil && a["ultracode"] == true {
 			return nil, f.refuseUltra
+		}
+		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
+			return nil, f.refuseGoal
 		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
