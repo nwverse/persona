@@ -53,6 +53,10 @@ const reading = () =>
   );
 
 beforeEach(() => {
+  // Pin a midday clock: the "today" fixtures use fixed hours, and withDayDividers hides lines dated after now; without
+  // this the suite flakes in the first minute after midnight (the future-clock guard would hide today's divider).
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 10, 15, 12, 0, 0));
   localStorage.clear();
   forgetExpanded();
   seq = 0;
@@ -71,6 +75,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reset();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 

@@ -107,4 +107,22 @@ describe("EarlierStretches", () => {
     // day 0 from a, day 1 from b's boundary; b opens on day 0 and adds no second divider for it
     expect(ids).toEqual([`day-${dayAt(1)}`, `day-${dayAt(60 * 24 + 11)}`]);
   });
+
+  it("never reports a day a stretch meets only inside a folded item, so it cannot suppress the live divider (#8160)", async () => {
+    const history = [{ session_id: "a", agent: "claude", until: at(10) }];
+    // stretch a: a day-0 exchange, then a folded tool run whose recorded time crosses midnight into day 1. The fold is
+    // a step inside the day-0 segment, not a line of its own, so the stretch draws no day-1 divider.
+    const folded: Item = {
+      id: "fold:f3#0", seq: 3, role: "assistant", kind: "fold", ts: at(60 * 24),
+      fold: { items: 4, tools: 2, thoughts: 0, through_seq: 4, until: at(60 * 24) },
+    };
+    const pages = { a: [...exchange(1, 1, 2, 2), folded] };
+    // the live stretch opens on the day the fold only reached: its divider must survive the guard
+    const liveItems = exchange(9, 60 * 24 + 120, 10, 60 * 24 + 121);
+    const reports = await drawWithFetch("b", history, liveItems, pages);
+    // the stretch itself draws the day-0 divider only
+    expect(dividerIds()).toEqual([`day-${dayAt(1)}`]);
+    // the reported guard days equal the dividers drawn: the fold's midnight day is not among them
+    expect(reports.at(-1)!.dayKeys).toEqual([dayAt(1)]);
+  });
 });

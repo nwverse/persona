@@ -1,8 +1,16 @@
 // The Agent transcript's day dividers (#8160): one divider at the first line of each new calendar day, keys derived
 // from the day alone so pagination inserts and midnight arrivals never duplicate or move a divider.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatLineTime, withDayDividers, type ChatDayRow } from "./day-dividers";
 import type { ChatLine, Segment } from "../../lib/turns";
+
+// Pin a midday clock: the "today" fixtures use fixed hours, and withDayDividers hides lines dated after now; without
+// this the suite flakes in the first minute after midnight (the future-clock guard would hide today's divider).
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 10, 15, 12, 0, 0));
+});
+afterEach(() => vi.useRealTimers());
 
 // Local calendar times: the divider keys are local YYYY-MM-DD, so the fixtures stay independent of the test zone.
 const iso = (dayOffset: number, h: number) => {
