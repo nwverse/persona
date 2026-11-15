@@ -1660,8 +1660,10 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
     program calls can (`TestExtensionCannotWriteItsSettings`).
   - When the settings change, the old address is refused at once (`Proxy.SetTargets`), before the restart.
   - The consent line is 「访问你在设置里填的地址」: the field's title, the address there now (「当前：…」, 未填 before
-    install), and whether http is allowed. An upgrade that adds such an entry lists it under the permissions that grew,
-    like a new host.
+    install), and whether http is allowed. An upgrade keeps the settings, so its preview, the upgrades list and the
+    market's lines for an installed extension name the address saved there (not the old version's default); a fresh
+    install says 未填 (#8570). An upgrade that adds such an entry lists it under the permissions that grew, like a new
+    host.
   - The proxy holds the extension to these rules only while its sandbox is **enabled** (`sandbox.enabled`, "Sandbox").
     With the sandbox also **active**, the proxy is its only way out. Enabled but not active (this machine has no
     sandbox), its environment points it at the proxy: a well-behaved program goes through it, a misbehaving one can go
