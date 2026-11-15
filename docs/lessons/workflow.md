@@ -285,19 +285,28 @@ set `max-parallel`, and measure normal-load PRs separately from peak queues.
 
 ## Keep the change-and-verify loop short (2026-11-15, #8186)
 
-- Each worktree uses fixed DerivedData folders: one for Debug simulator builds, plus one for an optimized build and one for
-  a device build when needed. Don't open a new folder or worktree per experiment: every new one costs a 15–35 minute cold build.
-- While iterating, run only the one relevant test method (`-only-testing:Target/Class/method`); run the whole UI test suite
-  once, before pushing.
-- Run tests on different simulators in parallel (one iPad, one iPhone Duo), not one after another.
+For every platform:
+
+- While iterating, run only the one relevant test: `go test ./internal/<package> -run '^TestName$'` in `server/`,
+  `npx vitest run <file>` in `web/`, `./gradlew :<module>:testDebugUnitTest --tests '<Class>.<method>'` in `android/`,
+  `-only-testing:Target/Class/method` with Xcode. Run the area's whole suite (UI tests included) once, before pushing.
+- Reuse one checkout and its build caches; don't open a new worktree per experiment. Every new one starts its builds
+  and dependency installs from nothing.
 - While a build or test runs, do the work that doesn't depend on its result (docs, the PR body, reading the next piece of
   code). Run it as a background task with a completion notification; never a long foreground `sleep` / `until` poll.
-- Performance problems: first confirm from per-frame data which frame got slower. Then, in one optimized build, put each
-  suspected change behind its own temporary launch-argument switch, split as finely as possible, and run them all in one
-  round before changing anything. Don't commit a fix on a guess: an optimized build takes 35–45 minutes, so every round
-  saved is close to an hour.
-- When measuring performance, stop unrelated load (minimize simulator windows you aren't using, for example) and alternate
-  runs between `main` and the branch.
+- Run independent test lanes in parallel (two simulators or emulators, the server and the web), not one after another.
+- Performance problems: first confirm from measurements which step got slower (per-frame data for UI). Then put each
+  suspected change behind its own temporary switch, split as finely as possible, and compare them all in one round
+  before changing anything. Don't commit a fix on a guess. When measuring, stop unrelated load (minimize simulator or
+  emulator windows you aren't using, for example) and alternate runs between `main` and the branch.
+
+Apple builds, where a cold build costs the most:
+
+- Each worktree uses fixed DerivedData folders: one for Debug simulator builds, plus one for an optimized build and one
+  for a device build when needed. Every new folder or worktree costs a 15–35 minute cold build.
+- Run UI tests on different simulators in parallel (one iPad, one iPhone Duo).
+- An optimized build takes 35–45 minutes, so put the temporary performance switches in as DEBUG launch arguments in one
+  optimized build: every round saved is close to an hour.
 - After merging `main`, `cannot find 'persona_core_…'` means the Rust core's XCFramework is stale: run
   `native/app-core/scripts/build-apple.sh` first. If `ContinuityFixture` reports a wrong `fold_id` argument, delete the old
   `PersonaCore*.swiftmodule` at the root of `Build/Products/<config>/` in DerivedData.
