@@ -1,8 +1,11 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -90,11 +93,20 @@ func (t *PlanTask) noteWhy(note string) {
 // fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
 // is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. It also
 // reports whether the task's Agent runs with Allow all (startAgent.allowAll: Claude Code, or a provider whose approval
-// is an Auto Accept switch), using the same launcher list rather than another probe.
+// is an Auto Accept switch), using the same launcher list rather than another probe. A read-only task whose launcher
+// has no read-only mode is refused here (readonlyLauncherRefusal), when it is planned and again before it starts.
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (bool, error) {
 	note, agent, err := s.fitLauncher(ctx, m, own, params)
-	if err != nil || note == "" {
+	if err != nil {
 		return agent.allowAll(), err
+	}
+	if t.Readonly {
+		if err := s.readonlyLauncherRefusal(ctx, m, params, agent); err != nil {
+			return false, err
+		}
+	}
+	if note == "" {
+		return agent.allowAll(), nil
 	}
 	t.Launcher, _ = params["launcher"].(string)
 	t.Model, _ = params["model"].(string)
@@ -102,6 +114,51 @@ func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, ow
 	t.Tier = ""
 	t.noteWhy(note)
 	return agent.allowAll(), nil
+}
+
+// readonlyUnsupportedAgents are the agents a read-only task cannot start in a terminal: pi, the Cursor CLI and the
+// Antigravity CLI have no flag that holds them read-only, and a line in the prompt does not (pi's tools write files), so
+// the node refuses their plan-mode start (readonly_unsupported, node/control.go). Claude Code runs a read-only task with
+// the constraint in its first message, Codex in its read-only sandbox (docs/integrations/launchers.md "Work agents").
+var readonlyUnsupportedAgents = []string{"pi", "cursor", "agy"}
+
+// readonlyLauncherRefusal refuses a read-only task on m whose launcher (params', as fitLauncher left it) starts one of
+// readonlyUnsupportedAgents in a terminal, before anything reaches the node: readonly_unsupported, naming the launchers
+// of m that take a read-only task (Claude Code's and Codex's), so the plan can be made writable or with one of them. No
+// other launcher is put in its place: the plan named that agent. Anything else goes on as before, to the node, which
+// still refuses what it cannot hold read-only: a launcher whose agent the computer's list does not say (nothing is
+// refused on a guess), and a start an engine runtime runs (Paseo answers for its own providers, caps.readonly).
+func (s *Service) readonlyLauncherRefusal(ctx context.Context, m Device, params map[string]any, agent startAgent) error {
+	if !slices.Contains(readonlyUnsupportedAgents, agent.agent) {
+		return nil
+	}
+	if host, _ := params["host"].(string); agentStartHost(m, host) != "" {
+		return nil
+	}
+	launcher, _ := params["launcher"].(string)
+	launchers := strings.Join(s.readonlyLaunchersOn(ctx, m), ", ")
+	data, _ := json.Marshal(map[string]string{"launcher": launcher, "launchers": launchers, "delivered": "none"})
+	return &rpc.Error{Code: "readonly_unsupported", Data: data, Message: i18n.T(s.lang(ctx), "assistant-tasks.readonly_launcher_unsupported",
+		i18n.Args{"machine": firstNonEmpty(m.Name, m.ID), "launcher": launcher, "agent": kindName(agent.agent), "launchers": cmp.Or(launchers, "—")})}
+}
+
+// readonlyLaunchersOn are the launchers of m a read-only task can start on, as its picker lists them (plain claude
+// when m has Claude Code, its own, hub.json's and the managed ones): those that start Claude Code or Codex. Only plain
+// claude when the list can't be read and m has Claude Code; none otherwise.
+func (s *Service) readonlyLaunchersOn(ctx context.Context, m Device) []string {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	list, err := s.pickerLaunchers(cctx, m.ID)
+	if err != nil && m.ClaudeVersion != "" {
+		return []string{"claude"}
+	}
+	var names []string
+	for _, l := range list {
+		if (l.AgentType == "claude" || l.AgentType == "codex") && l.Name != "" && !slices.Contains(names, l.Name) {
+			names = append(names, l.Name)
+		}
+	}
+	return names
 }
 
 // taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or

@@ -48,6 +48,14 @@ constraint on retries. Codex read-only tasks keep `permission: plan` and the har
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
 
+A read-only task whose launcher starts pi, the Cursor CLI or the Antigravity CLI in a terminal is refused when it is
+planned (#8316, `assistant/tasks_placement.go` `readonlyLauncherRefusal`): these agents have no read-only mode, so
+`task_plan` answers `readonly_unsupported` with the launchers on that computer that do take a read-only task (Claude
+Code's and Codex's), and nothing is saved or started. The model may plan the task writable or on one of those; no other
+launcher is put in its place. The same check runs again before a start (a card edited to one of them, a plan saved
+before this), and the node's own `readonly_unsupported` stays the last guard. A launcher whose agent the computer's
+list does not say, and a start an engine runtime runs (below), go on to the node as before.
+
 Ordinary plan-mode starts keep their existing behavior. For Codex read-only tasks, the node must honor `plan` or refuse
 the start. Terminal starts and supported terminal resumes use `--sandbox read-only
 --ask-for-approval never`: no approval can escalate past the sandbox. The node retains that constraint for later
