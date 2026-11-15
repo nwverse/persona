@@ -575,10 +575,11 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	}
 	event := func(data string) (reply Reply, done bool, err error) {
 		var ev struct {
-			Type    string `json:"type"`
-			Delta   string `json:"delta"`
-			Message string `json:"message"`
-			Code    string `json:"code"` // an error event's
+			Type    string          `json:"type"`
+			Delta   string          `json:"delta"`
+			Message string          `json:"message"`
+			Code    string          `json:"code"` // an error event's
+			Error   json.RawMessage `json:"error"`
 			// Part is the content part of response.content_part.added/done: type output_text or refusal.
 			Part struct {
 				Type string `json:"type"`
@@ -612,6 +613,16 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 			}
 			return r
 		}
+		failureDetails := func() (code, msg string) {
+			code, msg = ev.Code, ev.Message
+			if _, nestedCode, nestedMsg, ok := errorOf(ev.Error); ok {
+				code, msg = cmp.Or(nestedCode, code), cmp.Or(nestedMsg, msg)
+			}
+			if e := ev.Response.Error; e != nil { // response.error is more specific than the event's own error
+				msg, code = e.Message, cmp.Or(e.Code, code)
+			}
+			return code, msg
+		}
 		switch ev.Type {
 		case "response.output_text.delta":
 			b.WriteString(ev.Delta)
@@ -639,16 +650,10 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				reply = finished()
 				return Reply{Model: reply.Model, Usage: reply.Usage}, true, &RefusalError{StopReason: reason}
 			}
-			msg, code := ev.Message, ev.Code
-			if ev.Response.Error != nil {
-				msg, code = ev.Response.Error.Message, cmp.Or(ev.Response.Error.Code, code)
-			}
+			code, msg := failureDetails()
 			return reply, true, streamFailureError(ev.Type, code, msg)
 		case "response.failed", "error":
-			msg, code := ev.Message, ev.Code
-			if e := ev.Response.Error; e != nil {
-				msg, code = e.Message, cmp.Or(e.Code, code)
-			}
+			code, msg := failureDetails()
 			return reply, true, streamFailureError(ev.Type, code, msg)
 		}
 		return reply, false, nil
