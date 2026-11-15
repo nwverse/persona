@@ -3,7 +3,6 @@ package persona.feature.settings
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
@@ -45,7 +44,7 @@ class HubUpdateLoadableTest {
         override suspend fun history() = emptyList<HubUpdateRecord>()
     }
 
-    private fun show(state: HubUpdateState, model: HubUpdateModel? = null, style: AppStyle = AppStyle.Glass) = rule.setContent {
+    private fun show(state: HubUpdateState, model: HubUpdateModel? = HubUpdateModel(Hub(status, failures = 0)), style: AppStyle = AppStyle.Glass) = rule.setContent {
         PersonaTheme(darkTheme = false, reduceMotion = true, style = style) { HubUpdateContent(state, emptyList(), {}, null, model) }
     }
 

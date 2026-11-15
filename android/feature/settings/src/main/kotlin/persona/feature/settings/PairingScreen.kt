@@ -325,6 +325,7 @@ fun PairingScreen(
         page == PairingPage.Connecting -> null
         page == PairingPage.Confirm || page == PairingPage.Failed -> ::returnFromAttempt
         page == PairingPage.Manual -> ({ manual = false })
+        page == PairingPage.Password -> ({ passwordEntry = false })
         page == PairingPage.Welcome -> null
         onBack != null -> onBack
         !skipWelcome && initialLink == null -> ({ welcome = true; notice = null })

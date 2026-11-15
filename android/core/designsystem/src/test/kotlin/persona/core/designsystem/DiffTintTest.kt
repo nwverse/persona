@@ -10,8 +10,15 @@ import org.junit.Test
  * generated tokens (their colour, not just their strength), Brief and Board keep their own diff hue at the tokens' strength.
  */
 class DiffTintTest {
-    private val light = Tokens.Common.Light.Diff
-    private val dark = Tokens.Common.Dark.Diff
+    private data class DiffValues(val addFill: Color, val delFill: Color, val addEmphasis: Color, val delEmphasis: Color)
+    private val light = DiffValues(
+        Tokens.Common.Light.Diff.addFill, Tokens.Common.Light.Diff.delFill,
+        Tokens.Common.Light.Diff.addEmphasis, Tokens.Common.Light.Diff.delEmphasis,
+    )
+    private val dark = DiffValues(
+        Tokens.Common.Dark.Diff.addFill, Tokens.Common.Dark.Diff.delFill,
+        Tokens.Common.Dark.Diff.addEmphasis, Tokens.Common.Dark.Diff.delEmphasis,
+    )
 
     /** The emphasis is a generated token, not a number in a view: iOS `Theme.Diff.addEmphasis` / `delEmphasis` (0.32 / 0.30) on the fill's colour. */
     @Test fun theEmphasisTokensAreTheFillsColourAtTheIosStrength() {
@@ -38,12 +45,13 @@ class DiffTintTest {
     }
 
     @Test fun lineTintsAreTranslucentAndEmphasisIsDeeperThanTheLine() {
+        // Compose's Color constructor quantizes alpha to eight bits (0.14 becomes 36 / 255).
         for (style in AppStyle.entries) for (isDark in listOf(false, true)) {
             val palette = Palettes.of(style, isDark)
-            assertEquals("$style $isDark", 0.14f, palette.diffAddFill.alpha, 0.0001f)
-            assertEquals("$style $isDark", 0.12f, palette.diffDelFill.alpha, 0.0001f)
-            assertEquals("$style $isDark", 0.32f, palette.diffAddEmphasis.alpha, 0.0001f)
-            assertEquals("$style $isDark", 0.30f, palette.diffDelEmphasis.alpha, 0.0001f)
+            assertEquals("$style $isDark", 0.14f, palette.diffAddFill.alpha, 0.002f)
+            assertEquals("$style $isDark", 0.12f, palette.diffDelFill.alpha, 0.002f)
+            assertEquals("$style $isDark", 0.32f, palette.diffAddEmphasis.alpha, 0.002f)
+            assertEquals("$style $isDark", 0.30f, palette.diffDelEmphasis.alpha, 0.002f)
         }
     }
 

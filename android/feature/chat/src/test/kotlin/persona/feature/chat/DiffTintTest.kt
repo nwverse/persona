@@ -60,10 +60,10 @@ class DiffTintTest {
         }
     }
 
-    /** A pixel at the right end of the row's code, past its last glyph: the row's own background. */
+    /** A pixel in the middle of these short rows' code, past the last glyph and away from the clipped rounded edge. */
     private fun rowColour(text: String): Color {
         val image = rule.onNodeWithText(text).captureToImage()
-        return Color(image.asAndroidBitmap().getPixel(image.width - 4, image.height / 2))
+        return Color(image.asAndroidBitmap().getPixel(image.width / 2, image.height / 2))
     }
 
     private fun isClose(expected: Color, actual: Color, tolerance: Int) =
