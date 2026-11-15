@@ -163,6 +163,7 @@ type fakeRuntime struct {
 	answer func(method string, params json.RawMessage) (any, error)
 	events []string       // event names the node pushed, in order
 	hubs   []bool         // runtime.hub pushes: whether a hub is connected
+	driven []string       // runtime.driven pushes: the sessions the hub started through another runtime
 	helloR map[string]any // what runtime.hello answered
 	closed chan struct{}  // closed when the connection ends (helloAt)
 }
@@ -208,6 +209,13 @@ func dialRuntimeAt(t *testing.T, path string, hello map[string]any) *fakeRuntime
 			}
 			_ = json.Unmarshal(params, &p)
 			f.hubs = append(f.hubs, p.Connected)
+		}
+		if event == "runtime.driven" {
+			var p struct {
+				SessionID string `json:"session_id"`
+			}
+			_ = json.Unmarshal(params, &p)
+			f.driven = append(f.driven, p.SessionID)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
