@@ -22513,7 +22513,9 @@ def _ui_view(ui, launcher=""):
             {"type": "metric", "label": "余额", "value": "¥ 182.40", "detail": "刷新过 %d 次" % _UI_STATE["refreshed"], "tone": "positive"},
             {"type": "progress", "label": "本月预算", "ratio": 0.38, "detail": "¥ 57.60 / ¥ 150", "tone": "neutral"},
             {"type": "progress", "label": "今日额度", "ratio": 0.93, "detail": "快用完了", "tone": "danger"},
-            {"type": "text", "text": "数字每 5 分钟更新一次。", "style": "secondary"}]},
+            {"type": "text", "text": "数字每 5 分钟更新一次。", "style": "secondary"},
+            # The shell navigation suite's real root → sub-page fixture: a made-up usage detail.
+            {"type": "button", "title": "查看用量明细", "action": {"id": "usage-detail", "push": {"ui": "notes", "state": '{"page": "detail", "id": "n1"}', "title": "用量明细"}}}]},
         {"title": "Key", "footer": "停用后，用这个 Key 的启动器会立刻失败。", "items": [
             {"type": "row", "title": "工作", "subtitle": "sk-…3fa9 · 今天 1.2 万 token", "value": "¥ 12.30", "badge": {"text": "有效", "tone": "positive"},
              "action": {"id": "key:work"}},

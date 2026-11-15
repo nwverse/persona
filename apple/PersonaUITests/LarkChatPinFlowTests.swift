@@ -24,15 +24,23 @@ final class LarkChatPinFlowTests: XCTestCase {
         app.buttons["shell-feishu"].firstMatch.tapCenter()
         XCTAssertTrue(app.buttons["feishu-chat-f2"].waitForExistence(timeout: 20))
         app.buttons["feishu-chat-f2"].tapCenter()
-        XCTAssertTrue(app.buttons["lark.pins.open"].waitForExistence(timeout: 15))
+        pinsOpened(app)
         XCTAssertTrue(app.staticTexts["评审记录 4：这个方案需要保留。"].waitForExistence(timeout: 15))
         let initialReads = try await fixture()["reads"] as? Int
         XCTAssertEqual(initialReads, 0, "opening chat must not mark Pins read")
         return app
     }
     @MainActor private func pins(_ app: XCUIApplication) {
+        // The iPhone shell's one trailing menu keeps Pins and Persona summary together.
+        app.buttons["lark.chat.more"].tapCenter()
         app.buttons["lark.pins.open"].tapCenter()
         XCTAssertTrue(app.buttons["lark.pins.close"].waitForExistence(timeout: 10))
+    }
+    @MainActor private func pinsOpened(_ app: XCUIApplication) {
+        XCTAssertTrue(app.buttons["lark.chat.more"].waitForExistence(timeout: 15))
+        pins(app)
+        app.buttons["lark.pins.close"].tapCenter()
+        XCTAssertTrue(app.buttons["lark.pins.close"].waitForNonExistence(timeout: 10))
     }
     @MainActor private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
         for _ in 0..<8 where !element.isHittable { app.swipeUp(velocity: .slow) }
@@ -66,6 +74,7 @@ final class LarkChatPinFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["话题中的被 Pin 回复"].exists)
         shot(app, "chat-pins-thread-target")
         app.buttons["完成"].firstMatch.tapCenter()
+        app.buttons["lark.chat.more"].tapCenter()
         XCTAssertTrue(app.buttons["lark.pins.open"].waitForExistence(timeout: 10))
         pins(app)
         XCTAssertTrue(app.buttons["lark.pin.1000"].waitForExistence(timeout: 10))

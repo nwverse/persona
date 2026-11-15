@@ -51,6 +51,31 @@ final class ExtensionNavEntryTests: XCTestCase {
         checkEntry(app, "drawer")
     }
 
+    /// The usage place's root has ☰ and no Back; the extension page it pushes has Back and no ☰.
+    @MainActor func testTheUsageRootAndItsSubPageHaveOneLeadingButton() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .pad, "the shell's drawer is the phone's")
+        let app = try launch(["-tab", "assistant", "-dev.openChat", "", "-demo.on", "NO"])
+        let face = app.buttons["assistant-sidebar-button"]
+        XCTAssertTrue(face.waitForExistence(timeout: 15), app.debugDescription)
+        face.tap()
+        checkEntry(app, "usage")
+        let bar = app.navigationBars["Example 网关"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 10))
+        XCTAssertFalse(bar.buttons["BackButton"].exists, "the usage root has Back beside ☰")
+        XCTAssertEqual(bar.buttons.count, 1, "the usage root has more than one leading button")
+        XCTAssertTrue(app.buttons["shell-place-sidebar"].exists)
+
+        let detail = app.buttons["查看用量明细"] // i18n-ignore: the mock's made-up detail
+        XCTAssertTrue(detail.waitForExistence(timeout: 10), "no usage detail row:\n\(app.debugDescription)")
+        detail.tap()
+        let child = app.navigationBars["用量明细"]
+        XCTAssertTrue(child.waitForExistence(timeout: 10), "the usage detail did not push:\n\(app.debugDescription)")
+        XCTAssertTrue(child.buttons["BackButton"].exists)
+        XCTAssertEqual(child.buttons.count, 1, "the usage sub-page has more than one leading button")
+        XCTAssertFalse(app.buttons["shell-place-sidebar"].exists, "the usage sub-page has ☰ beside Back")
+        shot(app, "usage-subpage")
+    }
+
     @MainActor func testTheIPadSidebarListsTheExtensionsPages() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "the sidebar column is iPad's")
         for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {

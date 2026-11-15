@@ -54,7 +54,7 @@ final class ShellPlacesUITests: XCTestCase {
         }
     }
 
-    /// Opens the drawer from the page in front: the root's ☰, or ☰ beside Back on a place's page.
+    /// Opens the drawer from the current page's only leading button, its place root's ☰.
     @MainActor private func openDrawer(_ id: String) {
         sleep(1) // a push or a close settled
         see(button(id), "☰ (\(id))").tap()
@@ -85,13 +85,15 @@ final class ShellPlacesUITests: XCTestCase {
     @MainActor private var machines: XCUIElement { app.navigationBars["机器"] }
     @MainActor private var knowledge: XCUIElement { app.navigationBars["知识库"] }
 
-    /// Machines → a machine → ☰ → Knowledge → ☰ → Machines: the machine's page is still in front, Back goes to the
-    /// list and then the conversation. Choosing Machines again while it is in front goes to its root.
+    /// Machines → a machine → Knowledge → Machines keeps the sub-page. Each place root has only ☰; the machine has
+    /// only Back. Choosing Machines again returns to its root, and a conversation row returns to the conversation.
     @MainActor func testAPlaceKeepsItsStack() {
         launch()
         openDrawer("assistant-sidebar-button")
         pick("sidebar-machines")
         see(machines, "机器")
+        assertPlaceRoot(machines, "Machines")
+        shot("0-machines-root")
         let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'MacBook'")).firstMatch
         // At the largest text sizes the cards start below the summary.
         for _ in 0..<6 where !(card.exists && card.isHittable) {
@@ -102,24 +104,25 @@ final class ShellPlacesUITests: XCTestCase {
         let detail = app.navigationBars.firstMatch
         see(detail, "the machine's page")
         let title = detail.identifier
+        assertSubPage(detail, "Machine")
         shot("1-machine-page")
 
-        openDrawer("shell-place-sidebar")
-        shot("2-drawer-over-machine-page")
-        pick("sidebar-知识库")
+        pickPlaceFromRoot("sidebar-知识库")
         see(knowledge, "知识库")
         XCTAssertFalse(app.navigationBars[title].exists, "the machine's page is still in front")
+        assertPlaceRoot(knowledge, "Knowledge")
 
-        openDrawer("shell-place-sidebar")
-        pick("sidebar-machines")
+        pickPlaceFromRoot("sidebar-machines")
         see(app.navigationBars[title], "the machine's page again (\(title)), kept while on 知识库")
         XCTAssertFalse(machines.exists, "Machines came back at its root")
+        assertSubPage(app.navigationBars[title], "restored machine")
         shot("3-machine-page-kept")
 
-        // Back: the list, then the conversation.
+        // Back: the list, whose one leading button is ☰, not Back.
         sleep(1)
         app.navigationBars[title].buttons["BackButton"].firstMatch.tap()
         see(machines, "机器 under the machine's page")
+        assertPlaceRoot(machines, "Machines after Back")
 
         // Into the machine again, then Machines from the drawer while it is in front: its root.
         sleep(1)
@@ -128,13 +131,45 @@ final class ShellPlacesUITests: XCTestCase {
         }
         see(card, "MacBook's card").tap()
         see(app.navigationBars[title], "the machine's page")
+        sleep(1) // let the push settle before tapping Back
+        app.navigationBars[title].buttons["BackButton"].firstMatch.tap()
+        see(machines, "Machines after the second Back")
         openDrawer("shell-place-sidebar")
         pick("sidebar-machines")
         see(machines, "机器 at its root after choosing it again")
         XCTAssertFalse(app.navigationBars[title].exists, "choosing Machines again kept its page")
-        sleep(1)
-        machines.buttons["BackButton"].firstMatch.tap()
-        see(chatComposer, "the conversation under Machines")
+        assertPlaceRoot(machines, "re-picked Machines")
+
+        // Back to the conversation is a drawer choice, not a second button beside ☰.
+        openDrawer("shell-place-sidebar")
+        pick("sidebar-main")
+        see(chatComposer, "the conversation chosen from Machines' drawer")
+    }
+
+    @MainActor private func assertPlaceRoot(_ bar: XCUIElement, _ name: String) {
+        XCTAssertTrue(button("shell-place-sidebar").waitForExistence(timeout: 5), "\(name): no ☰")
+        XCTAssertFalse(bar.buttons["BackButton"].exists, "\(name): Back beside ☰")
+        assertSides(bar, leading: 1, trailing: 0, name)
+    }
+
+    @MainActor private func assertSubPage(_ bar: XCUIElement, _ name: String) {
+        XCTAssertTrue(bar.buttons["BackButton"].waitForExistence(timeout: 5), "\(name): no Back")
+        XCTAssertFalse(button("shell-place-sidebar").exists, "\(name): ☰ beside Back")
+        assertSides(bar, leading: 1, trailing: 0, name)
+    }
+
+    /// Count leading and trailing controls by their frames, not the navigation bar's total.
+    @MainActor private func assertSides(_ bar: XCUIElement, leading: Int, trailing: Int, _ name: String) {
+        let center = bar.frame.midX
+        let left = bar.buttons.allElementsBoundByIndex.filter { $0.frame.midX < center }
+        let right = bar.buttons.allElementsBoundByIndex.filter { $0.frame.midX > center }
+        XCTAssertEqual(left.count, leading, "\(name): leading controls: \(bar.debugDescription)")
+        XCTAssertLessThanOrEqual(right.count, max(trailing, 1), "\(name): more than one trailing control: \(bar.debugDescription)")
+    }
+
+    @MainActor private func pickPlaceFromRoot(_ row: String) {
+        openDrawer("shell-place-sidebar")
+        pick(row)
     }
 
     /// The iPad's sidebar column: the same places keep their stacks beside it (the column never closes).
