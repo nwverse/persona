@@ -432,6 +432,38 @@ import PersonaWire
         #expect(model.latest(otherKey) == nil, "an unfiltered landing drops a missing held row")
     }
 
+    /// A retained other-manager row on a complete hub must refresh on `sessions_list`: list-mode hubs no longer push
+    /// full snapshots, so without a detail read the open chat would keep a stale `canSend` / `isStopped` (#8748).
+    @Test func aRetainedRowRefreshesOnASessionsListHint() async throws {
+        let hub = FakeHub()
+        let id = UUID().uuidString.lowercased()
+        var payload = #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#
+        hub.on("GET", "/api/v1/sessions") { _ in Data(payload.utf8) }
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
+        let model = await completeChatModel(hub, key: key)
+        let owner = UUID()
+        model.open(key)
+        model.subscribe(key, by: owner)
+        await eventually { model.latest(key) != nil }
+        let other = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"manager":"assistant","state":"idle","status":"idle"}"#.utf8))
+        var stamped = other
+        stamped.group = key.group
+        model.landCompleteSessionList([stamped], group: key.group, manager: "assistant")
+        #expect(model.latest(key)?.canSend == true)
+
+        payload = #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","status":"offline","state":"offline","capabilities":{"read":true,"terminal":true},"read_only_reason":"stopped"}]}"#
+        let beforeStop = hub.sent("GET", "/api/v1/sessions").count
+        model.handle(.sessionsList(revision: "r-stopped"), group: key.group)
+        await eventually { model.latest(key)?.isStopped == true }
+        #expect(model.latest(key)?.canSend == false)
+        #expect(hub.sent("GET", "/api/v1/sessions").count > beforeStop)
+
+        payload = #"{"sessions":[]}"#
+        model.handle(.sessionsList(revision: "r-gone"), group: key.group)
+        await eventually { model.latest(key) == nil && model.missingSessionReason(key) != nil }
+        #expect(model.missingSessionReason(key) == String(localized: "This conversation isn't available"))
+    }
+
     /// When the hub answers with no row, the composer gets a reason instead of a silent disable (#8748).
     @Test func aMissingRowShowsAComposerReason() async throws {
         let hub = FakeHub()

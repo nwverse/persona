@@ -1500,6 +1500,8 @@ final class AppModel {
             open(home.key, latestAnswer: latestAnswer, reveal: home.childID)
             return
         }
+        // A prior missing answer must not flash on a reopen before the lookup returns (#8748).
+        clearMissingSessionDetail(key)
         if let reveal {
             revealToken += 1
             revealChild = ChildReveal(sessionID: reveal, token: revealToken)
@@ -1645,6 +1647,9 @@ final class AppModel {
     /// Open / subscribed chats whose exact row the hub answered with none (#8748): the composer says why instead of
     /// sitting disabled with no explanation. Cleared when a row lands or the chat is no longer held.
     private(set) var missingSessionDetails: Set<SessionKey> = []
+    /// Rows `retainHeldSessionRows` kept across a filtered complete landing (#8748). Not observed: only the refresh
+    /// gate reads it. Cleared when the chat is no longer held, or a landing includes that row again.
+    @ObservationIgnored private var retainedSessionKeys: Set<SessionKey> = []
 
     /// Why the composer of `key` is disabled when there is no session row: the hub could not provide one. Nil while a
     /// lookup is still out, or when a row is in hand (then `Session.sourceSubtitle` covers a real `!canSend`).
@@ -1654,11 +1659,16 @@ final class AppModel {
     }
 
     func refreshSessionDetail(_ key: SessionKey, listHint: String? = nil) async {
-        // Paged hubs refresh complete metadata for every open chat. Complete hubs only need a fetch when the opened
-        // row is missing from the filtered index (another manager's Agent from a push / Inbox / link, #8748).
+        // A prior missing answer must not flash while this lookup is out (#8748).
+        clearMissingSessionDetail(key)
+        forgetRetainedIfUnheld(key)
+        // Paged hubs refresh complete metadata for every open chat. Complete hubs fetch when the opened row is missing
+        // from the filtered index, or when it was only kept by `retainHeldSessionRows` (another manager's Agent, #8748):
+        // list-mode hubs no longer push full snapshots, so those retained rows would otherwise stay stale.
         let paged = sessionLists.lists[key.group]?.paged == true
         let missing = sessionIndex[key] == nil
-        guard paged || missing, let api = api(key.group) else { return }
+        let retained = retainedSessionKeys.contains(key)
+        guard paged || missing || retained, let api = api(key.group) else { return }
         var hint: String? = listHint
         while true {
             var gate = detailHints[key] ?? FetchHint()
@@ -1685,8 +1695,9 @@ final class AppModel {
             // Not in the list: there is no detail to add. This runs on its own whenever a chat opens, so a session the
             // list does not have (hidden from it, or gone) is not a chat error. A transcript that cannot be read is
             // still reported, by the read of the transcript itself. The composer still needs a reason when the row
-            // stays missing (#8748).
+            // stays missing (#8748). A retained row the hub no longer has must leave the index so that reason shows.
             guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else {
+                if retainedSessionKeys.contains(key) { dropRetainedSessionRow(key) }
                 noteMissingSessionDetail(key)
                 return
             }
@@ -1715,6 +1726,19 @@ final class AppModel {
             if sessionIndex[key] == nil { noteMissingSessionDetail(key) }
             if isSubscribed(key), !error.isQuiet { chat(key).error = error.localizedDescription }
         }
+    }
+
+    /// The hub answered with no row for a key we had only kept across a filtered landing: drop it so the composer
+    /// reason can show (#8748).
+    private func dropRetainedSessionRow(_ key: SessionKey) {
+        retainedSessionKeys.remove(key)
+        let list = (sessionsByMachine[key.machineRef] ?? []).filter { $0.sessionID != key.sessionID }
+        applySessions([key.machineRef: list])
+    }
+
+    private func forgetRetainedIfUnheld(_ key: SessionKey) {
+        guard retainedSessionKeys.contains(key) else { return }
+        if !heldSessionKeys(group: key.group).contains(key) { retainedSessionKeys.remove(key) }
     }
 
     private func noteMissingSessionDetail(_ key: SessionKey) {
@@ -1799,6 +1823,7 @@ final class AppModel {
         forgetAgentLive(key)
         if openChat != key, visibleSession != key, !shown.contains(where: { $0.key == key }) {
             clearMissingSessionDetail(key)
+            retainedSessionKeys.remove(key)
         }
         socket(key.group)?.send(["type": "unsubscribe", "machine_id": key.machineID, "session_id": key.sessionID])
     }
@@ -2420,14 +2445,28 @@ final class AppModel {
 
     /// Keep an open/subscribed row only when this landing filtered by `manager` and the row's own manager is a
     /// different nonempty id. An unfiltered landing, or one for the row's manager, leaves removals as they are.
+    /// Keys kept here are remembered so `sessions_list` can refresh them on a complete hub (#8748).
     private func retainHeldSessionRows(_ updates: inout [MachineRef: [Session]], group: String, manager: String?) {
-        guard let filter = manager, !filter.isEmpty else { return }
-        for key in heldSessionKeys(group: group) {
-            if updates[key.machineRef]?.contains(where: { $0.sessionID == key.sessionID }) == true { continue }
+        let held = heldSessionKeys(group: group)
+        retainedSessionKeys = retainedSessionKeys.filter { $0.group != group || held.contains($0) }
+        guard let filter = manager, !filter.isEmpty else {
+            // Unfiltered landing is authoritative for every manager: nothing stays "retained across a filter".
+            retainedSessionKeys = retainedSessionKeys.filter { $0.group != group }
+            return
+        }
+        for key in held {
+            if updates[key.machineRef]?.contains(where: { $0.sessionID == key.sessionID }) == true {
+                retainedSessionKeys.remove(key)
+                continue
+            }
             guard let row = sessionIndex[key] ?? sessionsByMachine[key.machineRef]?.first(where: { $0.sessionID == key.sessionID })
             else { continue }
-            guard let rowManager = row.manager, !rowManager.isEmpty, rowManager != filter else { continue }
+            guard let rowManager = row.manager, !rowManager.isEmpty, rowManager != filter else {
+                retainedSessionKeys.remove(key)
+                continue
+            }
             updates[key.machineRef] = Self.replacing(row, in: updates[key.machineRef] ?? [])
+            retainedSessionKeys.insert(key)
         }
     }
 
