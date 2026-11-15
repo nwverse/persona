@@ -121,28 +121,18 @@ func ageCodexCatalogs(d time.Duration) {
 // waitAsked waits until g has had n requests and the answer they gave is kept (fresh again).
 func waitAsked(t *testing.T, g *catalogGateway, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for len(g.requests()) < n {
-		if time.Now().After(deadline) {
-			t.Fatalf("%d requests, want %d", len(g.requests()), n)
+	waitWithin(t, 10*time.Second, "the gateway asked again and its answer kept", func() bool {
+		if len(g.requests()) < n {
+			return false
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	for {
 		codexCatalogCache.Lock()
+		defer codexCatalogCache.Unlock()
 		kept := len(codexCatalogCache.got) > 0
 		for _, a := range codexCatalogCache.got {
 			kept = kept && time.Now().Before(a.fresh)
 		}
-		codexCatalogCache.Unlock()
-		if kept {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the answer was not kept")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		return kept
+	})
 }
 
 // Each place a gateway may serve Codex's catalog is found by what it answers, the first in order winning; OpenAI's
