@@ -903,9 +903,10 @@ On a direct route (same network or Tailscale), the live screen's video can ride 
 connection, so a lost packet delays only the frame it belongs to, usually by no round trip, and never slows the stream
 by itself ([#7873](https://github.com/nwverse/persona/issues/7873) has the design and the shaped-link numbers it rests
 on). The node's end is `internal/screenlink` (`udp.go`, `udp_wire.go`, `rs.go`); the shared cases are
-`spec/fixtures/screen-udp`. In place: the node's side, offered in `paths` as `"udp": 1`, and the iPhone's, off in
-release builds until the check on real devices (`ScreenRoutes.udpReleaseEnabled`; a DEBUG build launched with
--showScreenUDP has it). No setting of its own: the Settings switch for direct routes covers it.
+`spec/fixtures/screen-udp`. In place: the node's side, offered in `paths` as `"udp": 1`, and the iPhone's, on in
+release builds since the live check against a real Mac (`ScreenRoutes.udpReleaseEnabled` turns it off again; a DEBUG
+build launched with -showScreenUDP has it either way). No setting of its own: the Settings switch for direct routes
+covers it.
 
 - **What rides it**: only the video channel's bytes from the node to the phone, plus the phone's acknowledgements,
   requests to send again, give-ups and pings for it. RFB, the phone's video messages (`start`, `report`, `keyframe`,
