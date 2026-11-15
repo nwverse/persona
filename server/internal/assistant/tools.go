@@ -313,7 +313,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if c.Assistant {
 			return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
 		}
-		if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Send) {
+		if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Send) && !stoppedAgent(c) {
 			// i18n-ignore: original MCP refusal for the model, not API error, push or approval-card copy; keep the source reason verbatim.
 			return "", fmt.Errorf("这个 Agent 仅支持查看：%s", c.ReadOnlyReason)
 		}
