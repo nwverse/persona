@@ -387,9 +387,10 @@ func TestLarkKnownReadsDoNotOverrideReportedRisk(t *testing.T) {
 	}
 }
 
-// A gated call's @file body is read from the conversation's directory, which a cd in the command leaves behind:
-// after one a relative body file may be another file than the one read, so a body-conditioned allow rule cannot
-// stand on it (#8404). The default mode, where those rules decide; an absolute @file still resolves.
+// A gated call's @file body is read from the conversation's directory. Anything else in the command may run the call
+// elsewhere (cd however spelled, env -C, sudo -D, a subshell), so a relative body file is known only for a lone call,
+// at most under timeout and piped into filters (#8404). The default mode, where body rules decide; an absolute
+// @file still resolves.
 func TestLarkRelativeBodyFileAfterCd(t *testing.T) {
 	cwd, other := t.TempDir(), t.TempDir()
 	_ = os.WriteFile(filepath.Join(cwd, "body.json"), []byte(`{"type":"p2p"}`), 0o644)
@@ -410,6 +411,21 @@ func TestLarkRelativeBodyFileAfterCd(t *testing.T) {
 		{"pushd", `pushd ` + other + `; ex POST /conversations @body.json`, 1},
 		{"cd in bash -c", `bash -c 'cd ` + other + `; ex POST /conversations @body.json'`, 1},
 		{"cd and &&", `cd ` + other + ` && ex POST /conversations @./body.json`, 1},
+		{"escaped cd, variable", `\cd ` + other + `; G=` + script + `; $G POST /conversations @body.json`, 1},
+		{"escaped cd", `\cd ` + other + `; ex POST /conversations @body.json`, 1},
+		{"empty double quotes in cd", `c""d ` + other + `; ex POST /conversations @body.json`, 1},
+		{"empty single quotes in cd", `c''d ` + other + `; ex POST /conversations @body.json`, 1},
+		{"quoted c", `'c'd ` + other + `; ex POST /conversations @body.json`, 1},
+		{"escaped d", `c\d ` + other + `; ex POST /conversations @body.json`, 1},
+		{"env -C", `env -C ` + other + ` ex POST /conversations @body.json`, 1},
+		{"env --chdir", `env --chdir=` + other + ` ex POST /conversations @body.json`, 1},
+		{"timeout env -C", `timeout 20 env -C ` + other + ` ex POST /conversations @body.json`, 1},
+		{"sudo -D", `sudo -D ` + other + ` ex POST /conversations @body.json`, 1},
+		{"subshell cd", `(cd ` + other + ` && ex POST /conversations @body.json)`, 1},
+		{"redirected", `ex POST /conversations @body.json > /tmp/out.json`, 1},
+		{"after another command", `true; ex POST /conversations @body.json`, 1},
+		{"body written first", `echo '{"type":"group"}' > body.json; ex POST /conversations @body.json`, 1},
+		{"absolute after escaped cd", `\cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := codexTestNode(t)

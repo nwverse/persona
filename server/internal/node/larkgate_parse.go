@@ -27,16 +27,66 @@ var (
 // resolves @file bodies; risk supplies CLI metadata when configured. Known read commands also have a static fallback.
 func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk) larkVerdict {
 	v := classifyLarkDepth(cmd, gates, cwd, risk, 0)
-	// A relative @file body is read from cwd; after a cd anywhere in the command (a loop may come back to an earlier
-	// call, a shell -c runs its own) it may be another file than the one sent: its body is not known (#8404).
-	if larkDirChangeRe.MatchString(cmd) && slices.ContainsFunc(v.calls, func(c larkCall) bool { return c.relBody }) {
+	// A relative @file body is read from cwd at check time. Whatever else the command runs may run the call
+	// elsewhere (cd in any spelling, env -C, sudo -D, a subshell) or change the file first (a redirect, an earlier
+	// command), so the body is known only for a lone call (larkLoneGateCall, #8404).
+	if slices.ContainsFunc(v.calls, func(c larkCall) bool { return c.relBody }) && !larkLoneGateCall(cmd, gates) {
 		v.other, v.unknown = true, true
 	}
 	return v
 }
 
-// larkDirChangeRe: a word that changes the shell's directory, anywhere in a command (text, so also inside quotes).
-var larkDirChangeRe = lazyre.New("(^|[\\s;&|(){}'\"`])(cd|pushd|popd)([\\s;&|(){}'\"`]|$)")
+// larkLoneGateCall: the command is one gated call with literal words and no assignment or redirect, at most under
+// `timeout <duration>`, piped only into output filters. Nothing in it runs before the call or changes its directory.
+func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil || len(tree.Stmts) != 1 {
+		return false
+	}
+	var calls []*syntax.CallExpr
+	var walk func(*syntax.Stmt) bool
+	walk = func(st *syntax.Stmt) bool {
+		if st.Background || st.Coprocess || st.Negated || len(st.Redirs) != 0 {
+			return false
+		}
+		switch c := st.Cmd.(type) {
+		case *syntax.CallExpr:
+			calls = append(calls, c)
+			return true
+		case *syntax.BinaryCmd:
+			return c.Op == syntax.Pipe && walk(c.X) && walk(c.Y)
+		}
+		return false
+	}
+	if !walk(tree.Stmts[0]) {
+		return false
+	}
+	for i, c := range calls {
+		if len(c.Assigns) != 0 || len(c.Args) == 0 {
+			return false
+		}
+		words := make([]string, len(c.Args))
+		for j, arg := range c.Args {
+			var dynamic bool
+			if words[j], dynamic = executionWord(arg); dynamic {
+				return false
+			}
+		}
+		if i > 0 {
+			if !larkFilters[words[0]] || words[0] == "cd" {
+				return false
+			}
+			continue
+		}
+		if words[0] == "timeout" && len(words) > 2 && timeoutArg.MatchString(words[1]) {
+			words = words[2:]
+		}
+		if gateOf(gates, words[0]) < 0 {
+			return false
+		}
+	}
+	return true
+}
 
 func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
 	return classifyLarkAt(cmd, gates, cwd, risk, depth, false)
