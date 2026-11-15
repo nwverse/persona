@@ -104,6 +104,7 @@ func TestChatRejectsReasoningEffort(t *testing.T) {
 		want       bool
 	}{
 		{"unsupported parameter", `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`, true},
+		{"parameter named by param", `{"error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
 		{"unknown argument", `{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}`, true},
 		{"extra field", `{"detail":[{"loc":["body","reasoning_effort"],"msg":"Extra inputs are not permitted"}]}`, true},
 		{"field not supported", `{"error":{"message":"reasoning_effort is not supported"}}`, true},
@@ -112,6 +113,8 @@ func TestChatRejectsReasoningEffort(t *testing.T) {
 		{"operator ceiling", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, false},
 		{"invalid value", `{"error":{"message":"reasoning_effort must be a non-empty string"}}`, false},
 		{"other field", `{"error":{"message":"Unsupported parameter: stream_options"}}`, false},
+		{"echoed effort does not associate another field's error", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, false},
+		{"unassociated details do not associate a generic error", `{"error":{"message":"Unsupported parameter","details":{"reasoning_effort":"high"}}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ChatRejectsReasoningEffort([]byte(tc.body)); got != tc.want {
@@ -136,6 +139,7 @@ func TestChatCompletionsReasoningEffortRetry(t *testing.T) {
 		{"field rejected twice", `{"error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`, 2, 2, false, 1},
 		{"value rejected", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, 1, 1, false, 0},
 		{"ceiling rejected", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, 1, 1, false, 0},
+		{"another parameter rejected", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, 1, 1, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs = nil

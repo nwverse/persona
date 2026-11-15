@@ -233,6 +233,18 @@ describe.each(["kb", "inbox.triage", "agent.delegate"])("%s Direct API editor", 
     expect(current).toEqual(saved);
   });
 
+  it("tests the inherited Chat effort and does not verify a degraded result", async () => {
+    current.override = { provider: "launcher.chat", model: "chat-default" };
+    current.effective = { ...current.override, effort: "low" };
+    result = { ok: true, ms: 20, model: "chat-default", effort: "" };
+    await render();
+    await testConnection();
+    expect(probes()[0].body).toEqual({ name: "chat", model: "chat-default", effort: "low" });
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain(t("settings-modelconfiguration.api_test_effort"));
+    expect(dialog().textContent).not.toContain(t("settings-modelconfiguration.api_test_ok", { ms: 20 }));
+    expect(writes()).toEqual([]);
+  });
+
   it("does not claim an effort was verified when an older hub ignores it", async () => {
     result = { ok: true, ms: 20, model: "saved-manual-model" };
     await render();

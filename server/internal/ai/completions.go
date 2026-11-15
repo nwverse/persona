@@ -86,18 +86,60 @@ func ChatRequiresCompletionTokens(raw []byte) bool {
 		(strings.Contains(message, "unsupported") || strings.Contains(message, "not supported"))
 }
 
-// ChatRejectsReasoningEffort reports a 400 body that rejects the reasoning_effort parameter itself. An unsupported
-// level, an invalid value or an operator ceiling is a different error and must keep its original response.
+// ChatRejectsReasoningEffort reports an error body that rejects the reasoning_effort parameter itself. An unsupported
+// level, an invalid value or an operator ceiling is a different error and must keep its original response. Callers
+// restrict this compatibility retry to the HTTP status they accept.
 func ChatRejectsReasoningEffort(raw []byte) bool {
-	body := strings.ToLower(string(raw))
-	if !strings.Contains(body, "reasoning_effort") {
+	var envelope struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+		Detail  []struct {
+			Loc []any  `json:"loc"`
+			Msg string `json:"msg"`
+		} `json:"detail"`
+	}
+	if json.Unmarshal(raw, &envelope) == nil {
+		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+			var object struct {
+				Message string `json:"message"`
+				Param   string `json:"param"`
+			}
+			if json.Unmarshal(envelope.Error, &object) == nil {
+				return chatReasoningFieldError(object.Message, object.Param)
+			}
+			var message string
+			return json.Unmarshal(envelope.Error, &message) == nil && chatReasoningFieldError(message, "")
+		}
+		if envelope.Message != "" {
+			return chatReasoningFieldError(envelope.Message, "")
+		}
+		for _, detail := range envelope.Detail {
+			for _, part := range detail.Loc {
+				if part == "reasoning_effort" && chatReasoningFieldError(detail.Msg, "reasoning_effort") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return chatReasoningFieldError(string(raw), "")
+}
+
+// chatReasoningFieldError matches only the error's own message and parameter, never an echoed request in its details.
+func chatReasoningFieldError(message, param string) bool {
+	message = strings.ToLower(message)
+	param = strings.ToLower(strings.TrimSpace(param))
+	if param != "" && param != "reasoning_effort" {
+		return false
+	}
+	if !strings.Contains(message, "reasoning_effort") && param != "reasoning_effort" {
 		return false
 	}
 	for _, valueError := range []string{
 		"unsupported value", "invalid value", "supported values", "unsupported reasoning_effort", "invalid reasoning_effort",
 		"reasoning_effort_above_ceiling", "reasoning_effort must be",
 	} {
-		if strings.Contains(body, valueError) {
+		if strings.Contains(message, valueError) {
 			return false
 		}
 	}
@@ -106,13 +148,13 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 		"unrecognized request argument", "unknown field", "unrecognized field", "unexpected field",
 		"extra inputs are not permitted", "additional properties are not allowed",
 	} {
-		if strings.Contains(body, fieldError) {
+		if strings.Contains(message, fieldError) {
 			return true
 		}
 	}
 	// Gateways quote JSON strings inside their error message differently. Ignore quoting and whitespace only for the
 	// field-only "reasoning_effort is not supported" form; a named value between those words does not match.
-	compact := strings.NewReplacer(`\`, "", `"`, "", `'`, "", " ", "", "\t", "", "\r", "", "\n", "").Replace(body)
+	compact := strings.NewReplacer(`\`, "", `"`, "", `'`, "", " ", "", "\t", "", "\r", "", "\n", "").Replace(message)
 	return strings.Contains(compact, "reasoning_effortisnotsupported")
 }
 
