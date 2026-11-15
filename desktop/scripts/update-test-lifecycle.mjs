@@ -47,7 +47,7 @@ export async function finishUpdateTestCleanup(cleanup, {
   timeoutMilliseconds = 180_000,
   settleGraceMilliseconds = 30_000,
   timeoutMessage = "cleanup timed out after 3 minutes",
-}) {
+} = {}) {
   const controller = new AbortController();
   let timer;
   let timedOut = false;
