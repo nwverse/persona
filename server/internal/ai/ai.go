@@ -219,6 +219,13 @@ func apiEndpoint(base, path string) string {
 	return base + "/" + path
 }
 
+// setUserAgent preserves the transport default unless the connection explicitly sets a value.
+func (c *Client) setUserAgent(req *http.Request) {
+	if c.cfg.UserAgent != nil {
+		req.Header.Set("User-Agent", *c.cfg.UserAgent)
+	}
+}
+
 // messages calls the Messages API; answered is whether the upstream said 200, Truncated whether the reply stopped at
 // MaxTokens. A model that thinks spends its thinking from the same MaxTokens, so a long answer can stop half written.
 // It streams (#4245): a gateway's cap on a non-streamed request's total time (often 120 s) otherwise fails every
@@ -243,6 +250,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		req.Header.Set("x-api-key", key)
 	}
 	req.Header.Set("anthropic-version", "2023-06-01")
+	c.setUserAgent(req)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return reply, false, fmt.Errorf("ai: %w", err)
@@ -538,6 +546,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	hreq.Header.Set("content-type", "application/json")
 	hreq.Header.Set("accept", "text/event-stream")
 	hreq.Header.Set("authorization", "Bearer "+key)
+	c.setUserAgent(hreq)
 	resp, err := hc.Do(hreq)
 	if err != nil {
 		return reply, false, fmt.Errorf("ai: %w", err)
