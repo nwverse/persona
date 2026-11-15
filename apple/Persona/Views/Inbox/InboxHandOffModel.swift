@@ -532,16 +532,14 @@ extension AppModel {
         while !Task.isCancelled {
             var current = chat(key).pending.first { $0.id == tracked.id }
             if current == nil, followRetries {
-                // An uncertain retry stays sending while its old receipt is checked; retain its failed snapshot so the
-                // replacement id is still recognizable after that await. Never pick between duplicates: an unrelated
-                // matching message is not evidence that this hand-off went.
-                let failed = tracked.state == .failed ? tracked : lastFailed
-                if let failed {
-                    let candidates = chat(key).pending.filter {
-                        $0.id != failed.id && $0.createdAt == failed.createdAt && $0.text == failed.text && $0.images == failed.images
-                    }
-                    if candidates.count == 1 { current = candidates[0] }
+                // An uncertain retry stays sending while its old receipt is checked, and can fail and change id between
+                // polls. Keep the original immutable identity as the fallback so recognition never depends on observing
+                // failed. Never pick between duplicates: an unrelated matching message is not evidence of this hand-off.
+                let identity = tracked.state == .failed ? tracked : lastFailed ?? msg
+                let candidates = chat(key).pending.filter {
+                    $0.id != identity.id && $0.createdAt == identity.createdAt && $0.text == identity.text && $0.images == identity.images
                 }
+                if candidates.count == 1 { current = candidates[0] }
             }
             if let current {
                 tracked = current
