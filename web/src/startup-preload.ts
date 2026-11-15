@@ -319,6 +319,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // part of (agentmenus, chat-comments, chat-contextgroup, chat-modelpill, chat-subagentcard, composer, context,
 // lib-tasks, lib-todos, node-health, settings-nav, work-entry, worktree), measured in one environment against that
 // main: ja 480,853 B to 479,549 B (en 477,669 B to 476,385 B, zh-Hans 478,451 B to 477,198 B), 1,090 B of room.
+// #8180: the web PRs merged since used that room, and main measured ja 480,687 B at 55ddb9f9c, 48 B over. The budget
+// stays; the startup catalog takes just the keys the first screen reads of five more (assistant-tasks, chat-chatview,
+// chat-sessiondialogs, lib-channels, lib-inbox), measured in one environment on that main with the hub release's
+// fixes: ja 480,730 B to 480,152 B (en 477,616 B to 477,061 B, zh-Hans 478,409 B to 477,845 B), 487 B of room.
 export const FIRST_SCREEN_BUDGET = 480_639;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
