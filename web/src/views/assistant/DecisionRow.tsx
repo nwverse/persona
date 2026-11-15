@@ -21,7 +21,7 @@ import { BriefingMark } from "./BriefingMark";
 /** Where answering the round stands: not yet, being sent, or answered (with what the row then says). */
 type Answering = { state: "idle" } | { state: "busy"; key: string } | { state: "done"; text: string };
 
-/** A dialog that has the Agent's terminal and kept the answer from it (409 dialog_open, #7343): its first line ("" when the
+/** A dialog that has the Agent's terminal and kept the answer from it (423 dialog_open, #7343): its first line ("" when the
  *  hub could not read it) and the Agent whose terminal it is, when the hub said. */
 type Blocker = { dialog: string; mid?: string; sid?: string };
 

@@ -184,7 +184,7 @@ func (s *Service) briefRoutes() {
 
 	// POST /api/v1/todos/{id}/accept {"asked_at"}: the Accept button of a `brief` item. It verifies the task when asked_at is
 	// the round that waits now; a button of an earlier round, or a task already verified, is 409. A decision whose
-	// recommendation could not be sent to the task's agent is 502 (409 with the node's code when the node refused it, such
+	// recommendation could not be sent to the task's agent is 502 (423 with the node's code when the node refused it, such
 	// as dialog_open, #7343), and asks that cannot be read or an acceptance that
 	// cannot be saved is 503; either way nothing was taken (conclusion.go, errAcceptStore). A decision also takes
 	// {"option"}: the label of the option chosen (the recommended one is what the plain press takes; no such option is
