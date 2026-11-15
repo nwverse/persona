@@ -197,6 +197,8 @@ class InboxHandOffRecordTest {
         val sent = mutableListOf<Triple<SessionKey, String, String>>()
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) {
             sent += Triple(session, text, clientMessageId)
+            // This fake's hub returned Accepted; local enqueue or a Sent outbox row would not be such evidence.
+            AuthoritativeMessageDeliveries.publish(AuthoritativeMessageDelivery("hub/generation", clientMessageId, session, text))
         }
     }
 

@@ -92,6 +92,10 @@ class RealInboxRepository(
     private val sendLock = Mutex()
     private val personaLock = Mutex()
     private val personaRequests = mutableMapOf<String, String>()
+    private val agentHandOffLock = Mutex()
+    private val agentHandOffs = mutableMapOf<String, PendingAgentHandOff>()
+    private val recordedAgentHandOffs = mutableSetOf<String>()
+    private data class PendingAgentHandOff(val request: InboxHandOffRequest, val session: SessionKey, val scope: String)
     // Access order is maintained when a window is opened.
     private val windows = LinkedHashMap<String, Window>(16, 0.75f, true)
     private var restoredScope: String? = null
@@ -129,6 +133,12 @@ class RealInboxRepository(
             hubPreferences.preferences.collect { state ->
                 current.update { it.copy(mutes = AgentPreferences(state.mutes.spaces, state.mutes.sessions, state.mutes.allowed)) }
             }
+        }
+        // Local enqueue and OutboxState are not delivery evidence. The real outbox publishes only an Accepted transport
+        // result, an Accepted reconciliation receipt, or validated transcript evidence. Its scoped stream also crosses
+        // the app's grouped MessageSender facade without making that facade part of core/contracts.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            AuthoritativeMessageDeliveries.events.collect { delivery -> agentHandOffDelivered(delivery) }
         }
         scope.launch {
             connection.current.collectLatest { transport ->
@@ -645,6 +655,29 @@ class RealInboxRepository(
         return parsed.copy(item = parsed.item.copy(id = appId), manager = owner.manager)
     }
 
+    private suspend fun agentHandOffDelivered(delivery: AuthoritativeMessageDelivery) {
+        val pending = agentHandOffLock.withLock {
+            val candidate = agentHandOffs[delivery.clientMessageId] ?: return
+            // The grouped facade removes its machine-id namespace before the real outbox sends. Scope, original client
+            // id and exact text survive that routing and bind this evidence to the one pending hand-off.
+            if (candidate.scope != delivery.scope || candidate.request.text != delivery.text) return
+            // Repeated Accepted/transcript evidence and caller retries cannot record twice.
+            if (!recordedAgentHandOffs.add(delivery.clientMessageId)) return
+            candidate
+        }
+        scope.launch {
+            quietly {
+                val transport = requireTransport()
+                val old = recordOf(pending.request.itemId)
+                val hubItemId = old?.hubItemId ?: pending.request.itemId
+                asItem(old) {
+                    transport.recordAgentHandOff(hubItemId, pending.session, pending.request.targetTitle.orEmpty(),
+                        pending.request.operationId)
+                }
+            }
+        }
+    }
+
     override suspend fun handOff(request: InboxHandOffRequest): SessionKey? {
         require(request.itemId.isNotBlank() && request.text.isNotBlank() && request.operationId.isNotBlank())
         scope.coroutineContext.ensureActive()
@@ -652,18 +685,21 @@ class RealInboxRepository(
         val session = request.sessionId
         if (!machine.isNullOrBlank() && !session.isNullOrBlank()) {
             val key = SessionKey(machine, session)
-            checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
-            // The message is already accepted: open it now and record the hand-off without holding the sheet open.
-            scope.launch {
-                quietly {
-                    val transport = requireTransport()
-                    val old = recordOf(request.itemId)
-                    val hubItemId = old?.hubItemId ?: request.itemId
-                    asItem(old) {
-                        transport.recordAgentHandOff(hubItemId, key, request.targetTitle.orEmpty(), request.operationId)
-                    }
-                }
+            val pending = PendingAgentHandOff(request, key, requireTransport().scope)
+            agentHandOffLock.withLock {
+                val previous = agentHandOffs[request.operationId]
+                require(previous == null || previous == pending) { "Operation id reused with different parameters" }
+                agentHandOffs[request.operationId] = pending
             }
+            try {
+                checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
+            } catch (failure: Exception) {
+                agentHandOffLock.withLock {
+                    if (agentHandOffs[request.operationId] == pending) agentHandOffs.remove(request.operationId)
+                }
+                throw failure
+            }
+            // The local outbox answers at once. Only authoritative delivery evidence releases the background record.
             return key
         }
         // Main-chat hand-offs need a receipt from the item's manager, not merely a local queue entry.

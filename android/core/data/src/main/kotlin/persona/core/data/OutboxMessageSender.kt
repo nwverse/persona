@@ -30,6 +30,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collect
@@ -41,6 +43,30 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * Hub-authoritative delivery of one durable outbox message. Unlike [DeliveryState], this is never inferred from manual
+ * confirmation, an HTTP error's delivered hint, or the grace that turns a sent bubble into a shown one.
+ *
+ * The app routes Agent sends through its grouped MessageSender facade. A process-local core/data stream lets the real
+ * outbox reach the repository through that unchanged facade; the pairing scope prevents cross-hub delivery.
+ */
+internal data class AuthoritativeMessageDelivery(
+    val scope: String,
+    val clientMessageId: String,
+    val session: SessionKey,
+    val text: String,
+)
+
+internal object AuthoritativeMessageDeliveries {
+    private val mutable = MutableSharedFlow<AuthoritativeMessageDelivery>(extraBufferCapacity = Int.MAX_VALUE)
+    val events: SharedFlow<AuthoritativeMessageDelivery> = mutable
+
+    /** Buffered so recording a hand-off can never hold up or change message delivery. */
+    suspend fun publish(delivery: AuthoritativeMessageDelivery) {
+        mutable.emit(delivery)
+    }
+}
 
 class OutboxMessageSender(
     private val hubScope: HubScope,
@@ -397,6 +423,7 @@ class OutboxMessageSender(
                 pending.remove(entry)
                 if (store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)) {
                     claimed += session to item.id
+                    AuthoritativeMessageDeliveries.publish(entry.delivery())
                     wake.trySend(Unit)
                 }
             }
@@ -417,12 +444,14 @@ class OutboxMessageSender(
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { null }
                 when (evidence) {
-                    MessageEvidence.Shown -> store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)
+                    MessageEvidence.Shown -> if (store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)) {
+                        AuthoritativeMessageDeliveries.publish(entry.delivery())
+                    }
                     is MessageEvidence.Receipt -> {
                         // A late success can settle manual review; an unknown receipt must keep that choice visible.
                         val from = if (evidence.result == MessageTransportResult.Accepted)
                             uncertain + OutboxState.NeedsConfirmation else uncertain
-                        settle(entry.clientMessageId, from, evidence.result)
+                        settle(entry, from, evidence.result)
                     }
                     null -> store.transition(entry.clientMessageId, setOf(OutboxState.Verifying), OutboxState.Unknown)
                 }
@@ -480,7 +509,7 @@ class OutboxMessageSender(
                 if (!store.transition(entry.clientMessageId, setOf(OutboxState.Unknown), OutboxState.Sending)) continue
                 result = attempt(entry)
             }
-            if (settle(entry.clientMessageId, setOf(OutboxState.Sending), result) == OutboxState.WaitingForNetwork) return
+            if (settle(entry, setOf(OutboxState.Sending), result) == OutboxState.WaitingForNetwork) return
         }
     }
 
@@ -489,15 +518,19 @@ class OutboxMessageSender(
      * spent (the hub answers it again from this try: 202 unknown, the stored 409), so the next attempt takes a new one,
      * as on iOS. Without an answer the id stays: the hub sends a repeated id once.
      */
-    private suspend fun settle(id: String, from: Set<OutboxState>, result: MessageTransportResult): OutboxState {
+    private suspend fun settle(entry: OutboxEntry, from: Set<OutboxState>, result: MessageTransportResult): OutboxState {
+        val id = entry.clientMessageId
         val state = classify(result)
         val error = (result as? MessageTransportResult.HubError)?.let { it.code ?: it.error }
         val moved = if ((result as? MessageTransportResult.HubError)?.delivered == "none") {
             store.transition(id, from, state, error, newOperationId())
         } else store.transition(id, from, state, error)
+        if (moved && result == MessageTransportResult.Accepted) AuthoritativeMessageDeliveries.publish(entry.delivery())
         if (moved && state == OutboxState.WaitingForNetwork) stall(id, error) else unstall(id)
         return state
     }
+
+    private fun OutboxEntry.delivery() = AuthoritativeMessageDelivery(hubScope.path, clientMessageId, session, text)
 
     /**
      * [id] came back waiting. Waiting for the link is what the outbox is for; while the link is up it means the hub
