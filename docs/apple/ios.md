@@ -199,8 +199,10 @@ Chat page:
 - Settings › Storage (`StorageView`): space used on this phone, size and share bars by category (Agent chats, chat images, Lark images/files, lists/Lark chats, websites,
   network cache, other, App data); swipe left / long-press clears a category, or Clear all caches (settings and pairing retained; websites clear cache, not login).
   Memory copies clear too; background sync refetches. DEBUG `-tab settings -openStorage YES`.
+  Without the user: the first time the app goes to the background in a process, `CacheBudget` trims `chat-images` and `lark-media`
+  oldest first from over 200 MB to 150 MB and clears WebKit's disk cache over 200 MB (links `WebViewPool` preloads; logins stay), #8341.
 - Lazy images: history pages and pushes omit image bytes (`lazy_images`, reducing pages from MB to hundreds of KB), dimensions only; visible rows fetch through
-  `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid forever),
+  `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid until `CacheBudget` trims them),
   reserving dimensions before arrival to avoid jumps. Thumbnails and full viewer share it; locally sent images retain inline base64.
   A failed load (hub unreachable, download failed) does not spin forever (#182): tool-result and file-page images (`Base64Image`) say
   "Image didn't load. Tap to retry" on the placeholder, and the viewer's page says so with Retry, keeping its bars (and Close) and the
