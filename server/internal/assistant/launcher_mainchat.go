@@ -180,7 +180,7 @@ const (
 // unavailableLauncher is one launcher or provider the main chat can't run on a machine, and why in the user's words.
 type unavailableLauncher struct {
 	Name        string `json:"name"`
-	DisplayName string `json:"display_name,omitempty"` // a Persona-managed provider's own name ("" shows Name)
+	DisplayName string `json:"display_name,omitempty"` // a Persona-managed provider's own name, or a runtime's for its provider ("" shows Name)
 	Kind        string `json:"kind"`                   // launcher | api
 	Agent       string `json:"agent,omitempty"`
 	API         string `json:"api,omitempty"` // a direct API provider's protocol: messages | responses | chat
@@ -219,7 +219,9 @@ func (s *Service) mainChatUnavailable(ctx context.Context, machine string, picke
 			continue
 		}
 		seen[l.Name] = true
-		u := unavailableLauncher{Name: l.Name, Kind: "launcher", Agent: cmp.Or(l.AgentType, l.Agent), Code: unavailableNotMainChat, Reason: notMainChat}
+		// named as the picker names it: a runtime's provider by the runtime's name for it (#8261)
+		u := unavailableLauncher{Name: l.Name, DisplayName: l.DisplayName, Kind: "launcher", Agent: cmp.Or(l.AgentType, l.Agent), Code: unavailableNotMainChat,
+			Reason: notMainChat}
 		if m, ok := managed(l.Name); ok {
 			u.DisplayName = m.DisplayName
 		}
