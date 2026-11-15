@@ -169,6 +169,7 @@ func TestChatProbeReasoningEffortRetry(t *testing.T) {
 		{"field rejected twice", `{"error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`, 2, 2, false, 1},
 		{"value rejected", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, 1, 1, false, 0},
 		{"ceiling rejected", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, 1, 1, false, 0},
+		{"ceiling code with generic message", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 1, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var requests []map[string]any

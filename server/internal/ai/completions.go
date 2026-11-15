@@ -103,8 +103,12 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 			var object struct {
 				Message string `json:"message"`
 				Param   string `json:"param"`
+				Code    string `json:"code"`
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
+				if chatReasoningValueCode(object.Code) {
+					return false
+				}
 				return chatReasoningFieldError(object.Message, object.Param)
 			}
 			var message string
@@ -123,6 +127,18 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 		return false
 	}
 	return chatReasoningFieldError(string(raw), "")
+}
+
+// chatReasoningValueCode vetoes a retry when a structured error code already identifies a value or policy rejection,
+// even if the message is only a generic "unsupported parameter".
+func chatReasoningValueCode(code string) bool {
+	code = strings.ToLower(strings.TrimSpace(code))
+	for _, marker := range []string{"ceiling", "unsupported_value", "invalid_value", "unsupported_reasoning_effort", "invalid_reasoning_effort"} {
+		if strings.Contains(code, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // chatReasoningFieldError matches only the error's own message and parameter, never an echoed request in its details.

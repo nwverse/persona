@@ -111,6 +111,8 @@ func TestChatRejectsReasoningEffort(t *testing.T) {
 		{"unsupported value", `{"error":{"message":"Unsupported value: 'max'. Supported values are: 'low', 'high'.","param":"reasoning_effort"}}`, false},
 		{"unsupported named level", `{"error":{"message":"unsupported reasoning_effort \"ultra\""}}`, false},
 		{"operator ceiling", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, false},
+		{"ceiling code wins over generic message", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
+		{"invalid value code wins over generic message", `{"error":{"code":"invalid_value","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
 		{"invalid value", `{"error":{"message":"reasoning_effort must be a non-empty string"}}`, false},
 		{"other field", `{"error":{"message":"Unsupported parameter: stream_options"}}`, false},
 		{"echoed effort does not associate another field's error", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, false},
@@ -139,6 +141,7 @@ func TestChatCompletionsReasoningEffortRetry(t *testing.T) {
 		{"field rejected twice", `{"error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`, 2, 2, false, 1},
 		{"value rejected", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, 1, 1, false, 0},
 		{"ceiling rejected", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, 1, 1, false, 0},
+		{"ceiling code with generic message", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 1, false, 0},
 		{"another parameter rejected", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, 1, 1, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
