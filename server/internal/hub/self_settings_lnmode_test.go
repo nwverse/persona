@@ -19,7 +19,7 @@ import (
 // waits and after a decline the switch is as it was; an approval turns it on and tells the managers (Hello.QuietPush).
 func TestLowDistractionSettingChangesTheSwitchOnlyOnApproval(t *testing.T) {
 	h := newTestHub(t)
-	h.push.store = &lnStore{settingsStore{vals: map[string][]byte{}}}
+	h.push.store = newLnStore()
 	a := connectAssistant(t, h)
 	m := &Machine{cfg: MachineConfig{ID: "box"}, hub: h}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
