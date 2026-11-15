@@ -65,5 +65,6 @@
   "config_dir_private": "Persona 専用",
   "config_dir_legacy": "このコンピューターの",
   "config_dir_hint": "「このコンピューターの」を選ぶと、新しい会話はそのコンピューターで claude を実行するときのサインインと設定（~/.claude のゲートウェイを含む）を使います。開始済みの会話はそのままです",
-  "supervise_description": "Persona が任せたタスクをフォローして検収し、メインチャットがいつでも返信できるようにします。メインチャットより安価なモデルや高性能なモデルも選べます。"
+  "supervise_description": "Persona が任せたタスクをフォローして検収し、メインチャットがいつでも返信できるようにします。メインチャットより安価なモデルや高性能なモデルも選べます。",
+  "agents": "Agents"
 }

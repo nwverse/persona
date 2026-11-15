@@ -65,5 +65,6 @@
   "config_dir_private": "Persona 专用",
   "config_dir_legacy": "这台电脑的",
   "config_dir_hint": "选「这台电脑的」，新对话就沿用在那台电脑上运行 claude 时的登录和设置，包括 ~/.claude 里的网关；已开始的对话保持不变",
-  "supervise_description": "跟进并验收 Persona 派出的任务，让主对话随时能回你。可以用比主对话更便宜或更强的模型。"
+  "supervise_description": "跟进并验收 Persona 派出的任务，让主对话随时能回你。可以用比主对话更便宜或更强的模型。",
+  "agents": "Agents"
 }

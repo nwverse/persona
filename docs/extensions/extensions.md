@@ -2693,8 +2693,9 @@ Used to connect directly to a personal Agent service (e.g. one with real-time pu
   The hub clears caches and pushes `{"type":"agents","session_ids":[…]}`, and the app refetches immediately. Only this extension's own sources are accepted. The hub also pushes after its own sends, then again at 4 / 15 / 45 seconds;
   every 60 seconds it relists all sources as a fallback.
   The hub keeps each source's list for 20 seconds; reads that miss it at the same time (the Agents page's sections, groups and counts after a change, other open apps) share one `sessions` call, and one that comes after a change does not share a call made before it (#7204).
+  A source whose `sessions` call timed out (its own timeout, not the asker going away) answers the reads after it with that failure at once for up to 60 seconds, instead of each waiting out the 30-second call timeout again; its rows are left out as before. An answer to the fallback poll, an `agentsrc.updated` from it, or the source being added again ends that sooner. Other failures are asked again each time (#8471).
 - Implementation: `server/internal/extmgr/extension_agents.go`; tests `TestExtensionAgentSource` (`extension_agents_test.go`, fake extension exercises the protocol),
-  `agents.TestAddAndRemoveSources`, `agents.TestListsMissingTheCacheTogetherAskTheSourceOnce` (`inflight_test.go`).
+  `agents.TestAddAndRemoveSources`, `agents.TestListsMissingTheCacheTogetherAskTheSourceOnce` (`inflight_test.go`), `agents.TestATimedOutSourceIsNotAskedAgainByEveryRead` (`timeout_memo_test.go`).
 
 ## Events
 

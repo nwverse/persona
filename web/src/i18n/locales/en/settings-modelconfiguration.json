@@ -65,5 +65,6 @@
   "config_dir_private": "Persona's own",
   "config_dir_legacy": "This computer's",
   "config_dir_hint": "“This computer's” starts new chats with the sign-in and settings claude uses there, a gateway in ~/.claude included. Chats already started keep theirs.",
-  "supervise_description": "Follows up and reviews the tasks Persona hands out, so the main chat stays free to answer you. It can run on a cheaper or a stronger model than the main chat."
+  "supervise_description": "Follows up and reviews the tasks Persona hands out, so the main chat stays free to answer you. It can run on a cheaper or a stronger model than the main chat.",
+  "agents": "Agents"
 }
