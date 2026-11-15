@@ -1,0 +1,27 @@
+package modelhttp
+
+import (
+	"net/http"
+	"testing"
+)
+
+func TestUserAgent(t *testing.T) {
+	SetVersion("1.2.3")
+	t.Cleanup(func() { SetVersion("dev") })
+	if got := UserAgent(); got != "Persona/1.2.3" {
+		t.Fatalf("UserAgent() = %q", got)
+	}
+	for _, custom := range []string{"custom-client", ""} {
+		h := http.Header{}
+		h.Set("User-Agent", custom)
+		SetDefaultUserAgent(h)
+		if got := h.Get("User-Agent"); got != custom {
+			t.Errorf("custom User-Agent = %q, want %q", got, custom)
+		}
+	}
+	h := http.Header{}
+	SetDefaultUserAgent(h)
+	if got := h.Get("User-Agent"); got != "Persona/1.2.3" {
+		t.Errorf("default User-Agent = %q", got)
+	}
+}
