@@ -1532,14 +1532,21 @@ nonisolated enum ChatCache {
     /// v18: Codex commentary is assistant text rather than thinking; older cached items would keep hiding mid-turn answers.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
     static let folder = "chats-v18"
-    /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v17"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
         guard let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
-        try? FileManager.default.removeItem(at: base.appending(path: previous))
+        removeOlderFolders(in: base)
     }()
+
+    /// Removes every older version's folder in `base`, not only the one right before: a phone that skipped versions
+    /// between installs kept each skipped one's copies, read by nothing (#8340).
+    static func removeOlderFolders(in base: URL) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []
+        for name in names where name != folder && isFolder(name) {
+            try? FileManager.default.removeItem(at: base.appending(path: name))
+        }
+    }
 
     /// Whether a caches folder is one of ChatCache's, this version or an older one ("chats", "chats-v<N>"): what
     /// Settings › Storage counts under 「Agent 对话」.
