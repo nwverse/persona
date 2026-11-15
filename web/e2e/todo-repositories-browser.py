@@ -22,6 +22,7 @@ legacy link. Screenshots stay outside Git (`REPOSITORY_EVIDENCE_DIR`, default `/
 
 import json
 import os
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -166,35 +167,45 @@ OWNED_TABS: set[str] = set()
 
 def close_owned_tabs():
     """Close only tabs this fixture created; a browser may carry the user's own tabs, which it never touches."""
-    for target in list(OWNED_TABS):
+    for target in tuple(OWNED_TABS):
         try:
             close_tab(target)
         except Exception:
             pass
-    OWNED_TABS.clear()
+        OWNED_TABS.discard(target)
 
 
-def owned_new_tab(url):
-    """Create a tab and remember exactly that target, so a long run cleans up after itself and nothing else."""
-    before = {tab.get("target_id") or tab.get("targetId") for tab in list_tabs(include_chrome=False)}
-    new_tab(url)
-    for tab in list_tabs(include_chrome=False):
-        target = tab.get("target_id") or tab.get("targetId")
-        if target and target not in before:
-            OWNED_TABS.add(target)
+def open_fixture_tab(url):
+    # Supplying a URL may reuse a blank tab; create one explicitly before taking ownership.
+    target = new_tab()
+    OWNED_TABS.add(target)
+    goto_url(url)
+
+
+def fresh_tab():
+    """Close only tabs this fixture opened, retaining the current one until the next document is ready."""
+    ensure_real_tab()
+    current = current_tab()
+    keep = current.get("target_id") or current.get("targetId")
+    for target in tuple(OWNED_TABS):
+        if target != keep:
+            try:
+                close_tab(target)
+                OWNED_TABS.discard(target)
+            except Exception:
+                pass
 
 
 def open_todo(theme, width, legacy=False, large=False, empty=False, rich=False):
-    close_owned_tabs()
-    ensure_real_tab()
+    fresh_tab()
     # The page is opened first and reloaded: Page.addScriptToEvaluateOnNewDocument only reaches documents created after
     # it, not the tab's first one.
-    owned_new_tab(f"{WEB}/?token=mock")
+    open_fixture_tab(f"{WEB}/?token=mock")
     wait_for_load()
     js("localStorage.setItem('persona.token','mock'); localStorage.setItem('persona.language','en'); "
        "localStorage.setItem('persona.todos.view','list'); localStorage.setItem('persona.theme',%s); true" % json.dumps(theme))
     js("localStorage.setItem('persona.text-size', %s); true" % json.dumps("large" if large else "standard"))
-    owned_new_tab(f"{WEB}/todos?id={TODO_ID}")
+    open_fixture_tab(f"{WEB}/todos?id={TODO_ID}")
     wait_for_load()
     cdp("Page.enable")
     # A production build registers its service worker: its cached shell carries the previous build's asset names, so the
