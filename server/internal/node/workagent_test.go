@@ -114,6 +114,18 @@ func TestAbandonStartWaitsForLateAgent(t *testing.T) {
 	}
 }
 
+func TestReportedWorkAgentRejectsDuplicateRawRows(t *testing.T) {
+	n, _, _ := herdrNode(t)
+	first := host.Agent{Agent: cursorAgent, PaneID: "w1:p2", AgentStatus: proto.StatusIdle}
+	second := host.Agent{Agent: cursorAgent, PaneID: "w1:p2", AgentStatus: proto.StatusIdle}
+	n.mu.Lock()
+	n.hostAgents = map[string][]host.Agent{host.Herdr: {first, second}}
+	n.mu.Unlock()
+	if id, ambiguous := n.reportedWorkAgent("w1:p2", cursorAgent); !ambiguous || id != "" {
+		t.Fatalf("duplicate raw rows were treated as one agent: id %q ambiguous %v", id, ambiguous)
+	}
+}
+
 func TestAbandonStartFollowsPiSessionIDChange(t *testing.T) {
 	n, f, home, created := newWorkAgentTestTab(t)
 	fallback := agentOf(piAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, piAgent)

@@ -276,9 +276,14 @@ func (n *Node) abandonStart(ctx context.Context, created *host.Created, kind str
 // waitForAbandonedWorkAgent polls fresh host snapshots for one unambiguous work agent in pane. A stale in-memory row
 // is never used as proof: only a successful refresh lets reportedWorkAgent inspect n.agents.
 func (n *Node) waitForAbandonedWorkAgent(ctx context.Context, pane, kind string) (id string, ambiguous bool, refreshErr error) {
+	hostKind := host.ParsePane(pane).Kind
+	h := n.hosts.Get(hostKind)
+	if h == nil {
+		return "", false, fmt.Errorf("host %s is unavailable", hostKind)
+	}
 	deadline := time.Now().Add(abandonStartWait)
 	for {
-		if err := n.refreshHosts(ctx); err != nil {
+		if err := n.refreshHosts(ctx, h); err != nil {
 			refreshErr = err
 		} else {
 			refreshErr = nil
@@ -297,11 +302,24 @@ func (n *Node) waitForAbandonedWorkAgent(ctx context.Context, pane, kind string)
 	}
 }
 
-// reportedWorkAgent returns the only matching n.agents key. Several matching rows make ownership ambiguous, so none
-// is safe to choose for cleanup.
+// reportedWorkAgent returns the only matching n.agents key. It first counts the raw rows from the latest answered
+// host snapshot: duplicate Cursor/agy rows collapse into one n.agents entry, so checking only the merged map would hide
+// an unsafe ambiguity. A stale in-memory row alone is never used as proof.
 func (n *Node) reportedWorkAgent(pane, kind string) (id string, ambiguous bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	raw := 0
+	for _, a := range n.hostAgents[host.ParsePane(pane).Kind] {
+		if a.PaneID == pane && a.Agent == kind {
+			raw++
+		}
+	}
+	if raw > 1 {
+		return "", true
+	}
+	if raw == 0 {
+		return "", false
+	}
 	for candidate, a := range n.agents {
 		if a.PaneID != pane || a.Agent != kind {
 			continue
