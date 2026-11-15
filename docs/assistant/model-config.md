@@ -42,6 +42,8 @@ Builds from before each client asked by ID (web before #5082, Apple before #5083
 | Launcher | Claude Code / Codex chats and Agents | Must exist on the execution machine; the CLI/app-server must actually receive the specific model |
 | Plugin model | Integrated voice services | Only models provided by that plugin can be selected; the plugin's own provider and credentials are not changed |
 
+Persona's own model gateway requests use `User-Agent: Persona/<version>` by default; a provider's custom `User-Agent` takes precedence where custom headers are supported. Agent processes send their own headers.
+
 The original `/launchers` API remains. New connections have `kind` of `launcher` or `api`; omitted on legacy entries, it still means launcher. Messages-protocol API connections (`api` empty or `messages`) can also be selected for the main chat and Agents: node starts claude with their address and key (#2455; see `docs/integrations/claude-integration.md` for environment variables). Responses and Chat Completions connections support only direct calls; `finishModel` refuses to treat them as launchers. Chat Completions can be configured manually, while extension provider declarations accept only Messages and Responses. Legacy API connections (`ai`, `inbox.*_ai`, `kb.ai`, in the manager's `manager.json` since 2026-11-06, in `hub.json` before) appear as compatibility sources; authentication-file paths and values are not returned to clients.
 
 ## Execution form

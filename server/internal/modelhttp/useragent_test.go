@@ -19,6 +19,13 @@ func TestUserAgent(t *testing.T) {
 			t.Errorf("custom User-Agent = %q, want %q", got, custom)
 		}
 	}
+	// Forwarded JSON may carry a non-canonical key. net/http only recognizes the
+	// canonical key when deciding whether to send its own default User-Agent.
+	raw := http.Header{"user-agent": {"forwarded-client"}}
+	SetDefaultUserAgent(raw)
+	if got := raw.Get("User-Agent"); got != "forwarded-client" {
+		t.Errorf("forwarded User-Agent = %q", got)
+	}
 	h := http.Header{}
 	SetDefaultUserAgent(h)
 	if got := h.Get("User-Agent"); got != "Persona/1.2.3" {

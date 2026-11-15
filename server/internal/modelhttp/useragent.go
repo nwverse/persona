@@ -1,7 +1,10 @@
 // Package modelhttp identifies Persona's own requests to model gateways.
 package modelhttp
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 var version = "dev"
 
@@ -17,7 +20,15 @@ func UserAgent() string { return "Persona/" + version }
 
 // SetDefaultUserAgent preserves a caller-supplied header, including an empty value.
 func SetDefaultUserAgent(h http.Header) {
-	if _, ok := h[http.CanonicalHeaderKey("User-Agent")]; !ok {
-		h.Set("User-Agent", UserAgent())
+	if _, ok := h["User-Agent"]; ok {
+		return
 	}
+	for name, values := range h {
+		if strings.EqualFold(name, "User-Agent") {
+			delete(h, name)
+			h["User-Agent"] = values
+			return
+		}
+	}
+	h.Set("User-Agent", UserAgent())
 }
