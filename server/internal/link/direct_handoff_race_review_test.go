@@ -99,6 +99,7 @@ func TestReviewDirectWinnerIsNotOrphanedWhenOldReadAlreadyReturned(t *testing.T)
 		err     error
 	}
 	serveDone := make(chan serveResult, 1)
+	published := make(chan *directHandoff, 1)
 	go func() {
 		handoff, err := old.serve(ctx, cfg, Options{
 			Path:             path,
@@ -106,6 +107,7 @@ func TestReviewDirectWinnerIsNotOrphanedWhenOldReadAlreadyReturned(t *testing.T)
 			PingTimeout:      time.Second,
 			PairCheck:        time.Hour,
 			DirectRetryEvery: 10 * time.Millisecond,
+			directReady:      published,
 			Logf: func(format string, args ...any) {
 				if strings.Contains(format, "direct hub reachable again") {
 					close(logStarted)
@@ -129,7 +131,13 @@ func TestReviewDirectWinnerIsNotOrphanedWhenOldReadAlreadyReturned(t *testing.T)
 		t.Fatal("old link did not enter cleanup")
 	}
 	releaseLogFn()
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case handoff := <-published:
+		// The candidate was published after the read loop returned. Put it back so serve's cleanup must reclaim it.
+		published <- handoff
+	case <-time.After(5 * time.Second):
+		t.Fatal("direct candidate was not published after the read loop returned")
+	}
 	releaseCleanupFn()
 
 	var result serveResult

@@ -110,7 +110,10 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 	l.again = make(chan struct{}, 1)
 	l.setEndpoints(c.Endpoints)
 	ctx, cancel := context.WithCancelCause(ctx)
-	directReady := make(chan *directHandoff, 1)
+	directReady := o.directReady
+	if directReady == nil {
+		directReady = make(chan *directHandoff, 1)
+	}
 	var heartbeatDone chan struct{}
 	defer func() {
 		// Stop and join the publisher before releasing ownership. A read failure may race with the winning probe; if that

@@ -142,6 +142,8 @@ type Options struct {
 	DirectRetryEvery time.Duration
 	PairCheck        time.Duration
 	SSHBin           string
+	// directReady observes candidate publication in package tests; production leaves it nil.
+	directReady chan *directHandoff
 	// limiter replaces passive mode's (tests).
 	limiter *authLimiter
 }
