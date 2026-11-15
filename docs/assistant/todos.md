@@ -44,14 +44,43 @@ takes only `plan` from it (`assistant/tasks_permission.go`). None of this reache
 Auto Accept (their launcher says `auto_accept`; Grok and Paseo's other ACP providers, OpenCode): they start with it on,
 as the owner decided (#8141, `docs/integrations/paseo.md` "Agents Persona starts"). A read-only task's first message adds
 `本任务只读：不改项目文件、不提交、不对外写入` after its own prompt, without changing the saved prompt or duplicating the
-constraint on retries. Codex read-only tasks keep `permission: plan` and the hard read-only sandbox. traex and omp take no
-permission mode or effort, so their tasks start with neither and a read-only one has only the first-message constraint (#7559);
-one the call names is refused. pi, cursor and agy start the same way, but one the call names is dropped rather than
-refused, as the node ignores it for them (#8151). Planning, card edits,
+constraint on retries. With the default `assistant.readonly_mode: sandbox`, Codex read-only tasks keep `permission: plan`
+and the hard read-only sandbox. traex and omp take no permission mode or effort, so their tasks start with neither
+and a read-only one has only the first-message constraint (#7559); one the call names is refused. pi, cursor and agy
+start a writable task the same way, but one the call names is dropped rather than refused, as the node ignores it for
+them (#8151); a read-only task for them is refused (below). Planning, card edits,
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
 
-Ordinary plan-mode starts keep their existing behavior. For Codex read-only tasks, the node must honor `plan` or refuse
+A read-only task whose launcher starts pi, the Cursor CLI or the Antigravity CLI in a terminal is refused when it is
+planned (#8316, `assistant/tasks_placement.go` `readonlyLauncherRefusal`): these agents have no read-only mode, so
+`task_plan` answers `readonly_unsupported` with the launchers on that computer that do take a read-only task (Claude
+Code's and Codex's), and nothing is saved or started. The model may plan the task writable or on one of those; no other
+launcher is put in its place. The same check runs again before a start (a card edited to one of them, a plan saved
+before this). A launcher whose agent the computer's list does not say keeps the selected protection mode, as above, and the
+node refuses a plan-mode start it cannot hold read-only (below); a start an engine runtime runs is the runtime's to refuse.
+
+Advanced users can choose **Settings > Assistant > Read-only task protection > Instructions only**, or use
+`persona_settings` with key `assistant.readonly_mode` and value `prompt`. Agent-initiated changes require the owner's
+confirmation on the phone. The confirmation explains the scope and rollback; denial, dismissal or an Agent answering
+for the owner saves nothing. `sandbox` is the default and restores the existing behavior.
+
+`prompt` keeps `readonly: true` and the first-message constraint, but starts Codex with `permission: default` rather than
+forcing `plan`. The node leaves the launcher's permission arguments and Codex configuration alone; it does not add
+`--sandbox read-only` or a bypass flag. Claude-family tasks and Auto Accept providers retain their existing
+`bypassPermissions` behavior.
+**Instructions only is not a security boundary**: the runtime's normal permissions still apply, including any sandbox
+the owner configured there. The setting is per assistant, independent of the model, and is rechecked on new starts and
+retries (including waiting or older saved plans). It does not restart or change running Agents. Ordinary explicit plan
+starts and helpers preserving their caller's permissions are unchanged.
+
+`persona_settings` list/get/set exposes the effective value. `GET /api/v1/assistant` returns `readonly_mode` as `sandbox`
+or `prompt`, including the default when unset; `PUT /api/v1/assistant` accepts the same values. Writes require a full-role
+caller and an explicit matching manager header or query parameter, as for `default_permission_mode`; other values and
+`null` are rejected without changing settings. The existing Web Settings selection is a direct owner edit. Switch back
+to `sandbox` in Settings or through an owner-confirmed `persona_settings` change to restore the default for future starts.
+
+Ordinary plan-mode starts keep their existing behavior. In `sandbox` mode, for Codex read-only tasks the node must honor `plan` or refuse
 the start. Terminal starts and supported terminal resumes use `--sandbox read-only
 --ask-for-approval never`: no approval can escalate past the sandbox. The node retains that constraint for later
 resumes, including a message that reopens the session. The terminal policy uses `never` because Codex 0.167 no
@@ -62,7 +91,7 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
-pi, the Cursor CLI and the Antigravity CLI have no such mapping either, so a read-only task for them is refused the same way, before a pane opens (`docs/integrations/launchers.md`, "Work agents"). The read-only line still goes into the first message, but the start never reaches it.
+pi, the Cursor CLI and the Antigravity CLI have no such mapping either: a read-only task for one of them is refused when it is planned (above), and the node refuses a plan-mode start of theirs that still reaches it, before a pane opens (`docs/integrations/launchers.md`, "Work agents").
 
 External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
 without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
@@ -74,7 +103,8 @@ change by the user.
 
 Health-space plans and mixed plans still wait for Start. Clients show the Read-only requested label on a waiting plan and
 collapse a started plan to "Started N tasks". The saved task's `permission` is the actual launch mode:
-`bypassPermissions` for Claude and an Auto Accept provider, and `plan` for Codex read-only tasks.
+`bypassPermissions` for Claude and an Auto Accept provider, and, by default, `plan` for Codex read-only tasks
+(`default` in `prompt` mode).
 
 ## Data model
 
@@ -510,7 +540,7 @@ Agents linked to no task (user-created, `agent_start`, inspection sessions such 
 
 It uses the archive the apps use ("Agent session archives" in `docs/protocol/protocol.md`): the session moves under Archived, nothing is deleted, the tool that owns it is asked to archive it too where it can, and new activity (the user's Resume) restores it for good. At most 20 sessions are archived per pass, so a long backlog clears over a few passes.
 
-Never archived by this pass: a session still in a host (a pane or an engine host), including one whose state the host cannot tell (`unknown`); one working, starting, or with background commands, subagents, workflows, a `/loop` or a server running; one with a card waiting for the user or queued input; one the manager is to wake or continue, or that waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set); one linked to an open to-do; an assistant conversation; a review's reviewer; a subagent's row; a session another tool owns (`source_kind` set: archiving it would also move it in that tool); with no to-do, one whose last reply asks the user something nobody answered (`awaits_reply`). Computers that are not connected are skipped, and nothing runs until the to-dos are loaded, since they say which sessions open tasks count on. Each candidate is looked at again just before its archive is written.
+Never archived by this pass: a session still in a host (a pane or an engine host), including one whose state the host cannot tell (`unknown`); one working, starting, or with background commands, subagents, workflows, a `/loop` or a server running; one with a card waiting for the user or queued input; one the manager is to wake or continue, or that waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set); one linked to an open to-do; an assistant conversation; a review's reviewer; a subagent's row; a session another tool owns (`source_kind` set: archiving it would also move it in that tool); a desktop app's session (`agent_surface` `desktop`): the node lists the Claude desktop app's sessions as its sidebar does, whatever their age (#3304), but sets `source_kind` only while the app has one open, so only an archive in the app or the user's Archive here takes one off; with no to-do, one whose last reply asks the user something nobody answered (`awaits_reply`). Computers that are not connected are skipped, and nothing runs until the to-dos are loaded, since they say which sessions open tasks count on. Each candidate is looked at again just before its archive is written.
 
 ## Nobody is working on this
 
@@ -646,11 +676,12 @@ Something the owner raises in the main conversation and wants an answer to is a 
 
 - **The verdict**: `task_review` with `parked` is refused unless it carries `reason` (one sentence: what the task waits for) and `waiting_on` (`owner_priority`: the owner has to say whether to do it or what comes first; `someone_else`; `external_event`; `date`). `until` is a duration (`3d`, `36h`, `2d12h`, `90m`) or an RFC 3339 time, 1 minute to 30 days ahead, 24 hours when left out. The refusal names everything missing at once. Only the task's supervisor parks it, as for the other verdicts; a done task, an unsupervised one and a task leader Agent's worker are refused.
 - **What parked means**: the to-do stays open with `supervision.state: "parked"` and `supervision.parked: {reason, until, waiting_on, count}`. It is not the owner's to answer: no `ask`, no push, no conclusion card (a decision that was waiting ends), and it is never filed under Waiting on you for being parked. While it is parked its supervisor gets no `stalled`, `idle`, `unjudged`, `orphaned`, `overdue` or `undecidable` signal for it, and the manager sends its Agent nothing on its own (continue, wake, CI follow-up; `workGuard`), since any turn of its Agent ends the parking.
-- **At `until`**: one supervision signal `parked_due` with what it waited for: decide, park it again with a new reason, or close it. The time is read off the ledger on every look, so a restart before the supervision message went out loses nothing; once a message carried it (sent, or queued), that is kept on the review (`due_at`) and a restarted manager does not tell it again. The task stays parked until its supervisor acts.
+- **At `until`**: one supervision signal `parked_due` with what it waited for and the decisions recorded on the to-do (so an answer that came meanwhile is in front of the supervisor before it parks again): decide, park it again with a new reason, or close it. The time is read off the ledger on every look, so a restart before the supervision message went out loses nothing; once a message carried it (sent, or queued), that is kept on the review (`due_at`) and a restarted manager does not tell it again. The task stays parked until its supervisor acts.
 - **Leaving**: one of its Agents starting a turn (the owner or the supervisor sent it something) ends the parking: the state goes back to in progress (or `rework` when rounds were used), `parked` is gone, a `parked_due` still waiting is dropped, and the task is supervised as before. Any other review ends it too. A closed to-do is not parked.
-- **Not a place to forget things**: `count` is how many times in a row the task was parked with no Agent turn in between (1 when first parked). Three re-parks are taken; the fourth is refused with the count, and the supervisor is told to close the task or state the real decision for the owner (`needs_user`). An Agent turn starts the count again.
+- **Leaving on the owner's decision** (#8044): a task parked with `waiting_on` `owner_priority` or `someone_else` waits for an answer, so a decision of the owner's recorded on its to-do ends the parking too, whether or not an Agent turn follows: their answer to a question card of its Agent (`card`), a decision they write or choose in the apps (`manual`), or their reply in its Lark topic (`thread`). The state goes back as above, a `parked_due` still waiting is dropped, and the supervisor gets one `park_decided` signal with what the task waited for and the to-do's decisions, to send the Agent on, review the task or close it; a decision that did not answer what it waited for is a reason to park it again. The review keeps which decision ended it (`decided`) and when a supervision message carried that (`decided_told`), so a restart before the message went out raises it again from the ledger and one after it does not. The decision is stored before the ledger is touched, so a ledger write that fails then never fails the request that recorded it: it is logged, and the supervision watch ends the parking from the stored decision on a later look (every 30 seconds; the latest owner's decision in effect recorded after the park). A review that follows before the message goes out, parking the task again included, does not drop it: the supervisor still gets `park_decided`, saying the task was parked again and what for, and a decision from before the new park does not end it. Only a review that closes the task (`accepted`, `cancelled`) drops it. Rows that are not the owner's own call do not end a parking: an Agent's note (`todo_decision_add`), a supervisor's answer to a routed card and the hub's default at a deadline (`agent`), and outcomes (`outcome`, `reported`). A task parked for `external_event` or `date` is left parked by any decision: it does not wait for one. Every writer of decisions passes one place (`insertDecision`), where this is checked.
+- **Not a place to forget things**: `count` is how many times in a row the task was parked with no Agent turn in between (1 when first parked). Three re-parks are taken; the fourth is refused with the count, and the supervisor is told to close the task or state the real decision for the owner (`needs_user`). An Agent turn starts the count again, and so does a decision that ended the parking.
 - **The owner hears of one kind only**: a task parked with `waiting_on: owner_priority` is listed in the daily digest's briefs (`docs/assistant/unified-entry.md`, "Briefs") as parked, waiting for their priority call, with its reason. No other parked task is mentioned to them.
-- **Kept on the review**: the ledger's `reviews[]` entry of a `parked` review carries `reason`, `until`, `waiting_on`, `parks` (the count) and `due_at`; `supervision.parked` is read off the latest review while the state is `parked`, so there is no new column. The `review` feed item of a parked review has `verdict: "parked"`, the reason as its `note` when the review gave none, `until` and `waiting_on`.
+- **Kept on the review**: the ledger's `reviews[]` entry of a `parked` review carries `reason`, `until`, `waiting_on`, `parks` (the count), `due_at`, and `decided` / `decided_told` once a decision ended it; `supervision.parked` is read off the latest review while the state is `parked`, so there is no new column. The `review` feed item of a parked review has `verdict: "parked"`, the reason as its `note` when the review gave none, `until` and `waiting_on`.
 - **Clients**: the web shows "Parked until <time> · <reason>" on the task's In progress row, its To-dos row and its page, and lists it In progress however long it has been still (`docs/web/web.md`). The To-dos page's sections (`docs/assistant/todo-status-sop.md`) are unchanged: a parked task is filed by its other facts. iOS and Android do not know the state yet and show the task as supervised and in progress.
 
 ## Decision deadlines
