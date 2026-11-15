@@ -131,7 +131,7 @@ struct SyncEventTests {
         #expect(desktop.sourceSubtitle == "Claude 桌面版")
         let cli = try decode(#"{"session_id":"s","source_kind":"claude_cli","capabilities":{"read":true},"read_only_reason":"回复请在电脑上"}"#)
         #expect(cli.sourceSubtitle == "终端里的 Claude · 仅查看：回复请在电脑上")
-        // The node's own "仅查看：" prefix is said once (#7803); a reason that is only the prefix falls back to the default.
+        // The node's own view-only prefix is said once (#7803); a reason that is only the prefix falls back to the default.
         let sub = try decode(#"{"session_id":"s","source_kind":"codex_app_server","capabilities":{"read":true},"read_only_reason":"仅查看：这个子 Agent 由父 Agent 驱动"}"#)
         #expect(sub.sourceSubtitle == "Codex 实时 · 仅查看：这个子 Agent 由父 Agent 驱动")
         let bare = try decode(#"{"session_id":"s","source_kind":"codex_app_server","capabilities":{"read":true},"read_only_reason":"仅查看："}"#)
