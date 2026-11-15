@@ -244,10 +244,9 @@ func handoffOp(it *InboxItem, op string) *InboxHandoff {
 // ordinary saved item and handoff ledger, but never make its receipt Needs You.
 func (s *Service) handoffLarkMentions(ctx context.Context, only ...string) {
 	b := &s.inbox
-	if !b.botHandoff.TryLock() {
-		return
-	}
 	go func() {
+		// Wait in the worker: a scoped request must not be lost behind an older global snapshot.
+		b.botHandoff.Lock()
 		defer b.botHandoff.Unlock()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 110*time.Second)
 		defer cancel()

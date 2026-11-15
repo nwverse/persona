@@ -2,11 +2,14 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -91,4 +94,70 @@ func TestLarkBotHandoffDoesNotBecomeActionableThroughChatPolicy(t *testing.T) {
 
 func TestLarkBotHandoffPrompt(t *testing.T) {
 	golden(t, "inbox_handoff.lark_bot", prompts.RenderLarkBotHandoff("Example User: @Example Bot investigate\nAlert: On-call: Example User"))
+}
+
+type blockedLarkHandoffHub struct {
+	Hub
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (h *blockedLarkHandoffHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionSendOnce {
+		h.once.Do(func() {
+			close(h.entered)
+			select {
+			case <-h.release:
+			case <-ctx.Done():
+			}
+		})
+	}
+	return h.Hub.DeviceCall(ctx, p)
+}
+
+func TestLarkBotHandoffConcurrentReplayWaitsForGlobalSnapshot(t *testing.T) {
+	h, first := larkBotHandoffHub(t)
+	blocked := &blockedLarkHandoffHub{Hub: h.f, entered: make(chan struct{}), release: make(chan struct{})}
+	h.Service.hub = blocked
+	release := sync.OnceFunc(func() { close(blocked.release) })
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.handoffLarkMentions(ctx)
+	select {
+	case <-blocked.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the global handoff did not reach its send after taking the snapshot")
+	}
+
+	selected := replayWriteFailureThing("thread:selected-handoff", "om_selected_handoff", "bot_handoff", connector.TierFYI)
+	unrelated := replayScopeItem("unrelated-handoff", "larkcli", "thread:unrelated-handoff", "om_unrelated", "Example", time.Now())
+	unrelated.Kind, unrelated.Tier, unrelated.Context = "bot_handoff", TierFYI, "Unselected pending handoff"
+	h.inbox.mu.Lock()
+	h.inbox.items[unrelated.ID] = unrelated
+	h.inbox.mu.Unlock()
+	if err := h.InboxCollected(ctx, assistantwire.InboxRound{Replay: true,
+		Sources: []assistantwire.InboxSource{{ID: "larkcli", Things: []connector.InboxThing{selected}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancel() // Recovery must outlive the requesting call, including its wait for the active pass.
+	release()
+	id := replayWriteFailureItemID(selected)
+	waitFor(t, "the selected replay handoff without another poll", func() bool {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		it := h.inbox.items[id]
+		return it != nil && len(it.Handoffs) == 1 && len(first.Handoffs) == 1
+	})
+	if sends := toMain(h.f); len(sends) != 2 {
+		t.Fatalf("global and selected handoffs were not each sent once: %v", sends)
+	}
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
+	it := h.inbox.items[id]
+	if len(unrelated.Handoffs) != 0 || it.Tier != TierFYI || it.Agent != nil || it.Suggestion != nil {
+		t.Fatalf("scoped recovery forwarded unrelated work or created Needs You: selected=%+v unrelated=%+v", it, unrelated)
+	}
 }
