@@ -14,13 +14,14 @@ import (
 var (
 	tomlHeader      = lazyre.New(`^\s*\[\s*([A-Za-z0-9_-]+(?:\s*\.\s*[A-Za-z0-9_-]+)*)\s*\]\s*(?:#.*)?$`)
 	tomlArrayHeader = lazyre.New(`^\s*\[\[`)
+	tomlAnyHeader   = lazyre.New(`^\s*\[`) // outside a multi-line value, a line starting with [ is always a table header
 	tomlDottedKV    = lazyre.New(`^(\s*)([A-Za-z0-9_-]+(?:\s*\.\s*[A-Za-z0-9_-]+)*)\s*=\s*(.*)$`)
 )
 
 // tomlLine is what one line of the file is, as far as these helpers care.
 type tomlLine struct {
 	header bool   // a [table] or [[array]] line
-	table  string // the table the line belongs to ("" top level; "[[" inside an array of tables, never matched)
+	table  string // the table the line belongs to ("" top level; "[[" in an array of tables or a quoted-name table, never matched)
 	key    string // a `key = value` line's key, without its table
 	value  string // the raw value after =
 	inner  bool   // a continuation line of a multi-line string or array
@@ -61,6 +62,11 @@ func tomlScan(lines []string) []tomlLine {
 		}
 		if m := tomlHeader.FindStringSubmatch(l); m != nil {
 			table = normDotted(m[1])
+			out[i] = tomlLine{header: true, table: table}
+			continue
+		}
+		if tomlAnyHeader.MatchString(l) { // a quoted name: still the end of the previous table
+			table = "[["
 			out[i] = tomlLine{header: true, table: table}
 			continue
 		}
@@ -149,6 +155,7 @@ func tomlSetDotted(text, dotted string, value any) (string, error) {
 	scan := tomlScan(lines)
 
 	header, end := -1, len(lines) // the table's header line, and the first line after its section
+	dotted0, parent := -1, ""     // the last line defining the table with dotted keys (`ui.x = 1`), and that line's table
 	for i, l := range scan {
 		if l.inner {
 			continue
@@ -177,9 +184,27 @@ func tomlSetDotted(text, dotted string, value any) (string, error) {
 		if full == table || strings.HasPrefix(table, full+".") {
 			return "", fmt.Errorf("%s is written inline in the file; edit it by hand", full)
 		}
+		if l.table != table && strings.HasPrefix(full, table+".") {
+			dotted0, parent = i, l.table
+		}
 	}
 	if remove {
 		return text, nil
+	}
+	if header < 0 && dotted0 >= 0 {
+		// The table is defined by dotted keys, so adding a [table] header would define it twice (invalid TOML):
+		// write the key the same way, after that line and any continuation lines of its value.
+		at := dotted0 + 1
+		for at < len(lines) && scan[at].inner {
+			at++
+		}
+		rel := dotted
+		if parent != "" {
+			rel = strings.TrimPrefix(dotted, parent+".")
+		}
+		indent := tomlDottedKV.FindStringSubmatch(lines[dotted0])[1]
+		out := append(append(append([]string{}, lines[:at]...), indent+rel+" = "+tomlValue(value)), lines[at:]...)
+		return strings.Join(out, "\n"), nil
 	}
 	if header >= 0 {
 		at := end // after the section's last non-blank line, so the blank line before the next table stays
