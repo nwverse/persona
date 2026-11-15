@@ -4,15 +4,15 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
@@ -24,6 +24,7 @@ import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Machine
@@ -82,14 +83,14 @@ class PairingWelcomeTest {
         rule.onNodeWithText(text(R.string.settings_pairing_welcome_guide)).assertDoesNotExist()
     }
 
-    @Test fun theGuideOpensThroughTheHostsLinkHandlerAndLeavesTheWelcomePage() {
-        var opened: String? = null
-        val handler = object : UriHandler { override fun openUri(uri: String) { opened = uri } }
-        show { CompositionLocalProvider(LocalUriHandler provides handler) {
-            PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = guide)
-        } }
+    /** The root pairing page has no shell around it: the page's own link host opens the guide in the app's link card. */
+    @Test fun theGuideOpensInTheAppsLinkCardAndNeverInTheSystemBrowser() {
+        show { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = guide) }
+        rule.onNodeWithTag("chat_link_card").assertDoesNotExist()
         tap(R.string.settings_pairing_welcome_guide)
-        assertEquals(guide, opened)
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("chat_link_card").fetchSemanticsNodes().isNotEmpty() }
+        assertNull(shadowOf(rule.activity).nextStartedActivity)
+        // The welcome page is still under the card.
         welcome().assertExists()
     }
 
