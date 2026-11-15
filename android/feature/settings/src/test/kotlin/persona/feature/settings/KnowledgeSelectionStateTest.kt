@@ -178,6 +178,71 @@ class KnowledgeSelectionStateTest {
         assertFalse(state.state.value.document!!.rule(KnowledgeSelectionPart.Messages, "mentions")!!.on)
     }
 
+    @Test fun aReloadedRuleSheetKeepsEveryUnchangedFieldAndWritesEveryChangedField() = runBlocking {
+        data class SheetValues(
+            val on: Boolean,
+            val days: Int?,
+            val attachmentDays: Int?,
+            val includeAll: Boolean?,
+            val context: Int?,
+        )
+        data class FieldCase(
+            val label: String,
+            val rule: String,
+            val external: (KnowledgeSelectionDocument) -> KnowledgeSelectionDocument,
+            val input: (SheetValues, Boolean) -> SheetValues,
+            val value: (KnowledgeSelectionRule) -> Any?,
+            val kept: Any?,
+            val written: Any?,
+        )
+
+        val original = KnowledgeSelectionDocument.defaults()
+            .setRuleDays(KnowledgeSelectionPart.Messages, "mentions", 10)
+            .setAttachmentDays("mentions", 11)
+            .setIncludeAll(true)
+            .setMineContext(50)
+        val cases = listOf(
+            FieldCase("on", "mentions",
+                external = { it.setRuleOn(KnowledgeSelectionPart.Messages, "mentions", false) },
+                input = { values, changed -> values.copy(on = if (changed) false else values.on, days = 60) },
+                value = { it.on }, kept = false, written = false),
+            FieldCase("days", "mentions",
+                external = { it.setRuleDays(KnowledgeSelectionPart.Messages, "mentions", 30) },
+                input = { values, changed -> values.copy(on = false, days = if (changed) 60 else values.days) },
+                value = { it.days }, kept = 30, written = 60),
+            FieldCase("attachment days", "mentions",
+                external = { it.setAttachmentDays("mentions", 31) },
+                input = { values, changed -> values.copy(on = false,
+                    attachmentDays = if (changed) 61 else values.attachmentDays) },
+                value = { it.attachmentDays }, kept = 31, written = 61),
+            FieldCase("include all", "mentions",
+                external = { it.setIncludeAll(false) },
+                input = { values, changed -> values.copy(on = false,
+                    includeAll = if (changed) false else values.includeAll) },
+                value = { it.includeAll }, kept = false, written = false),
+            FieldCase("context", "mine",
+                external = { it.setMineContext(80) },
+                input = { values, changed -> values.copy(on = false, context = if (changed) 100 else values.context) },
+                value = { it.context }, kept = 80, written = 100),
+        )
+
+        for (case in cases) for (changed in listOf(false, true)) {
+            val label = "${case.label}, changed=$changed"
+            val opened = original.rule(KnowledgeSelectionPart.Messages, case.rule)!!
+            val api = FakeSelection(original.root)
+            val state = model(api)
+            api.stored = (if (changed) original else case.external(original)).root
+            state.onExternalChange()
+            val values = SheetValues(opened.on, opened.days, opened.attachmentDays, opened.includeAll, opened.context)
+            val requested = case.input(values, changed)
+            assertTrue(label, state.saveRule(opened, KnowledgeSelectionPart.Messages, case.rule,
+                requested.on, requested.days, requested.attachmentDays, requested.includeAll, requested.context))
+            val sent = KnowledgeSelectionDocument(api.puts.single()).rule(KnowledgeSelectionPart.Messages, case.rule)!!
+            assertEquals(label, if (changed) case.written else case.kept, case.value(sent))
+            if (case.label == "on") assertEquals(label, 60, sent.days) else assertFalse(label, sent.on)
+        }
+    }
+
     @Test fun aStaleItemSheetKeepsFreshIdentityMetadataAndUnknownFields() = runBlocking {
         val opened = KnowledgeSelectionItem.newChat("source", "chat-1", "Original")
         val original = KnowledgeSelectionDocument.defaults().setItem(opened)
