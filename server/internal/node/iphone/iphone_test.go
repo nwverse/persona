@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -60,6 +61,11 @@ func (f *fakeIPhones) Pair(device string) error {
 }
 func (f *fakeIPhones) Forget(device string) error {
 	f.jobs = append(f.jobs, "forget "+device)
+	return nil
+}
+func (f *fakeIPhones) Install(src iphone.InstallSource) error {
+	f.jobs = append(f.jobs, "install "+strings.Join(src.URLs, " "))
+	f.job = &iphoneJob{Kind: "install", State: "running", Stage: "download", Step: "downloading the iPhone bridge"}
 	return nil
 }
 func (f *fakeIPhones) Cancel()         { f.job = nil }
@@ -438,5 +444,37 @@ func TestIPhonePairStartsAJob(t *testing.T) {
 	}
 	if strings.Join(f.jobs, ",") != "pair u1,forget u1" {
 		t.Fatalf("jobs %v", f.jobs)
+	}
+}
+
+// TestIPhoneInstallStartsAJob: the app's Install starts the job with the release's build, and the status says each
+// stage, and why it failed, in words the hub translates (#8199).
+func TestIPhoneInstallStartsAJob(t *testing.T) {
+	f := &fakeIPhones{}
+	useIPhones(t, f, nil)
+	out, err := Install(context.Background(), json.RawMessage(`{"urls":["https://example.com/dl/b.gz"],"size":3,"sha256":"x","binary_sha256":"y"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Job == nil || out.Job.Kind != "install" || out.Job.Step != iphoneInstallSteps["download"] || out.Job.Code != "" {
+		t.Fatalf("status %+v", out.Job)
+	}
+	if strings.Join(f.jobs, ",") != "install https://example.com/dl/b.gz" {
+		t.Fatalf("jobs %v", f.jobs)
+	}
+	for stage, step := range iphoneInstallSteps {
+		f.job = &iphoneJob{Kind: "install", State: "running", Stage: stage, Step: "english words"}
+		if j := Status(context.Background()).Job; j.Step != step {
+			t.Fatalf("stage %s: %+v", stage, j)
+		}
+	}
+	for code, note := range iphoneInstallErrors {
+		f.job = &iphoneJob{Kind: "install", State: "failed", ErrorCode: code, Error: "english words"}
+		if j := Status(context.Background()).Job; j.Error != note || j.Code != code {
+			t.Fatalf("failed with %s: %+v", code, j)
+		}
+	}
+	if _, err := Install(context.Background(), json.RawMessage(`[]`)); err == nil {
+		t.Fatal("unreadable params")
 	}
 }
