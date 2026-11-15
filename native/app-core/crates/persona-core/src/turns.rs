@@ -185,8 +185,8 @@ fn rows(items: &[Item]) -> Vec<Row> {
             wake: false,
             refusal: false,
             interrupt: false,
-            start: tools.iter().filter_map(Row::first_ts).min(),
-            end: tools.iter().filter_map(Row::last_ts).max(),
+            start: tools.iter().find_map(Row::first_ts),
+            end: tools.iter().rev().find_map(Row::last_ts),
             tools: tools.iter().map(|row| row.tools).sum(),
             thoughts: tools.iter().map(|row| row.thoughts).sum::<i64>()
                 + tools.iter().filter(|row| row.kind == Kind::Thinking).count() as i64,
@@ -254,7 +254,11 @@ fn rows(items: &[Item]) -> Vec<Row> {
                 if item.task.as_ref().is_some_and(|task| task.kind == "agent") && item.wake == Some(true) {
                     flush_thoughts(&mut rows, &mut tools, &mut thinking);
                     flush_run(&mut rows, &mut tools);
-                    rows.extend(row(item));
+                    let mut notice = row(item);
+                    if let Some(notice) = &mut notice {
+                        notice.kind = Kind::Notice;
+                    }
+                    rows.extend(notice);
                 }
             }
             "image" if item.tool_use_id.is_some() => {}
@@ -287,7 +291,6 @@ struct Turn {
 impl Turn {
     fn close(mut self) -> Self {
         if !self.wakes.is_empty() {
-            let before = self.clone();
             let all = self.ordered.clone();
             let mut pick = None;
             self.has_pending_wake = false;
@@ -312,15 +315,7 @@ impl Turn {
                     .chain(all[pick + 1..].iter().filter(|row| row.user_input()))
                     .cloned()
                     .collect();
-                self.process = self
-                    .ordered
-                    .iter()
-                    .filter(|row| row.kind != Kind::User)
-                    .cloned()
-                    .collect();
-            } else if before.process.iter().any(Row::assistant) {
-                let wake = all.iter().rposition(|row| row.wake).unwrap();
-                self.tail = all[wake..].to_vec();
+                self.process = self.ordered.iter().filter(|row| !row.user_input()).cloned().collect();
             }
         }
         self.steps = self.process.clone();
@@ -331,15 +326,11 @@ impl Turn {
     }
 
     fn timestamp(&self, last: bool) -> Option<i128> {
-        let source = if last {
-            self.steps.iter().chain(&self.trailing).collect::<Vec<_>>()
+        if last {
+            self.steps.iter().chain(&self.trailing).rev().find_map(Row::last_ts)
         } else {
-            self.users.iter().chain(&self.steps).collect::<Vec<_>>()
-        };
-        let timestamps = source
-            .into_iter()
-            .filter_map(|row| if last { row.last_ts() } else { row.first_ts() });
-        if last { timestamps.max() } else { timestamps.min() }
+            self.users.iter().chain(&self.steps).find_map(Row::first_ts)
+        }
     }
 
     fn json(&self) -> Value {
@@ -380,17 +371,15 @@ fn part(id: &str) -> i64 {
 /// Replays one static `lines` input through the row and turn projections. Fixture operation sequences and the rendered
 /// `ChatLine` / `TaskIndex` projections are deliberately outside this slice.
 pub fn project(input: &Input) -> Value {
-    let rows = rows(&input.items);
-    let rows = input.frozen.as_ref().map_or(rows.clone(), |frozen| {
-        rows.into_iter()
-            .filter(|row| {
-                input.items.iter().any(|item| {
-                    item.id == row.id.strip_prefix("tools-").unwrap_or(&row.id)
-                        && (item.seq, part(&item.id)) <= (frozen.seq, frozen.part)
-                })
-            })
-            .collect()
+    let items = input.frozen.as_ref().map_or(input.items.as_slice(), |frozen| {
+        let end = input
+            .items
+            .iter()
+            .position(|item| (item.seq, part(&item.id)) > (frozen.seq, frozen.part))
+            .unwrap_or(input.items.len());
+        &input.items[..end]
     });
+    let rows = rows(items);
     let mut current: Option<Turn> = None;
     let mut last_raw: Option<Turn> = None;
     let mut last_index = 0_usize;
@@ -418,18 +407,14 @@ pub fn project(input: &Input) -> Value {
         if row.user_input() {
             let same = current
                 .as_ref()
-                .and_then(|turn| turn.users.last())
-                .is_some_and(|previous| previous.kind == Kind::User)
+                .and_then(|turn| turn.ordered.last())
+                .is_some_and(Row::user_input)
                 && row.entry == message_entry;
             if let Some(turn) = current
                 .as_mut()
                 .filter(|_| same || (row.queued && !row.supervision && !supervision_round))
             {
-                if row.kind == Kind::User {
-                    turn.users.push(row.clone());
-                } else {
-                    turn.process.push(row.clone());
-                }
+                turn.users.push(row.clone());
                 turn.ordered.push(row.clone());
             } else {
                 close(
@@ -467,14 +452,20 @@ pub fn project(input: &Input) -> Value {
                 if row.wake
                     && current.is_none()
                     && let Some(raw) = &last_raw
-                    && blocks
+                {
+                    current = Some(raw.clone());
+                    if blocks
                         .get(last_index)
                         .and_then(Value::as_object)
                         .and_then(|turn| turn.get("id"))
                         == Some(&Value::String(raw.id.clone()))
-                {
-                    current = Some(raw.clone());
-                    reopened_at = Some(last_index);
+                    {
+                        reopened_at = Some(last_index);
+                    } else {
+                        // Swift inserts the reopened turn before the intervening recap rows.
+                        // Turn-only projection keeps turn order and records only the recap's position.
+                        reopened_at = None;
+                    }
                 }
                 if row.refusal {
                     let turn = current.get_or_insert_with(|| Turn {
