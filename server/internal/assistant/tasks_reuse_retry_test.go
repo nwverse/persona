@@ -5,11 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+// countingPlanHistoryStore counts the plan execution history reads through it.
+type countingPlanHistoryStore struct {
+	Store
+	reads atomic.Int64
+}
+
+func (c *countingPlanHistoryStore) TaskPlansMadeSince(ctx context.Context, since time.Time) ([]db.TaskPlanRow, error) {
+	c.reads.Add(1)
+	if h, ok := c.Store.(planExecutionHistoryStore); ok {
+		return h.TaskPlansMadeSince(ctx, since)
+	}
+	return nil, errTaskPlanHistory
+}
 
 // A task that runs on an existing to-do through task_plan's todo_id keeps that to-do's plan id, which a piece of a
 // leader's direction (todo_create) does not have: only the plan task's todo_id binds it to the plan. When its agent does
@@ -180,12 +197,85 @@ func TestDirectionTodoRemedyExpiresWithItsTab(t *testing.T) {
 			if err := e.s.patchPlanTask(ctx, plan.ID, 0, func(task *PlanTask) { task.Start.Until = time.Now().Add(-time.Second) }); err != nil {
 				t.Fatal(err)
 			}
-			e.s.remedyWatch(ctx, todoNow(e.s, piece.ID), time.Now())
+			e.s.remedyWatch(ctx, todoNow(e.s, piece.ID), time.Now(), e.s.planHistoryOnce())
 			if cur := todoNow(e.s, piece.ID); cur.DoneAt == nil || cur.StartError == "" {
 				t.Fatalf("the remedy outlived its tab: %+v", cur)
 			}
 			if p, err := e.s.loadPlan(ctx, plan.ID); err != nil || p.Tasks[0].Start == nil || p.Tasks[0].Start.State != remedyFailed || p.Tasks[0].Start.By != "hub" {
 				t.Fatalf("the plan's task after its tab: %+v, %v", p, err)
+			}
+		})
+	}
+}
+
+// The supervisor's sweep reads the plans' execution history once for its whole pass, not once per task: the history
+// holds every plan ever started, and a to-do with no plan id of its own is found only there.
+func TestRemedyWatchSharesTheSweepsPlanHistoryRead(t *testing.T) {
+	for _, backend := range []string{"memory", "database"} {
+		t.Run(backend, func(t *testing.T) {
+			var base Store
+			if backend == "database" {
+				base = taskRecoveryDatabase(t)
+			}
+			s, f := newQuietServiceOn(t, base)
+			// Hold the supervision digests: their messages also resolve plans, which is not what this sweep measures.
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			ctx := context.Background()
+			setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+			f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+				proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+			var plans []*TaskPlan
+			for _, title := range []string{"Tablet layout", "Phone layout"} {
+				if _, err := runJSON(t, s, "lead1", "todo_create", map[string]any{"title": title}); err != nil {
+					t.Fatal(err)
+				}
+				piece := mustTodo(t, s, title)
+				f.mu.Lock()
+				f.failStart = keptRefusal(proto.CodeShellWaiting)
+				f.mu.Unlock()
+				if _, err := s.toolTaskPlan(ctx, "lead1", reuseArgs(true, piece.ID)); err != nil {
+					t.Fatal(err)
+				}
+				all, err := s.conversationPlans(ctx, "lead1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				i := slices.IndexFunc(all, func(p *TaskPlan) bool { return p.Tasks[0].ReuseTodo == piece.ID })
+				if i < 0 {
+					t.Fatalf("no plan for %s among %+v", piece.ID, all)
+				}
+				plan := all[i]
+				waitFor(t, "the kept-tab remedy of "+title, func() bool {
+					p, err := s.loadPlan(ctx, plan.ID)
+					return err == nil && p.Tasks[0].Start != nil && p.Tasks[0].Start.State == remedying
+				})
+				if err := s.patchPlanTask(ctx, plan.ID, 0, func(task *PlanTask) { task.Start.Until = time.Now().Add(-time.Second) }); err != nil {
+					t.Fatal(err)
+				}
+				plans = append(plans, plan)
+				f.mu.Lock()
+				f.failStart = nil
+				f.mu.Unlock()
+			}
+			var counting *countingPlanHistoryStore
+			if base != nil {
+				counting = &countingPlanHistoryStore{Store: s.store()}
+				s.store = func() Store { return counting }
+			}
+			s.superviseWatch(ctx, time.Now())
+			for _, plan := range plans {
+				p, err := s.loadPlan(ctx, plan.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if r := p.Tasks[0].Start; r == nil || r.State != remedyFailed || r.By != "hub" {
+					t.Fatalf("the remedy did not end on the sweep: %+v", r)
+				}
+			}
+			// The sweep reads the history once for both tasks instead of once per task; giveUpStart then reads it once
+			// more per remedy it gives up, so the count is one (the sweep's) plus one per expired remedy.
+			if counting != nil && counting.reads.Load() != int64(1+len(plans)) {
+				t.Fatalf("plan execution history reads: %d, want one shared read plus %d give-ups", counting.reads.Load(), len(plans))
 			}
 		})
 	}

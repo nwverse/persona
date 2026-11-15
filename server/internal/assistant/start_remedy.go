@@ -367,12 +367,13 @@ func (s *Service) failedStartNotice(ctx context.Context, conversation string, t 
 }
 
 // remedyWatch fails for good the starts being remedied whose tab is no longer kept and that are not starting again:
-// on the supervisor's tick, so a hub restarted meanwhile catches up.
-func (s *Service) remedyWatch(ctx context.Context, t Todo, now time.Time) {
+// on the supervisor's tick, so a hub restarted meanwhile catches up. history is the sweep's one read of the plans
+// (planHistoryOnce): it only picks the starts to give up, and giveUpStart reads the one it gives up again.
+func (s *Service) remedyWatch(ctx context.Context, t Todo, now time.Time, history func(context.Context) ([]*TaskPlan, error)) {
 	if len(t.Agents) > 0 || t.DoneAt != nil {
 		return
 	}
-	_, p, i, err := s.remedyOf(ctx, t.ID)
+	p, i, err := s.currentPlanAssignmentIn(ctx, t, history)
 	if err != nil {
 		return
 	}

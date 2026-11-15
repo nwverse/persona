@@ -620,11 +620,34 @@ func (s *Service) planExecutionHistory(ctx context.Context) ([]*TaskPlan, error)
 	return plans, nil
 }
 
+// planHistoryOnce is planExecutionHistory read at most once, when first asked: one sweep over the open tasks
+// (remedyWatch) shares it, as it lists each machine once (machineSessions), instead of reading and decoding every plan
+// ever started for each to-do with no plan id of its own (#8770). Its plans are read only.
+func (s *Service) planHistoryOnce() func(context.Context) ([]*TaskPlan, error) {
+	var (
+		read  bool
+		plans []*TaskPlan
+		err   error
+	)
+	return func(ctx context.Context) ([]*TaskPlan, error) {
+		if !read {
+			read = true
+			plans, err = s.planExecutionHistory(ctx)
+		}
+		return plans, err
+	}
+}
+
 // currentPlanAssignment resolves the execution binding, which is not the to-do's historical PlanID after a same-to-do
 // continuation. An exact binding in the same owning conversation keeps the ordinary direct lookup cheap. A handoff or
 // retired binding requires a global started-plan check: exactly one exact TodoID is current; guessing or merging
 // candidates could restore the wrong permission, so absence and ambiguity both fail closed with errTaskNotInPlan.
 func (s *Service) currentPlanAssignment(ctx context.Context, todo Todo) (*TaskPlan, int, error) {
+	return s.currentPlanAssignmentIn(ctx, todo, s.planExecutionHistory)
+}
+
+// currentPlanAssignmentIn is currentPlanAssignment with the global check reading the plans' history through history.
+func (s *Service) currentPlanAssignmentIn(ctx context.Context, todo Todo, history func(context.Context) ([]*TaskPlan, error)) (*TaskPlan, int, error) {
 	p, loadErr := s.loadPlan(ctx, todo.PlanID)
 	if loadErr != nil && !errors.Is(loadErr, errPlanNotFound) {
 		return nil, 0, loadErr
@@ -636,7 +659,7 @@ func (s *Service) currentPlanAssignment(ctx context.Context, todo Todo) (*TaskPl
 			return p, i, nil
 		}
 	}
-	plans, err := s.planExecutionHistory(ctx)
+	plans, err := history(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
