@@ -286,6 +286,8 @@ test('stop while rollback restarts the previous version stops its late start', a
   mkdirSync(join(store, 'current.json'))
   const switching = loader.offer(v2)
   await until('the previous version is restarting', () => host.starts.join(',') === 'v1,v2,v1' && n.hello?.version === 'v1', 5000)
+  assert.equal(loader.running, undefined, 'the failed version is not reported while the previous one starts again')
+  assert.equal(loader.instance, undefined, 'the failed version is not reported while the previous one starts again')
   const stopping = loader.stop()
   releaseStart()
   await Promise.all([switching, stopping])
