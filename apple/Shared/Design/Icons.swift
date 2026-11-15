@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 extension Theme {
     /// SF Symbols by meaning: one meaning, one symbol. Views write `Image(systemName: Theme.Icon.copy)`, not the name.
@@ -728,6 +729,8 @@ extension Theme {
         /// A subagent the agent started (the Agent / Task tool, a session's subagents); one at work.
         static let subagent = "person.2"
         static let subagentWorking = "person.2.badge.gearshape"
+        /// A session's side sessions (a Claude desktop app's side chats), kept in its chat behind one button (#7944).
+        static let sideSessions = "rectangle.portrait.on.rectangle.portrait"
         /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
         static let agentChat = "bubble.left.and.text.bubble.right"
         /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).

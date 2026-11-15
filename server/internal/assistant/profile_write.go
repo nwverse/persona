@@ -26,6 +26,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		Settings
 		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
+		Readonly               json.RawMessage `json:"readonly_mode"`
 		MinutesRetention       json.RawMessage `json:"minutes_days"`
 		TranscriptionMode      json.RawMessage `json:"meeting_transcription_default"`
 		Glossary               json.RawMessage `json:"meeting_glossary"`
@@ -47,6 +48,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Permission != nil && !s.explicitSettingsTarget(w, r) {
 		return
+	}
+	if in.Readonly != nil {
+		if err := json.Unmarshal(in.Readonly, &in.ReadonlyMode); err != nil || !validReadonlyMode(in.ReadonlyMode) {
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_readonly_mode"))
+			return
+		}
+		if !s.explicitSettingsTarget(w, r) {
+			return
+		}
 	}
 	if in.TaskWorkspacePreference != "" && !validWorkspacePreference(in.TaskWorkspacePreference) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("task_workspace_preference must be prefer-existing or prefer-new"))
@@ -199,6 +209,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.TaskWorkspacePreference != "" {
 			v.TaskWorkspacePreference = in.TaskWorkspacePreference
 		}
+		if in.Readonly != nil {
+			v.ReadonlyMode = in.ReadonlyMode
+		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
 		}
@@ -210,6 +223,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
+		}
+		if in.RecentTaskChats != nil {
+			v.RecentTaskChats = in.RecentTaskChats
 		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault

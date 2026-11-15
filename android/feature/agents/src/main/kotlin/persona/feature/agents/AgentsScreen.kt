@@ -215,7 +215,11 @@ internal fun AgentsScreen(
         if (!row.session.isLive) {
             historyMachine = row.session.machineId
             historySession = row.session.sessionId
-        } else { model.opened(row); open(row.session.key) }
+        } else {
+            model.opened(row)
+            // A search hit inside a side session (#7944) opens the parent with that side shown.
+            open(page.settings.sideHit(row.session, page.sessions, names) ?: row.session.key)
+        }
     }
     fun newSession(space: AgentSpacePreset? = null) { creationModel?.startIn(space); newAgent = true }
     // Built with the page off the main thread (AgentsViewModel).
@@ -304,6 +308,15 @@ internal fun AgentsScreen(
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
             }, idleRepos = repoTree, hideIdle = hideIdle)
     }
+    val paginationFooter = page.pagination.paged && !firstPageIncomplete
+    val controls = page.settings
+    // Use the effective sort and the user's fold choices, which are kept separately from the live list projection.
+    // Display includes the Compact/Detailed preference in every style.
+    KeepAgentReadingPosition(listState, tree, paginationFooter,
+        scope = listOf(group?.namespace, assistant.id, assistant.group, controls.grouping, controls.sort,
+            controls.quick, controls.machineFilter, controls.query, controls.hideBotmux,
+            controls.folded, controls.expandedIdle, controls.expandedQuiet, page.preferences.foldedTabs, expandedTasks,
+            page.preferences.range, page.preferences.display, PersonaTheme.style))
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
     // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9).
     val mixesComputers = remember(page.list, page.settings.machineFilter) { page.list.mixesComputers(page.settings.machineFilter) }
@@ -668,7 +681,7 @@ internal fun AgentsScreen(
                     }
                 }
             }
-            if (page.pagination.paged && !firstPageIncomplete) item("sessions-pagination", contentType = "pagination") {
+            if (paginationFooter) item("sessions-pagination", contentType = "pagination") {
                 Column(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.m), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(pluralStringResource(R.plurals.agents_page_loaded, page.pagination.total, page.sessions.size, page.pagination.total),
                         style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
@@ -38,6 +40,8 @@ func (d *DB) TodoRepositories(ctx context.Context, id string) (repository.TaskSe
 // ReadTodoRepositoriesTx locks the Todo, including an empty association set. Preparation
 // consumers can read this value and persist their own selected snapshot in the same
 // transaction. It never seals business associations or changes legacy execution paths.
+// Transactions needing both locks take the Todo before the catalog; ordinary EditTodo
+// takes only the Todo lock, and catalog CAS updates never lock a Todo.
 func ReadTodoRepositoriesTx(ctx context.Context, tx pgx.Tx, id string, expected *int64) (repository.TaskSet, error) {
 	var todo string
 	if err := tx.QueryRow(ctx, `SELECT id FROM todos WHERE id=$1 FOR UPDATE`, id).Scan(&todo); err != nil {
@@ -124,6 +128,9 @@ func (d *DB) SetTodoRepositories(ctx context.Context, id string, in repository.S
 		if catalog.Revision != *in.ExpectedCatalogRevision {
 			return repository.Problem("catalog_conflict")
 		}
+		if err := rememberTodoRepositoryLinksTx(ctx, tx, id, repositoryURLs(cur.Repositories), false); err != nil {
+			return err
+		}
 		rows, err := repository.Bind(cur.Repositories, in.Repositories, catalog)
 		if err != nil {
 			return err
@@ -146,12 +153,16 @@ func (d *DB) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, in r
 		if err != nil {
 			return err
 		}
+		if err := rememberTodoRepositoryLinksTx(ctx, tx, id, repositoryURLs(cur.Repositories), false); err != nil {
+			return err
+		}
 		for index, row := range cur.Repositories {
 			if row.RepoID == repoID {
 				links, err := repository.NormalizeLinks(row.SourceSnapshot.Identity, in.Links)
 				if err != nil {
 					return err
 				}
+				repository.PreserveLinkTitles(row.Links, links)
 				cur.Repositories[index].Links = links
 				cur.Revision++
 				out = cur
@@ -161,4 +172,101 @@ func (d *DB) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, in r
 		return repository.Problem("not_found")
 	})
 	return out, err
+}
+
+func repositoryURLs(rows []repository.TaskRepository) []string {
+	urls := []string{}
+	for _, row := range rows {
+		for _, link := range row.Links {
+			urls = append(urls, link.CanonicalURL)
+		}
+	}
+	return urls
+}
+func rememberTodoRepositoryLinksTx(ctx context.Context, tx pgx.Tx, id string, urls []string, legacy bool) error {
+	if urls == nil {
+		urls = []string{}
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO todo_repository_link_receipts(todo_id,seen_urls,legacy_imported) VALUES($1,$2,$3)
+ ON CONFLICT(todo_id) DO UPDATE SET seen_urls=ARRAY(SELECT DISTINCT value FROM unnest(todo_repository_link_receipts.seen_urls || EXCLUDED.seen_urls) AS value), legacy_imported=todo_repository_link_receipts.legacy_imported OR EXCLUDED.legacy_imported`, id, urls, legacy)
+	return err
+}
+
+// ImportTodoRepositoryLinks is additive and serializes with interactive edits on the Todo.
+// Historical imports run once; repeated reports cannot resurrect removed references.
+// An explicit agent/user request can deliberately add a previously removed reference.
+func (d *DB) ImportTodoRepositoryLinks(ctx context.Context, id string, urls []string, source string) (repository.TaskSet, bool, error) {
+	input := make([]repository.LinkInput, 0, len(urls))
+	for _, raw := range urls {
+		input = append(input, repository.LinkInput{URL: raw})
+	}
+	return d.ImportTodoRepositoryLinkDetails(ctx, id, input, source)
+}
+
+// ImportTodoRepositoryLinkDetails uses the same transaction for references and titles.
+func (d *DB) ImportTodoRepositoryLinkDetails(ctx context.Context, id string, input []repository.LinkInput, source string) (repository.TaskSet, bool, error) {
+	var out repository.TaskSet
+	var changed bool
+	if source != "legacy" && source != "report" && source != "explicit" {
+		return out, false, repository.Problem("invalid")
+	}
+	if len(input) > repository.MaxTaskRepositories*repository.MaxRepositoryLinks {
+		return out, false, repository.Problem("limit")
+	}
+	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
+		if err != nil {
+			return err
+		}
+		out = cur
+		var seen []string
+		var legacy bool
+		err = tx.QueryRow(ctx, `SELECT seen_urls,legacy_imported FROM todo_repository_link_receipts WHERE todo_id=$1`, id).Scan(&seen, &legacy)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if source == "legacy" && legacy {
+			return nil
+		}
+		pending := []repository.LinkInput{}
+		canonical := []string{}
+		for _, in := range input {
+			_, link, err := repository.ParseTaskLinkInput(in)
+			if err != nil {
+				return err
+			}
+			canonical = append(canonical, link.CanonicalURL)
+			if source == "explicit" || !slices.Contains(seen, link.CanonicalURL) {
+				pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title})
+			}
+		}
+		if len(pending) == 0 {
+			if source == "legacy" {
+				return rememberTodoRepositoryLinksTx(ctx, tx, id, canonical, true)
+			}
+			return nil
+		}
+		catalog, err := ReadRepositoryCatalogTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		rows, err := repository.MergeTaskLinkDetails(cur.Repositories, pending, catalog)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(rows, cur.Repositories) {
+			if cur.Revision >= repository.MaxRevision {
+				return repository.Problem("limit")
+			}
+			cur.Repositories = rows
+			cur.Revision++
+			changed = true
+			if err := writeTodoRepositoriesTx(ctx, tx, cur); err != nil {
+				return err
+			}
+		}
+		out = cur
+		return rememberTodoRepositoryLinksTx(ctx, tx, id, canonical, source == "legacy")
+	})
+	return out, changed && err == nil, err
 }

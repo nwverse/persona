@@ -76,7 +76,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -1663,7 +1663,7 @@ const TodoListItem = memo(function TodoListItem({
               <Icon name="pullRequest" size={11} />
               {pr.text}
             </a>
-            <span className="truncate">· {t("todos.pr_idle", { age: view.age })}</span>
+            <span className="truncate">· {prBlockers(todo).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</span>
           </div>
         )}
 
@@ -1980,11 +1980,11 @@ function AutoReviewResult({ sup }: { sup: Supervision }) {
     <div data-testid="auto-review" className="mt-2 flex flex-col gap-1 text-[12.5px] text-ink-2">
       <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
         <Icon name="target" size={12} className="shrink-0" />
-        <span className="shrink-0 whitespace-nowrap font-semibold">{t("assistant-tasks.auto_review_title")}</span>
+        <span className="shrink-0 whitespace-nowrap font-semibold">{t("assistant-task-actions.auto_review_title")}</span>
         <span className="min-w-0">· {line}</span>
         {findings && (
           <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="touch-hit ml-auto shrink-0 whitespace-nowrap text-ink-3 hover:text-ink-2">
-            {t(open ? "assistant-tasks.auto_review_hide" : "assistant-tasks.auto_review_show")}
+            {t(open ? "assistant-task-actions.auto_review_hide" : "assistant-task-actions.auto_review_show")}
           </button>
         )}
       </div>
@@ -2086,6 +2086,8 @@ function TodoDetail({
   const retry = () => retryTask(todo).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
+  // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
+  const legacyPR = prLink(todo.pr_url);
   const toneClass = {
     red: "bg-red-tint text-red",
     green: "bg-green-tint text-green",
@@ -2190,8 +2192,9 @@ function TodoDetail({
       )}
       <LatestReport todo={todo} />
 
-      {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
-      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />
+      {/* Code task stages from the hub. Its PR link is not drawn again here: the repository links below are the one
+          place a task's issues and PRs are shown (legacy ones included). */}
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} className="mt-4" />
 
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 
@@ -2210,7 +2213,8 @@ function TodoDetail({
         </div>
       </div>
 
-      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
+        legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
       <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
 
       <ThreadSection todo={todo} />
@@ -2653,7 +2657,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
                       </div>
                     )}
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11.5px] text-ink-3">
-                      <span>{clock(d.created_at)}</span>
+                      <span>{clock(d.phase_completed_at ?? d.created_at)}</span>
                       <span>·</span>
                       <span>{decisionSourceLabel(d, todo, lookup)}</span>
                       {off && (

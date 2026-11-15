@@ -24,7 +24,7 @@ import (
 // agentToolNames are the tools of the agents (not the assistant's conversations) that are this manager's own; their
 // descriptions and schemas are in prompts/mcp (docs/assistant/prompts.md). Each needs to know which agent calls it: the node
 // names the session of the agent's pane for them (node.callerTools).
-var agentToolNames = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread"}
+var agentToolNames = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add"}
 
 // AgentTools are the agents' own tools (mcpTools for an agent).
 func (s *Service) AgentTools() []proto.Tool { return toolsNamed(agentToolNames) }
@@ -653,6 +653,12 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 			return proto.TextResult(err.Error(), true)
 		}
 		return proto.TextResult(res, false)
+	case "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add":
+		res, err := s.agentRepositoryTool(ctx, machine, session, name, args)
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+		return proto.TextResult(res, false)
 	case "todo_bind_thread": // todo_thread.go
 		res, err := s.agentThreadTool(ctx, machine, session, args)
 		if err != nil {
@@ -807,6 +813,14 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 // stoppedAgent: c is an agent that has stopped and is read-only (node stopped.go, #4754): its terminal engine keeps its
 // conversation and terminal, and a message to it is refused (agent_stopped).
 func stoppedAgent(c proto.Session) bool {
-	return c.SourceKind == "" && c.Capabilities != nil && !c.Capabilities.Send &&
-		(c.Status == proto.StatusOffline || c.Status == proto.StatusInterrupted)
+	if c.SourceKind == "codex_history" {
+		return c.Capabilities != nil && !c.Capabilities.Send && c.Capabilities.Read && c.Capabilities.Terminal && !c.IsSubagent
+	}
+	if c.Status != proto.StatusOffline && c.Status != proto.StatusInterrupted {
+		return false
+	}
+	if c.SourceKind == "" {
+		return c.Capabilities == nil || !c.Capabilities.Send
+	}
+	return false
 }
