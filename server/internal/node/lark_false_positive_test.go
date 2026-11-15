@@ -326,3 +326,61 @@ func TestLarkLiteralForLoopCommandBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// Reads stay reads when lark-cli cannot report its risk levels (#8389): the binary the node finds may be a wrapper that
+// cannot reach the real lark-cli from the node's PATH, so the lookup returns nothing. The helper's binary is missing.
+func TestLarkReadsWithoutRiskDiscovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		cards         int
+	}{
+		{"single read", `timeout 30 /opt/x/lark-cli im +chat-messages-list --as user --chat-id oc_a --page-size 50 --no-reactions 2>&1 | head -c 30000`, 0},
+		{"search", `lark-cli im +messages-search --query standup --format json | jq -r '.data.items[].chat_id' | sort -u`, 0},
+		{"mget", `lark-cli im +messages-mget --message-ids om_a,om_b --format json > /tmp/m.json 2>&1`, 0},
+		{"thread", `lark-cli im +threads-messages-list --thread omt_a | tee /tmp/t.json | jq '.data.items|length'`, 0},
+		{"chat search", `lark-cli im +chat-search --query team --page-size 20`, 0},
+		{"incident loop", `for c in oc_a oc_b; do echo "=== $c"; timeout 30 /opt/x/lark-cli im +chat-messages-list --as user --chat-id $c --start 2026-11-15T12:30:00+08:00 --end 2026-11-15T14:30:00+08:00 --page-size 50 --no-reactions 2>&1 | head -c 30000; done`, 0},
+		{"loop with filters", `for c in oc_a oc_b; do lark-cli im +chat-messages-list --chat-id $c --page-size 20 | jq -r '.data.items[]|.body.content' | head -20; done`, 0},
+		{"incident help", `cd /tmp; L=/opt/x/lark-cli; timeout 20 $L im +chat-messages-list --help 2>&1 | head -40`, 0},
+		{"help after cd, then read", `cd /tmp; L=/opt/x/lark-cli; $L im +chat-messages-list --help; $L im +chat-messages-list --chat-id oc_a | head`, 0},
+
+		// Writes and unknown risk stay behind approval.
+		{"send", `lark-cli im +messages-send --chat-id oc_a --text hi`, 1},
+		{"reply", `lark-cli im +messages-reply --message-id om_a --text hi`, 1},
+		{"download writes", `lark-cli im +messages-resources-download --message-id om_a --file-key k`, 1},
+		{"chat update", `lark-cli im +chat-update --chat-id oc_a --name x`, 1},
+		{"service create", `lark-cli im messages create --params '{"receive_id_type":"chat_id"}' --data '{}'`, 1},
+		{"api post", `lark-cli api POST /open-apis/im/v1/messages --data '{}'`, 1},
+		{"api delete", `lark-cli api DELETE /open-apis/im/v1/messages/om_a`, 1},
+		{"unknown shortcut", `lark-cli im +chat-messages-purge --chat-id oc_a`, 1},
+		{"read shortcut as a prefix", `lark-cli im +chat-messages-list-and-send --chat-id oc_a`, 1},
+		{"loop send", `for c in oc_a oc_b; do echo "== $c"; timeout 30 lark-cli im +messages-send --chat-id $c --text hi 2>&1 | head; done`, 1},
+		{"loop mixes read and send", `for s in +chat-messages-list +messages-send; do lark-cli im $s --chat-id oc_a --text hi; done`, 1},
+		{"send in substitution", `echo $(lark-cli im +messages-send --chat-id oc_a --text hi)`, 1},
+		{"xargs send", `printf 'oc_a\n' | xargs -I{} lark-cli im +messages-send --chat-id {} --text hi`, 1},
+		{"eval send", `eval "lark-cli im +messages-send --chat-id oc_a --text hi"`, 1},
+		{"bash -c send", `timeout 20 bash -c 'lark-cli im +messages-send --chat-id oc_a --text hi'`, 1},
+		{"variable subcommand", `s=+messages-send; lark-cli im $s --chat-id oc_a --text hi`, 1},
+		{"help then send", `lark-cli im +chat-messages-list --help; lark-cli im +messages-send --chat-id oc_a --text hi`, 1},
+		{"help is a text value", `lark-cli im +messages-send --chat-id oc_a --text --help`, 1},
+		{"cd, help, then send", `cd /tmp; L=/opt/x/lark-cli; timeout 20 $L im +chat-messages-list --help 2>&1 | head; timeout 20 $L im +messages-send --chat-id oc_a --text hi`, 1},
+		{"cd then relative command", `cd /tmp; L=./lark-cli; $L im +chat-messages-list --help`, 1},
+		{"cd then bare command", `cd /tmp; L=lark-cli; $L im +chat-messages-list --help`, 1},
+		{"dynamic cd", `cd "$D"; L=/opt/x/lark-cli; $L im +chat-messages-list --help`, 1},
+		{"reassigned after cd", `cd /tmp; L=/opt/x/lark-cli; L=$(which x); $L im +chat-messages-list --help`, 1},
+		{"read output as a command", `$(lark-cli im +chat-messages-list --chat-id oc_a | jq -r '.data.items[0].body.content')`, 1},
+		{"read output into bash", `x=$(lark-cli im +chat-messages-list --chat-id oc_a); bash -c "$x"`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
+	}
+}
+
+// The fallback covers only an unknown risk: what lark-cli says wins.
+func TestLarkKnownReadsDoNotOverrideReportedRisk(t *testing.T) {
+	for _, tc := range []struct{ risk, want string }{{"", "read"}, {"read", "read"}, {"write", "write"}, {"high-risk-write", "high-risk-write"}} {
+		v := classifyLark(`lark-cli im +chat-messages-list --chat-id oc_a`, nil, "", func([]string) string { return tc.risk })
+		if len(v.calls) != 1 || v.calls[0].Risk != tc.want {
+			t.Fatalf("risk %q: verdict = %+v", tc.risk, v)
+		}
+	}
+}
