@@ -1007,3 +1007,12 @@ placeholder examples in complete source text.
 Nanosecond stat fields can repeat across same-size writes within one filesystem timestamp tick. Bypass the parsed
 cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
 the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.
+
+## Claude Code keeps one gateway model list per config directory (#8417)
+
+With `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` on, Claude Code caches the gateway's `/v1/models` in
+`<config dir>/cache/gateway-models.json` for the last base URL only, refreshes it in the background, and shows it only
+while that is the running gateway. Several providers on one computer overwrite each other's list, so a headless
+`initialize` answer is not a stable source for a provider's gateway models. Turning discovery off to hide entries is
+wrong too: it removes the gateway's list from every `/model` the user opens. Read the gateway itself
+(`node/launcher_gateway_models.go`) and compare lists from several computers before concluding a list is clean.
