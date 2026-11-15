@@ -278,6 +278,30 @@ func TestScreenMechanicalSignalsKeepsMixedInboxAndIdle(t *testing.T) {
 	}
 }
 
+func TestPRConflictIsNeverMechanicalWithoutAgents(t *testing.T) {
+	for _, supervisor := range []string{"main", "direction", "background"} {
+		t.Run(supervisor, func(t *testing.T) {
+			s, f, todo, _, now := mechanicalFixture(t)
+			todo.Agents = nil
+			todo.Supervision.Supervisor = supervisor
+			s.todos.mu.Lock()
+			copy := copyTodoLocked(&todo)
+			s.todos.todos[todo.ID] = &copy
+			s.todos.mu.Unlock()
+			g := superviseSignal{Todo: todo.ID, Kind: sigPRConflict, Key: todo.PRURL + "@head-1"}
+			if handled, retry := s.mechanicalSignal(context.Background(), g, now); handled || !retry.IsZero() {
+				t.Fatalf("actionable conflict was suppressed: handled=%v, retry=%v", handled, retry)
+			}
+			if got := s.screenMechanicalSignals(context.Background(), []superviseSignal{g}, now, time.Time{}); len(got) != 1 || got[0].Kind != sigPRConflict {
+				t.Fatalf("responsible supervisor lost the conflict: %+v", got)
+			}
+			if len(f.asked) != 0 || todoNow(s, todo.ID).Supervision.State != "" {
+				t.Fatal("screening changed the task or called a model instead of forwarding the signal")
+			}
+		})
+	}
+}
+
 func TestSendDigestHandlesMechanicalSignalWithoutBackgroundModelWake(t *testing.T) {
 	s, f, todo, c, _ := mechanicalFixture(t)
 	shortSupervise(t, s)

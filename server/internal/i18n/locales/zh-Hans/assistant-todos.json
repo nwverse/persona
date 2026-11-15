@@ -8,6 +8,5 @@
   "complete_card": "把任务「{title}」标为完成（它的 Agent 停下后会被关闭）",
   "reopen_card": "重新打开任务「{title}」",
   "supervision_waits_upstream": "等待上游评审或合并：{url}",
-  "supervision_needs_deployment": "已合并，仍需部署并在真实环境验证",
-  "supervision_node_upgrade": "这台电脑的 Persona 需要先升级才能加载督办系统规则；消息尚未发送"
+  "supervision_needs_deployment": "已合并，仍需部署并在真实环境验证"
 }

@@ -375,11 +375,15 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
-	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm) {
-		if policy, _ := p["supervision_instructions"].(string); policy != "" {
-			id, _ := p["session_id"].(string)
-			if err := s.checkSupervisionNode(ctx, device, id); err != nil {
-				return err
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		id, _ := p["session_id"].(string)
+		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
+			return err
+		}
+		if method == DeviceSessionSend {
+			cfg := s.settings(ctx)
+			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
 			}
 		}
 	}

@@ -8,6 +8,5 @@
   "complete_card": "Mark the task “{title}” done (its agents are closed once they are idle)",
   "reopen_card": "Reopen the task “{title}”",
   "supervision_waits_upstream": "Waiting for upstream review or merge: {url}",
-  "supervision_needs_deployment": "Merged; deployment and live verification still required",
-  "supervision_node_upgrade": "Update Persona on this computer before sending supervision instructions; no message was sent"
+  "supervision_needs_deployment": "Merged; deployment and live verification still required"
 }
