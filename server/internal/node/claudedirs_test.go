@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,10 +145,11 @@ func TestKnownDirsWithoutRunningClaude(t *testing.T) {
 	}
 }
 
-// TestClaudeScanHelper is a claude of the machine's own for TestClaudeScanOff: it waits to be killed.
+// TestClaudeScanHelper is a claude of the machine's own for TestClaudeScanOff: it runs until the test closes its
+// stdin (or kills it).
 func TestClaudeScanHelper(t *testing.T) {
 	if os.Getenv("PERSONA_TEST_CLAUDE_SCAN_HELPER") == "1" {
-		time.Sleep(30 * time.Second)
+		_, _ = io.Copy(io.Discard, os.Stdin)
 		os.Exit(0)
 	}
 }
@@ -173,10 +175,15 @@ func TestClaudeScanOff(t *testing.T) {
 	cmd := exec.Command(exe, "-test.run=^TestClaudeScanHelper$")
 	cmd.Args[0] = "claude"
 	cmd.Env = []string{"PERSONA_TEST_CLAUDE_SCAN_HELPER=1", "CLAUDE_CONFIG_DIR=" + profile}
+	stdin, err := cmd.StdinPipe() // held open: the helper runs until it closes
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_ = stdin.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
