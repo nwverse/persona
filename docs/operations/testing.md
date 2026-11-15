@@ -341,7 +341,8 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   - MacBook without the bridge (Install takes 2 steps);
   - this simulator on MacBook's cable once MacBook is on (Pair waits for Trust);
   - Developer Mode off until 2 steps after pairing, then the developer disk image missing until Prepare;
-  - Mac Studio without Xcode (`ddi_present` false), and the server a Linux computer;
+  - Mac Studio without Xcode (`ddi_present` false), and the server a Linux computer (listed, without the bridge or the image);
+  - Forget unpairs; the install job's step is in `MOCK_LANG` (`en`, `ja`, default `zh-Hans`);
   - Try It answers a screenshot and Weather opened.
 
   `GET /mock/iphone?reset=1` starts it over. `-tab settings -openIPhoneSetup YES` opens the guide. `IPhoneSetupUITests.testTheWholeGuide` walks it with `TEST_RUNNER_PERSONA_IPHONE_SETUP_HUB`, once per look in `TEST_RUNNER_PERSONA_UI_LOOKS` (`name=args;…`, the mock starting over before each), saving `PERSONA_SHOTS`. Unit tests: `IPhoneSetupTests`.

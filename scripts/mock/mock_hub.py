@@ -22461,9 +22461,23 @@ IPHONE_MODES = ("one", "several", "none", "pair", "setup")
 # 2 × MOCK_COMPUTER_STEP); this simulator on MacBook's cable once MacBook is turned on (Pair waits for Trust a step,
 # then pairs); Developer Mode off until 2 steps after pairing (as if the user turned it on and the phone restarted), then
 # the developer disk image missing until Prepare (2 steps); Mac Studio a Mac without Xcode (ddi_present false); the
-# server a Linux computer. POST /api/v1/iphone/try answers a screenshot and Weather opened. GET /mock/iphone shows it,
-# GET /mock/iphone?reset=1 starts it over.
+# server a Linux computer (listed as the hub lists one, without the bridge or a developer disk image). Forget unpairs.
+# The install job's step is in MOCK_LANG (en, ja, zh-Hans), as the hub words it for the web (#8217). POST
+# /api/v1/iphone/try answers a screenshot and Weather opened. GET /mock/iphone shows it, GET /mock/iphone?reset=1
+# starts it over.
 IPHONE_SETUP = {"ext": MOCK_IPHONE != "setup", "installed": {"studio"}, "paired_at": None, "prepared_at": None, "tried": 0}
+
+
+IPHONE_SETUP_STEPS = {
+    "zh-Hans": {"install": "正在下载 iPhone 助手程序", "pair": "在这台 iPhone 上点「信任」，再输入锁屏密码", "prepare": "正在准备这台 iPhone，大约一分钟"},
+    "en": {"install": "Downloading the iPhone helper", "pair": "On the iPhone, tap Trust, then enter its passcode", "prepare": "Getting the iPhone ready, about a minute"},
+    "ja": {"install": "iPhoneヘルパーをダウンロードしています", "pair": "iPhoneで「信頼」をタップしてからパスコードを入力してください", "prepare": "iPhoneを準備しています（1分ほど）"},
+}
+
+
+def iphone_system(machine):
+    """A computer the hub lists iPhone control for: a Mac, and in the setup mode a Linux computer too (as the hub does)."""
+    return machine.get("os") == "darwin" or (MOCK_IPHONE == "setup" and machine.get("os") == "linux")
 
 
 def iphone_setup_job(machine_id):
@@ -22476,10 +22490,12 @@ def iphone_setup_job(machine_id):
     if job.get("cancelled"):
         return {"kind": kind, "state": "cancelled", "started": job["started"]}
     if t <= 2 * COMPUTER_STEP:
-        steps = {"install": "正在下载 iPhone 助手程序", "pair": "在这台 iPhone 上点「信任」，再输入锁屏密码", "prepare": "正在准备这台 iPhone，大约一分钟"}
+        steps = IPHONE_SETUP_STEPS.get(LAUNCHER_HEALTH_LANG, IPHONE_SETUP_STEPS["zh-Hans"])
         out = {"kind": kind, "state": "running", "started": job["started"], "step": steps.get(kind, "")}
         if kind == "pair":
             out.update(code="trust_pending", device="dev-mock-1")
+        elif kind == "prepare":
+            out["device"] = "dev-mock-1"
         return out
     if kind == "install":
         IPHONE_SETUP["installed"].add(machine_id)
@@ -22534,7 +22550,8 @@ def iphone_of(machine):
         job = iphone_setup_job(machine["id"])
         devices = [{**d, "allowed": enabled and d["id"] in IPHONE_CONSENT} for d in iphone_setup_devices(machine["id"])]
         installed = machine["id"] in IPHONE_SETUP["installed"]
-        out = {"enabled": enabled, "installed": installed, "devices": devices, "ddi_present": machine["id"] != "studio"}
+        out = {"enabled": enabled, "installed": installed, "devices": devices,
+               "ddi_present": machine.get("os") == "darwin" and machine["id"] != "studio"}
         if installed:
             out["version"] = "0.1.0"
         else:
@@ -22571,7 +22588,7 @@ def iphone_list():
 def refresh_iphones():
     if MOCK_IPHONE in IPHONE_MODES:
         for m in MACHINES:
-            if m.get("os") == "darwin":
+            if iphone_system(m):
                 if IPHONE_SETUP["ext"]:
                     m["iphone"] = iphone_of(m)
                 else:
@@ -22585,7 +22602,7 @@ if MOCK_IPHONE in IPHONE_MODES:
     if MOCK_IPHONE == "setup":
         IPHONE_ON.clear()  # nothing turned on yet
     for _m in MACHINES:
-        if _m.get("os") == "darwin" and IPHONE_SETUP["ext"]:
+        if iphone_system(_m) and IPHONE_SETUP["ext"]:
             _m["iphone"] = iphone_of(_m)
 
 # Every fixture, including machines added by optional modes, follows the engine contract.
@@ -26460,6 +26477,9 @@ class H(BaseHTTPRequestHandler):
                 IPHONE_JOBS[machine["id"]] = {"at": time.time(), "started": ago()}
             elif action == "cancel":
                 if machine["id"] in IPHONE_JOBS: IPHONE_JOBS[machine["id"]]["cancelled"] = True
+            elif action == "forget" and MOCK_IPHONE == "setup":
+                IPHONE_SETUP.update(paired_at=None, prepared_at=None)
+                IPHONE_CONSENT.discard("dev-mock-1")
             elif action != "forget":
                 return self.send_json({"error": "unknown action"}, 404)
             refresh_iphones()
