@@ -128,33 +128,30 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := t.normalizeMachinePolicy(); err != nil {
 		return "", "", err
 	}
-	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
-	// What the task itself named, kept from its first try in this process: later tries see what earlier ones resolved
-	// in t, and a task read back from the store already carries its resolved launch, so this is never recomputed.
+	// What the task itself named, kept from its first try in this process. The task as stored never carries what a
+	// start-defaults policy filled in (storedLaunch), so a task read back from the store (a remedy, a queued start, a
+	// retry from the card, a manager restart) names only its own.
 	if t.callerPick == nil {
-		p := pickOf(params)
-		p.ultracode = t.Ultracode // the task's own tri-state (nil, or on / off as it asked)
-		t.callerPick = &p
+		own := t.launchPick()
+		t.callerPick = &own
 	}
 	caller := *t.callerPick
-	// A self-planning constraint applies only while a policy rule asks for it on this try (start_defaults.go).
+	// Every try starts from what the task named: what a policy filled in on an earlier try goes back first, whichever
+	// rule fits now (start_defaults.go), so a rule that changed or no longer fits leaves nothing of the earlier one.
+	if t.startDefaulted {
+		t.Launcher, t.Model, t.Effort, t.Tier = caller.launcher, caller.model, caller.effort, caller.tier
+		t.Permission, t.Ultracode, t.startDefaulted = caller.permission, copyBool(caller.ultracode), false
+	}
+	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
-	// The start-defaults policy (start_defaults.go): its preset goes in before the start is resolved, as if the task
-	// had named that tier; its effort, ultracode and goal after the launcher fit.
+	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
+	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
+	// its effort, ultracode and goal after the launcher fit.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
 	presetNote := ""
 	if withDefaults {
+		t.startDefaulted = true // from here on, what t holds of its launch may be the policy's, not the task's own
 		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
-	} else if t.startDefaulted {
-		// An earlier try took defaults from a policy that no longer applies. What the policy filled in goes back to
-		// exactly what the task itself named (a task read from the store carries its resolved launch, which is then
-		// treated as its own): its launcher, model, effort, tier and ultracode, with no goal or plan-first this try.
-		t.Launcher, t.Model, t.Effort, t.Tier = caller.launcher, caller.model, caller.effort, caller.tier
-		t.Ultracode, t.planFirst = caller.ultracode, false
-		params["launcher"], params["model"], params["effort"], params["tier"] =
-			caller.launcher, caller.model, caller.effort, caller.tier
-		delete(params, "ultracode") // set below from t.Ultracode, as on any start
-		delete(params, "goal")
 	}
 	own, err := s.resolveStart(ctx, params)
 	if err != nil {
@@ -383,6 +380,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if refused { // only once it started here: a task moved elsewhere after a failed start asks again
 		off := false
 		t.Ultracode = &off // a retry does not ask again
+		if t.callerPick != nil {
+			t.callerPick.ultracode = copyBool(t.Ultracode) // nor a policy's later rule: off is the task's own now
+		}
 		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
 	}
 	return m.ID, res.Session.SessionID, nil
@@ -444,15 +444,18 @@ func (s *Service) adoptTaskStartSessionUntil(ctx context.Context, m Device, laun
 }
 
 // updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, its actual launch
-// permission, and its ultracode when the start went without it.
+// permission, and its ultracode when the start went without it. When a start-defaults policy filled values in on
+// this try, the launch it keeps (launcher, model, effort, tier, ultracode and permission) is only what the task named
+// itself (storedLaunch): a later start reading the task back must not take the policy's values for its own.
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
+	launch := t.storedLaunch()
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
-		pt.Reroute, pt.Ultracode = t.Reroute, t.Ultracode
+		pt.Reroute, pt.Ultracode = t.Reroute, launch.ultracode
 		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
 		pt.WorkspaceInferred, pt.ReservedTodoID = t.WorkspaceInferred, t.ReservedTodoID
-		pt.Launcher, pt.Model, pt.Effort, pt.Tier = t.Launcher, t.Model, t.Effort, t.Tier
-		pt.Permission = t.Permission
+		pt.Launcher, pt.Model, pt.Effort, pt.Tier = launch.launcher, launch.model, launch.effort, launch.tier
+		pt.Permission = launch.permission
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
 	}

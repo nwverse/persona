@@ -1496,11 +1496,13 @@ stopped or uninstalled extension leaves nothing in force. The full wire shape an
 What a task Agent starts with beyond what its caller named can come from an optional start-defaults policy
 (`internal/assistant/start_defaults.go`): rules matched by the kind of work, each saying which Agent presets to try,
 which thinking effort, whether ultracode is on, whether a goal is set from the task's acceptance criteria, and whether
-the prompt asks the Agent to plan first. With no policy stored, one past its expiry, or no rule that fits a task, a
-task's first start is exactly what it would be without the feature; a later try of a task the policy already started
-in the same manager process gets back what the task itself named. A task read back from the store (after a manager
-restart) carries the launch it resolved, as every task does, so values a policy filled in then count as its own. The
-owner and an extension granted the
+the prompt asks the Agent to plan first. With no policy stored, one past its expiry, or no rule that fits a task, the
+task starts exactly as it would without the feature. A policy's values belong to the one start they were applied to:
+every try of a task starts again from what the task named itself, whichever rule fits it now, and the task's plan keeps
+only what the task named (its why says what the policy picked), so a remedy, a queued start, a retry from the card or
+a manager restart, which read the task back from its plan, never take an expired policy's values for the task's own,
+and the card does not show them as asked for. The Agent's session shows what it actually runs with. The owner and an
+extension granted the
 `assistant.start_defaults` hub scope read and write it with `GET`/`PUT /api/v1/assistant/start-defaults` (the owner
 also as `start_defaults` in `PUT /api/v1/assistant`); an extension-written policy must expire within one hour, so a
 stopped or uninstalled extension leaves nothing in force. A rule must set something; a rule whose `then` names nothing

@@ -20,10 +20,41 @@ import (
 // (docs/server/launcher-health.md, "A launcher the computer doesn't have").
 
 // startPick is what a start's caller named itself, before a tier and Model configuration › Agents fill in the rest.
-// ultracode is the tri-state the caller gave (nil: it said nothing, false: it explicitly asked for it off).
+// ultracode is the tri-state the caller gave (nil: it said nothing, false: it explicitly asked for it off). permission
+// is a task's permission mode as it stood before the launcher that runs set it (launchPick only; pickOf leaves it "").
 type startPick struct {
-	launcher, effort, model, tier string
-	ultracode                     *bool
+	launcher, effort, model, tier, permission string
+	ultracode                                 *bool
+}
+
+// launchPick is what task t holds of its launch now, as pickOf reads it from a start's params, with its ultracode.
+func (t *PlanTask) launchPick() startPick {
+	return startPick{launcher: strings.TrimSpace(t.Launcher), effort: strings.TrimSpace(t.Effort),
+		model: strings.TrimSpace(t.Model), tier: strings.TrimSpace(t.Tier), permission: strings.TrimSpace(t.Permission),
+		ultracode: copyBool(t.Ultracode)}
+}
+
+// storedLaunch is the launch task t keeps in its plan: what this try resolved, as every task keeps it, or only what
+// the task named itself when a start-defaults policy filled values in on this try, the permission mode included (a
+// policy's preset can change which agent runs, and so the mode its launcher sets). A policy's values are for that one
+// start (the Agent's session shows what it runs with): kept with the task, a remedy, a queued start or a retry from
+// the card, which read the task back from the store, would take them for the task's own.
+func (t PlanTask) storedLaunch() startPick {
+	if t.startDefaulted && t.callerPick != nil {
+		own := *t.callerPick
+		own.ultracode = copyBool(own.ultracode)
+		return own
+	}
+	return t.launchPick()
+}
+
+// copyBool is a copy of an optional switch, so the copy and the original never change together.
+func copyBool(b *bool) *bool {
+	if b == nil {
+		return nil
+	}
+	v := *b
+	return &v
 }
 
 // pickOf is the caller's own pick in a start's params.

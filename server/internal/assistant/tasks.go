@@ -131,11 +131,12 @@ type PlanTask struct {
 	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
 	// serialized, this try only.
 	planFirst bool
-	// callerPick: the launcher, model, effort and tier the task named itself, kept from its first start try in this
-	// process, so a later try tells them from what start defaults or a default filled in. Never serialized.
+	// callerPick: the launcher, model, effort, tier and ultracode the task named itself, kept from its first start try
+	// in this process, so every try starts from them again whichever start-defaults rule fits it. Never serialized: the
+	// task as stored keeps only its own launch whenever a policy filled values in (storedLaunch).
 	callerPick *startPick
-	// startDefaulted: an earlier start try of this task in this process applied start defaults, so a later try must
-	// drop them when no rule applies any more. Never serialized (a task read from the store keeps its resolved launch).
+	// startDefaulted: the start-defaults policy applied to this start try, so what the task holds of its launch may be
+	// the policy's: the next try goes back to callerPick first, and the plan keeps only that. Never serialized.
 	startDefaulted bool
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for

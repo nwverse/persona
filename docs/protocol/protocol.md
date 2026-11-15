@@ -2041,7 +2041,8 @@ an expired one or no rule that fits, a task starts exactly as without the featur
   `ultracode` a boolean (`true` turns it on for a task that did not set it; `false` asks for nothing); `goal` only
   `done_when`; `plan_first` a boolean. Effort, ultracode and goal reach Claude Code starts only.
 - Rules are tried in order and the first that fits wins. A caller's own effort, ultracode, tier, model or launcher is
-  never replaced.
+  never replaced. A rule's values apply to one start try: the next try starts again from what the task named, and the
+  task in `TaskPlan` keeps only what it named, never a policy's values (its `why` names the preset the policy picked).
 
 ### Dispatch policy
 

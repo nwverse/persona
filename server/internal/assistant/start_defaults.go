@@ -295,7 +295,6 @@ func (s *Service) applyStartPreset(ctx context.Context, t *PlanTask, caller star
 // launcher fit (claude: what runs is Claude Code). caller is what the task named before any tier, Model Settings, the
 // fit or a preset filled something in. Explicit caller values always win; why is the preset's note, said with the rest.
 func (s *Service) applyStartExtras(ctx context.Context, t *PlanTask, caller startPick, d StartDefaults, claude bool, params map[string]any, why string) {
-	t.startDefaulted = true
 	// Effort, strongest first: the caller's own effort, then the effort of a tier the caller named; otherwise the
 	// policy's effort wins over a preset's and Model Settings' default (the policy says how this kind of task starts).
 	// Claude Code only; other agents keep whatever they were given.

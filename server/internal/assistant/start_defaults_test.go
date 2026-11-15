@@ -738,3 +738,164 @@ func TestStartDefaultsRoleAndLeaderWorkerFacts(t *testing.T) {
 		t.Fatalf("the leader's worker: %+v", got)
 	}
 }
+
+// A retry that a different rule fits starts from what the task named again: the earlier rule's ultracode and effort are
+// gone even when the task named its own launcher, model or tier (no preset is chosen then), and only the rule that
+// fits now adds anything.
+func TestStartDefaultsRetryUnderAChangedRuleKeepsNothingOfTheOldRule(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edit func(*PlanTask)
+	}{
+		{"names nothing", func(*PlanTask) {}},
+		{"names its model", func(p *PlanTask) { p.Model = "gw-own" }},
+		{"names its tier", func(p *PlanTask) { p.Tier = "quick" }},
+		{"names its launcher", func(p *PlanTask) { p.Launcher = "gateway" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f := defaultsHub(t)
+			first := true
+			stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) {
+				if first {
+					return fullDefaults("deep"), true // ultracode on, effort max, a goal, preset deep
+				}
+				return StartDefaults{PlanFirst: true}, true // a different rule: only the self-planning prompt
+			})
+			task := defaultsTask()
+			c.edit(&task)
+			if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+				t.Fatal(err)
+			}
+			if st := startsOf(f)[0]; st["ultracode"] != true || st["effort"] != "max" {
+				t.Fatalf("the first rule did not apply: %v", st)
+			}
+			first = false
+			if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+				t.Fatal(err)
+			}
+			st := startsOf(f)[1]
+			if st["ultracode"] != nil || st["effort"] == "max" || st["goal"] != nil || st["model"] == "gw-deep" {
+				t.Fatalf("the retry kept the old rule's values: %v", st)
+			}
+			if !strings.Contains(st["prompt"].(string), prompts.RenderPlanFirstTaskConstraint()) {
+				t.Fatalf("the rule that fits now did not apply: %v", st["prompt"])
+			}
+			if task.Ultracode != nil || task.Effort == "max" {
+				t.Fatalf("the task kept the old rule's values: ultracode %v effort %q", task.Ultracode, task.Effort)
+			}
+		})
+	}
+}
+
+// A policy's values are for the start they were applied to: the plan keeps only what the task named, so a start that
+// reads the task back from the store (a remedy, a queued start, a retry from the card, a manager restart) does not take
+// an expired policy's ultracode, effort, model or preset for the task's own, and the card does not show them as asked.
+func TestStartDefaultsNotStoredWithTheTask(t *testing.T) {
+	s, f := defaultsHub(t)
+	ctx := context.Background()
+	policy := true
+	stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) { return fullDefaults("deep"), policy })
+	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"Fix the build","prompt":"fix the build",
+		"machine":"box","cwd":"/Users/me/code/app","why":"the repo is on box","permission":"bypassPermissions",
+		"done_when":["CI is green","the fix is merged"],"expect_minutes":30}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := planID(t, res)
+	if _, err := s.startPlan(ctx, id, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the start", func() bool { return len(startsOf(f)) == 1 })
+	if st := startsOf(f)[0]; st["ultracode"] != true || st["effort"] != "max" || st["model"] != "gw-deep" {
+		t.Fatalf("the policy did not apply: %v", st)
+	}
+	todoID := todoIDOfPlan(t, s, id)
+	waitFor(t, "the agent linked", func() bool { return len(todoNow(s, todoID).Agents) == 1 })
+	p, err := s.loadPlan(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := p.Tasks[0]
+	if stored.Ultracode != nil || stored.Effort == "max" || stored.Model == "gw-deep" || stored.Tier == "deep" {
+		t.Fatalf("the policy's values were stored with the task: ultracode %v effort %q model %q tier %q",
+			stored.Ultracode, stored.Effort, stored.Model, stored.Tier)
+	}
+	if !strings.Contains(stored.Why, "Example") {
+		t.Fatalf("the task's why lost the policy's note: %q", stored.Why)
+	}
+	// The policy has expired; the task read back from the store starts as it would without the feature.
+	policy = false
+	if _, _, err := s.startTaskAgent(ctx, &stored, true); err != nil {
+		t.Fatal(err)
+	}
+	st := startsOf(f)[1]
+	if st["ultracode"] != nil || st["effort"] == "max" || st["model"] == "gw-deep" || st["goal"] != nil {
+		t.Fatalf("an expired policy still decided the start: %v", st)
+	}
+	if st["launcher"] != "gateway" || st["model"] != "gw-model" || st["effort"] != "high" {
+		t.Fatalf("the ordinary default launch changed: %v", st)
+	}
+}
+
+// What the task named itself stays stored as it was: a task's own ultracode off and effort survive a policy-filled
+// start in the plan, and a task's own ultracode on stays on.
+func TestStartDefaultsStoredTaskKeepsItsOwnValues(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		ultracode *bool
+		effort    string
+	}{
+		{"its own ultracode off and effort", func() *bool { b := false; return &b }(), "low"},
+		{"its own ultracode on", func() *bool { b := true; return &b }(), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f := defaultsHub(t)
+			stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) { return fullDefaults("deep"), true })
+			task := defaultsTask()
+			task.Ultracode, task.Effort = c.ultracode, c.effort
+			if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+				t.Fatal(err)
+			}
+			if len(startsOf(f)) != 1 {
+				t.Fatalf("starts: %v", startsOf(f))
+			}
+			kept := task.storedLaunch()
+			if (kept.ultracode == nil) != (c.ultracode == nil) || kept.ultracode != nil && *kept.ultracode != *c.ultracode ||
+				kept.effort != c.effort || kept.tier != "" || kept.model != "" || kept.launcher != "" {
+				t.Fatalf("stored launch = %+v, want the task's own (ultracode %v, effort %q)", kept, c.ultracode, c.effort)
+			}
+		})
+	}
+}
+
+// A policy's preset can change which agent runs, and with it the permission mode its launcher sets (Claude Code runs
+// with bypassPermissions): the plan keeps the task's own mode, and a later start without the policy runs the task's
+// own agent with it, not with the mode the policy's agent set.
+func TestStartDefaultsPermissionOfThePolicysAgentNotStored(t *testing.T) {
+	s, f := defaultsHub(t)
+	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "cx", Source: "zshrc", Agent: "codex"})
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.cx"}) // the task's own default runs Codex
+	policy := true
+	stubStartDefaults(s, func(StartFacts) (StartDefaults, bool) {
+		return StartDefaults{Presets: []PresetChoice{{Name: "plain"}}}, policy // a Claude Code preset
+	})
+	task := defaultsTask()
+	task.Permission = "acceptEdits"
+	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+		t.Fatal(err)
+	}
+	if st := startsOf(f)[0]; st["launcher"] != "claude" || st["permission_mode"] != "bypassPermissions" {
+		t.Fatalf("the policy's Claude Code preset did not run: %v", st)
+	}
+	stored := task.storedLaunch()
+	if stored.permission != "acceptEdits" || stored.launcher != "" || stored.tier != "" {
+		t.Fatalf("stored launch = %+v, want the task's own (acceptEdits, no launcher, no tier)", stored)
+	}
+	policy = false
+	if _, _, err := s.startTaskAgent(context.Background(), &task, false); err != nil {
+		t.Fatal(err)
+	}
+	if st := startsOf(f)[1]; st["launcher"] != "cx" || st["permission_mode"] != "acceptEdits" {
+		t.Fatalf("without the policy the task did not start as its own: %v", st)
+	}
+}
