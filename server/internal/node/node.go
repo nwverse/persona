@@ -1805,6 +1805,22 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		list, err := n.getOmpSettings()
 		return map[string]any{"settings": list}, err
+	case "grok.settings":
+		list, err := n.getGrokSettings()
+		return map[string]any{"settings": list}, err
+	case "grok.settings.set":
+		var a struct {
+			Key   string `json:"key"`
+			Value any    `json:"value"`
+		}
+		if err := json.Unmarshal(params, &a); err != nil {
+			return nil, err
+		}
+		if err := n.setGrokSetting(a.Key, a.Value); err != nil {
+			return nil, err
+		}
+		list, err := n.getGrokSettings()
+		return map[string]any{"settings": list}, err
 	case "claude.dirs.list": // every config directory the node knows, blocked ones too (claudedirs.go)
 		return map[string]any{"dirs": n.listClaudeDirs()}, nil
 	case "claude.settings", "claude.settings.set":
