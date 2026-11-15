@@ -41,6 +41,87 @@ func (s *startupOwnershipStore) readTimes(key string) []time.Time {
 	return append([]time.Time(nil), s.reads[key]...)
 }
 
+// gatedEntriesWriteStore holds the entries write until a recovery read has had the chance to run.
+type gatedEntriesWriteStore struct {
+	*entriesFailStore
+	started     chan struct{}
+	readStarted chan struct{}
+	release     chan struct{}
+}
+
+func (s *gatedEntriesWriteStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if key == machineEntriesKey {
+		select {
+		case s.readStarted <- struct{}{}:
+		default:
+		}
+	}
+	return s.entriesFailStore.Setting(ctx, key, out)
+}
+
+func (s *gatedEntriesWriteStore) PutSetting(ctx context.Context, key string, v any) error {
+	if key == machineEntriesKey {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+		<-s.release
+	}
+	return s.entriesFailStore.PutSetting(ctx, key, v)
+}
+
+func TestEntriesRecoveryReadWaitsForWrite(t *testing.T) {
+	ctx := context.Background()
+	gated := &gatedEntriesWriteStore{entriesFailStore: &entriesFailStore{meshStore: newMeshStore()},
+		started: make(chan struct{}, 1), readStarted: make(chan struct{}, 1), release: make(chan struct{})}
+	h := newTestHub(t)
+	h.store = gated
+	h.devices.mu.Lock()
+	h.devices.keptRead, h.devices.reportedRead = true, true
+	h.devices.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(gated.release) }) }
+	defer release()
+
+	saved := make(chan struct{})
+	go func() {
+		defer close(saved)
+		h.saveMachineEntries(ctx)
+	}()
+	select {
+	case <-gated.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the entries write did not begin")
+	}
+	loaded := make(chan error, 1)
+	go func() { loaded <- h.loadMachineEntries(ctx) }()
+	select {
+	case <-gated.readStarted:
+		t.Fatal("a recovery read ran during the write")
+	case <-time.After(100 * time.Millisecond): // a blocked read has no event; release it after this deadlock guard
+	}
+	if got := gated.readCount(); got != 0 {
+		t.Fatalf("a recovery read ran during the write: %d reads", got)
+	}
+	release()
+	select {
+	case <-saved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the entries write did not finish")
+	}
+	select {
+	case err := <-loaded:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the recovery read did not finish after the write")
+	}
+	if got := gated.readCount(); got != 1 {
+		t.Fatalf("recovery reads after the write = %d, want 1", got)
+	}
+}
+
 func TestStartupOwnershipReadsRetryAndReconcile(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.Background()
@@ -181,6 +262,13 @@ func TestKeptRecoveryRetriesEntriesRead(t *testing.T) {
 		h.bus.idents = keptStore
 		h.store = entries
 		h.startDevices(ctx) // kept #1 fails; entries #1 succeeds but filters out the not-yet-kept machine.
+		h.saveMachineEntries(ctx)
+		if got := entries.readCount(); got != 1 {
+			t.Fatalf("entries reads after a write with the kept list unread = %d, want 1", got)
+		}
+		if got := keptEntries(t, entries.meshStore)["m-0b0b0b"]["kept"]; got.Info.Hostname != "kept-host" || !got.LastSeen.Equal(seen) {
+			t.Fatalf("a write with the kept list unread dropped the saved entry: %+v", got)
+		}
 		entries.mu.Lock()
 		entries.fails = 1 // entries #2 fails after the kept-list recovery.
 		entries.mu.Unlock()
@@ -205,6 +293,13 @@ func TestKeptRecoveryRetriesEntriesRead(t *testing.T) {
 		h.devices.mu.Lock()
 		degradedRead := h.devices.reportedRead
 		h.devices.mu.Unlock()
+		h.saveMachineEntries(ctx)
+		if got := entries.readCount(); got != 2 {
+			t.Fatalf("entries reads after a write during recovery = %d, want 2", got)
+		}
+		if got := keptEntries(t, entries.meshStore)["m-0b0b0b"]["kept"]; got.Info.Hostname != "kept-host" || !got.LastSeen.Equal(seen) {
+			t.Fatalf("a write during recovery dropped the saved entry: %+v", got)
+		}
 
 		synctest.Sleep(trustRetryEvery)
 		synctest.Wait()

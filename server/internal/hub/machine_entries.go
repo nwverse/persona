@@ -53,19 +53,20 @@ type reportedEntry struct {
 // it is read again before the next write, which would otherwise drop the managers that did not report since. A failed
 // read also leaves reportedRead false: an earlier partial/degraded snapshot is not safe to write back.
 func (h *Hub) loadMachineEntries(ctx context.Context) error {
+	d := &h.devices
+	d.reportedSave.Lock()
+	defer d.reportedSave.Unlock()
 	if h.store == nil {
 		return nil
 	}
 	kept, err := h.readMachineEntries(ctx)
 	if err != nil {
 		h.logf("machines: what the managers last reported: %v", err)
-		d := &h.devices
 		d.mu.Lock()
 		d.reportedRead = false
 		d.mu.Unlock()
 		return err
 	}
-	d := &h.devices
 	d.mu.Lock()
 	d.mergeReportedLocked(kept)
 	d.reportedRead = true
@@ -445,6 +446,13 @@ func (h *Hub) saveMachineEntries(ctx context.Context) {
 func (h *Hub) writeMachineEntries(ctx context.Context) {
 	d := &h.devices
 	d.mu.Lock()
+	if !d.keptRead {
+		// An entries read with the kept list unknown filtered those machines out. Never write that partial map back;
+		// the trust loop or the next kept-list recovery schedules the write after both records are known.
+		d.reportedSaved = time.Now()
+		d.mu.Unlock()
+		return
+	}
 	read := d.reportedRead
 	d.mu.Unlock()
 	if !read {
