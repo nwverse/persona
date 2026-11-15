@@ -6,7 +6,7 @@ import XCTest
 final class ReturnSendsUITests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
-    /// An agent of the default manager's computers (Mac Studio's "博客迁移到 Astro", idle). The weather agent other composer
+    /// An agent of the default manager's computers (Mac Studio's blog migration, idle). The weather agent other composer
     /// tests use runs on the MacBook of the mock's second manager, whose sessions the app holds only while that
     /// manager's assistant is the current one: opened by key from the default assistant, its composer is disabled
     /// (#8640).
