@@ -5,7 +5,9 @@ import SwiftUI
 // progress: each thing once"): two entries, Needs You and In Progress, each thing in exactly one of them. The split is
 // `AssistantEntries`, a port of the web's `assistantEntries` (web/src/lib/assistant-entries.ts, Android's
 // AssistantEntries.kt, #3387) replaying the shared fixture spec/fixtures/entries/cases.json. Each entry opens a tray above
-// the bar, one at a time; the entries are drawn as the old dock's capsules (`DockCapsule`), so the bar is as low.
+// the bar, one at a time; the entries are drawn as the old dock's capsules (`DockCapsule`), so the bar is as low. In the
+// main conversation with low-distraction mode on, Held Pushes (#7782, PushInterceptsView.swift) comes after them, and its
+// tray opens in the same place (#8223).
 
 /// One of the bar's entries, and the tray it opens.
 nonisolated enum ActionTray: String, CaseIterable, Identifiable, Sendable {
@@ -140,12 +142,34 @@ nonisolated enum AssistantEntries {
         return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
     }
 
-    /// The task waits for the user's decision or review: an open ask (a decided one only while the task is open), or its
-    /// supervisor's `pending_review` / `needs_user` on an open task (the web's `taskAwaitsDecision`).
-    static func awaitsDecision(_ todo: TodoItem) -> Bool {
+    /// How long a task's review is its supervisor's alone (docs/assistant/unified-entry.md "Needs you and In progress"):
+    /// past it the review is overdue and the task is the owner's, under Needs You. The web's `REVIEW_OVERDUE_MS`.
+    static let reviewOverdueAfter: TimeInterval = 60 * 60
+
+    /// The task waits for its supervisor's review, which is not the owner's to do yet (the web's `supervisorReviewing`):
+    /// open, in `pending_review` for less than `reviewOverdueAfter`. False past that, and when the hub does not say since
+    /// when (an older hub): the review is then the owner's, as it was. An open ask or an asking Agent is the owner's
+    /// whatever this says.
+    static func supervisorReviewing(_ todo: TodoItem, now: Date) -> Bool {
+        guard todo.doneAt == nil, todo.supervision?.state == "pending_review", let since = todo.supervision?.pendingSince else { return false }
+        return now.timeIntervalSince(since) < reviewOverdueAfter
+    }
+
+    /// The task waits for the user's decision or review (the web's `taskAwaitsDecision`): an open ask (a decided one only
+    /// while the task is open), or its supervisor's `needs_user` on an open task, or a `pending_review` that is the
+    /// owner's: one waiting an hour or more, or one the hub gives no start for. A younger review is its supervisor's.
+    static func awaitsDecision(_ todo: TodoItem, now: Date) -> Bool {
         if let ask = openAsk(todo) { return !(todo.doneAt != nil && ask.outcome == "decide") }
+        guard todo.doneAt == nil else { return false }
         let state = todo.supervision?.state
-        return todo.doneAt == nil && (state == "pending_review" || state == "needs_user")
+        return state == "needs_user" || (state == "pending_review" && !supervisorReviewing(todo, now: now))
+    }
+
+    /// The task's row among the tasks in progress says its supervisor is reviewing it: nothing of it runs or asks, and
+    /// the review is not the owner's (the web's `supervisorReview`).
+    static func saysSupervisorReview(_ todo: TodoItem, status: Status, now: Date) -> Bool {
+        let resting = status == .followUp || status == .unread || status == .notStarted
+        return resting && !awaitsDecision(todo, now: now) && supervisorReviewing(todo, now: now)
     }
 
     /// The message card still waits for Send by the hub's fields alone: not sent, not filed (the web's `messageWaits`).
@@ -228,13 +252,15 @@ nonisolated enum AssistantEntries {
             let bucket = TodoTriageLogic.bucket(todo, triage)
             // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
             let waits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
+            let decision = awaitsDecision(todo, now: now)
             if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
-            else if waits || awaitsDecision(todo) {
+            else if waits || decision {
                 // Only the review decision is put off or dismissed (Later / Don't handle); a live Agent question keeps its home.
-                if !(status != .needsYou && awaitsDecision(todo) && decisionHidden(todo)) { deciding.append((row, rank(todo, status), when)) }
+                if !(status != .needsYou && decision && decisionHidden(todo)) { deciding.append((row, rank(todo, status), when)) }
                 listed()
             }
-            else if bucket == .open { open.append((row, rank(todo, status), when)); listed() }
+            // its supervisor's review is under way (not the owner's yet): in progress, whatever the To-dos page files it under
+            else if bucket == .open || supervisorReviewing(todo, now: now) { open.append((row, rank(todo, status), when)); listed() }
             else if bucket == .shelved { shelved.append((row, rank(todo, status), when)); listed() }
             // finished work handed out by a conversation (a failed start that a related to-do finished is history, not news)
             else if triage.section == .justDone, status != .failed, !(todo.origin ?? "").isEmpty { finished.append((row, triage.last)) }
@@ -403,22 +429,40 @@ struct AssistantActionBar: View {
     /// What the user picked on each plan row's card; the tray draws Start, Edit and Don't Start of the open one under its
     /// list (`PlanActions`), so a tall card never scrolls them away.
     @State private var planChoices: [String: PlanChoices] = [:]
+    /// Bumped once a minute while the bar is in front, so the split reads the clock again: a supervisor's review turns
+    /// the owner's at the hour while nothing else changes (`AssistantEntries.reviewOverdueAfter`; the web and Android
+    /// tick the same way).
+    @State private var minute = 0
+    /// The main conversation's held pushes (#7782), made the first time the bar reads them there, and whether their tray
+    /// is the one open: in the trays' place, so never with `open` (#8223).
+    @State private var held: PushInterceptsModel?
+    @State private var heldOpen = false
     private var store: TasksStore { .shared }
 
     private var entryRow: AnyLayout { AnyLayout(HStackLayout(spacing: Theme.Space.s)) }
 
     var body: some View {
+        let _ = minute
         let content = Self.content(conversation, key: key)
         let row = entryRow
+        let inMain = conversation == AppModel.shared.assistantMain?.sessionID && AppModel.shared.api != nil
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let open {
                 tray(open, content)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if heldOpen, let held {
+                PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
-                if conversation == AppModel.shared.assistantMain?.sessionID, let api = AppModel.shared.api {
-                    PushInterceptsEntry(api: api, otherTrayOpen: open != nil, onOpen: { open = nil })
+                if inMain, let held {
+                    PushInterceptsEntry(model: held, open: heldOpen) {
+                        withAnimation(Theme.Motion.state) {
+                            open = nil
+                            heldOpen.toggle()
+                        }
+                    }
                 }
                 if ComputerActivityPill.shows(computer) {
                     ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
@@ -432,7 +476,17 @@ struct AssistantActionBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
-        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } }
+        // One tray at a time: Needs You's or In Progress' opening closes the held pushes'.
+        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { heldOpen = false } }
+        // The held pushes are read in the main conversation while its tab is in front, every 30 s, with ln mode off too,
+        // so the entry comes when the mode is turned on; the bar reads none of the model's values itself.
+        .tabActiveTask(id: inMain) {
+            guard inMain, let api = AppModel.shared.api else { return }
+            let model = held ?? PushInterceptsModel(api: api)
+            if held == nil { held = model }
+            await model.run()
+        }
+        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false } }
         #if DEBUG
         .onAppear {
             if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
@@ -456,6 +510,12 @@ struct AssistantActionBar: View {
         }
         #endif
         .confirmTaskRemoval($removing)
+        .tabActiveTask {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                minute &+= 1
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("action-bar")
     }
@@ -803,6 +863,7 @@ struct AssistantActionBar: View {
         var parts: [String]
         if status == .interrupted { parts = [String(localized: "Interrupted [Chat Layout]")] }
         else if status == .usageLimit { parts = [String(localized: "Usage Limit")] }
+        else if AssistantEntries.saysSupervisorReview(todo, status: status, now: .now) { parts = [ReviewBadge.supervisorReview] }
         else if resting, review == .pendingReview || review == .needsUser { parts = [todo.reviewBadge?.label ?? status.taskState.label] }
         else { parts = [status.taskState.label] }
         if status == .waiting, let waits = store.waitLine(todo) { parts.append(waits) }

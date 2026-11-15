@@ -583,7 +583,8 @@ nonisolated struct APIClient: Sendable {
 
     struct MachinesResponse: Decodable { var machines: [Machine] }
     /// A machine's launchers and what runs with none picked (`default`, #2455; nil from an older hub). With
-    /// `purpose=assistant` (#5033) it also carries `unavailable`: launchers and providers that can't run the main chat.
+    /// `purpose=assistant` (#5033) it also carries `unavailable`: launchers and providers that can't run the main chat;
+    /// for New Agent (`agent.new`, #8109) the Persona-managed providers left out there by their own-service rule.
     struct LaunchersResponse: Decodable, Sendable {
         var launchers: [Launcher]
         var `default`: LauncherDefault?

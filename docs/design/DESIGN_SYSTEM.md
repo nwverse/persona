@@ -2759,3 +2759,54 @@ visible. The preview explicitly says remote existence is unconfirmed. Check and 
 keeps the draft on failure, and a browser timeout asks the user to refresh because persistence is unconfirmed.
 This serves people binding a repository reference in advanced assistant settings; it adds no primary-screen
 options, style, theme or motion. See `docs/assistant/managers.md` for provider semantics and verification boundaries.
+
+## Optional repository associations
+
+Coding-work metadata belongs in the Web to-do detail's **Repositories and
+work** group; creation carries the same editor, folded, under its own optional
+button. Ordinary to-dos still require only a title. On the detail the group is
+read first and drawn in the existing grouped-row geometry: one row per saved
+repository with its provider's own mark, project address and a `Pill` of its
+link count, and one link row per issue or pull request. `RepositoryMark` reuses
+the bundled GitHub asset and adds GitLab's mark without extending the unrelated
+connector vocabulary. Repository names and addresses share one line; the
+association store has no physical workspace path, so directory aliases are not
+presented as filesystem paths. A link carries its complete source title as one
+hyperlink, wrapping at narrow widths, followed by its number and an external
+mark. An unknown title falls back to the localized kind and number. GitHub PRs
+use the pull-request mark, GitLab MRs the merge mark and issues the existing
+issue mark. The associations an agent keeps show without an editor. Editing is
+the existing `Dialog` with a compact text button (**Manage links**), never an
+always-open form. `TaskRepositoryBindingsEditor` is the controlled editor;
+`TodoRepositoryBindings` owns existing-todo reads and writes and
+`NewTodoRepositoryBindings` contributes a draft to the parent's single creation
+request. These reuse `Group`, `Row`, `Pill`, `Button`, `IconButton`, `Menu`,
+`Dialog`, `Collapse`, `SearchField`, `Loading`, `RowFailed`, shared settings
+inputs, semantic tokens and toast Undo for draft removal. There is no new page
+or workspace control.
+
+Repositories are added through the search picker (name, path or host; ↑ ↓,
+Home/End, Enter takes the first match, Escape closes and returns the focus to
+its button), not a native `select`. Each repository's issues and PRs are link
+rows with their own **Add issue or PR** field: Enter adds, Escape cancels, and a
+URL of another repository is refused inline by `repositoryLinkView`, the same
+rule the manager applies. Directory aliases and source refs stay in the
+per-repository **Source options** disclosure; empty aliases and default branches
+need no setup. Saved-source changes (`removed`, `identity_changed`) and
+`unlisted` rows inferred from agent-added links are explained beneath their
+repository while the saved source stays. A to-do's `pr_url` is drawn inside
+this group as a link row with one line saying it predates the store, and never
+beside it, so one place holds a task's issues and PRs. That row is a fallback
+for a hub whose route is missing only: a successful store answer is
+authoritative even when it is empty, because the manager imports the legacy
+history once and honours an explicit removal, so an empty answer after the last
+repository was removed must not resurrect the old PR.
+
+Controls have labels, action groups wrap at narrow widths, and saving disables
+edits. Failed saves keep input; conflicts offer explicit **Discard edits and
+reload**, which reads the store again rather than reusing the stale draft, and
+opening the editor always reads the newest store value and catalog because an
+agent may have added a link. Manager/Todo/credential changes retire old results.
+New copy ships in English, Simplified Chinese and Japanese. Evidence:
+`web/src/ui/TaskRepositoryBindingsEditor.test.tsx` and
+`web/e2e/todo-repositories-browser.py`.

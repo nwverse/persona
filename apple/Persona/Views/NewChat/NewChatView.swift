@@ -687,7 +687,8 @@ struct NewChatView: View {
         LauncherPicker(launchers: launchers, selection: $launcher, allowDefault: unifiedModels, defaultLabel: defaultLabel,
                        defaultBlock: unifiedModels ? launchers.first(where: { $0.name == defaultLauncher })?.block : nil,
                        // The provider wizard saves to the hub-level group: on another group's computer it would land elsewhere.
-                       addsProvider: ref.group == (model.hub?.group ?? ""))
+                       addsProvider: ref.group == (model.hub?.group ?? ""),
+                       unavailable: model.launcherUnavailable[ref] ?? [])
     }
 
     /// The machines offered: the current assistant's (`AppModel.scopedMachines`), and of them this hub's when a todo is
@@ -1125,7 +1126,8 @@ struct NewChatView: View {
 }
 
 /// New Agent's launchers. One grayed out on this computer (`Launcher.block`, #1643) stays listed with why; choosing it
-/// shows how to fix it instead of picking it, and the help's Try Anyway picks it after all.
+/// shows how to fix it instead of picking it, and the help's Try Anyway picks it after all. A provider the hub leaves out
+/// here (`unavailable`, #8109) comes after them, off with why.
 struct LauncherPicker: View {
     var launchers: [Launcher]
     @Binding var selection: String
@@ -1135,8 +1137,11 @@ struct LauncherPicker: View {
     /// Why the launcher Default runs is grayed out on this computer; nil when it is not. Default stays pickable: it is
     /// Model Settings' choice, said under it.
     var defaultBlock: LauncherBlock? = nil
-    /// The help offers Add Provider: the computer is in the hub group the provider wizard saves to.
+    /// The help offers Add Provider: the computer is in the hub group the provider wizard saves to. So does How to Fix of
+    /// a provider left out here: Settings' provider pages read that group's hub.
     var addsProvider = true
+    /// The Persona-managed providers the hub leaves out on this computer, with why (#8109: their own-service rule).
+    var unavailable: [UnavailableLauncher] = []
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     /// The grayed-out launcher whose help is open.
@@ -1187,6 +1192,24 @@ struct LauncherPicker: View {
                             }
                             Spacer()
                             if l.name == selection { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
+                        }
+                    }
+                }
+            }
+            // Not just missing (#8109): a provider left out here is said after the launchers, in the main chat sheet's row,
+            // and never picked. How to Fix opens its page in Settings › Model providers, whose Computers has the switch.
+            let skipped = UnavailableLauncher.shown(unavailable, after: launchers, query: query)
+            if !skipped.isEmpty {
+                Section(String(localized: "Unavailable here")) {
+                    ForEach(skipped) { u in
+                        if addsProvider {
+                            NavigationLink { ModelLauncherDetailView(name: u.name) } label: { UnavailableLauncherRow(item: u, fixable: true) }
+                                .accessibilityHint(Text("Shows how to fix it"))
+                                .accessibilityIdentifier("launcherPicker.unavailable.\(u.name)")
+                        } else {
+                            UnavailableLauncherRow(item: u)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("launcherPicker.unavailable.\(u.name)")
                         }
                     }
                 }

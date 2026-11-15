@@ -129,10 +129,31 @@ progress** everything running that does not need them. Each thing is one row in 
 each count is its rows:
 
 - **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
-  for a decision or review (an open `ask`; `pending_review` / `needs_user` on an open task), one whose turn broke off on a
-  model error (`interrupted`) or whose start failed while it is still the user's to retry; in the main chat, an Agent
-  opened by hand (no task) that asks something; a plan waiting for Start (one row per plan); a message card waiting for
-  Send; the conversation's own cards.
+  for a decision or review that is the owner's (an open `ask`; `needs_user` on an open task; a `pending_review` that is
+  overdue, next bullet), one whose turn broke off on a model error (`interrupted`) or whose start failed while it is
+  still the user's to retry; in the main chat, an Agent opened by hand (no task) that asks something; a plan waiting
+  for Start (one row per plan); a message card waiting for Send; the conversation's own cards.
+- **A supervisor's review is not the owner's until it is overdue.** A supervised task judged finished waits in
+  `pending_review` for its supervisor (the background supervisor, a leader, or the conversation that handed it out;
+  "Supervision" and "Background supervisor" below), who closes it with `task_review`. That review is Persona's to do,
+  so the task is **In progress**, its row saying "Supervisor reviewing" (zh 督办验收中, ja 監督の確認待ち), and
+  the Needs you badge does not count it. It comes to the owner only when something of it is theirs: its agent asks, it
+  has an open `ask` (please verify), the review ends in `needs_user`, or the review is still waiting one hour after
+  the task entered `pending_review` (`supervision.pending_since`; the threshold is `REVIEW_OVERDUE_MS` on the web and
+  Android, `AssistantEntries.reviewOverdueAfter` on Apple), so a stalled or missing supervisor never hides a finished
+  task. A hub that does not send `pending_since` keeps the rule from before: the task is in Needs you. The row stays
+  in In progress whatever the To-dos page files the task under (a review the owner has seen files as Done there), and
+  each client re-reads the clock once a minute, so the row moves at the hour with nothing else changing. Unchanged by
+  this: the To-dos page's sections, the direction tree's `review` state, the Today card's "Waiting for your review"
+  and pushes. Before 2026-11-15 every `pending_review` task was listed under Needs you, a rule older than the
+  background supervisor (#4927): most of what the owner was shown there was a review Persona finished on its own
+  minutes later. A task under review whose PR is open and waits for a maintainer is still In progress here, not in
+  the web's Waiting for merge group (next bullet): the review is Persona's work under way; once it is overdue it is in
+  Needs you like any other (`supervisor_review_with_open_pr` in `spec/fixtures/entries`).
+- **Waiting for merge** (web only, #7614): a task whose fresh, open, non-draft PR waits for a maintainer with nothing
+  of it active and nothing the owner's (the To-dos page's `pr_open` rule, `docs/assistant/todo-status-sop.md`) is a
+  third group shown only when it has rows, outside In progress and its count. Needs you and a supervisor's review under
+  way come first. Android and iOS do not read `pr_status` and keep such a task in In progress.
 - **In progress**: every other task the To-dos page counts open (#3331), and in the main chat each working Agent opened by
   hand. A task its supervisor parked (#3804, "Supervision" below) is here on the web, saying "Parked until <time> ·
   <reason>", however long it has been still (never folded under shelved); it is never in Needs you for being parked.
@@ -155,7 +176,8 @@ each count is its rows:
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
 `assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`
 (`apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift`, #3393). All three replay `spec/fixtures/entries`, which pins
-which entry every case goes to (Apple: `AssistantEntriesFixtureTests`). The older Pending / Progress / Agents / To start entries
+which entry every case goes to, and which In progress rows say their supervisor is reviewing them (Apple:
+`AssistantEntriesFixtureTests`). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
 ### Background activity in In progress (#3588)
@@ -1072,7 +1094,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
+| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with low-distraction mode on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
@@ -1092,13 +1114,17 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
+  In the main conversation with low-distraction mode on, Held Pushes (#7782) is a third entry in the same capsule after
+  them; its tray of today's held pushes opens in the trays' place, above the row at the bar's width, and one tray is open
+  at a time (#8223; Android's `AssistantTray.HeldPushes` shares the slot the same way, the web opens a dialog).
   At the accessibility text sizes the entries (and the computer pill after them) are a `FlowLayoutRow`: one that doesn't
   fit goes on to the next line, each whole. Side by side they made the row, and with it the whole chat page, wider than
   the screen, the header and the composer cut off at both edges (#5702; `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (c),
   wrapping rather than a sideways scroll so Needs You and its count stay in view). Below those sizes the row is as before.
   Tests: `AssistantEntriesFixtureTests` (the shared fixture), `AssistantActionBarTests`, UI `AssistantActionBarUITests`
   (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`; `testEntriesStayOnScreenAtEveryTextSize` in zh-Hans, English and Japanese at
-  the default and the largest size, light and dark).
+  the default and the largest size, light and dark), UI `PushInterceptsUITests` (`MOCK_LN=1`; the held pushes tray's
+  place and width, the three entries on one row, one tray at a time).
 - Task details have one header layer: the embedded Agent page takes over the task name, Close, and task ⋯ (#3255; see "Task details" above).
 - Screenshots: `MOCK_TASKS=1`, `MOCK_TASKS_AT`, `-showTaskDetail`, `-showTaskBoard` (`docs/operations/testing.md`).
 

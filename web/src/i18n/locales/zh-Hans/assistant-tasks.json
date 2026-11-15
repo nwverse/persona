@@ -115,6 +115,7 @@
   "plan_edit_prompt": "交给 Agent 的第一条消息",
   "plan_edit_discard": "放弃这些修改？",
   "review_pending": "待验收",
+  "review_supervisor": "督办验收中",
   "review_rework": "返工第 {round} 轮",
   "review_needs_user": "等你决定",
   "review_parked": "已搁置",

@@ -347,9 +347,9 @@ export const Composer = memo(function Composer({
         if (e.type === "replace" && !startsEdit) editNow.current?.cancel();
         // "Edit" a message sent with files: they go back to their tiles (#8361), the words to the input
         const sentFiles = e.type === "replace" ? splitFileTags(e.text) : null;
-        if (sentFiles?.files.length) restoreFiles(draftKey, sentFiles.files);
+        const overflow = sentFiles ? restoreFiles(draftKey, sentFiles.files) : [];
         // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
-        const selected = sentFiles ? splitSkillDraft(sentFiles.text) : null;
+        const selected = sentFiles ? splitSkillDraft(withFiles(sentFiles.text, overflow)) : null;
         const split = e.type === "replace" ? splitQuotes(selected!.text) : null;
         const nextQuotes = e.type === "replace" ? (split ? parseQuotes(split.quotes) : []) : null;
         const next = split ? split.rest : selected ? selected.text : applyDraft(draftNow.current, e);
@@ -769,8 +769,14 @@ export const Composer = memo(function Composer({
         releaseAttachments(sent);
       }
       refs.forEach((r) => addContext(draftKey, r));
-      // the files back above this conversation's box: they are on the machine, ready to go again
-      restoreFiles(draftKey, sentFiles);
+      // the files back above this conversation's box: they are on the machine, ready to go again; ones over the
+      // tile limit stay in the draft as tags rather than disappearing
+      const overflow = restoreFiles(draftKey, sentFiles);
+      if (overflow.length) {
+        const restored = withFiles("", overflow);
+        if (mounted.current && keyNow.current === draftKey) setDraft((cur) => withUnsent(cur, restored));
+        else sendDraft(draftKey, { type: "unsent", text: restored });
+      }
       // the quotes back above this conversation's box (kept for it when the box shows another one or closed)
       if (q.length && !getQuotes(draftKey).list.length) setQuotes(draftKey, q);
     }
