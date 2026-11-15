@@ -41,6 +41,7 @@
   "err_model_no_id": "A model in the list has no ID",
   "err_model_duplicate": "Model {model} is listed twice",
   "err_model_context_negative": "The context window of model {model} can’t be negative",
+  "err_model_output_negative": "The output limit of model {model} can’t be negative",
   "err_model_effort_empty": "Model {model} has an empty thinking effort",
   "err_model_default_effort_unlisted": "The default thinking effort of model {model} isn’t one it supports",
   "err_timeout_negative": "Timeout can’t be negative",

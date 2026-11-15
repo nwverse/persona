@@ -198,6 +198,16 @@ describe("providerBody", () => {
     f.models[1] = { ...f.models[1], checked: false };
     expect(providerBody(f, stored).models).toEqual([{ id: "m1", context_window: 1000000, efforts: ["high", "max"], default_effort: "high" }]);
   });
+  it("saves what the gateway reported of a model that the form does not show, and leaves an unchanged PUT alone (#8778)", () => {
+    const reported = { id: "m1", context_window: 200000, efforts: ["low", "max"], all_efforts: ["minimal", "low", "ultra"], max_output_tokens: 32000, image_input: true, tool_calls: false };
+    const plain = { id: "m2", no_effort: true };
+    expect(providerBody(ready({ models: [formModel(reported), formModel(plain)] }), null).models).toEqual([
+      { id: "m1", context_window: 200000, efforts: ["low", "max"], max_output_tokens: 32000, all_efforts: ["minimal", "low", "ultra"], image_input: true, tool_calls: false },
+      { id: "m2", no_effort: true },
+    ]);
+    const view: ProviderView = { ...stored, models: [reported, plain] };
+    expect(providerBody(formFromView(view), view)).not.toHaveProperty("models");
+  });
   it.each(["responses", "chat"] as const)("%s direct API providers send no launcher-only fields", (api) => {
     const b = providerBody(ready({ kind: "api", api, small_model: "s", args: "--x" }), null);
     expect(b).toMatchObject({ kind: "api", api, small_model: "", args: [], auth: "api_key" });
@@ -300,6 +310,26 @@ describe("probes", () => {
     expect(merged[1]).toMatchObject({ context_window: "200", efforts: [], default_effort: "" });
     expect(merged[2]).toMatchObject({ context_window: "300", efforts: [], default_effort: "" });
     expect(merged[3]).toMatchObject({ context_window: "400", efforts: ["high"], default_effort: "high" });
+  });
+  it("gives rows already there what the gateway reports now, keeping theirs when it reports nothing (#8778)", () => {
+    const rows = [formModel({ id: "a", context_window: 100 }), formModel({ id: "c", no_effort: true }), formModel({ id: "d", max_output_tokens: 1 })];
+    const merged = mergeDiscovered(rows, [
+      { id: "a", no_effort: true, max_output_tokens: 8000, image_input: false, tool_calls: true },
+      { id: "c", max_output_tokens: 9000, efforts: ["high"], all_efforts: ["high", "ultra"] },
+      { id: "d" },
+    ]);
+    expect(merged.map((m) => [m.efforts, m.meta])).toEqual([
+      [[], { max_output_tokens: 8000, no_effort: true, image_input: false, tool_calls: true }],
+      [[], { max_output_tokens: 9000, all_efforts: ["high", "ultra"] }],
+      [[], { max_output_tokens: 1 }],
+    ]);
+    const fresh = mergeDiscovered([], [{ id: "d", efforts: ["high", "max"], all_efforts: ["high", "ultra"], max_output_tokens: 4096 }]);
+    expect(fresh[0]).toMatchObject({ efforts: ["high", "max"], meta: { all_efforts: ["high", "ultra"], max_output_tokens: 4096 } });
+  });
+  it("leaves a model the gateway said takes no thinking level without the catalog's levels (#8778)", () => {
+    const rows = [formModel({ id: "glm-5.3", no_effort: true }), formModel({ id: "glm-5.3-b" })];
+    const filled = fillFromCatalog(rows, [{ id: "glm-5.3", name: "GLM-5.3", efforts: ["low", "high"] }, { id: "glm-5.3-b", efforts: ["low", "high"] }]);
+    expect(filled.map((m) => [m.name, m.efforts])).toEqual([["GLM-5.3", []], ["", ["low", "high"]]]);
   });
   it("merges discovered models without losing what was typed", () => {
     const first = mergeDiscovered([], [{ id: "a", context_window: 200000 }, { id: "b" }]);
