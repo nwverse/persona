@@ -40,6 +40,8 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val preferences: Flow<InboxPreferences> get() = flowOf(InboxPreferences())
     /** Whether the hub shows source subscriptions (#2041, `source_subscriptions`): their entry joins the Inbox's other settings. */
     val subscriptionsShown: Flow<Boolean> get() = flowOf(false)
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`): the menu uses that name only then. */
+    val inboxSourcesShown: Flow<Boolean> get() = flowOf(false)
     suspend fun savePreferences(value: InboxPreferences) = Unit
     /** Where Hand to AI last sent each source's items (#2121, [InboxHandOffMemory]): the group's own, latest first. */
     val handOffMemory: Flow<List<HandOffMemoryEntry>> get() = flowOf(emptyList())
@@ -63,6 +65,12 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
      */
     suspend fun actOnSuggestion(request: SuggestionRequest): SuggestionOutcome =
         error("建议尚未接入") // i18n-ignore: developer error for a repository without the hub
+
+    /** The item's ancestry and direct children; null from a hub without the tree route. */
+    suspend fun inboxLine(item: InboxRecord): InboxLineage? = error("Inbox tree unavailable")
+    /** Clears or sets an item's parent, then applies the returned item to the snapshot. Call [inboxLine] again for the new line. */
+    suspend fun setInboxParent(item: InboxRecord, parent: persona.core.contracts.api.InboxParentRef?): Unit =
+        error("Inbox parent route unavailable")
 
     /** "Hand to AI": the item as context with what to do, queued for Persona's main conversation or a running Agent. */
     suspend fun handOff(request: InboxHandOffRequest): SessionKey? = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub

@@ -133,12 +133,13 @@ struct AssistantSwitcherHeader: View {
     }
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     var manager: HubManager
     var nameFont: Font
     var compact = false
     var showsSwitchLabel = false
     var identityStyle: IdentityStyle = .sidebar
+    /// Between the face and the name (the Sidebar layout's head brings the name onto its rows' titles line, #4206).
+    var faceGap = Theme.Space.m
     /// Opens Settings on the page `AppModel.settingsPath` names.
     var openSettings: () -> Void
 
@@ -158,10 +159,9 @@ struct AssistantSwitcherHeader: View {
     var body: some View {
         // Read here, not in the label alone: the spoken name says it too.
         let othersWaiting = model.othersWaiting
-        // At the accessibility sizes the face gives its room to the name (the top bar keeps showing it).
-        let showsFace = !compact && !typeSize.isAccessibilitySize
+        let showsFace = !compact
         Button { listShown.toggle() } label: {
-            HStack(spacing: Theme.Space.m) {
+            HStack(spacing: faceGap) {
                 switch identityStyle {
                 case .sidebar:
                     if showsFace {
@@ -177,7 +177,7 @@ struct AssistantSwitcherHeader: View {
                         }
                         if !compact {
                             Text(AssistantSwitcherText.line(manager, now: .now)).font(Theme.Font.label).foregroundStyle(.secondary)
-                                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                                .lineLimit(1)
                         }
                     }
                 case let .settings(title, defaultID):
@@ -341,9 +341,8 @@ private struct AssistantSwitcherList: View {
                     } chips: {
                         if isDefault { Chip(text: String(localized: "Default [Prompt Composer 844b8c]"), look: .tint(Theme.accent)).opacity(fade) }
                     }
-                    // Whole at the accessibility sizes, where one line keeps only its first words.
                     Text(AssistantSwitcherText.line(m, now: now)).font(Theme.Font.label).foregroundStyle(Color.secondary.opacity(fade))
-                        .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: Theme.Space.s)
                 if current {

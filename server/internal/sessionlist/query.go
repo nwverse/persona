@@ -34,7 +34,14 @@ func (i *Index) Query(options Options) (Page, error) {
 				return Page{}, err
 			}
 		}
-		r = i.queryResult(o)
+		if o.Search != "" {
+			r, err = i.searchResult(o)
+			if err != nil {
+				return Page{}, err
+			}
+		} else {
+			r = i.queryResult(o)
+		}
 		if len(r.events) > o.Limit {
 			id = randomToken()
 			if len(i.snapshots) == maxSnapshots {
@@ -46,6 +53,9 @@ func (i *Index) Query(options Options) (Page, error) {
 	}
 	end := min(offset+o.Limit, len(r.events))
 	p := Page{Sessions: make([]any, 0, end-offset), Remove: make([]string, 0), Revision: r.counts.Revision, Total: r.counts.Total, HasMore: end < len(r.events)}
+	if o.Search != "" {
+		p.SearchHits = make(map[string]SearchHit, end-offset)
+	}
 	for _, e := range r.events[offset:end] {
 		if e.value == nil {
 			p.Remove = append(p.Remove, e.id)
@@ -56,6 +66,14 @@ func (i *Index) Query(options Options) (Page, error) {
 			value = e.value.item.Summary
 		}
 		p.Sessions = append(p.Sessions, clone(value))
+		if o.Search != "" {
+			hit := r.searchHits[e.id]
+			if hit.Evidence != nil {
+				copy := *hit.Evidence
+				hit.Evidence = &copy
+			}
+			p.SearchHits[e.id] = hit
+		}
 	}
 	if p.HasMore {
 		p.NextCursor = i.cursorToken(id, end)
@@ -67,6 +85,9 @@ func (i *Index) Query(options Options) (Page, error) {
 // membership, validating Since if supplied; with Cursor it reports that frozen
 // view's membership and revision rather than a newer revision.
 func (i *Index) Counts(options Options) (Counts, error) {
+	if options.Search != "" {
+		return Counts{}, failure("invalid_query", "search does not support counts")
+	}
 	o, err := validate(options)
 	if err != nil {
 		return Counts{}, err
@@ -92,10 +113,12 @@ func (i *Index) Counts(options Options) (Counts, error) {
 
 func copyCounts(c Counts) Counts {
 	c.Machine = maps.Clone(c.Machine)
+	c.ActiveAgentsByMachine = maps.Clone(c.ActiveAgentsByMachine)
 	c.Project = maps.Clone(c.Project)
 	c.Group = maps.Clone(c.Group)
 	c.State = maps.Clone(c.State)
 	c.PaneSource = maps.Clone(c.PaneSource)
+	c.Todo = maps.Clone(c.Todo)
 	return c
 }
 
@@ -104,6 +127,7 @@ func (f filters) matches(r *record) bool {
 		return false
 	}
 	v := r.item
+	todo := v.todo()
 	return (f.ID == "" || f.ID == v.ID) && (!f.NoPrivate || !v.Private) &&
 		(!f.Roots || v.root() == "") && (f.Under == "" || f.Under == v.root()) &&
 		(f.State == "" || f.State == stateOf(v, f.Roots)) &&
@@ -114,8 +138,11 @@ func (f filters) matches(r *record) bool {
 		(f.Group == "" || f.Group == v.Group) &&
 		(f.Source == "" || f.Source == v.Source) &&
 		(f.PaneSource == "" || f.PaneSource == v.PaneSource) &&
+		(f.ExcludePaneSource == "" || f.ExcludePaneSource != v.PaneSource) &&
+		(f.Waiting == "" || (f.Waiting == "1") == waitingOf(v, f.Roots)) &&
 		(f.Manager == "" || f.Manager == r.owner) &&
 		(f.Provider == "" || f.Provider == v.Provider) &&
+		(f.Todo == "" || f.Todo == todo || f.Todo == TodoNone && todo == "") &&
 		(f.Q == "" || strings.Contains(r.search, f.Q))
 }
 
@@ -154,8 +181,12 @@ func (i *Index) remember(key cacheKey, r *result) *result {
 	return r
 }
 
-func emptyCounts(revision string) Counts {
-	return Counts{Machine: make(map[string]int), Project: make(map[string]int), Group: make(map[string]int), State: make(map[string]int), PaneSource: make(map[string]int), Revision: revision}
+func emptyCounts(revision string, roots bool) Counts {
+	counts := Counts{Machine: make(map[string]int), Project: make(map[string]int), Group: make(map[string]int), State: make(map[string]int), PaneSource: make(map[string]int), Todo: make(map[string]int), Revision: revision}
+	if roots {
+		counts.ActiveAgentsByMachine = make(map[string]int)
+	}
+	return counts
 }
 
 // stateOf is the state v is filtered and counted by: its folded state for Options.Roots (Fold.State, its own state
@@ -167,22 +198,35 @@ func stateOf(v Item, roots bool) string {
 	return v.State
 }
 
+// waitingOf is whether v only waits in the background, as it is filtered and counted: by its folded state for
+// Options.Roots (Fold.BackgroundWaiting), its own when it folds none.
+func waitingOf(v Item, roots bool) bool {
+	return v.BackgroundWaiting && (!roots || v.Fold == nil || v.Fold.BackgroundWaiting)
+}
+
 func addCount(c *Counts, v Item, roots bool, delta int) {
 	c.Total += delta
+	state := stateOf(v, roots)
+	if roots && !v.Assistant && state != "offline" {
+		c.ActiveAgentsByMachine[v.Machine] += delta
+		if c.ActiveAgentsByMachine[v.Machine] == 0 {
+			delete(c.ActiveAgentsByMachine, v.Machine)
+		}
+	}
 	if v.PaneSource != "" {
 		c.PaneSource[v.PaneSource] += delta
 		if c.PaneSource[v.PaneSource] == 0 {
 			delete(c.PaneSource, v.PaneSource)
 		}
 	}
-	if v.BackgroundWaiting && (!roots || v.Fold == nil || v.Fold.BackgroundWaiting) {
+	if waitingOf(v, roots) {
 		c.BackgroundWaiting += delta
 	}
 	for _, pair := range []struct {
 		m   map[string]int
 		key string
 	}{
-		{c.Machine, v.Machine}, {c.Project, v.Project}, {c.Group, v.Group}, {c.State, stateOf(v, roots)},
+		{c.Machine, v.Machine}, {c.Project, v.Project}, {c.Group, v.Group}, {c.State, state}, {c.Todo, v.todo()},
 	} {
 		pair.m[pair.key] += delta
 		if pair.m[pair.key] == 0 {
@@ -194,7 +238,7 @@ func addCount(c *Counts, v Item, roots bool, delta int) {
 // exactResult deliberately bypasses ordered views and their caches. A miss,
 // changed revision or new filter still touches only the selected map entry.
 func (i *Index) exactResult(f filters) *result {
-	r := &result{counts: emptyCounts(i.revisionToken()), ordered: true}
+	r := &result{counts: emptyCounts(i.revisionToken(), f.Roots), ordered: true}
 	if item := i.items[f.ID]; f.matches(item) {
 		addCount(&r.counts, item.item, f.Roots, 1)
 		r.events = []event{{id: f.ID, updated: item.item.UpdatedAt, value: item}}
@@ -217,7 +261,7 @@ func (i *Index) countsResult(f filters) *result {
 	if f == (filters{}) {
 		counts = copyCounts(i.counts)
 	} else {
-		counts = emptyCounts(i.revisionToken())
+		counts = emptyCounts(i.revisionToken(), f.Roots)
 		for _, item := range i.items {
 			if f.matches(item) {
 				addCount(&counts, item.item, f.Roots, 1)

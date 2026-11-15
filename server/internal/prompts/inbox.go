@@ -33,6 +33,9 @@ type InboxGroup struct {
 	Rules           string // the user's own rules, trimmed: the batch's source's (InboxThing.Rules), else inbox.rules
 	MaxCalls        int    // tool calls the batch may make
 	NewMax          int    // new events one batch may open
+	OpenMax         int    // open events the events tool may list
+	DoneMax         int    // handled events the events tool may list
+	DoneDays        int    // days within which handled events are listed
 	// Language is the titles' and summaries' language by its own name ("English", "Japanese" in Japanese); "" leaves the title's
 	// unsaid and the summary in Chinese, as before i18n.
 	Language string
@@ -40,9 +43,35 @@ type InboxGroup struct {
 
 func RenderInboxGroup(g InboxGroup) string { return render("inbox/group", g) }
 
+// InboxSettled is the system prompt that says whether an open "Needs you" event is over, given what came after it in
+// its conversation (inbox/settled; assistant/inbox_settle.go).
+type InboxSettled struct {
+	Owner string // "" is the Chinese "you"
+}
+
+func RenderInboxSettled(s InboxSettled) string { return render("inbox/settled", s) }
+
+// InboxSettledInput is the event and the messages after it (inbox/settled_input), oldest first.
+type InboxSettledInput struct {
+	Title, Summary, Context string
+	Later                   []InboxSettledLine
+}
+
+// InboxSettledLine is one message after the event: At as "01-02 15:04" ("" unknown), Mine the owner's own; ReplyTo the
+// message it quotes and Thread the topic it is in (ids as the event's context names its messages), "" none.
+type InboxSettledLine struct {
+	At, Sender, Text, ReplyTo, Thread string
+	Mine                              bool
+}
+
+func RenderInboxSettledInput(in InboxSettledInput) string { return render("inbox/settled_input", in) }
+
 // InboxGroupInput is one batch as the model reads it, with the tool calls made so far (inbox/group_input).
 type InboxGroupInput struct {
-	Thread  string
+	Thread string
+	// Kind is who the other side of a direct chat is, in the connector's words (its kind_descriptions: a person, a bot
+	// or an app); "" for a group, whose messages carry their own mention markers.
+	Kind    string
 	New     []string // the new messages' ids
 	Context string   // their text, as the connector wrote it
 	Events  string   // the events tool's answer without a query (JSON)
@@ -168,13 +197,17 @@ func RenderInboxAgent(a InboxAgent) string { return render("inbox/agent", a) }
 
 // InboxHandlingNote is what the program tells an event's processing conversation (inbox/handling/<name>): new
 // messages (Context), the user's confirmation, rejection or words (Text, Edited), the Agent it started (Machine,
-// Session), or that the event is closed (Text says how: self_replied, replied, dismissed, read, user).
+// Session), a due follow-up check (Who, Next and Checks), or that the event is closed (Text says how: self_replied,
+// replied, dismissed, read, user).
 type InboxHandlingNote struct {
 	Owner            string
 	Text             string
 	Edited           bool
 	Failed           bool
 	Context          string
+	Who              string // who or what a due check waits on; "" means the other side's reply
+	Next             string // the next step to consider on a due check
+	Checks           int    // the consecutive due check's number, starting at 1
 	Machine, Session string
 	Handoff          bool // the note goes to a conversation the event was handed to (wrapped by inbox/handoff_note)
 }
@@ -183,12 +216,15 @@ type InboxHandlingNote struct {
 const (
 	NoteNewMessages  = "inbox/handling/new_messages"
 	NoteSent         = "inbox/handling/sent"
+	NoteCheck        = "inbox/handling/check"
 	NoteAgentStarted = "inbox/handling/agent_started"
 	NoteAgentStopped = "inbox/handling/agent_stopped"
 	NoteHandback     = "inbox/handling/handback"
 	NoteRejected     = "inbox/handling/rejected"
 	NoteInstructed   = "inbox/handling/instructed"
 	NoteClosed       = "inbox/handling/closed"
+	NoteSelfReplied  = "inbox/handling/self_replied"
+	NoteSelfRead     = "inbox/handling/self_read"
 )
 
 func RenderInboxHandlingNote(name string, n InboxHandlingNote) string {
@@ -248,6 +284,24 @@ type InboxFolderItem struct {
 }
 
 func RenderInboxFoldersInput(in InboxFoldersInput) string { return render("inbox/folders_input", in) }
+
+// InboxMergeTitle is the system prompt that writes one title for rows the user merged (inbox/merge_title, #7229).
+type InboxMergeTitle struct {
+	Owner string // "" is the Chinese "you"
+	// Language is the title's language by its own name; "" leaves it to the language of the titles.
+	Language string
+}
+
+func RenderInboxMergeTitle(m InboxMergeTitle) string { return render("inbox/merge_title", m) }
+
+// InboxMergeTitleInput is the rows that were merged, newest first (inbox/merge_title_input).
+type InboxMergeTitleInput struct {
+	Items []InboxFolderItem
+}
+
+func RenderInboxMergeTitleInput(in InboxMergeTitleInput) string {
+	return render("inbox/merge_title_input", in)
+}
 
 // SubscriptionKind is a source subscription's kind of Inbox item (#2039, inbox/kinds/subscription): what its items'
 // type line says (InboxItem.Described, through the round's kinds).
