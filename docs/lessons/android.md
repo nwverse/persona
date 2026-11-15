@@ -9,9 +9,20 @@ An intermittent test is not verified by repeatedly running only its own class. I
 `rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
 and the read-only `selectedTexts` / `getSelectableTexts()` are all a select-in-place needs. Nothing starts from the word under a
 point (`select` takes a range of the container's text, and the Markdown renderer exposes no text layouts to find an offset by), so
-Select takes the whole message and a long press on a word picks that word. The words register as the container is laid out, so wait
-until `getSelectableTexts()` lists them (a frame or two) before `selectAll()`; a message with no words never lists any, and must not be
-left selecting.
+Select takes the whole message and a long press on a word picks that word. The words register as the container is laid out, and a
+later change of those words releases a selection that was already made (`updateTextLayout` calls `notifySelectableChange`, and
+`onSelectableChangeCallback` calls `onRelease`), including after composition has seen the selection. A position change does not
+(`notifyPositionChange`). Wait until `getSelectableTexts()` lists the same non-blank words for a couple of frames before `selectAll()`. A list that
+changes after that take is not done: wait for it to hold again and take the whole of it, even when the earlier selection was
+not released (a blank or partial first node does not count as the message). Keep doing that until the frame bound. A finger
+on the message is the user (a tap, a long press) and is not taken back. The toolbar's Copy is the user as well:
+Foundation 1.12.1 `SelectionManager.toolbarCopy` is `copy()` then `onRelease()`, and the touch-mode context-menu Copy
+does the same (`copy` then `onRelease` when `isInTouchMode`, which starts true). An empty selection whose words did not
+change is that release. Do not `selectAll` again, or the settle frames never see an empty selection and the message stays
+selecting (#8728). When the bound runs out with nothing really selected,
+end the selection. Stopping at the first stable reading leaves a later change: the message stays selecting, and Copy does
+nothing (#8728). A message with
+no words never lists any, and must not be left selecting.
 
 - A `SelectionContainer` inside another takes its text out of the outer one: a code block that opens its own was missing from a
   select-all. A block joins by checking `LocalSelectionAbove` (`SelectableOnItsOwn`); buttons, title bars and cards are wrapped in
