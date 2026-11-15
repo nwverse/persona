@@ -108,7 +108,8 @@ and the engine's note under Settings › Machines asks to update it.
     - A schedule's run is a notice: `定时任务到点：` and the schedule's name, or its prompt's first line when it has none.
     - From a transcript, a notice that started a turn is a wake, as a background task's notice is (its turn pushes "done" only as the end of
       held work), and a message absorbed mid-turn is queued. The timeline does not say which, so the bridge marks neither.
-    - Text around envelopes, and an envelope that does not parse, stays the user's words, as Paseo's own parser leaves it.
+    - A bare envelope of another kind is a notice of its first line: Paseo shows any bare envelope as its own, and quotes one a person sends as a
+      `user-message`. Text around envelopes, extra space, and an envelope Paseo's own parser would not take stay the user's words, as Paseo leaves them.
 - **Agents running Codex** (#4495): the row names the Codex thread the Agent runs (`codex_thread`). Node finds that thread's rollout on its own as well; named, the chat is
   listed once, as the Paseo Agent, not a second time as a read-only Codex history row, and the thread's own Codex sub-Agents hang off the Paseo Agent's row.
   When another program takes the thread up while the Paseo Agent is not running (the Codex App runs it, a shared app-server has it loaded), that program's row is listed too,

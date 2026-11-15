@@ -102,7 +102,7 @@ func TestPaseoNoticeWakes(t *testing.T) {
 }
 
 // What Paseo delivers together while the agent works comes in one queued input: a message, a cancel Paseo sends as
-// errored, a permission with its request JSON. Each is its own item (numbers that no block has), the message queued,
+// errored, a permission with its request JSON. Each is its own item (numbers no other item of a line has), the message queued,
 // the notices neither queued nor wakes; the permission's note says what it asks for, never the JSON.
 func TestPaseoQueuedBatch(t *testing.T) {
 	request := map[string]any{"agentId": paseoChildID, "serverId": "srv_test", "requestId": "permission-1", "request": map[string]any{
@@ -124,7 +124,7 @@ func TestPaseoQueuedBatch(t *testing.T) {
 		t.Fatalf("%d items: %+v", len(items), items)
 	}
 	msg, cancel, ask := items[0], items[1], items[2]
-	if msg.ID != "q1#0" || cancel.ID != "q1#1001" || ask.ID != "q1#1002" {
+	if msg.ID != "q1#0" || cancel.ID != "q1#1000001" || ask.ID != "q1#1000002" {
 		t.Fatalf("ids %s %s %s", msg.ID, cancel.ID, ask.ID)
 	}
 	if msg.From != FromSession || msg.Text != "Starting on ticket 44." || !msg.Queued || msg.Wake {
@@ -151,8 +151,8 @@ func TestPaseoQueuedBatch(t *testing.T) {
 	}
 }
 
-// Bare envelopes: a schedule's run, and a child's notice from a Paseo before the versioned envelope (its body not
-// escaped). Both woke the agent.
+// Bare envelopes: a schedule's run, a child's notice from a Paseo before the versioned envelope (its body not
+// escaped), and one of a kind not known here. Each woke the agent.
 func TestPaseoBareEnvelopes(t *testing.T) {
 	codex, _ := json.MarshalIndent(map[string]any{"agentId": paseoChildID, "requestId": "permission-2",
 		"request": map[string]any{"id": "permission-2", "provider": "codex", "name": "CodexBash", "kind": "tool", "title": "Run command: npm test"}}, "", "  ")
@@ -166,6 +166,8 @@ func TestPaseoBareEnvelopes(t *testing.T) {
 		{"Agent " + paseoChildID + " (" + paseoChildID + ") errored.", "子 Agent 失败", "failed", "", ""},
 		{`Schedule "nightly check" fired (id=s1, run=r1).` + "\nCheck the queue.", PaseoScheduleNotice + "：nightly check", "", "", ""},
 		{"Schedule fired (id=s1, run=r2).\nCheck the queue.\nThen report.", PaseoScheduleNotice + "：Check the queue.", "", "", ""},
+		// A kind not known here: Paseo shows any bare envelope as its own, so it is not the user's either.
+		{"Something Paseo has not sent yet.\nMore of it.", "Something Paseo has not sent yet.", "", "", ""},
 	}
 	for i, c := range cases {
 		var m Meta
@@ -175,7 +177,7 @@ func TestPaseoBareEnvelopes(t *testing.T) {
 		}
 		if c.status == "" {
 			if it.Task != nil {
-				t.Fatalf("%d: a schedule's run is a plain notice: %+v", i, it.Task)
+				t.Fatalf("%d: a plain notice: %+v", i, it.Task)
 			}
 			continue
 		}
@@ -185,7 +187,8 @@ func TestPaseoBareEnvelopes(t *testing.T) {
 	}
 }
 
-// Anything else that holds an envelope stays the user's words as written, as Paseo's own parser leaves it.
+// Anything else that holds an envelope stays the user's words as written, as Paseo's own parser leaves it: the
+// messages around one, a version, kind, event or escape it does not know, extra space, and so on.
 func TestPaseoNotEnvelopesStayText(t *testing.T) {
 	msg := paseoEnv(`kind="agent-message" source-agent-id="a1" message-id="m1"`, "hello")
 	for _, s := range []string{
@@ -200,8 +203,14 @@ func TestPaseoNotEnvelopesStayText(t *testing.T) {
 		strings.Replace(msg, "hello", "fish & chips", 1),
 		paseoEnv(`kind="agent-notification" source-agent-id="a1" message-id="n1" event="paused"`, "Agent a1 (x) paused."),
 		paseoEnv(`kind="user-message" source-agent-id="a1" message-id="u1"`, "hi"),
-		"<paseo-system>\nSomething Paseo has not sent yet.\n</paseo-system>",
 		"<paseo-system>\n</paseo-system>",
+		// Paseo takes an envelope only as the whole input, with line breaks between several, and no empty title or server.
+		msg + "\n",
+		" " + msg,
+		"<paseo-system>\nSchedule fired (id=s1, run=r1).\nDeploy\n</paseo-system>\n",
+		msg + msg,
+		strings.Replace(msg, ` message-id="m1"`, ` message-id="m1" source-agent-title=""`, 1),
+		paseoEnv(`kind="agent-notification" source-agent-id="a1" message-id="n1" source-server-id="" event="finished"`, "Agent a1 (x) finished."),
 		msg + "\n\n<paseo-system>\nAgent a1 (x) finished.\n</paseo-system>",
 	} {
 		it := only(t, ParseLine(1, paseoUserLine("u1", s), &Meta{}))
@@ -243,7 +252,15 @@ func TestPaseoCodexRollout(t *testing.T) {
 	if steered.From != "Ticket 02" || steered.Text != "One more thing." || steered.ID != "u2#0" {
 		t.Fatalf("message: %+v", steered)
 	}
-	if later.Task == nil || later.Wake || later.ID != "u2#1001" {
+	if later.Task == nil || later.Wake || later.ID != "u2#1000001" {
 		t.Fatalf("a notice steered in mid-turn: %+v", later)
+	}
+	// A message with a picture: the picture's path after its words, as for any message.
+	b, _ := json.Marshal(map[string]any{"timestamp": "2026-11-14T10:00:00Z", "type": "event_msg", "payload": map[string]any{
+		"type": "item_completed", "item": map[string]any{"type": "UserMessage", "id": "u3", "content": []map[string]any{
+			{"type": "text", "text": message}, {"type": "local_image", "path": "/work/shot.png"}}}}})
+	pic := only(t, ParseLine(len(lines)+1, b, &m))
+	if pic.From != "Ticket 02" || pic.Text != "One more thing.\n\n<attached_images>\n/work/shot.png\n</attached_images>" {
+		t.Fatalf("with a picture: %+v", pic)
 	}
 }

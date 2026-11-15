@@ -723,11 +723,12 @@ function tagged(s, tag) {
 
 /**
  * Another agent's message, a child's notice or a schedule's run, which Paseo hands an agent in a <paseo-system>
- * envelope and its timeline projects into a tool call (`agentMessage`; a bare envelope's into `heartbeat`). Drawn as the
- * node draws the same input read from a transcript: a message from another session, a subagent's task note, a notice;
- * null for any other call. The timeline does not say whether one started a run, so none is a wake.
+ * envelope and its timeline projects into a tool call (`agentMessage`; a bare envelope's into `heartbeat`, whatever it
+ * says). Its items as the node draws the same input read from a transcript: a message from another session, a
+ * subagent's task note, a notice, none for an empty message; null for any other call. The timeline does not say whether
+ * one started a run, so none is a wake.
  */
-export function agentMessageItem(it) {
+export function agentMessageItems(it) {
   const am = it?.agentMessage
   if (am && typeof am === 'object') {
     const text = typeof am.text === 'string' ? am.text : ''
@@ -735,19 +736,22 @@ export function agentMessageItem(it) {
     if (title === String(am.sender?.id ?? '').trim()) title = '' // Paseo names an untitled agent by its id
     if (am.event === 'message') {
       const words = text.trim()
-      return words ? { role: 'user', kind: 'text', text: words, from: title || FROM_SESSION } : null
+      return words ? [{ role: 'user', kind: 'text', text: words, from: title || FROM_SESSION }] : []
     }
-    return ['finished', 'errored', 'permission-required', 'closed'].includes(am.event) ? childNotice(am.event, title, text) : null
+    return ['finished', 'errored', 'permission-required', 'closed'].includes(am.event) ? [childNotice(am.event, title, text)] : null
   }
   if (it?.name !== 'heartbeat' || !String(it.callId ?? '').startsWith('paseo-system:')) return null
   const body = String(it.detail?.text ?? '')
   const [first, ...rest] = body.split('\n')
   const status = PASEO_STATUS.exec(first)
-  if (status) return childNotice(PASEO_EVENTS[status[3]], oneLine(status[2]) === status[1] ? '' : oneLine(status[2]), body)
+  if (status) return [childNotice(PASEO_EVENTS[status[3]], oneLine(status[2]) === status[1] ? '' : oneLine(status[2]), body)]
   const schedule = PASEO_SCHEDULE.exec(first)
-  if (!schedule) return null
+  if (!schedule) { // Paseo's words of another kind: a notice of its first line
+    const line = snippetLine(body, 200)
+    return line ? [{ role: 'system', kind: 'notice', text: line }] : []
+  }
   const what = snippetLine(schedule[1], 80) || snippetLine(rest.join('\n'), 80)
-  return { role: 'system', kind: 'notice', text: what ? `${SCHEDULE_NOTICE}：${what}` : SCHEDULE_NOTICE }
+  return [{ role: 'system', kind: 'notice', text: what ? `${SCHEDULE_NOTICE}：${what}` : SCHEDULE_NOTICE }]
 }
 
 /** The first line of s, at most n characters and an ellipsis (the node's snippetLine). */
@@ -825,9 +829,9 @@ export function entryItems(entry, echoes) {
       if (it.text) add(s, { role: 'assistant', kind: 'thinking', text: it.text })
       break
     case 'tool_call': {
-      const said = agentMessageItem(it)
+      const said = agentMessageItems(it)
       if (said) {
-        add(s, said)
+        for (const x of said) add(s, x)
         break
       }
       const call = toolCall(it.name, it.detail)

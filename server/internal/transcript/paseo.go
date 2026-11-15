@@ -24,14 +24,16 @@ import (
 //
 // Read as typed by the user, all of it was the user's bubble, the model's instructions and a permission's JSON
 // included, and everything that tells the user's words from others took it for theirs. A message is a peer's
-// (Item.From), a notice a subagent's task note, a schedule's run a notice. Text around envelopes, and an envelope that
-// does not parse, stay the user's words, as Paseo's own parseAgentMessages leaves them.
+// (Item.From), a notice a subagent's task note, a schedule's run a notice, and so is a bare envelope of another kind
+// (Paseo shows any bare envelope as its own; a person's is quoted as a user-message). Text around envelopes, and an
+// envelope Paseo's own parseAgentMessages would not take, stay the user's words, as Paseo leaves them.
 const (
 	paseoOpen  = "<paseo-system"
 	paseoBare  = "<paseo-system>\n"
 	paseoClose = "\n</paseo-system>"
-	// paseoBatch numbers the items of a batch's later envelopes past any block's number (paseoInput).
-	paseoBatch = 1000
+	// paseoBatch numbers the items of a batch's later envelopes past any other item's of a line: a block's index,
+	// a tool result's pictures (paseoInput).
+	paseoBatch = 1_000_000
 )
 
 // PaseoPermissionNotice heads the notice of a child agent waiting for a permission, its title after " · ";
@@ -59,19 +61,22 @@ var (
 var paseoEvents = map[string]string{"finished": "finished", "errored": "errored", "needs permission": "permission-required",
 	"was closed": "closed", "is unavailable": "closed", "was canceled": "errored"}
 
-// paseoEnvelope is one envelope: its kind (a bare one's is agent-notification or paseoScheduled), the agent it came
-// from, that agent's title, the notice's event and the body, unescaped.
+// paseoEnvelope is one envelope: its kind (a bare one's is agent-notification, paseoScheduled or paseoOther), the
+// agent it came from, that agent's title, the notice's event and the body, unescaped.
 type paseoEnvelope struct {
 	kind, agentID, title, event, body string
 }
 
-// paseoScheduled is the kind of a schedule's run.
-const paseoScheduled = "schedule"
+// paseoScheduled is the kind of a schedule's run, paseoOther of a bare envelope of a kind not known here.
+const (
+	paseoScheduled = "schedule"
+	paseoOther     = "other"
+)
 
 // paseoInput is s read as Paseo's envelopes when it is nothing else, an item each; ok false for any other text. Item
 // numbers come from part (a block's index, 0 for a whole line): the first envelope's is part, the others' past any
-// block's. The caller marks the notices of input that started a turn as wakes, and the messages of input absorbed
-// mid-turn as queued.
+// other item's of the line (paseoBatch). The caller marks the notices of input that started a turn as wakes, and the
+// messages of input absorbed mid-turn as queued.
 func paseoInput(mk func(int, string, string) proto.Item, part int, s string) ([]proto.Item, bool) {
 	envelopes := paseoEnvelopes(s)
 	if envelopes == nil {
@@ -106,15 +111,21 @@ func paseoInput(mk func(int, string, string) proto.Item, part int, s string) ([]
 			it := mk(n, "system", proto.KindNotice)
 			it.Text = paseoScheduleText(e.body)
 			out = append(out, it)
+		case paseoOther:
+			if line := snippetLine(e.body, 200); line != "" {
+				it := mk(n, "system", proto.KindNotice)
+				it.Text = line
+				out = append(out, it)
+			}
 		}
 	}
 	return out, true
 }
 
-// paseoEnvelopes is s split into the envelopes it is made of, nil when it holds anything else. A versioned body is
+// paseoEnvelopes is s split into the envelopes it is made of, nil when it holds anything else: nothing around them,
+// line breaks between them, as Paseo's parseAgentMessages and isSystemInjectedEnvelope take them. A versioned body is
 // escaped, so the first closing tag ends it; a bare one is not, so it is the whole of s.
 func paseoEnvelopes(s string) []paseoEnvelope {
-	s = strings.TrimSpace(s)
 	if !strings.HasPrefix(s, paseoOpen) {
 		return nil
 	}
@@ -122,10 +133,7 @@ func paseoEnvelopes(s string) []paseoEnvelope {
 		if len(s) < len(paseoBare)+len(paseoClose) || !strings.HasSuffix(s, paseoClose) {
 			return nil
 		}
-		if e, ok := paseoBareEnvelope(s[len(paseoBare) : len(s)-len(paseoClose)]); ok {
-			return []paseoEnvelope{e}
-		}
-		return nil
+		return []paseoEnvelope{paseoBareEnvelope(s[len(paseoBare) : len(s)-len(paseoClose)])}
 	}
 	var out []paseoEnvelope
 	for s != "" {
@@ -138,8 +146,11 @@ func paseoEnvelopes(s string) []paseoEnvelope {
 			return nil
 		}
 		out = append(out, e)
-		s = strings.TrimLeft(s[end+len(paseoClose):], "\n")
-		if s != "" && !strings.HasPrefix(s, paseoOpen+" ") {
+		rest := s[end+len(paseoClose):]
+		if rest == "" {
+			return out
+		}
+		if s = strings.TrimLeft(rest, "\n"); s == rest || !strings.HasPrefix(s, paseoOpen+" ") {
 			return nil
 		}
 	}
@@ -167,30 +178,37 @@ func paseoVersioned(s string) (paseoEnvelope, bool) {
 	}
 	e := paseoEnvelope{kind: attrs["kind"], agentID: attrs["source-agent-id"], title: attrs["source-agent-title"],
 		event: attrs["event"], body: body}
-	switch e.kind {
-	case "user-message":
+	if e.kind == "user-message" {
 		_, agent := attrs["source-agent-id"]
 		_, event := attrs["event"]
 		return e, !agent && !event
+	}
+	// An agent's: its id, and a title or server only when it has one (Paseo's schema takes no empty value).
+	for _, k := range []string{"source-agent-title", "source-server-id"} {
+		if v, ok := attrs[k]; ok && v == "" {
+			return paseoEnvelope{}, false
+		}
+	}
+	switch e.kind {
 	case "agent-message":
 		return e, e.agentID != ""
 	case "agent-notification":
-		_, known := map[string]bool{"finished": true, "errored": true, "permission-required": true, "closed": true}[e.event]
+		known := map[string]bool{"finished": true, "errored": true, "permission-required": true, "closed": true}[e.event]
 		return e, e.agentID != "" && known
 	}
 	return paseoEnvelope{}, false
 }
 
-// paseoBareEnvelope reads a bare envelope's body: a child's notice or a schedule's run, false for anything else.
-func paseoBareEnvelope(body string) (paseoEnvelope, bool) {
+// paseoBareEnvelope reads a bare envelope's body: a child's notice, a schedule's run, or Paseo's words of another kind.
+func paseoBareEnvelope(body string) paseoEnvelope {
 	first, _, _ := strings.Cut(body, "\n")
 	if m := paseoStatusRe.FindStringSubmatch(first); m != nil {
-		return paseoEnvelope{kind: "agent-notification", agentID: m[1], title: m[2], event: paseoEvents[m[3]], body: body}, true
+		return paseoEnvelope{kind: "agent-notification", agentID: m[1], title: m[2], event: paseoEvents[m[3]], body: body}
 	}
 	if paseoScheduleRe.MatchString(first) {
-		return paseoEnvelope{kind: paseoScheduled, body: body}, true
+		return paseoEnvelope{kind: paseoScheduled, body: body}
 	}
-	return paseoEnvelope{}, false
+	return paseoEnvelope{kind: paseoOther, body: body}
 }
 
 // paseoEntities undoes Paseo's escapeXml.

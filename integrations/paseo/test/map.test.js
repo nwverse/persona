@@ -426,8 +426,9 @@ test("what another agent hands this one is a message from another session, a sub
     entry(5, said('paseo-agent-message:n3', 'errored', `Agent ${child} (${child}) was canceled.`, { id: child, title: child })),
     entry(6, bare('Schedule "nightly review" fired (id=s1, run=r1).\nReview the day.')),
     entry(7, bare(`Agent ${child} (Ticket 02) errored.\n\n<agent-response>\nNo database.\n</agent-response>`)),
-    entry(8, bare('Something Paseo has not sent yet.')),
-  ], { maxSeq: 8 }).items
+    entry(8, bare('Something Paseo has not sent yet.\nMore of it.')),
+    entry(9, said('paseo-agent-message:m4', 'message', '  ')),
+  ], { maxSeq: 9 }).items
   assert.deepEqual(items.map((i) => [i.id, i.role, i.kind, i.text ?? i.tool_name, i.from, i.task]), [
     ['1#0', 'user', 'text', 'Ticket 01 is done, please review.', 'Ticket 01', undefined],
     ['2#0', 'user', 'text', 'Found it.', '另一个会话', undefined],
@@ -436,9 +437,8 @@ test("what another agent hands this one is a message from another session, a sub
     ['5#0', 'system', 'notice', '子 Agent 已停止', undefined, { kind: 'agent', status: 'stopped', title: '' }],
     ['6#0', 'system', 'notice', '定时任务到点：nightly review', undefined, undefined],
     ['7#0', 'system', 'notice', '子 Agent 失败 · Ticket 02', undefined, { kind: 'agent', status: 'failed', title: 'Ticket 02', detail: 'No database.' }],
-    ['8#0', 'assistant', 'tool_use', 'heartbeat', undefined, undefined], // a bare envelope Paseo has not sent yet keeps its card
-    ['8#1', 'user', 'tool_result', 'Something Paseo has not sent yet.', undefined, undefined],
-  ])
+    ['8#0', 'system', 'notice', 'Something Paseo has not sent yet.', undefined, undefined], // a bare envelope of another kind
+  ], 'an empty message shows nothing')
   assert.ok(items.every((i) => !i.wake && !i.queued), 'the timeline does not say whether one started a run')
 })
 
