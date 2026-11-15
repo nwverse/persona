@@ -88,7 +88,7 @@ sends the empty boundary to the node while a stream entry exists, so the Hub cle
 viewer subscribes. Call it whenever the generated segment ends, including while the session is unwatched.
 
 What the SDK handles (no runtime needs to write it again): connect / reconnect / `runtime.hello` (with this process's `instance`: if another process uses the same runtime id, node refuses the connection; the SDK logs one line and retries every 30 seconds, without taking over), list pushes, watch backfill and continuity (marking honestly when `from_seq` / `to_seq` don't line up,
-so the phone fills the gap), byte-by-byte streaming, the session turning "Needs you" while asking the phone, asking again with the same id for the same interaction when node restarts (`interactionId(...)`, waits up to 2 minutes),
+so the phone fills the gap), byte-by-byte streaming, the session turning "Needs you" while asking the phone, asking again with the same id for the same interaction when node restarts or its hub link drops (`interactionId(...)`; it waits up to 2 minutes from when the node or hub went away, however long the card was up before, #8128; a card under an id the runtime gives is resumable on the hub, so the phone keeps the card meanwhile and an answer given then is not lost),
 withdrawing retracted interactions from the phone, handing the same `client_msg_id` to the driver only once (retries get the first result; failed ones can be resent), the "who answers first" policy (when node says there's no hub, always the local UI first, `rt.hubConnected`), and reconnecting quickly after a drop (one attempt per second while the socket file exists).
 
 Things shared across runtimes but not part of the protocol are in the SDK too, for runtimes to use directly:
