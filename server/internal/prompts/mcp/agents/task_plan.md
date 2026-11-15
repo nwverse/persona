@@ -62,11 +62,11 @@ Workspace policy: set workspace="new" for an isolated checkout, {"new":{"branch"
           },
           "launcher": {
             "type": "string",
-            "description": "launcher name, one that machine has (a name it lacks is refused, listing the ones it has); empty: the default, or one the machine has when it lacks the default (claude first; the why says so)"
+            "description": "launcher name, one that machine has (a name it lacks is refused, listing the ones it has): a Claude Code launcher, or pi, cursor or agy to start that agent in herdr; empty: the default, or one the machine has when it lacks the default (claude first; the why says so)"
           },
           "model": {
             "type": "string",
-            "description": "model id (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
+            "description": "model id the agent takes (an alias such as opus, a gateway's own id, or a provider/model such as ag-chat/cursor/grok-4.7 for pi; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
           },
           "permission": {
             "type": "string",
@@ -77,7 +77,7 @@ Workspace policy: set workspace="new" for an isolated checkout, {"new":{"branch"
               "auto",
               "bypassPermissions"
             ],
-            "description": "permission mode; empty: the default for writable tasks. Set an explicit writable mode (for example bypassPermissions) with readonly=false when a replacement Agent must implement fixes on the same todo. Claude-family launchers use bypassPermissions; readonly=true adds a read-only prompt constraint. Codex readonly=true keeps plan/read-only sandbox"
+            "description": "permission mode; empty: the default for writable tasks. Set an explicit writable mode (for example bypassPermissions) with readonly=false when a replacement Agent must implement fixes on the same todo. Claude-family launchers use bypassPermissions; readonly=true adds a read-only prompt constraint; Codex keeps plan; traex and omp take none"
           },
           "role": {
             "type": "string",
