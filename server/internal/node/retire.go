@@ -165,9 +165,13 @@ func (n *Node) quitAgent(ctx context.Context, id, pane string) (bool, error) {
 // for that pane's host; the ordinary quitAgent keeps its tolerant multi-round refresh behavior.
 func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Host, requireFresh bool) (bool, error) {
 	if requireFresh {
-		// Do not let a successful discovery followed by an outage turn the first Ctrl+C pair into an unverified interrupt.
+		// Do not let a successful discovery followed by an outage turn the first Ctrl+C pair into an unverified interrupt,
+		// and do not send it to a shell after the agent has already left.
 		if err := n.refreshHosts(ctx, only); err != nil {
 			return false, err
+		}
+		if a, ok := n.agent(id); !ok || a.PaneID != pane {
+			return true, nil
 		}
 	}
 	_ = n.sendKeys(ctx, pane, "ctrl+c")
