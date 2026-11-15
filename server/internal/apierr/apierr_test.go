@@ -253,6 +253,8 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"send now unsupported", &rpc.Error{Code: "send_now_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unsupported"},
 		{"send now unrecognized", &rpc.Error{Code: "send_now_unrecognized", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unrecognized"},
 		{"untypable directory", &rpc.Error{Code: "directory_untypable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.directory_untypable"},
+		// a read of an agent its engine let go, which only an open chat starts (Paseo, #8132)
+		{"not loaded", &rpc.Error{Code: proto.CodeNotLoaded, Message: "the runtime's own words"}, "rpc-errors.not_loaded"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -282,6 +284,37 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 	rec = httptest.NewRecorder()
 	if body := call(t, langWriter{rec, i18n.Ja}, rec, typed); body["error"] != i18n.T(i18n.Ja, "inbox-errors.no_item") {
 		t.Fatal("typed summary overwritten")
+	}
+}
+
+// The node's open_elsewhere refusal (#6803) is said in the request's language by where the session is open, with the
+// node's words as the detail and its fields kept; one without a known where (an older node, an Agent runtime's own
+// refusal) keeps its words.
+func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
+	const words = "node's own words"
+	for _, where := range []string{"desktop", "terminal", "program", "other", "agents_list"} {
+		err := &rpc.Error{Code: "open_elsewhere", Message: words, Data: json.RawMessage(`{"delivered":"none","pid":42,"where":"` + where + `"}`)}
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			rec := httptest.NewRecorder()
+			body := call(t, langWriter{rec, lang}, rec, err)
+			want := i18n.T(lang, "rpc-errors.open_elsewhere_"+where)
+			if want == "rpc-errors.open_elsewhere_"+where || body["error"] != want {
+				t.Fatalf("%s %s: %v", where, lang, body)
+			}
+			if rec.Code != http.StatusConflict || body["code"] != "open_elsewhere" || body["delivered"] != "none" || body["where"] != where || body["detail"] != words {
+				t.Fatalf("%s %s: %d %v", where, lang, rec.Code, body)
+			}
+			if lang == i18n.ZhHans && strings.Contains(want, "手机") {
+				t.Fatalf("%s names the phone: %s", where, want)
+			}
+		}
+	}
+	for _, data := range []string{`{"delivered":"none","pid":42}`, `{"delivered":"none","where":"elsewhere"}`} {
+		err := &rpc.Error{Code: "open_elsewhere", Message: words, Data: json.RawMessage(data)}
+		rec := httptest.NewRecorder()
+		if body := call(t, langWriter{rec, i18n.En}, rec, err); body["error"] != words {
+			t.Fatalf("%s: %v", data, body)
+		}
 	}
 }
 

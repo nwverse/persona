@@ -42,6 +42,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** How long an upload waits for the hub connection to be ready again before it fails (a setting, not measured). */
@@ -56,11 +58,15 @@ fun ChatComposer(
     sending: Boolean,
     canClear: Boolean,
     service: ChatComposerService?,
+    /** An ordinary file's own destination, such as a Health conversation's reports; media never uses it. */
+    uploadDestination: String? = null,
     onSend: () -> Unit,
     onCommand: (String) -> Unit,
     onNotice: (String) -> Unit,
     // Content queued outside the text field (selected page context) also makes the draft sendable.
     extraContent: Boolean = false,
+    /** Persona's conversation, including a new one: its own command list, never an Agent session's quick commands. */
+    assistantChat: Boolean = false,
     enabled: Boolean = true,
     placeholder: String = stringResource(R.string.chat_composer_placeholder),
     leading: (@Composable RowScope.() -> Unit)? = null,
@@ -101,9 +107,13 @@ fun ChatComposer(
     val resources = LocalResources.current
     val photosOnly = stringResource(R.string.chat_composer_photos_only)
     val videosOnly = stringResource(R.string.chat_composer_videos_only)
-    SideEffect { state.photosOnlyText = photosOnly; state.videosOnlyText = videosOnly }
+    val filesOnly = stringResource(R.string.chat_composer_files_only)
+    SideEffect { state.photosOnlyText = photosOnly; state.videosOnlyText = videosOnly; state.filesOnlyText = filesOnly }
     val hasContent = state.hasContent || extraContent
     val scope = rememberCoroutineScope()
+    // Picker callbacks can overlap while a provider is read; serialize them so each sees the places already taken.
+    val pickerLock = remember { Mutex() }
+    val uploadLimiter = remember(state, session, service) { ComposerUploadLimiter() }
     var menu by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     var cameraDenied by remember { mutableStateOf(false) }
@@ -135,23 +145,33 @@ fun ChatComposer(
     // [media]: from the photo picker, the camera or the clipboard, photos and videos sharing four places (iOS).
     fun select(uris: List<Uri>, media: Boolean, capture: Boolean = false) {
         scope.launch {
-            val allowed = if (media) (MAX_COMPOSER_MEDIA - state.attachments.count { it.media }).coerceAtLeast(0) else uris.size
-            if (uris.size > allowed) onNotice(resources.getString(R.string.chat_composer_photo_limit))
-            if (capture) withContext(Dispatchers.IO) { uris.drop(allowed).forEach { deleteCapture(context, it.toString()) } }
-            for (uri in uris.take(allowed)) {
-                try {
-                    val attachment = withContext(Dispatchers.IO) {
-                        val video = media && isVideo(context, uri)
-                        selectAttachment(context, uri, image = media && !video, video = video)
+            pickerLock.withLock {
+                var overflow = false
+                for (uri in uris) {
+                    // An earlier invalid pick leaves its place available; a later valid one must still be considered.
+                    val allowed = if (media) (MAX_COMPOSER_MEDIA - state.attachments.count { it.media }).coerceAtLeast(0)
+                        else composerFileRoom(state.attachments)
+                    if (allowed == 0) {
+                        overflow = true
+                        if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
+                        continue
                     }
-                    state.beginEdit()
-                    state.attachments += attachment
-                    attachment.error?.let(onNotice)
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) {
-                    if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
-                    onNotice(resources.getString(R.string.chat_composer_attachment_unreadable))
+                    try {
+                        val attachment = withContext(Dispatchers.IO) {
+                            val video = media && isVideo(context, uri)
+                            selectAttachment(context, uri, image = media && !video, video = video)
+                        }
+                        state.beginEdit()
+                        state.attachments += attachment
+                        attachment.error?.let(onNotice)
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) {
+                        if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
+                        onNotice(resources.getString(R.string.chat_composer_attachment_unreadable))
+                    }
                 }
+                if (overflow) onNotice(resources.getString(
+                    if (media) R.string.chat_composer_photo_limit else R.string.chat_composer_file_limit))
             }
         }
     }
@@ -229,7 +249,7 @@ fun ChatComposer(
                 edited = MediaShare.writeEditedPhoto(context, result)
                 val carried = PhotoEdits(edit.sourceUri, done).takeUnless { done.edits.isEmpty }
                 val outcome = state.replaceWithEdited(edit.original, edited, carried) { photo ->
-                    uploadAttachment(context, checkNotNull(service), session, photo)
+                    uploadLimiter.withSlot { uploadAttachment(context, checkNotNull(service), session, photo) }
                 }
                 kept = outcome == PhotoEditOutcome.Replaced
                 if (outcome is PhotoEditOutcome.Failed) onNotice(resources.getString(R.string.chat_attach_edit_failed))
@@ -245,8 +265,10 @@ fun ChatComposer(
 
     state.attachments.forEach { attachment ->
         key(attachment.id) {
-            LaunchedEffect(attachment.id, attachment.error, service) {
+            LaunchedEffect(attachment.id, attachment.error, service, uploadDestination) {
                 if (attachment.uploadState == DraftUploadState.Invalid) return@LaunchedEffect
+                // Once the computer has it, a revoked local picker grant cannot make the attachment unsendable.
+                if (attachment.path != null) return@LaunchedEffect
                 if (!withContext(Dispatchers.IO) { attachmentReadable(context, attachment) }) {
                     val reason = resources.getString(R.string.chat_composer_attachment_gone)
                     state.attachments = state.attachments.map {
@@ -255,13 +277,18 @@ fun ChatComposer(
                     onNotice(reason)
                     return@LaunchedEffect
                 }
-                if (attachment.path != null) return@LaunchedEffect
                 if (attachment.error != null || service == null) return@LaunchedEffect
                 try {
-                    state.attachments = state.attachments.map {
-                        if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it
+                    val path = uploadLimiter.withSlot {
+                        state.attachments = state.attachments.map {
+                            if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it
+                        }
+                        uploadAttachment(context, service, session, attachment, destination = uploadDestination) { size ->
+                            state.attachments = state.attachments.map {
+                                if (it.id == attachment.id) it.copy(size = size) else it
+                            }
+                        }
                     }
-                    val path = uploadAttachment(context, service, session, attachment)
                     if (state.attachments.any { it.id == attachment.id }) {
                         state.attachments = state.attachments.map {
                             if (it.id == attachment.id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it
@@ -295,8 +322,13 @@ fun ChatComposer(
     val dictate = dictation?.takeIf { enabled }
     // The main conversation's /clear (#5100): offered while it works too (the hub stops the turn), and it never asks first.
     val mainClear = LocalMainChatClear.current?.takeIf { enabled }
-    val suggestions = if (enabled) SlashCommand.suggestions(state.value.text, canClear && !working || mainClear != null,
-        model = onModel != null, loop = loop) else emptyList()
+    // Both the "/" list and the + sheet offer only what an Assistant conversation runs, never an Agent's quick messages.
+    val useMainCommands = assistantChat || mainClear != null
+    val suggestions = if (!enabled) emptyList() else if (useMainCommands) {
+        SlashCommand.mainSuggestions(state.value.text, clear = mainClear != null, resources = resources)
+    } else {
+        SlashCommand.suggestions(state.value.text, canClear && !working, resources, model = onModel != null, loop = loop)
+    }
     val hint = if (enabled && loop) loopHint(state.value.text, resources) else null
     // @: the word being typed just before the caret, while nothing is selected and no "/" list is open.
     val selection = state.value.selection
@@ -500,11 +532,12 @@ fun ChatComposer(
         add(JAction(stringResource(R.string.chat_composer_files), enabled = service != null) { launchPicker { files.launch(arrayOf("*/*")) } })
         // iOS's Mention a File or Session, after the attachments (`AttachMoreSection.common`): where the composer has an @ list.
         if (mentions != null) add(JAction(stringResource(R.string.chat_mention)) { menu = false; startMention() })
-        // Quick messages go out at once; /clear asks first, and only while nothing is running or being cleared.
+        // An Agent's quick messages go out at once and /clear asks first; the main sheet has only its in-place clear.
         extensionPrompts.forEach { prompt -> add(JAction(prompt.title) { menu = false; state.fillQuickPrompt(prompt) }) }
-        SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
-        if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
-        else if (mainClear != null) add(JAction(SlashCommand.clearCommand(resources).title) { menu = false; clearMain(mainClear) })
+        if (!useMainCommands) {
+            SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
+            if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
+        } else if (mainClear != null) add(JAction(SlashCommand.mainClearCommand(resources).title) { menu = false; clearMain(mainClear) })
     })
     if (confirmClear) JDialog(onDismiss = { confirmClear = false }, title = stringResource(R.string.chat_composer_clear_title),
         text = stringResource(R.string.chat_composer_clear_text, agentName),

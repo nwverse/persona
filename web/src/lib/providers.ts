@@ -23,12 +23,33 @@ export const AUTH_AUTO_FEATURE = "launcher_auth_auto";
 export const EFFORT_LEVELS = EFFORTS.map((e) => e.id);
 
 /** proto.ProviderModel. */
-export interface ProviderModel {
+export interface ProviderModel extends ReportedMeta {
   id: string;
   name?: string;
   context_window?: number;
   efforts?: string[];
   default_effort?: string;
+}
+
+/** What a gateway reported of a model that the form does not show (#8778): its output limit, every thinking level in
+ *  its own words when some fall outside `efforts`, that it takes none, and whether it takes images and tools. Carried
+ *  through the form and saved as it came: the hub keeps `all_efforts` and `no_effort` only while they agree with the
+ *  levels saved (assistant/models_discover_meta.go settleSavedEfforts), so levels changed by hand need nothing here. */
+export interface ReportedMeta {
+  max_output_tokens?: number;
+  all_efforts?: string[];
+  no_effort?: boolean;
+  image_input?: boolean;
+  tool_calls?: boolean;
+}
+
+const META_KEYS = ["max_output_tokens", "all_efforts", "no_effort", "image_input", "tool_calls"] as const;
+
+/** The reported fields of m, in a fixed order (a PUT compares models as JSON). */
+function metaOf(m: ReportedMeta): ReportedMeta {
+  const out: Record<string, unknown> = {};
+  for (const k of META_KEYS) if (m[k] !== undefined) out[k] = m[k];
+  return out;
 }
 
 /** GET /api/v1/launchers' managed launcher (hub LauncherView): never the key, the headers or the environment, only
@@ -72,7 +93,7 @@ export interface ProviderView extends ScopeView {
   via_machine?: string;
 }
 
-/** One model row of step 3: numbers as typed. */
+/** One model row of step 3: numbers as typed, and what the gateway reported that the row does not show. */
 export interface FormModel {
   id: string;
   name: string;
@@ -80,6 +101,7 @@ export interface FormModel {
   efforts: string[];
   default_effort: string;
   checked: boolean;
+  meta: ReportedMeta;
 }
 
 export interface ProviderForm {
@@ -177,8 +199,9 @@ export function newForm(): ProviderForm {
 const numText = (n?: number) => (n ? String(n) : "");
 
 export function formModel(m: ProviderModel, checked = true): FormModel {
-  return { id: m.id, name: m.name ?? "", context_window: numText(m.context_window), efforts: [...(m.efforts ?? [])], default_effort: m.default_effort ?? "", checked };
+  return { id: m.id, name: m.name ?? "", context_window: numText(m.context_window), efforts: [...(m.efforts ?? [])], default_effort: m.default_effort ?? "", checked, meta: metaOf(m) };
 }
+
 
 /** How a saved provider signs in: what it stores, else x-api-key (providers saved before the choice existed). */
 export const storedAuth = (v: ProviderView): AuthMethod => v.auth ?? "api_key";
@@ -242,7 +265,8 @@ export function formFromView(v: ProviderView): ProviderForm {
 export const AUTO_CHECK = 8;
 
 /** Discovered models merged in: new ones added unchecked (all checked when nothing was there and the list is short),
- *  what was typed kept. */
+ *  what was typed kept; what the gateway reports now replaces what a row had of it (the hub keeps a model's stored
+ *  report when none comes). */
 export function mergeDiscovered(models: FormModel[], found: ProviderModel[], chat = false): FormModel[] {
   const out = [...models];
   const first = models.length === 0 && found.length <= AUTO_CHECK;
@@ -251,8 +275,12 @@ export function mergeDiscovered(models: FormModel[], found: ProviderModel[], cha
     if (i < 0) {
       const mismatch = chat && m.default_effort && m.efforts?.length && !m.efforts.includes(m.default_effort);
       out.push(formModel(mismatch ? { ...m, efforts: [], default_effort: "" } : m, first));
-    } else if (!out[i].context_window && m.context_window) {
-      out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
+    } else {
+      if (!out[i].context_window && m.context_window) {
+        out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
+      }
+      const meta = metaOf(m);
+      if (Object.keys(meta).length) out[i] = { ...out[i], meta };
     }
   }
   return out;
@@ -270,7 +298,7 @@ export function fillFromCatalog(models: FormModel[], found: ProviderModel[], cha
     const patch: Partial<FormModel> = {};
     if (!row.name && m.name) patch.name = m.name;
     if (!row.context_window && m.context_window) patch.context_window = String(m.context_window);
-    if (!chat && !row.efforts.length && m.efforts?.length) {
+    if (!chat && !row.efforts.length && !row.meta.no_effort && m.efforts?.length) {
       patch.efforts = [...m.efforts];
       if (!row.default_effort && m.default_effort && m.efforts.includes(m.default_effort)) patch.default_effort = m.default_effort;
     }
@@ -350,19 +378,32 @@ export interface FormProblems {
   advanced: string;
 }
 
+/** The Connect step's fields that can keep it from going on. */
+export type ConnectField = "display_name" | "name" | "base_url" | "api_key";
+
+/** What is wrong with each of the Connect step's fields, in the order formProblems says them ("" when fine): Next shows
+ *  each by its own field (audit item 19), not as one line under the step. */
+export function connectProblems(f: ProviderForm, isNew: boolean, hadKey = false, autoName = false): Record<ConnectField, string> {
+  const requiresUrlAndKey = f.kind === "api" || !f.agent || f.agent === "claude";
+  return {
+    display_name: displayNameProblem(f.display_name),
+    name: (!f.name.trim() && !autoName && t("lib-providers.name_required")) || (isNew && launcherNameProblem(f.name)) || "",
+    base_url: ((requiresUrlAndKey || f.base_url.trim() !== "") && gatewayProblem(f.base_url)) || "",
+    api_key: (requiresUrlAndKey && !f.api_key.trim() && (isNew || !hadKey) && t("lib-providers.key_required")) || "",
+  };
+}
+
+/** The first of the Connect step's fields with something wrong, the one Next takes the focus to; null: none. */
+export function firstConnectProblem(problems: Record<ConnectField, string>): ConnectField | null {
+  return (["display_name", "name", "base_url", "api_key"] as const).find((k) => problems[k]) ?? null;
+}
+
 /** `autoName`: the hub makes up a new provider's startup ID when none is typed (`launcher_auto_name`, #5029); an older
  *  hub needs one. */
 export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false, autoName = false): FormProblems {
-  const requiresUrlAndKey = f.kind === "api" || !f.agent || f.agent === "claude";
-  const reach =
-    ((requiresUrlAndKey || f.base_url.trim() !== "") && gatewayProblem(f.base_url)) ||
-    (requiresUrlAndKey && !f.api_key.trim() && (isNew || !hadKey) && t("lib-providers.key_required")) ||
-    "";
-  const connect =
-    displayNameProblem(f.display_name) ||
-    (!f.name.trim() && !autoName && t("lib-providers.name_required")) ||
-    (isNew && launcherNameProblem(f.name)) ||
-    reach;
+  const fields = connectProblems(f, isNew, hadKey, autoName);
+  const reach = fields.base_url || fields.api_key;
+  const connect = fields.display_name || fields.name || reach;
 
   const chat = f.kind === "api" && f.api === "chat";
   let models = "";
@@ -426,7 +467,7 @@ function modelsOf(f: ProviderForm): ProviderModel[] {
       if (int(m.context_window)) out.context_window = int(m.context_window);
       if (m.efforts.length) out.efforts = [...m.efforts];
       if (m.default_effort) out.default_effort = m.default_effort;
-      return out;
+      return { ...out, ...metaOf(m.meta) };
     });
 }
 
@@ -516,6 +557,7 @@ export function probeBody(f: ProviderForm, stored: string | null, model?: string
   if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;
+  if (model !== undefined && !(f.kind === "api" && f.api === "chat")) b.effort = f.effort.trim();
   if (f.kind === "api") b.via_machine = f.via_machine; // tested from where it will be sent
   return b;
 }

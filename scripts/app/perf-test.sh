@@ -4,6 +4,7 @@
 # scroll / navigation signposts per page and transition, XCTApplicationLaunchMetric for launch, then a JSON + Markdown report.
 #
 #   scripts/app/perf-test.sh [suite…]        # suites: launch agents assistant composer inbox settings machines (default: all)
+#                                            # and sidebar (an iPad held on its side; named only, not in the default run)
 #
 # Env:
 #   PERF_SIM         the assigned, existing simulator udid or name (required if "Persona Perf" is absent)
@@ -49,9 +50,10 @@ mock_env() {
     launch) echo "MOCK_AGENTS=1 MOCK_LONG_ASSISTANT=1 MOCK_LONG_HISTORY=1" ;;
     agents) echo "MOCK_AGENTS=1 MOCK_BIG=1 MOCK_CHAT_LINES=1 MOCK_SUBAGENT_CARDS=1 MOCK_FILES=1 MOCK_MACHINES=1 MOCK_TURN_IMAGES=many" ;;
     assistant|composer) echo "MOCK_LONG_ASSISTANT=1 MOCK_AGENTS=1 MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_DOCK=many MOCK_ASSISTANT_SIDEBAR=1 MOCK_KB_MANY_LINKS=1" ;;
-    inbox) echo "MOCK_LARK=1 MOCK_LARK_RICH=1 MOCK_LARK_TOPIC=1 MOCK_INBOX_EXTRA=150 MOCK_MAIL=1 MOCK_AGENTS=1" ;;
+    inbox) echo "MOCK_LARK=1 MOCK_LARK_RICH=1 MOCK_LARK_TOPIC=1 MOCK_INBOX_EXTRA=150 MOCK_MAIL=1 MOCK_AGENTS=1 MOCK_MANAGERS=0" ;;
     settings) echo "MOCK_EXTENSIONS=1 MOCK_SCHEDULE=1 MOCK_AGENTS=1" ;;
     machines) echo "MOCK_PERF_MACHINES=24 MOCK_PERF_METRIC_STEP=50 MOCK_AGENTS=1" ;;
+    sidebar) echo "MOCK_AGENTS=1 MOCK_ASSISTANT_SIDEBAR=1 MOCK_LONG_ASSISTANT=1" ;;
     *) return 1 ;;
   esac
 }
@@ -59,9 +61,10 @@ suite_class() {
   case "$1" in
     launch) echo PerfLaunchTests ;; agents) echo PerfAgentsTests ;; assistant) echo PerfAssistantTests ;; composer) echo PerfComposerTests ;;
     inbox) echo PerfInboxTests ;; settings) echo PerfSettingsTests ;; machines) echo PerfMachinesTests ;;
+    sidebar) echo PerfSidebarTests ;;
   esac
 }
-for s in "${SUITES[@]}"; do mock_env "$s" >/dev/null || { verdict "failed unknown suite $s (launch agents assistant composer inbox settings machines)"; exit 2; }; done
+for s in "${SUITES[@]}"; do mock_env "$s" >/dev/null || { verdict "failed unknown suite $s (launch agents assistant composer inbox settings machines sidebar)"; exit 2; }; done
 
 # Never create or boot an extra simulator when an explicitly assigned device is missing.
 UDID=$(xcrun simctl list devices -j | python3 -c '
