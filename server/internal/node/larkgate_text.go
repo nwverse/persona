@@ -33,11 +33,11 @@ func larkTextRuns(cmd string, flow []larkFlow) bool {
 	tainted, mentioned, writes, program, pos := false, false, false, false, 0
 	for _, f := range flow {
 		own := !f.call && larkCLIRe.MatchString(f.text)
-		piped := true // unless the text is found followed by another separator
+		piped := true // unless only another separator stands before the segment
 		if at := strings.Index(cmd[pos:], f.text); at >= 0 {
-			start := pos + at
-			piped = start > 0 && larkPipedFrom(cmd[:start])
-			pos = start + len(f.text)
+			gap := cmd[pos : pos+at]
+			piped = pos > 0 && (strings.Trim(gap, " \t\n\\|&;") != "" || larkPipedFrom(gap))
+			pos += at + len(f.text)
 		}
 		if names && f.opaque || piped && tainted && !f.filter {
 			return true
@@ -83,6 +83,9 @@ func selfContainedCode(words []string) bool {
 			if w == flag || base == "node" && (w == "--eval" || w == "-p" || w == "--print") {
 				if i+1 < len(words) {
 					code, ok = words[i+1], true
+					for _, a := range words[i+2:] {
+						ok = ok && !strings.ContainsAny(a, "|<>&") // perl's <> runs "cmd|" given as a file
+					}
 				}
 				break
 			}
@@ -101,7 +104,7 @@ func selfContainedCode(words []string) bool {
 // its data (a message type "system" is no system()), and builtins only undotted (re.compile, json.load are fine).
 var larkCodeRuns = lazyre.New("(?i)(?:^|[^.\\w])(?:eval|exec|compile|__import__|import|require)\\s*\\(" +
 	"|\\b(?:system|exec[a-z]+|popen[0-9]*|spawn[a-z]*|fork|getoutput|check_output)\\s*\\(" +
-	"|subprocess|importlib|runpy|child_process|ctypes|\\bpty\\.|`|\\bqx\\W|%x[{(\\[]|open\\s*\\(\\s*[\"']\\s*\\|")
+	"|subprocess|importlib|runpy|child_process|ctypes|getattr|__builtins__|builtins|__dict__|globals\\s*\\(|\\bpty\\.|`|\\bqx\\W|%x[{(\\[]|open\\s*\\(\\s*[\"']\\s*\\|")
 
 // larkInlineScript is the script of `awk|sed [options] SCRIPT [files…]` (or -e SCRIPT): valued lists the options
 // that take a value, flags those that do not; any other option makes it unknown.
@@ -209,8 +212,10 @@ func sshRemoteCommand(args []string) (string, bool) {
 					value = args[i]
 				}
 				if a[j] == 'o' {
-					key, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(value)), "=")
-					key, _, _ = strings.Cut(key, " ")
+					key := strings.ToLower(strings.TrimSpace(value))
+					if f := strings.FieldsFunc(key, func(r rune) bool { return r == '=' || r == ' ' || r == '\t' }); len(f) > 0 {
+						key = f[0]
+					}
 					if strings.HasSuffix(key, "command") || key == "include" {
 						return "", false // ProxyCommand, LocalCommand, RemoteCommand, KnownHostsCommand…
 					}
@@ -225,15 +230,17 @@ func sshRemoteCommand(args []string) (string, bool) {
 }
 
 // perlSubstitution: `perl [-0…] [-p|-n] [-i…] [-l] -e 's/A/B/flags' [files…]` with one substitution that evaluates no
-// code (no /e, no (?{…}), no @{[…]} or ${\…} in it): it rewrites text and runs nothing, whatever its pattern says.
+// code (no /e, no (?{…}), no @{[…]} or ${\…} in it) over plain file names: it rewrites text and runs nothing,
+// whatever its pattern says.
 func perlSubstitution(args []string) bool {
 	code := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case !strings.HasPrefix(a, "-"):
-			if code == "" {
-				return false // a program file
+			// -p and -n open files the two-argument way: "cmd|" runs cmd, "<…" / ">…" change the mode.
+			if code == "" || strings.ContainsAny(a, "|<>&") || strings.TrimSpace(a) != a {
+				return false // a program file, or a "file" that runs or redirects
 			}
 		case code == "" && perlSwitchesE.MatchString(a) && i+1 < len(args):
 			i++

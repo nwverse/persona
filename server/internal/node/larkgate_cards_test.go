@@ -27,8 +27,8 @@ func TestLarkCardsOnlyForWrites(t *testing.T) {
 		{"heredoc after cd ;", "cd ~/reports; cat > notes.md <<EOF\nlark-cli im +messages-send\nEOF", 0},
 		{"perl substitution", `perl -0pi -e 's/(- old\n)/$1- lark-cli has no app configured\n/' ~/reports/memory.md`, 0},
 		{"grep pattern", `grep -n 'lark-cli' script.py | head -8`, 0},
-		{"grep -v in a process list", `ps aux | grep -v open-lark | grep -v lark-cli | head -3`, 0},
-		{"app and process check", `ls -d /Applications/Lark.app 2>/dev/null; pgrep -fl -i "lark|feishu" | grep -v -i "openlark\|lark-cli" | head -3`, 0},
+		{"grep -v in a process list", `ps aux | grep -v lark-helper | grep -v lark-cli | head -3`, 0},
+		{"app and process check", `ls -d /Applications/Lark.app 2>/dev/null; pgrep -fl -i "lark|feishu" | grep -v -i "lark-helper\|lark-cli" | head -3`, 0},
 		{"log grep then a program", `git log --oneline -40 | grep -iE "empty lark-cli"; gh pr list --limit 5`, 0},
 
 		// Reads with a prefix or in a compound command.
@@ -73,6 +73,13 @@ func TestLarkCardsOnlyForWrites(t *testing.T) {
 		{"unquoted heredoc substitution", "cd ~/reports && cat >> notes.md <<EOF\n$(lark-cli im +messages-send)\nEOF", 1},
 		{"perl substitution that evaluates", `perl -pi -e 's/x/system("lark-cli im +messages-send")/e' notes.txt`, 1},
 		{"perl code", `perl -e 'system("lark-cli im +messages-send")'`, 1},
+		{"perl magic open of a command", `perl -pi -e 's/a/b/' 'lark-cli im +messages-send --text hi|'`, 1},
+		{"perl magic open, no name", `lark-cli docs +fetch --doc-id a; perl -pe 's/a/b/' "$SEND|"`, 1},
+		{"perl -e reading a command as a file", `lark-cli docs +fetch --doc-id a; perl -ne 'print' "$SEND|"`, 1},
+		{"perl -e reading a command via <>", `lark-cli docs +fetch --doc-id a; perl -e 'print while <>' "$SEND|"`, 1},
+		{"ssh option with a tab", "ssh -o 'ProxyCommand\tlark-cli im +messages-send --text hi' host.example true", 1},
+		{"comment before a piped program", "echo 'lark-cli im +messages-send' | # make\nmake -f -", 1},
+		{"code reaching a builtin by name", `lark-cli docs +fetch | python3 -c "import os,sys; getattr(os, 'sys'+'tem')(sys.stdin.read())"`, 1},
 		{"untrusted PATH", `PATH=/nonexistent/tools:$PATH lark-cli docs +fetch --doc-id a`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
