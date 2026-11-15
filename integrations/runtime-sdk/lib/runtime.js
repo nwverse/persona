@@ -422,7 +422,16 @@ export function createRuntime(driver, options) {
       socket.destroy()
       return false
     }
-    const conn = upgrade(req, socket, head, { token: typeof token === 'function' ? token() : token })
+    let expected = token
+    if (typeof token === 'function') {
+      try {
+        expected = token()
+      } catch {
+        // No usable expected token: the ordinary token check below refuses without adopting the connection.
+        expected = undefined
+      }
+    }
+    const conn = upgrade(req, socket, head, { token: expected })
     if (!conn) {
       log('persona: refused a connection (wrong token, or not the runtime protocol)')
       return false
