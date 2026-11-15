@@ -71,7 +71,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// What the box's field is bound to while the page is up, so it cannot move the caller's `selection` under the
     /// sheet (the page hands its cursor back to that when it goes down).
     @State private var parkedSelection: TextSelection?
-    /// Asks the page for the keyboard: something asked for the box's (a file's path inserted, `PathInsert.edit`; ⌘I)
+    /// Asks the page for the keyboard: something asked for the box's (⌘I)
     /// while the page is up. A focus binding does not reach into a sheet, so the page keeps its own.
     @State private var pageFocusRequest = 0
 
@@ -427,7 +427,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         if focused.wrappedValue {
             TypedText.commitFocused(into: $text)
         } else {
-            // An unfocused field's selection is stale (a restored draft's, PathInsert.edit): the page starts at the end.
+            // An unfocused field's selection is stale (a restored draft's): the page starts at the end.
             selection = TextSelection(insertionPoint: text.endIndex)
         }
         dictation.stop()
