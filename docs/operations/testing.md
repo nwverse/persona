@@ -528,7 +528,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   Read receipts (`POST …/read-states`): own f3 messages 282 all read, 296 partly, 306 none; DM f1 "Han Meimei" (`-openInboxItem lark:f1:100`) has own read/unread (103)/no receipt (104); live new mock messages are unread.
   Avatars: Tom's f3 loads, weather assistant returns 404 (initial fallback), others none.
   Mentions: f2/f3 members (`GET …/members`, Tom/Mia avatars, Ajie's group nickname "Jay"); sends/replies with `mentions` store `@name` text as `at` segments.
-  Thread group (#1087): `MOCK_LARK_TOPIC=1`, `-tab mail -openInboxItem lark:f4:405` opens Release group (also in Messages): bot posts three topics two minutes apart (individual cards), long >320 pt collapsible card, own topic, linked topic, 0/1/2/6 replies, recalled topics (gateway retained and unretained), edited topic (latest reply recalled), for the "Fengling Yueying" style. Like gateway, replies return topic first then latest `limit`. Don't combine `MOCK_LARK=1`, which takes over Lark reads and hides Release.
+  Thread group (#1087): `MOCK_LARK_TOPIC=1`, `-tab mail -openInboxItem lark:f4:405` opens Release group (also in Messages): bot posts three topics two minutes apart (individual cards), long >320 pt collapsible card, own topic, linked topic, 0/1/2/6 replies, recalled topics (gateway retained and unretained), edited topic (latest reply recalled), for the "Fengling Yueying" style. Like gateway, replies return topic first then latest `limit`. With `MOCK_LARK=1` as well (the perf `inbox` suite), the Feishu page lists Release too and its threads come from the topic group.
 
 ### Readiness scenarios (`MOCK_READINESS`, #287)
 
@@ -663,7 +663,9 @@ Pitfalls:
 - iOS 27.1 runtime lacks device types like iPhone 17 Pro; `simctl create` reports Incompatible device. sim-boot.sh picks latest compatible runtime; override with `--runtime`.
 
 Chat composer (#2200): confirm port free, then `PORT=<dedicated port> python3 scripts/mock/composer_hub.py`.
-This separate entry reuses fictional data, only changes main/Agent chat models to short/long GPT IDs, never other lanes' fixtures.
+This separate entry reuses fictional data, only changes main/Agent chat models to short/long GPT IDs, never other lanes' fixtures,
+and echoes each send into its chat's transcript (`MOCK_ECHO_SENT`): without that copy the app keeps a message sent to the working Agent
+chat queued for up to 16 minutes, across launches, and on an iPhone its queue strip left the next test no chat to drag (#7683).
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<dedicated port> xcodebuild test … -only-testing:PersonaUITests/ComposerKeyboardTests`
 checks no App keyboard-dismiss button in compact and regular-width iOS navigation, input/newlines, gesture dismissal retaining draft, sending, sidebar-header collapse, model-label/menu consistency.
 Style `TEST_RUNNER_PERSONA_UI_STYLE=beautiful`; actual `simctl ui <udid> appearance light|dark`,

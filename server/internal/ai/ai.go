@@ -161,7 +161,7 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 	// Every client of one address and key goes through the same gate, which holds requests back while the upstream
 	// is out of quota or busy (limit.go).
 	g := gateFor(c.cfg.BaseURL, key)
-	probe, err := g.admit(ctx)
+	t, err := g.admit(ctx)
 	if err != nil {
 		return Reply{}, err
 	}
@@ -172,12 +172,24 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 		hc = &copied
 	}
 	var found *probeAnswer // this request finds out whether a pause is over: the gate goes at its 200 (limit.go)
-	if probe && hc != nil {
+	if t.probe && hc != nil {
 		found = &probeAnswer{next: hc.Transport, g: g}
 		copied := *hc
 		copied.Transport = found
 		hc = &copied
 	}
+	finding := func() bool { return t.probe && !(found != nil && found.let.Load()) } // still the one finding out
+	// The turn goes back however the exchange ends, a panic included. One that unwound through here used to skip
+	// done, and where its caller recovers and carries on (the knowledge base loop's kbRun, its job pool) the gate
+	// kept counting the request as out for good: under a cap its slot was never free again, and as the request
+	// finding out nobody found out after it. Every later request on the connection was then put off as busy with
+	// nothing sent, until the process restarted (#6698). It is told as a failure that says nothing of the upstream.
+	returned := false
+	defer func() {
+		if !returned {
+			_ = g.done(t, finding(), false, errUnwound)
+		}
+	}()
 	var reply Reply
 	var answered bool
 	switch c.cfg.API {
@@ -188,11 +200,15 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 	default:
 		reply, answered, err = c.messages(ctx, hc, key, r)
 	}
+	returned = true
 	if reply.Model == "" {
 		reply.Model = c.cfg.Model
 	}
-	return reply, g.done(probe && !(found != nil && found.let.Load()), answered, err)
+	return reply, g.done(t, finding(), answered, err)
 }
+
+// errUnwound is what the gate is told of a request a panic unwound through: it ended, with no answer to read.
+var errUnwound = errors.New("ai: the request did not return")
 
 // apiEndpoint preserves deployment prefixes and accepts bases with or without /v1.
 func apiEndpoint(base, path string) string {
