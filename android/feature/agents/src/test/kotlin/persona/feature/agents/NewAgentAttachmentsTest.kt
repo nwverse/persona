@@ -104,6 +104,20 @@ class NewAgentAttachmentsTest {
         }
     }
 
+    @Test fun theProductionUploadFactoryWiresTheRowAndComposerText() {
+        val context = RuntimeEnvironment.getApplication()
+        val uploads = newAgentUploads(context, Source(Composer()).apply { online = false })
+        val error = HubFailure(HubError.Server, "No space left on the computer", status = 507, code = "insufficient_storage")
+        val row = uploads.errorText("build.log", error)
+        assertEquals(failureReasonText(error).resolve(context.resources), row)
+        assertFalse(row.contains("build.log"))
+
+        val oversize = ComposerOperationException(CoreText.of(CoreText.Key.UploadTooLarge))
+        assertEquals(uploadFailure("build.log", oversize).resolve(context.resources), uploads.errorText("build.log", oversize))
+        assertEquals(context.getString(persona.feature.chat.R.string.chat_composer_files_only), uploads.filesOnly())
+        assertEquals(context.getString(persona.feature.chat.R.string.chat_composer_photos_only), uploads.photosOnly())
+    }
+
     @Test fun theFirstMessageIsWrittenAsTheComposerWritesItsMessages() {
         val photosOnly = "Please look at the photos"
         val filesOnly = "Please look at the attached files"
