@@ -34,7 +34,7 @@ final class LarkChatPinFlowTests: XCTestCase {
         // The iPhone shell's one trailing menu keeps Pins and Persona summary together.
         app.buttons["lark.chat.more"].tapCenter()
         let open = app.buttons["lark.pins.open"]
-        XCTAssertTrue(open.waitForExistence(timeout: 10), "Pins is not in the one trailing menu")
+        XCTAssertTrue(open.waitForExistence(timeout: 10), "Pins is not in the one trailing menu:\n\(app.debugDescription)")
         open.tapCenter()
         XCTAssertTrue(app.buttons["lark.pins.close"].waitForExistence(timeout: 10), "Pins did not open from the one menu")
     }

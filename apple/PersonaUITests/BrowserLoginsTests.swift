@@ -72,12 +72,12 @@ final class BrowserLoginsTests: XCTestCase {
         app.launchPinned()
         let machines = app.navigationBars["机器"]
         XCTAssertTrue(machines.waitForExistence(timeout: 20))
-        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'MacBook'")).firstMatch
+        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '服务器'")).firstMatch
         for _ in 0..<6 where !(card.exists && card.isHittable) { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(card.isHittable, "MacBook is not reachable from Machines")
+        XCTAssertTrue(card.isHittable, "the mock computer is not reachable from Machines")
         card.tap()
-        XCTAssertTrue(app.navigationBars["MacBook"].waitForExistence(timeout: 15), "the machine did not open")
-        XCTAssertTrue(app.navigationBars["MacBook"].buttons["BackButton"].exists)
+        XCTAssertTrue(app.navigationBars["服务器"].waitForExistence(timeout: 15), "the machine did not open")
+        XCTAssertTrue(app.navigationBars["服务器"].buttons["BackButton"].exists)
         XCTAssertFalse(app.buttons["shell-place-sidebar"].exists)
         let bar = app.navigationBars["浏览器登录"]
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "the whole Browser Sign-ins list did not open:\n\(app.debugDescription)")
