@@ -245,9 +245,11 @@ type modelsState struct {
 	secret *secretkey.Box // secret.key; a key made for this run only in tests
 	quotas quotaCache     // the launchers' quota, kept a minute (models_quota.go)
 
-	cacheMu sync.Mutex
-	cacheAt map[string]time.Time
-	have    map[string]map[string]bool // machine \x00 launcher → its models (ids and what aliases resolve to)
+	cacheMu  sync.Mutex
+	cacheAt  map[string]time.Time
+	have     map[string]map[string]bool   // machine \x00 launcher → its models (ids and what aliases resolve to)
+	aliases  map[string]map[string]string // machine \x00 launcher → alias id → its resolved id
+	defaults map[string]string            // machine \x00 launcher → its default model's resolved or own id
 
 	customMu sync.Mutex // one change of the remembered typed ids at a time (models_custom.go)
 
