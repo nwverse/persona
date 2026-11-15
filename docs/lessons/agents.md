@@ -1055,3 +1055,11 @@ while that is the running gateway. Several providers on one computer overwrite e
 `initialize` answer is not a stable source for a provider's gateway models. Turning discovery off to hide entries is
 wrong too: it removes the gateway's list from every `/model` the user opens. Read the gateway itself
 (`node/launcher_gateway_models.go`) and compare lists from several computers before concluding a list is clean.
+
+## A Claude session without Persona's hooks still asks with AskUserQuestion (#8515)
+
+The desktop app's sessions (and claude in other terminals) run no hook of Persona's, so their questions never became
+cards; the apps showed only a "reply to answer" line, and the questions and options were nowhere to be seen. The peer
+message prompt asks the model to offer numbered options in plain text instead, but models still open AskUserQuestion,
+often with several questions. Read the open call from the transcript (`node/claudeoutside_ask.go`) rather than counting
+on the model to follow the prompt, and check a real transcript's `tool_use` input shape before parsing it.
