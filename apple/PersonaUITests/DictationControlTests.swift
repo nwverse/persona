@@ -45,6 +45,7 @@ final class DictationControlTests: XCTestCase {
             XCTAssertTrue(wait { mic.label == "停止听写" && cancel.isHittable }, "dictation did not start:\n\(app.shellTrace)\n\(app.debugDescription)")
             XCTAssertTrue(app.buttons["dictation-bar-stop"].firstMatch.isHittable)
             XCTAssertTrue(app.buttons["dictation-bar-send"].firstMatch.isHittable)
+            dismissIconNote()
             shot("dictation-control-\(name)")
 
             app.terminate()
@@ -68,6 +69,17 @@ final class DictationControlTests: XCTestCase {
         XCTAssertTrue(wait(30) { field.exists || dictating.exists }, "no starter composer:\n\(app.debugDescription)")
         let greeting = app.staticTexts.matching(NSPredicate(format: "label IN %@", ["早上好", "中午好", "下午好", "晚上好"])).firstMatch
         XCTAssertTrue(greeting.waitForExistence(timeout: 5), "the control did not open a new conversation:\n\(app.debugDescription)")
+    }
+
+    @MainActor private func dismissIconNote() {
+        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = board.alerts.firstMatch
+        guard alert.waitForExistence(timeout: 2) else { return }
+        for label in ["OK", "好"] where alert.buttons[label].exists { // i18n-ignore: the system's own button
+            alert.buttons[label].tap()
+            sleep(1)
+            return
+        }
     }
 
     @MainActor private func wait(_ timeout: TimeInterval = 8, _ condition: @escaping () -> Bool) -> Bool {
