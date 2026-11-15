@@ -19,6 +19,8 @@ import {
   planTodos,
   workBlocks,
   workDuration,
+  toolDurationMs,
+  toolDurationLabel,
   TICKING_DURATION,
   type AgentStatus,
   type ToolStep,
@@ -135,6 +137,19 @@ describe("a finished exchange", () => {
     const b = blocks([user("u1", 0), ...tool("t1", "Bash", 1000), say("a1", "第一部分。", 5000), say("a2", "第二部分。", 6000)]);
     expect(topSteps(b)).toEqual(["a2"]);
     expect(folded(b, "a1")).toBe(true);
+  });
+});
+
+describe("Codex commentary as assistant text (#5853)", () => {
+  it("answers a mid-turn question in the text slot, then stays readable as folded narration", () => {
+    const items = [user("u1", 0, "What is the current status?"), ...tool("check", "Bash", 1000), say("status", "The focused tests pass; the full run is next.", 2000), ...tool("verify", "Bash", 3000)];
+    const running = blocks(items, true);
+    expect(topSteps(running)).toEqual(["status"]);
+    expect(folded(running, "status")).toBe(false);
+
+    const done = blocks([...items, say("final", "All checks passed.", 4000)]);
+    expect(topSteps(done)).toEqual(["final"]);
+    expect(groups(done)[0].children.map(shape)).toEqual([["check"], "status", ["verify"]]);
   });
 });
 
@@ -591,5 +606,36 @@ describe("workLineStyle (#1614)", () => {
     expect(workLineStyle(undefined, true)).toBe("assistant");
     expect(workLineStyle(false, false)).toBe("agents");
     expect(workLineStyle(undefined, undefined)).toBe("agents");
+  });
+});
+
+describe("a tool call's own elapsed time (#8163)", () => {
+  const stepOf = (startAt?: number, endAt?: number): ToolStep => {
+    const use = mk("assistant", "tool_use", startAt, { id: "c1", tool_name: "Bash", tool_use_id: "tu-c1", tool_input: { command: "npm test" } });
+    const result = endAt !== undefined ? mk("user", "tool_result", endAt, { id: "c1-r", tool_use_id: "tu-c1", text: "ok" }) : undefined;
+    return { kind: "tool", id: use.id, use, ...(result ? { result } : {}), images: [] };
+  };
+
+  it("measures the span purely from the call and result timestamps", () => {
+    expect(toolDurationMs(stepOf(1000, 5000))).toBe(4000);
+    expect(toolDurationLabel(stepOf(1000, 5000))).toBe("4s");
+    expect(toolDurationLabel(stepOf(0, 252_000))).toBe("4m 12s");
+    // the same formatter as the group total, including its rounding to whole seconds
+    expect(toolDurationLabel(stepOf(0, 65_400))).toBe("1m 5s");
+  });
+
+  it("omits a sub-second span and a call without a reliable end", () => {
+    expect(toolDurationMs(stepOf(1000, 1400))).toBe(400);
+    expect(toolDurationLabel(stepOf(1000, 1400))).toBeNull();
+    expect(toolDurationMs(stepOf(1000))).toBeNull();
+    expect(toolDurationLabel(stepOf(1000))).toBeNull();
+  });
+
+  it("treats an inverted or unparseable pair as no duration, never as a guessed span", () => {
+    expect(toolDurationMs(stepOf(5000, 1000))).toBeNull();
+    expect(toolDurationLabel(stepOf(5000, 1000))).toBeNull();
+    const noStart = stepOf(undefined, 5000);
+    expect(toolDurationMs(noStart)).toBeNull();
+    expect(toolDurationLabel(noStart)).toBeNull();
   });
 });

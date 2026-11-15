@@ -22,17 +22,19 @@ type modelProbeResult struct {
 // launcherModelCheck verifies argument forwarding without contacting a model API.
 // A fixed --model flag must not silently win over the user's purpose-specific choice.
 func (n *Node) launcherModelCheck(ctx context.Context, name, model string) (string, error) {
-	if err := (modelExecution{Model: model}).check(); err != nil {
+	if err := (modelExecution{Model: model}).check(name); err != nil {
 		return "", err
+	}
+	// A runtime's launcher first: where ctx's start host is an engine that runs only its own launchers, its provider
+	// of the name runs whatever else has it (#8140); elsewhere a runtime never has a managed or a shell launcher's name.
+	if res, ok := n.runtimeLauncherModelsIn(ctx, name); ok {
+		return res.Agent, nil
 	}
 	if m, managed := n.managedLauncher(name); managed {
 		return m.AgentType(), nil
 	}
 	if _, ok := n.codexLauncher(ctx, name); ok {
 		return "codex", nil
-	}
-	if res, ok := n.runtimeLauncherModels(name); ok {
-		return res.Agent, nil
 	}
 	key := n.home + "\x00" + name + "\x00" + model
 	modelProbeCache.Lock()
@@ -81,7 +83,9 @@ func forwardedModel(probe Probe, model string) error {
 			}
 		}
 	}
-	if matches != 1 {
+	// Every model flag names the model asked for: a wrapper that pins that model and also forwards its arguments
+	// passes it twice, and claude runs it either way (#6205). None at all is a launcher that dropped it.
+	if matches == 0 {
 		return errors.New("启动器没有可靠转发模型参数，请在模型供应商中修正它")
 	}
 	return nil
@@ -92,6 +96,10 @@ func withoutModelArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if arg == "--" { // prompt words after the separator are not the launcher's model options
+			out = append(out, args[i:]...)
+			break
+		}
 		if arg == "--model" || arg == "-m" {
 			if i+1 < len(args) {
 				i++

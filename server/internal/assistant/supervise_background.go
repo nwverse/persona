@@ -232,7 +232,7 @@ func (s *Service) backgroundThere(ctx context.Context, cfg Settings, id string) 
 		return true
 	}
 	if res.OK {
-		return res.Session.Assistant
+		return res.Session.Assistant && !s.backgroundSignedOut(cfg, res.Session)
 	}
 	if d, ok := s.device(ctx, cfg.MachineID); !ok || !d.Online || !d.Reachable {
 		return true
@@ -244,11 +244,21 @@ func (s *Service) backgroundThere(ctx context.Context, cfg Settings, id string) 
 	listed := false // the node listed since this manager started: an assistant conversation is in its list
 	for _, c := range list {
 		if c.SessionID == id {
-			return c.Assistant
+			return c.Assistant && !s.backgroundSignedOut(cfg, c)
 		}
 		listed = listed || c.Assistant
 	}
 	return !listed
+}
+
+// backgroundSignedOut: background supervisor c, started before this manager, ended its last turn "Not logged in". It was
+// made in a new private profile with no login, as every conversation the hub started was until #6015, and a conversation
+// cannot move to another profile: it counts as gone, so one that starts signed in replaces it (ensureBackground) and what
+// waited for it moves on. One this manager started is already in the signed-in profile (startConversation): replacing it
+// would not sign it in, only make a new conversation at every signal.
+func (s *Service) backgroundSignedOut(cfg Settings, c proto.Session) bool {
+	at := cfg.BackgroundSupervisorAt
+	return signedOut(c) && c.SessionID == cfg.BackgroundSupervisor && at != nil && at.Before(s.born)
 }
 
 // backgroundFresh: conversation id is the background supervisor, started within backgroundGrace.
@@ -264,6 +274,7 @@ func (s *Service) backgroundFresh(cfg Settings, id string) bool {
 func (s *Service) startBackground(ctx context.Context) (string, error) {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 100*time.Second)
 	defer cancel()
+	sctx = context.WithValue(sctx, supervisionStartup{}, true)
 	c, err := s.startConversation(sctx, startParams{Text: prompts.RenderSupervisorStart(prompts.SupervisorStart{Owner: s.owner(ctx)}),
 		Purpose: purposeSupervise, Origin: OriginTask, Source: &proto.MessageSource{Kind: proto.SourceSupervision}})
 	if err != nil {

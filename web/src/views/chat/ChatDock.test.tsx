@@ -9,6 +9,7 @@ import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { Composer } from "./Composer";
 import { PendingCards, permissionFrom } from "./Interactions";
 import { restoreQueued } from "./QueueStrip";
+import { getComposerFiles, removeFile } from "../../lib/composer-files";
 import { QueuePanel } from "./QueuePanel";
 import { onDraftEvent, type DraftEvent } from "../../lib/drafts";
 import { getContexts, removeContext, withContexts } from "../../lib/links";
@@ -16,6 +17,7 @@ import { parseQueued } from "../../lib/queue";
 import { AttachmentTray } from "../../ui/AttachmentTray";
 import { parseAPIError } from "../../lib/api-errors";
 import { ErrorBanner } from "./Lines";
+import { setSideFold } from "../../lib/side-fold";
 
 // stores without a server snapshot: renderToStaticMarkup needs one
 vi.mock("../../lib/links", async (orig) => ({ ...(await orig<typeof import("../../lib/links")>()), useContexts: () => [] }));
@@ -56,6 +58,17 @@ describe("Header", () => {
     expect(html).not.toContain("max-lg:hidden");
     expect(html).not.toContain("max-lg:min-w-16");
     expect(html.match(/aria-label="更多操作"/g)).toHaveLength(1);
+    expect(html).not.toContain("data-side-sessions");
+  });
+
+  it("has a Side sessions button with their count while the session has some, and the dot while one needs you (#7944)", () => {
+    const quiet = header({ sides: { count: 2, open: false, needs: false, onToggle: () => {} } });
+    expect(quiet).toMatch(/<button type="button" aria-label="分支会话（2）" title="分支会话（2）" aria-expanded="false" data-side-sessions="2"[^>]*>.*<span>2<\/span><\/button>/);
+    expect(quiet).not.toContain("data-side-sessions-needs");
+    const waiting = header({ sides: { count: 3, open: true, needs: true, onToggle: () => {} } });
+    expect(waiting).toContain('aria-label="分支会话（3） · 有分支会话需要你"');
+    expect(waiting).toContain('aria-expanded="true"');
+    expect(waiting).toContain("data-side-sessions-needs");
   });
 
   it("is cindy's one line: the Agent's mark, the title, then ⋯ (#5421)", () => {
@@ -260,6 +273,17 @@ describe("PendingCards", () => {
     expect(html).toMatch(/data-permission-from="true" title="来自子 Agent · Review"/);
   });
 
+  it("names a side session's card as the side's, on its parent's page, once the hub folds sides (#7944)", () => {
+    const card = { folded_under: "review", folded_as: "side" as const, session_title: "btw: can it merge" };
+    expect(permissionFrom(card)).toBe("来自子 Agent · btw: can it merge");
+    setSideFold(true);
+    try {
+      expect(permissionFrom(card)).toBe("来自分支会话 · btw: can it merge");
+    } finally {
+      setSideFold(false);
+    }
+  });
+
   it("shows every card on a wide screen, in no box of their own", () => {
     const html = cards({ narrow: false });
     expect(html).not.toContain("data-chat-cards");
@@ -434,8 +458,9 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
     expect(claude).toContain('aria-label="拖动第 2 条排队消息调整顺序"');
     expect(claude).toContain('aria-label="编辑第 1 条排队消息"');
     expect(claude).toContain('aria-label="删除第 2 条排队消息"');
-    // it hands over the whole queue, and says so
-    expect(claude).toContain('title="现在就把排队的消息全部发给 Claude，不用等到下一步"');
+    // it hands over the whole queue at one press, and says so; its tooltip says what happens too, as the dialog did before #7155
+    expect(claude).toContain('aria-label="现在就把排队的消息全部发给 Claude，不用等到下一步"');
+    expect(claude).toMatch(/title="现在就把排队的消息全部发给 Claude，不用等到下一步\nClaude 会马上收到，不用等到下一步。/);
     const codex = panel({ session: { ...queued, agent: "codex" } });
     expect(codex).not.toContain("data-send-now");
     expect(codex.match(/data-queue-edit/g)).toHaveLength(2);
@@ -447,15 +472,15 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
     expect(viewOnly).not.toMatch(/data-queue-(handle|edit|delete)|data-send-now/);
   });
 
-  it("in a Persona chat offers the user's own rows the same; one from another conversation says so and has none (#4342)", () => {
+  it("in a Persona chat offers the user's own rows the same; one from another conversation is folded into one line (#4342, #6394)", () => {
     const persona = { ...queued, agent: undefined, assistant: true, queued: ["顺便把截图换掉", "来自「日报」：今天的汇总"], queued_relayed: 1 } as Session;
     const html = panel({ session: persona, persona: "Nova" });
     expect(html.match(/data-send-now/g)).toHaveLength(1);
     expect(html).toContain("现在就把排队的消息全部发给 Nova");
-    expect(html.match(/data-queue-relayed/g)).toHaveLength(1);
-    expect(html.match(/data-queue-handle/g) ?? []).toHaveLength(0);
-    expect(html).toContain('title="对话空闲后送达"');
-    expect(html).toContain('aria-label="排队的第 2 条：其他对话 · 来自「日报」：今天的汇总 · 对话空闲后送达"');
+    // collapsed: no relayed row markup yet, just the summary line
+    expect(html).not.toContain("data-queue-relayed-list");
+    expect(html).toContain("还有 1 条别的对话在排队");
+    expect(html).toContain("data-queue-relayed-summary");
     // relayed ones alone: nothing to send now
     expect(panel({ session: { ...persona, queued_relayed: 2 }, persona: "Nova" })).not.toContain("data-send-now");
   });
@@ -495,7 +520,7 @@ describe("restoreQueued (#3032)", () => {
     for (const c of getContexts("rq")) removeContext("rq", c.id);
   });
 
-  it("puts the words in the box, the photos in the tray, the contexts on their chips and a lost photo in as its path", async () => {
+  it("puts the words in the box, the photos in the tray, the files on their tiles, the contexts on their chips and a lost photo in as its path", async () => {
     const urls: string[] = [];
     vi.stubGlobal("localStorage", { getItem: () => "tok", setItem: () => {}, removeItem: () => {} });
     vi.stubGlobal("fetch", async (url: string) => {
@@ -510,13 +535,15 @@ describe("restoreQueued (#3032)", () => {
       await restoreQueued("rq", session, parseQueued(raw));
       expect(urls).toHaveLength(2);
       expect(urls[0]).toContain("/machines/m/file/download?path=");
+      expect(getComposerFiles("rq").map((f) => [f.state, f.file?.path])).toEqual([["ready", "/tmp/spec.pdf"]]); // #8361
       expect(events).toEqual([
-        { type: "append", text: "Fix the header /tmp/spec.pdf" },
+        { type: "append", text: "Fix the header" },
         { type: "image", image: { name: "a1.jpg", mime: "image/jpeg", data: "AQID" } },
         { type: "append", text: gone },
       ]);
       expect(getContexts("rq").map(({ kind, title, text, attrs }) => ({ kind, title, text, attrs }))).toEqual([{ kind: "workspace", title: "web", text: "~/code/web", attrs: workspace.attrs }]);
     } finally {
+      getComposerFiles("rq").forEach((f) => removeFile("rq", f.id));
       off();
     }
   });

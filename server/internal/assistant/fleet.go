@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -59,6 +60,7 @@ type fleetBook struct {
 	// shorten them on their own Service before any session list comes, so an upgrade loop another test left running
 	// never reads what this one writes (#4554).
 	upgradeEvery, upgradeFor time.Duration
+	upgrades                 sync.WaitGroup // active screen-upgrade loops; database-backed fixtures wait during teardown
 	// hooked: Persona's hooks run in the session (a hook event came since the manager started).
 	hooked map[[2]string]bool
 	// stopSig: the signature of the reply each session's latest Stop ended its turn with; pushedSig: the one a
@@ -68,10 +70,12 @@ type fleetBook struct {
 	clients            assistantwire.Clients
 	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
 
-	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
-	// decorated and told (publishList), so the lists reach the hub in the order they were made.
+	// sent: what is kept of each machine's last session list told the hub (fleet.sessions): its length and digest, not
+	// its bytes. sentMu is held while a list is decorated, encoded into enc and told (publishList), so the lists reach
+	// the hub in the order they were made; enc is the one buffer every list is encoded into, reused.
 	sentMu sync.Mutex
-	sent   map[string][]byte
+	sent   map[string]sentList
+	enc    bytes.Buffer
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
@@ -111,18 +115,19 @@ type fleetBook struct {
 
 // fleetReport is what the session lists are decorated with from the assistant's snapshot.
 type fleetReport struct {
-	mu       sync.RWMutex
-	got      bool
-	sessions map[string]SessionView // by session id
-	work     map[[2]string]proto.WorkState
-	workOn   bool
-	links    map[[2]string]TodoLink
-	quiet    map[[2]string]bool
-	marks    map[[2]string][]string  // conversation → the channels its messages came from, newest first
-	turns    map[[2]string]time.Time // conversation → when a channel's turn in it was answered (zero: followed now)
-	inbox    map[string]bool         // the inbox agents' conversations
-	tasks    []TaskView              // the scheduled tasks (nil: not read yet)
-	profile  *Profile                // its settings as the hub's features need them (nil: not read yet)
+	mu        sync.RWMutex
+	got       bool
+	sessions  map[string]SessionView // by session id
+	work      map[[2]string]proto.WorkState
+	workOn    bool
+	links     map[[2]string]TodoLink
+	completed map[[2]string]TodoLink
+	quiet     map[[2]string]bool
+	marks     map[[2]string][]string  // conversation → the channels its messages came from, newest first
+	turns     map[[2]string]time.Time // conversation → when a channel's turn in it was answered (zero: followed now)
+	inbox     map[string]bool         // the inbox agents' conversations
+	tasks     []TaskView              // the scheduled tasks (nil: not read yet)
+	profile   *Profile                // its settings as the hub's features need them (nil: not read yet)
 }
 
 // fleetStore is what of the store the fleet keeps (db.DB); a store without it keeps nothing.
@@ -364,6 +369,15 @@ func sessionTurnErrorCode(c proto.Session) string {
 		}
 	}
 	return code
+}
+
+// signedOut: conversation c's last turn ended "Not logged in". The node says so only in the turn's words: TurnError while
+// the conversation's process runs, and only its last words (LastText, Claude Code's own reply) once it is listed from
+// its transcript with no process, as a task's conversation between runs is (scanOffline). The lists work the error and
+// its code out of those (latestTurnError, sessionTurnErrorCode); session.get answers the node's session as it is.
+func signedOut(c proto.Session) bool {
+	text, _ := latestTurnError(c)
+	return c.TurnErrorCode == proto.TurnErrorNotLoggedIn || turnErrorCode(text) == proto.TurnErrorNotLoggedIn
 }
 
 // userTurnError: a turn error with code is the user's to fix; a rate limit passes (or is the user's when the

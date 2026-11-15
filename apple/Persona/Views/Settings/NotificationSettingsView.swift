@@ -18,6 +18,10 @@ struct NotificationSettingsView: View {
     @State private var debugIsland = false
     /// The quiet-hours request in flight: an older one's answer does not undo a newer choice.
     @State private var quietRequest = 0
+    /// The hub's low-distraction switch (#8157); nil until read, and on a hub without it (the section stays away).
+    @State private var lowDistraction: Bool?
+    /// The low-distraction write in flight: an older one's answer does not undo a newer choice.
+    @State private var lowDistractionRequest = 0
 
     var body: some View {
         SettingsForm {
@@ -125,6 +129,9 @@ struct NotificationSettingsView: View {
             }
             #endif
 
+            // The hub's switch, for every device (#8157): after this device's own rows.
+            if let lowDistraction { lowDistractionSection(lowDistraction) }
+
             // The Mac had the button twice while notifications were off (#1224 A5): the warning above has it then.
             #if os(macOS)
             if !systemOff { systemSettingsSection }
@@ -137,6 +144,7 @@ struct NotificationSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .overlay { if page?.spinning != false { ProgressView() } }
         .task { await load() }
+        .task { await loadLowDistraction() }
         .task { await refreshPush() } // the hub's way to this device now, not the one kept since launch (#1859)
         .onChange(of: model.isLive) { _, live in
             if live { Task { await page?.reloadIfNeeded() } } // the hub is back: read what failed
@@ -210,6 +218,50 @@ struct NotificationSettingsView: View {
         return String(localized: "After finishing, Persona waits \(delay) and skips the notification if you've already looked on your computer or in the app. It notifies once, after background tasks and subagents are all done. A “long task” is a turn that ran \(long) or longer; quick answers are best read where you asked.")
     }
 
+    /// Low-distraction mode (#8157): the hub's push grading switch (docs/server/server.md "Push grading"), the same one
+    /// persona_settings `notifications.low_distraction` changes after a card. It is the hub's, not this device's: the
+    /// footer says so and what still comes.
+    private func lowDistractionSection(_ on: Bool) -> some View {
+        Section {
+            SettingsSwitchRow(title: String(localized: "Low-Distraction Mode"),
+                              detail: String(localized: "Only what needs you notifies you; the rest waits for the briefing"),
+                              symbol: Theme.Icon.muted, tint: Theme.Hue.orange, iconColor: Theme.Hue.orange,
+                              accessibilityID: "notify.lowDistraction",
+                              isOn: Binding { on } set: { saveLowDistraction($0) })
+        } footer: {
+            Text("For all your devices. When on, questions, approvals, decisions only you can make, your reminders and the main conversation's notices still notify you; task results, “Please verify” requests and other conversations' notices wait for the briefing and Held Pushes, and finished agents stay silent.")
+        }
+    }
+
+    /// Reads the switch; a hub without it (404) or one that does not answer shows no section.
+    private func loadLowDistraction() async {
+        guard let api = model.api, !model.isDemo else { return }
+        let request = lowDistractionRequest
+        let on = try? await api.pushLnMode().enabled
+        guard request == lowDistractionRequest else { return }
+        lowDistraction = on
+    }
+
+    /// Shown at once; the hub's answer then stands, and a refusal puts the switch back and says why.
+    private func saveLowDistraction(_ on: Bool) {
+        guard let api = model.api, let before = lowDistraction, before != on else { return }
+        lowDistraction = on
+        lowDistractionRequest += 1
+        let request = lowDistractionRequest
+        Task {
+            do {
+                let saved = try await api.setPushLnMode(on)
+                guard request == lowDistractionRequest else { return }
+                lowDistraction = saved.enabled
+                Haptics.success()
+            } catch {
+                guard request == lowDistractionRequest else { return }
+                lowDistraction = before
+                model.show(error)
+            }
+        }
+    }
+
     @ViewBuilder private func quietHoursSection(_ quiet: QuietHours) -> some View {
         Section {
             SettingsSwitchRow(title: String(localized: "Quiet Hours"),
@@ -255,25 +307,24 @@ struct NotificationSettingsView: View {
         }
     }
 
-    /// Optimistic like `save`, but only `quiet` goes, with this device's time zone.
+    /// Shown at once like a control's change (`NotificationSettingsModel.change`), but only `quiet` goes, with this
+    /// device's time zone, through its own endpoint.
     private func saveQuiet(_ quiet: QuietHours) {
-        guard let api = model.api, var next = prefs else { return }
-        let before = prefs
+        guard let api = model.api, prefs != nil else { return }
         var quiet = quiet
         quiet.tz = TimeZone.current.identifier
-        next.quiet = quiet
-        prefs = next
+        page?.showQuiet(quiet)
         quietRequest += 1
         let request = quietRequest
         Task {
             do {
                 let saved = try await api.setQuietHours(device: PushRegistrar.deviceID, quiet)
                 guard request == quietRequest else { return }
-                prefs = saved
+                page?.quietSaved(saved)
                 model.savedNotifyPrefs(saved)
             } catch {
                 guard request == quietRequest else { return }
-                prefs = before
+                page?.quietFailed()
                 model.show(error)
             }
         }
@@ -283,17 +334,12 @@ struct NotificationSettingsView: View {
         Binding {
             (prefs ?? NotifyPrefs())[keyPath: path]
         } set: { value in
-            guard var next = prefs else { return }
-            next[keyPath: path] = value
-            save(next)
+            page?.change { $0[keyPath: path] = value } // in order, over the hub's last answer (#1913)
         }
     }
 
-    /// The prefs as read and as the optimistic saves leave them (nil until read).
-    private var prefs: NotifyPrefs? {
-        get { page?.prefs }
-        nonmutating set { page?.prefs = newValue }
-    }
+    /// The prefs as the page shows them: the hub's last answer with the changes still waiting (nil until read).
+    private var prefs: NotifyPrefs? { page?.prefs }
 
     /// Background Push's route at this page's hub, read again (#1859).
     private func refreshPush() async {
@@ -310,26 +356,15 @@ struct NotificationSettingsView: View {
                     guard let api = api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
                     return try await api.notifyPrefs(device: PushRegistrar.deviceID)
                 },
-                applied: { LiveActivityController.shared.settings($0) }))
+                save: { next in
+                    guard let api = api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
+                    return try await api.setNotifyPrefs(device: PushRegistrar.deviceID, next)
+                },
+                applied: { LiveActivityController.shared.settings($0) },
+                saved: { Haptics.success() },
+                failed: { [model] in model.show($0) }))
         }
         await page?.load()
     }
 
-    /// Optimistic: the control moves at once and goes back if the hub says no.
-    private func save(_ next: NotifyPrefs) {
-        let before = prefs
-        prefs = next
-        LiveActivityController.shared.settings(next)
-        guard let api = model.api else { return }
-        Task {
-            do {
-                prefs = try await api.setNotifyPrefs(device: PushRegistrar.deviceID, next)
-                Haptics.success()
-            } catch {
-                prefs = before
-                if let before { LiveActivityController.shared.settings(before) }
-                model.show(error)
-            }
-        }
-    }
 }

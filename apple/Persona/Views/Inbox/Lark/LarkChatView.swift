@@ -1,5 +1,6 @@
 import SwiftUI
 import OSLog
+import PersonaWire
 
 /// Message positions are decimal strings that can outgrow Int64 in theory; compare them as numbers.
 nonisolated enum LarkPosition {
@@ -57,6 +58,8 @@ extension AppModel {
 /// Jump to Latest / You Were Mentioned jumps.
 struct LarkChatView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.shell) private var shell
+    @Environment(\.pushInboxChat) private var pushChat
     /// Polled and reported only while its page is in front: a hidden chat reports nothing to Feishu (TabActivity.swift).
     @Environment(\.tabIsActive) private var tabActive
     @Environment(\.scenePhase) private var scenePhase
@@ -241,12 +244,24 @@ struct LarkChatView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .hidesTabBarWhenShown()
         .pageToolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: openPins) { Label("Pinned Messages", systemImage: Theme.Icon.pin) }
-                    .accessibilityIdentifier("lark.pins.open")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { Task { await askPersona() } } label: { Label("Summarize with Persona", systemImage: Theme.Icon.ai) }
+            if shell != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button(action: openPins) { Label("Pinned Messages", systemImage: Theme.Icon.pin) }
+                            .accessibilityIdentifier("lark.pins.open")
+                        Button { Task { await askPersona() } } label: { Label("Summarize with Persona", systemImage: Theme.Icon.ai) }
+                    } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                        .accessibilityLabel("More")
+                        .accessibilityIdentifier("lark.chat.more")
+                }
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: openPins) { Label("Pinned Messages", systemImage: Theme.Icon.pin) }
+                        .accessibilityIdentifier("lark.pins.open")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { Task { await askPersona() } } label: { Label("Summarize with Persona", systemImage: Theme.Icon.ai) }
+                }
             }
         }
         .task {
@@ -1453,6 +1468,16 @@ struct LarkChatView: View {
         }
     }
 
+    /// The new summary goes over an inbox source page when that stack offers the route; elsewhere it opens as before.
+    @MainActor static func openSummary(_ key: SessionKey, owner: String?, model: AppModel,
+                                       push: ((InboxChatRoute) -> Void)? = nil) {
+        if let push {
+            push(InboxChatRoute(key: model.inHub(key), manager: owner))
+        } else {
+            model.openAssistantConversation(key)
+        }
+    }
+
     private func askPersona() async {
         guard let api = chatAPI else { return }
         let prompt = String(localized: "Read the recent messages in my Lark chat “\(conversation.name)” (Lark gateway feedId \(conversation.id)), summarize the key points, list what I need to reply to or handle, and suggest replies.")
@@ -1461,7 +1486,7 @@ struct LarkChatView: View {
                 try await api.showing(nil).startConversation(prompt: prompt, opID: op) // the chat's manager's; the default's names none, whichever page shows
             }
             model.began(s, text: prompt)
-            model.openAssistantConversation(s.key)
+            Self.openSummary(s.key, owner: manager, model: model, push: pushChat)
         } catch {
             model.show(error)
         }

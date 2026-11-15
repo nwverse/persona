@@ -256,6 +256,22 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 	add("machines", "machines_event", "机器事件使用与列表一致的机器类型。", "event", ws(map[string]any{"type": "machines", "machines": machines}),
 		map[string]any{"/type": "machines", "/machines/0/id": "m1", "/machines/1/id": "m2"}, "server/internal/hub/http.go: Hub.serveWS", "apple/Shared/LiveConnection.swift: ServerEvent.decode")
 
+	concernMachines := []map[string]any{
+		{"id": "pending", "name": "Pending computer", "online": true, "trust": "pending"},
+		{"id": "offline", "name": "Offline computer", "online": false, "last_seen": now},
+		{"id": "critical", "name": "Critical computer", "online": true},
+		{"id": "warning", "name": "Warning computer", "online": true},
+		{"id": "needs-you", "name": "Waiting agents computer", "online": true},
+		{"id": "mismatch", "name": "Deploying computer", "online": true, "deploying": true, "deploy_phase": "transferring"},
+		{"id": "normal", "name": "Normal computer", "online": true, "node_version": "fixture-version"},
+	}
+	add("machines-concern", "machines_concern_projection",
+		"Anonymous machine wire data for Android concern-grid presentation tests.", "machines",
+		httpJSON(map[string]any{"machines": concernMachines}),
+		map[string]any{"/machines/0/trust": "pending", "/machines/1/online": false, "/machines/5/deploying": true,
+			"/machines/5/deploy_phase": "transferring", "/machines/6/online": true},
+		"android/feature/machines/src/main/kotlin/persona/feature/machines/MachineConcern.kt",
+		"apple/Persona/Views/Machines/MachinesView.swift")
 	item := func(id string, seq int, role, kind, text string) proto.Item {
 		return proto.Item{ID: id, Seq: seq, TS: now, Role: role, Kind: kind, Text: text}
 	}
@@ -668,8 +684,8 @@ func wireCompatibility(t *testing.T, files map[string][]wireSample, add wireAdde
 		add("compatibility", bad.name, bad.desc, "compat_event", ws(bad.body), map[string]any{}, "apple/Shared/LiveConnection.swift: ServerEvent.decode", "apple/Shared/Models.swift: InteractionKind, Session.init(from:)", "docs/archive/redesign/README.md: D5（现状差异）")
 		files["compatibility"][len(files["compatibility"])-1].Expected.Accepted = false
 	}
-	add("compatibility", "session_zero_time", "Go 零时间能解码，但不算有意义的日期。", "compat_session", httpJSON(proto.Session{SessionID: "s1"}), map[string]any{"/updated_at_meaningful": false, "/seen_at_meaningful": false}, "server/internal/proto/session.go: Session", "apple/Shared/JSONValue.swift: JSON.decoder, Date.isMeaningful")
-	add("compatibility", "date_at_cutoff", "当前 iOS 将 2000 年起点本身也判为无意义日期。", "compat_session", httpJSON(map[string]any{"session_id": "s1", "updated_at": "2000-01-01T00:00:00Z"}), map[string]any{"/updated_at_meaningful": false}, "apple/Shared/JSONValue.swift: Date.isMeaningful", "docs/archive/redesign/README.md: D5（现状差异）")
+	add("compatibility", "session_zero_time", "Go 零时间能解码，但不算有意义的日期。", "compat_session", httpJSON(proto.Session{SessionID: "s1"}), map[string]any{"/updated_at_meaningful": false, "/seen_at_meaningful": false}, "server/internal/proto/session.go: Session", "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: JSON.decoder, Date.isMeaningful")
+	add("compatibility", "date_at_cutoff", "当前 iOS 将 2000 年起点本身也判为无意义日期。", "compat_session", httpJSON(map[string]any{"session_id": "s1", "updated_at": "2000-01-01T00:00:00Z"}), map[string]any{"/updated_at_meaningful": false}, "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: Date.isMeaningful", "docs/archive/redesign/README.md: D5（现状差异）")
 	for i := range files["errors"] {
 		if i == 0 {
 			files["errors"][i].HTTPStatus = 401

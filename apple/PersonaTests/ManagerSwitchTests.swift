@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The current assistant (docs/assistant/managers.md "Clients"): the assistant's routes name the manager picked in the
 /// sidebar's switcher, except one conversation's and the health space's, and an item's client names only its own manager,
@@ -248,9 +249,10 @@ struct ManagerSwitchTests {
         model.managerRosters[""] = try Self.roster(Self.oneManager)
         model.selectAssistantManager("m-1")
         #expect(model.assistantManagerID == nil && model.assistantManager == nil, "one manager: nothing is named")
-        #expect(model.currentAssistant?.name == "助手" && model.managerRoster?.isMulti == false, "one manager: it is current, without a roster switcher")
+        #expect(model.currentAssistant?.name == "助手" && model.managerRoster?.isMulti == false && model.showsAssistantSwitcher,
+                "one manager: it is current, with the roster switcher")
         model.managerRosters[""] = nil
-        #expect(model.currentAssistant == nil, "a hub without a roster: no switcher")
+        #expect(model.currentAssistant == nil && !model.showsAssistantSwitcher, "a hub without a roster: no switcher")
     }
 
     @Test func thePickIsKeptOnThisDeviceAcrossLaunches() async throws {

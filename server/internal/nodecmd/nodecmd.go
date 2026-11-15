@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/office"
 	"github.com/nwverse/persona/server/internal/osproc"
+	"github.com/nwverse/persona/server/internal/procs"
 	"github.com/nwverse/persona/server/internal/scriptcli"
 	"github.com/nwverse/persona/server/internal/toolcli"
 )
@@ -38,14 +39,14 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad notify "title" [body] [--silent] [--error] [--strict]
                            one notification to the phone; exit 0 whatever happens unless --strict (docs/integrations/script-cli.md)
   personad tool <tool> [<json args> | -] | --cli <connector> [--format json|text] <words…>
-                           a connector's tools and command line from the assistant's shell, through the hub
+                           a connector's tools from the assistant's shell, or task_spawn from a supervised Agent's pane
                            (docs/protocol/connector-protocol.md "Command line"; personad tool --help)
   personad office docx|pptx|xlsx|check …
                            write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
                            one (the office skill): personad office --help
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md「Starting from the phone」)
+                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")
 ` + iphone.Usage
 
 // SysmonUsage is `sysmon`'s line in the usage text.
@@ -53,7 +54,7 @@ const SysmonUsage = `  personad sysmon [n]       print this machine's system inf
                            every 10 s), with what they cost`
 
 // LaunchUsage is `launch`'s line in the usage text.
-const LaunchUsage = `  personad launch <name> …   run claude with a launcher kept in 设置 › 模型 (from the local node)`
+const LaunchUsage = `  personad launch <name> …   run claude with a launcher kept in Settings › Models (from the local node)`
 
 // Run runs args (args[0] is the command) when it is a device command, and says whether it was. stop undoes the caller's
 // signal handling (launch execs claude and leaves signals as they came). A command that has an exit code of its own
@@ -125,7 +126,7 @@ func runNode(ctx context.Context, args []string, b Build) error {
 			// runResident replaces itself on a restart or update (syscall.Exec): what the previous image started (the
 			// update watchdog, the herdr server, bridges) is this one's child now, and only this reaps it.
 			osproc.ReapInherited()
-			capProcs()
+			procs.AtStart()
 			return runResident(ctx, b, supervised)
 		case "tailcat":
 			return runNodeTailcat(ctx, args[1:])
@@ -148,7 +149,7 @@ func runNode(ctx context.Context, args []string, b Build) error {
 	// What a parent left inheritable (an older hub's listening socket, through its manager) stops here, not in every
 	// agent and program the node starts. Here, not in main: other commands of this binary hand descriptors on by exec.
 	osproc.SealInherited()
-	capProcs() // the resident node's too, above
+	procs.AtStart() // the resident node's too, above
 	relayed, err := node.Relay(ctx, os.Stdin, os.Stdout)
 	if relayed {
 		if errors.Is(err, io.EOF) {

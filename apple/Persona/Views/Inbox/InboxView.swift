@@ -1,5 +1,6 @@
 import BeautifulUI
 import SwiftUI
+import PersonaWire
 
 @MainActor final class InboxAccountState: ObservableObject {
     @Published var accounts = InboxMailAccounts.cached(AppModel.shared.assistantManagerID)
@@ -55,10 +56,24 @@ extension InboxView {
     static func short(_ email: String) -> String { InboxPage.short(email) }
 }
 
+/// A waiting session pushes only on its own hub's Assistant stack. Another group's card keeps the old open, which
+/// selects that group's Persona for an assistant conversation instead of leaving a foreign route on this hub's stack.
+@MainActor enum InboxWaitingOpen {
+    static func session(_ key: SessionKey, currentHub: String?, push: ((InboxChatRoute) -> Void)?, open: () -> Void) {
+        if let push, key.group == currentHub {
+            push(InboxChatRoute(key: key, manager: nil))
+        } else {
+            open()
+        }
+    }
+}
+
 /// The inbox's page itself, in whatever stack shows it: Inbox's own (InboxView), or the shell's Assistant page (pushed from
 /// the drawer, docs/apple/ios.md「New shell」), which passes `embedded` so the page brings its destinations and link handling.
 struct InboxPage: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.shell) private var shell
+    @Environment(\.pushInboxChat) private var pushChat
     @Binding var path: NavigationPath
     @ObservedObject var accountState: InboxAccountState
     var embedded = false
@@ -88,6 +103,7 @@ struct InboxPage: View {
     @State private var showingRules = false     // Rules
     @State private var showingSubscriptions = false  // source subscriptions (#2041)
     @State private var ruling: InboxPolicyTarget? // a row's Rule for This Chat / Sender / Repository…
+    @State private var todoRequest: InboxTodoRequest? // rows waiting for their to-do's due time (#6480)
     @State private var confirming = false // Clear All over many items asks first
     /// Selecting (#2059): the picked items' keys (`InboxItem.key`); nil when not selecting. Marking stays in Persona (done, with Undo).
     @State private var picked: Set<String>?
@@ -132,42 +148,10 @@ struct InboxPage: View {
                 .pageToolbar {
                     if let picked {
                         selectingToolbar(picked)
+                    } else if shell != nil {
+                        phoneToolbar
                     } else {
-                    ToolbarItem(placement: .principal) { ConnectionTitle(title: String(localized: "Inbox")) }
-                    if model.isMultiHub {
-                        // Each hub has its own inbox (docs/protocol/multi-hub.md「Terminology」): whose this is, and the others.
-                        ToolbarItem(placement: .topBarLeading) { HubSwitcher(compact: true) }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Select") { withAnimation(Theme.Motion.standard) { picked = [] } }
-                            .disabled(pickable.isEmpty)
-                            .accessibilityIdentifier("inbox.select")
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-
-                        // Mail accounts are managed in Settings › Connectors › Mail (2026-11-01, with this device's data and Lark).
-                        Menu {
-                            cleanButton
-                            Divider()
-                            Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "", manager: model.assistantManagerID, accounts: accounts) } label: { Label("New Email", systemImage: Theme.Icon.compose) }
-                                .disabled(accounts.isEmpty)
-                            Button { showingMutes = true } label: { Label("Muted [Inbox Mutes View e5e468]", systemImage: Theme.Icon.mute) }
-                            Button { showingRules = true } label: { Label("Rules [Inbox Policy]", systemImage: Theme.Icon.inboxRule) }
-                            // Every source subscription, with the Inbox's other settings, once the hub shows them (#2041).
-                            if model.hubFeatures.contains(SubscriptionsUI.feature) {
-                                Button { showingSubscriptions = true } label: {
-                                    if model.hubFeatures.contains(SubscriptionsUI.sourcesFeature) { // every source of the Inbox (#5278)
-                                        Label("Inbox Sources", systemImage: Theme.Icon.subscriptions)
-                                    } else {
-                                        Label("Subscriptions [Source Subscriptions]", systemImage: Theme.Icon.subscriptions)
-                                    }
-                                }
-                                .accessibilityIdentifier("inbox.subscriptions")
-                            }
-                        } label: { ThemedIcon(Theme.Icon.moreMenu) }
-                        .accessibilityLabel("More")
-                        .accessibilityIdentifier("inbox.more")
-                    }
+                        ordinaryToolbar
                     }
                 }
                 // selecting: the bar at the bottom is the selection's (as in Mail), not the tabs'
@@ -179,6 +163,7 @@ struct InboxPage: View {
                 .sheet(isPresented: $showingRules) { InboxRulesView() }
                 .sheet(isPresented: $showingSubscriptions) { SubscriptionsSheet() }
                 .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
+                .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
                 .confirmationDialog(InboxBulk.confirmTitle, isPresented: $confirming, titleVisibility: .visible) {
                     Button(InboxBulk.confirmButton(count: cleanScope.count)) { clean(confirmed: true) }
                         .accessibilityIdentifier("inbox.cleanConfirm")
@@ -247,6 +232,20 @@ struct InboxPage: View {
                             picked = nil
                         }
                     }
+                    // `-showInboxDue YES` / `-showInboxMerge YES` / `-showInboxTodo YES`: Select with the first two rows picked and the
+                    // due sheet open / those two merged / those two added to to-dos for today (#6480 screenshots).
+                    let actionKeys = ["showInboxDue", "showInboxMerge", "showInboxTodo"].filter { UserDefaults.standard.bool(forKey: $0) }
+                    if let action = actionKeys.first {
+                        for _ in 0..<20 where store.open.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                        picked = Set(pickable.prefix(2).map(\.key))
+                        try? await Task.sleep(for: .milliseconds(800))
+                        let two = chosen(picked ?? [])
+                        switch action {
+                        case "showInboxDue": todoRequest = InboxTodoRequest(items: two) { picked = nil }
+                        case "showInboxMerge": store.merge(two) { picked = nil }
+                        default: store.addTodos(two, due: .today) { picked = nil }
+                        }
+                    }
                     // `-showInboxDone YES`: the first group's Done open and scrolled to, its groups' titles sticking (#2059 screenshots).
                     if UserDefaults.standard.bool(forKey: "showInboxDone") {
                         for _ in 0..<20 where store.items.isEmpty || store.history.isEmpty && store.doneDays == nil { try? await Task.sleep(for: .milliseconds(500)) }
@@ -256,12 +255,12 @@ struct InboxPage: View {
                         // its newest group open (only Just Now and Today start open), then scrolled to its first row:
                         // Done's title and the group's stick above it
                         if UserDefaults.standard.bool(forKey: "showInboxDoneFolded"),
-                           let last = InboxGroups.done(done, now: .now).filter({ groupOpen("done", $0.key) }).last?.items.last {
+                           let last = InboxGroups.done(done, now: AppClock.now).filter({ groupOpen("done", $0.key) }).last?.items.last {
                             // `-showInboxDoneFolded YES`: the groups as they start (Just Now and Today open), the last
                             // open row at the top so the folded ones with their counts follow it (#2969 screenshots)
                             try? await Task.sleep(for: .milliseconds(300))
                             scrollTarget = last.key
-                        } else if let g = InboxGroups.done(done, now: .now).first {
+                        } else if let g = InboxGroups.done(done, now: AppClock.now).first {
                             setGroupOpen("done", g.key, true)
                             try? await Task.sleep(for: .milliseconds(300))
                             scrollTarget = g.items.first?.key
@@ -279,10 +278,10 @@ struct InboxPage: View {
                         if !folds.isOpen("done") { folds.toggle("done") }
                         setGroupOpen("done", key, true)
                         autoLoaded.insert(key)
-                        store.loadDoneGroup(key, range: InboxGroups.timeRange(key, now: .now))
+                        store.loadDoneGroup(key, range: InboxGroups.timeRange(key, now: AppClock.now))
                         for _ in 0..<50 where store.groupLoading.contains(key) || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
                         try? await Task.sleep(for: .milliseconds(300))
-                        scrollTarget = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                        scrollTarget = store.history.filter { InboxGroups.timeKey($0.doneAt, now: AppClock.now, recent: true) == key }
                             .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
                     }
                     // `-showInboxPickGroups YES`: Select with the mail group folded and picked whole and the Lark group picked.
@@ -330,7 +329,7 @@ struct InboxPage: View {
     /// A section's items by source (the chips' order) or by time.
     private func groupsOf(_ items: [InboxItem]) -> [InboxGroups.Group] {
         if grouping == InboxGroups.Grouping.time.rawValue {
-            return InboxGroups.byTime(items, now: .now, at: \.updatedAt)
+            return InboxGroups.byTime(items, now: AppClock.now, at: \.updatedAt)
         }
         let order = ["lark"] + accounts.map { "mail:\($0.id)" } + connectorSources.map { "c:\($0.id)" }
         return InboxGroups.bySource(items, order: order) { id in accounts.first { $0.id == id }?.email ?? id }
@@ -353,7 +352,7 @@ struct InboxPage: View {
     /// counts are of what is loaded ("n+" until the group is complete), and `next` is the group "Show Older" loads.
     /// Without them, as before: what the history has loaded, "n+" on the last group while there is more.
     private func doneGroups(_ done: [InboxItem], days: [String: Int]?) -> (groups: [DoneGroup], next: DoneGroup?) {
-        let now = Date.now
+        let now = AppClock.now
         let loaded = InboxGroups.done(done, now: now)
         guard let days else {
             let more = store.historyMore && !store.history.isEmpty
@@ -416,9 +415,14 @@ struct InboxPage: View {
                     ThemedIcon(n == 0 ? Theme.Icon.unchecked : n == g.items.count ? Theme.Icon.successFilled : Theme.Icon.partlyChecked)
                         .font(Theme.Font.heading)
                         .foregroundStyle(n == 0 ? Color.secondary : Theme.accent)
+                        .tapTargetHeight()
+                        // A finger wide too, the title where it was: hit over the header's inset and the gap before the
+                        // title, whose own button, drawn after it, keeps its taps (#6658).
+                        .tapTargetOutset(.horizontal)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "Select All in \(g.title)"))
+                .accessibilityIdentifier("inbox.pickGroup")
             }
             Button {
                 withAnimation(Theme.Motion.standard) { setGroupOpen(section, g.key, !open) }
@@ -432,13 +436,15 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.groupTitle")
             if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush) // its buttons are the room above and below (#6576)
         .id(Self.groupID(section, g.key))
     }
 
@@ -464,6 +470,64 @@ struct InboxPage: View {
         }
     }
 
+    @ToolbarContentBuilder private var ordinaryToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) { ConnectionTitle(title: String(localized: "Inbox")) }
+        if model.isMultiHub {
+            // Each hub has its own inbox (docs/protocol/multi-hub.md「Terminology」): whose this is, and the others.
+            ToolbarItem(placement: .topBarLeading) { HubSwitcher(compact: true) }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button("Select") { withAnimation(Theme.Motion.standard) { picked = [] } }
+                .disabled(pickable.isEmpty)
+                .accessibilityIdentifier("inbox.select")
+        }
+        ToolbarItem(placement: .topBarTrailing) { moreMenu(selection: false) }
+    }
+
+    /// iPhone shell: one trailing action; selection and the hub scope join the page's other settings.
+    @ToolbarContentBuilder private var phoneToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) { ConnectionTitle(title: String(localized: "Inbox")) }
+        ToolbarItem(placement: .topBarTrailing) { moreMenu(selection: true) }
+    }
+
+    private func moreMenu(selection: Bool) -> some View {
+        Menu {
+            if selection {
+                Button("Select") { withAnimation(Theme.Motion.standard) { picked = [] } }
+                    .disabled(pickable.isEmpty)
+                    .accessibilityIdentifier("inbox.select")
+                if model.isMultiHub, let current = model.hub?.group {
+                    Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
+                        ForEach(model.groupIDs, id: \.self) { g in
+                            Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(g)
+                        }
+                    }
+                    .accessibilityIdentifier("hub.switcher")
+                }
+                Divider()
+            }
+            cleanButton
+            Divider()
+            Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "", manager: model.assistantManagerID, accounts: accounts) } label: { Label("New Email", systemImage: Theme.Icon.compose) }
+                .disabled(accounts.isEmpty)
+            Button { showingMutes = true } label: { Label("Muted [Inbox Mutes View e5e468]", systemImage: Theme.Icon.mute) }
+            Button { showingRules = true } label: { Label("Rules [Inbox Policy]", systemImage: Theme.Icon.inboxRule) }
+            // Every source subscription, with the Inbox's other settings, once the hub shows them (#2041).
+            if model.hubFeatures.contains(SubscriptionsUI.feature) {
+                Button { showingSubscriptions = true } label: {
+                    if model.hubFeatures.contains(SubscriptionsUI.sourcesFeature) { // every source of the Inbox (#5278)
+                        Label("Inbox Sources", systemImage: Theme.Icon.subscriptions)
+                    } else {
+                        Label("Subscriptions [Source Subscriptions]", systemImage: Theme.Icon.subscriptions)
+                    }
+                }
+                .accessibilityIdentifier("inbox.subscriptions")
+            }
+        } label: { ThemedIcon(Theme.Icon.moreMenu) }
+        .accessibilityLabel("More")
+        .accessibilityIdentifier("inbox.more")
+    }
+
     /// The picked items the list still has open (one filed meanwhile, elsewhere, drops out).
     private func chosen(_ picked: Set<String>) -> [InboxItem] { openItems.filter { picked.contains($0.key) } }
 
@@ -474,21 +538,66 @@ struct InboxPage: View {
         ToolbarItem(placement: .principal) {
             Text("\(chosen.count) Selected").font(Theme.Font.heading).lineLimit(1)
         }
-        ToolbarItem(placement: .topBarLeading) {
-            // Select All adds what is in sight (a folded group picked whole stays picked); Deselect All clears all
-            Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
-                self.picked = all ? [] : picked.union(pickable.map(\.key))
+        if shell != nil {
+            // iPhone's place root has one leading button, ☰, so Select All belongs with the other selection actions below.
+            ToolbarItemGroup(placement: .bottomBar) {
+                // Select All adds what is in sight (a folded group picked whole stays picked); Deselect All clears all.
+                Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
+                    self.picked = all ? [] : picked.union(pickable.map(\.key))
+                }
+                .disabled(pickable.isEmpty)
+                .accessibilityIdentifier("inbox.selectAll")
+                Spacer()
             }
-            .disabled(pickable.isEmpty)
-            .accessibilityIdentifier("inbox.selectAll")
+        } else {
+            // The iPad and other non-shell layouts keep their original leading Select All beside Back or the hub picker.
+            ToolbarItem(placement: .topBarLeading) {
+                Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
+                    self.picked = all ? [] : picked.union(pickable.map(\.key))
+                }
+                .disabled(pickable.isEmpty)
+                .accessibilityIdentifier("inbox.selectAll")
+            }
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button("Done") { withAnimation(Theme.Motion.standard) { self.picked = nil } }
                 .accessibilityIdentifier("inbox.selectDone")
         }
-        ToolbarItemGroup(placement: .bottomBar) {
-            Spacer()
-            // One request, versions checked, Undo on the toast (InboxStore.setDone); selecting ends.
+        // One item across the bar, so the three actions are measured together: the words where they fit, and where they do not
+        // (large text, a long language) Add to To-Dos is an icon, still named for VoiceOver. Separate toolbar items would fold
+        // Mark as Done into an overflow menu instead.
+        ToolbarItem(placement: .bottomBar) {
+            ViewThatFits(in: .horizontal) {
+                pickedBar(words: true)
+                pickedBar(words: false)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// The bar's three actions. Merge: the picked rows become one row (undoable); Add to To-Dos asks the due time; Mark as Done is
+    /// one request with Undo on the toast (`InboxStore.setDone`). Each ends selecting when it went through.
+    private func pickedBar(words: Bool) -> some View {
+        let chosen = chosen(picked ?? [])
+        return HStack(spacing: Theme.Space.l) {
+            Button("Merge Rows") {
+                store.merge(chosen) { withAnimation(Theme.Motion.standard) { self.picked = nil } }
+            }
+            .disabled(!InboxStore.canMerge(chosen))
+            .accessibilityIdentifier("inbox.mergePicked")
+            Menu {
+                InboxDueButtons(add: { due in addTodos(chosen, due) }, pick: { todoRequest = InboxTodoRequest(items: chosen) { self.picked = nil } })
+            } label: {
+                if words {
+                    Text("Add to To-Dos")
+                } else {
+                    Label("Add to To-Dos", systemImage: Theme.Icon.todo).labelStyle(.iconOnly)
+                }
+            }
+            .disabled(chosen.isEmpty)
+            .accessibilityLabel("Add to To-Dos")
+            .accessibilityIdentifier("inbox.todoPicked")
+            Spacer(minLength: 0)
             Button("Mark as Done") {
                 withAnimation(Theme.Motion.standard) {
                     store.setDone(chosen, true)
@@ -498,6 +607,13 @@ struct InboxPage: View {
             .disabled(chosen.isEmpty)
             .accessibilityIdentifier("inbox.markPickedDone")
         }
+        .lineLimit(1)
+        .buttonStyle(.borderless)
+    }
+
+    /// Add to To-Dos with a due: one to-do per row; selecting ends once they were added.
+    private func addTodos(_ items: [InboxItem], _ due: InboxDue) {
+        store.addTodos(items, due: due) { withAnimation(Theme.Motion.standard) { self.picked = nil } }
     }
 
     private func pick(_ it: InboxItem) {
@@ -531,13 +647,18 @@ struct InboxPage: View {
     /// `InboxBulk.confirmFrom` items on it asks first. One request, Undo after (docs/assistant/inbox.md「Clean up all」).
     private var cleanButton: some View {
         let scope = cleanScope
+        // Nothing to count yet (#7551): nothing shown while the list is read (the page's spinner), or after a read that
+        // failed (its red line); then the menu says no scope at all rather than that nothing is left.
+        let unread = store.items.isEmpty
+        let line = InboxBulk.scopeLine(filters: filterNames, query: query, count: scope.count,
+                                       loading: unread && (store.loading || !store.listed), failed: unread && store.error != nil)
         return Button { clean(confirmed: false) } label: {
             Label("Clean up all", systemImage: Theme.Icon.cleanUpAll)
-            Text(InboxBulk.scopeLine(filters: filterNames, query: query, count: scope.count))
+            if let line { Text(line) }
         }
         .disabled(scope.isEmpty)
         // A menu item's subtitle is drawn but not read out: the spoken name says what it covers and how many too.
-        .accessibilityLabel(Text("Clean up all") + Text(verbatim: String(localized: ", ")) + Text(InboxBulk.scopeLine(filters: filterNames, query: query, count: scope.count)))
+        .accessibilityLabel(line.map { Text("Clean up all") + Text(verbatim: String(localized: ", ")) + Text($0) } ?? Text("Clean up all"))
         .accessibilityIdentifier("inbox.cleanUpAll")
     }
 
@@ -548,6 +669,51 @@ struct InboxPage: View {
             return
         }
         withAnimation(Theme.Motion.standard) { store.clean(scope) }
+    }
+
+    // MARK: Nothing open (#7551)
+
+    /// What the list says with nothing open in it: the seal for the whole Inbox only.
+    nonisolated enum EmptyKind: Equatable {
+        /// No chip and no search: the whole Inbox is done.
+        case caughtUp
+        /// A source or kind chip leaves nothing open (a search too, maybe): the Inbox outside it may still hold plenty.
+        case filtered
+        /// A search alone finds nothing open.
+        case noMatch
+    }
+
+    /// The web's rule (#7478): a chip, with or without a search, is "filters"; a search alone is "no matches".
+    nonisolated static func emptyKind(source: String, kind: String, query: String) -> EmptyKind {
+        if !source.isEmpty || !kind.isEmpty { return .filtered }
+        return query.isEmpty ? .caughtUp : .noMatch
+    }
+
+    /// Nothing open: All Caught Up and its seal, or under the chips or a search a neutral mark that says what is empty and
+    /// the way back to the whole Inbox (the chips are kept on this device, so a list left filtered opens filtered).
+    @ViewBuilder private var emptyState: some View {
+        switch Self.emptyKind(source: source, kind: kind, query: query) {
+        case .caughtUp:
+            EmptyStateView(symbol: "checkmark.seal", title: String(localized: "All Caught Up"),
+                           message: String(localized: "New Lark messages and emails show up here."))
+        case .filtered:
+            EmptyStateView(symbol: Theme.Icon.filter, title: String(localized: "Nothing Open Matches These Filters"),
+                           message: String(localized: "Clear the filters to see the whole Inbox."),
+                           action: (String(localized: "Clear Filters"), clearFilters), tint: .secondary)
+        case .noMatch:
+            EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Matches"), message: String(localized: "Try a different search."),
+                           action: (String(localized: "Clear Search"), clearFilters), tint: .secondary)
+        }
+    }
+
+    /// Clear Filters / Clear Search: back to the whole Inbox, its chips and its search both cleared (as the web's).
+    private func clearFilters() {
+        withAnimation(Theme.Motion.standard) {
+            source = ""
+            kind = ""
+            query = ""
+        }
+        Haptics.tap()
     }
 
     private var list: some View {
@@ -596,8 +762,7 @@ struct InboxPage: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             } else if openItems.isEmpty && waitingAgents.isEmpty && !store.loading {
-                EmptyStateView(symbol: "checkmark.seal", title: query.isEmpty ? String(localized: "All Caught Up") : String(localized: "No Matches"),
-                               message: query.isEmpty ? String(localized: "New Lark messages and emails show up here.") : String(localized: "Try a different search."))
+                emptyState
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
@@ -650,7 +815,6 @@ struct InboxPage: View {
                     // iPhone the scroll edge reached from the top down to it, over every row between (#4218).
                     Section {
                         doneHeader(count: count, groups: dg, proxy: proxy)
-                            .listRowInsets(.vertical, Theme.Space.s)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                             .accessibilityAddTraits(.isHeader)
@@ -713,9 +877,11 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.doneTitle")
             if groups.count > 1 {
                 Menu {
                     ForEach(groups) { g in
@@ -725,13 +891,18 @@ struct InboxPage: View {
                     Button("Collapse All") { for g in groups { setGroupOpen("done", g.id, false) } }
                     Button("Expand All") { for g in groups { setGroupOpen("done", g.id, true) } }
                 } label: {
+                    // a finger wide too: the two-character zh-Hans label is about 30 pt
                     Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
+                        .tapTargetHeight()
+                        .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .frame(minWidth: Theme.Size.tapTarget, alignment: .trailing)
+                        .contentShape(.rect)
                 }
                 .accessibilityIdentifier("inbox.jumpTo")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
         .id("|done")
     }
 
@@ -753,7 +924,7 @@ struct InboxPage: View {
             for _ in 0..<50 where first == nil {
                 try? await Task.sleep(for: .milliseconds(100))
                 if store.groupLoading.contains(key) { continue }
-                first = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                first = store.history.filter { InboxGroups.timeKey($0.doneAt, now: AppClock.now, recent: true) == key }
                     .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
             }
             guard let first else { return }
@@ -767,7 +938,9 @@ struct InboxPage: View {
         HStack(spacing: Theme.Space.sm) {
             if InboxItem.Tier(rawValue: key)?.folds == false {
                 // In Progress: always open, a plain title (inbox phase 1).
+                // as tall as the other sections' titles, which are buttons
                 Text("\(title) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
+                    .tapTargetHeight()
                 Spacer(minLength: 0)
             } else {
             Button {
@@ -780,19 +953,24 @@ struct InboxPage: View {
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
+                .tapTargetHeight()
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("inbox.sectionTitle")
             }
             if let clear {
-                Button(clear.0) { withAnimation(Theme.Motion.standard) { clear.1() } }
-                    .font(Theme.Font.secondary)
-                    .lineLimit(1)
-                    .buttonStyle(.borderless)
+                Button { withAnimation(Theme.Motion.standard) { clear.1() } } label: {
+                    Text(clear.0).tapTargetHeight().contentShape(.rect)
+                }
+                .font(Theme.Font.secondary)
+                .lineLimit(1)
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("inbox.clear")
             }
         }
         .textCase(nil)
-        .padding(.vertical, Theme.Space.xxs)
+        .listRowInsets(.vertical, Theme.Space.flush)
     }
 
     private func agentRow(_ ix: Interaction) -> some View {
@@ -810,7 +988,7 @@ struct InboxPage: View {
     private func open(_ ix: Interaction) {
         // A card on no session has no chat: it opens by itself (#4059).
         if ix.isSessionless { answering = ix; return }
-        model.open(ix.sessionKey) // in its own group (another group's Persona: that group's)
+        InboxWaitingOpen.session(ix.sessionKey, currentHub: model.hub?.group, push: pushChat, open: { model.open(ix.sessionKey) })
     }
 
     @ViewBuilder private func row(_ it: InboxItem) -> some View {
@@ -857,6 +1035,9 @@ struct InboxPage: View {
             Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
         } else {
             Button { store.setDone(it, true) } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }
+            Menu {
+                InboxDueButtons(add: { store.addTodos([it], due: $0) }, pick: { todoRequest = InboxTodoRequest(items: [it]) })
+            } label: { Label("Add to To-Dos", systemImage: Theme.Icon.todo) }
         }
         if let mutes = it.mutes, !mutes.isEmpty {
             Section {
@@ -985,6 +1166,7 @@ struct InboxRow: View {
     static let textColumn: CGFloat = 52
 
     var body: some View {
+        let now = self.now
         HStack(alignment: .top, spacing: Theme.Space.m) {
             avatar
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -1008,7 +1190,7 @@ struct InboxRow: View {
                                 // white, where the row sets the words' color for these (MacHoverRow).
                                 .font(Theme.Font.secondary)
                                 .foregroundStyle(item.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary.opacity(0.9))).lineLimit(2)
-                            Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                            if !item.repeatsSummary { Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1) }
                         }
                     } else {
                         Text(from).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
@@ -1025,7 +1207,14 @@ struct InboxRow: View {
                 if showAccount && !item.isLark {
                     Text(item.accountName).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if let mark = InboxEventText.mark(item) {
+                if let merged = item.mergedFrom?.count, merged > 0 {
+                    // Rows merged into this one (#6480): plain grey small text
+                    Text("Merged from \(merged + 1) rows").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .accessibilityIdentifier("inbox.mergedFrom")
+                }
+                if let now, !item.isDone {
+                    nowLine(now)
+                } else if let mark = InboxEventText.mark(item) {
                     // Inbox phase 1: the suggestion (it replaces the AI agent's draft card, which a hub mirrors it
                     // into), In Progress's state, the 'preparing a suggestion' line; its buttons are in the detail.
                     InboxEventMarkLine(mark: mark).padding(.top, Theme.Space.xxs)
@@ -1049,8 +1238,34 @@ struct InboxRow: View {
         .contentShape(.rect)
     }
 
+    /// The shared state key wins over the old mark. The frozen Mac list keeps its existing row and mark.
+    private var now: String? {
+        #if os(macOS)
+        nil
+        #else
+        InboxNow.text(for: item)
+        #endif
+    }
+
+    /// The same state line as the other clients: waiting has a still clock, only AI work spins, and anything that
+    /// needs the owner carries the existing Needs you mark. FYI and folded states do not spin.
+    private func nowLine(_ words: String) -> some View {
+        let symbol = InboxNow.symbol(for: item)
+        return HStack(spacing: Theme.Space.sm) {
+            InboxNowSymbol(symbol: symbol)
+            Text(words).font(Theme.Font.label)
+                .foregroundStyle(symbol == .failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                .lineLimit(1)
+        }
+        .padding(.top, Theme.Space.xxs)
+    }
+
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
+        if item.isAssistantRow { return item.preview } // the tag says who: no "Assistant:" in front
+        #if !os(macOS)
+        if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
+        #endif
         if let doc = item.doc { return doc.typeName + " · " + item.preview } // the preview names who: Li Lei mentioned you
         if item.moment != nil { return String(localized: "\(item.sender ?? ""): \(item.preview)", comment: "Who wrote it: what they wrote") } // who commented, on the post in the title
         if let c = item.connector { // example-org/example-repo#12 · bob: please take a look
@@ -1063,6 +1278,17 @@ struct InboxRow: View {
     }
 
     private var avatar: some View {
+        Group {
+            if item.isAssistantRow {
+                // The assistant's own row wears the assistant's avatar, with no source badge.
+                PersonaAvatar(size: Theme.Size.avatar).opacity(item.isDone ? 0.6 : 1)
+            } else {
+                sourceAvatar
+            }
+        }
+    }
+
+    private var sourceAvatar: some View {
         ZStack(alignment: .bottomTrailing) {
             Group {
             if let doc = item.doc {
@@ -1232,18 +1458,26 @@ struct InboxAgentRow: View {
 
 // MARK: - Detail
 
-/// One inbox item opened: the Feishu chat at its first new message, or the mail, or what a plugin draws for its source
-/// (placement inbox_item, `InboxItemSlotContent`); the AI's summary with AI Draft Reply / Hand to AI on top, Done in the
-/// toolbar, whoever draws the body.
+/// One inbox item opened: on iOS an ordinary native chat or mail stays behind View original until asked for, so the detail
+/// alone reports nothing read; an extension's source action opens that native source directly. Other sources keep their
+/// existing body (placement inbox_item, `InboxItemSlotContent`). The AI's summary with AI Draft Reply / Hand to AI is on
+/// top, Done in the toolbar, whoever draws the body.
 struct InboxDetailView: View {
     var item: InboxItem
     var accounts: [MailAccount]
     @Environment(AppModel.self) private var model
+    @Environment(\.shell) private var shell
     @Environment(\.dismiss) private var dismiss
     @State private var drafting = false
     @State private var handingOff = false
+    @State private var sameMatter = false
     @State private var ruling: InboxPolicyTarget?
+    @State private var todoRequest: InboxTodoRequest?
     @State private var slot: InboxItemSlotModel
+    #if os(iOS)
+    /// The expanded item's key; nil keeps every newly opened or reused detail collapsed.
+    @State private var expandedSourceKey: String?
+    #endif
 
     init(item: InboxItem, accounts: [MailAccount]) {
         self.item = item
@@ -1259,7 +1493,14 @@ struct InboxDetailView: View {
                 InboxDraftSheet(item: current, accounts: accounts, onSent: { dismiss() })
             }
             .sheet(isPresented: $handingOff) { InboxHandOffSheet(item: current) }
+            .sheet(isPresented: $sameMatter) { InboxSameMatterPicker(item: current, tree: nil) }
             .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
+            .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
+            #if os(iOS)
+            .onChange(of: item.key) { _, _ in
+                expandedSourceKey = nil
+            }
+            #endif
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1271,29 +1512,54 @@ struct InboxDetailView: View {
             }
             #endif
             .pageToolbar {
-                if let mutes = current.mutes, !mutes.isEmpty {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu { InboxRuleButtons(item: current) { ruling = $0 } } label: { ThemedIcon(Theme.Icon.moreMenu) }
-                            .accessibilityLabel("More")
-                            .accessibilityIdentifier("inbox.detail.more")
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if current.isDone {
-                        Button { InboxStore.shared.setDone(current, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
-                    } else {
-                        Button {
-                            InboxStore.shared.setDone(current, true)
-                            dismiss()
-                        } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }
-                            .accessibilityIdentifier("inbox.detail.done")
+                    Menu {
+                        if shell != nil {
+                            if current.isDone {
+                                Button { InboxStore.shared.setDone(current, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
+                            } else {
+                                Button {
+                                    InboxStore.shared.setDone(current, true)
+                                    dismiss()
+                                } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }
+                                    .accessibilityIdentifier("inbox.detail.done")
+                            }
+                            Divider()
+                        }
+                        if !current.isDone {
+                            // Add to To-Dos (#6480): the row counts as handled, so the page closes like Done
+                            Menu {
+                                InboxDueButtons(add: { InboxStore.shared.addTodos([current], due: $0) { dismiss() } },
+                                                pick: { todoRequest = InboxTodoRequest(items: [current]) { dismiss() } })
+                            } label: { Label("Add to To-Dos", systemImage: Theme.Icon.todo) }
+                        }
+                        if let mutes = current.mutes, !mutes.isEmpty {
+                            InboxRuleButtons(item: current) { ruling = $0 }
+                        }
+                        Button { sameMatter = true } label: { Label("Same matter as…", systemImage: Theme.Icon.link) }
+                            .accessibilityIdentifier("inbox.detail.sameMatter")
+                    } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                        .accessibilityLabel("More")
+                        .accessibilityIdentifier("inbox.detail.more")
+                }
+                if shell == nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if current.isDone {
+                            Button { InboxStore.shared.setDone(current, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
+                        } else {
+                            Button {
+                                InboxStore.shared.setDone(current, true)
+                                dismiss()
+                            } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }
+                                .accessibilityIdentifier("inbox.detail.done")
+                        }
                     }
                 }
             }
     }
 
     /// An event (inbox phase 1: recap, a suggestion, the chain) opens as its own page, the source behind 'view original';
-    /// anything else as before: the source with the actions over it.
+    /// anything else keeps the actions over its body, with an ordinary native chat or mail collapsed on iOS until opened.
     @ViewBuilder private var page: some View {
         if current.isEvent {
             InboxEventPage(item: current, accounts: accounts, draft: { drafting = true })
@@ -1314,21 +1580,113 @@ struct InboxDetailView: View {
             InboxConnectorDetailView(item: current)
         } else if let m = current.moment {
             LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(current.manager)) // the post and its comments, as a shared Moments card opens
-        } else if let c = item.larkConversation {
-            LarkChatView(conversation: c, manager: model.linkManager(current.manager))
-        } else if let m = item.mailSummary {
-            MailDetailView(summary: m, accounts: accounts)
+        } else if item.larkConversation != nil || item.mailSummary != nil {
+            #if os(iOS)
+            if slot.showsSource {
+                originalSource
+            } else {
+                collapsibleSource
+            }
+            #else
+            originalSource
+            #endif
         } else {
             EmptyStateView(symbol: "questionmark", title: item.title, message: item.preview)
         }
+    }
+
+    /// The unchanged source, opened directly on other platforms and by an extension, or explicitly expanded on iOS.
+    @ViewBuilder private var originalSource: some View {
+        if let c = item.larkConversation {
+            LarkChatView(conversation: c, manager: model.linkManager(current.manager))
+        } else if let m = item.mailSummary {
+            MailDetailView(summary: m, accounts: accounts)
+        }
+    }
+
+    #if os(iOS)
+    private var showsOriginalSource: Bool {
+        expandedSourceKey == item.key
+    }
+
+    /// Only the expanded branch mentions the source views: `InboxItemSlotContent` can evaluate its plain content eagerly,
+    /// so neither a chat nor a mail reader may be constructed while this row is collapsed.
+    @ViewBuilder private var collapsibleSource: some View {
+        Group {
+            if showsOriginalSource {
+                originalSource
+            } else {
+                // The chat owns its title only while expanded; the collapsed detail must keep naming the item.
+                Spacer()
+                    .navigationTitle(current.title)
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: Theme.Space.flush) { sourceDisclosure }
+    }
+
+    /// The one entry stays above the source in both states; its preview follows the inbox row's metadata and sender line.
+    private var sourceDisclosure: some View {
+        Button(action: toggleOriginalSource) {
+            HStack(spacing: Theme.Space.s) {
+                Text(sourcePreview)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+                Label(showsOriginalSource ? String(localized: "Collapse") : String(localized: "View original"), systemImage: Theme.Icon.openDocument)
+                    .font(Theme.Font.captionMedium)
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.Space.page)
+            .tapTargetHeight()
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("inbox.detail.source")
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var sourcePreview: String {
+        if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
+        guard let sender = item.sender, !sender.isEmpty, item.lark?.isGroup != false || !item.isLark else { return item.preview }
+        return String(localized: "\(sender): \(item.preview)", comment: "Who wrote it: what they wrote")
+    }
+
+    private func toggleOriginalSource() {
+        withAnimation(Theme.Motion.standard) {
+            expandedSourceKey = showsOriginalSource ? nil : item.key
+        }
+    }
+    #endif
+}
+
+/// Values a destination needs directly: an outer NavigationStack / NavigationSplitView does not reliably forward them
+/// to pushed pages on iPad. Both are optional on Mac, Vision and the classic layouts, preserving their fallbacks.
+struct InboxDestinationEnvironment: ViewModifier {
+    var chat: ((InboxChatRoute) -> Void)? = nil
+    var openFeishu: ((FeishuRoute) -> Void)? = nil
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.pushInboxChat, chat)
+            .environment(\.feishuOpen, openFeishu)
     }
 }
 
 /// The pages the inbox opens, in either layout (`SplitNavigation`).
 struct InboxDestinations: ViewModifier {
     var accounts: [MailAccount]
+    var inboxChat: ((InboxChatRoute) -> Void)? = nil
+    var openFeishu: ((FeishuRoute) -> Void)? = nil
     @Environment(AppModel.self) private var model
-    @Environment(\.feishuOpen) private var feishuOpen
+    @Environment(\.feishuOpen) private var inheritedFeishuOpen
+    private var routeOpen: ((FeishuRoute) -> Void)? { openFeishu ?? inheritedFeishuOpen }
 
     // Links on these pages open in the app (feishuHandlesLinks) wherever the stack is: the shell pushes them onto its
     // own stack, where the inbox page's handler does not reach. Those on an item's pages, and on a document or post
@@ -1340,15 +1698,18 @@ struct InboxDestinations: ViewModifier {
             // and draft under the new chat's title (#885).
             .navigationDestination(for: InboxItem.self) {
                 InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage()
-                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.manager))
+                    .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.manager))
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             .navigationDestination(for: FeishuRoute.self) {
-                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(feishuOpen, manager: $0.manager)
+                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(routeOpen, manager: $0.manager)
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             // view original and the chain's links of an event (inbox phase 1).
             .navigationDestination(for: InboxSourceRoute.self) {
                 InboxSourcePage(route: $0, accounts: accounts).splitDetailPage()
-                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.item.manager))
+                    .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.item.manager))
+                    .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }
             .extensionPushDestination()
     }

@@ -46,6 +46,8 @@ type larkCall struct {
 	CLI  bool     // lark-cli
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown)
 	Args []string // lark-cli's arguments, for the phone card
+
+	relBody bool // the body is a relative @file, read from the conversation's directory (classifyLark, #8404)
 }
 
 // larkVerdict: what the gate makes of a whole Bash command.
@@ -84,6 +86,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
 	}
+	analysisCommand := normalizeLarkCommand(command, cwd, cfg.Gates)
 	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
 	if v.deny != "" {
 		return "deny", v.deny, nil
@@ -91,13 +94,15 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	health := n.gates().healthSession(session) || identity.InHealthSpace(cwd)
 	mode, _ := n.modesOf(session)
 	bypass := !health && mode == proto.ModeBypass && n.isAssistantSession(session) && n.guestOf(session) == nil
-	safe := len(v.calls) > 0 && !v.unparsed && !v.unknown && !v.unsure
+	// classified: every call read off the command and nothing else in it that the gate cannot follow.
+	classified := !v.unparsed && !v.unknown && !v.unsure
 	for _, c := range v.calls {
 		if larkDecision(cfg, c) == "deny" {
 			return "deny", "这个操作按配置不允许（" + c.Method + " " + c.Path + "）。", nil
 		}
-		safe = safe && larkBypassSafe(c)
+		classified = classified && larkBypassSafe(c)
 	}
+	safe := len(v.calls) > 0 && classified
 	if v.other {
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
@@ -107,7 +112,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			}
 		}
 		for _, g := range cfg.Gates {
-			if _, write := gateWrite([]proto.CommandGate{g}, command); write && g.Auth != nil {
+			if _, write := gateWrite([]proto.CommandGate{g}, analysisCommand); write && g.Auth != nil {
 				return "deny", "写操作要单独一条 `" + g.Command + " METHOD PATH [BODY]` 发：不放进循环、脚本或 $(…) 里，输出可以接 jq / head / grep，" +
 					"或者用 -o 写到 /tmp。这样手机上能逐条确认，确认过的才发得出去。", nil
 			}
@@ -119,10 +124,12 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		if bypass && safe {
 			return "allow", "Conversation permission mode allows these classified calls.", nil
 		}
-		g, write := gateWrite(cfg.Gates, command)
-		if write || v.cliWrite || v.unknown || larkCLIRe.MatchString(command) && !safe {
+		g, write := gateWrite(cfg.Gates, analysisCommand)
+		// Text naming lark-cli in a command with no call is not one: classifyLark marks unknown what could run it
+		// (larkgate_text.go), so a grep pattern or a note written to a file is no card (#8119).
+		if write || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !classified {
 			ix.Kind = proto.IxPermission
-			title := wholeCommandTitle(cfg.Gates, v, command, g, write)
+			title := wholeCommandTitle(cfg.Gates, v, analysisCommand, g, write)
 			if title != "" {
 				ix.ToolName, ix.Summary = title, "以你的身份在"+title+"上写（命令较复杂，整条显示）\n"+prettyBody(command)
 			} else {

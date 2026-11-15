@@ -120,12 +120,16 @@ object PersonaIcons {
     val folder: PhIcon get() = PhIcons.Folder
     /** SF Symbol `folder.fill`. */
     val folderFilled: PhIcon get() = PhIcons.Folder
+    /** SF Symbol `arrow.turn.down.right`. */
+    val followOn: PhIcon get() = PhIcons.ArrowBendDownRight
     /** SF Symbol `arrow.branch`. */
     val forkChat: PhIcon get() = PhIcons.GitBranch
     /** SF Symbol `chevron.forward`. */
     val forward: PhIcon get() = PhIcons.CaretRight
     /** SF Symbol `arrow.triangle.branch`. */
     val gitBranch: PhIcon get() = PhIcons.GitBranch
+    /** SF Symbol `star`. */
+    val gitHubStar: PhIcon get() = PhIcons.Star
     /** SF Symbol `cloud`. */
     val gitUpstream: PhIcon get() = PhIcons.Cloud
     /** SF Symbol `target`. */
@@ -216,6 +220,8 @@ object PersonaIcons {
     val notifications: PhIcon get() = PhIcons.BellSimple
     /** SF Symbol `wifi.exclamationmark`. */
     val offline: PhIcon get() = PhIcons.WifiSlash
+    /** SF Symbol `arrow.up.right`. */
+    val open: PhIcon get() = PhIcons.ArrowUpRight
     /** SF Symbol `arrow.up.forward.square`. */
     val openDocument: PhIcon get() = PhIcons.ArrowSquareOut
     /** SF Symbol `arrow.up.forward.app`. */
@@ -298,6 +304,8 @@ object PersonaIcons {
     val settings: PhIcon get() = PhIcons.Gear
     /** SF Symbol `square.and.arrow.up`. */
     val share: PhIcon get() = PhIcons.ShareNetwork
+    /** SF Symbol `rectangle.portrait.on.rectangle.portrait`. */
+    val sideSessions: PhIcon get() = PhIcons.Stack
     /** SF Symbol `sidebar.left`. */
     val sidebar: PhIcon get() = PhIcons.SidebarSimple
     /** SF Symbol `puzzlepiece.extension`. */

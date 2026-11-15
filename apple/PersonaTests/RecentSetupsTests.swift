@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// New Agent's recent setups (#2134): every case of spec/fixtures/recents/recent_setups.json (the rules the web and
 /// Android run too), the store, and what a card says and fills in.
@@ -190,6 +191,7 @@ import Testing
         #expect(RecentSetupCard.folder("/Users/me/code/persona", home: "/Users/me") == "persona")
         #expect(RecentSetupCard.folder("/Users/me/code/persona/", home: nil) == "persona")
         #expect(RecentSetupCard.folder("/Users/me", home: "/Users/me") == "~")
+        #expect(RecentSetupCard.folder("", home: "/Users/me") == String(localized: "Temporary Session")) // a start in the desktop app with no folder
         #expect(RecentSetupCard.folder("~", home: nil) == "~")
         #expect(RecentSetupCard.folder("/", home: "/Users/me") == "/")
     }

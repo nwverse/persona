@@ -44,6 +44,33 @@ func TestNextRun(t *testing.T) {
 	}
 }
 
+func TestNextRunAcrossClockChanges(t *testing.T) {
+	daily := Task{Repeat: repeatDaily, Time: "02:30", Enabled: true}
+	for _, tc := range []struct {
+		name, zone   string
+		after, first time.Time
+		following    time.Time
+	}{
+		{name: "spring gap", zone: "America/New_York",
+			after: time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC),
+			first: time.Date(2026, 3, 8, 7, 30, 0, 0, time.UTC), following: time.Date(2026, 3, 9, 6, 30, 0, 0, time.UTC)},
+		{name: "fall repeated hour", zone: "Europe/Berlin",
+			after: time.Date(2026, 10, 24, 22, 0, 0, 0, time.UTC),
+			first: time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC), following: time.Date(2026, 10, 26, 1, 30, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loc := mustZone(t, tc.zone)
+			first := nextRun(daily, tc.after, loc)
+			if !first.Equal(tc.first) {
+				t.Fatalf("first run = %v (%v), want %v", first, first.In(loc), tc.first)
+			}
+			if following := nextRun(daily, first, loc); !following.Equal(tc.following) {
+				t.Fatalf("following run = %v (%v), want %v", following, following.In(loc), tc.following)
+			}
+		})
+	}
+}
+
 func TestParseWhen(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	now := time.Date(2026, 10, 26, 16, 0, 0, 0, loc)
@@ -427,7 +454,8 @@ func TestCheckTask(t *testing.T) {
 		{Repeat: repeatDaily, Title: "早报", Prompt: "x", Time: "09:00", Weekdays: []int{5, 1, 1}},
 		{Repeat: repeatInterval, Prompt: "x", EveryMinutes: 30, PermissionMode: "bypassPermissions", Effort: "high", Launcher: "claude-fast"},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Enabled: true, PermissionMode: "acceptEdits"},
-		{Repeat: repeatOnce, Prompt: "x", At: now.Add(-time.Hour)}, // off: a past time is fine
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(-time.Hour)},                                    // off: a past time is fine
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "codex", Effort: "ultra"}, // #6181: a codex task takes its launcher's own levels
 	}
 	for _, task := range ok {
 		if err := checkTask(&task, now); err != nil {
@@ -446,6 +474,8 @@ func TestCheckTask(t *testing.T) {
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(-time.Hour), Enabled: true},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), PermissionMode: "yolo"},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Effort: "huge"},
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "claude", Effort: "ultra"}, // ultra is Codex-only
+		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "codex", Effort: "huge"},
 		{Repeat: repeatOnce, Prompt: "x", At: now.Add(time.Hour), Launcher: "rm -rf"},
 		{Repeat: "weekly", Prompt: "x"},
 		{Repeat: repeatOnce, At: now.Add(time.Hour)},

@@ -12,6 +12,7 @@
   "empty_title": "チャットはまだありません",
   "empty_body": "Personaに話しかけると、ここにチャットが表示されます。",
   "no_results": "「{query}」に一致するチャットはありません",
+  "search_partial": "以前のチャットを整理中です。まだ表示されないものがあります。",
   "archived_count_other": "アーカイブ済み（{count}）",
   "archived_footer": "アーカイブしてもリストに表示されなくなるだけで、チャットは残ります。アーカイブしたチャットでメッセージを送ると、自動的にリストに戻ります。",
   "via": "{name}から",
@@ -24,5 +25,7 @@
   "renamed": "名前を変更しました",
   "rename_title": "チャットの名前を変更",
   "title_placeholder": "チャットのタイトル",
-  "rename_hint": "設定したタイトルは自動タイトルで上書きされません。"
+  "rename_hint": "設定したタイトルは自動タイトルで上書きされません。",
+  "built_in": "内蔵",
+  "display_options": "表示オプション"
 }

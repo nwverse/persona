@@ -11,6 +11,7 @@
 | [connection.json](connection.json) | WS `hello`、`revs`；GET `/api/v1/health` | 调用 `Hub.hello`、`Hub.health`；revs 使用实际信封结构和 `client.sendJSON` |
 | [sessions.json](sessions.json) | GET `/api/v1/sessions`；WS `sessions` | `proto.Session` 经 `agentState`、`fillStateMarks` 后，用列表及事件的 map 结构发送 |
 | [machines.json](machines.json) | GET `/api/v1/machines`；WS `machines` | 调用 `Machine.snapshot`，再经 `writeJSON` 或 `sendJSON` |
+| [machines-concern.json](machines-concern.json) | Anonymous machines for Android concern-grid tests | `writeJSON` encodes the machine input |
 | [items.json](items.json) | GET `/api/v1/sessions/{mid}/{sid}/items` | `proto.Item`、`WithoutImageData`、`FoldWork`；增量和展开页调用 `Hub.sessionItems` |
 | [item_events.json](item_events.json) | WS `items`，含订阅后的补发 | 调用 `Hub.itemsToSubscribers`、`Hub.sendBacklog`，读取客户端发送队列 |
 | [interactions.json](interactions.json) | GET `/api/v1/interactions`；WS `interaction`、`interaction_resolved` | `proto.Interaction` 使用实际列表或信封结构；屏幕经 `ParseDialog`、`SecretPrompt` 处理 |
@@ -38,7 +39,7 @@
 | Persona 对话的 `queued` 先列用户自己的消息，最后 `queued_relayed` 条来自其他对话或系统，客户端只展示和拷贝这几条。 | `server/internal/proto/session.go`：`Session`；`server/internal/assistant/fleet_sessions.go`：`Service.decorateInventory`；`apple/Shared/Models.swift`：`Session.ownQueuedCount` | `sessions_assistant_queue` |
 | Persona 对话编辑队列的应答是 `{queue, images}`：`queue` 是编辑前排队的消息，`images[i]` 是第 i 条的照片（没有照片的为 null，一条都没有时整个键省略），客户端取回时放回输入框。 | `server/internal/proto/session.go`：`QueueEdit`；`server/internal/node/assistant_queue.go`：`assistantEditQueue`；`docs/protocol/protocol.md`：`POST /api/v1/sessions/{mid}/{sid}/queue`；`android/core/contracts/src/main/kotlin/persona/core/contracts/Models.kt`：`QueueEdit` | `queue_edit_images`、`queue_edit_words` |
 | 在线与离线机器使用同一类型，系统信息和版本字段可选。 | `server/internal/hub/machine.go`：`Machine.snapshot`；`apple/Shared/Models.swift`：`Machine` | `machines_list`、`machines_event` |
-| items 用 kind 区分内容块，工具输入中的自定义键名原样保留。 | `server/internal/proto/item.go`：`Item`；`apple/Shared/Models.swift`：`Item`；`apple/Shared/JSONValue.swift`：`JSONValue` | `items_all_kinds` |
+| items 用 kind 区分内容块，工具输入中的自定义键名原样保留。 | `server/internal/proto/item.go`：`Item`；`apple/Shared/Models.swift`：`Item`；`apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift`：`JSONValue` | `items_all_kinds` |
 | 助手条目携带写出它的模型（`model`），用户条目没有；客户端据此标出回复模型变化的位置。 | `server/internal/proto/item.go`：`Item.Model`；`android/core/domain/src/main/kotlin/persona/core/domain/lines/ModelChanges.kt` | `items_reply_models` |
 | 工具调用与结果共用 `tool_use_id`，失败结果携带 `is_error`。 | `proto.Item`；`apple/Shared/Models.swift`：`Item` | `items_all_kinds` |
 | 懒加载图片的 `data` 仍是空字符串，并携带尺寸和 lazy 标记，普通图片保留 base64。 | `proto.Image.Placeholder`、`WithoutImageData`；`apple/Shared/Models.swift`：`ImagePayload` | `items_all_kinds`、`items_inline_image`、`items_live_lazy`、`items_http_after` |
@@ -64,7 +65,7 @@
 | 未知会话状态和 item kind 降级为 unknown，旧会话缺字段时采用 iOS 默认值。 | `apple/Shared/Models.swift`：`SessionStatus`、`AgentState`、`ItemKind`、`Session.init(from:)` | `session_unknown_enums`、`item_unknown_kind`、`session_missing_fields` |
 | Fleet 的未知阶段降级为空阶段，未知条目 kind 降级为 screen，错误 stats 单独丢弃。 | `apple/Shared/FleetState.swift`：`init(from:)`；`apple/PersonaTests/FleetStateTests.swift`：`lenientDecoding` | `fleet_unknown_values`、`fleet_bad_optional_stats` |
 | 当前 iOS 会丢弃已知信封键类型错误、会话增强字段类型错误或未知交互类型的整条事件。 | `ServerEvent.decode`、`Session.init(from:)`、`InteractionKind` | `hello_wrong_known_type`、`session_bad_optional_field`、`interaction_unknown_kind` |
-| Go 零时间可解码，`isMeaningful` 仅接受严格晚于 2000 年起点的日期。 | `apple/Shared/JSONValue.swift`：`JSON.decoder`、`Date.isMeaningful` | `session_zero_time`、`date_at_cutoff` |
+| Go 零时间可解码，`isMeaningful` 仅接受严格晚于 2000 年起点的日期。 | `apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift`：`JSON.decoder`、`Date.isMeaningful` | `session_zero_time`、`date_at_cutoff` |
 
 ## JSON 结构
 
@@ -131,7 +132,7 @@ python3 /tmp/wire-extract.py
 swiftc -swift-version 6 -enable-bare-slash-regex \
   -module-cache-path /tmp/wire-swift/cache \
   -o /tmp/wire-swift/check \
-  apple/Shared/JSONValue.swift apple/Shared/Models.swift \
+  apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift apple/Shared/Models.swift \
   apple/Shared/FleetState.swift apple/Shared/MachineMetrics.swift \
   /tmp/wire-swift/Referenced.swift /tmp/wire-swift/Check.swift
 /tmp/wire-swift/check spec/fixtures/wire

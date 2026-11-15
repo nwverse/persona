@@ -39,6 +39,24 @@ const session = (x: Partial<Session> = {}): Session =>
 const on: PanelOptions = { switching: true };
 const provider = (s: Session, id: string, o: PanelOptions = on) => sessionPanel(s, launchers, listOf, o).providers.find((p) => p.id === id)!;
 
+describe("a Codex session that names no launcher (#6501)", () => {
+  // the computer runs the Codex App: the node offers its launcher, whose list is empty and locked (the App picks the model)
+  const appList: LauncherModels = { agent: "codex", models: [], locked: "the App picks" };
+  const withApp: Launcher[] = [...launchers, { name: "codex-app", agent: "codex", source: "codex_app" }];
+  const readApp = (name: string): ModelList => (name === "codex-app" ? { list: appList } : listOf(name));
+  const chat = session({ agent: "codex", source_kind: "codex_history", space_kind: "codex_app", agent_surface: "desktop", launcher: undefined,
+    capabilities: { send: true }, model: "gpt-6-astra", effort: "ultra", efforts: ["low", "ultra"] });
+
+  it("is the Codex App's for one of its chats: its own provider, never Claude Code's models", () => {
+    const panel = sessionPanel(chat, withApp, readApp, on);
+    const own = panel.providers.find((p) => p.engine === "codex" && p.id === "codex-app")!;
+    expect(own).toBeDefined();
+    expect(own.models?.some((m) => m.id === "opus" || m.id === "default")).toBeFalsy();
+    // Claude Code's launcher is another engine's, not this chat's own
+    expect(panel.providers.find((p) => p.id === "claude")!.unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" }));
+  });
+});
+
 describe("another launcher of the engine", () => {
   it("is picked like the session's own on a hub that switches, and stays off on an older one", () => {
     const work = provider(session(), "work");
@@ -126,6 +144,45 @@ describe("a message the switch refused", () => {
     expect(switchRefused(new ApiError(409, "failed", { code: "switch_failed_stopped", delivered: "none" }))).toBe(true);
     expect(switchRefused(new ApiError(409, "draft", { code: "input_draft", delivered: "none" }))).toBe(false);
     expect(switchRefused(new Error("x"))).toBe(false);
+  });
+});
+
+// A session a runtime runs (Paseo, #8142): its Claude Code switches its model there and never its launcher or engine
+// (the node refuses both, `switch_unsupported`), and each of its other providers is named by the provider, never by the
+// engine's id "paseo".
+describe("a session on Paseo", () => {
+  const engine: PanelOptions = { switching: true, engineSwitch: true };
+  const grokList: LauncherModels = { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true }] };
+  const kimiList: LauncherModels = { agent: "paseo", models: [{ id: "kimi-k2", name: "Kimi K2", default: true }] };
+  const paseoLaunchers: Launcher[] = [
+    { name: "my-claude", source: "paseo" }, { name: "my-claude-2", source: "paseo" }, { name: "my-codex", agent: "codex", source: "paseo" },
+    { name: "grok", agent: "paseo", source: "paseo" }, { name: "kimi", agent: "paseo", source: "paseo" },
+  ];
+  const paseoRead: Record<string, ModelList> = { "my-claude": { list: claudeList }, "my-claude-2": { list: workList }, "my-codex": { list: codexList }, grok: { list: grokList }, kimi: { list: kimiList } };
+  const paseoRaw = (name: string) => paseoRead[name]?.list;
+  const onPaseo = (x: Partial<Session>) => session({ source_kind: "runtime", source_instance_id: "paseo", host: "paseo", capabilities: { read: true, send: true, model: true, modes: true }, ...x });
+  const claude = onPaseo({ launcher: "my-claude" });
+  const grok = onPaseo({ agent: "paseo", agent_label: "Grok", launcher: "grok", model: "grok-4", effort: undefined });
+  const providers = (s: Session) => sessionPanel(s, paseoLaunchers, (name) => paseoRead[name] ?? {}, engine).providers;
+  const of = (s: Session, id: string) => providers(s).find((p) => p.id === id)!;
+
+  it("offers its Claude Code no other launcher or engine, on a hub that switches them for terminal Agents", () => {
+    expect(of(claude, "my-claude").unavailable).toBeUndefined();
+    expect(of(claude, "my-claude-2").unavailable).toBe(t("chat-modelpanel.other_provider"));
+    expect(of(claude, "my-codex").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
+    expect(pickPlan(claude, { provider: "my-claude-2", model: "glm-5.3" }, paseoRaw, engine)).toBeNull();
+    expect(pickPlan(claude, { provider: "my-codex", model: "gpt-5.5" }, paseoRaw, engine)).toBeNull();
+    // its own model still switches at once
+    expect(pickPlan(claude, { provider: "my-claude", model: "haiku" }, paseoRaw, engine)).toEqual([{ model: "haiku" }]);
+  });
+
+  it("names each provider by the provider, its own by its label", () => {
+    const own = of(grok, "grok");
+    expect([own.engine, own.engineLabel, own.unavailable]).toEqual(["grok", "Grok", undefined]);
+    expect(of(grok, "kimi").engine).toBe("kimi");
+    expect(of(grok, "kimi").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Grok", to: "kimi" }));
+    expect(of(grok, "my-claude").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Grok", to: "Claude Code" }));
+    for (const p of providers(grok)) expect(`${p.engine} ${p.unavailable ?? ""}`).not.toMatch(/paseo/i);
   });
 });
 

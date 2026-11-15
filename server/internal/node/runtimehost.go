@@ -240,9 +240,11 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// launchers: hello's launchers and runtime.launchers are offered; start_params: session.start carries the
 		// launcher picked and the form's model, permission mode, effort and space; modes: session.modes reaches a
 		// runtime with caps.modes; resume: a runtime with caps.resume that is the machine's engine is asked to take
-		// sessions over (runtimecontrol.go).
+		// sessions over (runtimecontrol.go). workspaces: runtime.workspaces is kept and, for a runtime with
+		// caps.workspaces that is the machine's engine, listed as its catalog and asked to make worktrees
+		// (runtimeworkspaces.go).
 		res := map[string]any{"protocol": RuntimeProtocol, "node_version": rh.version, "hub": rh.current() != nil,
-			"features": []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts"}}
+			"features": []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces"}}
 		if offer := rh.packageOffer(h, hello); offer != nil {
 			res["update"] = offer
 		}
@@ -334,6 +336,15 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		}
 		return
 	}
+	if event == "runtime.workspaces" { // its own workspaces (runtimeworkspaces.go): only from one that keeps them
+		var p struct {
+			Workspaces []runtimeWorkspace `json:"workspaces"`
+		}
+		if h.makesWorkspaces() && json.Unmarshal(params, &p) == nil {
+			h.setWorkspaces(cleanWorkspaces(p.Workspaces))
+		}
+		return
+	}
 	if event == "runtime.sessions" {
 		var p struct {
 			Sessions []proto.Session `json:"sessions"`
@@ -363,7 +374,12 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		if cap(list) > 2*len(list)+8 { // the list shrank: keep no array of the old size
 			list = append(make([]proto.Session, 0, len(list)), list...)
 		}
-		rewatch := rh.reg.setSessions(h, list)
+		rewatch, driven := rh.reg.setSessions(h, list)
+		for _, id := range driven { // started for the hub by another runtime: its cards go to the phone first here too
+			if h.peer != nil {
+				_ = h.peer.Notify("runtime.driven", map[string]any{"session_id": id})
+			}
+		}
 		if n == nil {
 			return
 		}

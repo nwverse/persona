@@ -51,6 +51,8 @@ import persona.android.data.Hub
 import persona.android.navigation.*
 import persona.core.contracts.*
 import persona.core.contracts.api.ConnectionState
+import persona.core.contracts.api.MainConversationSender
+import persona.core.contracts.api.MessageSender
 import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.*
 import persona.core.designsystem.dense
@@ -136,6 +138,8 @@ private fun PersonaRootContent(
     val link = MainActivity.pendingPairLink.value
     // One toast slot for the window, as iOS: the newest notice replaces the one showing; the host plays its haptic.
     LaunchedEffect(shell) { shell.feedback.notices.collect { toast.show(it) } }
+    // The GitHub star toast owed since first setup finished (#5761): here, so leaving the checklist for the shell keeps it.
+    persona.feature.settings.StarPromptWelcome(toast::show)
     CompositionLocalProvider(LocalAppFeedback provides shell.feedback) {
         Surface(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {
@@ -287,12 +291,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val currentKind by rememberUpdatedState<(SessionKey) -> ConversationKind?>(::kind)
     var assistantRequest by remember { mutableStateOf<SessionKey?>(null) }
     var assistantPending by remember { mutableStateOf<SessionKey?>(null) }
-    fun assistantTarget(key: NavKey): SessionKey? {
-        if (!embeddedAssistant) return null
-        val chat = when (key) { is ChatRoute -> key; is InteractionRoute -> key.chat; else -> null } ?: return null
-        val conversation = SessionKey(chat.machineId, chat.sessionId)
-        return conversation.takeIf { (chat.kind ?: currentKind(conversation)) == ConversationKind.Assistant }
-    }
+    fun assistantTarget(key: NavKey): SessionKey? = assistantHomeTarget(key, embeddedAssistant, currentKind)
     /** Show an assistant conversation in the Persona home rather than as a second chat page above it. */
     fun openAssistant(key: NavKey, select: Boolean): Boolean {
         val conversation = assistantTarget(key) ?: return false
@@ -304,8 +303,16 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         assistantPending = conversation
         return true
     }
-    fun openResolved(route: ResolvedRoute): AppTab =
-        if (openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+    val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
+        currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
+    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
+    fun openResolved(route: ResolvedRoute): AppTab {
+        // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
+        // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.
+        val hadInboxOrigin = navigator.hasInboxOrigin(route.key)
+        navigator.noteDirectOpen(route.key)
+        return if (!hadInboxOrigin && openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+    }
     /** Opens [route]; a card outside any session (#4808) also has Agents open its sheet, as its notification does. */
     fun openWithCard(route: ResolvedRoute) {
         selected = openResolved(route)
@@ -313,6 +320,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     remember {
         initialRoute?.let { route ->
+            navigator.noteDirectOpen(route.key)
             // The first frame already shows the requested conversation, not the home's default one.
             assistantTarget(route.key)?.let { assistantRequest = it } ?: route.open(stacks)
             route.pairingLink?.let { MainActivity.pendingPairLink.value = it }
@@ -327,9 +335,6 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         assistantRequest = conversation
         assistantPending = null
     }
-    val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
-        currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
-    }, openAssistant = { chat, select -> openAssistant(chat, select) }) }
     val router = remember { Router { m, s -> currentKind(SessionKey(m, s)) } }
     val agentsWiring by session.agentsWiring.state.collectAsStateWithLifecycle()
     val navigationWiring = remember { MutableStateFlow(agentsWiring) }
@@ -368,7 +373,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         snapshotFlow { ShellPosition(selected, machine, stacks.mapNotNull { (tab, stack) ->
             stack.mapNotNull { when (it) { is ChatRoute -> it; is InteractionRoute -> it.chat; else -> null } }
                 .lastOrNull()?.let { tab to it }
-        }.toMap()) }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
+        }.toMap(), navigator.inboxReturns()) }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
     }
     val visible = stacks.getValue(selected).lastOrNull()
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
@@ -568,6 +573,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         }
                     },
                     onRetired = { key -> sidebar.retired = sidebar.retired + key },
+                    onOpenTodo = { id -> sidebarDestination(TodoDetailRoute(id)) },
+                    onOpenAgent = { key ->
+                        sidebar.opened.value = false
+                        selected = openResolved(ResolvedRoute(AppTab.Agents, ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)))
+                    },
                     // The current assistant at the sidebar's head; its roster opens under it.
                     switcher = { head, trailing, fallback ->
                         persona.feature.settings.AssistantSwitcher(services.managers.takeUnless { services.demo }, waiting,
@@ -624,8 +634,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                                         if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
                                         else sidebar.opened.value = true
                                     })
-                                    // Something waits at another assistant: the switcher's badges say where.
-                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs))
+                                    // Something waits at another assistant: the switcher's badges say where. Still, as iOS's `AssistantWaitingDot`.
+                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs), breathes = false)
                                 }
                             }) else null) {
                         if (primary) Box(Modifier.fillMaxSize()) {
@@ -640,6 +650,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         }
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
         fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
+        val askSubscriptions = rememberSubscriptionAsk(session.sender, shell.feedback)
         val provider = entryProvider<NavKey> {
             assistantEntries(navigator) {
                 // Persona's conversation offers the next card an Agent waits on you with, as an Agent's chat does (#4339 C18).
@@ -690,7 +701,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             session.terminal?.let { terminalEntries(navigator, it, { key -> sessions.firstOrNull { s -> s.key == key }?.displayTitle },
                 panes = shell.terminalPanes.takeIf { session.demo == null }, sessions = session.sessions,
                 routed = shell::groupTerminal,
-                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation })) }
+                resumer = SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation },
+                    { session.sessions.machines.value })) }
                 ?: run {
                     entry<TerminalRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
                     entry<persona.core.navigation.TerminalPanesRoute> { UnavailablePage(stringResource(R.string.app_demo_no_terminal), navigator) }
@@ -708,7 +720,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 entry<KnowledgeRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
                 entry<KnowledgeDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
             }
-            settingsDetailEntries(navigator, services)
+            settingsDetailEntries(navigator, services, askSubscriptions)
             session.voice?.let { voiceEntries(navigator, it, session.identity, onModelConfiguration = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }) } ?: run { entry<VoiceRoute> { UnavailablePage(stringResource(R.string.app_demo_no_voice), navigator) } }
             tools?.run { register(navigator) }
         }
@@ -805,7 +817,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                       entry<PhoneToolsRoute> { session.phone?.let { PhoneToolsScreen(it, settingsNavigator) }
                           ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), settingsNavigator) }
                       assistantEntries(settingsNavigator)
-                      settingsDetailEntries(settingsNavigator, services)
+                      settingsDetailEntries(settingsNavigator, services, askSubscriptions)
                   }
                   // In a regular window the list of settings stays beside the page it opens, as on an open iPhone Duo
                   // (its divider is not kept: the sheet starts from the usual split each time). Elsewhere one page.
@@ -901,19 +913,20 @@ private fun ShellSettings(services: SettingsServices, navigator: Navigator, shel
         onBack = if (page == "settings") null else navigator::back, onNavigate = navigator::navigate, onClose = onClose)
 }
 
-/** Inbox deep links wait for the item list, then become the page the inbox list would open. */
+/** Inbox deep links wait for the item list, then read a historical item by id when the list no longer has it. */
 @Composable
 private fun InboxLink(route: NavKey, inbox: InboxRepository, navigator: Navigator, replace: (NavKey, NavKey) -> Unit) {
     val snapshot by inbox.snapshot.collectAsStateWithLifecycle()
-    var loaded by remember(route) { mutableStateOf(false) }
-    LaunchedEffect(route, inbox) {
+    var attempt by remember(route) { mutableIntStateOf(0) }
+    var destination by remember(route) { mutableStateOf<InboxDestination?>(null) }
+    val pages = LocalInboxItemPages.current
+    LaunchedEffect(route, inbox, attempt) {
+        destination = null
         try { inbox.refresh() }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { /* Cached records still resolve the link; a miss is reported below. */ }
-        loaded = true
+        catch (_: Exception) { /* Cached records and the single-item lookup still resolve what they can. */ }
+        destination = inboxDestinationWithLookup(route, snapshot.records, true, pages, inbox)
     }
-    val pages = LocalInboxItemPages.current
-    val destination = inboxDestination(route, snapshot.records, loaded, pages)
     LaunchedEffect(destination) {
         (destination as? InboxDestination.Open)?.let {
             // An item link (not a chat link) opened before the hub's list was read may be the extension's to draw.
@@ -921,8 +934,14 @@ private fun InboxLink(route: NavKey, inbox: InboxRepository, navigator: Navigato
             replace(route, it.key)
         }
     }
-    if (destination == InboxDestination.Missing) UnavailablePage(stringResource(R.string.app_inbox_item_missing), navigator)
-    else Box(Modifier.fillMaxSize().statusBarsPadding(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    when (destination) {
+        InboxDestination.Missing -> UnavailablePage(stringResource(R.string.app_inbox_item_missing), navigator)
+        InboxDestination.Failed -> Box(Modifier.fillMaxSize().statusBarsPadding(), contentAlignment = Alignment.Center) {
+            JNotice(stringResource(persona.feature.inbox.R.string.inbox_refresh_failed),
+                actionLabel = stringResource(persona.feature.inbox.R.string.inbox_retry), onAction = { attempt++ })
+        }
+        else -> Box(Modifier.fillMaxSize().statusBarsPadding(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    }
 }
 
 /**
@@ -959,6 +978,34 @@ private fun InboxItemUi(route: InboxItemUiRoute, inbox: InboxRepository, slots: 
             fallback == null -> InboxItemExtensionScreen(inbox, route, navigator, body.title, body.loading, body.refreshing, body.refresh, body.items)
             record == null -> UnavailablePage(missing, navigator)
             else -> Box(Modifier.fillMaxSize())
+        }
+    }
+}
+
+/**
+ * Set Up with … on Inbox Sources (#5308): the same hand-off as Ask Persona. The page has already closed itself.
+ * Without a main-conversation sender the Persona tab still opens, so the page is not left up doing nothing.
+ */
+@Composable
+private fun rememberSubscriptionAsk(sender: MessageSender, feedback: AppFeedback): (Navigator, String) -> Unit {
+    val scope = rememberCoroutineScope()
+    val failed = stringResource(persona.feature.chat.R.string.chat_handoff_failed)
+    return remember(sender, scope, feedback, failed) {
+        { nav, text ->
+            val main = sender as? MainConversationSender
+            if (main == null) {
+                nav.selectTab(AppTab.Persona)
+            } else scope.launch {
+                try {
+                    handToPersona(main, text, java.util.UUID.randomUUID().toString(),
+                        onQueued = { nav.selectTab(AppTab.Persona) },
+                        onBound = { key -> nav.navigate(ChatRoute(key.machineId, key.sessionId, kind = ConversationKind.Assistant)) })
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (feedback.failure(e) != true) feedback.notice(failed)
+                }
+            }
         }
     }
 }

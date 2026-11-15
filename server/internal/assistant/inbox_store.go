@@ -74,7 +74,7 @@ func (s *Service) inboxUp(w http.ResponseWriter, r *http.Request) bool {
 // loadInbox reads the items still remembered and the mutes; false when the database could not be read.
 func (s *Service) loadInbox(ctx context.Context) bool {
 	b := &s.inbox
-	if !s.loadInboxMutes(ctx) || !s.loadInboxPolicies(ctx) || !s.loadInboxFolders(ctx) {
+	if !s.loadInboxMutes(ctx) || !s.loadInboxPolicies(ctx) || !s.loadInboxFolders(ctx) || !s.loadMailBaselines(ctx) {
 		return false
 	}
 	st := s.inboxDB()
@@ -122,6 +122,12 @@ func (b *inboxBook) stored(it *InboxItem) {
 	if len(it.Chain) == 0 { // stored before chains: received and triaged, from its fields
 		it.Chain = synthesizedChain(b.userLang(), it)
 		it.ChainSeq = len(it.Chain)
+	}
+	// Loading a previously linked item is not a new message. Resume the process-local signal cursor at the
+	// stored snapshot; new batches collected after loading still change Last and reach the supervisor.
+	if a := it.Agent; a != nil && a.TodoID != "" {
+		_, a.signaled = receivedSince(it, 0, false)
+		a.signaledOf = it.Last
 	}
 }
 

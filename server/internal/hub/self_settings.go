@@ -59,11 +59,15 @@ func (h *Hub) selfSettings() []selfSetting {
 	if h.store != nil {
 		out = append(out, h.blockedClaudeDirsSetting())
 	}
+	if h.push != nil && h.push.store != nil { // the switch lives in hub_settings
+		out = append(out, h.lowDistractionSetting())
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
 	return out
 }
 
-func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, sessionID string, args json.RawMessage) (string, error) {
+func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, sessionID string, args json.RawMessage,
+	report func(proto.MCPWaitKind)) (string, error) {
 	var a struct {
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
@@ -83,14 +87,8 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	if s == nil {
 		for _, ms := range h.managerSettings(ctx, from) { // the caller's (mail, the sources' own rules): it does the change
 			if ms.Key == a.Key {
-				var res struct {
-					Text string `json:"text"`
-				}
-				if err := h.extCallTo(ctx, from, extwire.HubSettingsTool, map[string]any{"machine_id": m.cfg.ID, "session_id": sessionID,
-					"arguments": args}, &res); err != nil {
-					return "", err
-				}
-				return res.Text, nil
+				return h.managerSettingsTool(ctx, from, a.Action, map[string]any{"machine_id": m.cfg.ID, "session_id": sessionID,
+					"arguments": args})
 			}
 		}
 		return "", fmt.Errorf("no setting %q (action list shows them)", a.Key)
@@ -119,7 +117,7 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: m.cfg.ID, SessionID: sessionID, Kind: proto.IxPermission,
 		ToolName: "persona_settings", Summary: change.summary, ToolInput: shown, Fields: change.fields, SessionTitle: "Persona",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(15 * time.Minute).UTC()}
-	r, err := h.waitInteraction(ctx, ix)
+	r, err := h.waitMCPApproval(ctx, ix, report)
 	if err != nil {
 		return "", err
 	}
@@ -142,6 +140,30 @@ func orNone(s string) string {
 		return "（无）"
 	}
 	return s
+}
+
+// managerSettingsTool hands persona_settings on one of manager id's own settings to it (extwire.HubSettingsTool) and
+// answers what it says. A change is a card the manager shows, waits for (its own fifteen minutes) and then makes; the
+// hub only passes the call on. So it waits as long as its caller does, not callBus's two minutes: those told the
+// assistant the change had failed while the card stayed on the phone and was still applied when approved later
+// (#5907). When the caller stops waiting, so does the manager, which withdraws its card (serveBus's Cancels). Reading
+// (get) shows no card and keeps the two minutes.
+func (h *Hub) managerSettingsTool(ctx context.Context, id, action string, params any) (string, error) {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	call := h.callBus
+	if action != "get" {
+		call = h.callBusAsIs
+	}
+	var res struct {
+		Text string `json:"text"`
+	}
+	if err := call(ctx, id, extwire.MethodHubCall, extwire.HubCall{Method: extwire.HubSettingsTool, Params: raw}, &res); err != nil {
+		return "", err
+	}
+	return res.Text, nil
 }
 
 // managerSettings are the manager's persona_settings entries (none while it is away).

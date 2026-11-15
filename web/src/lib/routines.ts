@@ -1,13 +1,20 @@
 // The assistant's scheduled tasks (docs/assistant/assistant.md "Scheduled tasks", docs/protocol/protocol.md `/assistant/tasks`): the wire types,
-// how a task is said in words (the iOS app's AssistantScheduleText), what the editor checks, and the body it saves.
+// how a task is said in words (the iOS app's AssistantScheduleText, except that a daily rule's time is 24-hour here, as
+// its next run is; iOS still writes it in 12-hour time, #7499), what the editor checks, and the body it saves.
 // Pure functions of their arguments (`now` passed in), so they are tested without a DOM.
-import { currentLanguage, formatDate, t } from "../i18n";
+import { formatDate, t } from "../i18n";
 import { launcherTitle, type Named } from "./provider-names";
 
 export type Repeat = "once" | "daily" | "interval" | "cron";
 
 /** "Push when done": "" every run's answer is pushed, "asked" only what a run sends itself. */
 export type Push = "" | "asked";
+
+/** "When done, put it in the Inbox": "" nothing, "worthy" a row only when a run finds something worth a look, "every" a row after every run. */
+export type InboxMode = "" | "worthy" | "every";
+
+/** The hub feature that says it takes Task.inbox; without it the editor leaves the setting out. */
+export const TASK_INBOX_FEATURE = "task_inbox";
 
 /** The hub feature that says it takes Task.push; without it the editor leaves the setting out. */
 export const TASK_PUSH_FEATURE = "task_push";
@@ -60,6 +67,8 @@ export interface Task {
   /** "Push when done" (hubs with the task_push feature): "" every run's answer, "asked" only what a run sends with notify_user.
    *  An "asked" task always runs in its own conversation (docs/assistant/assistant.md "Push after running"). */
   push?: Push;
+  /** "When done, put it in the Inbox" (hubs with the task_inbox feature); independent of push (docs/assistant/assistant.md "Put it in the Inbox when done"). */
+  inbox?: InboxMode;
   /** Optional end time (RFC 3339). After it, a daily or interval task turns itself off. Ignored for once; omitted when unset. */
   until?: string;
   created_by?: string;
@@ -136,15 +145,18 @@ export function repeatsLabel(days?: number[] | null): string {
   return t("lib-routines.weekly", { days: d.map((x) => DAY_NAMES[x - 1]).join(t("lib-routines.day_separator")) });
 }
 
-/** "09:00" → "9:00 AM", "21:30" → "9:30 PM", "00:15" → "12:15 AM" (Chinese names the part of the day). */
+/** "17:05": the one way this page writes a time of day, 24-hour in every language, as its next and last runs, Up next,
+ *  the run history and the hub's cron words do; a daily rule written in 12-hour time beside a 24-hour next run made the
+ *  same moment read two ways on one card. */
+function clock(h: number, m: number): string {
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** A daily task's "HH:MM" as hm() writes a moment: "09:00", "21:30"; anything that is not HH:MM as it came. */
 export function clockLabel(hhmm?: string): string {
   if (!hhmm || !HHMM.test(hhmm)) return hhmm ?? "";
   const [h, m] = hhmm.split(":").map(Number);
-  // Chinese says the part of the day (small hours / early morning / morning…), finer than Intl's; the others read the clock their own way
-  if (currentLanguage() !== "zh-Hans") return formatDate(new Date(2000, 0, 1, h, m), { hour: "numeric", minute: "2-digit" });
-  const part = h < 5 ? t("lib-routines.part_small_hours") : h < 9 ? t("lib-routines.part_early_morning") : h < 12 ? t("lib-routines.part_morning") : h < 13 ? t("lib-routines.part_noon") : h < 18 ? t("lib-routines.part_afternoon") : t("lib-routines.part_evening");
-  const h12 = h % 12 === 0 ? 12 : h % 12;
-  return t("lib-routines.clock", { part, time: `${h12}:${String(m).padStart(2, "0")}` });
+  return clock(h, m);
 }
 
 /** "Every 30 minutes" / "Every 2 hours" / "Every 1 hour 30 minutes" / "Every day" / "Every 2 days". */
@@ -155,9 +167,9 @@ export function everyLabel(minutes: number): string {
   return m ? t("lib-routines.every_hours_minutes", { hours: h, minutes: m }) : t("lib-routines.every_hours", { count: h });
 }
 
-/** "17:05", always 24-hour. */
+/** "17:05", always 24-hour (clock). */
 export function hm(d: Date): string {
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return clock(d.getHours(), d.getMinutes());
 }
 
 /** The day part of a moment: "Today" / "Tomorrow" / "Yesterday" / "Wed" (within a week) / "Nov 2". */
@@ -194,7 +206,7 @@ export function taskTitle(task: Pick<Task, "title" | "prompt">): string {
   return first.trim() || t("lib-routines.scheduled_follow_up");
 }
 
-/** The rule in words: "Every weekday 9:00 AM" / "Every 30 minutes" / "Once · New chat" / "0 10 1 * * · At 10:00, on day 1 of the month"
+/** The rule in words: "Every weekday at 09:00" / "Every 30 minutes" / "Once · New chat" / "0 10 1 * * · At 10:00, on day 1 of the month"
  *  (a cron task's expression first, so a one-line row always shows it). */
 export function ruleText(task: Task): string {
   if (task.repeat === "interval") return everyLabel(task.every_minutes ?? 0);
@@ -315,6 +327,7 @@ export function sameTask(a: Task, b: Task): boolean {
   if ((a.session_id ?? "") !== (b.session_id ?? "")) return false;
   if ((a.permission_mode ?? "") !== (b.permission_mode ?? "")) return false;
   if ((a.push ?? "") !== (b.push ?? "")) return false;
+  if ((a.inbox ?? "") !== (b.inbox ?? "")) return false;
   if (a.repeat !== "once" && !sameInstant(a.until, b.until)) return false;
   switch (a.repeat) {
     case "once":
@@ -367,6 +380,7 @@ export function taskBody(d: Task, saved?: Task | null): Record<string, unknown> 
   if (until !== undefined) body.until = until;
   // Only when changed: a hub keeps it when left out, and one that does not know it never gets it.
   if ((d.push ?? "") !== (saved?.push ?? "")) body.push = d.push ?? "";
+  if ((d.inbox ?? "") !== (saved?.inbox ?? "")) body.inbox = d.inbox ?? "";
   return body;
 }
 

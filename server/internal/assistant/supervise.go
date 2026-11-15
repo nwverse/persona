@@ -107,6 +107,10 @@ type TaskReview struct {
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	Parks     int       `json:"parks,omitempty"`
 	DueAt     time.Time `json:"due_at,omitzero"`
+	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
+	// DecidedTold: when a supervision message carried that to the supervisor.
+	Decided     string    `json:"decided,omitempty"`
+	DecidedTold time.Time `json:"decided_told,omitzero"`
 	// RestateAt: when the hub handed this needs_user back to its supervisor because the owner could not answer it
 	// (undecidable, or owner_cannot_answer): told once.
 	RestateAt time.Time `json:"restate_at,omitzero"`
@@ -323,6 +327,11 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		return "已取消", 8
 	case reviewParked: // waits on purpose (parked.go): below everything that needs the assistant
 		return parkedHealth(v.parked(), now.Location()), 6
+	}
+	if t.DoneAt != nil && t.StartError != "" && !t.Cancelled() {
+		// Its agent never started: stored done (#1077) but nothing was done. Only the supervisor can retry it, so it
+		// heads the list rather than sitting among the finished ones.
+		return "启动失败，待你处理（重试只有你能做）", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	if t.DoneAt != nil {
 		return "", 8

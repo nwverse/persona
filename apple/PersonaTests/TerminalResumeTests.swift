@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Resume in Terminal (#5521): what the chat's ⋯ offers for an Agent that isn't running, the same rule as the web's
 /// `terminalResume` (web/src/lib/agent-resume.test.ts has the same cases). Offered for a stopped Agent, Claude Code or a
@@ -30,7 +31,7 @@ import Testing
         let herdr = machine(#"["herdr"]"#)
         #expect(session(stoppedCaps).terminalResume(on: herdr) == .available)
         #expect(session(stoppedCaps, status: "interrupted").terminalResume(on: herdr) == .available) // read as unknown
-        let codex = session(#","source_kind":"codex_history"# + stoppedCaps, agent: "codex")
+        let codex = session(#","source_kind":"codex_history""# + stoppedCaps, agent: "codex")
         #expect(codex.isStopped, "a Codex thread nothing has open is a stopped Agent too")
         #expect(codex.terminalResume(on: herdr) == .available)
         #expect(session(stoppedCaps).terminalResume(on: machine(nil)) == .available, "a hub before engine sets: the node's word holds")

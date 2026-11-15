@@ -69,6 +69,8 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 	devices := s.devices(ctx)
 	b := &s.health
 	var wg sync.WaitGroup
+	round := time.Now()
+	var scheduled time.Duration // machines started so far, times healthStagger: see healthStagger
 	for _, d := range devices {
 		b.mu.Lock()
 		s.healthLoadLocked(ctx)
@@ -83,6 +85,8 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 			continue
 		}
 		wg.Add(1)
+		due := round.Add(scheduled) // an absolute time, so a goroutine that is scheduled late does not slip into the one before
+		scheduled += healthStagger
 		go func() {
 			defer wg.Done()
 			defer func() {
@@ -90,6 +94,13 @@ func (s *Service) healthRound(ctx context.Context, wait bool) {
 				delete(b.checking, d.ID)
 				b.mu.Unlock()
 			}()
+			if left := time.Until(due); left > 0 { // not healthRound's wait: this goroutine only
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(left):
+				}
+			}
 			s.checkMachine(ctx, d, cfg, cameOnline, "")
 			s.repairMachine(ctx, d, cfg)
 		}()
@@ -142,11 +153,28 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 				continue // the login shell's check cannot tell (recordHealth): it waits for a start, or goes stale
 			}
 		}
-		if res, ok := s.probeLauncherHealth(ctx, d.ID, name); ok {
+		if res, ok := s.probeLauncherWithRetry(ctx, d.ID, name); ok {
 			out = append(out, s.recordHealth(ctx, d.ID, name, res))
 		}
 	}
 	return out
+}
+
+// probeLauncherWithRetry is probeLauncherHealth, asked once more right away when the first check timed out: only a
+// second timeout in a row is recorded. A gateway can leave one request without a first token while the same account
+// answers the others in seconds (2026-11-14: one shared account left a few percent of its requests silent for 90
+// seconds and longer), and a single silent request would otherwise mark a working launcher failing until the next
+// round, half an hour later. A fresh request is a new upstream stream and usually answers.
+func (s *Service) probeLauncherWithRetry(ctx context.Context, machine, launcher string) (healthResult, bool) {
+	res, ok := s.probeLauncherHealth(ctx, machine, launcher)
+	if !ok || res.ok || classifyLauncherError(res.err) != errKindTimeout || ctx.Err() != nil {
+		return res, ok
+	}
+	s.logf("launcher health: %s on %s timed out, checking once more: %s", launcher, machine, clip(oneLine(res.err), 200))
+	if again, ok := s.probeLauncherHealth(ctx, machine, launcher); ok {
+		return again, true
+	}
+	return res, true
 }
 
 // ---- picking a machine ----
@@ -259,29 +287,32 @@ func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string
 	}
 }
 
+// launcherUnusableNow is launcherUnusable after one on-the-spot probe of a failing record, for a start about to
+// move or be refused because of it: the record can lag behind a fix, so a pass clears it and the start stays on the
+// asked machine (#2018). Two records cannot be settled by a probe: a subscription usage limit (the request would be
+// refused too) and a launcher the terminal's shell cannot run (the probe's login shell runs it fine); only a real
+// start clears those.
+func (s *Service) launcherUnusableNow(ctx context.Context, machine, launcher string) (LauncherHealth, bool) {
+	r, bad := s.launcherUnusable(ctx, machine, launcher)
+	if !bad || r.Kind == errKindUsageLimit || r.Kind == errKindNotInTerminal {
+		return r, bad
+	}
+	if res, got, checked := s.recheckLauncherNow(ctx, machine, launcher); checked && got && res.ok {
+		return LauncherHealth{}, false
+	}
+	// The shared follow-up may have finished between the first read and the throttled claim. Decide from its
+	// published result, not the stale failure that led us here.
+	return s.launcherUnusable(ctx, machine, launcher)
+}
+
 // healthDetour is where a start with launcher on machine m goes instead: another machine when its last check failed
 // there and another has it healthy (moved), with a line saying so for whoever started it; no other: m, and the line
 // says it may fail. A usage limit with a known reset says when that is, and a saturated account pool (capacity.go)
 // adds the fleet-wide "no schedulable account" fact and its nearest recovery when the data is fresh.
 func (s *Service) healthDetour(ctx context.Context, m Device, launcher string, suitable ...func(Device) bool) (Device, string, bool) {
-	r, bad := s.launcherUnusable(ctx, m.ID, launcher)
+	r, bad := s.launcherUnusableNow(ctx, m.ID, launcher)
 	if !bad {
 		return m, "", false
-	}
-	// The record can lag behind a fix: probe the machine once on the spot before moving the start elsewhere. A pass
-	// clears the record and the start stays on the asked machine (#2018). Two records cannot be settled by a probe:
-	// a subscription usage limit (the request would be refused too) and a launcher the terminal's shell cannot run
-	// (the probe's login shell runs it fine); only a real start clears those.
-	if r.Kind != errKindUsageLimit && r.Kind != errKindNotInTerminal {
-		if res, got, checked := s.recheckLauncherNow(ctx, m.ID, launcher); checked && got && res.ok {
-			return m, "", false
-		}
-		// The shared follow-up may have finished between the first read and the throttled claim. Route from its
-		// published result, not the stale failure that led us here.
-		r, bad = s.launcherUnusable(ctx, m.ID, launcher)
-		if !bad {
-			return m, "", false
-		}
 	}
 	alt, moved := s.healthyMachine(ctx, launcher, m.ID, suitable...)
 	// The pool is provider-level: resolve it once from the failed machine. Missing or stale data gives no note, and
@@ -321,12 +352,12 @@ func (s *Service) healthLines(ctx context.Context, machine string) string {
 	return b.String()
 }
 
-// launcherWithHealth is a launcher of the "New Agent" picker with how its last check went on that machine.
+// launcherWithHealth is a launcher of the "New Agent" picker with how its last check went on that machine. Its
+// display_name is the launcher's own (proto.Launcher.DisplayName): a runtime's name for its provider (#8261), which a
+// Persona-managed provider's own name replaces (launcher_auto_name).
 type launcherWithHealth struct {
 	ConfiguredLauncher
-	// DisplayName is a Persona-managed provider's name shown, any language (launcher_auto_name); "" shows Name.
-	DisplayName string              `json:"display_name,omitempty"`
-	Health      *launcherHealthView `json:"health,omitempty"`
+	Health *launcherHealthView `json:"health,omitempty"`
 }
 
 type launcherHealthView struct {

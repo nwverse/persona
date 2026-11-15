@@ -39,10 +39,16 @@ type startLog struct {
 	running sync.WaitGroup // the start workers and their initial session-list notifications
 }
 
+// get returns the live start or recent failure, removing a failure once its display window has elapsed.
 func (l *startLog) get(id string) *startRec {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.m[id]
+	r := l.m[id]
+	if r != nil && !r.ended.IsZero() && time.Since(r.ended) > startFailedFor {
+		delete(l.m, id)
+		return nil
+	}
+	return r
 }
 
 // recovered forgets a failed start after an explicit resume has found or started the agent.
@@ -217,7 +223,7 @@ func (n *Node) startAsync(id, cwd, launcher, prompt, workspaceID, mode, effort, 
 // startAsyncIn is startAsync in host kind ("" : the default host, withStartHost).
 func (n *Node) startAsyncIn(kind, id, cwd, launcher, prompt, workspaceID, mode, effort, tabName string, options ...modelExecution) (*proto.Session, error) {
 	execution := executionOption(options)
-	if err := execution.check(); err != nil {
+	if err := execution.check(launcher); err != nil {
 		return nil, err
 	}
 	if kind == "" && n.defaultKind() == "" { // no host enabled: refused before a starting row shows up on the phone
@@ -231,7 +237,7 @@ func (n *Node) startAsyncIn(kind, id, cwd, launcher, prompt, workspaceID, mode, 
 	if n.starts.get(id) != nil {
 		return nil, fmt.Errorf("session %s is already starting", id)
 	}
-	cwd, launcher, err := n.checkStart(cwd, launcher, "", mode, effort)
+	cwd, launcher, err := n.checkStart(cwd, launcher, "", mode, effort, "")
 	if err != nil {
 		return nil, err
 	}

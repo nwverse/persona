@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// Operating a Mac through Cua Driver (the hub's plugin cua, docs/extensions/computer-use.md): what the machine list says of it,
 /// and how the assistant's two tools read in the chat.
@@ -48,6 +49,19 @@ struct ComputerTests {
     @Test func theMachineListSaysWhetherItsScreenCanBeShown() throws {
         #expect(try machine(",\"computer\":{\"enabled\":true,\"screen_sharing\":true}").computer?.screenSharing == true)
         #expect(try machine(",\"computer\":{\"enabled\":true}").computer?.screenSharing == false, "an older hub")
+    }
+
+    /// #3954: a Mac tells whether it can carry the live screen as hardware video (the helper's version and codecs); absent
+    /// means RFB only, and it survives a round-trip.
+    @Test func theMachineListSaysWhetherItCarriesVideo() throws {
+        #expect(try machine(",\"computer\":{\"enabled\":true}").computer?.screenVideo == nil, "no helper, or an older node: RFB only")
+        let v = try #require(try machine(",\"computer\":{\"enabled\":true,\"screen_sharing\":true,"
+            + "\"screen_video\":{\"version\":1,\"codecs\":[\"hevc\",\"h264\"],\"permission\":\"granted\"}}").computer?.screenVideo)
+        #expect(v.advertised && v.version == 1 && v.codecs == ["hevc", "h264"] && v.permission == "granted")
+        let none = try #require(try machine(",\"computer\":{\"enabled\":true,\"screen_video\":{\"version\":0}}").computer?.screenVideo)
+        #expect(!none.advertised, "version 0 is no video")
+        let m = try machine(",\"computer\":{\"enabled\":true,\"screen_video\":{\"version\":2,\"codecs\":[\"hevc\"]}}")
+        #expect(try JSON.decoder.decode(Machine.self, from: JSON.encoder.encode(m)) == m, "round-trips")
     }
 
     /// #1280: one step per missing permission in System Settings' own words, the allowed ones checked first.

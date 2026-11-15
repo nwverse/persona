@@ -187,7 +187,11 @@ func TestReviewAcceptedRecordsOutcome(t *testing.T) {
 				f.outcome = `{"outcome":"修好了","links":[],"decisions":[],"pitfalls":[]}`
 				ctx := context.Background()
 				s.superviseTodo(ctx, todo.ID, "conv1", []string{"PR 合并"}, 0)
-				raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": c.verdict, "note": "看过了"})
+				args := map[string]any{"todo_id": todo.ID, "verdict": c.verdict, "note": "看过了"}
+				if c.verdict == reviewAccepted {
+					args["checks"] = completeReviewChecks(todoNow(s, todo.ID))
+				}
+				raw, _ := json.Marshal(args)
 				if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
 					t.Fatalf("%s: %v", c.verdict, err)
 				}
@@ -239,7 +243,7 @@ func TestAgentStartCarriesProjectContext(t *testing.T) {
 	}
 	p, _ := f.starts[0]["prompt"].(string)
 	if !strings.HasPrefix(p, `<persona-context kind="context" title="项目 · 天气 App · 背景"`) || !strings.Contains(p, "结论：修好了") ||
-		!strings.HasSuffix(p, "\n\n加深色模式") {
+		!strings.Contains(p, "\n\n加深色模式\n\nPersona task handoffs:") {
 		t.Fatalf("prompt = %q", p)
 	}
 	if len(f.tabAsked) == 0 || strings.Contains(f.tabAsked[len(f.tabAsked)-1], "persona-context") {

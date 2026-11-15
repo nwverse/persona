@@ -25,7 +25,21 @@ type MeetingFeed struct {
 	// it to update them, only when the meeting moved on, before it writes nothing.
 	Topics      bool
 	TopicsSoFar []MeetingTopic
+	// Highlights: the room has meeting_highlights_set (phase 2b): the batch shows it HighlightsSoFar after the topics
+	// (none yet when empty) and asks it to update them beside the topics, only when the batch changed what matters most.
+	Highlights      bool
+	HighlightsSoFar []MeetingHighlight
+	// Lean: a room started with lean batches (docs/assistant/meeting-minutes.md "Long meetings: lean batches and
+	// compaction (#8253)"), which has both tools and their rules in its CLAUDE.md: one short line asks it to update the
+	// topics and highlights as its rules say instead of restating them, and the lists so far are shown only with Lists
+	// (at the boundaries). Without Lean the text is as before it.
+	Lean, Lists bool
 }
+
+// MeetingHighlight is one of a meeting's highlights as its room set them: when it was made (in a batch the clock time
+// of its minute, HH:MM in the user's zone as the batch writes its lines; in the follow-up's seed the time from the
+// start, m:ss, as its transcript's) and its text on one line.
+type MeetingHighlight struct{ At, Text string }
 
 // MeetingTopic is one of a meeting's topics as its room set them: the state (done, current, open), the title, when
 // it began from the meeting's start ("" when not said) and the room's note ("" when none).

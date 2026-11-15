@@ -85,9 +85,9 @@ class PlanCardConversationTest {
 
     private lateinit var api: Api
 
-    /** [alone]: the card by itself, given the plan as the tray's sheet captured it, not the conversation's lines. */
+    /** [alone]: that plan's card by itself, given as the tray's sheet captured it, not the conversation's lines. */
     private fun show(style: AppStyle, dark: MutableState<Boolean> = mutableStateOf(false), plans: List<TaskPlan> = listOf(plan),
-        items: List<FeedItem> = feed, alone: Boolean = false) {
+        items: List<FeedItem> = feed, alone: TaskPlan? = null) {
         api = Api(plans)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val store = TasksStore(api, Connection(), scope)
@@ -108,7 +108,7 @@ class PlanCardConversationTest {
                     listOf(NavItem("assistant", "Assistant", persona.core.designsystem.icons.PhIcons.House)), "assistant", onSelect = {}, leading = {})) {
                     Column(Modifier.fillMaxWidth().testTag("plan-shot").background(PersonaTheme.palette.background)
                         .padding(Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        if (alone) PlanCard(plan, host)
+                        if (alone != null) PlanCard(alone, host)
                         else lines.forEach { line -> key(line.contentKey) {
                             ChatLineContent(line, session, loader, null, onToggle = {}, onFold = {}, folding = emptySet(),
                                 foldErrors = emptyMap(), onFullText = {}, style = ChatRenderStyle.Assistant)
@@ -146,12 +146,12 @@ class PlanCardConversationTest {
             // the number disc only when there are several tasks
             rule.onNodeWithText("1").assertIsDisplayed()
             rule.onNodeWithText("2").assertIsDisplayed()
-            for (chip in listOf("Work laptop", "shop", "Default model", "Can edit files", "Build server", "app", "opus", "Read-only requested"))
+            for (chip in listOf("Work laptop", "shop", "Default model", "Can edit files", "Build server", "app", "Opus", "Read-only requested"))
                 rule.onNodeWithText(chip).assertIsDisplayed()
             rule.onNodeWithText("It only touches the docs folder").assertIsDisplayed()
             // the choice, then the three actions in iOS's order
             rule.onNodeWithTag("plan-directly").assertIsDisplayed().assertIsOff()
-            rule.onNodeWithText("Start these directly").assertIsDisplayed()
+            rule.onNodeWithText("Start directly here and in subfolders").assertIsDisplayed()
             rule.onNodeWithTag("plan-start-plan").assertTextEquals("Start 2 tasks").assertIsEnabled()
             rule.onNodeWithTag("plan-edit-plan").assertTextEquals("Edit")
             rule.onNodeWithTag("plan-dismiss-plan").assertTextEquals("Don't start")
@@ -189,12 +189,43 @@ class PlanCardConversationTest {
 
     @Test fun aCardLeftOpenFollowsItsPlanOnceStartedInsteadOfOfferingStartAgain() {
         // The tray's sheet keeps the plan it was opened with; the card reads the store's latest of it.
-        show(AppStyle.Glass, alone = true)
+        show(AppStyle.Glass, alone = plan)
         rule.onNodeWithTag("plan-start-plan").performClick(); settle()
         assertEquals("plan" to false, api.started)
         rule.onAllNodesWithTag("plan-start-plan").assertCountEquals(0)
         rule.onNodeWithText("✓ Started 2 tasks").assertIsDisplayed()
     }
+
+    private val named = TaskPlan("named", "main", listOf(
+        PlanTask("Look at the raw id", machine = "mac", cwd = "/w/a", model = "claude-opus-4-8[1m]"),
+        PlanTask("Start on a launcher", machine = "mac", cwd = "/w/b", launcher = "claude-kimi"),
+        PlanTask("Start on the default", machine = "mac", cwd = "/w/c"),
+    ), "open", at(5))
+
+    private fun namesTheModels() {
+        rule.onNodeWithText("Opus 4.8").assertIsDisplayed()
+        rule.onNodeWithText("Claude Kimi").assertIsDisplayed()
+        rule.onNodeWithText("Default model").assertIsDisplayed()
+        // never the raw id on the card (DESIGN_SYSTEM.md 5.6); iOS writes it as it is
+        rule.onAllNodesWithText("claude-opus-4-8[1m]").assertCountEquals(0)
+        rule.onAllNodesWithText("claude-kimi").assertCountEquals(0)
+    }
+
+    @Test fun glassNamesAModelByItsShortNameAndTheEditFieldKeepsTheRawValue() {
+        show(AppStyle.Glass, plans = listOf(named), items = listOf(FeedItem("named-feed", "main", at(5), "plan", "named")))
+        namesTheModels()
+        // what the task starts with stays as it is: the field holds the raw id, which is what Start sends
+        rule.onNodeWithTag("plan-edit-named").performClick(); settle()
+        rule.onNode(hasText("claude-opus-4-8[1m]") and hasSetTextAction()).assertExists()
+    }
+
+    private fun aTraySheetsCardNamesTheModelsToo(style: AppStyle) {
+        show(style, plans = listOf(named), alone = named)
+        namesTheModels()
+    }
+
+    @Test fun briefsCardNamesTheModelsToo() = aTraySheetsCardNamesTheModelsToo(AppStyle.Brief)
+    @Test fun boardsCardNamesTheModelsToo() = aTraySheetsCardNamesTheModelsToo(AppStyle.Board)
 
     @Test fun startTheseDirectlyGoesWithStart() {
         show(AppStyle.Glass)
@@ -229,9 +260,9 @@ class PlanCardConversationTest {
         assertEquals("one row", start.top.value, dismiss.top.value, 1f)
     }
 
-    @Config(qualifiers = "ja-w400dp-h1200dp-xhdpi")
+    @Config(qualifiers = "ja-w360dp-h1200dp-xhdpi")
     @Test fun startHasARowOfItsOwnWhenItsLabelWouldBeCutBesideTheOthers() {
-        // "2件のタスクを開始" does not fit beside "編集" and "開始しない" in a 400 dp card: stacked, never cut (iOS stacks its message card the same way)
+        // At 14sp the three Japanese labels fit in a 400 dp card; 360 dp leaves too little room, so Start stacks instead of being cut.
         show(AppStyle.Glass)
         val start = bounds("plan-start-plan"); val edit = bounds("plan-edit-plan"); val dismiss = bounds("plan-dismiss-plan")
         assertTrue("Start above the other two", edit.top >= start.bottom && dismiss.top >= start.bottom)
@@ -276,8 +307,8 @@ class PlanCardConversationTest {
     }
 
     @Config(qualifiers = "zh-w400dp-h1200dp-xhdpi")
-    @Test fun simplifiedChinese() = words("zh", "拆成 2 件事，这样开", "开始 2 个任务", "改一下", "不开", "这类以后直接开")
+    @Test fun simplifiedChinese() = words("zh", "拆成 2 件事，这样开", "开始 2 个任务", "改一下", "不开", "这些目录及子目录以后直接开")
 
     @Config(qualifiers = "ja-w400dp-h1200dp-xhdpi")
-    @Test fun japanese() = words("ja", "2件に分けて、この内容で開始", "2件のタスクを開始", "編集", "開始しない", "今後はすぐに開始")
+    @Test fun japanese() = words("ja", "2件に分けて、この内容で開始", "2件のタスクを開始", "編集", "開始しない", "今後このフォルダ以下はすぐに開始")
 }

@@ -88,12 +88,29 @@ type ExtensionTools interface {
 	MailAttachment(ctx context.Context, req proto.MailAttachmentRequest) (proto.MailAttachment, error)
 }
 
+// ownerHeard is told when the owner speaks in one of the assistant's conversations, a message or an answer to its
+// question (extmgr: a computer-use session the user stopped on a Mac starts again on that conversation's next call,
+// #7590). It must not block.
+type ownerHeard interface {
+	OwnerSpoke(session string)
+}
+
+// ownerHeard tells the extensions that the owner spoke in conversation session.
+func (s *Service) ownerHeard(session string) {
+	if s.heard != nil && session != "" {
+		s.heard.OwnerSpoke(session)
+	}
+}
+
 // SetExtensions gives the service the extensions' tools (before Run).
 func (s *Service) SetExtensions(e ExtensionTools) {
 	s.ext = e
+	s.heard, _ = e.(ownerHeard)
 	if r, ok := e.(launcherSecrets); ok {
 		s.refs = r
 	}
+	s.trans, _ = e.(transcribers)
+	s.transcriptionReadinessReset()
 }
 
 // AskCard is askHub for the extensions in this process: a card of theirs (a mail send, Cua's apps, persona_settings),

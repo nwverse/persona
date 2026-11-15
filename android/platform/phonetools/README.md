@@ -1,8 +1,10 @@
 # Android 手机工具
 
-本模块对应 `docs/archive/redesign/android.md` 5.12、`parity.md` 第 21 节和设置中的「手机数据」。提供通讯录搜索、日历查询与新建、当前位置、照片元数据与缩放取图、剪贴板、设备信息、本地通知、健康数据汇总（Health Connect）及 Persona 当前通知列表，共 12 个工具。
+本模块对应 `docs/archive/redesign/android.md` 5.12、`parity.md` 第 21 节和设置中的「手机数据」。提供通讯录搜索、日历查询与新建、当前位置、照片元数据与缩放取图、剪贴板、设备信息、本地通知、健康数据汇总（Health Connect）、运动记录列表与详情（Health Connect）及 Persona 当前通知列表，共 14 个工具。
 
 Android 没有统一的系统提醒事项接口，故不注册 `phone_reminders_*`。健康数据通过 Health Connect 提供每天的汇总（`phone_health_summary`，安卓 14 起系统自带；写入健康数据 `phone_health_write_sample` 为 iOS 独有）。不申请通知监听权限，不读取其他 App 的通知。`phone_notifications_list` 是 Android 新增工具，只返回本应用当前显示的通知，不包含操作确认通知。
+
+`phone_workouts_recent` 和 `phone_workout_detail` 读 Health Connect 的运动记录（`ExerciseSessionRecord`），距离、消耗、爬升和心率取自每段运动的时间窗口内的汇总；分段（每公里用时，扣除暂停）和每分钟心率只在详情里给出，算法与 iOS `WorkoutSplits` 一致，并有单测。需要 `READ_EXERCISE` 和 `READ_ELEVATION_GAINED`，它们与健康汇总的权限一起在「设置 › 手机数据 › 健康」里申请；未授权时工具报权限错误，不返回空列表。运动来源的名字用系统 App 名称，取不到时用包名。Dietary metrics use `NutritionRecord` totals per local day: `dietary_energy` in kcal and `protein`, `carbs`, and `fat` in g. `resting_energy` uses `BasalMetabolicRateRecord.BASAL_CALORIES_TOTAL` in kcal. Today's totals end at the query time. The new read permissions are `READ_NUTRITION` and `READ_BASAL_METABOLIC_RATE`; existing users can grant them under Settings › Phone data › Health.
 
 ## 和 iOS 对齐（2026-11-02）
 
@@ -11,7 +13,7 @@ hub 把各台手机同名的工具合并成一份定义（`server/internal/hub/h
 - 参数照 iOS 读：数字超出范围夹到范围内，不是数字的当没传、用默认值；多余参数忽略；字符串去掉首尾空白，空的当没传（剪贴板写入除外，空字符串就是清空）。必填项由各工具自己检查，缺了回「参数错误 / Invalid argument: title is required」这样的句子。
 - 返回结构和 iOS 一样：通讯录 `{query, count, results:[{id, name, nickname, company, job_title, phones[{label, number}], emails[{label, email}], birthday}]}`（没结果带英文 `note`，空查询按通讯录自己的顺序取前几个）；日程 `{start, end, count, truncated, events:[{id, title, start, end, all_day, calendar, location, notes 前 300 字, attendees[{name, role, status, is_current_user}]}]}`，`query` 同时查标题、地点和备注；照片 `{count, access: full|limited, assets:[{id, created, type, width, height, favorite, subtypes:["screenshot"], duration_seconds}]}`（没结果带 `note`，不传 `days` 不限时间）；取图是一段文字（`id, created, width, height, returned_width, returned_height, bytes`）加一个 `{"type":"image","data":…,"mime_type":"image/jpeg"}`；设备信息、剪贴板、通知、定位的键名也照 iOS（Android 用 `android_version` / `sdk` 代替 `ios_version`，定位多带 `provider` 和坐标系说明）。空字段不输出。时间一律是带偏移、到秒的 ISO 8601；只给日期或不带偏移的时间按手机时区读。
 - 和 iOS 不同、有意保留的：剪贴板和定位只在 App 在前台时声明和执行（Android 后台读不到剪贴板）；视频取图返回预览帧（iOS 报错）；没有可写日历时建一个本地的 Persona 日历（iOS 报错）。
-- Only Deny (or dismissing the dialog) returns the iOS sentence `The user declined on the phone.` (#1875). `PhoneConfirmations.confirm` says how a confirmation ended (`PhoneConfirmation`): nobody answering within 90 seconds, a confirmation that couldn't be shown (in the background with notifications off) one withdrawn when the tools close and one whose notification was swiped away (ended at once, #3861) each get their own result, never the decline. The phone keeps 90 seconds although the hub waits 30 minutes for a confirmed write, because the registry runs one call at a time and an open confirmation holds back the other calls. Other failures are bilingual as on iOS, with the settings path "Persona › Settings › Connectors › This phone".
+- Only Deny (or dismissing the dialog) returns the iOS sentence `The user declined on the phone.` (#1875). `PhoneConfirmations.confirm` says how a confirmation ended (`PhoneConfirmation`): a confirmation that couldn't be shown (in the background with notifications off), one withdrawn when the tools close and one whose notification was swiped away (ended at once, #3861) each get their own result, never the decline. Other failures are bilingual as on iOS, with the settings path "Persona › Settings › Connectors › This phone".
 - `register_phone` 的 `device_name` 是「厂商 型号」；调用里 `args` 缺省或为 null 当成空对象。
 
 ## 当前 App 接线
@@ -22,7 +24,11 @@ App 已依赖 `:platform:phonetools`；`AppServices` 按配对及同一 device_i
 
 ## 行为与边界
 
-工具执行前检查开关、权限、在线状态和前台限制；确认后再次检查。日历新建在前台展示完整参数摘要，在后台通过高优先级通知请求确认；允许按钮要求解锁，通知不可用、拒绝、超时或断开连接都不会继续等待授权。通知中的令牌只在本次待确认期间有效，进程重启后失效。
+工具执行前检查开关、权限、在线状态和前台限制；确认后再次检查。日历新建在前台展示完整参数摘要，在后台通过高优先级通知请求确认；允许按钮要求解锁，通知不可用、拒绝、断开连接都不会继续等待授权。通知中的令牌只在本次待确认期间有效，进程重启后失效。
+
+**并发与确认排队（2026-11-12，对齐 iOS）**：`PhoneToolRegistry` 不再用一把全局 Mutex 串行所有调用。确认写进入 `PhoneConfirmations` 的 FIFO 队列（一次一张卡，按 token 回答），等待期间位置、照片、联系人、日历等读取可并发返回。同一个 `call_id` 重复到达时，`PhoneToolCallGate` 让它共享 in-flight leader 的结果或直接返回缓存的终态结果，绝不重复执行；follower 自己被取消不影响 leader。等待期限由 hub 的 `phoneConfirmWait` 决定，App 不再另设 90 秒倒计时；本地 `execute` 超时仍生效，但确认写的超时返回「结果不确定，可能已写入，不要自动重试」而不是诱导重试的普通 timeout 文案。确认写一旦开始本地 `execute`（写入 `writesInFlight`），连接断开、权限收回、前后台切换的 watcher 不再取消它，让它产生确定结果或失败；pairing runtime 关闭仍可取消，结果按 uncertain 处理。
+
+**结果 outbox**：`transport.result` 返回 false 时，`PhoneToolResultOutbox` 只在 pairing runtime 内、内存中暂存结果（不是工具调用），连接恢复后按 FIFO 顺序补发；同一个 `call_id` 的新结果替换旧结果，容量有界。outbox 不落盘、不在进程重启后自动重放，也绝不调用 `registry` / `execute`；它补发的是结果，不是写入操作本身。`queue_if_offline` 由 hub 加 schema、接收并在转发前移除，Android 不实现第二队列。
 
 日历优先使用指定的可写日历，其次默认可写日历；完全没有可写日历时创建 Persona 本地日历。指定名称找不到时直接报错，防止误写到其他日历。全天日程以 UTC 日期保存，结束日期不包含在内。本地日历在国产系统日历 App 中的展示尚待真机验证。
 

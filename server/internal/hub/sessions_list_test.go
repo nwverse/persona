@@ -388,9 +388,13 @@ func fullIndexItems(mid string, list []proto.Session, encoded []sentSession) []s
 			root = row.FoldedUnder()
 		}
 		kids := row.Children()
+		todo := ""
+		if row.Todo != nil {
+			todo = row.Todo.ID
+		}
 		foldedWaiting := row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0
-		var fold *sessionlist.Fold // none: folded under nothing, shown with its own state and background wait
-		if f := (sessionlist.Fold{Root: root, State: row.FoldedState(), BackgroundWaiting: foldedWaiting}); f != (sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}) {
+		var fold *sessionlist.Fold // none: no hierarchy or to-do, shown with its own state and background wait
+		if f := (sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: foldedWaiting}); f != (sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}) {
 			fold = &f
 		}
 		items = append(items, sessionlist.Item{
@@ -477,11 +481,15 @@ func TestIndexRowReuseMatchesFullPath(t *testing.T) {
 		func(r *proto.Session, n int) {
 			r.State, r.BackgroundWaiting = cycle(n, "working", "needs_you", "idle"), n%2 == 0
 		},
+		func(r *proto.Session, n int) { // open to-do: none, one id, another (#6662)
+			r.Todo = []*proto.TodoRef{nil, {ID: "todo_a"}, {ID: "todo_b"}}[n%3]
+		},
 		func(r *proto.Session, n int) { r.Rev++ },
 		func(r *proto.Session, n int) { r.Archived = n%2 == 0 }, // hidden from the lists while archived
-		func(r *proto.Session, n int) { // folded under a row listed or not, as a tab's worker or not, a rollup of its own (#5120, #5180)
-			r.SetFold(cycle(n, "", "s01", "s02", "missing"), cycle(n, "", "", proto.FoldedAsWorker),
-				[]*proto.SessionChildren{nil, {Total: 2, Working: 1, Workers: 1}, {Total: 1, NeedsYou: 1}}[n%3])
+		func(r *proto.Session, n int) { // folded under a row listed or not, as a tab's worker, a side or neither, a rollup of its own (#5120, #5180, #7944)
+			r.SetFold(cycle(n, "", "s01", "s02", "missing"), cycle(n, "", "", proto.FoldedAsWorker, proto.FoldedAsSide), cycle(n, "", "", "", "s03", ""),
+				[]*proto.SessionChildren{nil, {Total: 2, Working: 1, Workers: 1}, {Total: 1, NeedsYou: 1},
+					{Total: 2, Sides: 2, SidesWorking: 1, SidesUnread: 1}}[n%4])
 		},
 	}
 	listEdits := []func(list []proto.Session, n int) []proto.Session{
@@ -926,5 +934,8 @@ func TestRuntimePageWithCounts(t *testing.T) {
 	}
 	if !slices.Contains(h.features(), featureSessionsPageCounts) || slices.Contains(proto.Features, featureSessionsPageCounts) {
 		t.Error("sessions_page_counts must be advertised by the hub")
+	}
+	if !slices.Contains(h.features(), featureAgentsPageCounts) || slices.Contains(proto.Features, featureAgentsPageCounts) {
+		t.Error("agents_page_counts must be advertised by the hub")
 	}
 }

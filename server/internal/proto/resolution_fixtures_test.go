@@ -295,7 +295,7 @@ func TestResolutionFixturesIOS(t *testing.T) {
 	views := read("apple/Persona/Views/Interactions/InteractionViews.swift")
 	chat := read("apple/Shared/ChatStore.swift")
 	notification := read("apple/Persona/App/NotificationActions.swift")
-	source := "import Foundation\n" + read("apple/Shared/JSONValue.swift") + "\n"
+	source := "import Foundation\n" + read("apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift") + "\n"
 	for _, marker := range []string{"nonisolated struct SessionKey", "nonisolated enum InteractionKind", "nonisolated struct QuestionOption", "nonisolated struct Question:", "nonisolated struct Interaction:", "nonisolated struct Resolution:", "nonisolated struct ScreenDialog:"} {
 		source += swiftBlock(t, models, marker) + "\n"
 	}
@@ -505,7 +505,7 @@ func TestResolutionFixtureSourceEvidence(t *testing.T) {
 	root := answerFixtureRoot(t)
 	evidence := map[string][]string{
 		"apple/Persona/Views/Interactions/InteractionViews.swift": {
-			".disabled(!canAdvance || sending)", ".disabled(sending)", "if interaction.offersAlways {",
+			".disabled(!canAdvance || isSending)", ".disabled(isSending)", "if interaction.offersAlways {",
 			"if rejecting {", "rejecting = false", ".disabled(text.isEmpty)",
 			"if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {",
 			"let t = text.trimmingCharacters(in: .whitespacesAndNewlines)",

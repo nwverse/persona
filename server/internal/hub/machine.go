@@ -74,12 +74,17 @@ type Machine struct {
 	// session is neither subscribed nor watched on the node (dropWatchSlot).
 	watchMu   map[string]*watchSlot
 	nodeWatch map[string]nodeWatchState
-	// The web panels' open folders on this machine (fswatch.go): fswMu orders the fs.watch calls, fswSent says the
-	// node was given a non-empty set, fswWarned that a failure was logged (a node without fs.watch).
-	fswMu     sync.Mutex
-	fswSent   bool
-	fswWarned bool
-	lastSeq   map[string]int // session id -> highest item seq seen
+	// The web panels' open folders on this machine (fswatch.go): fswMu guards the fields below. One worker syncs the
+	// node at a time, with fswPending coalescing changes made while it is out; fswForce resends even an empty set on a
+	// new connection. fswSent says an empty set must still be sent (the node has a non-empty one, or a forced one
+	// failed), fswWarned that a failure was logged.
+	fswMu      sync.Mutex
+	fswSent    bool
+	fswWarned  bool
+	fswRunning bool
+	fswPending bool
+	fswForce   bool
+	lastSeq    map[string]int // session id -> highest item seq seen
 	// derived: a computer only a member hub has in hub.json; the center reaches it through that hub.
 	derived bool
 
@@ -312,23 +317,43 @@ func (m *Machine) session(id string) (proto.Session, bool) {
 	return proto.Session{}, false
 }
 
-func (m *Machine) addWatcher(ctx context.Context, id string) {
+// watcherJoined counts one more app subscribed to session id, watcherLeft one fewer. Neither tells the node: the
+// caller syncs the node's watch afterwards (syncWatch, syncUnwatch). An app's connection counts in its read loop, in
+// the order its messages came, and syncs from a goroutine: the node may take up to watchCallTimeout to answer, and
+// nothing else the app sends is read while its read loop waits (#5915). Counting cannot move to the goroutine
+// too: a leave that ran ahead of its join would find nothing to take away, and the join would then stay for good.
+func (m *Machine) watcherJoined(id string) {
 	m.mu.Lock()
 	m.watchers[id]++
 	m.mu.Unlock()
-	m.syncWatch(ctx, id)
 }
 
-func (m *Machine) removeWatcher(id string) {
+func (m *Machine) watcherLeft(id string) {
 	m.mu.Lock()
 	m.watchers[id]--
 	if m.watchers[id] <= 0 {
 		delete(m.watchers, id)
 	}
 	m.mu.Unlock()
+}
+
+// syncUnwatch syncs session id's watch after an app left it, not on that app's connection, which may be gone.
+func (m *Machine) syncUnwatch(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), watchCallTimeout)
 	defer cancel()
 	m.syncWatch(ctx, id)
+}
+
+// addWatcher is a join and its sync in one call, removeWatcher a leave and its sync: for a caller that may wait for
+// the node, which a connection's read loop may not (watcherJoined).
+func (m *Machine) addWatcher(ctx context.Context, id string) {
+	m.watcherJoined(id)
+	m.syncWatch(ctx, id)
+}
+
+func (m *Machine) removeWatcher(id string) {
+	m.watcherLeft(id)
+	m.syncUnwatch(id)
 }
 
 // setSessionList keeps list as the sessions the node has now, and drops the highest item seq of those it no longer
@@ -703,6 +728,10 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			m.hub.toSubscribers(m.cfg.ID, p.SessionID, deltaPush{Type: "delta", MachineID: m.cfg.ID, SessionID: p.SessionID, Text: p.Text})
 		}
 	case "codex.inventory":
+		if !m.codexInventoryHanded() {
+			m.hub.logf("[%s] Codex inventory from a connection the hub has not handed its own yet: not kept", m.cfg.ID)
+			return
+		}
 		m.rememberCodexInventory(params)
 	case "session.echo":
 		m.recordEcho(params)

@@ -23,6 +23,10 @@ final class FrameStats: NSObject {
 
     private var bodiesAtStart: [String: Int] = [:]
     private var pushAtStart = (passes: 0, ms: 0.0)
+    /// The streamed reply's visible length at the last frame, and the frames where it grew: (when, characters added).
+    private var shownAtLastFrame = 0
+    private var textChanges: [(CFTimeInterval, Int)] = []
+    private var cpuAtStart: Double = 0
 
     func start() {
         MainThreadWatchdog.shared.reset()
@@ -32,6 +36,9 @@ final class FrameStats: NSObject {
         busies = []
         busy = 0
         last = 0
+        shownAtLastFrame = StreamCadence.shown
+        textChanges = []
+        cpuAtStart = Self.mainThreadCPU()
         let wake = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue, true, CFIndex.min) { _, _ in
             MainActor.assumeIsolated { FrameStats.shared.passStart = CACurrentMediaTime() }
         }
@@ -57,6 +64,9 @@ final class FrameStats: NSObject {
     @objc private func tick(_ link: CADisplayLink) {
         if last > 0 { deltas.append(link.timestamp - last); busies.append(busy * 1000) }
         busy = 0
+        let shown = StreamCadence.shown
+        if shown > shownAtLastFrame { textChanges.append((link.timestamp, shown - shownAtLastFrame)) }
+        shownAtLastFrame = shown
         expected = max(link.targetTimestamp - link.timestamp, 1.0 / 120)
         last = link.timestamp
     }
@@ -79,6 +89,14 @@ final class FrameStats: NSObject {
         // Typed: in the `Any` literal below Swift 6.2 (Xcode 26.0) took `busy.last` for `last(where:)`, a closure
         // JSONSerialization throws on.
         let busyMax: Double = busy.last ?? 0
+        let cpu = Self.mainThreadCPU() - cpuAtStart
+        // The streamed reply's cadence as the reader sees it: the gaps between frames where its text grew.
+        let gaps = zip(textChanges, textChanges.dropFirst()).map { ($1.0 - $0.0) * 1000 }.sorted()
+        let added = textChanges.map { Double($0.1) }.sorted()
+        // Typed, as `busyMax`: `gaps.last ?? 0` in the literal is `last(where:)`, and JSONSerialization aborts on it.
+        let gapMax: Double = gaps.last ?? 0
+        let addedMax: Double = added.last ?? 0
+        func q(_ v: [Double], _ p: Double) -> Double { v.isEmpty ? 0 : v[min(v.count - 1, Int(Double(v.count) * p))] }
         let result: [String: Any] = [
             "label": label,
             "frames": deltas.count,
@@ -88,6 +106,9 @@ final class FrameStats: NSObject {
             "p50_ms": pct(0.5), "p95_ms": pct(0.95), "p99_ms": pct(0.99),
             "max_ms": (sorted.last ?? 0) * 1000,
             "busy_p50_ms": bpct(0.5), "busy_p95_ms": bpct(0.95), "busy_max_ms": busyMax,
+            // Every frame: its interval and the main thread's time before it (ms), to find which frames of an
+            // animation grew (the sidebar's toggle, #4206).
+            "deltas_ms": deltas.map { ($0 * 10_000).rounded() / 10 }, "busies_ms": busies.map { ($0 * 10).rounded() / 10 },
             // When the long frames came (seconds from the start) and how long they were (ms).
             "long": zip(deltas.indices, deltas).filter { $0.1 > 0.05 }.map { i, d in
                 [Double(deltas[..<i].reduce(0, +)), d * 1000] },
@@ -99,6 +120,11 @@ final class FrameStats: NSObject {
             "push_passes": PerfCount.passes - pushAtStart.passes, "push_ms": PerfCount.totalMS - pushAtStart.ms,
             "main_thread_blocks": MainThreadWatchdog.shared.report,
             "busy_over_8ms": busy.filter { $0 > 8 }.count, "busy_over_16ms": busy.filter { $0 > 16 }.count,
+            "busy_ms_per_s": total > 0 ? busies.reduce(0, +) / total : 0,
+            "main_cpu_ms_per_s": total > 0 ? cpu * 1000 / total : 0,
+            "text_changes": textChanges.count,
+            "text_gap_p50_ms": q(gaps, 0.5), "text_gap_p95_ms": q(gaps, 0.95), "text_gap_max_ms": gapMax,
+            "text_added_p50": q(added, 0.5), "text_added_p95": q(added, 0.95), "text_added_max": addedMax,
         ]
         if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
            let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
@@ -107,6 +133,28 @@ final class FrameStats: NSObject {
         }
         return result
     }
+}
+
+extension FrameStats {
+    /// CPU seconds the main thread has used so far (user + system). Called on the main thread.
+    static func mainThreadCPU() -> Double {
+        var info = thread_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let thread = mach_thread_self()
+        defer { mach_port_deallocate(mach_task_self_, thread) }
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { thread_info(thread, thread_flavor_t(THREAD_BASIC_INFO), $0, &count) }
+        }
+        guard kr == KERN_SUCCESS else { return 0 }
+        func s(_ t: time_value_t) -> Double { Double(t.seconds) + Double(t.microseconds) / 1_000_000 }
+        return s(info.user_time) + s(info.system_time)
+    }
+}
+
+/// The streamed reply's visible length, written where it is drawn (`StreamingText`) and read once a frame by
+/// `FrameStats` (#6651): the frames where it grew are the reply's cadence as the reader sees it.
+@MainActor enum StreamCadence {
+    static var shown = 0
 }
 
 #if os(iOS) || os(visionOS)
@@ -120,6 +168,16 @@ import UIKit
     static let start = "com.persona.perf.frames.start"
     static let stop = "com.persona.perf.frames.stop"
     static let glideNotice = "com.persona.perf.frames.glide"
+    /// The other shell page comes to the front, as the switch's tap does it (`AppModel.selectedTab`, the strip slides).
+    /// A UI test's own tap costs main-thread time in the app: XCTest resolves the button from an accessibility snapshot
+    /// before it taps and again for every wait, 55–70 ms each on the `assistant` suite's data, some of them while the
+    /// strip moves (#5438). With this cue the measured frames are the app's.
+    static let switchPages = "com.persona.perf.shell.switch"
+    /// The Sidebar layout's column folded or brought back, with the animation its buttons use (#4206): a UI test's
+    /// taps and waits inside the measured frames cost the app's main thread their accessibility snapshots.
+    static let toggleSidebar = "com.persona.perf.sidebar.toggle"
+    /// Set by the Sidebar layout's split while it is on screen (`SplitNavigation`).
+    static var sidebarToggle: (() -> Void)?
 
     static func listenIfAsked() {
         guard UserDefaults.standard.bool(forKey: "showFrameProbe") else { return }
@@ -129,7 +187,7 @@ import UIKit
             let n = name?.rawValue as String?
             DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.handle(n) } }
         }
-        for name in [start, stop, glideNotice] {
+        for name in [start, stop, glideNotice, switchPages, toggleSidebar] {
             CFNotificationCenterAddObserver(center, nil, callback, name as CFString, nil, .deliverImmediately)
         }
     }
@@ -138,6 +196,11 @@ import UIKit
         let stats = FrameStats.shared
         if name == glideNotice {
             Task { await runGlide() }
+        } else if name == toggleSidebar {
+            sidebarToggle?()
+        } else if name == switchPages {
+            let model = AppModel.shared
+            model.selectedTab = model.selectedTab == .chats ? .assistant : .chats
         } else if name == start {
             if stats.running { stats.stop(label: "probe") }
             stats.start()
@@ -171,6 +234,9 @@ import UIKit
         } else if let list = PagePerf.mainScrollView() {
             context["viewport_height_pt"] = Double(list.bounds.height)
             context["content_height_pt"] = Double(list.contentSize.height)
+            // A chat is told a finger is on its list, as for `-showPagePerf`: otherwise it keeps to its newest end and
+            // the list does not move.
+            PagePerf.touch(list, true)
             list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
             try? await Task.sleep(for: .milliseconds(500))
             let startY = list.contentOffset.y
@@ -179,6 +245,7 @@ import UIKit
             let moved = abs(list.contentOffset.y - startY)
             await ListGlide.run(list, seconds: 3, speed: -2000)
             let frames = stats.stop(label: "probe-glide")
+            PagePerf.touch(list, false)
             context.merge(frames) { _, measured in measured }
             context["scroll_offset_delta_pt"] = Double(moved)
         } else {
@@ -207,7 +274,7 @@ import UIKit
     /// only for its own list: several chats can be mounted at once (Persona's conversation stays in the shell).
     static var touchers: [ObjectIdentifier: (UIScrollView, Bool) -> Void] = [:]
 
-    private static func touch(_ list: UIScrollView, _ down: Bool) {
+    static func touch(_ list: UIScrollView, _ down: Bool) {
         for toucher in touchers.values { toucher(list, down) }
     }
 

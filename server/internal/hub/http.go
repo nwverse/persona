@@ -70,12 +70,14 @@ func (h *Hub) routes() http.Handler {
 	h.phoneWriteRoutes(api)
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
+	h.webPushRoutes(api)
 	h.live.routes(api)
 	h.metricsRoutesRelayed(api) // the monitoring is the manager's (devices_routes.go)
 	h.lockTestRoutes(api)
 	h.assistantRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
+	h.lnRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
 	h.lookUploadRoutes(api)
@@ -364,7 +366,7 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: 200, lang: lang}
 		next.ServeHTTP(sw, r)
 		// Auth and ingress refusals are logged by securityError (masked, rate limited), WebSocket ones included.
-		if !sw.securityFailure && (sw.status >= 400 || (!longLived(r.URL.Path) && time.Since(start) > 2*time.Second)) {
+		if !sw.securityFailure && (sw.status >= 400 || (!longLived(r) && time.Since(start) > 2*time.Second)) {
 			path := loggedPath(r.URL.Path)
 			if client.Platform != "" {
 				h.logf("[%s] %s %s -> %d (%s) client=%q", id, r.Method, path, sw.status, time.Since(start).Round(time.Millisecond), client.Platform+"/"+client.Version)
@@ -394,11 +396,13 @@ func loggedPath(p string) string {
 	return p
 }
 
-// longLived requests (WebSockets, a plugin's sockets and streams, a forwarded port's connections: ports.go) are not
-// slow requests however long they last.
-func longLived(path string) bool {
+// longLived requests (WebSockets, a plugin's sockets and streams, a meeting's audio socket, a forwarded port's
+// connections: ports.go) are not slow requests however long they last.
+func longLived(r *http.Request) bool {
+	path := r.URL.Path
 	return path == "/api/v1/ws" || path == link.Path || path == link.StreamPath || path == bus.Path ||
-		strings.HasPrefix(path, "/api/v1/plugins/") || strings.HasPrefix(path, "/api/v1/extensions/") || strings.HasSuffix(path, "/connect")
+		strings.HasPrefix(path, "/api/v1/plugins/") || strings.HasPrefix(path, "/api/v1/extensions/") || strings.HasSuffix(path, "/connect") ||
+		isAssistantSocket(r)
 }
 
 // requestID keeps a client's id if it is a short token (it lands in logs), else makes one.
@@ -848,6 +852,9 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	var res struct {
 		Session      proto.Session `json:"session"`
 		LauncherNote string        `json:"launcher_note,omitempty"` // a default it lacks gave way to another (#4661)
+		// Instead: what an engine that runs only its own launchers ran in place of what was asked (#8140, the node's
+		// answer passed on); launcher_note says it.
+		Instead *proto.StartInstead `json:"instead,omitempty"`
 	}
 	raw, _ := json.Marshal(p)
 	params := map[string]any{}
@@ -891,10 +898,16 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
 	}
+	// An engine that runs only its own launchers may have started one of the same kind in place of the launcher asked
+	// for (#8140): its health and a model's use go to the launcher that ran, not to the one that did not.
+	if res.Instead != nil && res.Instead.Launcher != "" && res.Session.Launcher != "" {
+		params["launcher"] = res.Session.Launcher
+	}
 	if !async {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
 	}
-	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) {
+	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) &&
+		(res.Instead == nil || res.Instead.Model == "") { // a model the launcher that ran does not offer did not run
 		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
 		if async {
 			// Acknowledged before it ran: the launcher's check and the agent coming up are still to come.
@@ -924,7 +937,10 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			res.Session.Todo = &proto.TodoRef{ID: p.TodoID, Title: linked.Title}
 		}
 	}
-	res.LauncherNote = note
+	m.mu.Lock()
+	engine := proto.EngineNames[cmp.Or(p.Host, startEngine(m.info))]
+	m.mu.Unlock()
+	res.LauncherNote = apierr.JoinNotes(h.requestLang(r), note, apierr.StartInstead(h.requestLang(r), engine, m.name(), res.Instead, res.Session))
 	writeJSON(w, res)
 	if async && p.TabName == "" {
 		// The name takes a model call (seconds): the tab opens as agent-<n> and is renamed when it comes.
@@ -966,6 +982,15 @@ func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
 		}
 	}
 	h.asstOf(h.machineOwner(mid)).notify(assistantwire.EventStartEnded, r)
+}
+
+// startEngine is the host a machine's starts open in when they name none (its default engine host), as its node
+// reports it; "" from a node that reports none.
+func startEngine(info proto.NodeInfo) string {
+	if info.EngineHosts != nil && info.EngineHosts.Default != "" {
+		return info.EngineHosts.Default
+	}
+	return info.Engine
 }
 
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
@@ -1270,7 +1295,9 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		c.mu.Unlock()
 		for k := range subs {
 			if m := h.localMachine(k[0]); m != nil {
-				m.removeWatcher(k[1])
+				// Each unwatch on its own: one node slow to answer holds up neither the others nor what follows here.
+				m.watcherLeft(k[1])
+				go m.syncUnwatch(k[1])
 			}
 		}
 		h.terminalDrop(c)
@@ -1451,9 +1478,16 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		}
 		c.mu.Unlock()
 		if !already {
-			m.addWatcher(ctx, msg.SessionID)
+			m.watcherJoined(msg.SessionID)
 		}
-		go h.sendBacklog(ctx, c, m, msg.SessionID, msg.SinceSeq)
+		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
+		// backlog still goes after it, so nothing falls between the two.
+		go func() {
+			if !already {
+				m.syncWatch(ctx, msg.SessionID)
+			}
+			h.sendBacklog(ctx, c, m, msg.SessionID, msg.SinceSeq)
+		}()
 	case "unsubscribe":
 		m := h.localMachine(msg.MachineID)
 		if m == nil {
@@ -1465,7 +1499,8 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		delete(c.subs, key)
 		c.mu.Unlock()
 		if had {
-			m.removeWatcher(msg.SessionID)
+			m.watcherLeft(msg.SessionID)
+			go m.syncUnwatch(msg.SessionID)
 		}
 	case "register_phone":
 		if c.role != roleFull { // runs tools on behalf of claude: not for an answer-only device
@@ -1506,6 +1541,8 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		h.setPhoneTools(db.PhoneToolRegistration{DeviceID: deviceID, Platform: msg.Platform, CredentialID: c.device, Tools: tools})
 	case "register_desktop":
 		h.registerDesktop(c, msg.DeviceName, msg.DeviceID)
+	case "unregister_desktop":
+		h.unregisterDesktop(c)
 	case "seen":
 		if m := h.localMachine(msg.MachineID); m != nil && msg.SessionID != "" {
 			h.markSeen(m.cfg.ID, msg.SessionID)

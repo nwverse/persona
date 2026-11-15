@@ -71,13 +71,14 @@ Use synthetic conversations for screenshots, not the user's real main conversati
 - User images take two paths: ordinary messages contain user image blocks; messages sent while Claude is working are "absorbed mid-turn" as `attachment/queued_command`, with images in the prompt's block array
   (before 2026-10-29, the parser took only text blocks, so bubbles showed no images). In App turns awakened by background tasks (`pickAnswerAcrossWakes`), keep the user's images together with their message in the original position, not in the work trace.
 - A long chat's slow first screen is not caused by the hub / node (cold read: 0.12 s), but by the page being too large: one long Codex session's last two turns contained 1412 entries and 1.08 MB, with just 6 reply entries; the rest were tools and thinking already collapsed in the UI.
-  The App requests `fold_work`. Pages read backward from the end replace each work segment with one `kind: fold` entry (counts and ranges only). Expanding a work row fetches it with `from_seq` / `through_seq`
+- Codex commentary is assistant text, not `Reasoning` (#5853). Keep an internal-only `Narration` marker so folding can handle completed narration without exposing a new wire kind or counting it as thinking. Only the latest page leaves the newest commentary visible until a final answer follows; a historical page may end before a final answer stored on the next page. Changing only the item kind let 110 commentary rows escape the fold and broke the long-session 40-item / 32 KB budget; cover real running pages, completed folds, expansion merging and golden output together.
+- The App requests `fold_work`. Pages read backward from the end replace each work segment with one `kind: fold` entry (counts and ranges only). Expanding a work row fetches it with `from_seq` / `through_seq`
   (`docs/protocol/protocol.md`, "Folded work"). `after_seq` catch-up and live pushes are not folded. Neither are tool_use entries still running or tool_result entries whose other half is outside the page, or they cannot be paired.
 - Claude Code writes `&gt;`, `&lt;`, and `&amp;` itself into the summary / event / result of background task notifications (`<task-notification>`); decode them during parsing. For background commands without a description,
   the summary is the whole command (a heredoc can span dozens of lines). Do not use the summary as notice text: the node parses it into `Item.task`, and the App renders a single tool-style row (`TaskNoteRow`).
   Monitor events carry only task-id; map them back to the call using the tool_result `Monitor started (task <id>` (`TaskIndex`).
-- The App merges its on-disk chat cache by item id. If the hub changes the contents of a type of item (for example, adding fields to notices), new pages do not overwrite old cached items. When the item structure changes,
-  bump the `ChatCache` directory version (`chats-v3`).
+- The App merges its on-disk chat cache by item id. If the hub changes the contents of a type of item (for example, adding fields to notices), new pages do not overwrite old cached items. When the item structure or the hub's kind / text for an existing item changes,
+  bump the `ChatCache` directory version (`ChatCache.folder`) so the old representation is dropped.
 - Backward pagination has a parsing budget, but must not return an empty page while earlier content remains. An empty page + `has_more: true` leaves the App with no seq to fetch next, making earlier history permanently inaccessible (large Codex rollouts can have tens of MB of lines that produce no entries between two turns).
 - Parsing `<persona-context>` must not assume all attributes are present or in a fixed order (2026-11-03, #876). iOS once recognized it only when all three of `kind`, `title`, and `url` were present. Lark /agent contexts had no `url`, so the tag went unrecognized, leaving the whole prompt and large blank areas in the bubble.
   Truncating user messages for pagination must also avoid cutting through tags: a cut in the middle leaves an unclosed `<persona-context`, which every client displays as body text (`lightContexts` in `transcript/contexts.go` trims only the body of each block).
@@ -127,6 +128,8 @@ Now it skips only small files that have been read in full (no larger than the ta
 The same window also lost the last words of online sessions (#1583): after the Agent said something and then made dozens of tool calls, tool results, hook receipts (`async_hook_response`), and request lines quickly exceeded 384 KB.
 `last_text` became empty, leaving task cards and main-chat snapshots showing "No activity yet" for 7 minutes. `readQuickMetaSince` now reuses the previously read text when the window contains none;
 if there is no previous value (the node has just started), it searches backward in segments (`lastWordsBefore`, up to 8 MB). For any "last X" value found only in the tail, consider that it may already be outside the window.
+
+That retained preview belongs to the last visible words, not necessarily the latest turn (#6221). A later silent BotMux reply, or a turn with only tools and thinking, can leave an older API error there even after the structured `TurnError` cleared. Retire that error-only preview only when a newer `turn_duration` closes a turn with a visible non-synthetic model reply and no newer error; a prompt, an unclosed reply or process exit is not recovery. The reply and its close can straddle the quick-tail boundary, so backward recovery must reread an expanding window through the current end, not treat a close without the reply as success. Do not rewrite the historical error item.
 - **A Claude Code transcript is a tree** (`uuid` / `parentUuid`): rewinding (`/rewind`) or editing and resending with ↑ writes the next message as a sibling of an earlier one. Rewound turns remain in the file. See
   `transcript/branch.go` (two messages from the user under the same parent, with an assistant reply to the earlier one → the earlier message's entire subtree produces no items) and `docs/protocol/protocol.md` ("Rewinding to a message");
   **pressing Esc to cancel a message before any reply, then sending again, also writes the same pair of siblings** (#3036; observed: two identical messages under the same "[Request interrupted by user]" line, with no reply to the first).
@@ -268,3 +271,51 @@ A view that fetches once per id cannot recover when the store puts the same id b
   same split again. Leave `cwd` as recorded: it is what the session's own record says.
 - A test that makes a repository under `t.TempDir()` and compares paths needs the physical temporary directory
   (`physicalTempDir`): macOS's is behind a link, so the test passes on Linux and fails on a Mac.
+
+## The background scan never sees a long line (2026-11-13, #6003)
+
+- The node's background scan (`node/bgscan.go`) parses only lines of at most 64 KiB that name a marker: request blobs
+  repeat the whole conversation, markers included, and are 100–500 KB each. Lines over its 256 KiB buffer come in
+  pieces and are skipped too. Anything the session list needs from that scan has to be readable from a short line.
+- A Workflow call carries its script inline (`input.script`), so the call is as long as the script: a 42 KB script
+  made a 94 KB call line. The call was skipped, never parked in `bgPending`, and its short result ("Workflow launched in
+  background. Task ID: …") then registered nothing, so a running workflow had no card. The result names the task, the
+  run (`Run ID`, `Transcript dir`) and the script file on its own, so `backgroundStarted` now starts the run from it
+  when the call was not read; it only takes a result that starts with those words and names a run.
+- Before blaming the line limit, measure the lines: in the same session the earlier runs' calls were 2–27 KB and listed
+  fine; the 69–115 KB lines near them were request blobs and attachments.
+
+## A per-row lookup slower than its cache's life is never cached (2026-11-12)
+
+- Each row of the session list whose transcript path was found more than 30 seconds ago is looked up again
+  (`findTranscriptPath`), and each lookup globbed `<projects>/*/<id>.jsonl`: Go's `filepath.Glob` reads and sorts every
+  project directory to match one name, so a lookup costs a read of the whole tree (66 ms for 2,600 directories and
+  27,000 transcripts). A chat bridge kept 567 compatible-CLI threads listed; with 58 live Claude sessions that was 625
+  lookups, 41 s a rebuild, longer than the 30 s the found paths were trusted for, so every rebuild found them all expired
+  again and the cache never hit. Five rebuild sources overlapped, and the node used up to four cores, half of it in the
+  kernel reading directories.
+- Below the threshold (rows × lookup < trust window) the cost is near zero; above it it jumps to the full price. Check
+  per-row work against the list's real size, not a dozen test rows.
+- A rollout (Codex, the compatible CLI) has no copy in Claude's projects directories: once found it stays the thread's
+  file while it exists, and a live rollout agent is looked up in its rollouts only (`isClaudeTranscript`,
+  `rolloutAgent`). Claude rows still look again every half minute; a shared read per list pass would bound them, but it
+  must not hide a newer copy that appears in another config directory meanwhile
+  (`TestAssistantResumeKeepsARunningProcessProfile`).
+
+## Structural tool-input clipping must count its own marker (#2907)
+
+- A size-indexed clip pass must include the appended marker, its root comma and every change in the omission counts before
+  deciding to stop. Excluding the marker makes an exactly full result cross the budget only when the final JSON is encoded.
+  Keep the marker as a fixed root suffix: ordinary tail removal would otherwise delete it when the root is the widest object.
+- Dropping an ancestor detaches its whole subtree. Mark those descendants inactive instead of resizing their ancestors again;
+  lazy heap removal then skips them. Compare the optimized size index with a deliberately naive reference that re-encodes after
+  every removal, including nested arrays, root-wide objects and marker-key collisions.
+- Walking every ancestor to update its size after each drop is quadratic on deep nesting. Keep one running total, sum a subtree
+  only when detaching it, and pin the work with a node-visit counter rather than a clock. Each indexed node is then visited at
+  most once after the initial tree walk, plus its deactivation.
+- A top-level string metadata field becomes the title in clients that name a call by its first string argument, including
+  already-installed versions. Use an object holding the note instead. Go and the web find that note recursively; Apple and
+  Android's `cutText` handling applies to item text, not recursive tool-input detection.
+- JavaScript's `Object.keys` order (integer-like keys first) and default UTF-16 sort do not match Go's UTF-8/code-point key
+  order. Sort only the SDK's removal and preorder keys with UTF-8 bytes; delete from the original object so surviving fields
+  retain their own output order. Compare shared cases as parsed values and keep known encoder differences platform-specific.

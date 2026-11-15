@@ -62,7 +62,8 @@ const (
 	DeviceAssistantWarm = "assistant.warm"
 	// DeviceAssistantMemory: {op, cwd, name?, content?} → the memory files (op list) or {}.
 	DeviceAssistantMemory = "assistant.memory"
-	// DeviceAssistantCompact: {session_id} → {}.
+	// DeviceAssistantCompact: {session_id, only_running?} → {}; only_running refuses not_running instead of starting a
+	// process that is not running (an older node ignores it and starts one).
 	DeviceAssistantCompact = "assistant.compact"
 	// DeviceAssistantHandoff: {session_id} → {summary, recent}: what a main conversation leaves for the next one.
 	DeviceAssistantHandoff = "assistant.handoff"
@@ -71,6 +72,12 @@ const (
 	// DeviceLaunchersProbe: {name} → {detail}.
 	DeviceLaunchersProbe = "launchers.probe"
 )
+
+// ConfigDirClaudeOnly is the node's refusal of a config_dir for a conversation whose launcher runs another agent than
+// Claude Code, which alone has profiles. The node refuses it before starting anything (node/assistant.go), so a caller
+// that asked for a profile without knowing what the launcher runs can start again without one (assistant
+// startSignedIn, #6884).
+const ConfigDirClaudeOnly = "config_dir is only supported for Claude assistant conversations"
 
 // StartParams is assistant.start's params.
 type StartParams struct {
@@ -81,8 +88,10 @@ type StartParams struct {
 	ConfigDir      string        `json:"config_dir,omitempty"` // Claude profile on the target machine; "" private, "legacy" old resolution, "default" unset
 	PermissionMode string        `json:"permission_mode,omitempty"`
 	Effort         string        `json:"effort,omitempty"`
-	Purpose        string        `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
-	MachineID      string        `json:"machine_id,omitempty"` // "" is the assistant's machine
+	// ServiceTier: the native speed for a new Codex conversation, acknowledged before its first turn. Independent of Effort.
+	ServiceTier string `json:"service_tier,omitempty"`
+	Purpose     string `json:"purpose,omitempty"`    // the model configuration's purpose; "" is the main chat's
+	MachineID   string `json:"machine_id,omitempty"` // "" is the assistant's machine
 	// Space: "health" starts it in the health space (its own directory, instructions and memory, docs/assistant/health.md);
 	// "" is the assistant's own.
 	Space string `json:"space,omitempty"`

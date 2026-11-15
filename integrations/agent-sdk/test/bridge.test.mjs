@@ -78,6 +78,18 @@ test('guest: an empty upstream tool directory fails instead of starting unarmed'
   assert.equal(await b.exited, 1)
 })
 
+test('guest: a child exit during initialize fails startup instead of hanging', async () => {
+  const b = bridge()
+  b.send(start({ guestMcpServers: { persona: {
+    command: process.execPath,
+    args: [fileURLToPath(new URL('./guest-mcp-exit.mjs', import.meta.url))],
+  } } }))
+  const failure = await b.until((m) => m.event === 'error')
+  assert.match(failure.error, /guest MCP: Persona MCP exited \(code 0\)/)
+  assert.equal(await b.exited, 1)
+  assert.equal(b.msgs.some((m) => m.event === 'ready'), false)
+})
+
 test('settings reach query() as a private file, removed at exit', async () => {
   for (const how of ['stdin', 'SIGTERM']) {
     const b = bridge()
@@ -148,6 +160,24 @@ test('each control request calls its Query method and is answered like claude -p
     ['setModel', 'claude-sonnet-4-5'],
     ['applyFlagSettings', { effortLevel: 'high' }],
   ])
+  await b.end()
+})
+
+test('the background tasks: unknown before a turn ended, then the last list the CLI sent (#5234)', async () => {
+  const b = bridge()
+  b.send(start(), ctl('t0', { subtype: 'persona_background_tasks' }))
+  const before = (await b.until((m) => m.type === 'control_response' && m.response.request_id === 't0')).response
+  assert.deepEqual(before, { subtype: 'success', request_id: 't0', response: { tasks: null } })
+  b.send(user('hi'))
+  await b.until((m) => m.type === 'result')
+  b.send(ctl('t1', { subtype: 'persona_background_tasks' }))
+  const idle = (await b.until((m) => m.type === 'control_response' && m.response.request_id === 't1')).response
+  assert.deepEqual(idle.response, { tasks: [] })
+  b.send(user('start a background task'))
+  await b.until((m) => m.type === 'result' && b.msgs.filter((x) => x.type === 'result').length === 2)
+  b.send(ctl('t2', { subtype: 'persona_background_tasks' }))
+  const busy = (await b.until((m) => m.type === 'control_response' && m.response.request_id === 't2')).response
+  assert.deepEqual(busy.response.tasks.map((t) => t.task_id), ['b1'])
   await b.end()
 })
 

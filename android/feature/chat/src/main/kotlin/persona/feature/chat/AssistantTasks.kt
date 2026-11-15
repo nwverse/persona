@@ -179,46 +179,7 @@ internal fun AssistantExtraLine(payload: Any, host: AssistantTaskHost?) {
         is AssistantExtra.Day -> DayLine(payload.date)
         is AssistantExtra.Quick -> QuickResultCard(payload.result)
         is AssistantExtra.Feed -> FeedLine(payload.item, host)
-        is persona.core.domain.tasks.DispatchHint -> DispatchLine(payload, host)
-    }
-}
-
-/**
- * What a reply dispatched, under it (#3700): one task reads "Dispatched: <title> · Open", several list their titles. Each
- * opens that task's detail (its agent, or the task while it starts), never the whole In progress tray. A task the hub
- * could not start has no to-do yet and has no link (its plan says why).
- */
-@Composable
-private fun DispatchLine(hint: persona.core.domain.tasks.DispatchHint, host: AssistantTaskHost) {
-    val fallback = stringResource(R.string.chat_tasks_default_title)
-    val open = stringResource(R.string.chat_assistant_dispatch_open)
-    fun Modifier.opens(task: persona.core.domain.tasks.DispatchedTask) =
-        clickable(enabled = task.todoId != null, onClickLabel = open) { task.todoId?.let { host.sheet.value = TaskSheet.Task(it) } }
-    val single = hint.tasks.singleOrNull()
-    if (single != null) {
-        Row(Modifier.fillMaxWidth().opens(single).padding(vertical = Tokens.Space.xs).testTag("assistant-dispatch-hint"),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            Text(stringResource(R.string.chat_assistant_dispatched_one, single.title.ifBlank { fallback }), Modifier.weight(1f, fill = false),
-                style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (single.todoId != null) {
-                Text(stringResource(R.string.chat_assistant_dispatch_open_line, open), style = PersonaTheme.type.caption,
-                    color = PersonaTheme.palette.accent, maxLines = 1)
-                JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
-            }
-        }
-        return
-    }
-    Column(Modifier.fillMaxWidth().testTag("assistant-dispatch-hint")) {
-        Text(pluralStringResource(R.plurals.chat_assistant_dispatched, hint.count, hint.count), Modifier.padding(vertical = Tokens.Space.xs),
-            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1)
-        hint.tasks.forEach { task ->
-            Row(Modifier.fillMaxWidth().opens(task).padding(vertical = Tokens.Space.xs).testTag("assistant-dispatched-task"),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                Text(task.title.ifBlank { fallback }, Modifier.weight(1f, fill = false), style = PersonaTheme.type.caption,
-                    color = if (task.todoId != null) PersonaTheme.palette.ink else PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (task.todoId != null) JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
-            }
-        }
+        is persona.core.domain.tasks.DispatchHint -> DispatchHandoffCards(payload, host)
     }
 }
 
@@ -260,6 +221,8 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
         "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
         "notice" -> NoticeLine(item)
     }
+    if (item.kind == "routed" && !item.sentByPersona && !item.field("new_agent").isNullOrBlank())
+        NewAgentHandoff(item, title, todos.firstOrNull { it.id == item.ref }, host)
 }
 
 /**
@@ -437,6 +400,15 @@ internal fun permissionLabel(mode: String?): String = when (mode ?: "default") {
 }
 
 /**
+ * What a planned task runs on, as its chip says it: the model, else its launcher, by the short name the Agents rows and the
+ * composer's pill use ("Opus 4.8", `modelShortName`; iOS writes the raw string), else "Default model". The Edit sheet's field
+ * keeps the raw value: it is what the task starts with.
+ */
+@Composable
+internal fun planModelLabel(task: persona.core.contracts.PlanTask): String =
+    persona.core.domain.modelShortName(task.model?.takeIf(String::isNotBlank) ?: task.launcher).ifEmpty { stringResource(R.string.chat_tasks_default_model) }
+
+/**
  * A plan as the conversation or a sheet draws it: the store's latest of it ([given] until it knows the plan), so a card left
  * open on the screen follows the plan to started or dismissed instead of offering Start again.
  */
@@ -479,7 +451,7 @@ internal fun PlanCard(given: TaskPlan, host: AssistantTaskHost) {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                             JChip(host.machineName(t.machine), icon = PhIcons.Laptop)
                             JChip(t.project, icon = PhIcons.Folder)
-                            JChip(t.model?.takeIf(String::isNotBlank) ?: t.launcher?.takeIf(String::isNotBlank) ?: stringResource(R.string.chat_tasks_default_model), icon = PhIcons.Cpu)
+                            JChip(planModelLabel(t), icon = PhIcons.Cpu)
                             JChip(if (t.readonly == true) stringResource(R.string.chat_tasks_read_only) else permissionLabel(t.permission), selected = t.readonly == true)
                         }
                         t.why?.takeIf(String::isNotBlank)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
@@ -773,7 +745,7 @@ private fun InterruptBatchCard(batch: InterruptBatch, host: AssistantTaskHost, t
 }
 
 @Composable
-private fun QuickResultCard(result: QuickResult) {
+internal fun QuickResultCard(result: QuickResult) {
     val locale = currentLocale
     val time = AssistantLines.time(result.time)?.let { LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale) }
     Row(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.cardShape).background(PersonaTheme.palette.sunken).padding(Tokens.Space.m),
@@ -785,7 +757,6 @@ private fun QuickResultCard(result: QuickResult) {
             Text(listOfNotNull(time, result.title, result.place).joinToString(" · "), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(stringResource(R.string.chat_tasks_quick_on_iphone), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3)
     }
 }
 

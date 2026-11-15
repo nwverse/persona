@@ -344,7 +344,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	devs := devices.New(devices.Options{Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
 		Logf: log.New(stderr, "devices: ", log.LstdFlags).Printf,
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
-			if !waitsOnPerson(method) { // a tool call, a write the gate forwarded: idle (idle.go) waits for it
+			if !waitsOnPerson(method) && method != "mcp.tools" { // discovery watches reconnect after restart; actual tool calls hold idle
 				svc.nodeAnswering.Add(1)
 				defer svc.nodeAnswering.Add(-1)
 			}
@@ -383,6 +383,13 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return bh.Answer(ctx, method, params)
 		},
 		AssistantEvent: func(event string, params json.RawMessage) { bh.TellLocal(event, params) },
+		// A meeting's audio socket (assistantwire.SocketRoutes): svc is made below, before the extensions run.
+		AssistantSocket: func(w http.ResponseWriter, r *http.Request) { svc.ServeSocket(w, r) },
+		TranscriptionChanged: func() {
+			if svc != nil {
+				svc.transcriptionReadinessChanged()
+			}
+		},
 		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
 		// The model providers' keys that are references, for their provider extensions' details (launcher_secrets.go).
 		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
