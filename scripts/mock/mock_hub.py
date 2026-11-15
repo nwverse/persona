@@ -24551,7 +24551,7 @@ MOCK_HELP = [
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
     "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
-    "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
+    "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 or the apps' PUT /api/v1/push/ln-mode (#8157) switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
 ]
 
 _features_without_voice = features
@@ -27661,6 +27661,9 @@ class H(BaseHTTPRequestHandler):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
             return self.send_json({"settings": store[mid]})
+        if p == "/api/v1/push/ln-mode" and self.command == "PUT":  # Settings › Notifications › Low-distraction mode (#8157)
+            LN["on"] = json.loads(self.last_body or b"{}").get("enabled") is True
+            return self.send_json({"enabled": LN["on"]})
         if p.startswith("/api/v1/devices/") and p.endswith("/prefs"):  # Settings › Notifications
             body = json.loads(self.last_body or b"{}")
             PREFS.update({k: v for k, v in body.items() if k in ("input", "done", "live_activity", "lock_details")})
