@@ -13,12 +13,19 @@ import { t } from "../../i18n";
 
 // imagePayload decodes on a canvas, which jsdom has not: each read waits on a promise the test settles
 const reads: ((p: { mime: string; data: string }) => void)[] = [];
-// a file upload waits on a promise the test settles too, with the path the machine stored it at
+// a file upload (lib/composer-files.ts) waits on a promise the test settles too, with the path the machine stored it at
 const uploads: ((path: string) => void)[] = [];
+const failures: ((e: Error) => void)[] = [];
 vi.mock("../../lib/attachments", async (orig) => ({
   ...(await orig<typeof import("../../lib/attachments")>()),
   imagePayload: () => new Promise<{ mime: string; data: string }>((resolve) => reads.push(resolve)),
-  sendFile: () => new Promise<string>((resolve) => uploads.push(resolve)),
+}));
+vi.mock("../../lib/file-ops", () => ({
+  uploadAttachment: (_mid: string, file: File) =>
+    new Promise((resolve, reject) => {
+      uploads.push((path) => resolve({ path, name: path.split("/").pop(), size: file.size }));
+      failures.push(reject);
+    }),
 }));
 
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
@@ -39,6 +46,7 @@ beforeEach(() => {
   urls = 0;
   reads.length = 0;
   uploads.length = 0;
+  failures.length = 0;
   create.mockClear();
   revoke.mockClear();
   URL.createObjectURL = create;
@@ -248,57 +256,75 @@ describe("Composer image object URLs", () => {
 
 // A file sent to the machine puts its path into the draft of the conversation it was picked in, not into the one
 // the box shows when the upload finishes.
-describe("Composer file upload that finishes after the box moved on", () => {
+// Files picked for a message are tiles above the input, never words in it (#8361): they upload for their own
+// conversation, hold the message until they are there, and go with it as <persona-file> tags after the words.
+describe("Composer files", () => {
   const box = () => host.querySelector("textarea")!;
-  const renderOn = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={async () => true} />));
-  const spinning = () => !host.querySelector("button[data-composer-plus] svg");
+  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-testid=composer-files] > span"));
+  const renderOn = (draftKey: string, onSend: (m: Outgoing) => Promise<boolean> = async () => true) =>
+    act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={onSend} />));
   const pickNotes = async () => {
     await pickFile(new File(["notes"], "notes.txt", { type: "text/plain" }));
-    expect(uploads).toHaveLength(1);
+    await until(() => expect(uploads).toHaveLength(1));
   };
+  const sendButton = () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]');
+  const forget = () => tiles().forEach((t) => act(() => t.querySelector<HTMLButtonElement>("button[data-remove]")!.click()));
 
-  it("goes into its own conversation's draft, not into the one the box shows now", async () => {
+  afterEach(() => {
+    renderOn("a");
+    forget();
+    renderOn("b");
+    forget();
+  });
+
+  it("puts nothing in the words and sends the file as a tag after them", async () => {
+    const send = vi.fn(async () => true);
+    renderOn("a", send);
+    act(() => void sendDraft("a", { type: "replace", text: "look at" }));
+    await pickNotes();
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["uploading"]);
+    expect(sendButton()?.disabled ?? true).toBe(true); // holds the message while it uploads
+    await act(async () => uploads[0]("/home/me/.persona/uploads/2026-11-15/notes.txt"));
+    expect(box().value).toBe("look at");
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
+    await act(async () => sendButton()!.click());
+    expect(send).toHaveBeenCalledWith({
+      text: 'look at\n\n<persona-file kind="file" path="/home/me/.persona/uploads/2026-11-15/notes.txt" name="notes.txt" size="5"/>',
+      images: [],
+    });
+    expect(tiles()).toEqual([]);
+  });
+
+  it("goes on uploading for its own conversation while the box shows another, and is there when it comes back", async () => {
     renderOn("a");
     await pickNotes();
-    expect(spinning()).toBe(true);
     renderOn("b");
-    expect(spinning()).toBe(false); // b has nothing uploading
-    await act(async () => uploads[0]("/tmp/notes.txt"));
+    expect(tiles()).toEqual([]);
+    await act(async () => uploads[0]("/u/notes.txt"));
     expect(box().value).toBe("");
-    expect(localStorage.getItem("draft:a")).toBe("/tmp/notes.txt");
     renderOn("a");
-    expect(box().value).toBe("/tmp/notes.txt");
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
+    expect(box().value).toBe("");
   });
 
-  it("shows its spinner again when the box comes back to its conversation before it finishes", async () => {
+  it("keeps a failed one as a tile to try again", async () => {
     renderOn("a");
     await pickNotes();
-    renderOn("b");
-    renderOn("a");
-    expect(spinning()).toBe(true);
-    await act(async () => uploads[0]("/tmp/notes.txt"));
-    expect(spinning()).toBe(false);
-    expect(box().value).toBe("/tmp/notes.txt");
+    await act(async () => failures[0](new Error("no space left on device")));
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["failed"]);
+    expect(toast).toHaveBeenCalled();
+    act(() => tiles()[0].querySelector<HTMLButtonElement>("button")!.click());
+    await until(() => expect(uploads).toHaveLength(2));
+    await act(async () => uploads[1]("/u/notes.txt"));
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
   });
 
-  it("is kept for the conversation when the box went away before it finished", async () => {
-    renderOn("a");
+  it("puts the files back over the box when the send does not go", async () => {
+    renderOn("a", async () => false);
     await pickNotes();
-    act(() => root.unmount());
-    root = createRoot(host);
-    await act(async () => uploads[0]("/tmp/notes.txt"));
-    expect(localStorage.getItem("draft:a")).toBe("/tmp/notes.txt");
-    renderOn("a");
-    expect(box().value).toBe("/tmp/notes.txt");
-  });
-
-  it("goes under what the conversation's draft already holds", async () => {
-    localStorage.setItem("draft:a", "see");
-    renderOn("a");
-    await pickNotes();
-    renderOn("b");
-    await act(async () => uploads[0]("/tmp/my notes.txt"));
-    expect(localStorage.getItem("draft:a")).toBe("see\n'/tmp/my notes.txt'");
+    await act(async () => uploads[0]("/u/notes.txt"));
+    await act(async () => sendButton()!.click());
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
   });
 });
 
