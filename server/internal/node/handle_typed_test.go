@@ -32,6 +32,43 @@ func TestTypedHandleParamsDecodeAsTheSharedStructDid(t *testing.T) {
 				return reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(fileReadParams{})).Interface() == *n.(*fileReadParams)
 			},
 		},
+		{
+			name:   methodFsStat,
+			sample: `{"paths":["a","b"],"cwd":"/work","detail":true,"path":"x","session_id":"s1"}`,
+			legacy: &struct {
+				Paths  []string `json:"paths"`
+				Cwd    string   `json:"cwd"`
+				Detail bool     `json:"detail"`
+			}{},
+			typed: &fsStatParams{},
+			same: func(l, n any) bool {
+				return reflect.DeepEqual(reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(fsStatParams{})).Interface(), *n.(*fsStatParams))
+			},
+		},
+		{
+			name:   methodFsList,
+			sample: `{"path":"sub","cwd":"/work","limit":3,"detail":true}`,
+			legacy: &struct {
+				Path string `json:"path"`
+				Cwd  string `json:"cwd"`
+			}{},
+			typed: &fsListParams{},
+			same: func(l, n any) bool {
+				return reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(fsListParams{})).Interface() == *n.(*fsListParams)
+			},
+		},
+		{
+			name:   methodFsFind,
+			sample: `{"cwd":"/work","limit":200,"path":"x"}`,
+			legacy: &struct {
+				Cwd   string `json:"cwd"`
+				Limit int    `json:"limit"`
+			}{},
+			typed: &fsFindParams{},
+			same: func(l, n any) bool {
+				return reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(fsFindParams{})).Interface() == *n.(*fsFindParams)
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

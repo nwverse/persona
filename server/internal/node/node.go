@@ -437,7 +437,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 			n.onTerminalEvent(event, params)
 		}
 	}
-	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify("fs.changed", c) })
+	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify(methodFsChanged, c) })
 	defer n.fsw.close()
 	n.cdirs.report = func(dirs []string) { _ = n.peer.Notify("claude.dirs", map[string]any{"dirs": dirs}) }
 	n.codices.report = func(cfg proto.CodexConfig) { _ = n.peer.Notify("codex.inventory", cfg) }
@@ -668,8 +668,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	var p struct {
 		Path             string        `json:"path"`
-		Paths            []string      `json:"paths"`
-		Detail           bool          `json:"detail"` // fs.stat: the Info sheet's fields (files_info.go)
 		SessionID        string        `json:"session_id"`
 		CreationID       string        `json:"creation_id"`
 		Incarnation      string        `json:"incarnation"`
@@ -1819,8 +1817,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		"browser.status", "browser.install", "browser.open", "browser.cancel", "browser.call",
 		"browser.cookies.list", "browser.cookies.import", "browser.cookies.clear":
 		return legacyBuiltinCall(ctx, method, params, n.lcuComputerCall)
-	case "fs.stat": // detail: the Info sheet (files_info.go)
-		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd, p.Detail)}, nil
+	case methodFsStat: // detail: the Info sheet (files_info.go)
+		var in fsStatParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return map[string]any{"stats": n.statPaths(in.Paths, in.Cwd, in.Detail)}, nil
 	case "space.rename":
 		name, err := n.renameSpace(ctx, p.WorkspaceID, p.Name)
 		if err != nil {
@@ -1839,11 +1841,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return ok(n.syncTodoTokens(ctx, in.Tokens))
-	case "fs.list":
-		return n.listDir(p.Path, p.Cwd)
-	case "fs.find": // every file under cwd, for the web palette's file search (files_find.go)
-		return n.findFiles(ctx, p.Cwd, p.Limit)
-	case "fs.watch": // the folders and Git directories the web panels have open (fswatch.go)
+	case methodFsList:
+		var in fsListParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.listDir(in.Path, in.Cwd)
+	case methodFsFind: // every file under cwd, for the web palette's file search (files_find.go)
+		var in fsFindParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.findFiles(ctx, in.Cwd, in.Limit)
+	case methodFsWatch: // the folders and Git directories the web panels have open (fswatch.go)
 		return n.fsWatch(params)
 	case "git.status":
 		if p.IdentityOnly {
