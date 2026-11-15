@@ -67,17 +67,12 @@ final class BrowserLoginsTests: XCTestCase {
     @MainActor func testWholeListKeepsSelectAndSortInOneMenu() throws {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openShellPage", "machines",
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openMachines", "YES",
                                "-openMachineDetail", "macbook", "-openBrowserLogins", "YES"]
         app.launchPinned()
-        let machines = app.navigationBars["机器"]
-        XCTAssertTrue(machines.waitForExistence(timeout: 20))
-        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH '服务器'")).firstMatch
-        for _ in 0..<6 where !(card.exists && card.isHittable) { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(card.isHittable, "the mock computer is not reachable from Machines")
-        card.tap()
-        XCTAssertTrue(app.navigationBars["服务器"].waitForExistence(timeout: 15), "the machine did not open")
-        XCTAssertTrue(app.navigationBars["服务器"].buttons["BackButton"].exists)
+        let detail = app.navigationBars["MacBook"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 20), "the machine did not open")
+        XCTAssertTrue(detail.buttons["BackButton"].exists)
         XCTAssertFalse(app.buttons["shell-place-sidebar"].exists)
         let bar = app.navigationBars["浏览器登录"]
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "the whole Browser Sign-ins list did not open:\n\(app.debugDescription)")

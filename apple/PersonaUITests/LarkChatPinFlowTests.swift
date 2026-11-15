@@ -70,8 +70,6 @@ final class LarkChatPinFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["话题中的被 Pin 回复"].exists)
         shot(app, "chat-pins-thread-target")
         app.buttons["完成"].firstMatch.tapCenter()
-        app.buttons["lark.chat.more"].tapCenter()
-        XCTAssertTrue(app.buttons["lark.pins.open"].waitForExistence(timeout: 10))
         pins(app)
         XCTAssertTrue(app.buttons["lark.pin.1000"].waitForExistence(timeout: 10))
         app.buttons["lark.pin.1000"].tapCenter()
