@@ -40,6 +40,7 @@ import { TranslationSettings } from "./settings/TranslationSettings";
 import { Extensions } from "./settings/Extensions";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
 import { NotificationSettings } from "./settings/NotificationSettings";
+import { DesktopSettings } from "./settings/DesktopSettings";
 import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
@@ -90,6 +91,8 @@ interface LauncherView extends ProviderView {
   /** zshrc: an rc file's (~/.zshrc, ~/.bashrc); path: a wrapper script on the computer's PATH (#5954); builtin: plain claude (no edit, can't be hidden). */
   source: "zshrc" | "path" | "persona" | "agy" | "builtin" | string;
   agent?: "claude" | "codex" | "agy" | string;
+  /** Managed: pi can use it too on the computers in its scope (docs/integrations/pi.md "Persona's model providers"). */
+  pi?: boolean;
   machines?: string[];
   hidden?: boolean;
   /** zshrc: the rc files it was found in; absent from older hubs (all ~/.zshrc). */
@@ -631,6 +634,7 @@ function General({ onModel }: { onModel: () => void }) {
         <RecentChatsRow />
       </Group>
 
+      <DesktopSettings />
       <SidebarPagesGroup />
 
       <section id="settings-translation" className="scroll-mt-4">
@@ -854,6 +858,7 @@ function Models() {
         <div className="flex items-center gap-2">
           {l.display_name ? <span className="truncate text-[13px] font-medium text-ink">{l.display_name}</span> : <span className="truncate font-mono text-[13px] font-medium text-ink">{l.name}</span>}
           {managedProvider(l.source) && <Pill tone="accent">Persona</Pill>}
+          {managedProvider(l.source) && l.pi && <span title={t("settings.pi_too_title")}><Pill>{t("settings.pi_too")}</Pill></span>}
           {l.source === "agy" && <Pill>Antigravity Runtime</Pill>}
           {l.kind === "api" && <Pill>{t("settings.direct_api")}</Pill>}
           {staleMark(l.stale)}
