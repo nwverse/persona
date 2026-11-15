@@ -534,6 +534,13 @@ def repair_worker_argv(argv, worktree, home=None, writable_paths=(), edit_root=N
             if path.exists() and not path.is_file():
                 raise WatchError("conflict repair needs a regular file or symlink mount")
             target = root / path.relative_to(worktree)
+            if not path.exists():
+                # Delete/delete and delete/modify conflicts can have no regular
+                # source file. The outer stager accepts an explicit deletion;
+                # the worker must not replace it with a link or another type.
+                if target.is_symlink():
+                    raise WatchError("conflict workspace cannot use a symlink")
+                continue
             if not target.is_file() or target.is_symlink():
                 raise WatchError("conflict workspace does not match the original conflict file")
         # A checkout-local workspace is inside the CLI's Read boundary. The

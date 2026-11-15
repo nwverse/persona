@@ -438,6 +438,20 @@ class RepairIntegrationTests(unittest.TestCase):
         self.assertFalse((self.repo / "file.txt").exists())
         self.assertEqual(self.git("show", "-s", "--format=%P", updated).split(), [self.head, self.main])
         self.assertEqual(self.git("status", "--porcelain"), "")
+    def test_conflict_worker_can_resolve_a_missing_source_with_a_deletion(self):
+        self.conflicting_merge()
+        self.git("rm", "-q", "file.txt")
+        self.git("commit", "-qm", "delete conflicted file")
+        head = self.git("rev-parse", "HEAD")
+        self.pr["headRefOid"] = head
+        self.head = head
+        with self.conflict_worker(lambda root, edits: None), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=self.pr), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}):
+            updated = pr_watch_repair.update_branch_with_main("example/one", self.pr, str(self.repo), self.main,
+                                                              {"repair_command": "repair-worker"})
+        self.assertTrue((self.repo / "file.txt").exists())
+        self.assertEqual(self.git("show", "-s", "--format=%P", updated).split(), [head, self.main])
 
 
 if __name__ == "__main__":
