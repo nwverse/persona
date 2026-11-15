@@ -34,9 +34,9 @@ internal fun AgentsPageState.rowIds(): List<String> = list.groups.flatMap { grou
  */
 internal fun holdsAgainst(frozen: AgentsFeedFrozen, latest: AgentsPageState, scope: List<Any?>): Boolean {
     if (frozen.scope != scope || !latest.loaded) return false
-    val held = frozen.page.rowIds()
+    val held = frozen.page.rowIds().toSet()
     val rows = latest.rowIds()
-    if (held.isEmpty() || rows.isEmpty() || rows.none(held.toSet()::contains)) return false
+    if (held.isEmpty() || rows.isEmpty() || rows.none { it in held }) return false
     if (frozen.page.pagination.paged != latest.pagination.paged) return false
     return !(latest.pagination.paged && growsPage(frozen.page, latest))
 }
