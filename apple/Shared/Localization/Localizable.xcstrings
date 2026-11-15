@@ -55199,6 +55199,28 @@
         }
       }
     },
+    "Didn't start. Open it for details." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Didn't start. Open it for details."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "起動できませんでした。開いて詳細を確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没开起来，点开看详情"
+          }
+        }
+      }
+    },
     "Didn't start: %@ [Chat View 38dec8]" : {
       "localizations" : {
         "en" : {
@@ -76379,6 +76401,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "它会保持开启；你不合并就不会合并。"
+          }
+        }
+      }
+    },
+    "It took too long to start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It took too long to start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "起動に時間がかかりすぎました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动太久，超时了"
           }
         }
       }
@@ -113766,6 +113810,28 @@
       },
       "extractionState" : "manual"
     },
+    "Persona on this computer needs an update" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona on this computer needs an update"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターの Persona を更新する必要があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑上的 Persona 需要更新"
+          }
+        }
+      }
+    },
     "Persona pairing link" : {
       "localizations" : {
         "en" : {
@@ -145502,6 +145568,50 @@
       },
       "extractionState" : "manual"
     },
+    "Stopped, not done yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped, not done yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "止まったまま未完了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停下了，还没完成"
+          }
+        }
+      }
+    },
+    "Stopped, not done yet · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped, not done yet · %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "止まったまま未完了 · %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停下了，还没完成 · %1$@"
+          }
+        }
+      }
+    },
     "Stopping on your Apple Watch…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -153034,6 +153144,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The connection to this computer dropped" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The connection to this computer dropped"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターとの接続が切れました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "和这台电脑的连接断了"
+          }
+        }
+      }
     },
     "The connection to this computer dropped. Reconnect it and check whether your last action went through before retrying." : {
       "extractionState" : "manual",
@@ -161731,6 +161863,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This computer didn't allow it" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This computer didn't allow it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピューターで許可されませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑没有允许"
+          }
+        }
+      }
     },
     "This computer has no Claude Code launcher that can start directly" : {
       "localizations" : {
