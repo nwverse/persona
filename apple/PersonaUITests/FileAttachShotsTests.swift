@@ -25,6 +25,14 @@ final class FileAttachShotsTests: XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 30), "no folded cards:\n\(app.debugDescription)")
         sleep(2) // the gone file's look-up
         shot(app, "1-sent")
+        // The older message's file the computer no longer has, a little further up.
+        let gone = app.buttons["file-card-gone"].firstMatch
+        for _ in 0..<4 where !(gone.exists && gone.isHittable) { app.swipeDown(velocity: .slow) }
+        XCTAssertTrue(gone.exists, "no card for the file that is gone:\n\(app.debugDescription)")
+        sleep(1)
+        shot(app, "1b-gone")
+        for _ in 0..<4 { app.swipeUp(velocity: .fast) }
+        sleep(1)
         more.tap()
         sleep(1)
         shot(app, "2-expanded")
