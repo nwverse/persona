@@ -80,6 +80,8 @@
 
 - A to-do's `origin` is what makes it a task, for the hub and every app (#1852, #1909). The hub tests `origin != ""` in some 70 places (receipts, the done judgment, reopening on a new turn, retiring a finished task's Agents, retitling, outcome records, Today, MCP tool text), and web, iOS and Android pick a conversation's tasks by it. A to-do that only relates to a conversation, such as a question nobody answered, keeps that conversation in its own record, not in `origin`: an `isAskTodo` skip in `todosOf` hid it from the snapshot alone, while the apps showed it as a task whose Agent was starting and a hand-off got it closed by the judge. Before giving a new kind of to-do an origin, read every `t.Origin` use and the apps' task filters.
 
+- A remembered "kind" has to repeat in how the owner really works (#8259). "Start These Directly" keyed a kind by the task's exact folder, and the owner's work on one repository happens in a new worktree per branch, so the next task was always a new kind: ticked again and again, it never skipped a card. The kind is now the repository (its main checkout, from the node's `worktree.status`), resolved by the hub, not taken from the tool call; whatever the node cannot say leaves the exact folder, so a lookup failure can only ask more, never less. Before keying a preference on a path, check whether the next occurrence would have the same path.
+
 - A read-modify-write of shared assistant state needs a lock and a read that can fail (#2192). `ensureToday` looked for the day's card and then appended one, and `assistant_feed` has no unique key, so concurrent opens of a chat each made a card. A plan's tasks are one blob that `movePlan` writes whole, so tasks whose starts failed together wrote back each other's old errors. `trustKinds` read `tasks.trust` through a read that answered an empty map on error and wrote that back over every kind remembered before. Serialize the writers of one key (`cardLocks`, `patchPlanTask`, `trustMu`), read again under the lock instead of writing back a copy read earlier, skip the write when the read failed, and answer from the rows that were saved (`saveWrites`), not from memory. Where DST starts at midnight, `time.Date(y, m, d, 0, 0, 0, 0, loc)` is 23:00 the day before: take the date from `now` and the day's start from `dayStart`.
 
 - A disconnected start caller does not prove the Agent was never created (#3251). A runtime bridge can finish `agent.start` after the hub loses its reply; directory and title are not unique operation identities. Recover an interrupted task from its persisted plan, to-do and agent links, and fail visibly when no durable start key or session identity can make replay safe. Do not invent a kept pane to enter start remedying. Read all candidate plans before recording failures: patching one task advances the whole plan's update time and can otherwise hide its siblings from a startup time window.
@@ -410,6 +412,18 @@ the only line between tool calls was English to a Chinese owner. The node now al
 user's language in process text too.
 
 - Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions. A URL-only Agent must still obey the age limit before its first automatic handling; creating its task association is not permission to process old backlog. On load, seed previously linked items' signal cursors from the stored snapshot so a restart is not paid-for news; count only batches observed after that snapshot.
+
+## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
+
+Every `{"type":"todos"}` makes every app read the whole `GET /api/v1/todos` (about 1 MB at ~500 to-dos), and one step of
+a task writes its to-do from several places milliseconds apart (the to-do, its report, its check, its supervision, its
+leader): one supervised task sent 16 events. The event now goes through `todosPushSoon` and waits `todosSettle` (100 ms)
+for the rest of the write, so each step sends one. Two traps: `askChanged` and the orphan pass broadcast `todos` on
+their own and kept a step at two until they used the same path, so never call `s.event` with `todos` directly; and tests
+that count events right after a write must wait with `todosTold` first. A pass that runs on a timer and looks only at
+open tasks takes them with `todosWhere`, not `todosOf(ctx, "*")`, which deep-copies every finished one too (27 MB per
+30 s at 4,000). The direction tree is not such a pass: a finished task decides whether a failed start in its row
+still counts, so it reads them all.
 
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 
