@@ -115,14 +115,16 @@ and the engine's note under Settings › Machines asks to update it.
   - **Agents running Claude Code**: content is read directly from the Claude transcript on that computer, exactly as for herdr sessions: tool cards, sub-Agents, background tasks,
     compaction, and "what it is doing" are all available. The same transcript does not produce an extra "Not running" row. If the transcript has not been written yet (the first turn has just started), or node does not recognize its configuration directory,
     content uses Paseo's timeline until the transcript becomes available, then switches automatically. So does an old Agent whose transcript Claude Code's own cleanup removed.
+    A message the phone sent meanwhile keeps its `client_msg_id` on its line in the transcript (#8358; docs/protocol/protocol.md "Matching pending messages").
   - **Other Agents**: content comes from Paseo's timeline, converted to the App's rendering format. Commands, file reads / writes, diffs, search, web access, sub-Agents, and to-dos use Claude Code tool names.
   - **An Agent Paseo let go is read only while its chat is open** (#8132). Reading the timeline of an Agent that is `closed` (Paseo 0.15 lets one go
     after an hour idle) or archived has Paseo load it first, which starts its provider's process again: every timeline request does, and Paseo has no read
     that leaves the Agent stored. The bridge reads such an Agent only for the watch an App sends when it opens the chat (every App does; the web and
-    Android read their first page just before it, and the watch's backlog then brings the page), or for a send, a rewind or a mode change. Any other read
-    (the manager's after a turn, an App's background sync of its recent chats, which pulls them whenever their `rev` moves) is answered from the bridge's
-    last whole read of the Agent while that is still all of the conversation, and otherwise refused with `not_loaded`, asking Paseo nothing. A chat left
-    open reads nothing more once Paseo lets its Agent go; the next turn, a message's, is read as it runs.
+    Android read their first page just before it, which is refused, and the watch's backlog then brings the page: both keep the chat loading until it
+    comes and say the refusal only if nothing came in 45 s, Android also the hub's error for a backlog it could not read, #8321), or for a send, a
+    rewind or a mode change. Any other read (the manager's after a turn, an App's background sync of its recent chats, which pulls them whenever their
+    `rev` moves) is answered from the bridge's last whole read of the Agent while that is still all of the conversation, and otherwise refused with
+    `not_loaded`, asking Paseo nothing. A chat left open reads nothing more once Paseo lets its Agent go; the next turn, a message's, is read as it runs.
   - **What other Agents send an Agent** (#8220): Paseo hands an Agent another Agent's message, a child's notice (finished, errored, waiting for a
     permission, closed) and a schedule's run as user input in a `<paseo-system>` envelope: XML-escaped, several delivered together separated by blank
     lines. A schedule's run comes in a bare `<paseo-system>`, as the notices did before Paseo versioned the envelope. Node reads them from the Claude
@@ -537,8 +539,10 @@ launcher ran on another account, and a provider added in Persona never applied i
   go when its timeline is read, as Paseo does, and keeps which (`loads`). It holds a new subscription's updates while it builds the first page and sends
   them right after it, as Paseo 0.15 does, so a test can change things while a page is read (`duringPage`) and see what a reconnect leaves (#8129).
 - End to end: first `cd server && go generate ./internal/runtimepkg && go build -o /tmp/personad ./cmd/personad`, then run
-  `PERSONAD=/tmp/personad CLAUDE_BIN=<a Claude Code executable> [PASEO_BIN=<a Paseo executable>] node integrations/paseo/e2e/run.mjs`. There are 64 checks;
-  without `PASEO_BIN`, `paseo` must be installed locally. Its temporary directories go under `$TMPDIR` when it is set.
+  `PERSONAD=/tmp/personad CLAUDE_BIN=<a Claude Code executable> [PASEO_BIN=<a Paseo executable>] node integrations/paseo/e2e/run.mjs`. There are 65 checks;
+  without `PASEO_BIN`, `paseo` must be installed locally. Its temporary directories go under `$TMPDIR` when it is set. A check waits, with a
+  limit, for the state it asserts (the list the node pushes once the bridge is gone, a row naming its forks), rather than reading the
+  last list once: node pushes its list a moment after what changed it (#8358).
   - Start a real Paseo daemon with its own home and an unused port. The provider uses `extends: "claude"`; the model is a scripted
     Anthropic API in `e2e/model.mjs`.
   - Start a real `personad node --stdio`, with the SDK test tools acting as hub. After setting the engine to Paseo, node runs the bridge itself.
@@ -546,6 +550,7 @@ launcher ran on another account, and a provider added in Persona never applied i
     archiving it again across a restart of the bridge (meanwhile still listed and read, a message refused as Paseo away, #8131), and resuming it.
   - The launcher test and refreshed models through Paseo (nothing of the probe left), a model switch, a rewind of that session, and a rewind of an Agent started in Paseo (its Claude session forked, its session in Persona the same).
   - What a start in Paseo can run (#8140): the list for Paseo's host is its providers alone, and a launcher Paseo lacks (Claude Code's built-in provider, off there) runs on its provider of the same kind, an effort its model lacks lowered, both said on the answer.
+    That start has no first message: the one sent to it next, before Claude Code has written a transcript, keeps its `client_msg_id` on its line once the session reads the transcript (#8358).
   - An Agent started in Paseo and archived there: its transcript a session not running, read by node, and a message has Paseo take that same Agent back, with no node
     restart in between (#8131).
   - Paseo forking an Agent started there by itself, as its App does to go on after an API error: seen by the bridge (the ID pinned as kept) and while the bridge was not running (the same ID from the line of its transcripts), each row naming its fork in `aliases`.
