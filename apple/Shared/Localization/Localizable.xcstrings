@@ -30111,6 +30111,28 @@
       },
       "extractionState" : "manual"
     },
+    "Chats your scheduled tasks and the background supervisor start also appear in the sidebar's Recent, by time. All your devices follow." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chats your scheduled tasks and the background supervisor start also appear in the sidebar's Recent, by time. All your devices follow."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定期タスクとバックグラウンド監督が始めたチャットも、時間順にサイドバーの「最近」に並びます。すべてのデバイスに反映されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定时任务和后台督办开的对话，也按时间排进侧边栏的「最近」。你的所有设备都会跟着变。"
+          }
+        }
+      }
+    },
     "Choose the Fastest Route Automatically" : {
       "localizations" : {
         "en" : {
@@ -138335,6 +138357,28 @@
       },
       "extractionState" : "manual"
     },
+    "Show Scheduled Task Chats" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Scheduled Task Chats"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定期タスクのチャットを表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示定时任务的对话"
+          }
+        }
+      }
+    },
     "Show Session Info" : {
       "localizations" : {
         "en" : {
@@ -139439,6 +139483,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "侧边栏"
+          }
+        }
+      }
+    },
+    "Sidebar's Recent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sidebar's Recent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サイドバーの「最近」"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "侧边栏「最近」"
           }
         }
       }
