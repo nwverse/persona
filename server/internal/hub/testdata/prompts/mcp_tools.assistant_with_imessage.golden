@@ -1325,7 +1325,7 @@
   },
   {
     "name": "inbox_replay",
-    "description": "Recover specific Lark messages into Persona's Inbox only when the user explicitly asks you to recover those messages. Give one chat ID, an RFC3339 start and end spanning no more than one hour, and 1-10 exact message IDs. This replay reads only those selected source messages and does not move the global Lark cursor. It follows the normal Inbox path and may hand an explicitly addressed bot message to Persona's main conversation; it never sends a Lark message. After replay, use `read_only: true` to read the retained Inbox receipt without replaying again. `read_only: true` does not fetch Lark history; it only returns already retained items whose latest message ID is selected.",
+    "description": "Only on explicit user request, recover 1-10 exact om_ message IDs from one oc_ chat in an RFC3339 window of at most one hour. Uses Inbox routing (including bot handoff to the main chat), never sends Lark messages or moves the global cursor. Use read_only=true after replay to read retained items by latest message ID without fetching or replaying history.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1336,18 +1336,15 @@
       ],
       "properties": {
         "chat_id": {
-          "type": "string",
-          "description": "One Lark chat ID beginning with oc_."
+          "type": "string"
         },
         "start": {
           "type": "string",
-          "format": "date-time",
-          "description": "Start of the bounded replay window."
+          "format": "date-time"
         },
         "end": {
           "type": "string",
-          "format": "date-time",
-          "description": "End of the bounded replay window, at most one hour after start."
+          "format": "date-time"
         },
         "message_ids": {
           "type": "array",
@@ -1355,14 +1352,12 @@
           "maxItems": 10,
           "uniqueItems": true,
           "items": {
-            "type": "string",
-            "description": "An exact Lark message ID beginning with om_."
+            "type": "string"
           }
         },
         "read_only": {
           "type": "boolean",
-          "default": false,
-          "description": "When true, only read matching items already retained in the Inbox; do not replay or fetch messages."
+          "default": false
         }
       },
       "additionalProperties": false
