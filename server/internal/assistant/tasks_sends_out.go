@@ -69,7 +69,8 @@ type sendsOut struct {
 }
 
 // reopens: n asks an accepted task for more, and its answer decides what a turn of the agent that starts meanwhile is
-// (closedTurnHeld): such a send has a bounded wait, its own (agent_send's liveSendWait). n may be nil.
+// (closedTurnHeld): such a send has a bounded wait of its own (its ctx deadline: liveSendWait for a live agent_send or a
+// card message, 5 minutes for agent_interrupt's then, a not-running agent or a card message's offline row). n may be nil.
 func (n *agentSendNote) reopens() bool { return n != nil && n.task != "" }
 
 // counts: n asks task id, accepted at doneAt (that acceptance, not a later one), for more, and still counts at now.

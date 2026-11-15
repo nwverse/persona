@@ -212,13 +212,15 @@ the main chat: a task a side chat supervises reopens for that chat's sends, not 
 
 The send is noted before it goes, with the task, its acceptance and how long the send counts (its own wait plus a
 minute). The note is kept in the assistant's settings (`assistant.sends_out`,
-`server/internal/assistant/tasks_sends_out.go`), so a manager restart does not lose it. How the send went decides:
+`server/internal/assistant/tasks_sends_out.go`), so a manager restart does not lose it; when it cannot be saved, the
+send is not made and says so. How the send went decides:
 
 - the agent's computer took it: the task reopens at once (`reopenTodo`, stored);
 - it definitely failed (refused, or it never left the manager: `rpc.ErrNotSent`): nothing reopens;
-- its answer never came (the wait ran out, the link dropped), or the manager restarted before it came: the text may
-  still arrive, so a turn of the agent that starts while the send counts reopens the task, and if none does, the task
-  stays closed.
+- its answer never came (the wait ran out, the link dropped), the manager restarted before it came, or the computer
+  could not confirm it (`delivered: unknown`: typing failed part way, a Claude inbox holds the text for approval): the
+  text may still arrive, so a turn of the agent that starts while the send counts reopens the task, and if none does,
+  the task stays closed.
 
 A turn of the agent that starts while the send is still out waits for that answer (`closedTurnReopens`): if the send
 definitely failed and no other send for the task is out, the turn was other work and the task stays closed through it;
