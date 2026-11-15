@@ -511,6 +511,25 @@ describe("messages kept across a reload", () => {
     expect(store.size).toBe(0);
   });
 
+  // A send refused because a dialog had the terminal (#7343) lights the terminal button by its code: the code comes
+  // back with the failed bubble after a reload, and goes once the message is sent, so the dot does not stay behind.
+  it("keeps a refusal's code across a reload and drops it once the message goes", async () => {
+    const refused = new ApiError(409, "a dialog is open", { code: "dialog_open", delivered: "none", retryable: false });
+    keepFailed("m", "s", { id: "d1", text: "go on", images: [], at: 1000 }, refused);
+    expect(outbox()["m/s"]).toMatchObject([{ id: "d1", state: "failed", code: "dialog_open" }]);
+    reload();
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "d1", state: "failed", code: "dialog_open", restored: true }]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ ok: true })));
+    expect(await retryOutbox("m", "s", "d1")).toBe(true);
+    const sent = outbox()["m/s"].find((e) => e.text === "go on")!;
+    expect(sent).toMatchObject({ state: "sent" });
+    expect(sent.code).toBeUndefined();
+    const kept = [...store.values()].map((v) => JSON.parse(v) as { code?: string });
+    expect(kept.length).toBe(1);
+    expect(kept[0].code).toBeUndefined();
+  });
+
   it("restores an accepted message as pending with its original id, never resends, and settles once", async () => {
     const fetcher = vi.fn().mockResolvedValue(response({ ok: true }));
     vi.stubGlobal("fetch", fetcher);

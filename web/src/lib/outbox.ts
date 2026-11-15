@@ -38,7 +38,8 @@ export interface OutboxEntry {
   /** sent: the hub has it (or it started the conversation); the bubble waits for the transcript. */
   state: "sending" | "sent" | "failed";
   error?: string;
-  /** The code its failed send was refused with (dialog_open: a dialog had the terminal, #7343). */
+  /** The code its failed send was refused with (dialog_open: a dialog had the terminal, #7343). Kept across a reload
+   *  (keepOutgoing); cleared once it is sent, retried or settled by a Check. */
   code?: string;
   /** The computer's input box holds text (input_draft): what "Clear and send" clears, when it can. */
   clearable?: string;
@@ -235,14 +236,14 @@ export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> 
 
 const KEPT_PREFIX = "outbox-msg:";
 const keptKey = (key: string, id: string) => `${KEPT_PREFIX}${key}/${id}`;
-type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "state" | "wordsOnly" | "acceptedAt" | "clearable">>;
+type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "code" | "state" | "wordsOnly" | "acceptedAt" | "clearable">>;
 
 /** Keeps one message's words until its transcript copy arrives (pictures are not kept: they would fill the
  *  storage). Storage can be full or refused; the message then lasts only as long as the page. */
 export function keepOutgoing(key: string, e: Outgoing) {
   if (!e.text.trim()) return;
   try {
-    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
+    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
   } catch {
     // only this page's copy then
   }
@@ -255,12 +256,12 @@ export function acceptOutgoing(key: string, id: string, acceptedAt = Date.now())
   // too; the original component's setPending no longer reaches it. An already settled entry stays absent.
   const entries = list(key);
   if (entries.some((e) => e.id === id && e.state !== "sent")) {
-    setOutbox(key, entries.map((e) => e.id === id ? { ...e, state: "sent", acceptedAt, error: undefined, clearable: undefined, newId: undefined, inDoubt: undefined } : e));
+    setOutbox(key, entries.map((e) => e.id === id ? { ...e, state: "sent", acceptedAt, error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined } : e));
   }
   try {
     const saved = storedValue(keptKey(key, id));
     if (saved === null) return;
-    storeValue(keptKey(key, id), JSON.stringify({ ...JSON.parse(saved), state: "sent", acceptedAt, error: undefined, newId: undefined, inDoubt: undefined }));
+    storeValue(keptKey(key, id), JSON.stringify({ ...JSON.parse(saved), state: "sent", acceptedAt, error: undefined, code: undefined, newId: undefined, inDoubt: undefined }));
   } catch {
     // storage unavailable: keep only the current page's bubble
   }
@@ -314,7 +315,7 @@ export function restoreOutbox(mid: string, sid: string, inFlight: string[] = [])
     return true;
   });
   if (!back.length) return;
-  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: k.state === "sent" ? "sent" : "failed", restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
+  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: k.state === "sent" ? "sent" : "failed", code: k.state === "sent" ? undefined : k.code, restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
   setOutbox(key, [...list(key), ...entries]);
 }
 
@@ -335,7 +336,7 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
     }));
     if (!flight.current()) return true;
     flight.finish("delivered");
-    update(key, e.id, { state: "sent", acceptedAt: Date.now(), error: undefined, clearable: undefined });
+    update(key, e.id, { state: "sent", acceptedAt: Date.now(), error: undefined, code: undefined, clearable: undefined });
     showLauncherNote(`${mid}/${sid}`, r?.launcher_note);
     // An outside-terminal Claude took it behind a question only the computer can answer (#5890).
     if (r?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
@@ -454,13 +455,13 @@ export function checkOutbox(mid: string, sid: string, id: string): Promise<Outbo
     if (op.state === "done") {
       reread();
       if (!current()) return "stale";
-      update(key, id, { state: "sent", acceptedAt: Date.now(), error: undefined, clearable: undefined, newId: undefined, inDoubt: undefined });
+      update(key, id, { state: "sent", acceptedAt: Date.now(), error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined });
       return "applied";
     }
     if (op.state === "failed") {
       reread();
       if (!current()) return "stale";
-      update(key, id, { inDoubt: false, newId: true, error: operationFailure(op) });
+      update(key, id, { inDoubt: false, newId: true, error: operationFailure(op), code: undefined });
       return "not_applied";
     }
     reread(); // pending and unknown stay uncertain: never a new message id, never an ordinary Retry.
@@ -491,7 +492,7 @@ export function retryOutboxEntry(mid: string, sid: string, id: string, clearDraf
   if (e.inDoubt) return { id, sent: checkOutbox(mid, sid, id).then((result) => result === "applied") };
   // A gap the hub never answered is retried with the same id (the hub does it at most once). A definite answer stays
   // on the old receipt, so this ordinary Retry is a new operation.
-  const next: OutboxEntry = { ...e, id: e.newId ? uuid() : e.id, newId: false, state: "sending", error: undefined, acceptedAt: undefined, at: Date.now() };
+  const next: OutboxEntry = { ...e, id: e.newId ? uuid() : e.id, newId: false, state: "sending", error: undefined, code: undefined, acceptedAt: undefined, at: Date.now() };
   const flight = beginMessageSend(mid, sid, next.id, next.text);
   noteWritten(next.id, next.at);
   write(key, list(key).map((x) => (x.id === id ? next : x)));
