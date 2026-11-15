@@ -302,7 +302,9 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
       const result = await entry.promise;
       if (result) applyLoaded(result);
     } catch (failure) {
-      if (!context.isCurrent()) return;
+      // A rejected read is fenced like its answer: an invalidated background read must not surface its 404/503 over
+      // the current store, and it must not schedule a refresh of its own.
+      if (!context.isCurrent() || entry.id !== loads.current || entry.version !== versionNow.current) return;
       if (editingNow.current || editorPending.current) { pendingRefresh.current = true; return; }
       if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure));
     } finally {
@@ -315,7 +317,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     if (editingNow.current || editorPending.current) { pendingRefresh.current = true; return; }
     void refresh();
   }, [context, todoId, version, attempt, refresh]);
-  // Closing the dialog (save, cancel or a failed close attempt) fulfils the refresh that was held back while editing.
+  // A completed close (save or cancel) fulfils the refresh that was held back while editing.
   useEffect(() => {
     if (editing || editorPending.current || !pendingRefresh.current || !context.isCurrent()) return;
     pendingRefresh.current = false;
