@@ -445,11 +445,12 @@ Phase 3 lands in several PRs.
   - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build` and
     `Turn.pickAnswerAcrossWakes`. It handles raw-item frozen cuts, entry-based user pictures, tool pairing,
     compaction, supervision provenance, recap reopening and pending wakes; it does not project rendered `ChatLine`s.
-  - All 57 static turn cases compare complete expected objects after applying the checked-in current-iOS overlay
+  - All 57 static turn cases compare complete `turns` arrays after applying the checked-in current-iOS overlay
     (`spec/fixtures/lines/ios/differences.json`, #8429). The independent maintainer's macOS replay passed the 59
     executable content cases and its properties; this Rust PR does not run Swift or claim that replay itself.
   - The four operation-sequence cases, two source-order layout cases, rendered lines, task indexes, incremental
-    rebuilds, production adapters and shared FFI/JNI/NAPI are outside this slice. No physical-device or performance
+    rebuilds, production adapters and shared FFI/JNI/NAPI are outside this slice. The Rust comparison deliberately
+    ignores rendered `lines` and `task_index` even where an overlay replaces them. No physical-device or performance
     claim is made. `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
 
 - **Question answers and recommendation labels (#8460).**

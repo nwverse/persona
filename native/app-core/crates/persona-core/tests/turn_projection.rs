@@ -7,26 +7,36 @@ use std::path::{Path, PathBuf};
 use persona_core::turns::Input;
 use serde_json::Value;
 
-fn current_apple_expected(case: &Value, overlay: &Value) -> Value {
+fn current_apple_expected(case: &Value, overlay: &Value, apply_case_patch: bool) -> Value {
     let mut expected = case["expected"].clone();
     let wake = &overlay["turn_wake_state"];
     for turn in expected["turns"].as_array_mut().unwrap() {
-        let pending = overlay["turn_wake_state"]["pending"]
+        let pending = wake["pending"]
             .as_array()
             .unwrap()
             .iter()
             .any(|entry| entry["case"] == case["name"] && entry["turn"] == turn["id"]);
         let object = turn.as_object_mut().unwrap();
+        assert!(object.contains_key(wake["drop"].as_str().unwrap()), "stale wake drop");
+        assert!(!object.contains_key(wake["set"].as_str().unwrap()), "stale wake set");
         object.remove(wake["drop"].as_str().unwrap());
         object.insert(wake["set"].as_str().unwrap().to_owned(), Value::Bool(pending));
     }
     let name = case["name"].as_str().unwrap();
-    if let Some(entry) = overlay["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["name"] == name)
+    if apply_case_patch
+        && let Some(entry) = overlay["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == name)
     {
+        for key in entry.as_object().unwrap().keys() {
+            assert!(
+                ["name", "why", "source", "replace", "turn_fields"].contains(&key.as_str()),
+                "unknown overlay entry key: {name}.{key}"
+            );
+        }
+        assert!(entry["why"].is_string() && !entry["source"].as_array().unwrap().is_empty());
         for (key, value) in entry["replace"].as_object().into_iter().flatten() {
             assert!(
                 expected.get(key).is_some_and(|old| old != value),
@@ -57,7 +67,7 @@ fn current_apple_expected(case: &Value, overlay: &Value) -> Value {
 }
 
 #[test]
-fn exact_static_turn_manifest_and_full_expected_objects() {
+fn exact_static_turn_manifest_and_full_expected_turns() {
     let mut paths: Vec<PathBuf> =
         fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../spec/fixtures/lines"))
             .unwrap()
@@ -80,11 +90,30 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
     }))
     .unwrap();
     let mut replayed = BTreeSet::new();
+    let mut all_names = BTreeSet::new();
+    let mut all_turns = BTreeSet::new();
+    let mut patch_names = BTreeSet::new();
+    for entry in overlay["cases"].as_array().unwrap() {
+        assert!(
+            patch_names.insert(entry["name"].as_str().unwrap().to_owned()),
+            "duplicate overlay case"
+        );
+    }
     let mut total = 0;
     for path in paths {
         let document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         for case in document["cases"].as_array().unwrap() {
             total += 1;
+            let name = case["name"].as_str().unwrap().to_owned();
+            assert!(all_names.insert(name.clone()), "duplicate corpus case: {name}");
+            for state in case["expected"]["checkpoints"]
+                .as_array()
+                .map_or_else(|| std::slice::from_ref(&case["expected"]), Vec::as_slice)
+            {
+                for turn in state["turns"].as_array().into_iter().flatten() {
+                    all_turns.insert((name.clone(), turn["id"].as_str().unwrap().to_owned()));
+                }
+            }
             if case["expected"].get("checkpoints").is_some() || case["input"].get("operations").is_some() {
                 continue;
             }
@@ -93,13 +122,33 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
             let actual = persona_core::turns::project(&input);
             assert_eq!(
                 actual,
-                current_apple_expected(case, &overlay),
+                current_apple_expected(case, &overlay, true),
                 "current Apple turn projection from #8239's replay: {}/{}",
                 path.display(),
                 name
             );
+            if patch_names.contains(name.as_str()) {
+                assert_ne!(
+                    actual,
+                    current_apple_expected(case, &overlay, false),
+                    "unnecessary overlay case entry: {name}"
+                );
+            }
             assert!(replayed.insert(name.clone()), "duplicate case: {name}");
         }
+    }
+    assert!(patch_names.is_subset(&all_names), "overlay names a nonexistent case");
+    let mut pending_names = BTreeSet::new();
+    for pending in overlay["turn_wake_state"]["pending"].as_array().unwrap() {
+        let key = (
+            pending["case"].as_str().unwrap().to_owned(),
+            pending["turn"].as_str().unwrap().to_owned(),
+        );
+        assert!(pending_names.insert(key.clone()), "duplicate pending overlay reference");
+        assert!(
+            all_turns.contains(&key),
+            "overlay names a nonexistent pending turn: {key:?}"
+        );
     }
     assert_eq!(total, 61, "actual lines corpus size");
     let expected: BTreeSet<String> = [
