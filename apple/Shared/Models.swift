@@ -551,6 +551,8 @@ extension Machine {
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var name: String
+    /// What people call it where it has a name of its own: a Persona-managed provider's name, or the label a runtime
+    /// gives its provider (Paseo's "Grok" for `grok`, #8261); nil for the others, which go by `name` (`title`).
     var displayName: String? = nil
     var baseURL: String?
     var model: String?
@@ -572,9 +574,6 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// A Codex launcher the computer starts in a shell pane the user picked (Run Agent Here) and keeps that pane when the
     /// start fails (#5504); nil from an older computer, where Run Agent Here offers Claude Code only.
     var runHere: Bool? = nil
-    /// What people call it where it has a name of its own: the label a runtime gives its provider (Paseo's "Grok" for
-    /// `grok`, #8261) or a Persona-managed provider's; nil for the others, which go by `name`.
-    var displayName: String? = nil
     /// The permission modes a start on it takes when its agent is not Claude Code (#8261, the node's `permission_modes`:
     /// Paseo's Grok, OpenCode or Codex): `default`, its own approval, sent as no mode, and `bypassPermissions` where it
     /// has an Allow Everything (`StartModes.listed`). Nil for Claude Code's launchers, which take its five, for the
@@ -606,14 +605,13 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
         case baseURL = "base_url"
         case promptOptional = "prompt_optional"
         case runHere = "run_here"
-        case displayName = "display_name"
         case permissionModes = "permission_modes"
     }
 }
 
 nonisolated extension Launcher {
     /// A health record this app cannot read is left out, never the launcher (the list is what New Agent starts from);
-    /// so is a `display_name` or `permission_modes` it cannot read (#8261).
+    /// so is a `display_name`, `agent_type` or `permission_modes` it cannot read (#8261).
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
@@ -627,7 +625,6 @@ nonisolated extension Launcher {
         promptOptional = try c.decodeIfPresent(Bool.self, forKey: .promptOptional)
         source = try c.decodeIfPresent(String.self, forKey: .source)
         runHere = try c.decodeIfPresent(Bool.self, forKey: .runHere)
-        displayName = (try? c.decodeIfPresent(String.self, forKey: .displayName)) ?? nil
         permissionModes = (try? c.decodeIfPresent([String].self, forKey: .permissionModes)) ?? nil
     }
 }

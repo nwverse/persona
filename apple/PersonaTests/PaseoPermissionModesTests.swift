@@ -14,10 +14,10 @@ import Testing
         return try JSON.decoder.decode(Session.self, from: Data(json.utf8))
     }
 
-    private static let grok = Launcher(name: "grok", model: "grok-4", agent: "paseo", source: "paseo", displayName: "Grok",
+    private static let grok = Launcher(name: "grok", displayName: "Grok", model: "grok-4", agent: "paseo", source: "paseo",
                                        permissionModes: ["default", "bypassPermissions"])
     /// A provider with neither Auto Accept nor full access: its own approval is all it lists.
-    private static let ownOnly = Launcher(name: "cursor", agent: "paseo", source: "paseo", displayName: "Cursor",
+    private static let ownOnly = Launcher(name: "cursor", displayName: "Cursor", agent: "paseo", source: "paseo",
                                           permissionModes: ["default"])
     private static let paseoCodex = Launcher(name: "my-codex", agent: "codex", source: "paseo",
                                              permissionModes: ["default", "bypassPermissions"])
@@ -43,7 +43,7 @@ import Testing
     }
 
     @Test func theSearchFindsALauncherByItsTitle() {
-        let fast = Launcher(name: "p_1", agent: "paseo", source: "paseo", displayName: "Grok Fast", permissionModes: ["default"])
+        let fast = Launcher(name: "p_1", displayName: "Grok Fast", agent: "paseo", source: "paseo", permissionModes: ["default"])
         let list = [fast, Self.claude]
         #expect(LauncherChoices.shown(list, query: "fast").map(\.name) == ["p_1"])
         #expect(LauncherChoices.shown(list, query: "p_1").map(\.name) == ["p_1"])
