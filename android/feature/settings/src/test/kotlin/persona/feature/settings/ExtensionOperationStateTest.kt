@@ -281,6 +281,23 @@ class ExtensionOperationStateTest {
         }
     }
 
+    @Test fun cleanupWarningsFromASteppedRemovalReplaceTheToastUntilTheirOk() {
+        val api = FakeOperations()
+        val warnings = listOf("请手动删除数据目录", "缓存清理失败")
+        watching(api) { model, notices ->
+            assertFalse(model.uninstall(keepData = true))
+            api.pushes.emit(op("succeeded", "nodes", 9, kind = "uninstall", id = "op2").copy(warnings = warnings))
+            until { model.state.value.removalNotice != null }
+            assertTrue(notices.isEmpty())
+            assertEquals(warnings, model.state.value.removalNotice?.warnings)
+            assertNull(model.state.value.operation)
+            assertFalse(api.calls.any { it.startsWith("retry") })
+            model.dismissRemovalNotice()
+            assertNull(model.state.value.removalNotice)
+            assertTrue(notices.isEmpty())
+        }
+    }
+
     @Test fun removingOneOthersDependOnAsksThenCascades() {
         // #5611: in steps the refusal is only the failed operation's error_code; asked, it starts again with cascade.
         val api = FakeOperations()

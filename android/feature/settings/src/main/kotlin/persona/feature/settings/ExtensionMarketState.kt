@@ -50,6 +50,22 @@ internal const val GitHubTokenUrl = "https://github.com/settings/personal-access
     "&description=Lets%20a%20Persona%20hub%20read%20its%20GitHub%20extension%20markets%20%28read-only%29." +
     "&expires_in=365"
 
+/** A successful uninstall with cleanup left for the user, held until its OK. */
+internal data class ExtensionRemovalNotice(val title: String, val warnings: List<String>)
+
+/** Only actionable hub warnings open the cleanup sheet; null, empty and blank results keep the ordinary success path. */
+internal fun extensionRemovalNotice(
+    res: Resources,
+    name: String,
+    members: Boolean,
+    removal: ExtensionRemoval?,
+    stepped: Boolean = false,
+): ExtensionRemovalNotice? {
+    val warnings = removal?.warnings.orEmpty().filter { it.isNotBlank() }
+    if (warnings.isEmpty()) return null
+    return ExtensionRemovalNotice(ExtensionText.uninstalled(res, name, members, removal, stepped), warnings)
+}
+
 internal object CatalogText {
     fun standing(p: CatalogExtension): CatalogStanding = when {
         p.upgradable && p.problem.isNullOrBlank() -> CatalogStanding.Upgradable
@@ -234,6 +250,8 @@ internal data class CatalogExtensionState(
     val cascade: ExtensionCascade? = null,
     /** The pack's members were partly uninstalled (#1154): said in a dialog. */
     val partial: PackPartial? = null,
+    /** Cleanup left after a successful uninstall: shown until the user acknowledges it, with no success toast. */
+    val removalNotice: ExtensionRemovalNotice? = null,
 ) {
     val busy: Boolean get() = loading || previewing || acting || operation?.active == true
 }
@@ -314,11 +332,19 @@ internal class CatalogExtensionModel(
         if (!op.active && !refused && asked != null) removing = null
         when (op.state) {
             ExtensionOperation.Succeeded -> {
-                mutable.update { it.copy(operation = null, consentFor = null, preview = if (it.consentFor == op.id) null else it.preview) }
                 val name = state.value.extension?.label ?: op.name ?: op.extension
+                if (op.kind == "uninstall") removal = ExtensionRemoval(warnings = op.warnings)
                 // A pack's removal with its members ends only once every member is gone (#1154).
-                onDone(if (op.kind == "uninstall" && asked?.members == true) ExtensionText.uninstalled(res, name, members = true, stepped = true)
-                    else OperationText.done(res, op, name))
+                val message = if (op.kind == "uninstall" && asked?.members == true)
+                    ExtensionText.uninstalled(res, name, members = true, stepped = true) else OperationText.done(res, op, name)
+                val notice = if (op.kind == "uninstall")
+                    extensionRemovalNotice(res, name, asked?.members == true, removal, stepped = true) else null
+                mutable.update {
+                    it.copy(operation = null, consentFor = null, preview = if (it.consentFor == op.id) null else it.preview,
+                        removalNotice = if (op.kind == "uninstall") notice else it.removalNotice)
+                }
+                // Cleanup warnings replace the success toast; the sheet is the acknowledgement, not a retry prompt.
+                if (op.kind != "uninstall" || notice == null) onDone(message)
                 // Installed but not signed in: straight on to its sign-in.
                 if (op.next == "auth" && op.kind != "uninstall") onSignIn(op.extension.ifBlank { id })
                 load()
@@ -471,7 +497,8 @@ internal class CatalogExtensionModel(
      */
     suspend fun uninstall(keepData: Boolean, cascade: Boolean = false, members: Boolean = false): Boolean {
         if (state.value.busy) return false
-        mutable.update { it.copy(acting = true, actionError = null, partial = null) }
+        removal = null
+        mutable.update { it.copy(acting = true, actionError = null, partial = null, removalNotice = null) }
         return try {
             if (stepped()) {
                 removing = null
@@ -480,8 +507,11 @@ internal class CatalogExtensionModel(
                 track(op, requestOwned = true)
                 return false
             }
-            removal = api.uninstall(id, keepData, cascade, members)
-            mutable.update { it.copy(acting = false) }
+            val completed = api.uninstall(id, keepData, cascade, members)
+            removal = completed
+            val name = state.value.extension?.label ?: id
+            val notice = extensionRemovalNotice(res, name, members, completed)
+            mutable.update { it.copy(acting = false, removalNotice = notice) }
             load()
             true
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -508,6 +538,12 @@ internal class CatalogExtensionModel(
     fun dismissCascade() = mutable.update { it.copy(cascade = null) }
 
     fun dismissPartial() = mutable.update { it.copy(partial = null) }
+
+    /** The cleanup sheet's OK: only now may its result be forgotten. */
+    fun dismissRemovalNotice() {
+        removal = null
+        mutable.update { it.copy(removalNotice = null) }
+    }
 }
 
 internal data class MarketsState(
