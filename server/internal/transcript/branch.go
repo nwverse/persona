@@ -327,6 +327,11 @@ func trackLine(t *branchTree, meta *Meta, items []proto.Item, kept, sent *[]prot
 	return drop
 }
 
+// ForgetLine drops what ParseLine noted of the line it just read for File's tree and Tail.Line, the line's bytes among
+// it. A reader that reuses its buffer and follows no tree (node's pooled background scan) calls it, so the meta it
+// keeps holds nothing of that buffer.
+func (m *Meta) ForgetLine() { m.tree = treeLine{} }
+
 func (tl treeLine) rec(items []proto.Item) treeRec {
 	return treeRec{uuid: tl.uuid, parent: tl.parent, prompt: isMessage(items), reply: tl.assistant, system: tl.system, turnEnd: tl.turnEnd, raw: tl.raw}
 }

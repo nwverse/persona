@@ -173,6 +173,7 @@ func scanBackground(f *os.File, off *int64, m *transcript.Meta, size int64) {
 		// A plan tool's result line does not name the tool: it is the line with the call's id.
 		if !long && len(line) <= 64<<10 && (match.match(line) || containsAny(line, m.PlanPending())) {
 			transcript.ParseLine(0, bytes.TrimSuffix(line, []byte("\n")), m)
+			m.ForgetLine() // line is the pool's buffer, read over by the next scan
 		} else if !long {
 			m.ObserveModelFallback(bytes.TrimSuffix(line, []byte("\n")))
 		} else if refusalLine != nil {

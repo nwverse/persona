@@ -90,6 +90,7 @@ func referenceBackground(src []byte) transcript.Meta {
 		if len(l) < 64<<10 && (containsAny(l, bgMarkers) || containsAny(l, transcript.GoalMarkers) || containsAny(l, transcript.UltracodeMarkers) ||
 			containsAny(l, transcript.PlanMarkers) || containsAny(l, m.PlanPending())) {
 			transcript.ParseLine(0, bytes.Clone(l), &m)
+			m.ForgetLine() // as scanBackground: the background scan follows no tree
 		}
 		m.ObserveNamingMetadata(l)
 	}
