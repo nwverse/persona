@@ -1536,7 +1536,8 @@ nonisolated enum ChatCache {
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
         guard let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
-        removeOlderFolders(in: base)
+        // Off the caller's thread (often the main actor): the current folder is never among them, so nothing waits for it.
+        Task.detached(priority: .utility) { removeOlderFolders(in: base) }
     }()
 
     /// Removes every older version's folder in `base`, not only the one right before: a phone that skipped versions
