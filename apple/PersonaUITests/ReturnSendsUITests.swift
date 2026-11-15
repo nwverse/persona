@@ -72,7 +72,9 @@ final class ReturnSendsUITests: XCTestCase {
         open(isAssistant: true, on: true)
         startTyping()
         field.typeText("Book a table for two at 7")
-        sleep(1)
+        // The keyboard is the evidence (its key reads "send"): wait for it to be up and settled before the picture.
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard for the picture")
+        sleep(2)
         shot("composer-on")
         clear(field)
         sleep(2)
