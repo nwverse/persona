@@ -680,6 +680,16 @@ export interface ModelRefusal {
   scope?: string;
   explanation?: string;
   text?: string;
+  // The node's own bounded recovery projects these onto the session's fallback shape (#7824). A runtime-written
+  // record never sets them, so an older client that does not know them keeps its old behavior.
+  /** When the configured model is available again (RFC3339); absent when the upstream gave no time. */
+  recovery_reset?: string;
+  /** Every model the recovery chain could try failed; fallback_model is empty in that case. */
+  recovery_exhausted?: boolean;
+  /** The configured model answered a probe; the next request runs on it again. */
+  recovery_returning?: boolean;
+  /** Every model tried, in order, joined by the arrow sequence the node writes. */
+  recovery_tried?: string;
 }
 
 /** A pending "back to the configured model" (server proto.ModelRestore): "next_start" — the idle headless process was
@@ -917,6 +927,9 @@ export interface AssistantInfo {
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
+  /** "Show scheduled task chats" in the sidebar's Recent (#8324, lib/recent-task-chats.ts): one value on the hub for all
+   *  of the user's devices, off by default; absent from an older hub (no switch, and Recent leaves them out). */
+  recent_task_chats?: boolean;
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;
