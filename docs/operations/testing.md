@@ -85,6 +85,8 @@ share runs once per lane rather than once per part (#3056). Module declarations 
 use a fallback part, while unsupported declarations fail rather than skip coverage. Every module's complete test selector retains all
 variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-lane Gradle
 profiles and test/lint reports are uploaded for diagnosis. Local entry points without lane options still run complete verification.
+The chat module's single-JVM tests use a 1 GB heap because their Robolectric native-graphics classes retain framework resource/theme
+tables between classes. A two-worker lane can run at most two test JVMs, a 2 GB combined maximum when both use that setting.
 
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
