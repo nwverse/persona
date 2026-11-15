@@ -61,6 +61,7 @@ async function render() { await act(async () => root.render(<AssistantSettings /
 it("defaults a missing value to runtime protection and saves the selected mode for the current manager", async () => {
   await render();
   expect(selector().value).toBe("sandbox");
+  expect(selector().className).toContain("pointer-coarse:min-h-11");
   expect([...selector().options].map((o) => [o.value, o.textContent])).toEqual([
     ["sandbox", "Runtime protection (default)"], ["prompt", "Instructions only"],
   ]);
