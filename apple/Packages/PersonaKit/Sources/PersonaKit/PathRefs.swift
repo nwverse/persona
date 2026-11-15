@@ -17,16 +17,25 @@ public nonisolated struct PathRef: Hashable, Sendable {
 ///
 /// - `~/x`, `/x/y` (two parts at least: `/tmp` alone is a word), or relative with a folder and an extension (`src/a.ts`;
 ///   a letter-led extension, so `deepseek/v4.1` is not a file).
-/// - Outside backticks a path is ASCII: Chinese text or full-width punctuation right after it ends it (「/tmp/a.md里」),
-///   and a sentence's full stop after it is not part of it. In backticks the whole span is one, whatever it is written
-///   in (「~/报告/第四季度.docx」); the ASCII paths in a span are candidates too (「/a.md 和 /b.md」): what is there decides.
+/// - Its names may be in any script (「~/报告/第四季度.docx」, 「~/ドキュメント/メモ.txt」). Outside backticks it ends at a
+///   space, at punctuation other than `_ . @ + -` (full-width 「，。、（）」 too) and before a Chinese word right after an
+///   extension (「/tmp/a.md里」); a relative one starts with an ASCII folder (「notes/报告.md」), so the words before it stay
+///   out; a sentence's full stop after it is not part of it. In backticks the whole span is one, whatever it is written
+///   in, spaces too, and any folder may start a relative one (「报告/第四季度.docx」); the paths in a span are candidates
+///   too (「/a.md 和 /b.md」): what is there decides.
 /// - Not inside a URL or a longer word.
 public nonisolated enum PathRefs {
-    private static let seg = "[A-Za-z0-9_.@+\\-]+"
+    /// A name: ASCII, or a letter or digit of any script not right after an extension.
+    private static let seg = #"(?:[A-Za-z0-9_.@+\-]|(?<!\.[A-Za-z][A-Za-z0-9]{0,7})[\p{L}\p{M}\p{N}])+"#
     private static let line = #"(?::(\d{1,7})(?::(\d{1,5}))?(?:[-–]\d{1,7})?|#L(\d{1,7})(?:-L?\d{1,7})?)?"#
-    private static let ascii = try! NSRegularExpression(pattern:
-        #"(?<![A-Za-z0-9_/:.\-~])(~(?:/"# + seg + #")+/?|/"# + seg + "(?:/" + seg + #")+/?|[A-Za-z0-9_.@\-]+(?:/"# + seg
-        + #")+\.[A-Za-z][A-Za-z0-9]{0,7})"# + line + #"(?![A-Za-z0-9_/\-])"#)
+    private static func paths(lead: String) -> NSRegularExpression {
+        try! NSRegularExpression(pattern:
+            #"(?<![A-Za-z0-9_/:.\-~])(~(?:/"# + seg + #")+/?|/"# + seg + "(?:/" + seg + ")+/?|" + lead + "(?:/" + seg
+            + #")+\.[A-Za-z][A-Za-z0-9]{0,7})"# + line + #"(?![A-Za-z0-9_/\-])"#)
+    }
+    /// In text a relative path starts with an ASCII folder; a code span that is one may start with any.
+    private static let text = paths(lead: #"[A-Za-z0-9_.@\-]+"#)
+    private static let span = paths(lead: seg)
     private static let codeSpan = try! NSRegularExpression(pattern: "`([^`\\n]+)`")
     /// A line at the end of a code span (`~/My Notes/a.md:3`).
     private static let trailingLine = try! NSRegularExpression(pattern: "(?:" + line.dropFirst(3).dropLast(2) + ")$")
@@ -42,15 +51,17 @@ public nonisolated enum PathRefs {
             let inner = m.range(at: 1)
             if let r = codePathRef(ns.substring(with: inner)) { out.append(shifted(r, by: inner.location)) }
         }
-        for r in asciiRefs(in: text) where !out.contains(where: { $0.range == r.range }) { out.append(r) }
+        for r in textRefs(in: text) where !out.contains(where: { $0.range == r.range }) { out.append(r) }
         out.sort { $0.range.location != $1.range.location ? $0.range.location < $1.range.location : $0.range.length > $1.range.length }
         return Array(out.prefix(limit))
     }
 
-    /// The ASCII paths of text, outside backticks or in them.
-    public static func asciiRefs(in text: String) -> [PathRef] {
+    /// The paths of text as outside backticks, there or in them.
+    public static func textRefs(in text: String) -> [PathRef] { refs(in: text, with: Self.text) }
+
+    private static func refs(in text: String, with re: NSRegularExpression) -> [PathRef] {
         let ns = text as NSString
-        return ascii.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { ref(m: $0, in: ns) }
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { ref(m: $0, in: ns) }
     }
 
     /// The path a whole code span is (`/tmp/a.md`, `src/a.ts:12`, 「~/报告/第四季度.docx」), or nil; its range is in `code`.
@@ -75,8 +86,8 @@ public nonisolated enum PathRefs {
                                column: lineNo == nil || lineNo == 0 ? nil : col, whole: true)
             }
         }
-        // Or one ASCII path that is the whole span (`ios/Persona/Foo.swift`).
-        if var r = asciiRefs(in: t).first, r.range.location == 0, r.range.length == tn.length {
+        // Or one path that is the whole span (`ios/Persona/Foo.swift`, 「报告/第四季度.docx」).
+        if var r = refs(in: t, with: span).first, r.range.location == 0, r.range.length == tn.length {
             r.whole = true
             return shifted(r, by: lead)
         }
@@ -260,7 +271,7 @@ public nonisolated struct PathMarkdown: Sendable {
             r.range.location += c.inner.location
             out.append(Spot(range: c.whole, ref: r, code: true))
         }
-        for r in PathRefs.asciiRefs(in: line) where !covered(r.range) {
+        for r in PathRefs.textRefs(in: line) where !covered(r.range) {
             out.append(Spot(range: r.range, ref: r, code: false))
         }
         return out.sorted { $0.range.location < $1.range.location }
