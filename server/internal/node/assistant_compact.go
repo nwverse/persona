@@ -61,9 +61,16 @@ func (n *Node) assistantCompact(ctx context.Context, id string) error {
 		}
 		n.stopAssistant(id)
 		var err error
-		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, IsMain: st.IsMain}
+		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, IsMain: st.IsMain, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions}
+		if _, current := n.assistantModel(ctx, id); current.SupervisionResolved {
+			execution.SupervisionInstructions = current.SupervisionInstructions
+		}
 		if p, err = n.spawnAssistant(id, cwd, launcher, true, false, execution); err != nil {
 			return err
+		}
+		if st.SupervisionInstructions != execution.SupervisionInstructions {
+			st.SupervisionInstructions = execution.SupervisionInstructions
+			n.state.put(id, st)
 		}
 	}
 	p.mu.Lock()

@@ -1,9 +1,9 @@
 📋 督办：你派出去的任务有 5 个要你处理
-（这是 Persona 的督办消息，不是用户发的。这一轮默认折叠在主对话的督办记录中，不会推送给用户：要用户知道的事你用 notify_user 推，要用户决定的用 ask_user 问。）
+（这是 Persona 的督办消息，不是用户发的。）
 <persona-supervision level="triage" />
 
-1. 任务「Finish the migration」（todo_3）：用户回答不了你发的决定，回的是「你来定」
-   验收标准：派活时没写，按任务本身要的结果判断
+1. 任务「Finish the migration」（todo_3，signal=owner_cannot_answer）：用户回答不了你发的决定，回的是「你来定」
+   验收标准：未记录
    当时发给用户的决定（why_owner=irreversible，不会默认执行）：Drop the old table?
    - 任务来历（hub 记的）：From the main conversation, 2026-11-07: “Finish the migration” · Now: migrated, old table still there
    - 选项「Drop it」：the old rows cannot be restored
@@ -11,17 +11,17 @@
    - 推荐：Drop it
    - 等待的代价：The disk fills up in two weeks
 
-2. 任务「Fix the login crash」（todo_4）：用户回答不了你发的决定，回的是「这不是我要的」
-   验收标准：派活时没写，按任务本身要的结果判断
+2. 任务「Fix the login crash」（todo_4，signal=owner_cannot_answer）：用户回答不了你发的决定，回的是「这不是我要的」
+   验收标准：未记录
    当时发给用户的决定（why_owner=priority）：Canary or everyone?
    - 选项「Canary」：10% today
    - 选项「Everyone」：all users today
    - 推荐：Canary
 
-3. 任务「Fix the login crash」（todo_5）：用户回答不了你发的决定，回的是「先讲清背景」
-   验收标准：派活时没写，按任务本身要的结果判断
+3. 任务「Fix the login crash」（todo_5，signal=owner_cannot_answer）：用户回答不了你发的决定，回的是「先讲清背景」
+   验收标准：未记录
 
-4. 任务「Finish the migration」（todo_1）：要用户拍板的决定等了超过一天还没人回答，再给用户看之前先交回你核对
+4. 任务「Finish the migration」（todo_1，signal=recheck）：要用户拍板的决定等了超过一天还没人回答，已交回督办
    验收标准：old table gone
    当时发给用户的决定（why_owner=irreversible，不会默认执行）：Drop the old table?
    - 任务来历（hub 记的）：From the main conversation, 2026-11-07: “Finish the migration” · Now: migrated, old table still there
@@ -30,13 +30,5 @@
    - 推荐：Drop it
    - 等待的代价：The disk fills up in two weeks
 
-5. 任务「Tidy the docs」（todo_2）：标着等用户决定，但用户那边没有能回答的东西（没有问题、选项或推荐）（waits for the user to look）
-   验收标准：派活时没写，按任务本身要的结果判断
-
-怎么处理（你是这些任务的负责人，处理而不是转述）：
-其余处理规则见你的说明里督办那一节，照它做。
-- 决定交回你核对的：先核对它依据的事实还成立不（版本、分支、PR 状态、谁在做；用 gh、agent_read 看）。还成立、还要用户定的，用 task_review needs_user 按现在的事实重发一次；已经不用用户定的，自己拍板后 agent_send 让它继续，或 task_review accepted / cancelled 关掉。不要原样留着：hub 只交回这一次。
-- 用户那边没有能回答的东西的：这是以前留下的 needs_user。看任务现在的状态三选一：真要用户定，用 task_review needs_user 按完整字段（why_owner、reason、recommend、options、cost_of_waiting）重发；只是在等别的事（别人、某个时间、实验范围），那不是决定，先 agent_send 交代清楚，再用 task_review parked 搁置（reason、waiting_on、until），到时间 hub 交回你；不用做了或其实做完了，核对后 task_review cancelled / accepted。hub 只交回这一次。
-- 用户回「你来定」的：你自己拍板，agent_send 告诉任务的 Agent 照哪个做，写明你做了什么假设，并让它用 todo_decision_add 把这个决定和假设记到任务的决定里；不要再拿同一件事问用户，原样重发会被拒绝。标着「不会默认执行」的（不可撤回，或别人看得到）你不能替用户走这一步：用 task_review needs_user 重发成只有两个选项的批准（做 / 不做），每个 leads_to 写清后果。
-- 用户回「这不是我要的」的：hub 已经停掉这个任务 Agent 的自动跟进。对照上面的任务来历和它实际做的（agent_read 看）：跑偏了就 rework 重新划定范围，或 task_review cancelled 取消；没跑偏，用两句话向用户说明它和用户原话的关系（task_review needs_user 重发时写进 reason，或 notify_user）。你 task_review 或 agent_send 之后自动跟进才恢复。
-- 用户回「先讲清背景」的：同一个决定用 task_review needs_user 重发，reason 里先写短背景（这是什么、为什么有这件事、已经做了什么），选项和推荐不变，别的都不动。
+5. 任务「Tidy the docs」（todo_2，signal=undecidable）：标着等用户决定，但用户那边没有能回答的东西（没有问题、选项或推荐）（waits for the user to look）
+   验收标准：未记录

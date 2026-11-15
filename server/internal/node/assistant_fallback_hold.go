@@ -68,6 +68,7 @@ func (n *Node) heldFallback(id, launcher string, asked modelExecution) modelExec
 	}
 	out := f.to
 	out.IsMain, out.Interject, out.Ultracode = asked.IsMain, asked.Interject, asked.Ultracode // the message's own
+	out.SupervisionInstructions = asked.SupervisionInstructions
 	return out
 }
 

@@ -1,13 +1,9 @@
 📋 督办：你派出去的任务有 1 个要你处理
-（这是 Persona 的督办消息，不是用户发的。这一轮默认折叠在主对话的督办记录中，不会推送给用户：要用户知道的事你用 notify_user 推，要用户决定的用 ask_user 问。）
+（这是 Persona 的督办消息，不是用户发的。）
 <persona-supervision level="triage" />
 
-1. 任务「修登录崩溃」（todo_1）：负责它的 leader 对话判断要用户决定，它的 Agent 在等的卡片已经发给用户（要推到远端分支，需要你同意）
-   验收标准：派活时没写，按任务本身要的结果判断
+1. 任务「修登录崩溃」（todo_1，signal=escalated）：负责它的 leader 对话判断要用户决定，它的 Agent 在等的卡片已经发给用户（要推到远端分支，需要你同意）
+   验收标准：未记录
    leader 推荐：允许
    - 卡片 interaction_id=ix_2（machine=box，权限，session_id=e5f6a7b8）：
      允许运行 Bash：git push
-
-怎么处理（你是这些任务的负责人，处理而不是转述）：
-其余处理规则见你的说明里督办那一节，照它做。
-- leader 升级上来的：卡片或结论卡已经发给用户，用户的回答会转给任务的 Agent，卡片上的回答会记成任务的决定；不要再问用户同一件事。用户在主对话里回答了，就用 task_review 记下结论（任务仍归那个 leader 督办）；要催用户的用 notify_user。
