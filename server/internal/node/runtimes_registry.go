@@ -563,6 +563,16 @@ func (b *runtimeRegistry) unwatch(id string) {
 	}
 }
 
+// watchedOn: the hub watches session id, and connection h was asked to watch it (watch, setSessions).
+func (b *runtimeRegistry) watchedOn(h *runtimeConn, id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, watching := b.watching[id]
+	return watching && h.watched[id]
+}
+
 // watchParent is the connection a transcriptMoved watch must inherit, including when the original watch was runtime-only.
 // A parent already gone is forgotten rather than given a persistent replacement.
 func (b *runtimeRegistry) watchParent(id string) context.Context {

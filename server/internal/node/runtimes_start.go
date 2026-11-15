@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -74,7 +75,7 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	defer cancel()
 	params := map[string]any{"cwd": p.Cwd, "prompt": p.Prompt}
 	for k, v := range map[string]string{"launcher": p.Launcher, "model": p.Model, "permission_mode": p.PermissionMode,
-		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume} {
+		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID} {
 		if v != "" {
 			params[k] = v
 		}
@@ -86,24 +87,37 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 		params["open_elsewhere"] = true
 	}
 	var res struct {
-		Session proto.Session `json:"session"`
+		Session json.RawMessage `json:"session"`
 	}
 	if err := h.peer.Call(ctx, "session.start", params, &res); err != nil {
 		return nil, err
 	}
-	return n.listStarted(h, res.Session)
+	var s proto.Session
+	var row struct {
+		Transcript string `json:"transcript"`
+	}
+	if len(res.Session) > 0 {
+		if err := json.Unmarshal(res.Session, &s); err != nil {
+			return nil, fmt.Errorf("%s: the started session: %w", h.label(), err)
+		}
+		_ = json.Unmarshal(res.Session, &row)
+	}
+	return n.listStarted(h, s, row.Transcript)
 }
 
 // listStarted lists a session h just started right away, before the runtime's next runtime.sessions, so the chat
 // that opens next finds it. Who answers for it is decided as for any list (recomputeOwners): a runtime that starts
 // sessions elsewhere (pi's companion starts them in pi-web) reports them offline, and the one running it, if it has
-// listed it already, keeps it.
-func (n *Node) listStarted(h *runtimeConn, started proto.Session) (*proto.Session, error) {
+// listed it already, keeps it. transcript: the Claude transcript the started row names as its conversation (a session
+// taken over keeps its own, runtimetranscript.go), taken as a list naming it would be: a watch right after the start
+// is the transcript's, and the next list naming it moves nothing (transcriptMoved).
+func (n *Node) listStarted(h *runtimeConn, started proto.Session, transcript string) (*proto.Session, error) {
 	list := normalizeRuntimeSessions(h, []proto.Session{started})
 	if len(list) == 0 {
 		return nil, fmt.Errorf("%s started a session without a valid id", h.label())
 	}
 	s := list[0]
+	known := !h.isDaemon() && namesTranscript(s.SessionID, transcript) && n.transcriptPath(transcript) != ""
 	b := n.runtimes
 	b.mu.Lock()
 	h.mu.Lock()
@@ -115,6 +129,12 @@ func (n *Node) listStarted(h *runtimeConn, started proto.Session) (*proto.Sessio
 	}
 	if !found {
 		h.sessions = append(h.sessions, s)
+	}
+	if known {
+		if h.transcripts == nil {
+			h.transcripts = map[string]string{}
+		}
+		h.transcripts[s.SessionID] = transcript
 	}
 	h.mu.Unlock()
 	b.recomputeOwners()
