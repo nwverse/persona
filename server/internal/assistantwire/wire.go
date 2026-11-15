@@ -84,7 +84,8 @@ type Placement struct {
 	// WorkMachines are configured work computers, including aliases; none may host the assistant.
 	WorkMachines []string `json:"work_machines,omitempty"`
 	// Standby: this hub is a member of a mesh group, whose center runs the scheduled tasks (docs/server/mesh.md).
-	Standby bool `json:"standby,omitempty"`
+	Standby        bool `json:"standby,omitempty"`
+	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
 }
 
 // DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.

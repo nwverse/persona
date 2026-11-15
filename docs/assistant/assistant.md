@@ -714,7 +714,7 @@ In the assistant's composer (web, and the iPhone/iPad shell composer's `Composer
 - **Another process replaces node's socket file** (2026-11-05): another node listened on the same path and didn't unlink on exit (`SetUnlinkOnClose(false)`), leaving an unserved socket;
   every `personad launch <Persona-managed launcher>` and hook got `connection refused`. The watchdog once checked only existence; now every 15 seconds it checks ownership (`os.SameFile`),
   dials if different, and recreates only when unanswered (`sockGone`). A responding newer node keeps the socket; don't take it back.
-- In Chinese locales, `.hour(.twoDigits(amPM: .omitted))` is 12-hour (17:00 appears "05:00"); always use `AssistantScheduleText.hm` (fixed `HH:mm`).
+- In Chinese locales, `.hour(.twoDigits(amPM: .omitted))` is 12-hour (17:00 appears "05:00"); always use `AssistantScheduleText.hm` (fixed `HH:mm`), and `AssistantScheduleText.clock` for a daily task's `HH:MM` (#7499).
 
 ## Live snapshots and prefix caching
 
@@ -850,7 +850,8 @@ Why archive and not delete or hide in place: the old conversation's id is what o
 `former` keeps the last 10 main conversations put away, by New main chat and Clear context alike: someone who clears often pushes older ones out sooner, and those are then ordinary archived conversations (still listed while their machine lists them, still found by id).
 Why no confirmation: nothing is lost (`docs/design/DESIGN_SYSTEM.md` 4.4, the reversible rung), and Cindy's `/clear` asks nothing either. "New main chat…" stays for carrying a summary over.
 
-Android offers it in the main chat's title menu and as `/clear` in its composer (#5100, `docs/android/android.md`); iOS does not yet.
+Android offers it in the main chat's title menu and as `/clear` in its composer (`docs/android/android.md`). iOS offers it in the avatar menu and the sidebar main-chat long press, and as `/clear` where that composer offers commands (#5100). Without `assistant_main_clear` none of it shows. After it, the page stays an empty conversation (the same top bar and composer); the first message starts the new main chat. A 409 `main_changed` refreshes and shows what the hub has.
+
 ## Scheduled tasks
 
 Previously two systems: routines (daily time) and follow-ups (one-shot wakeups from `schedule_followup`), in separate settings;
@@ -871,6 +872,7 @@ Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), four
 - Two runs are at least 5 minutes apart (as `interval`), checked from the minute and hour fields. `@every`, a seconds field, `TZ=` / `CRON_TZ=` and an expression that matches no date in five years are refused with the field and what it takes (`assistant-schedule.cron_*`; English for the tools).
 - The words for an expression (`cron_text`, the preview's `text`) come from `github.com/lnquy/cron` in en / zh-Hans / ja; none when a day field is a step from `*` and the other is restricted, since the words would read Vixie's "both" as "either". `next_runs` always shows what it does.
 - `schedule_routine` takes `cron` instead of `time` / `weekdays`, `schedule_followup` instead of `at` / `every` (a run of a one-off that reschedules itself with `cron` turns it into a cron task). Their replies give the expression, its words, the time zone and the next 5 runs, so the model can check them against what was asked.
+- A routine can set `run_if` through `schedule_routine` (with the owner's approval) or through `PUT /api/v1/assistant/tasks/{id}`. Give a shell `command`, an optional `timeout_s` (default 30, from 1 to 60), and `on_error` (`run` by default or `skip`). The node runs it in the owner's shell before any briefing facts or conversation turn. Exit 0 proceeds, exit 1 skips and records the first line of output, and other failures (including timeout or an unreachable node) follow `on_error`. If the run proceeds after a check failure, its history entry includes `run_if_error`. A skip sends no push and does not advance briefing state. One-off follow-ups, **Run now**, and automatic retries of an already admitted run bypass the check. Omit `run_if` to keep it, or send null to remove it.
 - Older apps: iOS reads an unknown `repeat` as `once`, and Android and the web send it back without `cron`; a `PUT` without `cron` keeps a cron task's rule and saves the rest (title, prompt, on / off, permission mode). The legacy `GET /api/v1/assistant/followups` lists cron tasks with the other non-daily ones. Clients show cron tasks when the hub has `task_cron`.
 
 `until` is optional on a repeating task. It is stored and compared in UTC and shown in the user's time zone. One-off tasks ignore it, and saving a one-off clears it. Omitting `until` on update keeps the stored time; `null` clears it. Once that time is reached the task is turned off and a skipped run is recorded instead of running.
@@ -965,9 +967,17 @@ Tasks continuing original chats (`session_id`) also switch those chats to these 
 - If due again while the previous run is running or awaiting approval / answer, **skip**, recording "Previous run still running; skipped", not queuing in the same chat
   (would answer twice, the second seeing half-finished work). One-shot follow-ups still send (skip loses them); App "Run now" returns 409 with reason when busy.
   Only one simultaneous send per task (`schedule.sending`), preventing due / Run now overlap.
-- Chat-scheduled tasks (`session_id`) still send to their originating chat first; failures fall back to a task-owned chat, recorded and reused.
+- Chat-scheduled tasks (`session_id`) send to their originating chat first. Recurring tasks created in the main chat run in a task-owned chat. Failures to resume fall back to a task-owned chat, recorded and reused.
 - App Scheduled tasks "Chat" section says "Runs in the same chat", opening it in Persona in both layouts / shells. "Start a new chat next time"
   (`POST /api/v1/assistant/tasks/{id}/fresh`) clears the stored chat for large context / restart; old chat remains in Chats. Never-run tasks say "A new chat starts on the first run".
+
+In the Web Scheduled tasks editor, expand **Run continuity** to edit a recurring task's state note or select **Start a new chat for each run**.
+The hub includes the last saved note in each run. Keep cursors and a short record of what has already been reported, up to 4,096 UTF-8 bytes.
+A run can stage a replacement with `schedule_state_set`. Staging is temporary. The hub saves the replacement only if it can track the run through a successful turn and write the note.
+If the hub cannot register the dispatched run or monitor its conversation, it discards the draft and the next run reads the last saved note.
+A user edit takes precedence over updates from a run that started before that edit. The editor sends the note's
+revision when changing its text. If a run already saved a newer note, the hub rejects the stale edit so the user can
+review the new note before changing it. Saving another task field keeps the current note.
 
 Deployment: update hub and node together (`resume_only` is new; old node ignores it and creates a new chat under a missing old id).
 
@@ -1517,6 +1527,42 @@ stopped or uninstalled extension leaves nothing in force. The full wire shape an
   by the rule's own note when it has one, and a matching sentence in the `task_plan`, `agent_start`,
   `conversation_new` and `conversation_send` tool descriptions.
 
+## Start defaults
+
+What a task Agent starts with beyond what its caller named can come from an optional start-defaults policy
+(`internal/assistant/start_defaults.go`): rules matched by the kind of work, each saying which Agent presets to try,
+which thinking effort, whether ultracode is on, whether a goal is set from the task's acceptance criteria, and whether
+the prompt asks the Agent to plan first. With no policy stored, one past its expiry, or no rule that fits a task, the
+task starts exactly as it would without the feature. A policy's values belong to the one start they were applied to:
+every try of a task starts again from what the task named itself, whichever rule fits it now, and for whatever a policy
+filled in (a preset's launcher, model, effort, tier and the permission mode its agent sets; the policy's effort or
+ultracode) the task's plan keeps the task's own value (its why names a preset the policy picked), so a remedy, a queued
+start, a retry from the card or a manager restart, which read the task back from its plan, never take an expired
+policy's values for the task's own, and the card does not show them as asked for. A rule that fits but fills nothing
+in leaves the start and what the plan keeps exactly as without the feature. The Agent's session shows what it actually runs with. The owner and an
+extension granted the
+`assistant.start_defaults` hub scope read and write it with `GET`/`PUT /api/v1/assistant/start-defaults` (the owner
+also as `start_defaults` in `PUT /api/v1/assistant`); an extension-written policy must expire within one hour, so a
+stopped or uninstalled extension leaves nothing in force. A rule must set something; a rule whose `then` names nothing
+is refused.
+`GET /api/v1/assistant/worker-presets?machine=<id>` (same scope) lists the presets a computer can start. The wire shape
+is in `docs/protocol/protocol.md` ("Start defaults").
+
+- **Matching**, first rule that fits wins: `supervisor` names the class of the conversation that follows the task up,
+  with the dispatch policy's classes (`main`, `leader`, `background_supervisor`, `scheduled`, `other`; a task leader's
+  worker takes the class of the conversation that follows its leader's task up, and a task no conversation follows up
+  matches only a rule naming no class), `role` is `worker` or `leader`, `readonly` matches read-only or writable tasks.
+- **Applied at the task's start** (`startTaskAgent`, after the launcher fit), so retries, remedies, queued starts and
+  `task_spawn` children get the same: the first preset whose launcher the computer has and that is not at its usage
+  limit (weights share starts among the usable ones; a preset passed over is named in the task's why); then the effort,
+  ultracode and goal on Claude Code only. A caller's own effort, ultracode choice, tier, model or launcher is never
+  replaced, and an effort the caller's tier gives wins over the policy's.
+- **The goal** is the task's `done_when` as one checkable sentence (`prompts/assistant/task_goal.md`), set by the node
+  after the first message is in the transcript ([agent-goal.md](../integrations/agent-goal.md), "A goal set at the start"). A computer
+  whose node cannot set it starts the Agent without it once, and the task's why says so, as for ultracode.
+- **Plan first** adds `prompts/agents/plan_first_task.md` to the prompt: for a launch whose model does not act on an
+  effort setting, the prompt is the only lever.
+
 ## Chat search (#6282)
 
 The apps find an assistant chat by what was said in it through `GET /api/v1/assistant/search` (`docs/protocol/protocol.md` ("Assistant chat search (#6282)"), the design in `docs/design/proposals/assistant-search.md`). The manager answers it from an index in its own database (`internal/assistant/search_index.go`, `search_routes.go`, and the text rules in `chatsearch/text.go`; tables `assistant_search_items` and `assistant_search_cursors`, migration `0511_assistant_search.sql`).
@@ -1527,6 +1573,21 @@ The apps find an assistant chat by what was said in it through `GET /api/v1/assi
 - **Privacy**: full devices only (a read-only role gets 403), not an extension scope, not a tool the model can call; the query is never logged. The rows go with their chat; dropping the manager's database drops them.
 - **Reading it again** (#6340): `personad assistant search-reindex` (the built-in manager; `persona-manager assistant search-reindex`) or `personad manager search-reindex [--dir D]` (a manager made in the app, `--dir` left out when the computer has one) empties both tables in the database the manager runs on and counts the reset (`db.ResetSearch`, the manager setting `assistant_search.reset`). The built-in manager's database is its own once its data moved there, else the hub's (`builtinDatabaseNow`, as `builtinDatabase` decides at its start); another manager's is its `manager.json`'s, never the hub's. A running manager sees the count move at its next sweep (`searchLoad`): it empties what it wrote meanwhile from its old cursors, drops the cursors it held and reads every chat again from the start, so it need not be stopped; a stopped one reads them when it starts. A database without the index (a manager from before chat search) is left as it is. There is no separate `--purge`: the manager always fills the index again from the transcripts, so emptying it and rebuilding it are the same act.
 - **Not yet**: the earlier stretches of a chat that moved between Claude Code and Codex are not indexed, only the session it runs in now.
+
+## Memory dreaming
+
+Set `"assistant": {"memory_dreaming": true}` in the assistant manager's `manager.json` to enable a background pass inspired by
+[pi-memory-dreaming](https://github.com/yukukotani/pi-memory-dreaming). Every five minutes the manager checks whether the main
+chat on the selected personal computer is idle. It makes at most one attempt per day when it finds new user-authored text
+in the latest eight turns. It sends those messages, the memory index and the previous dreaming note to Persona's configured
+Data processing model. The pass excludes Health, other conversations, tool output and automated messages.
+It reads eligible messages from oldest to newest, up to 12,000 bytes of user text per pass. Long messages are sent as
+marked excerpts of up to 3,000 bytes. A message that does not fit in the remaining batch waits for the next pass
+while it is within the latest eight turns.
+
+The model consolidates durable preferences and explicit corrections into `dreaming.md` in the existing assistant memory,
+visible and editable in the app. It may return no change. The node updates the dedicated note and its index link only if
+the note and index still match the version reviewed by the model. The assistant stores the last attempt time and checkpoints processed messages so they survive a restart. If the transcript is replaced, the new history starts a fresh checkpoint.
 
 ## Codex (2026-11-01, `codex app-server`)
 
@@ -1602,7 +1663,7 @@ DSH details (permission preset mapping, persistent `dsh web`): `docs/integration
   proactive work (scheduled tasks, run history), knowing you (About Me, memory), settings (Skills, Run on, Working directory;
   next-message suggestions on a supporting hub, off by default and hidden when the field is absent; model in Settings › Model
   Configuration › Main chat, #1291), accessible data. Settings › Assistant opens the same page.
-- Scheduled tasks: "Up Next" timeline (large times on the left, like Reminders), "Scheduled tasks" (daily / interval, natural rules "Every weekday at 9:00 AM", "Every 30 minutes"),
+- Scheduled tasks: "Up Next" timeline (large times on the left, like Reminders), "Scheduled tasks" (daily / interval, natural rules "Every weekday at 09:00", "Every 30 minutes"; a daily rule's time is 24-hour in every language, like the next run under it and the web, #7499),
   "One-time follow-ups"; rows show icon, next run, nondefault execution ("claude-fast · Auto · Low effort", Allow Everything red), last result, switch; swipe delete, long-press Run now,
   recent runs. Shared editor: repeat (Once / Daily / Interval), prompt, execution (model, permission, effort), Continue original chat (toggle off for new chats each run),
   Run now, history.
