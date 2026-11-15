@@ -1067,6 +1067,7 @@ if os.environ.get("MOCK_SHARED_FOLDER") == "1":
     SESSIONS += [
         _desktop("a1f3c2d4-0000-4000-8000-00000000571%d" % i, title, *(("done", "unread") if i == 1 else ("idle", "idle")),
                  40 + 20 * i, last, repo_root=_atlas, source_kind="claude_desktop",
+                 space_kind="claude_desktop", space_id="codex-project:" + _atlas, space_name="atlas",  # its project (#8521)
                  **({} if i == 1 else {"seen_at": ago(minutes=30 + 20 * i)}))
         for i, (title, last) in enumerate([("地图瓦片缓存", "瓦片缓存改成按缩放级别分目录了。"),
                                            ("离线包大小评估", "离线包压到 180 MB，列了三种取舍。"),
@@ -1543,7 +1544,8 @@ if os.environ.get("MOCK_SOURCES"):
         # messages through its peer inbox, one in another terminal whose inbox the node cannot use.
         sess("server", CLAUDE_DESKTOP, "整理发布说明", "/home/me/code/release", "working", "working", "", 0, "", 0, 1,
              "把这周合并的 PR 按模块分好了，正在写摘要。", agent="claude", source_kind="claude_desktop",
-             capabilities=_desktop_caps, **NO_SPACE),
+             capabilities=_desktop_caps, **dict(NO_SPACE, space_kind="claude_desktop",
+                                                 space_id="codex-project:/home/me/code/release", space_name="release")),
         sess("server", CLAUDE_TERMINAL, "排查构建缓存", "/home/me/code/build", "idle", "idle", "", 0, "", 0, 12,
              "缓存键里少了 Go 版本，已经补上。", agent="claude", source_kind="claude_cli",
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
@@ -1746,8 +1748,11 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
             kw.update(space_kind="codex_app", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1],
                       agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True},
                       efforts=["low", "medium", "high", "xhigh", "max", "ultra"], effort="max")
-        elif surface == "desktop" and status != "offline":
-            kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
+        elif surface == "desktop":
+            if status != "offline":
+                kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
+            if project:  # in its project, as the app's sidebar groups it; the home directory's in none (#8521)
+                kw.update(space_kind="claude_desktop", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1])
         SESSIONS.append(sess("macbook", sid, title, cwd, status, state, "", 0, "", 0, mins,
                              "好的，我先看一下。", agent=agent, **kw))
     # The CSV chat's subagents (thread_spawn): the node lists each with its chat (codex_registry.go); the Agents list puts
@@ -17861,10 +17866,10 @@ def session_catalog(rows, revision, state_of):
     waiting = lambda n: {"needs_you": n} if n else {}
     for s in rows:
         needs = 1 if state_of(s) == "needs_you" else 0
-        path = s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")
+        path = s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd") or ""
         at = places.setdefault((s["machine_id"], path), [0, 0])
         at[0] += 1; at[1] += needs
-        group = s.get("space_id") or s.get("workspace_id", "")
+        group = s.get("space_id") or s.get("workspace_id") or ""  # a row may name none as null (NO_SPACE)
         at = groups.setdefault((s["machine_id"], group), [0, 0])
         at[0] += 1; at[1] += needs
         if group and s.get("space_name"):

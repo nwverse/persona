@@ -39,6 +39,9 @@ var (
 	// superviseEvery is the least time between two supervision messages; superviseUrgentEvery when one waits on a decision.
 	superviseEvery       = 10 * time.Minute
 	superviseUrgentEvery = 2 * time.Minute
+	// superviseNoMainLogEvery is how often a digest that still finds no main conversation says so in the log: the
+	// watch's every pass (superviseTick) tries again, and each said it once before.
+	superviseNoMainLogEvery = time.Hour
 	// superviseNeedsAfter is how long an agent waits for an answer before the supervisor hears of it (the user was
 	// pushed; a quiet task's at once: the user was not).
 	superviseNeedsAfter = 3 * time.Minute
@@ -142,8 +145,11 @@ type superviseBook struct {
 	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	timer   *time.Timer
 	timerAt time.Time
-	hold    map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
-	visible map[string]bool      // an explicit user action makes the current triage turn visible
+	// noMainSince is when digests started finding no main conversation (zero: the last one found it), noMainLogged
+	// when that was last logged (sendDigest).
+	noMainSince, noMainLogged time.Time
+	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
+	visible                   map[string]bool      // an explicit user action makes the current triage turn visible
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
