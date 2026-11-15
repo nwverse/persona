@@ -291,7 +291,7 @@ func TestLeaderEscalatesAnApproval(t *testing.T) {
 		t.Fatalf("the user's card: %+v %+v", shown, shown.Delegate)
 	}
 	m := e.noticeWith("conv1", "负责它的 leader 对话判断要用户决定")
-	for _, want := range []string{"它的 Agent 在等的卡片已经发给用户", "要推到远端分支", "leader 推荐：允许", "interaction_id=ix1", "leader 升级上来的"} {
+	for _, want := range []string{"它的 Agent 在等的卡片已经发给用户", "要推到远端分支", "leader 推荐：允许", "interaction_id=ix1", "signal=escalated"} {
 		if !strings.Contains(m, want) {
 			t.Errorf("the main conversation's message lacks %q:\n%s", want, m)
 		}
