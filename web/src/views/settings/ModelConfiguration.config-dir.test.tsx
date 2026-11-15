@@ -34,7 +34,9 @@ const hub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Respon
   if (init?.method === "PATCH") {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     writes.push(body);
-    const override: ModelBinding = typeof body.config_dir === "string" && body.config_dir !== "private" ? { config_dir: body.config_dir } : {};
+    // as patchModel: a PATCH without config_dir keeps the saved one, private is stored as none
+    const saved = "config_dir" in body ? body.config_dir : main.override.config_dir;
+    const override: ModelBinding = typeof saved === "string" && saved !== "private" ? { config_dir: saved } : {};
     main = { ...main, override, effective: { ...main.effective, ...override }, revision: main.revision + 1 };
     return json({ purpose: main, providers });
   }
@@ -97,6 +99,46 @@ describe("main chat's profile for new conversations", () => {
     await openMain();
     expect(profileChoice()!.querySelector('[aria-checked="true"]')!.textContent).toBe(t("settings-modelconfiguration.config_dir_legacy"));
     expect(dialog().textContent).toContain(t("settings-modelconfiguration.config_dir"));
+  });
+
+  // Opened on Codex, which has no profiles, the editor hides the choice but keeps the saved one: picking Claude Code
+  // shows it, and a save on either agent leaves it as it was.
+  const onCodex = () => ({ ...assistant({ provider: "launcher.codex", config_dir: "legacy" }), override: { provider: "launcher.codex", config_dir: "legacy" } });
+  const pick = (provider: string) => act(() => {
+    const select = [...dialog().querySelectorAll<HTMLSelectElement>("select")].find((s) => [...s.options].some((o) => o.value === provider))!;
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, provider);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const saveEditor = async () => {
+    const save = [...dialog().querySelectorAll("button")].find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    await flush();
+  };
+
+  it("keeps a saved choice opened on another agent and shows it on Claude Code", async () => {
+    main = onCodex();
+    await openMain();
+    expect(profileChoice()).toBeNull();
+    pick("launcher.claude");
+    expect(profileChoice()!.querySelector('[aria-checked="true"]')!.textContent).toBe(t("settings-modelconfiguration.config_dir_legacy"));
+    await saveEditor();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ provider: "launcher.claude", config_dir: "legacy" });
+  });
+
+  it("does not reset a saved choice when another field is saved on another agent", async () => {
+    main = onCodex();
+    await openMain();
+    const model = dialog().querySelector<HTMLInputElement>("input[type=text], input:not([type])")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(model, "gpt-test");
+      model.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await saveEditor();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ provider: "launcher.codex", model: "gpt-test" });
+    expect(writes[0].config_dir === undefined || writes[0].config_dir === "legacy").toBe(true);
+    expect(main.override.config_dir).toBe("legacy");
   });
 
   it("is not offered for another agent or by an older hub", async () => {

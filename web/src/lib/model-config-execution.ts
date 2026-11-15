@@ -157,6 +157,8 @@ export const modelConfiguration = (manager?: string) => api<ModelConfigurationBo
 export function draftFor(p: ModelPurpose): ModelDraft {
   const runtime = runtimeChoices(p).length ? p.override?.runtime || p.effective?.runtime || "cli" : "";
   const draft: ModelDraft = { provider: p.override?.provider ?? "", model: p.override?.model ?? "", effort: p.override?.effort ?? "", runtime };
+  // Asked without the agent on purpose: seeded whatever the purpose runs on, so an editor opened on one without profiles
+  // (Codex), which hides the choice, keeps the saved one for Claude Code and for its save (#4633).
   if (configDirChoices(p).length) draft.config_dir = p.override?.config_dir || p.effective?.config_dir || "private";
   return draft;
 }

@@ -364,10 +364,10 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
           {chosenAgent === "claude" && <span className="mt-1 block text-[11px] text-ink-3">{t("settings-modelconfiguration.runtime_hint")}</span>}
         </div>}
         {configDirs.length > 0 && <div className="block">
-          <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.config_dir")}</span>
+          <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelconfiguration.config_dir")}</span>
           <Segmented label={t("settings-modelconfiguration.config_dir")} value={draft.config_dir ?? "private"} options={configDirs.map((c) => ({ v: c.id, label: c.label }))}
             onChange={(config_dir) => { if (!busy) setDraft((d) => ({ ...d, config_dir })); }} />
-          <span className="mt-1 block text-[11px] text-ink-3">{t("settings-modelconfiguration.config_dir_hint")}</span>
+          <span className="mt-1 block text-submeta text-ink-3">{t("settings-modelconfiguration.config_dir_hint")}</span>
         </div>}
         <p className="text-[11.5px] leading-relaxed text-ink-3">{p.kind === "plugin" ? t("settings-modelconfiguration.save_note_plugin") : t("settings-modelconfiguration.save_note")}</p>
       </div>}
