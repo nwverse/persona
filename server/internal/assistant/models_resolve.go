@@ -42,7 +42,7 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 					}
 				}
 			}
-			b.Effort = ""
+			b.Effort = "off"
 		}
 		return b, "inbox.triage", nil
 	}

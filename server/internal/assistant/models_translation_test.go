@@ -16,7 +16,7 @@ func translationProvider(t *testing.T, s *Service, name, model, haiku string) {
 		t.Fatal(err)
 	}
 	putLaunchers(t, s, storedLauncher{
-		ManagedLauncher: proto.ManagedLauncher{Name: name, Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: model, HaikuModel: haiku},
+		ManagedLauncher: proto.ManagedLauncher{Name: name, Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: model, HaikuModel: haiku, Effort: "high"},
 		KeySealed:       key,
 	})
 }
@@ -55,8 +55,11 @@ func TestTranslateUsesCheapClaudeDefaultAndManagedHaiku(t *testing.T) {
 			translationProvider(t, s, "claude-gateway", "claude-sonnet-5-5", tc.configured)
 			selectTranslationScreeningProvider(t, s, "launcher.claude-gateway", "claude-sonnet-5-5")
 			b, err := s.resolveModel(context.Background(), "translate")
-			if err != nil || b.Provider != "launcher.claude-gateway" || b.Model != tc.want || b.Effort != "" {
-				t.Fatalf("translation default = %+v, %v; want model %q and no effort", b, err, tc.want)
+			if err != nil || b.Provider != "launcher.claude-gateway" || b.Model != tc.want || b.Effort != "off" {
+				t.Fatalf("translation default = %+v, %v; want model %q and reasoning off", b, err, tc.want)
+			}
+			if c, err := s.apiConfig(context.Background(), b); err != nil || c.ReasoningEffort != "off" {
+				t.Fatalf("translation inherited an expensive provider effort: %+v, %v", c, err)
 			}
 		})
 	}
