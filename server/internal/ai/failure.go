@@ -70,6 +70,8 @@ func failureKindFor(status int, code, message string) FailureKind {
 		return FailureModelUnavailable
 	case "context_length_exceeded":
 		return FailureContextTooLong
+	case "unsupported_endpoint":
+		return FailureOther
 	}
 	if status != http.StatusBadRequest && status != http.StatusNotFound {
 		return FailureOther
@@ -95,6 +97,10 @@ func gatewayErrorDetails(raw []byte) (code, message string) {
 		return "", string(raw)
 	}
 	code, message = strings.TrimSpace(body.Code), body.Message
+	var errorText string
+	if json.Unmarshal(body.Error, &errorText) == nil && errorText != "" {
+		message = errorText
+	}
 	var nested struct {
 		Code    string          `json:"code"`
 		Message string          `json:"message"`
