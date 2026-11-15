@@ -8,7 +8,55 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
+
+func TestChatSendsDefaultUserAgent(t *testing.T) {
+	for _, tt := range []struct {
+		name, api, path, response string
+		bearer, retry             bool
+	}{
+		{"messages", "", "/v1/messages", `{"content":[{"type":"text","text":"ok"}]}`, false, false},
+		{"messages bearer", "", "/v1/messages", `{"content":[{"type":"text","text":"ok"}]}`, true, false},
+		{"responses", "responses", "/v1/responses", "data: {\"type\":\"response.completed\"}\n\n", false, false},
+		{"chat completions retry", "chat", "/v1/chat/completions", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := make(chan string, 3)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != tt.path {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				requests <- r.UserAgent()
+				if tt.retry && len(requests) == 1 {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":{"message":"max_tokens is unsupported; use max_completion_tokens"}}`))
+					return
+				}
+				_, _ = w.Write([]byte(tt.response))
+			}))
+			defer srv.Close()
+			_, err := New(Config{API: tt.api, BaseURL: srv.URL, APIKey: "k", Model: "m", Bearer: tt.bearer}).Chat(
+				context.Background(), Request{Messages: []Message{{RoleUser, "hi"}}, MaxTokens: 42})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCount := 1
+			if tt.retry {
+				wantCount = 2
+			}
+			if len(requests) != wantCount {
+				t.Fatalf("got %d requests, want %d", len(requests), wantCount)
+			}
+			for i := 0; i < wantCount; i++ {
+				if got, want := <-requests, modelhttp.UserAgent(); got != want {
+					t.Errorf("request %d User-Agent = %q, want %q", i+1, got, want)
+				}
+			}
+		})
+	}
+}
 
 func TestChatSendsTheTurnsAndReadsTheUsage(t *testing.T) {
 	var got struct {
