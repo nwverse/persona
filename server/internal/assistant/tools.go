@@ -383,11 +383,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		unsent := s.noteAgentSend(self, am.ID, c.SessionID) // more from its task's conversation reopens an accepted task (#6726)
 		if c.Status != proto.StatusOffline {
-			if err := s.call(ctx, am.ID, DeviceSessionSend, params, nil); err != nil {
+			var sent struct {
+				Queued bool `json:"queued"` // the runtime holds it behind the turn under way (#8097)
+			}
+			if err := s.call(ctx, am.ID, DeviceSessionSend, params, &sent); err != nil {
 				if !startResultUnknown(err) { // it may still arrive and start the turn
 					unsent()
 				}
 				return "", task.sendFailed(ctx, s, err)
+			}
+			if sent.Queued {
+				return fmt.Sprintf("Queued for %s on %s: it is in the middle of a turn and reads the message once what it is doing now ends.",
+					agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
 			}
 			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
 		}

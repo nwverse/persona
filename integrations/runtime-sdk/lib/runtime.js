@@ -55,8 +55,12 @@ export function defaultSocketPath() {
  *   apart; default: the to_seq and history of a one-turn page.
  * @property {(params: object) => Promise<object>} [image] - session.image → {mime, data}.
  * @property {(params: object) => Promise<object>} [item] - session.item → the whole item.
- * @property {(params: {session_id: string, text: string, images?: object[], client_msg_id?: string}) => Promise<void>} [send]
- * @property {(params: {session_id: string}) => Promise<void>} [interrupt]
+ * @property {(params: {session_id: string, text: string, images?: object[], client_msg_id?: string}) => Promise<void | {queued?: boolean}>} [send] -
+ *   resolves to {queued: true} when the message waits behind the running turn rather than reaching the agent now
+ *   (session.send answers it as is, for the node to say so).
+ * @property {(params: {session_id: string}) => Promise<void | {settled?: boolean}>} [interrupt] - resolves to
+ *   {settled: true} once the turn has actually ended; throws when it could not be stopped (a turn that only might stop
+ *   resolves to nothing).
  * @property {(params: {cwd: string, prompt?: string}) => Promise<{session: object}>} [start]
  * @property {(params: {session_id: string, title: string}) => Promise<void>} [rename]
  * @property {(params: {session_id: string}) => Promise<void>} [close]
@@ -93,7 +97,8 @@ export function defaultSocketPath() {
  * @property {(params: {workspace_id: string}) => Promise<{archived_at?: string}>} [archiveWorkspace] - with
  *   caps.workspaces: the workspace leaves the runtime's list, its sessions archived with it, and a worktree the runtime
  *   made is removed from the disk (its branch stays). The node has checked what the user confirmed first.
- * @property {() => boolean} [hasLocalClient] - the runtime's own UI is open (the policy gives it first turn).
+ * @property {(sessionId: string) => boolean} [hasLocalClient] - the runtime's own UI is open for that session (the
+ *   policy gives it first turn).
  * @property {(sessionId: string, watching: boolean, o?: { transcript: boolean }) => void} [watchChanged] - the phone
  *   started (or stopped) watching a session: a runtime that follows a session only while it is watched (Paseo's
  *   timeline subscription) starts and ends that here. transcript: the node reads its items (only live text from here).
@@ -321,6 +326,8 @@ export function createRuntime(driver, options) {
     }
     const p = new Peer(socket, { prefix: 'd', onRequest: (m, params) => request(m, params), onEvent: (event, params) => {
       if (event === 'runtime.hub' && peer === p && setHub(params?.connected !== false)) hubChanged()
+      // The node routed the session's start (or a send) through another runtime: it was driven from Persona all the same.
+      if (event === 'runtime.driven' && peer === p && typeof params?.session_id === 'string' && params.session_id) drivenBy(params.session_id)
     } })
     unwatchAll() // a new node asks again for what the phone watches
     listed.clear()
@@ -697,7 +704,23 @@ export function createRuntime(driver, options) {
     if (answerFirst === 'local') return false
     const at = phoneDriven.get(sessionId)
     if (at !== undefined && Date.now() - at < PHONE_DRIVEN_FOR) return true
-    return typeof driver.hasLocalClient === 'function' && driver.hasLocalClient() === false
+    return typeof driver.hasLocalClient === 'function' && driver.hasLocalClient(sessionId) === false
+  }
+
+  /**
+   * The session waits on the user in the runtime's own UI (a dialog of its own, not a card): it lists as needing you
+   * until the returned release is called, as for a card on the phone.
+   */
+  function waitingOnUser(sessionId) {
+    pending.set(sessionId, (pending.get(sessionId) ?? 0) + 1)
+    schedulePush(50)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      pending.set(sessionId, Math.max(0, (pending.get(sessionId) ?? 1) - 1))
+      schedulePush(50)
+    }
   }
 
   /**
@@ -770,9 +793,10 @@ export function createRuntime(driver, options) {
         const key = typeof params.client_msg_id === 'string' && params.client_msg_id ? params.client_msg_id : undefined
         if (key && sends.has(key)) return sends.get(key)
         const p = (async () => {
-          await driver.send(params)
+          const r = await driver.send(params)
           schedulePush() // what the phone sends to is active now: the list may change (a runtime keeps it listed)
-          return { ok: true }
+          // Queued behind the running turn: said, so that nobody takes it for read.
+          return r?.queued === true ? { ok: true, queued: true } : { ok: true }
         })()
         if (key) {
           sends.set(key, p)
@@ -781,9 +805,10 @@ export function createRuntime(driver, options) {
         }
         return p
       }
-      case 'session.interrupt':
-        await need(driver.interrupt, 'interrupt')(params)
-        return { ok: true }
+      case 'session.interrupt': {
+        const r = await need(driver.interrupt, 'interrupt')(params)
+        return r?.settled === true ? { ok: true, settled: true } : { ok: true }
+      }
       case 'session.rewind': {
         const result = await need(driver.rewind, 'rewind')(params)
         schedulePush()
@@ -898,6 +923,7 @@ export function createRuntime(driver, options) {
     streamEnd,
     ask,
     phoneFirst,
+    waitingOnUser,
     /** Whether the phone is watching a session (no need to compute what nobody gets). */
     watching: (sessionId) => watched.has(sessionId),
     /**
