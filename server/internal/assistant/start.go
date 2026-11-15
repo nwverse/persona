@@ -312,9 +312,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	used, _ := params["launcher"].(string)
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
-	// can both change it.
+	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel
+	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent, and
+	// startSignedIn starts again without it (#6884).
 	if _, asked := params["config_dir"]; asked && used != "" && used != "claude" {
-		if agent := s.launcherAgent(ctx, machine, used); agent != "" && agent != "claude" {
+		if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && agent != "claude" {
 			delete(params, "config_dir")
 		}
 	}
@@ -1114,6 +1116,10 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid) ||
 		s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+	// The owner-visible recovery rule (#7824) covers the main conversation and the leader/background supervisors, but
+	// not worker Agent task conversations, whose cheaper-tier behavior stays unchanged. The node marks the protected
+	// ones so it can publish and persist the model-recovery marker only for them.
+	p["follows_setting"] = s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
 		m = strings.TrimSpace(m)

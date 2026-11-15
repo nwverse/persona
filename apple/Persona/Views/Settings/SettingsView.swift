@@ -359,6 +359,7 @@ struct SettingsView: View {
         }
         else if d.bool(forKey: "openConnectorBot") { p.append(SettingsPage.feishuBot) }
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
+        else if d.bool(forKey: "openIPhoneSetup") { p = SettingsPage.iphoneSetupPath } // the guided setup (#8199)
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openLiveScreenSettings") { // Settings › Live Screen (#6396)
             #if os(iOS)
@@ -410,6 +411,8 @@ enum SettingsPage: Hashable {
     case liveScreen
     #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
+    /// Settings › Connectors › This iPhone › iPhone Control: the guided setup (#8199).
+    case iphoneSetup
     /// Settings › Connectors › the chat connector; `manager`: whose (Messages' Settings names the default's, whose
     /// account its chats follow; nil: the current assistant's).
     case feishu(manager: String? = nil)
@@ -474,6 +477,8 @@ enum SettingsPage: Hashable {
 
     /// One canonical path for current callers and legacy Sent destinations.
     static var sentPath: NavigationPath { NavigationPath([SettingsPage.connectors, .sent]) }
+    /// This iPhone's guided setup, under Settings › This iPhone (`persona://iphone/setup`).
+    static var iphoneSetupPath: NavigationPath { NavigationPath([SettingsPage.phoneData, .iphoneSetup]) }
 
 }
 
@@ -540,6 +545,12 @@ private struct SettingsDestinations: ViewModifier {
         case .codex: ClaudeSettingsView(agent: .codex)
         case .devices: DevicesView()
         case .phoneData: PhoneDataView()
+        case .iphoneSetup:
+            #if os(iOS)
+            IPhoneSetupView()
+            #else
+            EmptyView()
+            #endif
         case .mail: MailAccountsView(inSheet: false)
         case .feishu(let manager): FeishuConnectorView(manager: manager)
         case .connector(let id, let manager):
@@ -639,8 +650,9 @@ private struct DemoSection: View {
 }
 
 /// Settings › Connectors › This iPhone: which of the device's data Claude may use (phone_* tools). One switch per source, and
-/// the switch is the whole state: on = turned on and allowed (2026-11-01, no Allowed / Tap to Allow labels). Turning one on
-/// asks for the permission; refused (or refused before) it stays off and Settings opens where it can be allowed.
+/// the switch is the whole state: on = what the hub is offered (2026-11-01, no Allowed / Tap to Allow labels), that is turned
+/// on and allowed, or turned on and not asked yet for a source whose first use asks (`PhoneDataSource.asksWhenUsed`, #7659).
+/// Turning one on asks for the permission; refused (or refused before) it stays off and Settings opens where it can be allowed.
 struct PhoneDataView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var phase
@@ -648,12 +660,14 @@ struct PhoneDataView: View {
     @State private var enabled: [PhoneDataSource: Bool] = [:]
     @State private var asking: PhoneDataSource?
     @StoredValue(ClipboardOffer.enabledKey) private var offerClipboard = false
-    #if os(iOS)
-    @State private var iphoneConsent = IPhoneConsentModel()
-    #endif
 
     var body: some View {
         List {
+            #if os(iOS)
+            // Being operated by the assistant through a computer (docs/extensions/iphone.md): the guided setup, first,
+            // always offered on an iPhone (#8199).
+            IPhoneSetupEntry()
+            #endif
             Section {
                 ForEach(PhoneDataSource.onThisDevice) { s in
                     HStack(spacing: Theme.Space.m) {
@@ -673,12 +687,13 @@ struct PhoneDataView: View {
                     .padding(.vertical, Theme.Space.xxs)
                 }
             } footer: {
+                #if os(iOS)
+                Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
+                #else
                 Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
+                #endif
             }
             #if os(iOS)
-            // Being operated by the assistant through a paired Mac (docs/extensions/iphone.md): only while the hub's
-            // extension iphone is on.
-            IPhoneConsentSection(consent: iphoneConsent)
             // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
             Section {
                 Toggle(isOn: $offerClipboard) {
@@ -690,23 +705,24 @@ struct PhoneDataView: View {
             } footer: {
                 Text("When you come back to Persona after copying something, offers to send it to a computer that shares its clipboard. The clipboard is read only when you tap Send.")
             }
-            // Reminders imported as to-dos (#4009): only while Persona may read Reminders.
-            if isOn(.reminders) { RemindersImportSection() }
+            // Reminders imported as to-dos (#4009): only while Persona may read Reminders (not while it is on but not asked yet).
+            if isOn(.reminders) && status(.reminders).isUsable { RemindersImportSection() }
             #endif
         }
         .themedPage()
         .navigationTitle(ConnectorText.device)
         .navigationBarTitleDisplayMode(.inline) // like the other connectors' pages
         .task { refresh() }
-        #if os(iOS)
-        .task(id: model.config) { await iphoneConsent.load() } // again once the app has its hub (pairing, switching)
-        #endif
         // Back from the system's Settings, where a permission may have been given or taken away.
         .onChange(of: phase) { _, p in if p == .active { refresh() } }
     }
 
     private func isOn(_ s: PhoneDataSource) -> Bool {
-        (enabled[s] ?? s.isEnabled) && (statuses[s] ?? PhoneAuthorization.status(s)).isUsable
+        (enabled[s] ?? s.isEnabled) && s.offered(status(s))
+    }
+
+    private func status(_ s: PhoneDataSource) -> PhoneAuthStatus {
+        statuses[s] ?? PhoneAuthorization.status(s)
     }
 
     private func refresh() {
