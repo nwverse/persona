@@ -132,7 +132,7 @@ answer on.
 
 ## Interfaces
 
-- `GET /api/v1/machines/{mid}/iphone` → `IPhone` `{enabled, installed, version?, devices: [{id, name, product_type?, ios?, paired, usb?, state?, transport?, connected, locked, capabilities?, ready, note?, code?, developer_mode?, auto_prepare?, allowed}], note?, code?, checked?, job?}` (fields are block C's, `proto/iphone.go`);
+- `GET /api/v1/machines/{mid}/iphone` → `IPhone` `{enabled, installed, version?, devices: [{id, name, product_type?, ios?, paired, usb?, state?, transport?, connected, locked, capabilities?, ready, note?, code?, developer_mode?, auto_prepare?, allowed}], note?, code?, ddi_present?, checked?, job?}` (fields are block C's, `proto/iphone.go`);
   `PUT` `{"enabled": bool}` is the computer's switch. Extension off, or a computer the bridge doesn't run on → 404.
 - `POST /api/v1/machines/{mid}/iphone/{pair|forget|cancel|install|prepare}` `{"device"?}`: pair an iPhone plugged into this computer (progress in `job`),
   forget one's pairing record, cancel a pairing (no device), install the device bridge from the release (no device;
@@ -165,7 +165,9 @@ answer on.
 Every note comes with its reason as a `code`, so an app (the iPhone's guided setup) acts on the state without reading
 the words, and an older node that sends none still shows its note:
 
-- The computer's: `bridge_missing` (no device bridge here), `none_paired` (nothing paired with it).
+- The computer's: `bridge_missing` (no device bridge here), `none_paired` (nothing paired with it); and `ddi_present`,
+  whether it has the developer disk image Prepare mounts (Xcode's on a Mac, or `PERSONA_IPHONE_DDI_DIR`): a Mac without
+  Xcode and a Linux computer don't, and the guided setup says so before Prepare.
 - Each iPhone's: `usb_unpaired` (on the cable, not paired), `connecting`, then the bridge's or the session's code
   (`developer_mode_off`, `ddi_not_mounted`, `unsupported` (input below iOS 27), `locked`, `unreachable`, `pairing_rejected`,
   `tunnel_failed`, `timeout`, …), or `failed` when there is no better word. `developer_mode` is what the iPhone last said of

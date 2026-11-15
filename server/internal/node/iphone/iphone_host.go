@@ -89,6 +89,7 @@ func (s iphoneSessions) Install(src iphone.InstallSource) error {
 	return s.m().StartInstall(src)
 }
 func (s iphoneSessions) Prepare(device string) error { return s.m().StartPrepare(device) }
+func (iphoneSessions) DDIPresent() bool              { return iphone.DDIPresent() }
 func (s iphoneSessions) Cancel()                     { s.m().Cancel() }
 
 func (s iphoneSessions) Job() *iphoneJob {

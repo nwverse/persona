@@ -3,6 +3,8 @@ package iphone
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -43,4 +45,22 @@ func (m *Manager) StartPrepare(udid string) error {
 		}
 		return nil
 	})
+}
+
+// The folder the bridge reads the developer disk image from (iphone-bridge.md "mount_ddi"): $PERSONA_IPHONE_DDI_DIR,
+// else the one Xcode installs. Nothing downloads it.
+const (
+	DDIDirEnv     = "PERSONA_IPHONE_DDI_DIR"
+	DDIDefaultDir = "/Library/Developer/DeveloperDiskImages/iOS_DDI/Restore"
+)
+
+// DDIPresent says whether this computer has the developer disk image Prepare mounts: the bridge's folder holds its
+// BuildManifest.plist. A Mac without Xcode, and a Linux computer, don't (#8199: the app says to install Xcode).
+func DDIPresent() bool {
+	dir := os.Getenv(DDIDirEnv)
+	if dir == "" {
+		dir = DDIDefaultDir
+	}
+	st, err := os.Stat(filepath.Join(dir, "BuildManifest.plist"))
+	return err == nil && st.Mode().IsRegular()
 }

@@ -20,6 +20,7 @@ import (
 
 // fakeIPhones is an iphoneHost whose bridge, devices and answers the test sets.
 type fakeIPhones struct {
+	ddi       bool // the developer disk image is on this computer
 	installed bool
 	links     []iphoneLink
 	info      map[string]string // device_info's answer by device
@@ -32,6 +33,7 @@ type fakeIPhones struct {
 }
 
 func (f *fakeIPhones) Bridge(context.Context) (bool, string) { return f.installed, "0.1.0" }
+func (f *fakeIPhones) DDIPresent() bool                      { return f.ddi }
 func (f *fakeIPhones) Devices(context.Context) []iphoneLink  { return f.links }
 func (f *fakeIPhones) Call(ctx context.Context, device, op string, args json.RawMessage) (json.RawMessage, error) {
 	f.mu.Lock()
@@ -176,8 +178,13 @@ func TestIPhoneReadyWithoutElementTree(t *testing.T) {
 func TestIPhoneStatusSaysWhatIsMissing(t *testing.T) {
 	ctx := context.Background()
 	useIPhones(t, &fakeIPhones{}, nil)
-	if p := Status(ctx); p.Installed || p.Note != iphoneNoteNoBridge || p.Code != "bridge_missing" || p.Devices == nil || p.Checked.IsZero() {
+	if p := Status(ctx); p.Installed || p.Note != iphoneNoteNoBridge || p.Code != "bridge_missing" || p.Devices == nil || p.Checked.IsZero() ||
+		p.DDIPresent == nil || *p.DDIPresent {
 		t.Fatalf("no bridge: %+v", p)
+	}
+	useIPhones(t, &fakeIPhones{ddi: true}, nil)
+	if p := Status(ctx); p.DDIPresent == nil || !*p.DDIPresent {
+		t.Fatalf("with the developer disk image: %+v", p)
 	}
 	useIPhones(t, &fakeIPhones{installed: true, links: []iphoneLink{{ID: "u1", Name: "Phone", USB: true}}}, nil)
 	if p := Status(ctx); p.Note != iphoneNoteNonePaired || p.Code != "none_paired" || len(p.Devices) != 1 || p.Devices[0].Note != iphoneNoteUSB ||

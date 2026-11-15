@@ -33,6 +33,8 @@ import (
 type iphoneHost interface {
 	// Bridge: the device bridge is installed, and its version.
 	Bridge(ctx context.Context) (installed bool, version string)
+	// DDIPresent: this computer has the developer disk image Prepare mounts.
+	DDIPresent() bool
 	// Devices are the paired iPhones and those plugged in over USB.
 	Devices(ctx context.Context) []iphoneLink
 	// Call runs one of the bridge's operations (device_info, screenshot, tap…) on a paired iPhone through its session
@@ -118,6 +120,7 @@ var (
 type noIPhones struct{}
 
 func (noIPhones) Bridge(context.Context) (bool, string) { return false, "" }
+func (noIPhones) DDIPresent() bool                      { return false }
 func (noIPhones) Devices(context.Context) []iphoneLink  { return nil }
 func (noIPhones) Connect(string) error                  { return errNoIPhoneBridge }
 func (noIPhones) Pair(string) error                     { return errNoIPhoneBridge }
@@ -155,7 +158,7 @@ var (
 	}
 	iphonePrepareStep   = "正在准备这台 iPhone，大约一分钟"
 	iphonePrepareErrors = map[string]string{
-		"ddi_missing":            "这台电脑上没有 iPhone 需要的 Apple 开发者文件",
+		"ddi_missing":            "这台电脑上没有 iPhone 需要的 Apple 开发者文件：先在这台 Mac 上从 App Store 装好 Xcode，再试一次",
 		"ddi_unsupported_device": "这台电脑上的 Apple 开发者文件不支持这台 iPhone 的 iOS 版本",
 		"tss_failed":             "没能从 Apple 拿到这台 iPhone 的签名：检查这台电脑的网络，再试一次",
 		"mount_failed":           "这台 iPhone 没能准备好：解锁后再试",
@@ -223,6 +226,8 @@ const (
 func Status(ctx context.Context) proto.IPhone {
 	p := proto.IPhone{Devices: []proto.IPhoneDevice{}}
 	p.Installed, p.Version = iphones.Bridge(ctx)
+	present := iphones.DDIPresent()
+	p.DDIPresent = &present
 	if !p.Installed {
 		p.Note, p.Code = iphoneNoteNoBridge, "bridge_missing"
 	} else {

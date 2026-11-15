@@ -55,7 +55,8 @@ pairing, `POST /api/v1/machines/{mid}/iphone/prepare`) mounts it through the ses
 Done, the record keeps `auto_prepare`: the owner allowed this computer to mount it again by itself, and from then on a link that comes up
 with `ddi_mounted: false` (after the restart) mounts it in the background, once per link, a failure only logged. Every mount asks Apple's
 signing server for the phone's ticket, which carries the phone's chip ID (ECID); the app says so before the first Prepare. The image comes
-from this computer (Xcode's folder or `PERSONA_IPHONE_DDI_DIR`); without it Prepare fails with `ddi_missing`. Forgetting the phone drops
+from this computer (Xcode's folder or `PERSONA_IPHONE_DDI_DIR`; the status's `ddi_present` says whether it is there); without it
+Prepare fails with `ddi_missing`, whose note says to install Xcode on that Mac (the owner's call on #8199: a Mac with Xcode for now). Forgetting the phone drops
 `auto_prepare` with the record.
 
 ### Where the record lives
