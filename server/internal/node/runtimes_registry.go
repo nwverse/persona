@@ -105,8 +105,10 @@ func (b *runtimeRegistry) warnOnce(key, format string, args ...any) {
 	b.logf(format, args...)
 }
 
-// besideShell drops the runtimes' launchers named like one of the login shell's (shell): a session.start with that
-// name runs the shell's (runtimeStart), so the form lists it once. Logged once per name.
+// besideShell drops the runtimes' launchers named like one of the login shell's (shell) from a terminal host's list: a
+// start there with that name runs the shell's (runtimeStart), so the form lists it once. Where the start's host is an
+// engine runtime that runs only its own launchers, its list is its own and it runs its provider of the name
+// (engineHostLaunchers, runtimeOfIn; runtimes_samekind.go). Logged once per name.
 func (b *runtimeRegistry) besideShell(runtime, shell []proto.Launcher) []proto.Launcher {
 	names := map[string]bool{}
 	for _, l := range shell {
@@ -116,7 +118,8 @@ func (b *runtimeRegistry) besideShell(runtime, shell []proto.Launcher) []proto.L
 	for _, l := range runtime {
 		if names[l.Name] {
 			b.mu.Lock()
-			b.warnOnce("shell launcher "+l.Name, "runtime %s: launcher %q has the name of a launcher in the login shell, which runs instead", l.Source, l.Name)
+			b.warnOnce("shell launcher "+l.Name, "runtime %s: launcher %q has the name of a launcher in the login shell, which a start in a terminal host "+
+				"runs instead; a start whose host is %s runs its own", l.Source, l.Name, l.Source)
 			b.mu.Unlock()
 			continue
 		}
@@ -505,24 +508,29 @@ func (b *runtimeRegistry) launchers() []proto.Launcher {
 	for name, h := range b.launcherOwners() {
 		l, _ := h.launcherNamed(name)
 		h.mu.Lock()
-		// Agent, as for a Codex launcher (proto.Launcher.Agent): what it starts is not Claude Code, so the apps do
-		// not offer it where only Claude Code or Codex can run (the Persona assistant).
-		agent := l.Agent
-		if agent == "" {
-			agent = h.hello.Agent
-		}
-		if agent == "" {
-			agent = h.hello.Runtime
-		}
-		if agent == "claude" {
-			agent = ""
-		}
-		out = append(out, proto.Launcher{Name: name, Model: l.Model, Source: h.hello.Runtime, Agent: agent,
-			Assistant: h.hello.Caps.Assistant && name == h.hello.Launcher})
+		out = append(out, h.formLauncherLocked(l))
 		h.mu.Unlock()
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// formLauncherLocked is h's launcher l as the new-session form lists it. Agent, as for a Codex launcher
+// (proto.Launcher.Agent): what it starts is not Claude Code, so the apps do not offer it where only Claude Code or
+// Codex can run (the Persona assistant). Callers hold h.mu.
+func (h *runtimeConn) formLauncherLocked(l runtimeLauncher) proto.Launcher {
+	agent := l.Agent
+	if agent == "" {
+		agent = h.hello.Agent
+	}
+	if agent == "" {
+		agent = h.hello.Runtime
+	}
+	if agent == "claude" {
+		agent = ""
+	}
+	return proto.Launcher{Name: l.Name, Model: l.Model, Source: h.hello.Runtime, Agent: agent, PromptOptional: l.PromptOptional,
+		Assistant: h.hello.Caps.Assistant && l.Name == h.hello.Launcher}
 }
 
 // launcherRuntime is the runtime offering a launcher name, nil when none does.

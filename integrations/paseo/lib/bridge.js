@@ -12,8 +12,8 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
   AUTO_ACCEPT, AUTO_ACCEPT_ROOTS, CHECK_LABEL, EFFORTS, KEPT, KEPT_LABEL, RUNTIME, SESSION_LABEL, WORKSPACE_ID, agentRoot, agentRow, appAgent,
-  archivedUnderOwnId, autoAcceptOf, claudeId, codexThreadOf, defaultProvider, formModel, interactionOf, launchersOf, linkedWorktree,
-  parentAgentId, paseoCheckouts, paseoMode, projectSpaces, promptKey, providerRoots, responseOf, rewindOf, sessionIdOf, slotNameOf,
+  archivedUnderOwnId, autoAcceptOf, claudeId, codexThreadOf, defaultProvider, effortFor, formModel, interactionOf, launchersOf, linkedWorktree,
+  parentAgentId, paseoCheckouts, paseoMode, projectSpaces, promptKey, providerRoots, responseOf, rewindOf, sameKindProvider, sessionIdOf, slotNameOf,
   spaceIdOf, strayRecord, timelineItems, transcriptOf, workspaceRow,
 } from './map.js'
 import { createLineage } from './lineage.js'
@@ -28,6 +28,7 @@ const REFRESH_DELAY = 120 // ms: a watched agent's timeline is read again this l
 const LAST_TEXT_DELAY = 3000 // ms: an agent's last words are read again this long after it changed
 const PAGE = 200 // agents in a page of Paseo's directory
 const PAGES_MAX = 10 // directory pages read at connect
+const FEATURES_MAX = PAGE * PAGES_MAX // agents whose last features are kept at most: as many as the directory is read for
 // Agents archived in Paseo have their Claude session named to the node this long: its list of sessions not running
 // goes back 7 days. The ones archived before the bridge was told are read at connect (loadArchived).
 const UNLISTED_DAYS = 8
@@ -115,6 +116,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   let hubBackAt = 0 // when a node with a hub was last there again
   const echoes = new Map() // Paseo message id → the client_msg_id the phone sent it with
   const lastTexts = new Map() // agent id → its last words (agents whose content is not a transcript)
+  const featuresSeen = new Map() // agent id → the features Paseo last listed for it, the latest last (withFeatures)
   // agent id → { agent, project, transcript?, at }: archived Claude agents and Persona-owned Codex agents (noteArchived),
   // the latest last
   const archived = new Map()
@@ -154,6 +156,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
     resume: true,
     // start() runs permission_mode plan in Paseo's plan mode or refuses it (holdsPlan).
     readonly: true,
+    // start() runs only Paseo's own providers: a launcher it lacks gets one of the same kind, said on the answer, or a
+    // refusal (sameKindProvider); as the machine's engine its providers are all that a start there can run.
+    sameKind: true,
     // modes() changes a session's model too (set_agent_model_request).
     modelSwitch: true,
     socketPath: options.socketPath,
@@ -237,7 +242,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const prev = agents.get(agent.id)
     if (prev && (Date.parse(prev.agent.updatedAt) || 0) > (Date.parse(agent.updatedAt) || 0) && prev.agent.status === agent.status) return
     if (agent.archivedAt) return remove(agent.id, agent, project)
-    agent = withKept(agent, prev ?? archived.get(agent.id), !loading)
+    agent = withFeatures(withKept(agent, prev ?? archived.get(agent.id), !loading))
     archived.delete(agent.id) // back from the archive: listed again
     const oldSession = prev ? sessionIdOf(prev.agent, roots) : undefined
     agents.set(agent.id, { agent, project: project ?? prev?.project })
@@ -286,6 +291,25 @@ export function createPaseoBridge(deps = {}, options = {}) {
       return { ...agent, [KEPT]: id }
     }
     return agent
+  }
+
+  /**
+   * What Paseo sends of an agent it has not loaded (Paseo let its process go, Paseo restarted, a change to its stored
+   * record) is that record's projection, which lists no features (agent-projections buildStoredAgentPayload). The
+   * switches it listed while it had the agent loaded are still set, and Paseo sets them again when it loads the agent:
+   * the last ones seen stand in for them, so a Grok row still says Allow all (#8133). A list of features, an empty one
+   * too, is what Paseo has now. Kept while the agent is listed (remove drops them), FEATURES_MAX at most; a bridge started
+   * while Paseo has not loaded the agent has seen none.
+   */
+  function withFeatures(agent) {
+    if (Array.isArray(agent.features)) {
+      featuresSeen.delete(agent.id) // the latest last: the oldest go first when there are too many
+      featuresSeen.set(agent.id, agent.features)
+      while (featuresSeen.size > FEATURES_MAX) featuresSeen.delete(featuresSeen.keys().next().value)
+      return agent
+    }
+    const seen = featuresSeen.get(agent.id)
+    return seen ? { ...agent, features: seen } : agent
   }
 
   /**
@@ -339,6 +363,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     agents.delete(agentId)
     timelines.delete(agentId)
     lastTexts.delete(agentId)
+    featuresSeen.delete(agentId)
     for (const [id, x] of asks) if (x.agentId === agentId) x.abort()
     for (const [id, c] of rounds) if (c.agentId === agentId) forgetRequest(id)
     reindex()
@@ -1091,13 +1116,17 @@ export function createPaseoBridge(deps = {}, options = {}) {
     return Boolean(p) && p.id !== agent.id && p.workspaceId !== agent.workspaceId
   }
 
-  /** What agentRow takes beside the agent: its place, its last words, the agent that created it and its own fleet. */
+  /**
+   * What agentRow takes beside the agent: its place, its last words, the agent that created it, its own fleet, and the
+   * thinking options of its model (the efforts modes takes for it).
+   */
   function rowOptions(agentId, s, fam) {
     const a = agents.get(agentId)
     const spaceId = s.idOf(a?.project)
     const by = fam.creator.get(agentId)
     return { project: a?.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId),
-      parent: by && sessionOf(by), quiet: Boolean(a) && !workspaceOwn(a.agent), fleet: fam.fleet.get(agentId), canon }
+      parent: by && sessionOf(by), quiet: Boolean(a) && !workspaceOwn(a.agent), fleet: fam.fleet.get(agentId), canon,
+      thinking: a && thinkingOptions(a.agent) }
   }
 
   async function listSessions() {
@@ -1749,10 +1778,14 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   /**
-   * A new session (the form, or the machine's engine starting one): a new agent of the provider the launcher names
-   * (a launcher of the login shell's that Paseo does not have: its default provider). A replacement uses its own
-   * model and effort defaults; the mode and first message still apply. Its id is chosen here (paseo-<agent id>)
-   * and kept on the agent as a label.
+   * A new session (the form, or the machine's engine starting one): a new agent of the provider the launcher names.
+   * A launcher Paseo has no usable provider of (none of that name, or one switched off or failing) starts on one of
+   * the same kind of agent (agent_type, the node's word for what the launcher starts), chosen here and said on the
+   * answer (instead); with none of that kind it is refused, never run as another kind of agent or on Paseo's default
+   * (docs/integrations/paseo.md "A launcher Paseo does not have"). No launcher named: Paseo's default provider. The
+   * model stays only with a provider that offers it; an effort the model does not offer goes down to the nearest
+   * lower one it does (effortFor), and the answer says so. The mode and first message apply as asked. Its id is
+   * chosen here (paseo-<agent id>) and kept on the agent as a label.
    */
   async function start(params) {
     if (params.resume) return takeOver(params)
@@ -1761,9 +1794,22 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!cwd || !isDir(cwd)) throw new RpcError(`没有这个目录：${cwd || '（空）'}`, 'bad_request')
     // Read-only (plan): only a provider holding plan mode starts it, and nothing falls back to a writable one (#3238).
     const readonly = params.permission_mode === 'plan'
-    let provider = launchers.some((l) => l.name === params.launcher) ? params.launcher : undefined
+    const asked = typeof params.launcher === 'string' ? params.launcher : ''
+    // What the start asked for that it does not run with, for the node to say (the row says what it runs with).
+    const instead = {}
+    let provider = launchers.some((l) => l.name === asked) ? asked : undefined
     if (readonly && provider && !holdsPlan(provider)) {
       throw new RpcError(`Paseo 的 ${provider} 没有只读（plan）模式，这次没有新建。选一个 Claude Code 的启动器再试。`, 'readonly_unsupported')
+    }
+    if (!provider && asked) {
+      const kind = kindOf(asked, params.agent_type)
+      provider = sameKindProvider(launchers, roots, kind, (p) => !readonly || holdsPlan(p))
+      if (!provider && readonly && sameKindProvider(launchers, roots, kind)) {
+        throw new RpcError(`Paseo has no provider for ${asked} that starts read-only (plan): nothing was started. Pick a Claude Code launcher.`, 'readonly_unsupported')
+      }
+      if (!provider) throw new RpcError(noKindMessage(asked, kind), 'launcher_kind_missing')
+      instead.launcher = asked
+      log(`paseo: Paseo has no usable provider ${asked}; starting on ${provider}, of the same kind (${kind})`)
     }
     if (!provider) {
       provider = defaultProvider(readonly ? entries.filter((e) => holdsPlan(e?.provider)) : entries, roots)
@@ -1771,21 +1817,28 @@ export function createPaseoBridge(deps = {}, options = {}) {
         throw new RpcError('Paseo 里没有能以只读（plan）模式启动的 provider（要 Claude Code 的），这次没有新建。', 'readonly_unsupported')
       }
       if (!provider) throw new RpcError('Paseo 里没有能用的 provider：在 Paseo 的设置里打开一个再试', 'unavailable')
-      if (params.launcher) log(`paseo: Paseo has no provider ${params.launcher}; starting with ${provider}`)
     }
     const root = roots[provider] ?? provider
     const config = { provider, cwd }
-    // Model ids and effort belong to the requested launcher, including when a tier resolved them upstream. Only
-    // Paseo knows the actual replacement, so leave both unset here and let that provider apply its own defaults.
-    const replacedLauncher = params.launcher && provider !== params.launcher
-    if (!replacedLauncher && typeof params.model === 'string' && params.model) config.model = params.model
+    // A model id is the asked launcher's (a tier may have resolved it upstream): one standing in keeps it only when it
+    // offers that model too, else it runs its own default and the answer says so.
+    const model = typeof params.model === 'string' ? params.model : ''
+    if (model && (!instead.launcher || offersModel(provider, model))) config.model = model
+    else if (model) instead.model = model
     const modeId = paseoMode(root, params.permission_mode)
     if (modeId) config.modeId = modeId
     // Allow all where approval is Paseo's Auto Accept (Grok and its other ACP providers, OpenCode): started with it on.
     else if (params.permission_mode === 'bypassPermissions' && AUTO_ACCEPT_ROOTS.has(root)) config.featureValues = { [AUTO_ACCEPT]: true }
-    if (!replacedLauncher && EFFORTS.includes(params.effort)) {
+    if (EFFORTS.includes(params.effort)) {
+      // The model's thinking options, as Paseo listed them: an effort it does not offer goes down to one it does. None
+      // listed (Paseo has not said): as asked.
       const opts = thinkingOptions({ provider, model: config.model })
-      if (!opts.length || opts.includes(params.effort)) config.thinkingOptionId = params.effort
+      const effort = opts.length ? effortFor(params.effort, opts) : params.effort
+      if (effort) config.thinkingOptionId = effort
+      if (effort !== params.effort) {
+        instead.effort = params.effort
+        log(`paseo: ${provider}'s model does not offer effort ${params.effort}; starting at ${effort ?? 'its default'}`)
+      }
     }
     const prompt = typeof params.prompt === 'string' ? params.prompt : ''
     const workspaceId = workspaceFor(params.workspace_id, cwd, { strict: true })
@@ -1828,10 +1881,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
       remove(agentId)
       throw new RpcError(`Paseo 没有以只读（plan）模式启动（实际：${res.agent.currentModeId}），已经归档。`, 'readonly_unsupported')
     }
+    const said = Object.keys(instead).length ? { instead } : {}
     if (res !== TIMEOUT) {
       upsert(res.agent)
       const row = rowOf(res.agent)
-      if (row) return { session: row }
+      // The effort it runs at, while Paseo's record does not say it yet.
+      if (row && !row.effort && config.thinkingOptionId && EFFORTS.includes(config.thinkingOptionId)) row.effort = config.thinkingOptionId
+      if (row) return { session: row, ...said }
     }
     // Still being created (its provider starting): the row it will have.
     return {
@@ -1840,7 +1896,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
         status: prompt.trim() ? 'working' : 'idle', updated_at: new Date().toISOString(), rev: Date.now(),
         ...placeOf(workspaceId, cwd), agent: appAgent(root), launcher: provider,
         ...(config.model ? { model: config.model } : {}),
+        ...(EFFORTS.includes(config.thinkingOptionId) ? { effort: config.thinkingOptionId } : {}),
       },
+      ...said,
     }
   }
 
@@ -1849,6 +1907,32 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!provider || (roots[provider] ?? provider) !== 'claude') return false
     const e = entries.find((x) => x?.provider === provider)
     return !Array.isArray(e?.modes) || !e.modes.length || e.modes.some((m) => m?.id === 'plan')
+  }
+
+  /**
+   * The kind of agent launcher name starts, as a Paseo root (claude, codex, omp…): the node's word for it
+   * (agent_type, which it sends for every launcher Paseo does not have), else the root of Paseo's own provider of that
+   * name (one switched off or failing), else what the name says, as the node's launcherAgentType reads it (pi,
+   * cursor, agy, codex, traex and omp by name, else Claude Code). '' for Paseo's catch-all agent, which names no kind.
+   */
+  function kindOf(name, agentType) {
+    if (typeof agentType === 'string' && agentType) return agentType === RUNTIME ? '' : agentType
+    if (entries.some((e) => e?.provider === name)) return roots[name] ?? name
+    return ['pi', 'cursor', 'agy', 'codex', 'traex', 'omp'].includes(name) ? name : 'claude'
+  }
+
+  /** Whether provider lists model (by its id or an alias); false while Paseo has listed none for it. */
+  function offersModel(provider, model) {
+    return modelsOf(provider).some((m) => m?.id === model || (m?.aliases ?? []).includes(model))
+  }
+
+  /** Why a start of launcher name, of agent kind kind, was refused: what Paseo has of it, and what to do. */
+  function noKindMessage(name, kind) {
+    const own = entries.find((e) => e?.provider === name)
+    const why = !own ? `Paseo has no provider ${name}` : !own.enabled ? `Paseo's ${name} is turned off` : `Paseo's ${name} cannot start agents now (${own.status || 'not ready'})`
+    const label = kind === 'claude' ? 'Claude Code' : kind === 'codex' ? 'Codex' : kind || 'its kind'
+    return `${why}, and none of its other providers runs ${label}: nothing was started, and no other kind of agent runs in its place. ` +
+      `Turn one on in Paseo's settings, or pick one of its providers.`
   }
 
   /**
