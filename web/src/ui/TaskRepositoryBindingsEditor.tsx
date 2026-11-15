@@ -258,82 +258,132 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
   const loads = useRef(0);
   const editingNow = useRef(editing);
   editingNow.current = editing;
-  // A version change while the dialog is open must not start a read: its answer could replace the user's draft or the
-  // revision the dialog is editing from. It is remembered and read after the dialog closes instead.
+  const versionNow = useRef(version);
+  versionNow.current = version;
+  // A version change while the dialog is open or opening must not start a competing read: its answer could replace the
+  // user's draft or the revision the dialog edits from. It is remembered and read after the dialog closes instead.
+  const editorPending = useRef(false);
   const pendingRefresh = useRef(false);
-  const read = useCallback(async () => {
-    const n = ++loads.current;
-    const result = await loadTaskRepositories(context, todoId);
-    return n === loads.current && context.isCurrent() ? result : undefined;
+  // An operation clears busy only if it is still the newest one: an obsolete read must not end another operation's
+  // spinner, and a newer read must not be cleared by an older finally.
+  const busyOwner = useRef(0);
+  const beginBusy = useCallback(() => { const token = ++busyOwner.current; setBusy(true); return token; }, []);
+  const endBusy = useCallback((token: number) => { if (token === busyOwner.current) setBusy(false); }, []);
+  const inFlight = useRef<{ id: number; version: unknown; promise: Promise<TaskRepositorySet | undefined> } | undefined>(undefined);
+  // A read belongs to the version it began from. Reusing one that began before a version change would answer with the
+  // state before the notification; the invalidated read returns undefined, so a fresh one is needed instead.
+  const startRead = useCallback((forVersion: unknown) => {
+    const id = ++loads.current;
+    const promise = loadTaskRepositories(context, todoId).then(
+      (result) => id === loads.current && context.isCurrent() ? result : undefined,
+    );
+    const entry = { id, version: forVersion, promise };
+    inFlight.current = entry;
+    return entry;
   }, [context, todoId]);
   const applyLoaded = useCallback((result: TaskRepositorySet) => {
     if (!context.isCurrent()) return;
-    if (editingNow.current) { pendingRefresh.current = true; return; }
+    if (editingNow.current || editorPending.current) { pendingRefresh.current = true; return; }
     setSaved(result); setDraft(repositoryDraft(result.repositories)); setUnsupported(false);
   }, [context]);
   // Viewing reads the store: the Agent keeps it, so the detail is its newest word without opening an editor. StrictMode
-  // runs this effect twice (and the version re-runs it), so a second run joins the read in flight instead of being
-  // turned away by a lock; one that did that would leave the section on its spinner for good.
-  const inFlight = useRef<Promise<TaskRepositorySet | undefined> | undefined>(undefined);
+  // runs this effect twice (and the version re-runs it), so a second run adopts the read that is still current instead
+  // of starting a duplicate; one that did not would leave the section on its spinner for good.
   const [attempt, setAttempt] = useState(0);
   const refresh = useCallback(async () => {
     if (!context.isCurrent()) return;
-    setError(""); setBusy(true);
-    inFlight.current ??= read();
+    const busy = beginBusy();
+    setError("");
+    let entry = inFlight.current;
+    if (!entry || entry.version !== versionNow.current || entry.id !== loads.current) {
+      entry = startRead(versionNow.current);
+    }
     try {
-      const result = await inFlight.current;
+      const result = await entry.promise;
       if (result) applyLoaded(result);
     } catch (failure) {
       if (!context.isCurrent()) return;
-      if (editingNow.current) { pendingRefresh.current = true; return; }
+      if (editingNow.current || editorPending.current) { pendingRefresh.current = true; return; }
       if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure));
-    } finally { inFlight.current = undefined; if (context.isCurrent() && !editingNow.current) setBusy(false); }
-  }, [context, read, applyLoaded]);
+    } finally {
+      if (inFlight.current === entry) inFlight.current = undefined;
+      endBusy(busy);
+    }
+  }, [context, beginBusy, endBusy, applyLoaded, startRead]);
   useEffect(() => {
     if (!context.isCurrent()) return;
-    if (editingNow.current) { pendingRefresh.current = true; return; }
+    if (editingNow.current || editorPending.current) { pendingRefresh.current = true; return; }
     void refresh();
-  }, [context, todoId, version, attempt, read, refresh]);
+  }, [context, todoId, version, attempt, refresh]);
   // Closing the dialog (save, cancel or a failed close attempt) fulfils the refresh that was held back while editing.
   useEffect(() => {
-    if (editing || !pendingRefresh.current || !context.isCurrent()) return;
+    if (editing || editorPending.current || !pendingRefresh.current || !context.isCurrent()) return;
     pendingRefresh.current = false;
     void refresh();
   }, [editing, context, refresh]);
   // Editing always starts from the store's newest value and catalog: the Agent may have added a link since the load.
   const openEditor = async () => {
     if (lock.current || !context.isCurrent()) return;
-    lock.current = true; setBusy(true); setError("");
+    lock.current = true;
+    editorPending.current = true;
+    const busy = beginBusy();
+    setError("");
+    const versionAtStart = versionNow.current;
+    // An explicit editor load must not adopt a background read: that read may predate this version.
+    inFlight.current = undefined;
+    const load = startRead(versionAtStart);
+    let opened = false;
     try {
-      const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), read()]);
+      const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), load.promise]);
       if (!context.isCurrent() || !latest) return;
-      pendingRefresh.current = false;
+      // A version change while this load was pending is newer than what it answered: keep it for the close refresh.
+      pendingRefresh.current = versionNow.current !== versionAtStart;
       setCatalog(nextCatalog); setSaved(latest); setDraft(repositoryDraft(latest.repositories)); setEditing(true); setUnsupported(false);
+      opened = true;
     } catch (failure) {
       if (context.isCurrent()) { if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure)); }
-    } finally { lock.current = false; if (context.isCurrent()) setBusy(false); }
+    } finally {
+      if (inFlight.current === load) inFlight.current = undefined;
+      editorPending.current = false;
+      lock.current = false;
+      endBusy(busy);
+      if (!opened && pendingRefresh.current && context.isCurrent()) { pendingRefresh.current = false; void refresh(); }
+    }
   };
   const reloadForEdit = async () => {
     if (lock.current || !context.isCurrent()) return;
-    lock.current = true; setBusy(true); setError("");
+    lock.current = true;
+    editorPending.current = true;
+    const busy = beginBusy();
+    setError("");
+    const versionAtStart = versionNow.current;
+    inFlight.current = undefined;
+    const load = startRead(versionAtStart);
     try {
-      const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), read()]);
+      const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), load.promise]);
       if (!context.isCurrent() || !latest) return;
-      pendingRefresh.current = false;
+      pendingRefresh.current = versionNow.current !== versionAtStart;
       setCatalog(nextCatalog); setSaved(latest); setDraft(repositoryDraft(latest.repositories));
     } catch (failure) { if (context.isCurrent()) setError(errorMessage(failure)); }
-    finally { lock.current = false; if (context.isCurrent()) setBusy(false); }
+    finally {
+      if (inFlight.current === load) inFlight.current = undefined;
+      editorPending.current = false;
+      lock.current = false;
+      endBusy(busy);
+    }
   };
   const save = async () => {
     if (lock.current || !saved || !catalog || !context.isCurrent()) return;
-    lock.current = true; setBusy(true); setError("");
+    lock.current = true;
+    const busy = beginBusy();
+    setError("");
     try {
       const result = await saveTaskRepositories(context, todoId, saved.revision, catalog.catalog_revision, cleanRepositoryDraft(draft));
       if (!context.isCurrent()) return;
       setSaved(result); setDraft(repositoryDraft(result.repositories)); setEditing(false);
       toast(t("task-repositories.saved"), "ok");
     } catch (failure) { if (context.isCurrent()) setError(errorMessage(failure)); }
-    finally { lock.current = false; if (context.isCurrent()) setBusy(false); }
+    finally { lock.current = false; endBusy(busy); }
   };
   const repositories = saved?.repositories ?? [];
   const dirty = !!saved && JSON.stringify(cleanRepositoryDraft(draft)) !== JSON.stringify(repositoryDraft(saved.repositories));

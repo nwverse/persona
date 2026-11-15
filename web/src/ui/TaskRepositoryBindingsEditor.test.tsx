@@ -217,6 +217,94 @@ it("does not let an older read replace the saved result after the editor saves",
   expect(section.textContent).toContain("#8");
 });
 
+it("fetches a fresh store after closing instead of reusing the invalidated read", async () => {
+  await render("assistant", "todo_example", undefined, 1);
+  await answer(calls[0], set);
+  // A version change starts background read B, which stays pending in the shared in-flight slot.
+  await render("assistant", "todo_example", undefined, 2);
+  const background = pendingCall("/todos/todo_example/repositories")!;
+  expect(background).toBeTruthy();
+  // Opening the editor reads the store again (rev2), invalidating B; B still stays pending.
+  const rev2 = { ...twoLinks, revision: 2, repositories: [{ ...set.repositories[0], links: [
+    { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
+  ] }] };
+  await click("Manage links");
+  await answerEditor(catalog, rev2);
+  await settle();
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/8");
+  await press(linkInput(), "Enter");
+  // The Agent moves the store to rev3 while the dialog is open: no read, no draft/baseline change.
+  const rev3 = { ...rev2, revision: 3, repositories: [{ ...set.repositories[0], links: [
+    { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
+    { kind: "issue", number: "13", canonical_url: identity.canonical_url + "/issues/13" },
+  ] }] };
+  const before = calls.length;
+  await render("assistant", "todo_example", undefined, 3);
+  expect(calls.length).toBe(before);
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("#8");
+  expect(dialog.textContent).not.toContain("#13");
+  // Closing must start a genuinely new read, not join the invalidated B.
+  await click("Cancel");
+  const fresh = pendingCall("/todos/todo_example/repositories");
+  expect(fresh).toBeTruthy();
+  expect(fresh).not.toBe(background);
+  // B answering while the fresh close-read is pending changes nothing.
+  await answer(background, { ...rev2, revision: 9, repositories: [{ ...set.repositories[0], links: [
+    { kind: "pull_request", number: "99", canonical_url: identity.canonical_url + "/pull/99" },
+  ] }] });
+  await settle();
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).not.toContain("#99");
+  await answer(fresh!, rev3);
+  await settle();
+  const section = document.querySelector("[data-todo-repositories]")!;
+  expect(section.textContent).toContain("#13");
+  // Reopening and saving uses rev3, not stale data.
+  await click("Manage links");
+  await answerEditor(catalog, rev3);
+  await settle();
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/9");
+  await press(linkInput(), "Enter");
+  await click("Save");
+  const save = calls.at(-1)!;
+  expect(JSON.parse(save.init.body as string).expected_revision).toBe(3);
+  await answer(save, { ...rev3, revision: 4 });
+});
+
+it("holds a version change while the editor is opening, then refreshes after it closes", async () => {
+  await render("assistant", "todo_example", undefined, 1);
+  await answer(calls[0], set);
+  await click("Manage links");
+  // The editor's catalog and store reads are pending. A version change now must not start a competing read.
+  const before = calls.length;
+  await render("assistant", "todo_example", undefined, 2);
+  expect(calls.length).toBe(before);
+  // The editor's own read answers with the store it began from (rev1).
+  await answerEditor(catalog, set);
+  await settle();
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog).toBeTruthy();
+  // The editor keeps the baseline it loaded (rev1); the newer store is not applied over it.
+  expect(dialog.textContent).toContain("#7");
+  expect(dialog.textContent).not.toContain("#12");
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/8");
+  await press(linkInput(), "Enter");
+  // Closing reads the newer store and updates the page.
+  const rev2 = { ...twoLinks, revision: 2, repositories: [{ ...set.repositories[0], links: [
+    { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
+    { kind: "issue", number: "12", canonical_url: identity.canonical_url + "/issues/12" },
+  ] }] };
+  await click("Cancel");
+  const fresh = pendingCall("/todos/todo_example/repositories");
+  expect(fresh).toBeTruthy();
+  await answer(fresh!, rev2);
+  await settle();
+  expect(document.querySelector("[data-todo-repositories]")!.textContent).toContain("#12");
+});
+
 it("falls back to the legacy PR link on a hub without the association route", async () => {
   await render("assistant", "todo_example", "https://example.com/pull/3211");
   await answer(calls[0], { code: "not_found", error: "Not Found" }, 404);
