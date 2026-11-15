@@ -221,13 +221,16 @@ say) is tried again in the background until one goes through. How the send went 
   could not confirm it (`delivered: unknown`: typing failed part way, a Claude inbox holds the text for approval): the
   text may still arrive, however late (queued behind a long turn, or let in when the person at the computer looks), so
   the agent's next turn reopens the task. The note goes once the task is no longer that agent's closed task on that
-  acceptance (reopened, accepted again, the agent moved to another task), and after a week at the latest.
+  acceptance (reopened, the agent moved to another task), once the task is accepted again (also while it is still
+  closed: that acceptance answers every send before it, even one whose answer is still to come), and after a week at
+  the latest.
 
 A turn of the agent that starts while the send is still out waits for that answer (`closedTurnReopens`): if the send
 definitely failed and no other send for the task is out, the turn was other work and the task stays closed through it;
 otherwise the turn is the task's, its end included, also when a later send to the agent went out meanwhile or the
 manager restarted before the answer (`recoverSendsOut`). A bare `/exit` or `/quit` asks for no work (the agent's
-computer closes the agent) and reopens nothing, and a card message reopens only the task whose card it was sent from;
+computer closes the agent) and reopens nothing; on the card of a task whose agents have all stopped it starts no new
+agent (`route_agents_exited`). A card message reopens only the task whose card it was sent from;
 when the task's agents have all stopped, it reopens the task once the new agent started, and leaves it closed when that
 start definitely failed. That agent's other turns leave the task closed, whether or not its plan started the agent: a
 wakeup it set itself, other conversations' work, the owner typing in its session (#6726, #7539). Their ends raise no
