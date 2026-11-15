@@ -372,21 +372,30 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	}
 	said := gatewayMessage(raw)
 	var head string
-	switch res.StatusCode {
-	case http.StatusUnauthorized:
-		head = pt(l, "status_401")
-	case http.StatusForbidden:
-		head = pt(l, "status_403")
-	case http.StatusNotFound:
-		head = pt(l, "status_404")
-		code = "not_found"
-	case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
-		head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
-		code = "wrong_protocol"
-	case http.StatusTooManyRequests:
-		head = pt(l, "status_429")
-	default:
-		head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+	if (res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusNotFound) &&
+		ai.FailureKindFor(res.StatusCode, raw) == ai.FailureModelUnavailable {
+		head = pt(l, "status_model_not_found")
+		code = "model_not_found"
+	} else {
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			head = pt(l, "status_401")
+		case http.StatusForbidden:
+			head = pt(l, "status_403")
+		case http.StatusPaymentRequired:
+			head = pt(l, "status_402")
+			code = "quota_exhausted"
+		case http.StatusNotFound:
+			head = pt(l, "status_404")
+			code = "not_found"
+		case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
+			head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
+			code = "wrong_protocol"
+		case http.StatusTooManyRequests:
+			head = pt(l, "status_429")
+		default:
+			head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+		}
 	}
 	if credentialRefused(res.StatusCode, raw, t.atAnthropic()) {
 		code = "auth"
@@ -650,6 +659,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		msg, code := t.failure(ctx, res, err)
 		if err == nil && res != nil && res.StatusCode == http.StatusNotFound {
 			msg = pt(i18n.From(ctx), "models_not_found")
+			code = "not_found" // a model-list endpoint is missing, not the model used by a connection test
 		}
 		out := fail(msg)
 		if code != "" {
