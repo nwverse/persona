@@ -90,6 +90,11 @@ private fun SettingsContent(
     // The first group's pages read and write the current assistant's settings alone (docs/assistant/managers.md "Clients").
     val assistant = currentAssistant()
     val mine = services.forCurrentAssistant()
+    val knowledgeSelection = mine.knowledgeSelection.takeUnless { services.demo }
+    val knowledgeAvailability = remember(knowledgeSelection, assistant.id, services.hubAddress) {
+        knowledgeSelection?.let { KnowledgeSelectionAvailability(it) }
+    }
+    val knowledgeSelectionAvailable = knowledgeAvailability?.state?.collectAsState()?.value == true
     // The assistant the first group's pages are of, for the pages they open (null: a hub without a roster, the default's).
     val owner = assistant.takeIf { it.roster != null }?.id
     // A switch while one of its pages is open here goes back to the list: no page shows one assistant's settings once
@@ -109,6 +114,9 @@ private fun SettingsContent(
     val appStyleStore = LocalAppStyleStore.current
     val scope = rememberCoroutineScope()
     val connection by services.connection.state.collectAsState()
+    LaunchedEffect(knowledgeAvailability, page, connection, assistant.id) {
+        if (knowledgeAvailability != null && page == "settings" && connection == ConnectionState.Online) knowledgeAvailability.probe()
+    }
     val machines by services.sessions.machines.collectAsState()
     val paired by services.pairing.isPaired.collectAsState()
     val deviceController = remember(services) { DeviceSettingsState(services.deviceSettings, services.disconnect) }
@@ -316,6 +324,7 @@ private fun SettingsContent(
             machines = services.machines.takeUnless { services.demo }, attempts = services.pairingAttempts,
             mainReadiness = services.readiness.takeUnless { services.demo }, skipWelcome = true)
         "capsule" -> CapsuleSettingsPage(services.capsule, back)
+        "knowledge-selection" -> KnowledgeSelectionPage(knowledgeSelection, connectorsService, back)
         // The current assistant's computers alone: their Claude Code / Codex settings.
         "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, owns = { assistant.ownsOn(it.id, it.manager) })
         "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex,
@@ -462,7 +471,7 @@ private fun SettingsContent(
             HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
         } else SettingsHomePage(
             services, searchQuery, { searchQuery = it }, extensionsAvailable, inboxSources, extensionSummary, channelsAvailable, channelList,
-            connection, translationValue, hubUpdateStatus,
+            knowledgeSelectionAvailable, connection, translationValue, hubUpdateStatus,
             when {
                 busy -> stringResource(R.string.settings_update_checking)
                 installing -> stringResource(R.string.settings_update_installing)
@@ -769,6 +778,7 @@ private fun AssistantOfflinePage(page: String, assistant: persona.core.contracts
         SettingsPage.Feishu -> R.string.settings_src_lark_title
         SettingsPage.FeishuBot -> R.string.settings_feishu_bot_title
         SettingsPage.Sent -> R.string.settings_sent_title
+        SettingsPage.KnowledgeSelection -> R.string.settings_knowledge_selection_title
         else -> R.string.settings_section_connectors
     }
     JListPage(title = stringResource(title), onBack = onBack) { item("offline") { JAssistantOffline(assistant) } }

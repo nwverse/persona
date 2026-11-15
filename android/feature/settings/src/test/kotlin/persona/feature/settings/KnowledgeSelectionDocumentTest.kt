@@ -209,6 +209,89 @@ class KnowledgeSelectionDocumentTest {
         assertThrowsIllegalArgument { base.setItem(KnowledgeSelectionItem.newChat("lark", "one", "One").copy(mode = KnowledgeItemMode.All, days = 0)) }
     }
 
+    @Test fun ruleSheetsLeaveUntouchedOptionalSpellingsAlone() {
+        val rules = base.root.getValue("messages").jsonObject.getValue("rules").jsonObject
+        val sparse = KnowledgeSelectionDocument(JsonObject(base.root + ("messages" to JsonObject(
+            base.root.getValue("messages").jsonObject + ("rules" to JsonObject(rules + (
+                "mentions" to JsonObject(rules.getValue("mentions").jsonObject - "include_all")
+            )))
+        ))))
+        assertSame(sparse, sparse.setRule(KnowledgeSelectionPart.Messages, "mentions", true, null, null, null, null))
+        val changed = sparse.setRule(KnowledgeSelectionPart.Messages, "mentions", true, null, null, false, null)
+        assertEquals(false, changed.rule(KnowledgeSelectionPart.Messages, "mentions")!!.includeAll)
+        assertFalse("include_all" in sparse.rule(KnowledgeSelectionPart.Messages, "mentions")!!.raw)
+    }
+
+    @Test fun numberFieldsAcceptOnlyAsciiWholeNumbersInRange() {
+        assertNull(knowledgeSelectionNumber(" \n", 1..36500))
+        assertEquals(30, knowledgeSelectionNumber(" 30 ", 1..36500))
+        assertEquals(0, knowledgeSelectionNumber("0", 0..200))
+        assertEquals(36500, knowledgeSelectionNumber("36500", 1..36500))
+        listOf("+1", "-1", "1.5", "1e2", "１２", "1 2", "999999999999999999999", "0", "36501").forEach {
+            assertThrowsIllegalArgument { knowledgeSelectionNumber(it, 1..36500) }
+        }
+        assertThrowsIllegalArgument { knowledgeSelectionNumber("201", 0..200) }
+    }
+
+    @Test fun anUnchangedItemKeepsItsExactOptionalFields() {
+        val id = KnowledgeItemId("lark", "chat", "optional")
+        val raw = JsonObject(mapOf(
+            "source" to JsonPrimitive(id.source), "kind" to JsonPrimitive(id.kind), "id" to JsonPrimitive(id.id),
+            "name" to JsonNull, "read" to JsonPrimitive(true), "store" to JsonPrimitive(false),
+            "days" to JsonPrimitive(30), "future" to JsonPrimitive("kept"),
+        ))
+        val document = KnowledgeSelectionDocument(JsonObject(base.root + ("items" to JsonArray(listOf(raw)))))
+        assertSame(document, document.setItem(document.item(id)!!))
+        assertEquals(raw, document.item(id)!!.raw)
+        val changed = document.setItem(document.item(id)!!.copy(mode = KnowledgeItemMode.Skip))
+        assertEquals(JsonNull, changed.item(id)!!.raw["name"])
+        assertEquals(JsonNull, changed.item(id)!!.raw["days"])
+        assertEquals("kept", changed.item(id)!!.raw["future"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun nameOnlyItemEditsKeepUnusedDaysSpellings() {
+        val id = KnowledgeItemId("lark", "chat", "one")
+        fun document(days: JsonElement?): KnowledgeSelectionDocument {
+            val raw = JsonObject(buildMap {
+                put("source", JsonPrimitive(id.source)); put("kind", JsonPrimitive(id.kind)); put("id", JsonPrimitive(id.id))
+                put("name", JsonPrimitive("Old")); put("read", JsonPrimitive(true)); put("store", JsonPrimitive(false))
+                days?.let { put("days", it) }
+            })
+            return KnowledgeSelectionDocument(JsonObject(base.root + ("items" to JsonArray(listOf(raw)))))
+        }
+        val numeric = document(JsonPrimitive(30))
+        val renamed = numeric.setItem(numeric.item(id)!!.copy(name = "New"))
+        assertEquals(30, renamed.item(id)!!.raw["days"]!!.jsonPrimitive.int)
+        assertHubValid(renamed)
+        val absent = document(null)
+        assertFalse("days" in absent.setItem(absent.item(id)!!.copy(name = "New")).item(id)!!.raw)
+    }
+
+    @Test fun nullItemsAndHistoryContainersSurviveAnUnrelatedEdit() {
+        val document = KnowledgeSelectionDocument(JsonObject(base.root + ("items" to JsonNull) + ("history" to JsonNull)))
+        assertTrue(document.items().isEmpty())
+        assertHubValid(document)
+        val edited = document.setRuleOn(KnowledgeSelectionPart.Messages, "dm", false)
+        assertEquals(JsonNull, edited.root["items"])
+        assertEquals(JsonNull, edited.root["history"])
+    }
+
+    @Test fun nullOptionalMessageRuleFieldsAreValidAndPreserved() {
+        val messages = base.root.getValue("messages").jsonObject
+        val rules = messages.getValue("rules").jsonObject
+        val updatedRules = JsonObject(rules + mapOf(
+            "dm" to JsonObject(rules.getValue("dm").jsonObject + ("include_all" to JsonNull)),
+            "group" to JsonObject(rules.getValue("group").jsonObject + ("context" to JsonNull)),
+        ))
+        val document = KnowledgeSelectionDocument(JsonObject(base.root + ("messages" to JsonObject(
+            messages + ("rules" to updatedRules)
+        ))))
+        assertHubValid(document)
+        val edited = document.setRuleOn(KnowledgeSelectionPart.Messages, "dm", false)
+        assertEquals(JsonNull, edited.rule(KnowledgeSelectionPart.Messages, "dm")!!.raw["include_all"])
+        assertEquals(JsonNull, edited.rule(KnowledgeSelectionPart.Messages, "group")!!.raw["context"])
+    }
+
     @Test fun trueNoOpEditsReturnTheSameDocument() {
         assertSame(base, base.setRuleOn(KnowledgeSelectionPart.Messages, "dm", true))
         assertSame(base, base.setRuleDays(KnowledgeSelectionPart.Messages, "dm", null))
@@ -299,14 +382,19 @@ private fun assertHubValid(document: KnowledgeSelectionDocument) {
         for (name in part.rules) {
             val rule = rules.getValue(name).jsonObject
             requireDays(rule["days"])
-            if (part == KnowledgeSelectionPart.Messages) requireDays(rule["attachment_days"])
-            if (name != "mentions" || part != KnowledgeSelectionPart.Messages) require("include_all" !in rule)
-            if (name != "mine" || part != KnowledgeSelectionPart.Messages) require("context" !in rule)
+            if (part == KnowledgeSelectionPart.Messages) {
+                requireDays(rule["attachment_days"])
+                if (name != "mentions") require(rule["include_all"].let { it == null || it == JsonNull })
+                if (name != "mine") require(rule["context"].let { it == null || it == JsonNull })
+                rule["include_all"]?.takeIf { it != JsonNull }?.let { require(it.jsonPrimitive.booleanOrNull != null) }
+            } else {
+                require("include_all" !in rule && "context" !in rule && "attachment_days" !in rule)
+            }
             rule["context"]?.let { if (it != JsonNull) require(it.jsonPrimitive.int in 0..200) }
         }
     }
     val seen = mutableSetOf<Triple<String, String, String>>()
-    root["items"]?.jsonArray?.forEach { element ->
+    root["items"].nullableArray().forEach { element ->
         val item = element.jsonObject
         val source = item.getValue("source").jsonPrimitive.content
         val kind = item.getValue("kind").jsonPrimitive.content
@@ -319,7 +407,7 @@ private fun assertHubValid(document: KnowledgeSelectionDocument) {
         require(read || !store) { "store needs read" }
         requireDays(item["days"])
     }
-    root["history"]?.jsonObject?.forEach { (source, history) ->
+    root["history"].nullableObject().forEach { (source, history) ->
         require(source.isNotEmpty())
         requireDays(history.jsonObject["back_days"])
     }
@@ -342,6 +430,12 @@ private fun assertHubShapeAllowingFutureFields(document: KnowledgeSelectionDocum
         require(order.containsAll(part.rules))
     }
 }
+
+private fun JsonElement?.nullableArray(): List<JsonElement> =
+    if (this == null || this == JsonNull) emptyList() else jsonArray
+
+private fun JsonElement?.nullableObject(): Map<String, JsonElement> =
+    if (this == null || this == JsonNull) emptyMap() else jsonObject
 
 private fun requireDays(value: JsonElement?) {
     if (value == null || value == JsonNull) return

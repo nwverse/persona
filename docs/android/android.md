@@ -342,14 +342,69 @@ notification channels, manufacturer battery/autostart controls, lock-screen and 
 First-run onboarding still uses the original checklist behavior. When an older hub cannot supply phone-muting
 preferences, its online-computer detail entry remains visible in this page rather than disappearing with the switch.
 
-Android currently has knowledge-base browsing, searching and tagging, but no knowledge-base **selection** settings
-(priorities, context-source toggles or per-chat selection). No misleading selection entry is added; that capability
-remains separate work tracked by #2217.
+Android's knowledge-base browsing, searching and tagging are joined by **Knowledge Selection** in the current
+assistant's Settings and in Settings search. See "Knowledge selection" below for its priorities, per-item settings,
+immediate saves and older-hub behavior.
 
 Verification: `SettingsSearchTest` pins alias matching and stable destinations; `SettingsGroupsShotsTest` checks scope
 order, assistant switching, real-page phone home/search/empty states in every style and light/dark; model tests check
 Advanced folding and owner-aware selection. Captures produced by these tests are **Native JVM Compose renders**,
 not emulator/handset screenshots, and do not prove system dialogs, background survival or live hub transport.
+
+## Knowledge selection (Settings › Knowledge Selection, #2217)
+
+The current assistant's Settings places **Knowledge Selection** below Extensions, and Settings search finds the same
+entry. The page edits the existing selection document through `GET` / `PUT /api/v1/kb/selection`; chat candidates
+come from `GET /api/v1/kb/selection/candidates?source=<connector id>`, while document choices use the existing
+Knowledge list/detail routes. What the rules mean is in `docs/assistant/knowledge.md` ("Selection").
+
+- **Availability and access**: a selection GET 404 means an older hub without the route, so the Settings row and its
+  search result are hidden. Direct navigation to the page on such a hub instead shows a notice to update the hub,
+  without editable controls. A PUT 403 latches the page into read-only mode: the loaded document remains visible,
+  every editing control is disabled, and one line explains that this device cannot change the selection.
+- **Priorities**: per-item overrides are a fixed first section, ahead of every rule level, and cannot be moved.
+  Messages and documents have separate ordered priority levels, and several rules can share one level. Buttons and
+  TalkBack actions move a level up or down, join a rule to the preceding level, or split a rule out of a shared
+  level; dragging is not required. Every resulting `order` names every rule exactly once and leaves no empty level.
+- **Rules and items**: a rule's switch controls whether matching content is stored. Text retention days and, for
+  message rules, attachment days accept 1–36500; blank means the hub's default and is shown that way. Mentions has
+  the include-@all switch, and Mine has context from 0–200 messages on each side. A chat or document override can
+  skip reading, follow the applicable rules (for a chat, only mentions and your own messages), or keep everything
+  with its own optional days, and can be removed with Undo. Blank item days leave retention to the rule that would otherwise
+  decide.
+- **Pickers and stable identity**: Add Chat lists candidates per source with name, kind, what the selection would
+  read, and the estimate when the source supplies one; a cached response is labelled plainly as cached. A source
+  whose candidates route answers 404 offers no picker. A candidate's returned `source` and `id` identify its chat,
+  rather than assuming the queried connector is its filing source. For an existing Knowledge chat the identity is
+  `detail.meta.source` + `meta.source_id`; for a document it is `detail.meta.source` + `meta.id`. Overrides are keyed
+  by `(source, kind, id)`, never by a KB filename, path, display name or title.
+- **Lossless document edits**: `KnowledgeSelectionDocument.kt` edits the raw JSON and returns the complete document,
+  including `history`, optional fields, unknown fields at every level and unknown rule names. Where iOS presents an
+  unrecognized document as unsupported, Android retains that unknown data while the known controls are edited. This
+  is client-side preservation, not relaxed hub validation: the hub can still refuse a document it does not know.
+- **Immediate saves**: there is no page Save button and no separate draft. A change appears at once; the state holder
+  then GETs the latest document, applies that edit to it and PUTs the whole result. The document returned by the hub
+  replaces the optimistic one, so the page shows what was stored. A failure restores the previous value and shows
+  the hub's reason, including its detailed 400 validation text. One fresh-read/PUT pair stays on the same hub connection
+  even if the selected hub changes. A sheet reapplies only fields changed from its opening values, so an external reload
+  cannot make its untouched fields overwrite the fresh document. Existing chat and document overrides reopen with their
+  current mode and days. Fresh read–apply–PUT retains changes observed by
+  that read, but it is not compare-and-swap: another write arriving between the GET and PUT can still be overwritten.
+- **Live updates**: a `kb_selection` event reloads the document only while idle (neither loading nor saving). An
+  event received while busy is deferred, then reloads when the page becomes idle instead of replacing the optimistic
+  edit midway.
+- **Code**: pure document edits live in `KnowledgeSelectionDocument.kt`. `KnowledgeSelectionModel` owns loading,
+  optimistic saves, rollback, read-only state and deferred events behind the `KnowledgeSelection` API interface,
+  independently of Compose. The page uses the Android design system, with explicit move/join/split buttons and
+  TalkBack labels rather than drag-only actions.
+
+Verification: JVM unit tests cover lossless unknown-field/rule round trips, valid pure edits and bounds, fresh
+read–apply–PUT, rollback with hub errors, 404 hiding, latched 403 read-only behavior and deferred event reloads.
+Compose semantics tests cover switches, move/join/split actions, TalkBack labels and the absent old-hub entry. The
+page's `*ShotsTest` captures defaults, several and shared levels, rule days, cached/estimated candidates, read-only
+mode and a refused change in Glass, Brief and Board, dark and light, English and Chinese, including 360 dp and font
+scale 2.0. These are native JVM Compose renders, not emulator or handset screenshots; no emulator or device was
+available, so on-device rendering and system TalkBack behavior remain unverified.
 
 ## Notifications (no push service)
 
@@ -884,7 +939,7 @@ Modules are defined by `android/settings.gradle.kts`, and direct in-repository d
 | `:feature:inbox` | Unified Inbox, Lark chats, mail details, AI actions and reply components | `:core:chatlist`, `:core:contracts`, `:core:hub`, `:core:domain`, `:core:designsystem`, `:core:navigation` |
 | `:feature:knowledge` | Knowledge base list, reading and navigation; entered from the Persona drawer | `:core:contracts`, `:core:designsystem`, `:core:navigation` |
 | `:feature:machines` | Machine dashboard, details and metric charts; entered from the Agents machine menu | `:core:contracts`, `:core:designsystem`, `:core:domain`, `:core:navigation` |
-| `:feature:settings` | Pairing, checklist, diagnostics, devices and notification preferences, About and APK installation | `:core:contracts`, `:core:domain`, `:core:hub`, `:core:designsystem`, `:core:navigation` |
+| `:feature:settings` | Pairing, checklist, diagnostics, devices and notification preferences, About and APK installation, Knowledge Selection | `:core:contracts`, `:core:domain`, `:core:hub`, `:core:designsystem`, `:core:navigation` |
 | `:feature:terminal` | Terminal Canvas, streaming frame consumption, takeover and input; entered from the chat page and the notification terminal fallback | `:core:contracts`, `:core:terminal`, `:core:designsystem`, `:core:navigation` |
 | `:feature:voice` | Full-duplex voice chat with the hub's voice extension; see "Voice chat" | `:core:contracts`, `:core:designsystem`, `:core:navigation` |
 | `:platform:notify` | Foreground service, ongoing summary notification (`FleetFeed`), notification policy and buttons, action log, boot receiver and connection keep-alive | `:core:contracts`, `:core:domain`, `:core:designsystem`, `:core:navigation` |
@@ -1164,8 +1219,8 @@ Managers are **assistants** to the user (助手, アシスタント; the code an
 - **Pages show the current assistant** (`CurrentAssistant`, `currentAssistant()`): the assistant page, Agents (its sessions and computers, and their cards: `AgentsViewModel.show`), Computers (the list; one computer's page opens whichever assistant it belongs to), the inbox (`InboxSnapshot.ofAssistant`; Done's history, Muted and Rules are read from it alone), to-dos (each carries the `manager` its merged list stamped, `Todo.manager`; requests for one name it, and a new one is the current assistant's), scheduled tasks and the knowledge base. The hub's lists stay every manager's and are filtered here by each thing's `manager` (none, or one the roster no longer lists: the default's), so the sidebar's counts, the tab badges and "Needs you now" are the current assistant's too, and an item of another assistant still opens from a notification or a link, by its own manager, without switching. No page has per-manager headings any more, Settings included (below). Row keys carry the manager, since the same id can be under two (a built-in extension is listed under every manager).
 - **A page keeps its assistant**: an entry of the knowledge base opens with the assistant whose list showed it (`KnowledgeDetailRoute.manager`; a route restored from before keeps the one current when it opens again), and its page pins it on its own reads and saves (`ManagerPins` over `kb` and `kb-search`, which `HttpKnowledgeRepository` puts on the URL), so switching while it is open leaves it that assistant's; a question about it goes to the main queue when its assistant is the current one (the Persona page shows it), else to that assistant's main conversation, the default's included (`mainConversationOf`, then the outbox), which opens in place. The other pages about one thing already go by it: an inbox item's pages by its record's manager, a to-do's by its noted stamp, a conversation by its own manager, a computer by the hub's ownership; the assistant page's own sub-pages (scheduled tasks, its settings in place) close on a switch. **Create and link** on an agent (and a project's new to-do) makes the to-do under that agent's assistant (`AgentsViewModel.todoOwner`, a `RequestManager` on `POST todos`; `""` the default's), and the to-do sheet offers that assistant's to-dos only (`todosFor`). A plan's Start and Dismiss (`task-plans/<id>/…`, routes that name no conversation) name the manager of the conversation's own session row (`AssistantTaskHost.manager`), else the one a list registered it under (`TasksStore.planOwner`), so a restored back stack or a notification still names it. An offline notice shows only when nothing is kept: the unfiltered inbox / to-do list is empty, and Agents has no computer either. Nothing but the switcher (`AssistantManagerChoice.pick`) and the roster check (`AssistantSelectionPreferences`: restored per hub, back to the default when the roster no longer lists it) changes the current assistant.
 - **Settings in three groups** (`SettingsScreen.kt`; the same groups and order on every client, `docs/assistant/managers.md` "Clients"):
-  - **<name>'s settings** (`settings_group_assistant`): the head is the current assistant's monogram with its presence dot and the title (`JAssistantSettingsHeader`), and a **Switch** text button that opens the sidebar's roster (the same `AssistantSwitcher`, drawn through its `head` slot: switch, new, manage; the badges come from `LocalAssistantWaiting`, which the shell provides). With one installed assistant it shows the same way, its roster that one, New assistant and Manage assistants…, and no Default tag; an assistant still installing is listed too but does not count as another installed assistant or bring back that tag. The sidebar's head follows the same rule. Without a roster (an older hub, demo mode) there is no assistant to name: the heading is "Persona", with no Switch and no footer. Then Model providers, Models, Assistant profile, Session triage, Connectors, Extensions, Channels, Claude Code settings and Codex settings, and the footer "Only <name>'s own settings are shown. To change another assistant's, switch to it first." The extensions' slot cards and nav pages sit above the rows only while the current assistant is the default (they are the default's).
-  - **Its pages read and write the current assistant alone**: for an assistant other than the default, `SettingsServices.forCurrentAssistant()` hands them providers, models, triage, connectors, channels, the messaging bot and the sent ledger through `forManager` (`ManagerScopedApis.kt`: each call carries the `RequestManager`) and extensions (with their source subscriptions) pinned with `ManagerPins`; the default's, one assistant's and an older hub's requests name none, as before (model configuration's `namingOwner` likewise). Merged lists (connectors, extensions) are filtered by `CurrentAssistant.owns`; Claude Code and Codex settings, and Model providers' Import from ~/.zshrc, list only its computers; what a page opens carries it: a model use (`ModelPurposeRoute`: Session triage's, the Lark connector's agent model), a market's channel (`ExtensionCatalogRoute`), a channel's More settings (`ExtensionRoute`, `ChannelText.settingsDestination`). The rows' values (the extensions' count, the channels') are each assistant's own. No page of the group has assistant chips or per-assistant headings. While the current assistant is offline (several assistants), each of its pages shows `JAssistantOffline` ("<name> is offline", when it last synced) instead of a list that would look empty or failed.
+  - **<name>'s settings** (`settings_group_assistant`): the head is the current assistant's monogram with its presence dot and the title (`JAssistantSettingsHeader`), and a **Switch** text button that opens the sidebar's roster (the same `AssistantSwitcher`, drawn through its `head` slot: switch, new, manage; the badges come from `LocalAssistantWaiting`, which the shell provides). With one installed assistant it shows the same way, its roster that one, New assistant and Manage assistants…, and no Default tag; an assistant still installing is listed too but does not count as another installed assistant or bring back that tag. The sidebar's head follows the same rule. Without a roster (an older hub, demo mode) there is no assistant to name: the heading is "Persona", with no Switch and no footer. Then Model providers, Models, Assistant profile, Session triage, Connectors, Extensions, Knowledge Selection, Channels, Claude Code settings and Codex settings, and the footer "Only <name>'s own settings are shown. To change another assistant's, switch to it first." The extensions' slot cards and nav pages sit above the rows only while the current assistant is the default (they are the default's).
+  - **Its pages read and write the current assistant alone**: for an assistant other than the default, `SettingsServices.forCurrentAssistant()` hands them providers, models, triage, knowledge selection, connectors, channels, the messaging bot and the sent ledger through `forManager` (`ManagerScopedApis.kt`: each call carries the `RequestManager`) and extensions (with their source subscriptions) pinned with `ManagerPins`; the default's, one assistant's and an older hub's requests name none, as before (model configuration's `namingOwner` likewise). Merged lists (connectors, extensions) are filtered by `CurrentAssistant.owns`; Claude Code and Codex settings, and Model providers' Import from ~/.zshrc, list only its computers; what a page opens carries it: a model use (`ModelPurposeRoute`: Session triage's, the Lark connector's agent model), a market's channel (`ExtensionCatalogRoute`), a channel's More settings (`ExtensionRoute`, `ChannelText.settingsDestination`). The rows' values (the extensions' count, the channels') are each assistant's own. No page of the group has assistant chips or per-assistant headings. While the current assistant is offline (several assistants), each of its pages shows `JAssistantOffline` ("<name> is offline", when it last synced) instead of a list that would look empty or failed.
   - **This device** (`settings_group_device`): Interface style, Language, Open native chats by default, Notifications, Floating capsule, Keep running in background, Persona is signed in on a Mac (while one is), Translation (its model and connector stay the default's), Storage, About, Check for updates; then the update card.
   - **Hub** (`settings_group_hub`): the hub card (its connection and computers online), Hubs, Hub version, Assistants, Pairing, Avatar (the hub keeps it, `/api/v1/looks`, for every device whichever assistant is current), Devices, Diagnostics, and the footer "These two groups are the same whichever assistant is current."; then Disconnect. Inbox rules and scheduled tasks have no row of their own on Android (the inbox's Rules and the assistant's proactive page hold them), and there is no Health page.
   - **A switch with a page of the first group open** goes back: `CloseAssistantSettingsOnSwitch` (in `Root.kt`) closes everything from the first such page (`isAssistantSettingsDestination`) on the Settings sheet's stack and on each tab's (a link or a readiness card opens settings there), and a page shown in place goes back to the list (`SettingsContent`), so no page shows the new name over the old assistant's content, or sends a half-filled form to the new one.

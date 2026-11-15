@@ -36,16 +36,30 @@ internal class KnowledgeSelectionItem(
 
     val raw: JsonObject
         get() {
+            val before = original.takeIf { it.isNotEmpty() }?.let(::fromRaw)
+            if (before != null && this.samePresentationAs(before)) return original
             val fields = original.toMutableMap()
             fields["source"] = JsonPrimitive(id.source)
             fields["kind"] = JsonPrimitive(id.kind)
             fields["id"] = JsonPrimitive(id.id)
-            if (name.isBlank()) fields.remove("name") else fields["name"] = JsonPrimitive(name)
+            val originalName = (original["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            if ("name" in original && name == originalName.orEmpty()) {
+                // Keep an existing name's spelling (including an explicit null) when the value did not change.
+            } else if (name.isBlank()) fields.remove("name")
+            else fields["name"] = JsonPrimitive(name)
             fields["read"] = JsonPrimitive(read)
             fields["store"] = JsonPrimitive(store)
-            fields["days"] = if (mode == KnowledgeItemMode.All && days != null) JsonPrimitive(days) else JsonNull
+            if (before != null && mode == before.mode && days == before.days) {
+                // A name-only rebuild has no days edit: retain an absent, null, or mode-independent numeric spelling.
+                if ("days" in original) fields["days"] = original.getValue("days") else fields.remove("days")
+            } else {
+                fields["days"] = if (mode == KnowledgeItemMode.All && days != null) JsonPrimitive(days) else JsonNull
+            }
             return JsonObject(fields)
         }
+
+    private fun samePresentationAs(other: KnowledgeSelectionItem): Boolean =
+        id == other.id && name == other.name && mode == other.mode && days == other.days
 
     fun copy(
         id: KnowledgeItemId = this.id,
@@ -80,7 +94,7 @@ internal class KnowledgeSelectionItem(
                     raw.getValue("kind").jsonPrimitive.content,
                     raw.getValue("id").jsonPrimitive.content,
                 ),
-                name = raw["name"]?.jsonPrimitive?.content.orEmpty(),
+                name = (raw["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty(),
                 mode = mode,
                 days = if (mode == KnowledgeItemMode.All) raw["days"].nullableInt() else null,
                 original = raw,
@@ -118,12 +132,43 @@ internal class KnowledgeSelectionDocument(val root: JsonObject) {
             ?.let { KnowledgeSelectionRule(it.jsonObject) }
 
     fun items(): List<KnowledgeSelectionItem> =
-        root["items"]?.jsonArray.orEmpty().map { KnowledgeSelectionItem.fromRaw(it.jsonObject) }
+        root["items"].nullableArray().map { KnowledgeSelectionItem.fromRaw(it.jsonObject) }
 
     fun item(id: KnowledgeItemId): KnowledgeSelectionItem? = items().firstOrNull { it.id == id }
 
     fun setRuleOn(part: KnowledgeSelectionPart, name: String, on: Boolean) =
         withRule(part, name) { JsonObject(it + ("on" to JsonPrimitive(on))) }
+
+    /** A sheet changes only fields whose values changed; absent and explicitly null optional fields stay as they were. */
+    fun setRule(
+        part: KnowledgeSelectionPart,
+        name: String,
+        on: Boolean,
+        days: Int?,
+        attachmentDays: Int? = null,
+        includeAll: Boolean? = null,
+        context: Int? = null,
+    ): KnowledgeSelectionDocument {
+        val before = rule(part, name) ?: return this
+        requireDays(days)
+        requireDays(attachmentDays)
+        require(context == null || context in 0..200) { "context must be from 0 to 200" }
+        return withRule(part, name) { raw ->
+            var changed = raw
+            if (on != before.on) changed = JsonObject(changed + ("on" to JsonPrimitive(on)))
+            if (days != before.days) changed = JsonObject(changed + ("days" to days.jsonOrNull()))
+            if (part == KnowledgeSelectionPart.Messages && attachmentDays != before.attachmentDays) {
+                changed = JsonObject(changed + ("attachment_days" to attachmentDays.jsonOrNull()))
+            }
+            if (part == KnowledgeSelectionPart.Messages && name == "mentions" && includeAll != before.includeAll) {
+                changed = JsonObject(changed + ("include_all" to includeAll.jsonOrNull()))
+            }
+            if (part == KnowledgeSelectionPart.Messages && name == "mine" && context != before.context) {
+                changed = JsonObject(changed + ("context" to context.jsonOrNull()))
+            }
+            changed
+        }
+    }
 
     fun setRuleDays(part: KnowledgeSelectionPart, name: String, days: Int?): KnowledgeSelectionDocument {
         requireDays(days)
@@ -232,8 +277,10 @@ internal class KnowledgeSelectionDocument(val root: JsonObject) {
                 requireDays(rule["days"].nullableInt())
                 if (part == KnowledgeSelectionPart.Messages) {
                     requireDays(rule["attachment_days"].nullableInt())
-                    if (name != "mentions") require("include_all" !in rule)
-                    if (name != "mine") require("context" !in rule)
+                    val includeAll = rule["include_all"]
+                    if (name != "mentions") require(includeAll == null || includeAll == JsonNull)
+                    else require(includeAll == null || includeAll == JsonNull || includeAll.jsonPrimitive.booleanOrNull != null)
+                    if (name != "mine") require(rule["context"].let { it == null || it == JsonNull })
                     if (name == "mine") rule["context"]?.nullableInt()?.let { require(it in 0..200) }
                 } else {
                     require("include_all" !in rule && "context" !in rule && "attachment_days" !in rule)
@@ -241,7 +288,7 @@ internal class KnowledgeSelectionDocument(val root: JsonObject) {
             }
         }
         val seen = mutableSetOf<KnowledgeItemId>()
-        root["items"]?.jsonArray.orEmpty().forEach { element ->
+        root["items"].nullableArray().forEach { element ->
             val item = KnowledgeSelectionItem.fromRaw(element.jsonObject)
             require(item.id.source.isNotEmpty() && item.id.id.isNotEmpty())
             require(item.id.kind == "chat" || item.id.kind == "doc")
@@ -251,7 +298,7 @@ internal class KnowledgeSelectionDocument(val root: JsonObject) {
             require(item.read || !item.store) { "store needs read" }
             requireDays(raw["days"].nullableInt())
         }
-        root["history"]?.jsonObject?.forEach { (source, history) ->
+        root["history"].nullableObject().forEach { (source, history) ->
             require(source.isNotEmpty())
             requireDays(history.jsonObject["back_days"].nullableInt())
         }
@@ -305,10 +352,28 @@ internal class KnowledgeSelectionDocument(val root: JsonObject) {
     }
 }
 
+private fun JsonElement?.nullableArray(): List<JsonElement> =
+    if (this == null || this == JsonNull) emptyList() else jsonArray
+
+private fun JsonElement?.nullableObject(): Map<String, JsonElement> =
+    if (this == null || this == JsonNull) emptyMap() else jsonObject
+
 private fun JsonElement?.nullableInt(): Int? =
     if (this == null || this == JsonNull) null else jsonPrimitive.int
 
 private fun Int?.jsonOrNull(): JsonElement = this?.let(::JsonPrimitive) ?: JsonNull
+
+private fun Boolean?.jsonOrNull(): JsonElement = this?.let(::JsonPrimitive) ?: JsonNull
+
+/** Blank is the hub default. Otherwise only an ASCII whole number in [range] is a valid field value. */
+internal fun knowledgeSelectionNumber(text: String, range: IntRange): Int? {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return null
+    require(trimmed.all { it in '0'..'9' }) { "not an ASCII whole number" }
+    val value = trimmed.toLongOrNull()?.takeIf { it <= Int.MAX_VALUE }?.toInt()
+    require(value != null && value in range) { "number outside $range" }
+    return value
+}
 
 private fun requireDays(days: Int?) {
     require(days == null || days in 1..36500) { "days must be from 1 to 36500 or null" }
