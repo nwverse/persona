@@ -281,8 +281,12 @@ const underTranscript = (from = closedAt) => node.events.slice(from)
 const agentNow = async () => (await paseo.request('fetch_agent_request', { agentId })).agent
 await tryCall('session.close', { session_id: sid })
 await until('not running', () => listed()?.status === 'offline', 30_000).catch(() => {})
-check('closed from the phone: archived in Paseo, and still listed under the same id, not running',
-  claudeSid && (await agentNow())?.archivedAt && listed()?.status === 'offline' && listed()?.title === 'E2E 改名', JSON.stringify(listed()))
+// Paseo changes nothing of an archived agent: its row offers no rewind, mode, effort or model (#8133).
+const archivedCaps = listed()?.capabilities
+check('closed from the phone: archived in Paseo, and still listed under the same id, not running, offering nothing Paseo refuses for it',
+  claudeSid && (await agentNow())?.archivedAt && listed()?.status === 'offline' && listed()?.title === 'E2E 改名' &&
+  archivedCaps?.rewind === false && archivedCaps?.rewind_code === false && archivedCaps?.modes === false && archivedCaps?.model === false,
+  JSON.stringify(listed()))
 check('its conversation still reads under that id', await hasText('Hello from the mock model, step by step.') &&
   (await texts()).some((i) => i.client_msg_id === 'cm-e2e-7'))
 await tryCall('session.send', { session_id: sid, text: 'Back again E2E_HELLO', client_msg_id: 'cm-e2e-8' }, 60_000)
