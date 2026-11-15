@@ -28,10 +28,14 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
             }
             let name = case["name"].as_str().unwrap().to_owned();
             let input: Input = serde_json::from_value(case["input"].clone()).expect(&name);
+            let mut actual = persona_core::turns::project(&input);
+            for turn in actual.as_array_mut().unwrap() {
+                turn.as_object_mut().unwrap().remove("has_pending_wake");
+            }
             assert_eq!(
-                persona_core::turns::project(&input),
+                actual,
                 case["expected"]["turns"],
-                "{}",
+                "static turn corpus uses the legacy image/after-wake shape; #8239 owns the current Apple replay: {}",
                 path.display()
             );
             assert!(replayed.insert(name.clone()), "duplicate case: {name}");
@@ -131,4 +135,193 @@ fn choosing_the_first_answer_fails_the_wake_corpus() {
         detected > 0,
         "a first-answer mutation must not satisfy every wake fixture"
     );
+}
+
+/// Expectations below are written from current Apple source/tests, not from this Rust implementation's output.
+/// They supplement rather than rewrite the shared lines fixtures while #8239 repairs the executable Apple replay.
+mod apple_source_regressions {
+    use persona_core::turns::Input;
+    use serde_json::{Value, json};
+
+    fn project(items: Value) -> Value {
+        assert!(items.is_array(), "test helper expects an item array");
+        let input: Input = serde_json::from_value(json!({"items": items})).unwrap();
+        persona_core::turns::project(&input)
+    }
+
+    #[test]
+    fn synthetic_supervision_json_shape() {
+        let text = "📋 督办：你派出去的任务有 2 个要你处理\n这是 Persona 的督办消息";
+        for marked in [false, true] {
+            let items = json!([
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","text":"First real request"},
+                {"id":"u2#0","seq":2,"role":"user","kind":"text","text":text,"queued":true,
+                 "injected":if marked {json!({"state":"supervise"})} else {Value::Null}},
+                {"id":"u3#0","seq":3,"role":"user","kind":"text","text":"Next real request","queued":true},
+            ]);
+            assert!(items.is_array(), "items: {items}");
+            let turns = project(items);
+            assert_eq!(turns.as_array().unwrap().len(), 3);
+        }
+    }
+
+    #[test]
+    fn same_entry_text_image_text_stays_in_users_and_a_later_real_input_is_separate() {
+        let turns = project(json!([
+            {"id":"u1#0","seq":1,"role":"user","kind":"text","text":"First real request"},
+            {"id":"t2#0","seq":2,"role":"assistant","kind":"tool_use","tool_use_id":"call2"},
+            {"id":"u3#0","seq":3,"role":"user","kind":"image"},
+            {"id":"u3#1","seq":3,"role":"user","kind":"text","queued":true,
+             "injected":{"state":"supervise"}},
+            {"id":"u3#2","seq":3,"role":"user","kind":"text","text":"Extra fictional detail"},
+            {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use","tool_use_id":"call4"},
+            {"id":"u5#0","seq":5,"role":"user","kind":"text","text":"Next real request","queued":true},
+        ]));
+        assert_eq!(turns.as_array().unwrap().len(), 3);
+        assert_eq!(turns[0]["id"], "u1#0");
+        assert_eq!(turns[1]["id"], "u3#1");
+        assert_eq!(turns[1]["user_ids"], json!(["u3#1", "u3#0", "u3#2"]));
+        assert_eq!(turns[1]["process_ids"], json!(["tools-t4#0"]));
+        assert_eq!(turns[2]["user_ids"], json!(["u5#0"]));
+        assert_eq!(turns[1]["has_pending_wake"], false);
+
+        let image_only = project(json!([
+            {"id":"u1#0","seq":1,"role":"user","kind":"text","injected":{"state":"supervise"}},
+            {"id":"u4#0","seq":4,"role":"user","kind":"image"},
+            {"id":"a5#0","seq":5,"role":"assistant","kind":"text"},
+        ]));
+        assert_eq!(image_only.as_array().unwrap().len(), 2);
+        assert_eq!(image_only[1]["user_ids"], json!(["u4#0"]));
+    }
+
+    #[test]
+    fn frozen_cut_precedes_tool_pairing_and_ordered_timestamps() {
+        let mut input: Input = serde_json::from_value(json!({
+            "frozen":{"seq":2,"part":0},
+            "items":[
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","ts":"2026-01-01T00:00:10Z"},
+                {"id":"t2#0","seq":2,"role":"assistant","kind":"tool_use","tool_use_id":"call2","ts":"2026-01-01T00:00:20Z"},
+                {"id":"r3#0","seq":3,"role":"user","kind":"tool_result","tool_use_id":"call2","ts":"2026-01-01T00:00:05Z"},
+                {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use","tool_use_id":"call4","ts":"2026-01-01T00:00:07Z"},
+                {"id":"a5#0","seq":5,"role":"assistant","kind":"text","ts":"2026-01-01T00:00:30Z"},
+            ]
+        })).unwrap();
+        let turns = persona_core::turns::project(&input);
+        assert_eq!(turns[0]["ordered_ids"], json!(["u1#0", "tools-t2#0"]));
+        assert_eq!(turns[0]["process_ids"], json!(["tools-t2#0"]));
+        assert_eq!(turns[0]["end"], "2026-01-01T00:00:20Z");
+
+        input.frozen = None;
+        let turns = persona_core::turns::project(&input);
+        assert_eq!(turns[0]["ordered_ids"], json!(["u1#0", "tools-t2#0", "a5#0"]));
+        assert_eq!(turns[0]["process_ids"], json!(["tools-t2#0"]));
+        assert_eq!(turns[0]["start"], "2026-01-01T00:00:10Z");
+        assert_eq!(turns[0]["end"], "2026-01-01T00:00:30Z");
+    }
+
+    #[test]
+    fn tool_result_wake_reopens_the_turn_without_becoming_a_user_message() {
+        let items = json!([
+            {"id":"q1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+            {"id":"rc3#0","seq":3,"role":"system","kind":"recap"},
+            {"id":"r4#0","seq":4,"role":"user","kind":"tool_result","tool_use_id":"agentcall",
+             "task":{"kind":"agent"},"wake":true},
+            {"id":"a5#0","seq":5,"role":"assistant","kind":"text"},
+        ]);
+        let turns = project(json!(items));
+        assert_eq!(turns.as_array().unwrap().len(), 1, "wake: {turns}");
+        assert_eq!(turns[0]["user_ids"], json!(["q1#0"]));
+        assert_eq!(turns[0]["wake_ids"], json!(["r4#0"]), "{turns}");
+        assert_eq!(turns[0]["process_ids"], json!(["a2#0", "r4#0"]));
+        assert_eq!(turns[0]["answer_id"], "a5#0", "wake: {turns}");
+        assert_eq!(turns[0]["has_pending_wake"], false);
+
+        let mut not_a_wake = items;
+        not_a_wake[3]["wake"] = Value::Bool(false);
+        let turns = project(not_a_wake);
+        assert_eq!(turns.as_array().unwrap().len(), 2, "not-a-wake: {turns}");
+        assert_eq!(turns[0]["wake_ids"], json!([]), "not-a-wake: {turns}");
+        assert_eq!(turns[0]["answer_id"], "a2#0", "not-a-wake: {turns}");
+        assert_eq!(turns[1]["answer_id"], "a5#0", "not-a-wake: {turns}");
+        let pending = project(json!([
+            {"id":"q1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+            {"id":"w3#0","seq":3,"role":"system","kind":"notice","wake":true},
+            {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use","tool_use_id":"call4"},
+        ]));
+        assert_eq!(pending[0]["answer_id"], "a2#0");
+        assert_eq!(pending[0]["tail_ids"], json!([]));
+        assert_eq!(pending[0]["has_pending_wake"], true);
+    }
+
+    #[test]
+    fn compaction_notices_are_one_source_derived_step() {
+        let input: Input = serde_json::from_value(json!({"items":[
+            {"id":"u1#0","seq":1,"role":"user","kind":"text"},
+            {"id":"a2#0","seq":2,"role":"assistant","kind":"text"},
+            {"id":"n3#0","seq":3,"role":"system","kind":"notice","text":"上下文已压缩"}, // i18n-ignore
+            {"id":"n4#0","seq":4,"role":"system","kind":"notice","text":"已从压缩的上下文继续"}, // i18n-ignore
+            {"id":"n5#0","seq":5,"role":"system","kind":"notice","text":"Compacted while idle, fictional example"},
+        ]}))
+        .unwrap();
+        let turns = persona_core::turns::project(&input);
+        assert_eq!(turns[0]["ordered_ids"], json!(["u1#0", "a2#0", "n3#0"]));
+        assert_eq!(turns[0]["process_ids"], json!(["n3#0"]));
+        assert_eq!(turns[0]["answer_id"], "a2#0");
+
+        let input: Input = serde_json::from_value(json!({"items":[
+            {"id":"n1#0","seq":1,"role":"system","kind":"notice","text":"已从压缩的上下文继续"}, // i18n-ignore
+            {"id":"u2#0","seq":2,"role":"user","kind":"text"},
+        ]}))
+        .unwrap();
+        let turns = persona_core::turns::project(&input);
+        assert_eq!(turns.as_array().unwrap().len(), 2);
+        assert_eq!(turns[0]["ordered_ids"], json!(["n1#0"]));
+        assert_eq!(turns[0]["process_ids"], json!(["n1#0"]));
+        assert_eq!(turns[0]["answer_id"], Value::Null);
+    }
+
+    #[test]
+    fn supervision_legacy_recognition_preserves_real_user_provenance() {
+        // i18n-ignore: canonical injected protocol text, not localized UI copy.
+        let text = "📋 督办：你派出去的任务有 2 个要你处理\n这是 Persona 的督办消息";
+        for marked in [false, true] {
+            let turns = project(json!([
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","text":"First real request"},
+                {"id":"u2#0","seq":2,"role":"user","kind":"text","text":text,"queued":true,
+                 "injected":if marked {json!({"state":"supervise"})} else {Value::Null}},
+                {"id":"u3#0","seq":3,"role":"user","kind":"text","text":"Next real request","queued":true},
+            ]));
+            assert_eq!(turns.as_array().unwrap().len(), 3);
+            assert_eq!(turns[1]["user_ids"], json!(["u2#0"]));
+            assert_eq!(turns[2]["user_ids"], json!(["u3#0"]));
+        }
+
+        for (provenance, marker) in [
+            ("client_msg_id", json!("fictional-message")),
+            ("from", json!("fictional-peer")),
+        ] {
+            let mut value = json!({"items":[
+                {"id":"u1#0","seq":1,"role":"user","kind":"text","text":text,"queued":true},
+                {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
+            ]});
+            value["items"][0]
+                .as_object_mut()
+                .unwrap()
+                .insert(provenance.to_owned(), marker);
+            let turns = project(value["items"].take());
+            assert_eq!(turns[0]["user_ids"], json!(["u1#0", "u2#0"]));
+        }
+
+        let protected = project(json!([
+            {"id":"u0#0","seq":0,"role":"user","kind":"text","text":"First real request"},
+            {"id":"u1#0","seq":1,"role":"user","kind":"text",
+            "text":format!("<persona-context kind=\"message-source\">{{\"author\":\"user\"}}</persona-context>\n{text}"),
+            "queued":true,
+            "injected":{"state":"supervise"}},
+            {"id":"u2#0","seq":2,"role":"user","kind":"text","text":"Next real request","queued":true},
+        ]));
+        assert_eq!(protected[0]["user_ids"], json!(["u0#0", "u1#0", "u2#0"]));
+    }
 }

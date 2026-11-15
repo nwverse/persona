@@ -38,9 +38,82 @@ pub struct Item {
     #[serde(default)]
     pub wake: Option<bool>,
     pub task: Option<Task>,
+    pub client_msg_id: Option<String>,
+    pub from: Option<String>,
     pub injected: Option<Injected>,
+    pub compact: Option<Compaction>,
     pub model_refusal: Option<Value>,
     pub fold: Option<Fold>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Compaction {
+    pub trigger: Option<String>,
+    pub notes: Option<Vec<String>>,
+}
+
+// i18n-ignore: exact hub notices used by ChatStore.compactions.
+const COMPACTED_TEXT: &str = "上下文已压缩";
+// i18n-ignore: exact hub notices used by ChatStore.compactions.
+const CONTINUED_TEXT: &str = "已从压缩的上下文继续";
+
+fn compaction_notice(item: &Item, text: &str) -> bool {
+    item.kind == "notice" && item.task.is_none() && item.wake != Some(true) && item.text.as_deref() == Some(text)
+}
+
+/// Fold the boundary, its summary and any immediately following idle note before constructing rows. These are one
+/// inspectable compaction step on Apple, not separate notices in the exchange's work.
+fn compactions(items: &[Item]) -> Vec<Item> {
+    let mut out: Vec<Item> = Vec::with_capacity(items.len());
+    let mut open: Option<usize> = None;
+    for item in items {
+        if item.compact.is_some() || compaction_notice(item, COMPACTED_TEXT) {
+            let mut boundary = item.clone();
+            let compact = boundary.compact.get_or_insert(Compaction {
+                trigger: None,
+                notes: None,
+            });
+            compact
+                .notes
+                .get_or_insert_with(Vec::new)
+                .push(item.text.clone().unwrap_or_else(|| COMPACTED_TEXT.to_owned()));
+            out.push(boundary);
+            open = Some(out.len() - 1);
+            continue;
+        }
+        let continued = compaction_notice(item, CONTINUED_TEXT);
+        let idle = item.kind == "notice"
+            && item
+                .text
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Compacted while idle"));
+        if continued || idle {
+            if let Some(index) = open {
+                let compact = out[index].compact.as_mut().expect("open compaction");
+                compact
+                    .notes
+                    .get_or_insert_with(Vec::new)
+                    .push(item.text.clone().unwrap_or_default());
+                if idle {
+                    compact.trigger = Some("idle".to_owned());
+                }
+                continue;
+            }
+            if continued {
+                let mut boundary = item.clone();
+                boundary.compact = Some(Compaction {
+                    trigger: None,
+                    notes: Some(vec![item.text.clone().unwrap_or_else(|| CONTINUED_TEXT.to_owned())]),
+                });
+                out.push(boundary);
+                open = Some(out.len() - 1);
+                continue;
+            }
+        }
+        open = None;
+        out.push(item.clone());
+    }
+    out
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,6 +124,80 @@ pub struct Task {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Injected {
     pub state: Option<String>,
+    pub level: Option<String>,
+}
+
+/// `MessageSource.protectsUser`: the first leading message-source envelope is authoritative. An explicit user author,
+/// malformed JSON or a non-string/missing kind vetoes legacy injection classification, even over explicit metadata.
+fn protects_user(text: &str) -> bool {
+    const OPEN: &str = "<persona-context";
+    const CLOSE: &str = "</persona-context>";
+    let mut rest = text.trim_start();
+    while let Some(after_open) = rest.strip_prefix(OPEN) {
+        let Some((attributes, after_attributes)) = after_open.split_once('>') else {
+            return false;
+        };
+        let Some((body, after_body)) = after_attributes.split_once(CLOSE) else {
+            return false;
+        };
+        if attributes
+            .split_whitespace()
+            .any(|attribute| attribute == "kind=\"message-source\"")
+        {
+            let Ok(metadata) = serde_json::from_str::<Value>(body) else {
+                return true;
+            };
+            return metadata.get("author").and_then(Value::as_str) == Some("user")
+                || metadata
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .is_none_or(|kind| kind.trim().is_empty());
+        }
+        rest = after_body.trim_start();
+    }
+    false
+}
+
+fn leading_context_stripped(text: &str) -> &str {
+    let mut rest = text.trim();
+    while let Some(after_open) = rest.strip_prefix("<persona-context") {
+        let Some((_, after_attributes)) = after_open.split_once('>') else {
+            break;
+        };
+        let Some((_, after_body)) = after_attributes.split_once("</persona-context>") else {
+            break;
+        };
+        rest = after_body.trim();
+    }
+    rest
+}
+
+/// The supervision subset of `Injected.of`: no generic substring matching and no inference from an app/peer input.
+fn is_supervision(item: &Item) -> bool {
+    if item.role != "user" || item.kind != "text" {
+        return false;
+    }
+    let text = item.text.as_deref().unwrap_or_default();
+    if protects_user(text) {
+        return false;
+    }
+    if let Some(injected) = &item.injected {
+        return injected.state.as_deref() == Some("supervise");
+    }
+    if item.client_msg_id.is_some() || item.from.is_some() {
+        return false;
+    }
+    let text = leading_context_stripped(text);
+    let Some((head, rest)) = text.split_once('\n') else {
+        return false;
+    };
+    let Some(count) = head.strip_prefix("📋 督办：你派出去的任务有 ") else {
+        return false;
+    };
+    let Some(count) = count.strip_suffix(" 个要你处理") else {
+        return false;
+    };
+    !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()) && rest.contains("这是 Persona 的督办消息")
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,7 +257,7 @@ impl Row {
 fn row(item: &Item) -> Option<Row> {
     let timestamp = || item.ts.as_deref().and_then(utc_timestamp);
     let kind = match item.kind.as_str() {
-        "text" if item.role == "user" => Kind::User,
+        "text" if item.role == "user" && item.kind == "text" => Kind::User,
         "text" => Kind::Assistant,
         "thinking" => Kind::Thinking,
         "notice" => Kind::Notice,
@@ -123,8 +270,8 @@ fn row(item: &Item) -> Option<Row> {
         kind,
         entry: ((kind == Kind::User) || (kind == Kind::Image && item.role == "user" && item.tool_use_id.is_none()))
             .then(|| item.id.split('#').next().unwrap_or(&item.id).to_owned()),
-        queued: item.queued == Some(true) || kind == Kind::Image,
-        supervision: item.injected.as_ref().and_then(|injected| injected.state.as_deref()) == Some("supervise"),
+        queued: item.queued == Some(true),
+        supervision: is_supervision(item),
         wake: item.wake == Some(true),
         refusal: item.model_refusal.is_some(),
         interrupt: item.task.is_none() && item.text.as_deref().is_some_and(|text| text.contains("中断")), // i18n-ignore: hub notice
@@ -160,7 +307,7 @@ fn rows(items: &[Item]) -> Vec<Row> {
         }
     }
     ordered.extend(pictures);
-
+    let ordered = compactions(&ordered);
     let mut rows = Vec::new();
     let mut tools: Vec<Row> = Vec::new();
     let mut thinking: Vec<Row> = Vec::new();
@@ -254,11 +401,21 @@ fn rows(items: &[Item]) -> Vec<Row> {
                 if item.task.as_ref().is_some_and(|task| task.kind == "agent") && item.wake == Some(true) {
                     flush_thoughts(&mut rows, &mut tools, &mut thinking);
                     flush_run(&mut rows, &mut tools);
-                    let mut notice = row(item);
-                    if let Some(notice) = &mut notice {
-                        notice.kind = Kind::Notice;
-                    }
-                    rows.extend(notice);
+                    let timestamp = || item.ts.as_deref().and_then(utc_timestamp);
+                    rows.push(Row {
+                        id: item.id.clone(),
+                        kind: Kind::Notice,
+                        entry: None,
+                        queued: false,
+                        supervision: false,
+                        wake: true,
+                        refusal: false,
+                        interrupt: false,
+                        start: timestamp(),
+                        end: timestamp(),
+                        tools: 0,
+                        thoughts: 0,
+                    });
                 }
             }
             "image" if item.tool_use_id.is_some() => {}
@@ -286,6 +443,7 @@ struct Turn {
     tail: Vec<Row>,
     steps: Vec<Row>,
     ordered: Vec<Row>,
+    reopened_at: Option<usize>,
 }
 
 impl Turn {
@@ -295,7 +453,7 @@ impl Turn {
             let mut pick = None;
             self.has_pending_wake = false;
             for (index, row) in all.iter().enumerate() {
-                if row.wake {
+                if row.kind == Kind::Notice && row.wake {
                     pick = None;
                     self.has_pending_wake = true;
                 }
@@ -348,6 +506,7 @@ impl Turn {
             "answer_id": self.answer.as_ref().map(|row| &row.id),
             "trailing_ids": ids(&self.trailing),
             "wake_ids": ids(&self.wakes),
+            "has_pending_wake": self.has_pending_wake,
             "after_wake_ids": after_wake.unwrap_or_default().into_iter().filter(|id| {
                 let id = id.as_str().unwrap_or_default();
                 !self.users.iter().any(|row| row.id == id) && !id.starts_with("message#")
@@ -392,10 +551,14 @@ pub fn project(input: &Input) -> Value {
                  last_index: &mut usize,
                  reopened_at: &mut Option<usize>,
                  blocks: &mut Vec<Value>| {
+        let reopened = current
+            .as_ref()
+            .and_then(|turn| turn.reopened_at)
+            .or_else(|| reopened_at.take());
         let Some(turn) = current.take() else { return };
         *last_raw = Some(turn.clone());
         let turn = turn.close();
-        if let Some(index) = reopened_at.take() {
+        if let Some(index) = reopened {
             blocks[index] = turn.json();
             *last_index = index;
         } else {
@@ -446,7 +609,7 @@ pub fn project(input: &Input) -> Value {
                     &mut reopened_at,
                     &mut blocks,
                 );
-                blocks.push(Value::Null);
+                blocks.push(serde_json::json!({"row_id": row.id}));
             }
             Kind::Notice => {
                 if row.wake
@@ -460,11 +623,7 @@ pub fn project(input: &Input) -> Value {
                         .and_then(|turn| turn.get("id"))
                         == Some(&Value::String(raw.id.clone()))
                     {
-                        reopened_at = Some(last_index);
-                    } else {
-                        // Swift inserts the reopened turn before the intervening recap rows.
-                        // Turn-only projection keeps turn order and records only the recap's position.
-                        reopened_at = None;
+                        current.as_mut().unwrap().reopened_at = Some(last_index);
                     }
                 }
                 if row.refusal {
@@ -511,7 +670,7 @@ pub fn project(input: &Input) -> Value {
         &mut reopened_at,
         &mut blocks,
     );
-    Value::Array(blocks.into_iter().filter(|block| !block.is_null()).collect())
+    Value::Array(blocks.into_iter().filter(|block| block.get("id").is_some()).collect())
 }
 
 /// Wake selection mutation: choosing the first assistant row must disagree with the fixture corpus.
