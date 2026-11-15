@@ -278,6 +278,18 @@ def today_at(hour, minute=0, days=0):
     return local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def held_today(hours):
+    """A push held `hours` before now, or minutes after this machine's midnight when that was another day: clients list
+    only today's held pushes (#7782), and a mock left running overnight or started before dawn would otherwise have none.
+    Naive wall-clock arithmetic, so a DST transition day keeps the fallback on today (libc applies midnight's offset)."""
+    now_local = datetime.now()
+    midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    at = now_local - timedelta(hours=hours)
+    if at < midnight:
+        at = midnight + timedelta(minutes=10 - hours)
+    return at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _mock_qr(text, n=29):
     """A QR-looking grid of "0" / "1" rows for text: three finder squares and noise from its hash (not scannable)."""
     seed = hashlib.sha256(text.encode()).digest()
@@ -1859,6 +1871,8 @@ SEEN = []  # session ids marked seen (GET /mock/seen)
 SESSION_CLOSE = {"fail": False, "attempts": [], "closed": [], "interactions": []}
 # GET /mock/send-fail?on=1: sends to sessions fail (502) until ?on=0, as MOCK_SEND_FAIL=1 makes them for the whole run.
 SEND_FAIL = {"on": False}
+# Low-distraction mode (#7782): MOCK_LN=1 starts it on; GET /mock/ln?on=0|1 switches it until /mock/reset.
+LN = {"on": bool(os.environ.get("MOCK_LN"))}
 # Delete conversation (DELETE /api/v1/sessions/{mid}/{sid}): what was taken out, so /mock/reset puts it back.
 SESSION_DELETED = []
 PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins: what the Agents list keeps on top
@@ -23979,6 +23993,7 @@ MOCK_HELP = [
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
     "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
+    "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
 ]
 
 _features_without_voice = features
@@ -24377,17 +24392,20 @@ class H(BaseHTTPRequestHandler):
         if self.token_refused(): return
         if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
+        if p == "/mock/ln":
+            if "on" in q: LN["on"] = q["on"][0] == "1"
+            return self.send_json(LN)
         if p == "/api/v1/push/ln-mode":
-            return self.send_json({"enabled": bool(os.environ.get("MOCK_LN"))})
-        if p == "/api/v1/push/intercepts":
-            if not os.environ.get("MOCK_LN"):
-                return self.send_json({"intercepts": []})
+            return self.send_json({"enabled": LN["on"]})
+        if p == "/api/v1/push/intercepts":  # kept whether the mode is on or off, as the hub keeps them
             return self.send_json({"intercepts": [
-                {"at": ago(hours=3), "level": "P1", "reason": "ln_p1_held",
-                 "title": "发布结果等你核对", "body": "网页和手机的构建都完成了",
-                 "related_key": "demo-subject", "manager": "assistant", "also": ["请检查最后的发布说明"]},
-                {"at": ago(hours=4), "level": "P1", "reason": "ln_dedup_12h", "title": "同一任务还有一次补充汇报", "manager": "assistant"},
-                {"at": ago(hours=5), "level": "P2", "reason": "ln_p2_silent", "title": "后台检查已完成",
+                # the one with a source the clients follow (todo_id, #7910): the /orders investigation to-do, whose
+                # agent is a session the assistant manager can open
+                {"at": held_today(3), "level": "P1", "reason": "ln_p1_held",
+                 "title": "排查结果等你核对", "body": "/orders 的慢查询已经定位并修复",
+                 "related_key": "demo-subject", "manager": "assistant", "also": ["请确认修复方案"], "todo_id": "todo_orders"},
+                {"at": held_today(4), "level": "P1", "reason": "ln_dedup_12h", "title": "同一任务还有一次补充汇报", "manager": "assistant"},
+                {"at": held_today(5), "level": "P2", "reason": "ln_p2_silent", "title": "后台检查已完成",
                  "body": "没有需要你处理的事项", "manager": "assistant"},
                 {"at": ago(days=1), "level": "P1", "reason": "ln_p1_held", "title": "昨天的记录不应出现"},
             ]})
@@ -24705,6 +24723,7 @@ class H(BaseHTTPRequestHandler):
             TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
+            LN["on"] = bool(os.environ.get("MOCK_LN"))  # low-distraction mode as the run started (/mock/ln)
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
             # MOCK_RULE_SUGGESTIONS: every suggestion is offered again, and what Always made is gone (web/e2e/rule-suggestions.mjs)
             RULE_SUGGESTIONS_ANSWERED.clear(); RULE_GRANTS[:] = standing_seed(); RULE_GRANTS_REVISION[0] = 1
