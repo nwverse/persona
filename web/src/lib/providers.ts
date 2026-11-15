@@ -497,7 +497,7 @@ export function legacyChatClears(v: ProviderView | null): Record<string, string 
   const clears: Record<string, string | number | boolean> = {};
   if (v.has_headers) clears.headers = "";
   if (v.has_env) clears.env = "";
-  for (const key of ["proxy", "no_proxy", "effort", "opus_model", "sonnet_model", "haiku_model", "fable_model"] as const) {
+  for (const key of ["proxy", "no_proxy", "opus_model", "sonnet_model", "haiku_model", "fable_model"] as const) {
     if (v[key]) clears[key] = "";
   }
   for (const key of ["timeout_ms", "compact_window", "max_context"] as const) {
@@ -537,7 +537,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
   const extra = extraFields(f);
   const before = old && extraFields(formFromView(old));
   for (const [k, v] of Object.entries(extra)) {
-    if (chat && ["proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"].includes(k)) continue;
+    if (chat && ["proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"].includes(k)) continue;
     if (before ? !sameJSON(before[k], v) : v !== "" && v !== 0 && v !== false && !(Array.isArray(v) && v.length === 0)) body[k] = v;
   }
   if (!chat && f.headers_touched) body.headers = f.headers.trim();
@@ -557,7 +557,7 @@ export function probeBody(f: ProviderForm, stored: string | null, model?: string
   if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;
-  if (model !== undefined && !(f.kind === "api" && f.api === "chat")) b.effort = f.effort.trim();
+  if (model !== undefined) b.effort = f.effort.trim();
   if (f.kind === "api") b.via_machine = f.via_machine; // tested from where it will be sent
   return b;
 }

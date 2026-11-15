@@ -330,6 +330,24 @@ func TestChatProbeCompatibilityRetryHonorsNoRetryHeader(t *testing.T) {
 	}
 }
 
+func TestChatProbeReasoningRetryHonorsNoRetryHeader(t *testing.T) {
+	calls := 0
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("X-Should-Retry", "false")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`))
+	}))
+	t.Cleanup(gw.Close)
+	s, _ := launcherTestService(t)
+	effort := "high"
+	out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "synthetic-model", API: "chat", Effort: &effort})
+	msg, _ := out["error"].(string)
+	if calls != 1 || out["ok"] != false || !strings.Contains(msg, "'reasoning_effort' is not supported") {
+		t.Fatalf("calls = %d, providerTest() = %v, want one non-retried effort failure", calls, out)
+	}
+}
+
 func TestGatewayMessagePrecedenceAndBoundedFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw, want string

@@ -230,6 +230,72 @@ time.sleep(30)
   }
 });
 
+test("a detached descendant survives original-group observation and cannot authorize cleanup", async t => {
+  const root = await temporary(t);
+  const readyFile = join(root, "ready.json");
+  const marker = "persona-link-detached-test-fixture";
+  const source = `
+    const fs = require('node:fs');
+    const child = require('node:child_process').spawn(process.execPath, ['-e', "const fs=require('node:fs');const stat=fs.readFileSync('/proc/self/stat','utf8');const fields=stat.slice(stat.lastIndexOf(')')+2).trim().split(/\\\\s+/);fs.writeFileSync(process.argv[2],JSON.stringify({pid:process.pid,pgid:Number(fields[2]),start:fields[19]}));setInterval(()=>{},1000);", ${JSON.stringify(marker)}, ${JSON.stringify(readyFile)}], { detached: true, stdio: 'ignore' });
+    child.unref();
+    const deadline = Date.now() + 2000;
+    const timer = setInterval(() => {
+      if (fs.existsSync(${JSON.stringify(readyFile)})) { clearInterval(timer); process.exit(0); }
+      else if (Date.now() > deadline) { clearInterval(timer); process.exit(2); }
+    }, 10);
+  `;
+  let identity;
+  let result;
+  let verdict;
+  let cleanupError;
+  try {
+    result = await runCaptured(process.execPath, ["-e", source], { closeGrace: 50 });
+    identity = JSON.parse(await readFile(readyFile, "utf8"));
+    const stat = await readFile(`/proc/${identity.pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    assert.equal(Number(fields[2]), identity.pgid);
+    assert.equal(fields[19], identity.start);
+    assert.equal(identity.pgid, identity.pid, "the fixture must detach into its own process group");
+    assert.notEqual(identity.pgid, result.pid, "the fixture must not be found by the original-group scan");
+    assert.equal(result.code, 0);
+    assert.equal(result.closed, true);
+    assert.equal(result.groupEmpty, true, "the original PGID is empty even though the detached descendant is alive");
+    verdict = receiptVerdict({ commands: [result], cleanup: { ok: true } });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.mayRemoveRunRoot, false);
+    assert.equal(verdict.descendantProofMissing, true);
+  } catch (error) {
+    cleanupError = error;
+  } finally {
+    if (identity) {
+      try {
+        const stat = await readFile(`/proc/${identity.pid}/stat`, "utf8").catch(() => "");
+        if (stat) {
+          const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+          assert.equal(Number(fields[2]), identity.pgid, "fixture PGID changed before cleanup");
+          assert.equal(fields[19], identity.start, "fixture PID was reused before cleanup");
+          for (const signal of ["SIGTERM", "SIGKILL"]) {
+            try { process.kill(-identity.pgid, signal); } catch (error) { if (error.code !== "ESRCH") throw error; }
+            for (let attempt = 0; attempt < 100; attempt++) {
+              await new Promise(done => setTimeout(done, 10));
+              if (!await readFile(`/proc/${identity.pid}/stat`, "utf8").catch(() => "")) break;
+            }
+            if (!await readFile(`/proc/${identity.pid}/stat`, "utf8").catch(() => "")) break;
+          }
+          assert.equal(await readFile(`/proc/${identity.pid}/stat`, "utf8").catch(() => ""), "", "the exact fixture must exit before ordinary test cleanup");
+        }
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    if (cleanupError) {
+      const evidence = join(root, "detached-counterexample.json");
+      await writeFile(evidence, `${JSON.stringify({ identity, result, verdict, cleanupError: cleanupError.message, originalGroupObservation: "not proof of detached-descendant exit" }, null, 2)}\n`, { mode: 0o600 });
+      throw cleanupError;
+    }
+  }
+});
+
 test("stdin failures remain observable beside a genuine child close", async () => {
   const result = await runCaptured("/bin/sh", ["-c", "exec 0<&-; sleep 0.1"], { input: "x".repeat(128 * 1024), timeout: 2000 });
   assert.equal(result.code, 0);
@@ -299,9 +365,12 @@ test("missing, malformed and incomplete provenance cannot approve removal", asyn
     assert.equal(verdict.ok, false);
     assert.equal(verdict.mayRemoveRunRoot, false);
   }
-  assert.equal(receiptVerdict({ commands: [{ closed: true, code: 0, signal: null, groupEmpty: true }], provenance: valid, expectedProvenance: expected, cleanup: { ok: false } }).mayRemoveRunRoot, true);
-  assert.equal(receiptVerdict({ commands: [validCommand], provenance: valid, expectedProvenance: expected, cleanup: { ok: false } }).ok, false);
-  assert.equal(receiptVerdict({ commands: [validCommand], provenance: valid, expectedProvenance: expected, cleanup: { ok: true } }).ok, true);
+  for (const command of [validCommand, { ...validCommand, descendantsClosed: true, descendantsClosedProof: true }]) {
+    const verdict = receiptVerdict({ commands: [command], provenance: valid, expectedProvenance: expected, cleanup: { ok: true } });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.mayRemoveRunRoot, false);
+    assert.equal(verdict.descendantProofMissing, true);
+  }
 });
 
 test("a redaction or provenance failure cannot leave a previous successful verdict", async t => {

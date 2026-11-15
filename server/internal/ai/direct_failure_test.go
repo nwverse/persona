@@ -253,6 +253,19 @@ func TestDirectChatNoRetrySkipsCompatibilityRetries(t *testing.T) {
 	}
 }
 
+func TestDirectChatNoRetrySkipsReasoningEffortRetry(t *testing.T) {
+	body := `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`
+	u := newUpstream(t, answer(http.StatusBadRequest, body, "X-Should-Retry", "false"))
+	client := New(Config{API: "chat", BaseURL: u.srv.URL, APIKey: "example-key", Model: "example-model", ReasoningEffort: "high"})
+	_, err := client.Chat(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "synthetic input"}}, MaxTokens: 32})
+	if got := u.sent.Load(); got != 1 {
+		t.Fatalf("requests = %d, want the explicit no-retry response to stop at 1", got)
+	}
+	if want := "ai: HTTP 400: " + body; err == nil || err.Error() != want || Transient(err) {
+		t.Fatalf("error = %v, want %q, non-transient", err, want)
+	}
+}
+
 func TestDirectStreamFailureKinds(t *testing.T) {
 	cases := []struct {
 		name      string

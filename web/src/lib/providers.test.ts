@@ -21,6 +21,7 @@ import {
   importSources,
   importStays,
   importSummary,
+  legacyChatClears,
   type ImportedProvider,
   mergeDiscovered,
   newForm,
@@ -115,8 +116,10 @@ describe("formProblems", () => {
     for (const body of [providerBody(draft, null), providerBody(draft, { name: "gw", kind: "api", api: "chat", model: "m1" }), probeBody(draft, null)]) {
       expect(body).not.toHaveProperty("headers");
       expect(body).not.toHaveProperty("proxy");
-      for (const key of ["no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"]) expect(body).not.toHaveProperty(key);
+      for (const key of ["no_proxy", "env", "timeout_ms", "compact_window", "max_context", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"]) expect(body).not.toHaveProperty(key);
     }
+    expect(providerBody(draft, null)).toHaveProperty("effort", "high");
+    expect(probeBody(draft, null, "m1")).toHaveProperty("effort", "high");
     const responses = providerBody({ ...draft, api: "responses" }, null);
     expect(responses).toMatchObject({ headers: "invalid", proxy: "invalid", no_proxy: "example.com", opus_model: "tier-a", subagent_force: true });
     const models = [formModel({ id: "m1", context_window: 16000, efforts: ["high"], default_effort: "high" })];
@@ -163,6 +166,12 @@ describe("formProblems", () => {
 });
 
 describe("providerBody", () => {
+  it("keeps a supported stored Chat effort out of legacy repair and sends only real edits", () => {
+    const old: ProviderView = { name: "chat", kind: "api", api: "chat", model: "m1", base_url: "https://gw.example.com", has_key: true, effort: "high" };
+    expect(legacyChatClears(old)).toEqual({});
+    expect(providerBody(formFromView(old), old, true)).not.toHaveProperty("effort");
+    expect(providerBody({ ...formFromView(old), effort: "max" }, old, true)).toHaveProperty("effort", "max");
+  });
   it("a new provider sends what is set, not the empty ones", () => {
     const b = providerBody(ready({ timeout_ms: "30000", subagent_force: true }), null);
     expect(b).toMatchObject({ name: "gw", base_url: "https://gw.example.com", model: "m1", auth: "bearer", api_key: "sk-test-1", timeout_ms: 30000, subagent_force: true });
@@ -265,7 +274,7 @@ describe("fallbackTitle", () => {
 
 describe("probes", () => {
   it("tests the provider draft's effort, including explicitly clearing its saved default", () => {
-    for (const api of ["responses", "messages"] as const) {
+    for (const api of ["responses", "messages", "chat"] as const) {
       expect(probeBody(ready({ kind: "api", api, effort: "high" }), "gw", "m1")).toMatchObject({ effort: "high" });
       expect(probeBody(ready({ kind: "api", api, effort: "" }), "gw", "m1")).toHaveProperty("effort", "");
     }
