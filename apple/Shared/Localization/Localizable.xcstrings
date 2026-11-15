@@ -24171,6 +24171,29 @@
         }
       }
     },
+    "Approves everything without asking; can be switched back in the chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approves everything without asking; can be switched back in the chat"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認なしですべて許可します。チャットで元に戻せます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "什么都不问直接放行；在对话里可以切回来"
+          }
+        }
+      }
+    },
     "Apps Allowed for the Assistant" : {
       "localizations" : {
         "en" : {
@@ -77122,6 +77145,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "今後の会議で Persona が答えるとき、この会議の議事録は使われません。"
+          }
+        }
+      }
+    },
+    "Its own approval settings decide what it asks, and may already allow everything" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its own approval settings decide what it asks, and may already allow everything"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何を確認するかは自身の承認設定で決まります。すでにすべて許可している場合もあります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "问不问你由它自己的审批设置决定，可能本来就全部放行"
           }
         }
       }
@@ -161550,6 +161596,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "除非选「全部放行」，这个 Agent 按它自己的审批设置运行。"
+          }
+        }
+      }
+    },
+    "This agent uses its own approval settings unless you choose Allow Everything. You can switch in the chat later." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This agent uses its own approval settings unless you choose Allow Everything. You can switch in the chat later."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「すべて許可」を選ばない限り、このエージェントは自身の承認設定で動作します。あとからチャットで切り替えることもできます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "除非选「全部放行」，这个 Agent 按它自己的审批设置运行。之后也能在对话里切换。"
           }
         }
       }

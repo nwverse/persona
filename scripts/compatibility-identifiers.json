@@ -219,6 +219,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "deploy/docker/.env.example": {
+      "reason": "Upgrade instructions identify the historical container image repository for existing installations.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "deploy/docker/compose.yaml": {
       "reason": "Installation, upgrade or privacy input adapter retaining an existing deployment identity.",
       "tokens": [

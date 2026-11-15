@@ -1062,11 +1062,20 @@ app treats as unsupported and off (no section, never offered).
 Two small labels above the chat input: permission mode (Manual approval / Auto-edit files / Plan only / Auto / Allow everything) and effort (Auto / Low … Max),
 like Claude Code's terminal bottom bar; tap to change (`SessionModeBar`, wording and icons in `SessionModes`). The new shell moves these into the input's bottom-right
 "Model · Effort" button (#1091, see the input under "New shell" above). New Agent forms and the assistant home page above its input
-also offer selection (unset means "Follow launcher"). New Agent offers a Paseo provider that is neither Claude Code nor Codex (a launcher with
-`source` `paseo` and an agent of its own, such as Grok) only Use Launcher's and Allow Everything, and only the efforts its model lists (`StartModes`, #8144):
-Paseo refuses Plan Only for it and drops the other modes. The mode remembered per computer is Claude Code's: such a start never sends it, never saves over it,
-and its pick is made on the sheet each time; its footer says the agent uses its own approval settings unless Allow Everything is chosen, and its first message's
-hint names no Claude. Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
+also offer selection (unset means "Follow launcher"). New Agent offers a launcher that lists the permission modes a start on it takes
+(`Launcher.permissionModes`, the node's `permission_modes`, #8261: Paseo's Grok, OpenCode or Codex, Codex's start included) only Use Launcher's (its own
+approval, sent as no mode) and, where it lists it, Allow Everything, and only the efforts its model lists (`StartModes`); one whose own approval is all it lists
+shows no mode field. A computer older than the list is told by the agent instead: a launcher with `source` `paseo` and an agent of its own, such as Grok, gets
+Use Launcher's and Allow Everything (#8144). Paseo refuses Plan Only for these and drops the other modes. The mode and effort remembered per computer are
+Claude Code's: such a start never sends them, never saves over them, and its picks are made on the sheet each time (`providerMode`, `providerEffort`); its
+footer says the agent uses its own approval settings unless Allow Everything is chosen (and, where the launcher lists its modes, that the chat can switch
+later), and its first message's hint names no Claude. Pickers name a launcher by its title (`display_name`: Paseo's label for its provider, a
+Persona-managed provider's name), and the search finds it by that too. A running chat whose row lists two modes (`capabilities.permission_modes`,
+`Session.listedModes`) offers those two rows alone in the header's mode menu (`HeaderModeButton`) and the composer's model menu (`SessionModesMenu`,
+`SessionModeBar`): Use Launcher's, drawn as a mode not known (the plain permissions symbol in no tone, never Ask First's hand, since its own settings may
+allow everything; no mode reported is this one), and Allow Everything, which asks first (`SessionModes.confirmation`); leaving it does not. Session Info
+names the mode the same way and leaves out Context, Compactions, Chat and Output where the node says nobody gives them (`usage_unknown`). The web and
+Android follow the same rule (`docs/design/DESIGN_SYSTEM.md`, "Permission modes a provider lists (#8261)"). Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
 show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")). When the row carries `capabilities.modes`, that Boolean decides instead: `false` hides the controls for Claude outside Persona's terminals, and `true` enables them for a compatible runtime such as Orca or agy. An older hub that omits the field keeps the agent-based behavior (`Session.canChangeModes`; `docs/protocol/protocol.md` "Codex sources and capabilities").
 For Claude Code sessions in herdr, the effort menu also has a Model section (#3119, matching web #2434; `SessionModes.switchesModel`):
 the launcher's list as above (#3754; the fixed Default / Opus / Sonnet / Haiku until it is read), ticked by the running model's exact ID or the alias that stands for it, so a version is never shown as its family; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
@@ -1089,7 +1098,9 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
   wand, Allow Everything a red shield; not reported yet the plain permissions shield (never a guessed Ask First). A tap opens the mode menu; going into
   Allow Everything asks first, and so does leaving it when `bypass_available` is false (no way back from the phone); the composer's model menu
   goes through the same `ChatView.requestMode`. Shown where the agent has a mode to see or change (`SessionModes.showsInHeader`): not Codex,
-  TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. Client-only: `permission_mode` is already in every
+  TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. A row that lists its own modes (#8261, Paseo's
+  Grok, OpenCode or Codex) shows its two rows instead, its own approval as the plain shield, a switch both ways (`SessionModes.menuOptions`,
+  `headerLook(session:)`; see the New Agent paragraph above). Client-only: `permission_mode` is already in every
   session row (read off the transcript tail the node reads anyway), so no request, push or poll was added (measured in the PR).
 - Assistant chats (Persona page, including the main chat) can choose Allow everything both at creation and while running (#2416); a red warning at the menu top explains consequences (`BypassWarning`). Persona does not start
   claude with `--dangerously-skip-permissions`, so a control request cannot switch to bypassPermissions: stop an idle process, then resume the next message with `--permission-mode bypassPermissions`;
