@@ -1,14 +1,13 @@
 // The composer's "/" palette (#5325), drawn as cindy's slash command palette at the owner's request (2026-11-12): a
 // 320 px panel at the composer's left edge, one 36 px row per command with where it comes from on the right, and the
-// focused row's description in a 280 px card beside the panel (inside it on a phone). Commands keep their existing
-// ranking and cap priority; matching session skills follow them (#6171). Its base chunk is idle-preloaded and drawn only once "/" is typed.
-import { Suspense, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ComponentProps, type ReactNode } from "react";
+// focused command's description in a 280 px card beside the panel (to its right, to its left when the window has no
+// room there, inside the panel under the rows when it has room on neither side, as on a phone). Rows come ranked
+// (lib/composer-commands.ts rankCommands); the composer keeps the keys and the focus. Its own chunk: drawn only once
+// "/" is typed (Composer.tsx).
+import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import { cx, EASE } from "../../ui/atoms";
 import { t } from "../../i18n";
-import { lazyPage } from "../../lib/lazy-page";
-import { OverlayBoundary } from "../LazyOverlay";
-import type { MentionRow, MentionSource } from "./ComposerPanel";
 
 const PANEL_W = 320;
 const CARD_W = 280;
@@ -19,77 +18,46 @@ const EDGE = 8;
 const CARD_MAX = 400;
 
 /** Beside the panel: its top and height in the palette; or in the panel, under the rows. */
-type Place = { side: "right" | "left" | "inside"; top?: number; maxHeight?: number };
+type Place = { side: "right" | "left"; top: number; maxHeight: number } | { side: "inside" };
 
-const samePlace = (a: Place | null, b: Place) => a?.side === b.side && a.top === b.top && a.maxHeight === b.maxHeight;
+const samePlace = (a: Place | null, b: Place) =>
+  a?.side === b.side && (b.side === "inside" || (a.side !== "inside" && a.top === b.top && a.maxHeight === b.maxHeight));
 
 /** A command as its row names it: without the "/" already typed. */
-const commandName = (c: Command) => c.word.replace(/^\//, "");
-/** What picking a command types, when that is more than the command itself (Persona's text commands, quick prompts). */
+const name = (c: Command) => c.word.replace(/^\//, "");
+/** What picking it types, when that is more than the command itself (Persona's text commands, quick prompts). */
 const typed = (c: Command) => (c.text.trim() === c.word ? "" : c.text.trim());
-const keepFocus = (e: React.SyntheticEvent) => e.preventDefault();
-const SlashSkillPalette = lazyPage(() => import("./SlashSkillPalette").then((m) => m.SlashSkillPalette));
 
 function Description({ c, id, className }: { c: Command; id?: string; className?: string }) {
   const text = typed(c);
   return (
     <div id={id} className={className}>
       {c.desc && <p className="text-ink-2">{c.desc}</p>}
-      {text && <p className={`line-clamp-4 whitespace-pre-line text-ink-3${c.desc ? " mt-1" : ""}`}>{t("chat-slashpalette.types", { text })}</p>}
+      {text && <p className={cx("line-clamp-4 whitespace-pre-line text-ink-3", c.desc && "mt-1")}>{t("chat-slashpalette.types", { text })}</p>}
     </div>
   );
 }
 
-export type SlashPaletteInput = {
-  /** Commands already ranked by the composer, with the existing whole-list cap applied first. */
+export function SlashPalette({ rows, active, onHover, onPick, onClose, within }: {
   rows: Command[];
   active: number;
   onHover: (i: number) => void;
-  onPick: (c: Command | MentionRow) => void;
+  onPick: (c: Command) => void;
   /** A press outside `within` (the composer) closes it. */
   onClose: () => void;
-  /** What follows the slash; the catalog is read once for this opening, not for each query. */
-  query?: string | null;
-  source?: MentionSource;
-  machineId?: string;
   within: React.RefObject<HTMLElement | null>;
-  /** The skill stage's chunk or catalog state; loading also suppresses a premature empty message. */
-  status?: "loading" | "error" | "partial";
-};
-
-export type SlashPaletteViewProps = SlashPaletteInput & {
-  /** Display rows; `rows` remains the command-filter generation used to restore scroll. */
-  entries?: Command[];
-  renderRow?: (row: Command, common: ComponentProps<"button">) => ReactNode;
-};
-
-/** Commands are drawn by the idle palette; its optional skill stage can load or fail without replacing them. */
-export function SlashPalette(input: SlashPaletteViewProps) {
-  const [failed, setFailed] = useState(false);
-  if (!input.source?.skills) return <SlashPaletteView {...input} />;
-  if (failed) return <SlashPaletteView {...input} status="error" />;
-  return (
-    <OverlayBoundary open onClose={() => setFailed(true)}>
-      <Suspense fallback={<SlashPaletteView {...input} status="loading" />}>
-        <SlashSkillPalette {...input} />
-      </Suspense>
-    </OverlayBoundary>
-  );
-}
-
-export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick, onClose, within, source, status, renderRow }: SlashPaletteViewProps) {
+}) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const card = useRef<HTMLDivElement>(null);
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  const glide = useRef<HTMLSpanElement>(null);
+  const [glide, setGlide] = useState<{ top: number; height: number } | null>(null);
   const [place, setPlace] = useState<Place | null>(null);
   // the list scrolled or the window changed size: measure again
   const [, remeasure] = useReducer((n: number) => n + 1, 0);
-  const current = Math.min(active, entries.length - 1);
-  const focused = entries[current];
+  const focused = rows[active];
 
   const close = useRef(onClose);
   close.current = onClose;
@@ -108,11 +76,11 @@ export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick
   // the focused row into the list's view, on a key or a new filter only: the wheel may leave it
   useLayoutEffect(() => {
     const l = list.current;
-    const row = refs.current[current];
+    const row = refs.current[active];
     if (!l || !row) return;
     if (row.offsetTop < l.scrollTop) l.scrollTop = row.offsetTop;
     else if (row.offsetTop + row.offsetHeight > l.scrollTop + l.clientHeight) l.scrollTop = row.offsetTop + row.offsetHeight - l.clientHeight;
-  }, [current, rows]);
+  }, [active, rows]);
 
   // After every render, since the rows, the focus, the list's scroll and the card's own height all move the card; a
   // place that did not change renders nothing more.
@@ -121,9 +89,9 @@ export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick
     const p = panel.current;
     const l = list.current;
     if (!r || !p) return;
-    const row = refs.current[current];
-    const g = glide.current;
-    if (g) Object.assign(g.style, { top: `${row?.offsetTop ?? 0}px`, height: `${row?.offsetHeight ?? 0}px`, opacity: row ? 1 : 0 });
+    const row = refs.current[active];
+    const at = row ? { top: row.offsetTop, height: row.offsetHeight } : null;
+    setGlide((cur) => (cur?.top === at?.top && cur?.height === at?.height ? cur : at));
     // the panel's left edge does not move while it grows in (it grows from its bottom left corner)
     const box = r.getBoundingClientRect();
     const right = box.left + PANEL_W + GAP + CARD_W + EDGE <= innerWidth;
@@ -151,56 +119,46 @@ export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick
         className="relative flex flex-col rounded-xl bg-surface p-1.5 shadow-overlay"
         style={{ width: PANEL_W, maxWidth: `calc(100vw - ${2 * EDGE}px)`, maxHeight: `min(${CARD_MAX}px, calc(var(--kb-h) * 0.5))` }}
       >
-        {entries.length ? (
-          <div ref={list} role="listbox" aria-label={t(source?.skills ? "chat-slashpalette.label_with_skills" : "chat-slashpalette.label")} onScroll={remeasure} className="relative min-h-0 overflow-y-auto overscroll-contain">
-            <span ref={glide} aria-hidden className="pointer-events-none absolute inset-x-0 rounded-control bg-hover" style={{ top: 0, height: 0, opacity: 0, transition: `top 200ms ${EASE}, height 200ms ${EASE}` }} />
-            {entries.map((c, i) => {
-              const hover = () => onHover(i);
-              const common: ComponentProps<"button"> = {
-                ref: (el: HTMLButtonElement | null) => { refs.current[i] = el; },
-                type: "button",
-                role: "option",
-                "aria-selected": i === current,
-                "aria-describedby": described(c) ? `${id}-${i}` : undefined,
+        {rows.length > 0 ? (
+          <div ref={list} role="listbox" aria-label={t("chat-slashpalette.label")} onScroll={remeasure} className="relative min-h-0 overflow-y-auto overscroll-contain">
+            <span aria-hidden className="pointer-events-none absolute inset-x-0 rounded-control bg-hover" style={{ top: glide?.top ?? 0, height: glide?.height ?? 0, opacity: glide ? 1 : 0, transition: `top 200ms ${EASE}, height 200ms ${EASE}` }} />
+            {rows.map((c, i) => (
+              <button
+                key={c.key ?? c.word}
+                ref={(el) => {
+                  refs.current[i] = el;
+                }}
+                type="button"
+                role="option"
+                aria-selected={i === active}
+                aria-describedby={described(c) ? `${id}-${i}` : undefined}
                 // the box keeps the focus; a click picks
-                onMouseDown: keepFocus,
-                // Async rows can move any row under a resting pointer; only real movement changes the active row.
-                [source?.skills ? "onMouseMove" : "onMouseEnter"]: hover,
-                onClick: () => onPick(c),
-              };
-              return renderRow?.(c, common) ?? (
-                <button
-                  key={c.key ?? c.word}
-                  {...common}
-                  className={cx(
-                    "relative flex h-9 w-full items-center justify-between gap-3 rounded-control px-2.5 text-left text-[14px] leading-[1.43] text-ink [@media(pointer:coarse)]:h-11",
-                    i === current ? "font-medium" : "font-normal",
-                  )}
-                >
-                  <span className="min-w-0 truncate">{commandName(c)}</span>
-                  {c.source && <span className="max-w-[50%] shrink-0 truncate text-[12px] font-normal text-ink-3">{c.source}</span>}
-                </button>
-              );
-            })}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => onHover(i)}
+                onClick={() => onPick(c)}
+                className={cx(
+                  "relative flex h-9 w-full items-center justify-between gap-3 rounded-control px-2.5 text-left text-[14px] leading-[1.43] text-ink [@media(pointer:coarse)]:h-11",
+                  i === active ? "font-medium" : "font-normal",
+                )}
+              >
+                <span className="min-w-0 truncate">{name(c)}</span>
+                {c.source && <span className="max-w-[50%] shrink-0 truncate text-[12px] font-normal text-ink-3">{c.source}</span>}
+              </button>
+            ))}
           </div>
-        ) : status !== "loading" ? (
+        ) : (
           <div role="status" className="flex h-10 items-center justify-center text-[13px] text-ink-3">
-            {t(source?.skills ? "chat-slashpalette.no_match_skills" : "chat-slashpalette.no_match")}
+            {t("chat-slashpalette.no_match")}
           </div>
-        ) : null}
+        )}
         {place?.side === "inside" && focused && described(focused) && (
           <div data-slash-card aria-hidden className="mt-1.5 shrink-0 border-t border-line px-2.5 pt-2 pb-1 text-[13px] leading-[1.5]">
             <Description c={focused} />
           </div>
         )}
-        {status && (
-          <div role="status" className="mt-1.5 shrink-0 border-t border-line px-[10px] pt-2 pb-1 text-xs text-ink-3">
-            {t(`chat-composerpanel.skills_${status}`)}
-          </div>
-        )}
         {/* each row's description for assistive technology; the card and the line above only show the focused one */}
         <div hidden>
-          {entries.map((c, i) => described(c) && <Description key={c.key ?? c.word} c={c} id={`${id}-${i}`} />)}
+          {rows.map((c, i) => described(c) && <Description key={c.key ?? c.word} c={c} id={`${id}-${i}`} />)}
         </div>
       </div>
       {focused && place && place.side !== "inside" && (
@@ -208,11 +166,11 @@ export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick
           ref={card}
           data-slash-card
           aria-hidden
-          onMouseDown={keepFocus}
+          onMouseDown={(e) => e.preventDefault()}
           className="absolute overflow-y-auto rounded-xl bg-surface p-3.5 shadow-overlay"
           style={{ width: CARD_W, left: place.side === "right" ? PANEL_W + GAP : -(GAP + CARD_W), top: place.top, maxHeight: place.maxHeight }}
         >
-          <div className="truncate text-[14px] font-medium text-ink">{commandName(focused)}</div>
+          <div className="truncate text-[14px] font-medium text-ink">{name(focused)}</div>
           <Description c={focused} className="mt-2 text-[13px] leading-[1.5]" />
         </div>
       )}

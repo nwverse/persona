@@ -49,7 +49,7 @@ it("keeps the command fallback through skill-chunk loading and failure, includin
     box.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await vi.waitFor(() => expect(host.querySelectorAll("[role=option]")).toHaveLength(2));
-  expect(host.textContent).toContain(t("chat-composerpanel.skills_loading"));
+  await vi.waitFor(() => expect(host.textContent).toContain(t("chat-composerpanel.skills_loading")));
   await act(async () => { chunk.fail(); await Promise.resolve(); });
   await vi.waitFor(() => expect(host.textContent).toContain(t("chat-composerpanel.skills_error")));
   expect([...host.querySelectorAll("[role=option]")].map((row) => row.textContent)).toEqual(["alpha", "beta"]);

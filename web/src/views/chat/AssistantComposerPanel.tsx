@@ -5,8 +5,18 @@ import { ComposerPanel, type MentionRow } from "./ComposerPanel";
 import { SkillRow } from "./SkillRow";
 import { SkillCatalogStatus } from "./SkillCatalogStatus";
 import { useSkillCatalog } from "./useSkillCatalog";
+import { SlashSkillEntry } from "./SlashSkillView";
+import type { SlashPaletteInput } from "./SlashSkillView";
 
-export function AssistantComposerPanel(props: ComponentProps<typeof ComposerPanel>) {
+type MentionProps = ComponentProps<typeof ComposerPanel>;
+
+/** The same intent-loaded catalog chunk serves the @ panel and the skill-aware / palette. */
+export function AssistantComposerPanel(props: MentionProps | (SlashPaletteInput & { slash: true })) {
+  if ("slash" in props) return <SlashSkillEntry {...props} />;
+  return <AssistantMentionPanel {...props} />;
+}
+
+function AssistantMentionPanel(props: MentionProps) {
   const source = props.source?.skills;
   const current = useSkillCatalog(source, props.machineId, props.source?.cwd);
   const rows = useCallback((query: string): MentionRow[] => matchingSkills(current.catalog?.skills ?? [], query).map((skill) => ({ kind: "skill", id: `skill:${skill.id}`, skill })), [current.catalog]);

@@ -5,7 +5,7 @@ import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import type { MentionSkill } from "../../lib/skill-mentions";
 import { SkillRow } from "./SkillRow";
 import { useSkillCatalog } from "./useSkillCatalog";
-import { SlashPaletteView, type SlashPaletteInput } from "./SlashPalette";
+import { SlashSkillView, type SlashPaletteInput } from "./SlashSkillView";
 
 type SkillCommand = Command & { skill: MentionSkill };
 const attached = (row: Command | undefined) => row && (row as SkillCommand).skill;
@@ -50,7 +50,7 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
     return () => root.removeEventListener("keydown", key, true);
   });
   return (
-    <SlashPaletteView
+    <SlashSkillView
       {...input}
       entries={entries}
       onPick={pick}

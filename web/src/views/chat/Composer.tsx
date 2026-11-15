@@ -34,6 +34,7 @@ import { ContextChips } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
+import { OverlayBoundary } from "../LazyOverlay";
 import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
@@ -50,7 +51,7 @@ const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.Com
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
-// The command palette is idle-preloaded as before; only its optional skill-aware stage waits for "/" intent.
+// The command palette stays idle-preloaded. The assistant's intent chunk owns the skill stage and its loading/error view.
 const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette), { idle: true });
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
 const NUDGE_MS = 4000;
@@ -394,7 +395,8 @@ export const Composer = memo(function Composer({
   // backgrounded or the screen locked — mobile WebViews often skip pagehide there), so the last words typed before
   // switching are not lost (#4591).
   const unsaved = useRef<{ key: string; text: string } | null>(null);
-  const saveDraft = useCallback(() => {
+  const saveDraft = useCallback((event?: Event) => {
+    if (event?.type === "visibilitychange" && document.visibilityState !== "hidden") return;
     const u = unsaved.current;
     if (!u) return;
     unsaved.current = null;
@@ -413,15 +415,12 @@ export const Composer = memo(function Composer({
     return () => clearTimeout(t);
   }, [draft, draftKey, saveDraft, contexts]);
   useEffect(() => {
-    // visibilitychange to hidden reaches mobile WebViews that never fire pagehide; saveDraft is a no-op without unsaved words
-    const flushOnHidden = () => {
-      if (document.visibilityState === "hidden") saveDraft();
-    };
+    // visibilitychange to hidden reaches mobile WebViews that never fire pagehide; other visibility states save nothing
     addEventListener("pagehide", saveDraft);
-    document.addEventListener("visibilitychange", flushOnHidden);
+    document.addEventListener("visibilitychange", saveDraft);
     return () => {
       removeEventListener("pagehide", saveDraft);
-      document.removeEventListener("visibilitychange", flushOnHidden);
+      document.removeEventListener("visibilitychange", saveDraft);
       // only this conversation's: on a switch the box still holds the old words under the new key for one render
       if (unsaved.current?.key === draftKey) saveDraft();
     };
@@ -795,6 +794,8 @@ export const Composer = memo(function Composer({
     input.current?.focus({ preventScroll: true });
   };
 
+  const slashProps = { rows, active, onHover: setActive, onPick: pick, onClose: closeSlash, query, source: mention, machineId, within: box };
+  const commandPalette = () => <SlashPalette {...slashProps} active={Math.min(active, Math.max(rows.length - 1, 0))} />;
   const MentionPanel = mention?.skills ? AssistantComposerPanel : ComposerPanel;
   return (
     <div
@@ -819,7 +820,13 @@ export const Composer = memo(function Composer({
     >
       {slashOpen && (
         <Suspense fallback={null}>
-          <SlashPalette rows={rows} active={active} onHover={setActive} onPick={pick} onClose={closeSlash} query={query} source={mention} machineId={machineId} within={box} />
+          {mention?.skills ? (
+            <OverlayBoundary open onClose={closeSlash} fallback={commandPalette()}>
+              <Suspense fallback={commandPalette()}>
+                <AssistantComposerPanel {...slashProps} slash />
+              </Suspense>
+            </OverlayBoundary>
+          ) : commandPalette()}
         </Suspense>
       )}
 

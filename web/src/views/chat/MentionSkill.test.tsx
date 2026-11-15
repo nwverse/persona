@@ -384,3 +384,51 @@ it("never lets a large skill catalog push commands out of the shared slash row c
   expect(options().map((o) => o.textContent)).toEqual(Array.from({ length: 25 }, (_, i) => `command-${i}`));
   expect(api).toHaveBeenCalledTimes(1);
 });
+
+it("keeps commands but no skill rows when the slash catalog uses an unsupported version", async () => {
+  api.mockImplementationOnce(async () => ({ catalog_version: 2, complete: true, skills }));
+  render(source, COMMANDS);
+  await type("/");
+  await vi.waitFor(() => expect(host.textContent).toContain(t("chat-composerpanel.skills_error")));
+  expect(options().map((row) => row.textContent)).toEqual(["alpha", "beta"]);
+  expect(host.textContent).not.toContain("Inspect security boundaries");
+});
+
+it("shows the partial-inventory line only for a partial slash catalog", async () => {
+  api.mockImplementationOnce(async () => ({ catalog_version: 1, complete: false, skills }));
+  render(source, COMMANDS);
+  await type("/security");
+  await waitForOptions(1);
+  expect(options()[0].textContent).toContain("Inspect security boundaries");
+  expect(host.textContent).toContain(t("chat-composerpanel.skills_partial"));
+
+  key("Escape");
+  await type("text");
+  await type("/security");
+  await waitForOptions(1);
+  await vi.waitFor(() => expect(host.textContent).not.toContain(t("chat-composerpanel.skills_loading")));
+  expect(options()[0].textContent).toContain("Inspect security boundaries");
+  expect(host.textContent).not.toContain(t("chat-composerpanel.skills_partial"));
+  expect(host.querySelector("[role=status]")).toBeNull();
+});
+
+it.each((["Enter", "Tab", "ArrowDown", "ArrowUp"] as const).flatMap((pressed) => [
+  { composition: "isComposing", pressed },
+  { composition: "keyCode 229", pressed },
+]))("does not navigate or pick a skill with $pressed during $composition", async ({ composition, pressed }) => {
+  render(source, COMMANDS);
+  await type("/");
+  await waitForOptions(4);
+  key("ArrowUp");
+  const selected = focused()?.textContent;
+  expect(selected).toContain("Check wording");
+  await act(async () => {
+    const event = new KeyboardEvent("keydown", { key: pressed, bubbles: true, cancelable: true, isComposing: composition === "isComposing" });
+    if (composition === "keyCode 229") Object.defineProperty(event, "keyCode", { value: 229 });
+    box().dispatchEvent(event);
+    await Promise.resolve();
+  });
+  expect(focused()?.textContent).toBe(selected);
+  expect(box().value).toBe("/");
+  expect(getContexts("skill-test").filter((row) => row.kind === "skill")).toHaveLength(0);
+});
