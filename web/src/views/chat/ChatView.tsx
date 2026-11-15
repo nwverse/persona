@@ -3,8 +3,8 @@ import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
 import { LinkManager, useShownManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
-import { attentionReason, backgroundWaiting, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
+import { api, ApiError, errorText, fullItem, pastHub, sessionPath } from "../../lib/api";
+import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, composerSlot, otherView, useSessionView, viewOnlyRow } from "../../lib/session-view";
@@ -41,7 +41,7 @@ import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
 import { sendDraft } from "../../lib/drafts";
-import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
+import { chatLines, freshWords, insideFold, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
@@ -79,8 +79,8 @@ import { RunningStatusBar } from "./RunningStatusBar";
 import { latestPlan, usePlanClosed, usePlanOutOfView } from "./latest-plan";
 import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { addFreshWords, resetFreshWords } from "./fresh-words";
-import { backgroundCount, backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
-import { waitingOnSubagents } from "../../lib/background-work";
+import { backgroundCount, backgroundLine, backgroundWaitLine, workflowAgentFor, workflowCalls, workflowCallsKey } from "../../lib/workflows";
+import { backgroundTurn, waitingOnSubagents } from "../../lib/background-work";
 import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
 import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
 import { useChildSessions } from "../../lib/use-child-sessions";
@@ -1183,14 +1183,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, awaiting, session, view, embedded, inPanel]);
 
-  // The hub says its turn is over and a workflow it launched keeps it working (#3434): the exchange is drawn finished
-  // (its work folded, the run's card inside it), and the running bar says the workflow, timed from its start, instead
-  // of the turn's "Working…" clock going on. Other background work (a command, a Monitor, a subagent) leaves the turn as
-  // it was. A message of yours on its way, or one it is answering, is a turn again.
-  // The same for an agent that only waits on background commands (#6045): its turn is drawn finished.
-  // The same for a background subagent still running after the turn ended (#5030, cindy's background subtasks).
-  const subtasks = waitingOnSubagents(session, subagents);
-  const backgroundOnly = (waitingOnWorkflow(session) || Boolean(session && backgroundWaiting(session)) || subtasks) && !tr.streaming && !outgoing && !awaiting;
+  // Once the hub says the turn is over, four kinds of background work draw the last exchange finished (its work folded,
+  // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
+  // background subagents (#5030), commands that only wait (#6045), and finally a real background command or Monitor
+  // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
+  const streaming = Boolean(tr.streaming);
+  const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
+  const backgroundOnly = backgroundState !== null;
   const lastLive = working && !backgroundOnly && !tr.loading;
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain);
@@ -1382,7 +1381,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const closeoutSegment = useMemo(() => {
     if (!closeoutShown) return undefined;
     const last = lines.findLast((line) => line.kind === "segment");
-    return last?.kind === "segment" ? last.seg.id : undefined;
+    return last?.kind === "segment" ? last.seg : undefined;
   }, [closeoutShown, lines]);
   // The child sessions folded under this one (#5120, a Codex subagent, an Agent a Paseo Agent created): each a card in
   // the exchange during which it started (lib/child-cards.ts). The placement is kept while nothing moves it, so a push
@@ -1428,7 +1427,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedChild, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids.loaded, childRows, places, mid, sid, jump]);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment, children: places, embedded }),
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded }),
     [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, openingId, openingOrigin, closeoutSegment, places, embedded],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
@@ -1580,7 +1579,20 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const run = ++msgLanding.current;
     const holds = () => trNow.current.items.some((i) => i.id === item);
     if (holds()) return void requestAnimationFrame(() => seekItem(item, true));
-    if (!trNow.current.hasMore) return;
+    if (!trNow.current.hasMore) {
+      void (async () => {
+        // A folded assistant reply is not a raw item: resolve it, then open only the fold that holds it.
+        const whole = await fullItem(mid, sid, item);
+        if (run !== msgLanding.current) return;
+        const fold = trNow.current.items.find((f) => insideFold(whole, f));
+        if (!fold) return;
+        openFoldRange(ctx.scope, fold.seq, fold.fold!.through_seq);
+        await trNow.current.expandFold(fold);
+        if (run !== msgLanding.current) return;
+        requestAnimationFrame(() => seekItem(item));
+      })().catch(() => {});
+      return;
+    }
     void (async () => {
       // the chat may still be filling the screen with older pages: wait for that, then page back (again if it was busy)
       for (let go = 0, until = performance.now() + LANDING_WAIT_MS; go < 3 && run === msgLanding.current && !holds(); go++) {
@@ -1731,19 +1743,23 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   ) : null;
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
-  const wait = useMemo(() => (outgoing || awaiting ? null : backgroundWaitLine(session)), [outgoing, awaiting, session]);
+  // Streaming makes the turn live again, but an Agent's existing wait / subagent bar stays as it was while the answer
+  // streams. Only the new command line is withheld there; in a quiet turn the four-kind order decides the bar.
+  const wait = streaming && !outgoing && !awaiting ? backgroundWaitLine(session) : backgroundState?.kind === "waiting" ? backgroundState.line : null;
+  const subtasks = streaming ? waitingOnSubagents(session, subagents) && !outgoing && !awaiting : backgroundState?.kind === "subtasks";
+  const command = backgroundState?.kind === "command" ? backgroundState.line : null;
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
   // In a Persona conversation the message stream already carries the turn's state for its whole life — the sending /
   // preparing feedback while the message is on its way, then the live work line ("Working…", spinner and clock) once the
   // hub accepts it — so the dock never repeats the foreground turn (#6230). The dock bar stays only for work that outlives
-  // the turn (a background workflow, background wait or subagent: `backgroundOnly`, where the stream shows only quiet fold
-  // rows) and, unchanged, for Agent chats, whose dock keeps the full cindy status bar. Gating on the foreground/background
+  // the turn (a background workflow, subagent, wait or working command: `backgroundOnly`, where the stream shows only
+  // quiet fold rows) and, unchanged, for Agent chats, whose dock keeps the full cindy status bar. Gating on the foreground/background
   // phase (not on the live line being mounted) keeps the bar out even while a transcript loads or a state push is in flight.
   // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
   // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
   const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={background} wait={wait} subtasks={subtasks && !outgoing && !awaiting} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -1848,7 +1864,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       <div className={switchable ? "relative min-h-0 flex-1" : "contents"}>
       <ViewLayer bare={!switchable} on={view === "chat"} from="start">
       {/* what a stopped agent said of its own work, above the transcript and not part of it (#3612) */}
-      {closeoutShown && session && <CloseoutCard key={`${mid}/${sid}`} session={session} />}
+      {closeoutShown && session && <CloseoutCard key={`${mid}/${sid}`} session={session} segment={closeoutSegment} expandFold={tr.expandFold} />}
       <div className="relative min-h-0 flex-1">
         {(tr.notLive || refreshFailed) && <NotLivePill error={refreshFailed} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
         <div ref={scrollRef} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">

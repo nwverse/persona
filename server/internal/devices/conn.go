@@ -93,7 +93,9 @@ func (m *Machine) run(ctx context.Context) {
 			lasted.Round(time.Second), planned, conn.restarting.Load(), dropReason(err))
 		m.d.pathEnded(conn.path, true, err, lasted, planned || conn.restarting.Load())
 		conn.close()
+		m.eventRetire.Lock()
 		m.detach(err, planned)
+		m.eventRetire.Unlock()
 		dropped = lastDrop{at: time.Now(), reason: dropReason(err), via: conn.via}
 		if next != nil {
 			next.trigger = fmt.Sprintf("switch from %s", conn.via)
@@ -278,6 +280,19 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 			m.mu.Unlock()
 			return
 		}
+		// Close does not wait for an admitted callback: finish it before detach, or drop it when it arrives after.
+		select {
+		case <-peer.Done():
+			return
+		default:
+		}
+		m.eventRetire.Lock()
+		defer m.eventRetire.Unlock()
+		select {
+		case <-peer.Done():
+			return
+		default:
+		}
 		m.onEvent(event, params)
 	}
 	go func() { c.served <- peer.Serve(cctx, l.r) }()
@@ -309,8 +324,11 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 	p := c.path
 	m.d.pathConnected(p)
+	listed := make(chan struct{})
 	m.mu.Lock()
 	m.peer, m.info, m.online, m.err, m.lastSeen = c.peer, c.info, true, "", time.Now().UTC()
+	m.sessionsListed = false
+	m.sessionsReady = listed
 	m.reloadUntil = time.Time{}
 	m.connectedAt = m.lastSeen
 	m.forgetOpenedLocked()     // a new connection has nothing of the hub's open yet
@@ -387,16 +405,16 @@ func (m *Machine) serve(ctx context.Context, c *nodeConn) error {
 		var list struct {
 			Sessions []proto.Session `json:"sessions"`
 		}
-		revision := m.sessionsRevision()
+		snapshot := &sessionSnapshot{peer: c.peer, revision: m.sessionsRevision()}
 		if err := c.peer.Call(ctx, "sessions.list", map[string]any{}, &list); err == nil {
-			m.setInitialSessions(c.peer, revision, list.Sessions)
-			m.d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+			m.acceptSessionsList(snapshot, list.Sessions, true)
 			updates = true
 		}
 	} else {
 		rewatch = nil
 		updates = true // node.update.* stays available so this node can become compatible again
 	}
+	close(listed)
 	m.firstTried() // configured and listed: the calls that waited for it go now
 	if updates {
 		// A queued update goes on, and a node back on another build is given the one it should run (deploy_rpc.go,
