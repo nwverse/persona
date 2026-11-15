@@ -60,6 +60,7 @@ import { AcceptRow, BriefCard } from "./Brief";
 
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
+const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.HeldPushesEntry));
 
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one.
@@ -79,7 +80,7 @@ import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
 import { MessageActions } from "../chat/MessageActions";
 import { sessionTitle, stateOf } from "../../lib/format";
-import { formatDate, t } from "../../i18n";
+import { formatDate, formatList, t } from "../../i18n";
 import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
 import { lazyPage } from "../../lib/lazy-page";
@@ -94,6 +95,7 @@ import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { requestHome } from "../../lib/child-sessions";
 import { stateName } from "../../lib/state-labels";
+import { EDITABLE } from "../../lib/shortcuts";
 
 // ── what a task is now ──
 
@@ -270,8 +272,18 @@ function usePlanUltracodeBlocked(plan: TaskPlan): string[] | undefined {
 /** A computer can't start with ultracode now (what Start sends checks it as it goes). */
 const ultracodeBlockedNow = (machine: string) => Boolean(machineStartBlocked(getState(), machine));
 
+/** What "Start these directly" remembers, said on the card (#8095): each task that changes files, by its computer and
+ *  folder; the remembered kind then covers that folder's subfolders too. "" when every task only reads: those start
+ *  without asking anyway, so there is nothing to remember. */
+export function rememberScope(tasks: PlanTask[], machines: Machine[]): string {
+  const places = [...new Set(tasks.filter((task) => !task.readonly).map((task) =>
+    t("assistant-tasks.plan_remember_place", { machine: machines.find((m) => m.id === task.machine)?.name ?? task.machine, directory: task.cwd })))];
+  return places.length ? t("assistant-tasks.plan_remember", { places: formatList(places) }) : "";
+}
+
 export function PlanCard({ plan }: { plan: TaskPlan }) {
   const busy = useFeed((s) => s.busy[plan.id]);
+  const machines = useStore((s) => s.machines);
   const [remember, setRemember] = useState(false);
   const [editing, setEditing] = useState(false);
   const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
@@ -297,6 +309,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   // opens with it (so a task moved there to a computer that can has it again), and Start sends it, off where it can't
   const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
   const editedPlan = { ...plan, tasks: plan.tasks.map((task, i) => workspaceChoice[i] === undefined ? task : { ...task, workspace: workspaceChoice[i], workspace_resolved: undefined }) };
+  const scope = rememberScope(editedPlan.tasks, machines);
   const startEdits = () => {
     const edits = planUltracodeToSend(plan, ultracode, ultracodeBlockedNow) ?? plan.tasks.map(() => ({}));
     const all = edits.map((e, i) => workspaceChoice[i] === undefined ? e : { ...e, workspace: workspaceChoice[i] });
@@ -316,10 +329,10 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
           <TaskWorkspaceEditor plan={editedPlan} index={i} disabled={busy} onChange={(workspace) => setWorkspaceChoice((c) => ({ ...c, [i]: workspace }))} />
         </div>
       ))}
-      <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+      {scope && <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
-        {t("assistant-tasks.plan_remember")}
-      </label>
+        {scope}
+      </label>}
       {/* Start stays in reach (#3822): a card taller than the tray it scrolls in (several tasks, an opened brief) keeps
           its buttons at the tray's bottom edge; a card that fits looks as it did (the padding it takes it gives back) */}
       <div data-plan-actions className="sticky bottom-0 z-[1] -mx-4 -mt-2 -mb-4 flex gap-2 rounded-b-card bg-surface px-4 pt-2 pb-4">
@@ -412,6 +425,12 @@ function BackgroundReviewLine({ item, title, known }: { item: FeedItem; title: s
   );
 }
 
+/** The plan a `plan` item carries in its body (the hub writes it there with the item), when it is one of this item's. */
+function itemPlan(item: FeedItem): TaskPlan | undefined {
+  const p = item.body?.plan as TaskPlan | undefined;
+  return p && typeof p === "object" && p.id === item.ref && Array.isArray(p.tasks) ? p : undefined;
+}
+
 // Memoized: the chat re-renders on every streamed item and session push, while an item keeps its identity until its body
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
@@ -426,7 +445,13 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
   if (simplified) {
     // the Agents a dispatch handed work to, a card each that opens its page (#5096, cindy's hand-off card); never the
     // whole In progress tray (#3700)
-    if (item.kind === "plan") return plan?.state === "started" ? <PlanHandoffs plan={plan} /> : null;
+    // a plan not started yet is its card where it was made, Start / Edit / Dismiss included, as on iOS (FeedLine,
+    // #8193); it is in the Needs you tray as well. The item's own body draws it when the store has none (a missed event).
+    if (item.kind === "plan") {
+      const shown = plan ?? itemPlan(item);
+      if (!shown) return null;
+      return shown.state === "started" ? <PlanHandoffs plan={shown} /> : <PlanCard plan={shown} />;
+    }
     if (item.kind === "task") return planned ? null : <TaskHandoffs item={item} />;
     // a task's conclusion, a card for each of done / stopped / failed / interrupted (#5569); an interrupted one the hub worked
     // out stays as its record (#3834): one card for a batch, a grey line once handled
@@ -1388,10 +1413,26 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   }, [conversation]);
   const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
   const entryKeys: AssistantTray[] = ["needs", "running"];
+  const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
+  // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
+  // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
+  // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
+  // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
+  const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
+    if (document.querySelector("[role=dialog],[role=menu]")) return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const entry = entryButtons.current[tray];
+    setTray(null);
+    entry?.focus();
+  };
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
-    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar>
+    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {tray && (
         // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
         // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
@@ -1430,11 +1471,12 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
         {entryKeys.map((key) => {
           const open = tray === key;
-          // An empty Needs you is drawn quiet (grey) but still opens "All caught up".
-          const quiet = key === "needs" && !counts.needs;
+          // An empty entry is drawn quiet (grey), Needs you and In progress alike, and still opens its "nothing here" line.
+          const quiet = !counts[key];
           return (
             <button
               key={key}
+              ref={(el) => void (entryButtons.current[key] = el)}
               type="button"
               data-tray-entry={key}
               aria-expanded={open}
@@ -1448,6 +1490,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             </button>
           );
         })}
+        {main === conversation && <Suspense fallback={null}><HeldPushesEntry className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink-2 hover:bg-hover")} /></Suspense>}
       </div>
       {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>

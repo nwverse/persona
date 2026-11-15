@@ -14,12 +14,14 @@
   "fixed_launcher_unhealthy": "固定电脑 {machine} 上的启动器 {launcher} 不可用：{reason}。任务仍留在该电脑，请在健康恢复后重试。",
   "launcher_not_on_machine": "{machine} 上没有启动器 {launcher}，没有启动任何 Agent。这台电脑能用的启动器：{launchers}",
   "launcher_swapped": "{launcher} 不在 {machine} 上，改用 {to}（它的默认模型）",
+  "launcher_kind_missing": "{machine} 的 {engine} 里没有 {launcher}，也没有别的 {kind} provider，没有启动，也不会改用别类 Agent。它在那里的 provider：{launchers}",
   "start_identity_conflict": "启动响应未确认所请求电脑上的会话身份。",
   "start_interrupted": "Hub 在此任务的 Agent 启动途中重启了，之前的请求仍可能完成。请等电脑重新连接后检查会话，再决定是否重试，以免重复启动 Agent。",
   "failed_start": "没开起来：{reason}",
   "ultracode_skipped": "没开 ultracode 就启动了：{reason}",
   "task_failed_title": "「{name}」没开起来",
   "task_failed_title_health": "任务没开起来",
+  "ask_held_title": "「{name}」有卡片在等督办处理",
   "task_failed_body": "{reason}。打开对话点『重试』，或换一台电脑再派",
   "task_failed_body_no_reason": "打开对话点『重试』，或换一台电脑再派",
   "not_retryable": "只有没开起来、或被模型服务出错打断的任务能重试",
@@ -40,6 +42,7 @@
   "dispatch_notes": "由 {from_machine} 上的 {from} 派出（dispatch_start）：{machine} · {cwd}",
   "adopt_failed": "收编没成功：{reason}",
   "interrupt_summary": "停下 {agent} · {machine}",
+  "resume_note": "恢复了 {agent} · {machine}（同一个会话，带着原来的上下文）：{why}",
   "start_remedy_notice": "没开起来：「{title}」。{reason}",
   "admission_no_metrics": "这台电脑还没有上报过资源指标。",
   "admission_stale": "这台电脑的资源指标已经过期。",
@@ -53,5 +56,8 @@
   "admission_recommend": "推荐电脑：{machine}。",
   "admission_reroute": "已从 {from} 改派到 {to}：{reason}",
   "admission_queued": "排队中，hub 会自动重试：{reason}",
-  "admission_queue_timeout": "排队等待超过 {limit} 仍未启动，放弃本次启动。最后一次原因：{reason}"
+  "admission_queue_timeout": "排队等待超过 {limit} 仍未启动，放弃本次启动。最后一次原因：{reason}",
+  "start_link_lost": "和「{machine}」的连接断了，重连后也没看到任务起来：{reason}",
+  "start_machine_busy": "「{machine}」一直连着，但在等待时间内没回应（电脑可能太忙）：{reason}",
+  "start_link_down": "和「{machine}」的连接断了，等了一阵也没重连上：{reason}"
 }

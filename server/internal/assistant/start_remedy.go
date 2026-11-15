@@ -109,7 +109,7 @@ func (s *Service) beginRemedy(ctx context.Context, planID string, i int, t PlanT
 		return false
 	}
 	s.logf("task %s: did not start (%s); its tab %s is kept until %s for the supervisor", t.TodoID, code, r.Pane, until.Format(time.RFC3339))
-	s.taskNotice(ctx, todo, t.Machine, "failed", "", reason)
+	s.taskStartFailed(ctx, todo, t.Machine, r, reason)
 	return true
 }
 
@@ -122,16 +122,11 @@ func (s *Service) remedyOf(ctx context.Context, id string) (Todo, *TaskPlan, int
 	if todo.PlanID == "" {
 		return todo, nil, 0, errTaskNotInPlan
 	}
-	p, err := s.loadPlan(ctx, todo.PlanID)
+	p, i, err := s.currentPlanAssignment(ctx, todo)
 	if err != nil {
 		return todo, nil, 0, err
 	}
-	for i, pt := range p.Tasks {
-		if pt.TodoID == id {
-			return todo, p, i, nil
-		}
-	}
-	return todo, nil, 0, errTaskNotInPlan
+	return todo, p, i, nil
 }
 
 // remedyTool is the task a remedy tool names, checked: the main conversation's own, and its start being remedied.
