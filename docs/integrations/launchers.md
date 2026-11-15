@@ -122,6 +122,25 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
 - Wrappers that exec claude with argv[0] still `claude` were already recognized by herdr; the prefix changes nothing.
 - If recognition still fails, see `docs/lessons/agents.md`, “claude did not become ready…,” for node's error.
 
+## Work agents: pi, the Cursor CLI, the Antigravity CLI
+
+pi, the Cursor CLI (`cursor-agent`) and the Antigravity CLI (`agy`) are agents the user works with, started in a herdr pane the way Claude and Codex are (`server/internal/node/workagent.go`). A machine lists each as a launcher when its program is on the login shell's PATH (`pi`, `cursor-agent`, `agy`), so New Agent and `task_plan` / `agent_start` offer it there and nowhere else. `launcher` is the agent's name (`pi`, `cursor`, `agy`); `model` is passed as `--model` (a provider and model, such as `ag-chat/cursor/grok-4.7` for pi). They take no permission mode and no ultracode, and an effort picked for Claude is ignored rather than refusing the start.
+
+The first message is never typed into the pane:
+
+- **pi**: through the Persona extension in that pi process (`session.send`, `docs/integrations/pi.md`). A pi whose extension does not list the session within 30 seconds is closed and the message is not sent (`pi_no_extension`), so a start never falls back to typing into pi's input.
+- **cursor and agy**: through herdr's `agent.prompt`, once herdr reports the agent. herdr 0.9.5 detects both (its integrations `cursor` and `antigravity-cli`) and reads `HERDR_AGENT` for a wrapper that execs them under another name. Persona does not read their conversations: the phone shows the terminal and can send and interrupt.
+
+Neither cursor nor agy names a session Persona can resume, so a herdr restart starts them again without one; pi's resume names its session (`pi --session`). Resuming one of these sessions from the phone with `session.start` is refused (`work_agent_resume`): a stopped pi resumes in its own herdr tab when the phone sends it a message (`docs/integrations/pi.md`), and the others are resumed on the computer.
+
+**The Cursor CLI on a Mac over SSH.** `cursor-agent` keeps its sign-in in the macOS keychain. A pane opened inside an SSH session (or by a launchd job that is not the GUI user's) finds the keychain locked and asks for it, so the agent never becomes ready and the start fails. Run it in the GUI session: herdr itself started there (the node service of a logged-in user), not `ssh mac cursor-agent`. The same applies to anything else the CLI reads from the keychain.
+
+What these agents do not do here, and why:
+
+- No conversation in the app for cursor and agy. herdr drives the pane; reading their transcripts would be a runtime of their own (agy's `agy acp` is the candidate, `docs/plans/plan-antigravity.md`), which this change does not add.
+- No phone approval cards for cursor and agy. pi's come from its extension; the other two have no Persona hook, so their own dialogs stay on the terminal.
+- Supervision (`report_to_supervisor`, done checks) reaches an agent Persona can send to. pi qualifies once its extension is in; cursor and agy qualify for a message through herdr, and nothing more.
+
 ## Running Persona-managed launchers
 
 - Stored in settings `launchers.managed`; the manager AES-GCM encrypts API keys with its own `secret.key` (the built-in manager's `~/.persona/managers/assistant/secret.key`, the same key used for email credentials, `server/internal/secretkey`). **The API never returns keys**.
