@@ -122,10 +122,14 @@ struct ExtensionManagementTests {
         let m = ExtensionModel(id: "pack", deps: .init(api: { hub.client }))
         await m.load()
         await m.requestEnabled(false)
-        #expect(m.packDisablePresented && m.packDisableConfirmation?.members == ["示例笔记", "Example Helper"])
-        #expect(m.packDisableConfirmation?.message.contains("示例笔记、Example Helper") == true)
+        guard case .pack(let question)? = m.disableDialog else {
+            Issue.record("switching a following pack off did not ask first")
+            return
+        }
+        #expect(m.packDisablePresented && question.members == ["示例笔记", "Example Helper"])
+        #expect(question.message.contains("示例笔记、Example Helper"))
         #expect(m.detail?.plugin.enabled == true && hub.sent("PUT", packPath + "enabled").isEmpty)
-        m.cancelPackDisable()
+        m.dismissDisableConfirmation(generation: m.disableDialogGeneration) // what Cancel and a tap outside do
         #expect(!m.packDisablePresented && hub.sent("PUT", packPath + "enabled").isEmpty)
 
         await m.requestEnabled(false)

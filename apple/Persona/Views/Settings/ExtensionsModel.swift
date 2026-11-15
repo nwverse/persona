@@ -774,7 +774,6 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
     private(set) var disableDialog: ExtensionDisableDialog?
     private(set) var disableDialogPresented = false
     private(set) var disableDialogGeneration = 0
-    private(set) var packDisableConfirmation: ExtensionPackDisableConfirmation?
     var packDisablePresented: Bool {
         guard disableDialogPresented, case .pack? = disableDialog else { return false }
         return true
@@ -853,17 +852,12 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
             guard !packDisablePresented, disableConfirmation == nil, !changingEnabled,
                   changingContribution == nil, !saving, !detail.readOnly else { return }
             let confirmation = ExtensionPackDisableConfirmation(packName: detail.plugin.name, members: packOn.map(\.displayName))
-            packDisableConfirmation = confirmation
             disableDialog = .pack(confirmation)
             disableDialogGeneration += 1
             disableDialogPresented = true
             return
         }
         await setEnabled(on)
-    }
-
-    func cancelPackDisable() {
-        disableDialogPresented = false
     }
 
     func dismissDisableConfirmation(generation: Int? = nil) {
