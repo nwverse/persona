@@ -48,9 +48,9 @@ const FEISHU_HOSTS = ["larkoffice.com", "feishu.cn", "larksuite.com"];
 // First path segments the reader opens (FeishuLinks.isDoc).
 const DOC_PATHS = ["docx", "wiki", "docs", "sheets", "base", "mindnotes", "file", "slides"];
 
-function parse(url: string): URL | null {
+function parse(url: string, base?: string | URL): URL | null {
   try {
-    return new URL(url);
+    return new URL(url, base);
   } catch {
     return null;
   }
@@ -133,7 +133,9 @@ const pageOrigin = () => (typeof location !== "undefined" ? [location.origin, ..
 /** Whether an image URL is this page's or an advertised hub's own (its attachments and extension images), so it loads
  *  inline. Relative and non-http(s) URLs are the hub's too; every other host stays behind the tap-to-load gate. */
 export function isOwnImageURL(src: string): boolean {
-  const u = parse(src.trim());
+  // Resolve protocol-relative URLs (//host/x) against the page origin: without a base they fail to parse and would be
+  // mistaken for the hub's own, letting a third-party image load past the gate (#8162).
+  const u = parse(src.trim(), typeof location !== "undefined" ? location.href : undefined);
   if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return true;
   return pageOrigin().includes(u.origin);
 }

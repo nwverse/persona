@@ -11,6 +11,8 @@ import { forgetMarkdown } from "./markdown-cache";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const external = "https://tracker.example/banner.png";
+// Protocol-relative: react-markdown passes the raw //host/x through, which new URL() rejects without a base.
+const protocolRelative = "//tracker.example/pixel.png";
 const own = `${location.origin}/api/v1/extensions/notes/-/image/token`;
 
 let host: HTMLDivElement;
@@ -94,6 +96,25 @@ describe("external Markdown image gate (#8162)", () => {
     await flush();
     expect(img()?.getAttribute("src")).toBe(external);
     expect(srcSets.filter((s) => s === external)).toHaveLength(2);
+  });
+
+  it("gates a protocol-relative image on mount with no src and loads it without a referrer after a tap", async () => {
+    await draw(`![pixel](${protocolRelative})`);
+    // Without the page-origin base this URL fails to parse, is treated as the hub's own, and an <img> leaks the request on mount.
+    expect(img()).toBeNull();
+    expect(srcSets.some((s) => s.includes("tracker.example"))).toBe(false);
+    const button = gate();
+    expect(button).not.toBeNull();
+    expect(button!.textContent).toContain("tracker.example");
+    expect(button!.title).toBe("pixel");
+    await act(async () => gate()!.click());
+    await flush();
+    const picture = img();
+    expect(picture).not.toBeNull();
+    expect(picture!.getAttribute("src")).toBe(protocolRelative);
+    expect(picture!.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(srcSets.filter((s) => s === protocolRelative)).toHaveLength(1);
+    expect(gate()).toBeNull();
   });
 
   it("renders a same-origin image inline with no placeholder", async () => {

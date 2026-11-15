@@ -10,7 +10,8 @@ type GateState = "idle" | "loading" | "failed";
 
 function hostOf(src: string): string {
   try {
-    return new URL(src).host;
+    // Same page-origin base as isOwnImageURL, so a protocol-relative //host/x labels the host instead of the raw string.
+    return new URL(src, typeof location !== "undefined" ? location.href : undefined).host;
   } catch {
     return src;
   }
