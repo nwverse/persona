@@ -210,17 +210,18 @@ or the background supervisor that follows it up for the main chat then sends its
 still says `accepted` (`docs/assistant/todos.md`). The background supervisor counts only for a task whose ledger names
 the main chat: a task a side chat supervises reopens for that chat's sends, not for the background supervisor's.
 
-The send is noted before it goes, with the task, its acceptance and how long the send counts (its own wait plus a
-minute). The note is kept in the assistant's settings (`assistant.sends_out`,
-`server/internal/assistant/tasks_sends_out.go`), so a manager restart does not lose it; when it cannot be saved, the
-send is not made and says so. How the send went decides:
+The send is noted before it goes, with the task and its acceptance. The note is kept in the assistant's settings
+(`assistant.sends_out`, `server/internal/assistant/tasks_sends_out.go`), so a manager restart does not lose it; when it
+cannot be saved, the send is not made and says so. A later write of the notes that fails (removing a refused send's,
+say) is tried again in the background until one goes through. How the send went decides:
 
 - the agent's computer took it: the task reopens at once (`reopenTodo`, stored);
 - it definitely failed (refused, or it never left the manager: `rpc.ErrNotSent`): nothing reopens;
 - its answer never came (the wait ran out, the link dropped), the manager restarted before it came, or the computer
   could not confirm it (`delivered: unknown`: typing failed part way, a Claude inbox holds the text for approval): the
-  text may still arrive, so a turn of the agent that starts while the send counts reopens the task, and if none does,
-  the task stays closed.
+  text may still arrive, however late (queued behind a long turn, or let in when the person at the computer looks), so
+  the agent's next turn reopens the task. The note goes once the task is no longer that agent's closed task on that
+  acceptance (reopened, accepted again, the agent moved to another task), and after a week at the latest.
 
 A turn of the agent that starts while the send is still out waits for that answer (`closedTurnReopens`): if the send
 definitely failed and no other send for the task is out, the turn was other work and the task stays closed through it;
@@ -232,10 +233,12 @@ start definitely failed. That agent's other turns leave the task closed, whether
 wakeup it set itself, other conversations' work, the owner typing in its session (#6726, #7539). Their ends raise no
 review signal either.
 
-Two gaps remain. A send whose answer never came, or was lost with a restart, and whose text the agent takes up only
-after the send stopped counting (queued behind a longer turn) leaves the task closed: more has to be sent, or the task
-reopened by hand. And after a restart, a turn of other work that was already running when the send was taken ends as
-the reopened task's: the conversation gets one extra receipt for it, with no judgment and no review signal.
+Gaps remain. A send whose answer is unknown and whose text never arrived reopens the task on the agent's next turn of
+other work, whenever it comes within the week; one whose text the agent takes up more than a week later leaves the
+task closed. A refused send whose removal cannot be written at all until the manager restarts (the database refuses
+every write meanwhile) reads after the restart as a send with an unknown answer. And after a restart, a turn of other
+work that was already running when the send was taken ends as the reopened task's: the conversation gets one extra
+receipt for it, with no judgment and no review signal.
 
 Earlier the page treated every reopened task as not reviewed: it showed "Follow up", its badge "Supervising", and
 criteria added with the extra work (`agent_supervise` / `agent_send` replace `done_when`, so the list grew from 5 to
