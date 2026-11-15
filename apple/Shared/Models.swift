@@ -667,7 +667,8 @@ nonisolated struct ModelPick: Codable, Hashable, Sendable {
 }
 
 /// A launcher or provider the main chat can't run on a machine, and why in the hub's words
-/// (`unavailable` of `GET …/machines/{id}/launchers?purpose=assistant`, #5033).
+/// (`unavailable` of `GET …/machines/{id}/launchers?purpose=assistant`, #5033). New Agent's list (`agent.new`) has
+/// the same shape for the Persona-managed providers whose own-service rule leaves them out there (#8109).
 nonisolated struct UnavailableLauncher: Codable, Identifiable, Hashable, Sendable {
     var name: String
     var displayName: String?
@@ -1284,11 +1285,17 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         default: nil
         }
     }
+    private static let nodeReadOnlyPrefix = "仅查看：" // i18n-ignore: the node's prefix it strips
+
     var sourceSubtitle: String? {
         guard let sourceLabel else { return nil }
         let detail = sourceKind == "identity_conflict" ? nil : agentName.flatMap { $0.isEmpty ? nil : $0 }
         let label = detail.map { sourceLabel + " · " + $0 } ?? sourceLabel
-        let reason = readOnlyReason.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Sending isn't allowed from this source yet")
+        // The node writes some reasons with their own "View only: " in Chinese, which this line adds already (#7803;
+        // Android's `READ_ONLY_PREFIX`).
+        let given = readOnlyReason.map { $0.hasPrefix(Self.nodeReadOnlyPrefix) ? String($0.dropFirst(Self.nodeReadOnlyPrefix.count)) : $0 }
+        let reason = given.map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
+            ?? String(localized: "Sending isn't allowed from this source yet")
         return canSend ? label : String(localized: "\(label) · View only: \(reason)", comment: "A session's source, and why it can only be viewed")
     }
 

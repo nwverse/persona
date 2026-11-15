@@ -41,6 +41,9 @@ final class ComposerKeyboardTests: XCTestCase {
         app.launchPinned()
         XCTAssertTrue(field.waitForExistence(timeout: 15), "the isolated conversation did not open")
         sleep(2)
+        // Only the field: the placeholder over it once carried the identifier too, and on iPhone took the typing (#7632).
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "shell-composer-field").count, 1,
+                       "something besides the field has its identifier")
     }
 
     @MainActor private var field: XCUIElement {
@@ -67,7 +70,7 @@ final class ComposerKeyboardTests: XCTestCase {
     }
 
     /// The buttons over the composer within `column`: the chat's header and the bar above it. An iPad's split shows the
-    /// session list beside the chat, whose rows end in a relative time ("35 分钟前") that moves on during the test
+    /// session list beside the chat, whose rows end in a relative time ("35 min ago") that moves on during the test
     /// (#7479); only buttons overlapping the chat's column count, so the list is left out.
     @MainActor private func headerButtons(in column: CGRect) -> Set<String> {
         let limit = field.frame.minY - 120

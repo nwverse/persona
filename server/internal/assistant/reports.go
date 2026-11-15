@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -132,8 +133,10 @@ func stageOf(text string) (stage, pr string) {
 	stage = "develop"
 	if ref := closeoutPRRef(text); ref != "" {
 		pr = prLink.FindString(ref)
-	} else if prs := prLink.FindAllString(text, -1); len(prs) > 0 {
-		pr = prs[len(prs)-1]
+	} else if deliveryCloseout(text) == "" {
+		if prs := prLink.FindAllString(text, -1); len(prs) > 0 {
+			pr = prs[len(prs)-1]
+		}
 	}
 	if pr != "" {
 		stage = "review"
@@ -174,6 +177,12 @@ var generalTaskWords = lazyre.New(`(?i)\b(research|investigate|report|plan|triag
 
 // advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
+	urls := taskRepositoryReportLinks(text)
+	if len(urls) > 0 {
+		if err := s.importTodoRepositoryLinks(ctx, t.ID, urls, "report"); err != nil {
+			s.logf("task %s: repository links not saved: %v", t.ID, err)
+		}
+	}
 	stage, pr := stageOf(text)
 	d, marked := deliveryMark(text)
 	if pr != "" {
@@ -266,7 +275,8 @@ func keptPRs(prs []string, pr string) []string {
 	return out[max(0, len(out)-stagePRsKept):]
 }
 
-// forgetTaskPR removes a confirmed non-PR and installs a recovered delivery PR, if any, in the same saved update.
+// forgetTaskPR removes a non-delivery record and installs only an explicitly recovered delivery, never an
+// unproven historical reference. A confirmed no-PR result also discards that reference history and its hold.
 func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) error {
 	b := &s.reports
 	b.stageWriting.Lock()
@@ -286,15 +296,17 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 		if replacement != "" {
 			cur.PRs = slices.DeleteFunc(cur.PRs, func(p string) bool { return p == replacement })
 		}
-		if cur.PR == "" && len(cur.PRs) > 0 {
-			cur.PR = cur.PRs[len(cur.PRs)-1]
-			cur.PRs = cur.PRs[:len(cur.PRs)-1]
+		if cur.PR == "" {
+			cur.PRs = nil
+		}
+		if cur.PRStatus != nil && (cur.PR == "" || cur.PRStatus.URL == pr) {
+			cur.PRStatus = nil
 		}
 		if cur.PR == "" && !cur.Verified && (cur.Stage == "review" || cur.Stage == "merge") {
 			cur.Stage = "develop"
 		}
 	}
-	removedWatch := cur.Deploy != nil && cur.Deploy.PR == pr
+	removedWatch := cur.Deploy != nil && (cur.Deploy.PR == pr || removed && cur.PR == "")
 	if removedWatch {
 		cur.Deploy, changed = nil, true
 	}
@@ -318,7 +330,7 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 	b.mu.Unlock()
 	s.todos.mu.Lock()
 	if t := s.todos.todos[id]; t != nil {
-		t.Stage, t.PRURL, t.PRs, t.Delivery = cur.Stage, cur.PR, cur.PRs, cur.Delivery
+		t.Stage, t.PRURL, t.PRs, t.Delivery, t.PRStatus = cur.Stage, cur.PR, cur.PRs, cur.Delivery, cur.PRStatus
 	}
 	s.todos.mu.Unlock()
 	s.deploy.mu.Lock()
@@ -368,6 +380,11 @@ func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
 }
 
 func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind string, verified bool) {
+	if _, link, err := repository.ParseTaskLink(pr); err == nil {
+		if err = s.importTodoRepositoryLinks(ctx, id, []string{link.CanonicalURL}, "report"); err != nil {
+			s.logf("task %s: repository link not saved: %v", id, err)
+		}
+	}
 	s.setTaskStageOn(ctx, id, stage, pr, kind, verified, "")
 }
 

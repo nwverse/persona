@@ -88,6 +88,29 @@ direct API purposes use provider connections/credentials and no terminal or Clau
 plugins use their own environment, configuration and credentials.
 **Unverified** means launcher execution on the target computer has not been confirmed, not that a paid model request succeeded or failed.
 
+### Testing background Direct API drafts on the web
+
+The editors for information processing, information screening, and question delegation fetch the selected connection's
+model list through `POST /api/v1/launchers/discover`, while retaining manual model-ID entry. Reasoning choices follow the
+selected model's metadata; an existing unlisted value remains visible rather than being silently replaced.
+
+**Test connection** sends the draft connection name, model, and effort to `POST /api/v1/launchers/test`. The manager resolves
+the saved connection's encrypted credentials and network route and issues a small request, with the same effort translation
+as real API calls (`off` becomes Responses `none`, for example). A successful result echoes the tested effort and includes
+`ms`, the elapsed provider request/response time in milliseconds. Unsupported effort cannot be reported as verified.
+Authentication, missing-model/endpoint, timeout, and other failures keep actionable details, with credentials redacted.
+
+Omitting effort (or sending `null`) tests the saved connection's default effort, which real API calls also inherit when
+their purpose has no effort override. An explicit string overrides that default; `""` tests clearing it in a provider
+draft. The purpose editor omits effort for **Use default**, while the provider wizard sends its draft value, including
+an explicit clear. Connection tests never inherit an unrelated purpose's effort.
+
+A test never saves the draft or changes purpose/provider defaults. Verification belongs only to that open draft:
+changing the connection, model, or effort invalidates it, including while a request is outstanding. Closing the editor
+discards it. Launcher execution health is a separate status; an API probe does not verify a launcher.
+The iOS and Android purpose editors do not yet provide this draft test; Android also retains its free-text purpose effort
+field. Native parity is tracked in #6887.
+
 ## Sending through a computer (#4775)
 
 API purposes are HTTP requests the manager sends from its own machine. When that machine has no route to the provider
@@ -323,6 +346,21 @@ so creating or resuming sessions is impossible without it and returns `503 assis
 - If node cannot run the SDK (no Node 22+, bridge, or claude), it falls back to CLI and includes `runtime_fallback` in session status.
 - A binding without a model means the launcher's default, on a resume too (#2487). Claude Code resumes a session on the model it last ran on unless `--model` or a model variable (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`) names one; a `model` in its settings does not. So when node resumes a conversation the hub resolved with no model, it passes what a new session of that launcher would use: the `model` from Claude Code's settings, else `default`. It passes nothing when the launcher names a model itself or when its start cannot be seen (a managed launcher, a wrapper script); see `node/assistant_resume_model.go`.
 
+## Main chat's profile for new conversations (#4633)
+
+“Main Chat” adds “New chats' Claude profile”. It decides which Claude config directory a conversation the user starts gets when the start names none (`docs/assistant/assistant.md`, “New conversations”). The choices:
+
+- `private` (the default, stored as none): Persona's own profile, `<PERSONA_HOME>/profiles/<launcher>`.
+- `legacy`: this computer's existing Claude Code setup, resolved once per conversation the way an explicit `config_dir: "legacy"` is. That is the setup the node's service environment, a login shell's `CLAUDE_CONFIG_DIR`, a launcher's own profile or the machine's `claude_start_dir` names, else `~/.claude`.
+
+It is the Settings side of #4633's decision: reusing an existing profile means choosing it, and nothing is copied between profiles. A machine whose only sign-in is a gateway and token in `~/.claude/settings.json`'s `env`, or an OAuth login in `~/.claude`, picks `legacy` here, and its new main chats start signed in.
+
+- **Where it applies**: only `assistant` offers it, as `config_dirs: ["private", "legacy"]` with `config_dir` in its `fields`. Agents, API purposes and a task's own purpose do not accept it, and PATCH returns 400 `err_config_dir_assistant_only`. A value other than `private` / `legacy` returns 400 `err_config_dir_invalid`. The main chat's other uses inherit it through the binding; a provider change keeps it, as it keeps the runtime.
+- **What reads it**: `startOn` (`withNewConversationProfile`) puts it in `assistant.send` when the start names no `config_dir`, is not a guest's, and runs on Claude Code. A launcher known to run another agent gets none, the same rule as #6467. The warm spare for the next new conversation (`assistant.warm`) gets it too, also when it is warmed on a pick carried over `/clear`, since a spare is adopted only in the same profile: node compares the profile each Claude start resolves to, Persona's own included, with the spare's, so a spare warmed before the choice changed, either way, or before a start that names `legacy` itself, is left and the conversation starts in its own (`node/assistant_spare.go`).
+- **What it leaves alone**: a start that names its own profile (the hub's own conversations' `legacy`, a meeting room's, an API caller's) and existing conversations, which keep the profile they were started in. Messages never carry it, and it is not in `model_fingerprint`, so choosing it restarts no running process. Model profiles leave it as they leave the runtime: a switch and its rollback keep the choice, and a model profile that sets it is refused (`err_config_dir`). One stored holding it anyway is read without it (`readModelProfiles`), so it shows no change it cannot make, can still be switched to and edited, and the next write stores it clean.
+- **Older nodes, unknown agents**: one too old to be told a profile (`node_outdated`) gets the start, or the warm-up, again without it, and the conversation starts where it always has. So does a launcher whose agent the hub cannot tell (the machine's launcher list did not come): it is asked for in the profile, and the node, which alone has profiles for Claude Code, refuses it for another agent before starting anything (`profileRefused`, #6884).
+- **Clients**: the web edits it in the Main chat editor next to “Runtime”, for a Claude Code provider only, and shows it under what runs now (`web/e2e/main-chat-profile.mjs`). The Apple and Android editors do not show it yet. They send sparse PATCHes, so they leave a saved choice as it is. Without an editor it is set through `PATCH /api/v1/model-config/purposes/assistant` (`{"revision": <n>, "config_dir": "legacy"}`).
+
 ## A conversation's own model (#5033)
 
 The model panel of a Persona chat switches that conversation to another launcher, model or reasoning effort, and the choice stays with the conversation: its next messages run on it, on every device, until the user switches again or goes back to the default (the user's ask on 2026-11-12). Model configuration › Main chat stays the default: a conversation without a pick follows it (the main chat, a scheduled task's own conversation, a leader conversation and the background supervisor) or keeps what it runs (the others), as before.
@@ -454,9 +492,10 @@ Direct-API purposes (knowledge processing, Inbox triage / assessment / drafting,
 - **Every call streams**: Messages, Responses and Chat Completions requests all ask for a stream (`"stream": true`), so a gateway's cap on a non-streamed request's total time (often 120 seconds) does not fail an answer a slow model needs longer for (#4245). A Messages server that ignores the flag and answers one JSON message is read as before. A stream that ends before its end event (Messages: `message_stop`, or at least a stop reason; Responses: its terminal event; Chat Completions: the finish reason) was cut: it is a failed connection, retried like one, not a short reply.
 - **Limits reported inside a stream**: A Messages `error` event whose type is `overloaded_error` or `rate_limit_error` counts as concurrency full (the HTTP 529 / 429 it stands for; a `rate_limit_error` whose message speaks of quota or credit as quota exhausted). A Responses `response.failed` or `error` event after the 200 whose code is `rate_limit_exceeded`, `slow_down` or `server_is_overloaded` counts as concurrency full, and one whose code is `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded` or `project_spend_limit_exceeded` as quota exhausted, with the wait in a "try again in ..." of its message (`1.5s`, `250ms`, `20 seconds`, `6m0s`, `1m30s`) used like `Retry-After`; any other in-stream failure is an ordinary error.
 - **No requests during a pause**: Calls immediately receive `ai.PausedError` (`ai.IsPaused`), with the same text displayed in the app: “Quota exhausted; retry in 23 minutes.” Callers treat it as deferred: knowledge-processing loops stop immediately (sessions remain pending compaction, projects pending rewrite, entries untagged); Inbox triage does not mark entries as triaged (new entries go into rule-based groups first and are triaged again after recovery); assessment and translation wait for the next round. None logs it.
-- **Only the gate logs**: One line on entry (address, upstream code and message, pause end time), one on exit (pause duration, number of deferred requests).
+- **Only the gate logs**: One line on entry (address, upstream code and message, pause end time, with its day when the pause runs past today), one on exit (pause duration, number of deferred requests). Requests deferred for want of a turn (no slot under the cap, or the probe unanswered when their own deadline came) get a line as well, at most one every 10 minutes: how many were deferred, how many requests are out, the cap, and how long the longest has been out. No request stays out past its caller's deadline (minutes), so a time far beyond that is a slot that was lost, not an upstream at its limit (#6698).
 - **Release one request after the pause**: The first request probes recovery; the others wait for its answer (until their own deadline, a background call at most 30 seconds, then deferred) instead of being deferred at once, so a round of Inbox triage right after a pause sorts all its items rather than one (#6698). The gate opens as soon as the upstream answers the probe 200, not when its stream has been read to the end: a long answer no longer keeps everything else deferred while it lasts (the probe still holds its slot under the concurrency cap). Another rejection starts a new pause (without another log) and defers the ones waiting; a limit the probe's stream reports after its 200 holds the connection again with the backoff continued. A probe that fails another way (404, a 5xx no limit stands behind, a dropped connection, its deadline) leaves the gate held, and the next request probes in its place. Matching responses from requests already in flight before the pause do not count and do not compound the backoff.
 - **Concurrency cap**: On the first concurrency-full response, set it to half the current in-flight count (at least 1); halve it again on another full response. Then increase by 1 after every 10 successes; stop limiting once it exceeds 8. Requests above the cap queue for a slot until their own deadline; reaching it also counts as deferred. The knowledge base loop's calls are marked background (`ai.Background`): they queue for at most 30 seconds, or until their own deadline if sooner, and are then deferred without being sent, so they give their turn back instead of spending their whole deadline (minutes) in the queue, while a call someone waits for on the same connection keeps waiting (#4246).
+- **A turn always goes back**: A request gives back its slot, and as the probe its place, however it ends, a panic that unwinds through it included. The knowledge base loop and its job pool recover from a panic and carry on, so a request left counted as out would keep the cap full, or the probe unanswered, for as long as the process ran: every later request on the connection deferred as busy with nothing sent (#6698).
 - **Visible in the app**: In the model-configuration API, purposes whose connection is paused carry `limit` (`reason`: `quota` / `busy`, `until`), and `status` is the text above (apps, web, and Android versions that do not understand `limit` still show it).
   The app displays a warning in purpose rows and details under “Settings › Model Settings” (a `Theme.caution` symbol + `cautionText` text), counting down from `until` while the page is open. Screenshots use mock `MOCK_MODEL_LIMIT=1`.
 
@@ -502,7 +541,7 @@ Saving one item:
 }
 ```
 
-Only `assistant` may write `runtime` (see “Main-chat runtime”).
+Only `assistant` may write `runtime` (see “Main-chat runtime”) and `config_dir` (`"private"` or `"legacy"`, see “Main chat's profile for new conversations”).
 
 “Information screening” (`inbox.triage`) also governs plugins: plugins using the Inbox without their own fallback require it to be callable before they can be enabled. With such plugins enabled, a change making it unusable returns 422 `triage_model_in_use`,
 listing plugin names (clearing a selection still saves normally if fallback to `manager.json`'s `ai` / `inbox.triage_ai` or automatic selection remains callable; `docs/extensions/extensions.md`, “General rules for the Inbox”).
