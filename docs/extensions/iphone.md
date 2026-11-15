@@ -77,6 +77,13 @@ tool, the actions (`do [tap type]`), the time and ok / failed (with what was sen
 
 `iphone_do` takes `timeout_ms`, the node's time for the call (1–120 s, 30 s by default); the manager waits 5 s more.
 
+**Setup not finished** (#8199): when a call fails because of a setup the user hasn't finished (no iPhone allowed yet; the
+extension or the computer off; the iPhone not allowed, not paired or no longer paired, Developer Mode off, not prepared;
+no bridge on the computer), its result also tells the model to give the user the link `persona://iphone/setup`, which the
+iPhone app opens as the guided setup. `iphone_status` carries the same line (`setup`) while some iPhone the computers
+reach isn't set up, and so does `persona_settings` on `extension.iphone` while no iPhone is allowed. It is only in these
+results, never in the tools' descriptions or the assistant's prompt (`iphoneSetupHint`, `extmgr/iphone.go`).
+
 ### Failures
 
 The call helper (`iphoneCall`) checks again, on every call, that the extension is on, the computer is on, online and has the
@@ -142,6 +149,12 @@ answer on.
   computer 404, the release site away 502. The log never says which iPhone.
 - `GET /api/v1/iphone` → `{on, devices: [{…device, machines: [{id, name, enabled}], consented}]}`, every iPhone the computers reach, each once.
 - `PUT /api/v1/iphone/consent` `{"device", "allowed", "app"?: {"bundle_id", "name"}}` → that device as above. Not the user's own app → 403; extension off → 404.
+- `POST /api/v1/iphone/try` `{"device"}` → `{screenshot?, opened, app, error?}`: the guided setup's Try It (#8199), without the model.
+  It takes a look (the screenshot) and then opens Weather (`com.apple.weather`), through the same checks and per-iPhone turn as
+  the tools. A real iPhone asks before every input it can't check (`unchecked`), and the owner's tap on Try It answers exactly
+  that one step: the Weather launch is approved at once, anything else it asks is not. `opened` is the launch step's delivery
+  `sent`; `error` is in the user's words. Not the user's own app → 403; extension off → 404; the iPhone not allowed or its
+  computer offline → 409; another action on it under way → 409.
 - `proto.Machine.iphone` is the computer's `IPhone` while the extension is on (the manager's report, like `computer`).
 - Node: `iphone.status` → `IPhone` (the manager sets `enabled` and `allowed` itself, never taking the node's word);
   a device is `ready` when it is connected, unlocked and has `screenshot` and `input`. The element tree is not needed: a
