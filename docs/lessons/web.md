@@ -57,8 +57,12 @@ tasks on a 4x-throttled phone, none with 74 Agents). Sidebar folds are lazy by d
 folded group's rows (to check they are inert) opens the group first. Two smaller costs hid behind the big DOM: each
 group heading read its height in a layout effect (`getBoundingClientRect`), and one set a custom property on the
 scroller, which restyles everything under it before the next heading's read. Take such heights from a
-`ResizeObserver`: its first report comes after the browser's own layout and before the paint, and `flushSync` applies
-state from it in that frame. Measure with a production build (`vite preview`), CDP CPU throttling and a `longtask`
+`ResizeObserver`: its first report comes after the browser's own layout and before the paint. Do not synchronously flush
+another React layout pass from that delivery: the shared group-heading observer did that and reproduced
+`ResizeObserver loop completed with undelivered notifications` in the desktop smoke. Let React batch those reports, and
+verify the real browser console, not only a jsdom test. A callback's target or timestamp alone does not identify the
+writer; use a before/after control and keep the warning in the verdict (`web/e2e/sidebar-resize-observer.mjs`, #7701).
+Measure with a production build (`vite preview`), CDP CPU throttling and a `longtask`
 observer, against the same mock with fewer sessions (`web/e2e/sidebar-many-agents.mjs`).
 
 Dropping what is not drawn has three costs to pay for. A broadcast to mounted listeners (Collapse all / Expand all)

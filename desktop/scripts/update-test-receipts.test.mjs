@@ -79,6 +79,21 @@ test("watch awaits a genuinely delayed NSIS event and validates its real executa
   assert.equal(result.event.executableInRunDirectory, true);
 });
 
+test("watch abort stops polling and never returns a later event as success", async t => {
+  const profile = await fixture(t);
+  const controller = new AbortController();
+  let predicates = 0;
+  const pending = watchUpdateTestEvents(profile, 60, () => { predicates++; return undefined; }, { pollMilliseconds: 20, signal: controller.signal });
+  const observed = pending.catch(error => error);
+  await new Promise(resolve => setTimeout(resolve, 45));
+  controller.abort(new Error("cancel watcher"));
+  assert.match((await observed).message, /cancel watcher/);
+  const before = predicates;
+  await writeFile(join(profile, "update-test.jsonl"), record({ event: "nsis-install", executableDirectory: profile }));
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(predicates, before, "an aborted watch must not read or evaluate later events");
+});
+
 test("watch returns undefined after a missing-event deadline, not a Promise treated as an event", async t => {
   const profile = await fixture(t);
   const started = Date.now();

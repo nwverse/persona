@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -67,6 +68,7 @@ type treeRec struct {
 	system       bool
 	turnEnd      bool
 	turnStart    bool
+	wake         bool
 	raw          []byte
 	errorLine    string
 	hasOutcome   bool
@@ -335,12 +337,17 @@ func (tl treeLine) rec(items []proto.Item) treeRec {
 // transcript's end), so that the agent's last words it ends up with are not ones on an abandoned branch: a turn gone back
 // over that ended in an API error would otherwise stay the session's last words, and its error the session's.
 type Tail struct {
-	tree    branchTree
-	words   []treeLine      // the lines that said something, in order
-	gone    map[string]bool // Rewound's lines still left out
-	rewound []string        // Rewound's lines as it was told them
-	revoked bool
+	tree          branchTree
+	words         []treeLine      // the lines that said something, in order
+	gone          map[string]bool // Rewound's lines still left out
+	rewound       []string        // Rewound's lines as it was told them
+	modelFallback *proto.ModelRefusal
+	revoked       bool
 }
+
+// PriorModelFallback supplies the session's fallback from before the quick tail. Settle starts visible-record replay
+// from it, not from meta after records on an abandoned branch may have cleared or replaced it.
+func (t *Tail) PriorModelFallback(fallback *proto.ModelRefusal) { t.modelFallback = fallback }
 
 // Rewound tells the tail about lines the node itself rewound over (File.RewoundLines): Claude writes nothing for that,
 // so they and what grows from them are left out too. All of them, not only where the branch starts: that may be
@@ -382,6 +389,9 @@ func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool, skippedS
 	// while a skipped tool result or compact summary is tree shape only.
 	rec.hasOutcome = recordOutcome || rec.prompt || len(skippedStart) > 0 && skippedStart[0]
 	rec.turnStart = len(skippedStart) > 0 && skippedStart[0] && !rec.prompt
+	if len(skippedStart) > 1 {
+		rec.wake = skippedStart[1]
+	}
 	if meta.TurnError != "" {
 		rec.errorLine = meta.turnErrorLine
 	}
@@ -418,12 +428,25 @@ func (t *Tail) take(rec treeRec) {
 	}
 }
 
-func skippedTurnStart(e map[string]json.RawMessage) bool {
+func skippedTurnStart(e map[string]json.RawMessage) (start, wake bool) {
 	if rawString(e["type"]) != "user" || string(e["isCompactSummary"]) == "true" || string(e["isMeta"]) == "true" {
-		return false
+		return false, false
 	}
-	_, toolResult := e["toolUseResult"]
-	return !toolResult
+	var message struct {
+		Content json.RawMessage `json:"content"`
+	}
+	_ = json.Unmarshal(e["message"], &message)
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(message.Content, &blocks) == nil {
+		for _, b := range blocks {
+			if rawString(b["type"]) == "tool_result" {
+				return false, false
+			}
+		}
+	}
+	start = true
+	wake = bytes.Contains(message.Content, []byte("<task-notification>")) || bytes.Contains(e["content"], []byte("<task-notification>"))
+	return start, wake
 }
 
 // Skipped is told about a line the caller left unparsed for its size (a prompt with an image or a long paste, a big
@@ -436,7 +459,7 @@ func (t *Tail) Skipped(line []byte) {
 	if json.Unmarshal(line, &e) != nil {
 		return
 	}
-	start := skippedTurnStart(e)
+	start, wake := skippedTurnStart(e)
 	delete(e, "toolUseResult")
 	if raw, ok := e["message"]; ok {
 		var msg map[string]json.RawMessage
@@ -461,7 +484,7 @@ func (t *Tail) Skipped(line []byte) {
 		return
 	}
 	var m Meta
-	t.line(&m, parseLine(0, small, &m), false, start)
+	t.line(&m, parseLine(0, small, &m), false, start, wake)
 }
 
 // Settle puts into meta the agent's last words on the lines still in the conversation, when words on an abandoned
@@ -491,15 +514,17 @@ func (t *Tail) Settle(meta *Meta) bool {
 	}
 	// Replay the raw records that remain visible, not the parser state that an abandoned turn left behind. ParseLine
 	// supplies the real prompt/wake/local/close and error transitions, including idempotent starts and resume state.
-	var replay Meta
+	// The pre-tail fallback is replay's initial state; meta may instead describe an abandoned branch's last reply.
+	replay := Meta{ModelFallback: t.modelFallback}
 	for _, rec := range t.tree.recs {
 		if t.tree.hidden[rec.uuid] || !rec.hasOutcome || len(rec.raw) == 0 || rec.errorLine != "" && t.tree.hidden[rec.errorLine] {
 			continue
 		}
 		ParseLine(0, rec.raw, &replay)
 		if rec.turnStart {
-			replay.ClaudeTurnStarted(replay.LastTurnWake)
+			replay.ClaudeTurnStarted(rec.wake)
 			replay.TurnOpen, replay.TurnClosed = true, false
+			replay.LastTurnWake = rec.wake
 		}
 	}
 	meta.TurnOpen, meta.TurnClosed = replay.TurnOpen, replay.TurnClosed
