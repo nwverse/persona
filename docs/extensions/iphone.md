@@ -132,7 +132,7 @@ answer on.
 
 ## Interfaces
 
-- `GET /api/v1/machines/{mid}/iphone` → `IPhone` `{enabled, installed, version?, devices: [{id, name, product_type?, ios?, paired, usb?, state?, transport?, connected, locked, capabilities?, ready, note?, allowed}], note?, checked?, job?}` (fields are block C's, `proto/iphone.go`);
+- `GET /api/v1/machines/{mid}/iphone` → `IPhone` `{enabled, installed, version?, devices: [{id, name, product_type?, ios?, paired, usb?, state?, transport?, connected, locked, capabilities?, ready, note?, code?, developer_mode?, allowed}], note?, code?, checked?, job?}` (fields are block C's, `proto/iphone.go`);
   `PUT` `{"enabled": bool}` is the computer's switch. Extension off, or a computer the bridge doesn't run on → 404.
 - `POST /api/v1/machines/{mid}/iphone/{pair|forget|cancel}` `{"device"?}`: pair an iPhone plugged into this computer (progress in `job`),
   forget one's pairing record, cancel a pairing (no device). Pairing only once the computer is on (404); forget and cancel
@@ -155,6 +155,21 @@ answer on.
   `self_apps` / `self_names` are Persona's own apps on the iPhone (bundle ids and names) for the core's
   `Rules.SelfApps` / `Rules.SelfNames`, as the iPhone app reports them; they only add to what the node already keeps
   out (the name `Persona` and the bundle ids its device's app list gives), for as long as it runs.
+
+## Codes for apps (#8199)
+
+Every note comes with its reason as a `code`, so an app (the iPhone's guided setup) acts on the state without reading
+the words, and an older node that sends none still shows its note:
+
+- The computer's: `bridge_missing` (no device bridge here), `none_paired` (nothing paired with it).
+- Each iPhone's: `usb_unpaired` (on the cable, not paired), `connecting`, then the bridge's or the session's code
+  (`developer_mode_off`, `ddi_not_mounted`, `unsupported` (input below iOS 27), `locked`, `unreachable`, `pairing_rejected`,
+  `tunnel_failed`, `timeout`, …), or `failed` when there is no better word. `developer_mode` is what the iPhone last said of
+  Developer Mode: at pairing, then whenever it answered (it follows a phone that turned it on after pairing).
+- The pairing job's (`job.code`, with `job.device`, the iPhone it is for): while it runs, what it waits for from the person
+  at the phone (`trust_pending`: tap Trust and enter the passcode; `locked`: unlock it; empty while it waits for nothing),
+  its `step` the matching note; once failed, why (`timeout` when nobody tapped Trust in its 3 minutes, `pairing_rejected`,
+  …).
 
 ## Notes and their languages
 

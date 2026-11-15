@@ -50,6 +50,62 @@ func TestWorkspaceNamingSettingsPersistAndOldClientsKeepWorking(t *testing.T) {
 	}
 }
 
+func TestWorkspaceNamingAndDispatchPolicySettingsAreAtomic(t *testing.T) {
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	f := newFakeHub()
+	s := newServiceOn(t, f, database)
+	put := func(body string, owner bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PUT", "/api/v1/assistant", strings.NewReader(body))
+		if owner {
+			r.Header.Set(assistantwire.ManagerHeader, s.managerIdentity())
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	const policy = `{"rules":[{"conversation_class":"scheduled","deny":["task_plan"]}]}`
+	if w := put(`{"notes":"Before","workspace_rules":{"branch_template":"custom/{task-id}"},"dispatch_policy":`+policy+`}`, true); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	before, err := json.Marshal(s.settings(t.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, body string
+		owner      bool
+	}{
+		{"invalid policy", `{"notes":"After","workspace_rules":{"branch_template":"changed/{task-id}"},"dispatch_policy":{"rules":[{"conversation_class":"unknown","deny":["task_plan"]}]}}`, true},
+		{"invalid naming", `{"notes":"After","workspace_rules":{"task_directory_template":"{branch}"},"dispatch_policy":{"rules":[]}}`, true},
+		{"missing manager", `{"notes":"After","workspace_rules":null,"dispatch_policy":{"rules":[]}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if w := put(tc.body, tc.owner); w.Code != 400 {
+				t.Fatalf("invalid combined settings: %d %s", w.Code, w.Body)
+			}
+			restarted := newServiceOn(t, f, database)
+			after, err := json.Marshal(restarted.settings(t.Context()))
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("rejected settings changed persisted values: %s (was %s), error %v", after, before, err)
+			}
+		})
+	}
+	if t.Failed() {
+		return
+	}
+	if w := put(`{"workspace_rules":null,"dispatch_policy":{"rules":[]}}`, true); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	got := newServiceOn(t, f, database).settings(t.Context())
+	if got.WorkspaceRules != (workspacenaming.Rules{}) || got.DispatchPolicy != nil || got.Notes == nil || *got.Notes != "Before" {
+		t.Fatalf("clearing both settings did not persist: %+v", got)
+	}
+}
+
 func TestWorkspaceNamingHTTPOverridesAndStableOperationRetry(t *testing.T) {
 	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
 	if err != nil {

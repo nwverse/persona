@@ -9,7 +9,7 @@ import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
 import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
 import { sameValue } from "./stable-lines";
-import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
+import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
@@ -581,6 +581,27 @@ export function send(msg: Record<string, unknown>) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
+// What client_hello declares beyond CLIENT_FEATURES now: lib/attention-signals.ts asks for the hub's `notify` events
+// (`ws_notify`) while this page can alert (#8145). Read at every hello.
+let helloExtras: () => string[] = () => [];
+
+function sendHello(sock: WebSocket) {
+  // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
+  // and what it can render: MCP forms and links come only to a socket that says so
+  // device_id: this browser's (lib/device-id.ts), so the hub pushes nothing to it while a page is open (#7459)
+  sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: [...CLIENT_FEATURES, ...helloExtras()], locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
+}
+
+/** Sets what client_hello declares beyond CLIENT_FEATURES, from the next hello on. */
+export function setHelloExtras(extras: () => string[]) {
+  helloExtras = extras;
+}
+
+/** Says client_hello again on the open socket: the hub takes a later one's features in place of the earlier one's. */
+export function sayHello() {
+  if (ws?.readyState === WebSocket.OPEN) sendHello(ws);
+}
+
 export function connect() {
   setCompatibilityFeatures([]);
   stopped = false;
@@ -590,17 +611,14 @@ export function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   socketToken = getToken();
   directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
-  const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1"])}`);
+  const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1"])}`);
   ws = sock;
   restartNotice = false;
   // an attempt does not move offline back to connecting: the pill stays on one phase while the hub is down instead of
   // flipping at every backoff tick (the app's ConnectionTitle); shownConn decides it when the attempt fails
   sock.onopen = () => {
     socketOpenedAt = Date.now(); // a direction tree read since then serves this hello (lib/direction-tree.ts)
-    // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
-    // and what it can render: MCP forms and links come only to a socket that says so
-    // device_id: this browser's (lib/device-id.ts), so the hub pushes nothing to it while a page is open (#7459)
-    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
+    sendHello(sock);
     retry = 0;
     fastTries = 0;
     lastMessage = Date.now();

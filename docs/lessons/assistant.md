@@ -383,6 +383,17 @@ its task decision together before sending it to a hook. A plan approval must sel
 mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
 creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
 
+## The supervision fingerprint only sees the agent's words (#6027)
+
+`digestFingerprint` (`supervise_dedup.go`) folds a signal into the one told in the last 30 minutes when its agent's
+last words are unchanged, because a new turn or a periodic sweep is not news. Some signals carry news that is not in the
+agent's words: the owner's answer to a decision's round, a recheck or undecidable review of a new round, a start
+attempt's failure or start. They were dropped: the owner's "You decide" after "Tell me the background first" ended the
+card but never reached the supervisor, and a retry that failed with the first try's error was never told although
+`task_retry` promised it. Such kinds now hash their key too (`keyIsNews`), and a failed start's key names its attempt.
+A new signal kind whose key names one event, rather than moving with every turn, belongs in `keyIsNews`; test it with
+the agent's words unchanged, which is the case that hides the drop (the task's agent is usually stopped while it waits).
+
 ## A card the chat waits on must be in the chat (#4883)
 
 A Persona conversation's first Bash waited three and a half minutes for approval while its card was only inside the
@@ -545,3 +556,9 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 ## A hidden effective cadence overrides the interval the user configured (#7619)
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
+
+## A signal told once needs somewhere to go when its reader never acts (#8043)
+
+A side conversation supervises the tasks it hands out, and "waits for review" is told once per review. A side conversation that had stopped, or whose turn ended without `task_review`, left its task awaiting review for good: the send-time fallback to the main conversation covers only a conversation that is gone, the orphan check leaves out a task waiting for review on purpose, and the stuck-queue remedy covers only the background supervisor. When a signal is told once to a reader that may never act, give it a bounded wait and a second home (`handOverUnreviewed`, `server/internal/assistant/side_handover.go`), and record the move where a restart finds it (here the ledger's `supervisor`), so it happens once.
+
+Telling the same review to another conversation is not a new signal to the deduplication window (`superviseDedupWindow`): its fingerprint is the task, the kind and the agent's last words, not who was told. A hand-over inside the window is dropped as "said the same" unless its fingerprint is forgotten first (`forgetSupervision`, as a gone background supervisor's queue does). Check "is this conversation in a turn" against the machine's list the way `backgroundThere` does: a manager that has just started has an empty list, which says nothing about a conversation being gone.
