@@ -1,5 +1,54 @@
 # Lessons: hub / node and networking
 
+## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
+
+The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
+account changed. So account A's review request stayed in the inbox, and a reply to it posted a comment with B's token. Fixing it at the place
+the user switches was not enough, because the login changes in ways nobody chooses:
+
+- A poll that gets a 401 asks the computer for its token again and retries. If `gh` was switched there, the retry is another account's request
+  carrying the first one's `If-Modified-Since`, and its answer is merged into the first one's inbox.
+- `/user` answers arrive in any order. A check of the old token that GitHub answers late wrote the old login back over the new one.
+- A read in flight when the account changes writes its answer into whatever is there afterwards: a cache that was just emptied (or a nil map).
+- A thing can be older than its keep time when the account changes (things are forgotten only when a poll reads the list), so a marker kept
+  by the thing's age is dropped by the next poll, before the hub closed the item.
+- Both accounts can have the same thread unread at the same time: the thread, and even the move's timestamp, do not tell their items apart.
+
+What holds: one owner of the identity (`account.go`). A new token reads or answers nothing that belongs to an account until GitHub named its
+account; every credential has a number and an answer to an older one is dropped; a different login moves an epoch, and the same step that
+adopts it retires and resets everything read under the old one. State and requests carry the epoch they began under (in the context), a
+request for an older epoch is refused before it is sent, and write-backs check the epoch under the state's own lock. Lock order is the
+connector's lock, then the state's; a state lock never takes the connector's. The tests hold a request at the fake GitHub on a channel and
+change the account while it waits (`account_switch_test.go`).
+
+The first version of the fix still failed an independent review, on what the hub keeps rather than on what the connector does:
+
+- The hub holds items longer than the connector's process lives and hands back only a thread and the move the item holds. Anything the
+  connector decides from what it has in memory (a marker per retired thing, "is this thread held") is wrong after a restart, for items it
+  has forgotten (older than its keep time), and for items it considers done while the hub keeps them open (answered through Persona).
+  So the account and its epoch are kept across restarts, every move read after a change carries the epoch (the reply check needs no
+  memory), and the hub's leftovers are closed by exclusion: whatever the account in use holds no thing of.
+- A mark put only where a collision was noticed (the retired thing's last move) misses the collisions nobody remembered: the hub's item
+  one move behind, or a third account meeting the first one's move. Mark every move, or none.
+- A step done once and then recorded has two wrong orders. "Tell the hub, then save that it is done" closes the wrong items after a
+  failed save and a restart; "save, then tell" at worst leaves old items open. Pick the order whose failure is the harmless one, and
+  say which it is. The same review found the record forgotten after `Reload` (whoever held the id had saved over it) and a secret that
+  no longer opens taking a computer's sign-in down: a record added to an existing store inherits every way that store is rewritten or fails.
+- Closing by thread meets the hub's own rule, which starts an item only for a move later than the thread's closed one: a round trip to
+  another account and back does not bring the first inbox back. That is a limit, written down in `docs/assistant/inbox.md`, not a bug to
+  work around by moving a thing's time.
+
+## A new connection reports nothing the hub keeps for it until the hub has handed it over (2026-11-15, #8275)
+
+Every node connection is a new `Node` with empty state, and the hub hands back what it keeps for the computer (the
+Codex inventory: homes, app-servers, joined threads) only in the `node.configure` that follows `devices.connected`.
+The engine is settled earlier (`engine.use` is the first call of the handshake), and the manager passes a node's events
+on before it calls `devices.connected`, so a report made "once the engine is ready" reached the hub first and the hub
+stored the empty registry over what it kept. A node's report of state the hub keeps waits for the hub's part of the
+connection (`codexHanded`); the hub keeps such a report only from a connection it has done that part for
+(`codexInventoryHanded`: `hookedAt` equal to the manager's `ConnectedAt`), which also covers older nodes. Write a test
+of the sequence, not only of each side's storage.
+
 ## An empty list sent as null means "no change" to an optional field (2026-11-14)
 
 The node reads node.configure's `claude_dirs_blocked` as `*[]string`: absent or `null` leaves its patterns as they are.
@@ -134,6 +183,35 @@ in bus order, but one worker persists only the latest pending report, with a bou
 write is logged and left for the next report, never retried in a tight loop. Both kinds of worker join the hub's
 `nodeWorkers`, whose shutdown wait is bounded. Tests hold the node or `PutSetting`, prove a later message or bus event
 is still handled, then release the dependency and join the workers before checking the final value and call count.
+
+## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
+
+`client_hello` and `register_phone` also waited in the app connection's read loop: `hub.client_apps` did a settings
+load and save, the device and user locales did up to two of each, and every phone registration waited for
+`ReplacePhoneTools`. A slow store therefore delayed the hello ack and every later frame just as a slow node did for
+subscriptions. Record connection-local metadata in place, so the next reply and direct phone routing use the new
+language and tools at once, but move persistence to one ordered consumer per setting group. Client-app and locale
+changes are history-dependent: apply every change in message order and coalesce only the final snapshot writes. Phone
+registrations are complete replacements, so pending ones can coalesce to the newest per device. The consumers have
+their own lifetime, not `deployCtx`'s: `runHub` stops them in a bounded shutdown step only after `serveHTTP` has closed
+and joined the app socket handlers, then joins `nodeWorkers`, and closes the database last. Deploy cancellation alone
+must not strand a report read while those connections are closing. Starting and stopping the consumers is serialized,
+so a stop racing the first report is safe. A report that arrives after the stop is not written; the app sends it again
+on reconnect.
+
+Each pending set is capped at 1,024 entries; phone capacity counts distinct pending devices, so replacing one already
+queued takes no new slot. If two producers race for the same new device, the one that becomes a replacement returns
+its now-redundant admission token immediately. Normally admission is a nonblocking semaphore send. At the cap, only
+the producing read loop waits, for at most the existing Store timeout; it then drops that report and logs once for the
+affected queue rather than once per dropped report. Consumers return capacity as soon as they detach a batch, not when
+its Store write ends. Tests use a separate idle condition (pending empty and no flush in flight), so they still wait
+for the final save.
+
+A failed load is not an empty setting. `loadClientAppsLocked` used to clear the map and its caller still saved it, so
+one transient read error could drop every other device. Load into temporary state, publish it only after a complete
+successful read, and otherwise apply and save nothing; the next message retries. The same rule covers both locale
+settings together: in particular, an absent `user_locale` plus a failed `hub.device_locales` read must not publish or
+save a first device's language.
 
 ## A Go file named after a platform builds only there (#5563)
 
@@ -508,6 +586,13 @@ Don't add a `pending.json` field for it: older edges and watchdogs read the same
 ## Test a staged node before stopping the resident one (#5097)
 
 A completed gzip stream and `chmod 755` prove that bytes arrived, not that the target machine can execute them. The SSH deploy therefore runs the staged binary's `version` command before the atomic rename and before `pkill`: an `exec format error` or another failed self-test removes `.new`, preserves the installed binary, and leaves the working node running. Package selection still validates GOOS / GOARCH through Go build info; the remote self-test is the final target-side guard, not a duplicate package check. Exercise this boundary through the real login-shell deploy script with an isolated HOME and a fake `pkill`, never by replacing or stopping a development machine's resident node.
+
+## A release archive's checksum does not verify its version (#8338)
+
+A correctly hashed Windows ZIP can contain programs reporting another version while sharing the manifest's build number.
+Run the bundled version and node self-check commands on the target architecture, before installation or publication.
+Bind the successful results to both the ZIP and executable hashes, and reject missing or stale verification at the upload boundary.
+Cross-platform build metadata and a version-shaped string somewhere in a binary are not substitutes for those command results.
 
 ## Migrating a long-poll channel without duplicate consumers (#2020)
 
@@ -1731,6 +1816,8 @@ When a `httputil.ReverseProxy` has to read what it forwards (the sent-as-user le
 
 Calling both notification channels does not mean either selected a recipient: a saved device may have no usable APNs or relay route, and a connected client may not support `ws_notify`. Return selected and reachable counts from the same recipient walk, before and after its preference filters, so the API can distinguish `no_device` from `filtered` without a separate readiness check racing that selection. Preserve the earlier session-level `muted` result and count both channels: a WebSocket notification can still go out without any push credentials. These counts are not asynchronous APNs / relay acceptance or proof that a phone displayed anything.
 
+The same holds on every path that reports a push, not only the API that was fixed. `POST /api/v1/notify` learned to say `no_device` in #1910, but the assistant's `notify.request` kept dropping the counts, so `notify_user` answered "Notification sent." for days in which no device was paired, and the north star counted each of those notices as an interruption (#8138). When a function returns selected and reachable counts, carry them up to every caller that reports success, and count a browser's Web Push and an offline device's kept copy apart from "nothing".
+
 ## A push's nil "wants" means "asked for explicitly" (2026-11-06, per-manager push switches)
 
 `Pusher.send*` and the WebSocket notify take `wants func(NotifyPrefs) bool`, and nil is not just "every device": `alertWanted` lets it past Phone Muted (`mute_while_desktop`) and the pusher sends it to an open desktop too (an assistant's reminder, an extension's push). Wrapping nil in a filter to add one more condition (a muted manager) silently turns those pushes into ordinary ones, and they stop reaching a phone in Phone Muted mode. Put an extra per-device rule where the devices are walked (`Pusher.sendFrom`, `notifyWSFrom` take the manager) instead of in `wants`.
@@ -2074,6 +2161,15 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
 - The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`). A later sparse to-do id rode in that same optional pointer rather than taking `Item` past the class again (#7200); `TestItemBatchFitsItsSizeClass` now checks the 150-row batch beside the type, with no architecture-specific struct size.
 
+- A small list on every runtime row (2026-11-15, #8261). `proto.Session` had no byte left (1,528 of 1,528), so a row's
+  permission modes went into `SessionCapabilities`, which the node allocates for every runtime row. As a `[]string` it
+  took that struct from 64 to 88 bytes, the 96-byte class: a push of 300 rows allocated 9,600 B more and
+  `TestRuntimeSessionsPushAllocatesOneList` failed. It also made `proto.Launcher` uncomparable, and the manager compares
+  launcher lists (`slices.Equal` in `models_launchers_push.go`), so the build broke there and in three tests. A set of
+  at most eight known ids fits one byte: `proto.PermissionModeSet`, sent as the same JSON list, sits in the padding after
+  the six bools, so neither struct grew nor stopped being comparable. Read leniently: anything that is not a list of
+  strings is an empty set, never an error that would lose the rest of the row.
+
 ## A fact about a directory does not go on every row in it (2026-11-13, #994)
 
 - #4637 put a project identity on each session (`inventory` on `proto.Session`, more attributes on `sessionlist.Item`) so the paged list could group a repository across computers. `Item` went from 200 to 328 bytes, a 150-row reindex allocated 17% more, two allocation guards failed, and it was reverted the same day (#4744). `proto.Session` is at 1,528 bytes with one spare byte, so a new string there costs every row copied anywhere 256 bytes.
@@ -2162,6 +2258,15 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
   minute is then the same machine for all of them, and the head's CPU time over the base's in the same minute came
   out at 0.943 with every one of the 20 minutes below 1, the unchanged hub's at 0.983 (`pairedCPU`). Measure a noisy
   quantity against a reference that sees the same noise at the same moment.
+- The largest share was not in the event path at all: `liveLoop` builds the fleet again up to ten times a second
+  while it changes, and each round took a new copy of every machine's list to decorate, 54% of what the manager
+  allocated. A loop that reads the same lists again and again keeps its arrays: `Devices.AppendSessions` copies a
+  machine's rows over the list the last round kept (`fleetInputsInto`), 78 KB a round where new copies were 886 KB.
+  What makes that safe is stated in the code and pinned by tests: every row is overwritten whole before it is
+  decorated, so no decoration carries over; rows a shorter list leaves behind are cleared; one goroutine owns the
+  arrays; and nothing built from a round keeps a row (`TestLiveRoundsOverKeptListsAreFreshRounds` runs every round
+  both ways and marshals each round's results again after the arrays were rewritten). Give the arrays back on the
+  slow tick, or a fleet gone quiet holds a second copy of its lists for good.
 
 ## The manager read its own session lists through their JSON (2026-11-13, #3197)
 
@@ -2284,3 +2389,36 @@ tests and its importers passed, and the hub deploy failed on this guard. When co
 run `go test -run TestPlacesThatSealAreKnown ./internal/assistant` (no database needed) and record the file there:
 with `secret.key`, after putting where it keeps the sealed value into `db.sealedTables` or `db.sealedSettings`; with
 any other key, under "other keys" with where the key comes from. Never loosen the guard.
+
+## A setting moved into a table stays readable by the build before it (2026-11-15, #8257)
+
+Moving `hub.push_sent` (one list, rewritten whole by every push) into the `hub_push_sent` table first deleted the
+setting once its entries were in the table. A switch back to the build from before (`personad hub switch`, a
+self-update going back) then started with no delivered history: that build reads only the setting, its daily counts
+began again at zero, and the pushes the new build had recorded were not there for it. The forward tests all passed;
+nothing ran the old build after the new one.
+
+- Keep the old record for the build before, and say when it can go. Write it back off the hot path: where the hub
+  stops (`Hub.closeDatabaseAfterWorkers`, before the database closes) and on the updater's way back before it runs the
+  old binary, since an exec skips the cleanup; while running only at a bounded rate (hourly here), or the move saves
+  nothing. A handoff in `hub switch` alone is not enough: the command, the edge and a watchdog may each be another
+  build, and a killed hub runs none of them.
+- Going forward again merges, never replaces. The old build writes the list back without the table's ids, so match
+  entry and row by content (time to the precision the table keeps, and the other fields), count equal entries as
+  separate pushes, and skip what the table's sweep would remove, or every start adds expired entries again.
+- Do not write the old record from a start that failed to read it: its list may be shorter than what is stored.
+- Test the round trip with the old build's reader: upgrade, deliver, old build (reads only the old record), deliver,
+  upgrade again, the same counts at each step (`TestPushSentSurvivesSwitchBackAndForward`).
+
+## A 409 from start options is not always "confirm this computer" (2026-11-14, #7425)
+
+- New work session's `start-options` answers 409 for two different reasons: the manager's `machine_pending` (the hub
+  keeps the computer out of its list) and every refusal the node's strict work-session check makes
+  (`work_launcher_unavailable`, `apierr.Call` maps a coded node error to 409). The hub's log line is the same; the web
+  dialog tells them apart (its "This launcher cannot start a session…" line is only the node's). Read that code before
+  tracing trust or ownership. A fast answer says nothing either: the node refuses from its cached launcher list
+  before any login shell runs.
+- A list the manager shows is not the node's own list: the pickers add plain `claude` back on a computer whose shell
+  has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
+  and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
+  `knownLauncher` does.

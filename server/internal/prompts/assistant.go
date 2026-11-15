@@ -214,6 +214,12 @@ type SnapshotTask struct {
 	Plan *SnapshotAgentPlan
 }
 
+// SnapshotOpenTodo is the compact index of one open todo. Full task details are
+// limited separately so every open todo remains discoverable in the context.
+type SnapshotOpenTodo struct {
+	ID, Title, Link string
+}
+
 // SnapshotReport is a supervised task's agent's latest report: its kind (progress, question, blocked, done), the step
 // of how many (0: not said), what it said in a line and how many minutes ago.
 type SnapshotReport struct {
@@ -263,23 +269,26 @@ type Snapshot struct {
 	Awaiting []SnapshotAgent
 	// Muted: agents (or their spaces) the user turned notifications off for that would be in one of the above; in
 	// none of them, as the Live Activity and the Agents badge count none of them (#4562).
-	Muted          []SnapshotAgent
-	Working        []SnapshotAgent
-	Workflows      []SnapshotWorkflow // background workflow runs still running, newest first
-	PhoneOnline    bool
-	Apps           []SnapshotApp      // one per kind of device, the user's own before a simulator
-	KB             string             // RenderKBDigest, "" leaves it out
-	Chats          *SnapshotChats     // nil: Feishu did not answer in time
-	Calendar       *SnapshotCalendar  // nil: the calendar did not answer in time
-	Followups      []SnapshotFollowup // the next eight
-	FollowupsTotal int                // all of them
-	Routines       []SnapshotRoutine  // the daily tasks that are on (at most eight)
-	RoutinesTotal  int                // all of them
-	Missed         []SnapshotMiss     // scheduled runs that failed or were skipped since yesterday 18:00, newest first
-	MissedTotal    int                // all of them (Missed is the newest six)
-	Tasks          []SnapshotTask     // tasks opened from assistant conversations (task_plan), newest first
-	Plans          []SnapshotPlan     // plan cards in the main conversation waiting for "Start", newest first (at most five)
-	PlansTotal     int
+	Muted           []SnapshotAgent
+	Working         []SnapshotAgent
+	Workflows       []SnapshotWorkflow // background workflow runs still running, newest first
+	PhoneOnline     bool
+	Apps            []SnapshotApp      // one per kind of device, the user's own before a simulator
+	KB              string             // RenderKBDigest, "" leaves it out
+	Chats           *SnapshotChats     // nil: Feishu did not answer in time
+	Calendar        *SnapshotCalendar  // nil: the calendar did not answer in time
+	Followups       []SnapshotFollowup // the next eight
+	FollowupsTotal  int                // all of them
+	Routines        []SnapshotRoutine  // the daily tasks that are on (at most eight)
+	RoutinesTotal   int                // all of them
+	Missed          []SnapshotMiss     // scheduled runs that failed or were skipped since yesterday 18:00, newest first
+	MissedTotal     int                // all of them (Missed is the newest six)
+	Tasks           []SnapshotTask     // tasks opened from assistant conversations (task_plan), newest first
+	OpenTodos       []SnapshotOpenTodo // compact index of open todos, including personal todos
+	OpenTodosTotal  int                // all open todos; OpenTodos is bounded for very large lists
+	OpenTodosLoaded bool               // false when the store could not be read; do not report that as zero
+	Plans           []SnapshotPlan     // plan cards in the main conversation waiting for "Start", newest first (at most five)
+	PlansTotal      int
 
 	FollowingEnabled bool                // Inbox is enabled and available; false leaves the whole section out
 	Following        []SnapshotFollowing // open inbox matters being followed, earliest check first (at most five)
@@ -303,7 +312,7 @@ type Snapshot struct {
 // the sections that changed, so a section that went missing would read as unchanged, and one rendered without its items
 // as "none".
 type SnapshotOmit struct {
-	Waiting, Working, Unread, Routines, Following, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+	Waiting, Working, Unread, Routines, Following, Followups, Asked, KB, OtherChats, Unaccepted, OpenTodos, Tasks, Approvals bool
 }
 
 // SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).
@@ -698,6 +707,8 @@ type Supervise struct {
 	Overdue bool
 	// ParkedDue: an entry is a parked task whose time came (#3804).
 	ParkedDue bool
+	// ParkDecided: an entry is a task whose parking a decision of the owner's ended (#8044).
+	ParkDecided bool
 	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
 	// they wait here before going up a rung.
 	Asked      bool
@@ -742,15 +753,15 @@ type SuperviseEntry struct {
 	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
-	// ask: the cards waiting, and the task's decisions in effect (prompts/todo/decisions.md, rendered); escalated: the
-	// cards a leader gave the user.
+	// ask: the cards waiting, and the task's decisions in effect (prompts/todo/decisions.md, rendered), which
+	// parked_due and park_decided carry too; escalated: the cards a leader gave the user.
 	Asks      []SuperviseAsk
 	Decisions string
 	// recheck and owner_cannot_answer: the decision as it was asked; owner_cannot_answer: the owner's answer
 	// (decide_yourself, not_what_i_asked, explain_first).
 	Decision *SuperviseDecision
 	Response string
-	// parked_due: what the task was parked for.
+	// parked_due: what the task was parked for; park_decided: what it was parked for again before the message went.
 	Parked *SuperviseParked
 	// From the task's brief (#3822): Asked is the owner's message that led to the work (clipped) and AskedAt its day;
 	// Started says who started it when it was not the owner; Dropped are the criteria scope changes took out.
