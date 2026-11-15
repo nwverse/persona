@@ -218,11 +218,11 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
     expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
     expect(host.querySelector("section")).toBeNull();
-    // the plan's one Agent; the task line of a planned task adds none; the task's conclusion is its own card (#5569)
+    // the plan's one Agent; the task line of a planned task adds none; its receipt and review are no cards (#8237)
     expect(host.querySelectorAll("[data-handoff-cards]")).toHaveLength(1);
     expect(host.querySelectorAll("[data-handoff-card]")).toHaveLength(1);
-    expect(host.querySelectorAll("[data-receipt]")).toHaveLength(1);
-    expect(host.textContent).toContain("Demo result");
+    expect(host.querySelectorAll("[data-receipt]")).toHaveLength(0);
+    expect(host.textContent).not.toContain("Demo result");
     act(() => entry("running").click());
     expect(entry("running").getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelectorAll("[data-task-slot]")).toHaveLength(1);
@@ -281,7 +281,9 @@ describe("Assistant Needs you / In progress trays", () => {
       expect(cards[1]!.textContent).toContain("Second agent");
       expect(cards[2]!.textContent).toContain("Second task");
       expect(cards[3]!.textContent).toContain("Failed task");
-      expect(cards[3]!.textContent).toContain(t("assistant-tasks.start_failed", { error: "machine offline" }));
+      // in plain words (#8237): the raw "machine offline" is the task's details'
+      expect(cards[3]!.textContent).toContain(t("assistant-tasks.start_failed", { error: t("assistant-tasks.start_cause_offline") }));
+      expect(cards[3]!.textContent).not.toContain("machine offline");
       act(() => cards[1]!.click());
       expect(getPanel()).toEqual({ kind: "agent", mid: "demo", sid: "second" });
       act(() => cards[0]!.click());
@@ -310,7 +312,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.textContent).toContain("Waiting on another team");
   });
 
-  it("updates the same row while it runs, opens the task, and drops it once it is accepted", () => {
+  it("updates the same row while it runs, opens the task, and moves it under Just finished once it is accepted", () => {
     act(() => entry("running").click());
     const row = host.querySelector("[data-task-slot]");
     act(() => putTodo({ ...todo, supervision: { ...todo.supervision!, progress: { kind: "blocked", step: 3, steps: 5, text: "Waiting for a decision" } } }));
@@ -329,11 +331,14 @@ describe("Assistant Needs you / In progress trays", () => {
     act(() => (host.querySelector("[data-task-slot]") as HTMLButtonElement).click());
     expect(opened()).toBe("/s/demo/worker");
     act(() => putTodo({ ...todo, done_at: at, supervision: { ...todo.supervision!, state: "accepted" } }));
-    // finished: in neither entry (the board has it), no fold for it either
+    // finished: counted in neither entry; In progress lists it under Just finished, not as work going on (#8237)
     expect(entry("running").textContent).toBe(label.running);
     expect(entry("needs").textContent).toBe(label.needs);
-    expect(host.querySelector("[data-task-slot]")).toBeNull();
     expect(host.textContent).toContain(t("assistant-tasks.tray_empty_progress"));
+    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${t("assistant-tasks.tray_just_finished")}1`);
+    const finished = host.querySelector("[data-task-slot]")!;
+    expect(finished.getAttribute("data-counts-open")).toBe("false");
+    expect(finished.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("done");
   });
 
   it("reuses round-bound owner acceptance and deduplicates its supervision decision", async () => {
@@ -373,7 +378,7 @@ describe("Assistant Needs you / In progress trays", () => {
     await openRows();
     expect(host.textContent!.split(todo.title).length - 1, "an opened row names its task once").toBe(1);
     const row = host.querySelector('[data-brief-row="accept"]')!;
-    expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-tasks.later"), t("assistant-tasks.dismiss_draft"), t("assistant-brief.take")]);
+    expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-task-actions.later"), t("assistant-task-actions.dismiss_draft"), t("assistant-brief.take")]);
     const read = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (url, init) => {
       if (init?.method === "PATCH") {
@@ -409,7 +414,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
     const actions = [...draftCard.querySelectorAll("button")];
-    expect(actions.map((button) => button.textContent)).toEqual([t("assistant-tasks.send"), t("assistant-tasks.later"), t("assistant-tasks.dismiss_draft")]);
+    expect(actions.map((button) => button.textContent)).toEqual([t("assistant-task-actions.send"), t("assistant-task-actions.later"), t("assistant-task-actions.dismiss_draft")]);
     act(() => actions[1].click());
     expect(host.querySelector('[data-testid="message-card"]')).toBeNull();
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, label.running]);
@@ -685,7 +690,7 @@ describe("Assistant Needs you / In progress trays", () => {
       mk("open-stopped", "Stopped between rounds", "idle-worker"),
       mk("open-unread", "Finished, not seen", "unread-worker"),
       mk("open-asks", "Needs a decision", "asking-worker"),
-      mk("closed-old", "Closed long ago", "idle-worker", { done_at: at }),
+      mk("closed-old", "Closed long ago", "idle-worker", { done_at: "2026-11-08T08:00:00Z" }),
       mk("closed-elsewhere", "Another chat's task", "idle-worker", { origin: "another-chat" }),
     ];
     await act(async () => {

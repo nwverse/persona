@@ -1390,6 +1390,27 @@ final class AppModel {
         }
     }
 
+    /// Whether the sidebar's Recent lists the scheduled tasks' chats too (#8324): off until the hub says on, an older hub
+    /// and settings not read yet included.
+    var recentTaskChats: Bool { assistantConfig?.recentTaskChats ?? false }
+
+    /// Show Scheduled Task Chats (#8324), from Settings or All Chats' menu: one value on the hub for all of the user's
+    /// devices. Shown at once, put back if the hub says no.
+    func setRecentTaskChats(_ on: Bool) async {
+        guard let api, var shown = assistantConfig, shown.recentTaskChats != on else { return }
+        let was = shown.recentTaskChats
+        shown.recentTaskChats = on
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(APIClient.AssistantConfigBody(recentTaskChats: on))
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.recentTaskChats = was }
+            show(error)
+        }
+    }
+
     /// Whether conversation `id` is the hub's built-in background supervisor (#5083, docs/assistant/unified-entry.md
     /// "Background supervisor"): its row has no Archive, End or Pin (the hub refuses the first and the last).
     func isBackgroundSupervisor(_ id: String) -> Bool { assistantConfig?.isBackgroundSupervisor(id) ?? false }
@@ -2914,7 +2935,8 @@ final class AppModel {
         held.images += photos.prefix(room).map(\.photo)
         // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still enforces the four-photo cap.
         held.images += overflow.filter { $0.path == nil }.map(\.photo)
-        left += held.videos.restore(draft.files).map(\.xml)
+        left += held.videos.restore(draft.files.filter(\.playable)).map(\.xml)
+        left += held.files.restore(draft.files.filter { !$0.playable }).map(\.xml)
         if !draft.contexts.isEmpty { composerContexts[key] = (composerContexts[key] ?? []) + draft.contexts }
         let words = ([draft.text] + left).filter { !$0.isEmpty }.joined(separator: "\n")
         if !words.isEmpty {
@@ -4196,6 +4218,9 @@ final class AppModel {
     func refresh() async {
         guard let api else { return }
         Task { await loadPins() }
+        // The assistant's settings too, once read: one changed on another device (Show Scheduled Task Chats, #8324)
+        // shows here when the user comes back.
+        if assistantConfig != nil { Task { await refreshAssistant() } }
         for link in links { Task { await refreshManagerRoster(link.group) } }
         Task {
             let writes = muteWrites, saves = notifyPrefsWrites
