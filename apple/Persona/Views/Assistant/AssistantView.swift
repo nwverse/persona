@@ -702,7 +702,7 @@ struct AssistantView: View {
             backToRoot()
             model.assistantCurrent = nil
         }
-        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
+        withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count, op: op) }
         let newChat = model.assistantNewChat
         do {
             // The first one becomes the main conversation; with the settings not read yet, whether there is one is unknown.
@@ -714,33 +714,28 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            // New Chat or Dictate opened while the request was away: its accepted conversation stays in the roster,
-            // but an older completion must not replace the newer starter or interrupt its dictation.
-            guard newChat == model.assistantNewChat else {
-                withAnimation(Theme.Motion.standard) { pending = nil }
-                return
-            }
-            // The accepted conversation is visible before a follow-up configuration refresh.
+            // Always adopt an accepted result and refresh Main. Only its navigation and feedback become stale when New
+            // Chat or Dictate opened meanwhile; the op check leaves a newer send's pending bubble alone.
             if makesMain { Task { await model.refreshAssistant() } }
-            Haptics.success()
             model.began(s, text: text, images: images) // the message stays on screen until claude has written it
+            let current = newChat == model.assistantNewChat
+            if current { Haptics.success() }
             withAnimation(Theme.Motion.standard) {
                 // Another manager's page by now: the conversation is listed on its own page, not opened on this one.
-                if space != nil || model.showsPage(of: api) { model.assistantCurrent = s.key }
-                pending = nil
-                failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                if current, space != nil || model.showsPage(of: api) { model.assistantCurrent = s.key }
+                if pending?.op == op { pending = nil }
+                if current {
+                    failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
+                }
             }
         } catch {
-            guard newChat == model.assistantNewChat else {
-                withAnimation(Theme.Motion.standard) { pending = nil }
-                return
-            }
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
             // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
-            let here = space != nil || model.showsPage(of: api) // the card belongs to the page it failed on
+            let current = newChat == model.assistantNewChat
+            let here = current && (space != nil || model.showsPage(of: api)) // the card belongs to the page it failed on
             withAnimation(Theme.Motion.standard) {
-                pending = nil
+                if pending?.op == op { pending = nil }
                 if here { model.readiness.failure = coded }
                 failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
                                                      mayHaveStarted: FailedStart.mayHaveStarted(error),
@@ -748,7 +743,7 @@ struct AssistantView: View {
                                                      manager: space == nil ? api.shownManager : nil))
             }
             if here, coded != nil { model.readinessChanged() }
-            Haptics.error()
+            if current { Haptics.error() }
         }
     }
 }
@@ -758,6 +753,8 @@ struct PendingStart: Equatable {
     var imageCount: Int
     /// A start that failed (#1368): drawn as the chat's failed bubble, with Resend and Delete, and no typing line.
     var failed: FailedStart.Message? = nil
+    /// Which invocation owns the sending bubble; a late completion never clears a newer send's.
+    var op: UUID? = nil
 }
 
 /// The first message of a new conversation while it spins up, laid out as the chat will lay it out the moment it takes

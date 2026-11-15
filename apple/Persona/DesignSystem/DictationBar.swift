@@ -4,6 +4,7 @@ import SwiftUI
 
 /// The bar's start boundary, also allowing a unit test to fail or count a start without opening the microphone.
 @MainActor protocol DictationStarting {
+    var heard: String { get }
     func start(hints: [String], update: @escaping (String) -> Void, failed: @escaping (String) -> Void)
 }
 
@@ -29,6 +30,8 @@ final class DictationBarModel {
     /// One generator, prepared before it is needed: `Haptics.tap()` makes a new one each time, and the first impact of a
     /// cold one started the haptic engine on the main thread right as the bar moved (100–600 ms frames on a simulator).
     @ObservationIgnored private var haptic: UIImpactFeedbackGenerator?
+    /// The words already joined into the draft, so a disappearing composer cannot append them twice.
+    @ObservationIgnored private var wordsCommitted = false
 
     enum Ending: Equatable { case cancel, stop, send }
 
@@ -54,6 +57,7 @@ final class DictationBarModel {
         }
         ending = nil
         slow = false
+        wordsCommitted = false
         withAnimation(reduceMotion ? Theme.Motion.state : Theme.Motion.dictationIn) { on = true }
         // A cancel while the system still asks for the microphone passes the start's turn (`Dictation.stop`): it never
         // listens.
@@ -89,6 +93,7 @@ final class DictationBarModel {
             let words = await dictation.finish(settling: true)
             guard run == mine else { return }
             text.wrappedValue = DictationHold.joined(text.wrappedValue, words)
+            wordsCommitted = true
             if how == .send, send() {
                 let deadline = ContinuousClock.now + Theme.DictationBar.sendWait
                 while !text.wrappedValue.isEmpty, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(8)) }
@@ -104,12 +109,18 @@ final class DictationBarModel {
         guard on, ending == nil else { return }
         run = UUID()
         text.wrappedValue = DictationHold.joined(text.wrappedValue, dictation.heard)
+        wordsCommitted = true
         close(.stop, reduceMotion: reduceMotion)
     }
 
-    /// Gone without a word (the composer left the screen).
-    func reset() {
+    /// Gone from the screen, including a root-layout replacement: keep the words already heard as an unsent draft.
+    /// Stop/send's asynchronous finish may already have joined them; `wordsCommitted` prevents a second append.
+    func reset(_ dictation: any DictationStarting, text: Binding<String>) {
         run = UUID()
+        if on, !wordsCommitted {
+            text.wrappedValue = DictationHold.joined(text.wrappedValue, dictation.heard)
+            wordsCommitted = true
+        }
         on = false
         ending = nil
         slow = false

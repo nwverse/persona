@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Persona
 
@@ -39,7 +40,7 @@ import Testing
 
     @Test func aRefreshStartedBeforeTheControlCannotRestoreTheMainConversation() async throws {
         let hub = FakeHub()
-        hub.on("GET", "/api/v1/assistant", json: #"{"machine_id":"m","launcher":"claude","cwd":"/","conversations":[{"machine_id":"m","session_id":"main","status":"idle","assistant":true}]}"#)
+        hub.on("GET", "/api/v1/assistant", json: #"{"machine_id":"m","launcher":"claude","cwd":"/","main":"main","conversations":[{"machine_id":"m","session_id":"main","status":"idle","assistant":true}]}"#)
         let model = try Self.model(hub)
         defer { Self.close(model) }
         await model.refreshAssistant()
@@ -111,6 +112,12 @@ import Testing
 
         #expect(model.dictationRequest == nil)
         #expect(!model.takeDictationRequest(request, uploadDest: nil))
+
+        // Defend the boundary itself too: even a wrongly installed request cannot be taken by an existing conversation.
+        let misplaced = DictationRequest()
+        model.dictationRequest = misplaced
+        #expect(!model.takeDictationRequest(misplaced, uploadDest: nil))
+        #expect(model.dictationRequest == nil)
     }
 
     @Test func aFailedStartRestoresFocusAndCannotBeRetried() throws {
@@ -132,6 +139,21 @@ import Testing
         #expect(!model.takeDictationRequest(request, uploadDest: nil))
     }
 
+    @Test func leavingAnActiveBarPreservesTheTypedAndSpokenDraftExactlyOnce() {
+        let dictation = FakeDictation(heard: "spoken words")
+        let bar = DictationBarModel()
+        var draft = "typed"
+        let text = Binding(get: { draft }, set: { draft = $0 })
+        bar.start(dictation, hints: [], reduceMotion: true)
+
+        bar.reset(dictation, text: text)
+        #expect(draft == "typed spoken words")
+        #expect(!bar.on)
+
+        bar.reset(dictation, text: text)
+        #expect(draft == "typed spoken words")
+    }
+
     private static func model(_ hub: FakeHub = FakeHub()) throws -> AppModel {
         let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "dictation-control-" + UUID().uuidString))
         model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
@@ -147,9 +169,11 @@ import Testing
 @MainActor private final class FakeDictation: DictationStarting {
     private(set) var starts = 0
     let failure: String?
+    let heard: String
 
-    init(failure: String? = nil) {
+    init(failure: String? = nil, heard: String = "") {
         self.failure = failure
+        self.heard = heard
     }
 
     func start(hints: [String], update: @escaping (String) -> Void, failed: @escaping (String) -> Void) {

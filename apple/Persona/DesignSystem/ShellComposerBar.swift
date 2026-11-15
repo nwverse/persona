@@ -292,10 +292,10 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         }
         #endif
         .onDisappear {
-            dictation.stop() // a start still asking for permission too (#3407)
             #if os(iOS)
-            dictationBar.reset()
+            dictationBar.reset(dictation, text: $text)
             #endif
+            dictation.stop() // a start still asking for permission too (#3407)
         }
         #if os(iOS)
         .task { dictationBar.warm() }
