@@ -10,5 +10,5 @@
   "background": "后台任务",
   "task": "任务",
   "agent": "Agent",
-  "sides": "子会话"
+  "sides": "分支会话"
 }

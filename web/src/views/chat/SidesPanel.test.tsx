@@ -63,7 +63,7 @@ describe("SidesPanel", () => {
     // the state is said in each pill's hover text and spoken name: no engine or model name
     expect(pills().map((p) => p.getAttribute("aria-label"))).toEqual(["btw: can it merge · 需要你", "Deeper · 工作中", "Side chat · 已看", "Why is CI slow · 未运行"]);
     expect(pills()[0]!.getAttribute("aria-selected")).toBe("true");
-    expect(host.querySelector("[role=tablist]")?.getAttribute("aria-label")).toBe("子会话");
+    expect(host.querySelector("[role=tablist]")?.getAttribute("aria-label")).toBe("分支会话");
     expect(shown).toEqual({ sid: "btw", embedded: true, landAt: undefined });
     expect(host.querySelector("header")?.textContent).toContain("btw: can it merge");
     act(() => pills()[2]!.click());
@@ -80,7 +80,7 @@ describe("SidesPanel", () => {
     });
     act(() => root.render(<SidesPanel mid="mac" sid="review" onClose={() => {}} />));
     expect(pills()).toHaveLength(0);
-    expect(host.textContent).toContain("没有子会话");
+    expect(host.textContent).toContain("没有分支会话");
   });
 
   it("names a side's state, not its engine", () => {

@@ -62,10 +62,10 @@ describe("Header", () => {
 
   it("has a Side sessions button with their count while the session has some, and the dot while one needs you (#7944)", () => {
     const quiet = header({ sides: { count: 2, open: false, needs: false, onToggle: () => {} } });
-    expect(quiet).toMatch(/<button type="button" aria-label="子会话（2）" title="子会话（2）" aria-expanded="false" data-side-sessions="2"[^>]*>.*<span>2<\/span><\/button>/);
+    expect(quiet).toMatch(/<button type="button" aria-label="分支会话（2）" title="分支会话（2）" aria-expanded="false" data-side-sessions="2"[^>]*>.*<span>2<\/span><\/button>/);
     expect(quiet).not.toContain("data-side-sessions-needs");
     const waiting = header({ sides: { count: 3, open: true, needs: true, onToggle: () => {} } });
-    expect(waiting).toContain('aria-label="子会话（3） · 有子会话需要你"');
+    expect(waiting).toContain('aria-label="分支会话（3） · 有分支会话需要你"');
     expect(waiting).toContain('aria-expanded="true"');
     expect(waiting).toContain("data-side-sessions-needs");
   });
@@ -277,7 +277,7 @@ describe("PendingCards", () => {
     expect(permissionFrom(card)).toBe("来自子 Agent · btw: can it merge");
     setSideFold(true);
     try {
-      expect(permissionFrom(card)).toBe("来自子会话 · btw: can it merge");
+      expect(permissionFrom(card)).toBe("来自分支会话 · btw: can it merge");
     } finally {
       setSideFold(false);
     }
