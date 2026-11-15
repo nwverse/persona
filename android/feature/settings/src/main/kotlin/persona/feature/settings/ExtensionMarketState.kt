@@ -338,14 +338,19 @@ internal class CatalogExtensionModel(
         return op.copy(warnings = warnings) to merged.size > previous.size
     }
 
+    private fun removalEnded(op: ExtensionOperation): Boolean =
+        op.state == ExtensionOperation.Succeeded || op.state == ExtensionOperation.Failed || op.state == ExtensionOperation.Canceled
+
     /** While the start request is in flight, only this extension's removal packets are held for its response's operation id. */
     private fun cacheEarlyRemoval(op: ExtensionOperation) {
         val previous = earlyRemovalEvents[op.id]
+        val previousEnded = previous?.let(::removalEnded) == true
+        val incomingEnded = removalEnded(op)
         earlyRemovalEvents[op.id] = when {
             previous == null -> op
             // Terminal states win over every running snapshot; only a newer packet of the same terminal state replaces one.
-            !previous.active && (previous.state != op.state || !OperationText.newer(op, previous)) -> previous.copy(warnings = op.warnings)
-            !previous.active || !op.active || OperationText.newer(op, previous) -> op
+            previousEnded && (!incomingEnded || previous.state != op.state || !OperationText.newer(op, previous)) -> previous.copy(warnings = op.warnings)
+            previousEnded || incomingEnded || OperationText.newer(op, previous) -> op
             else -> previous.copy(warnings = op.warnings)
         }
     }
@@ -386,9 +391,9 @@ internal class CatalogExtensionModel(
                 updateFinishedRemoval(finished, op, hasNewWarnings)
                 return
             }
-            // While this page's removal is unresolved, an older or another client's operation cannot replace it.
-            removing?.let { if (it.operation != op.id) return }
         }
+        // While this page's removal is unresolved, an older or another client's operation cannot replace it.
+        removing?.let { if (it.operation != op.id) return }
         val was = state.value.operation
         if (was != null && was.id == op.id && !OperationText.newer(op, was)) return
         // A historical success from relisting is not news; this start's own response and pushes still are.
