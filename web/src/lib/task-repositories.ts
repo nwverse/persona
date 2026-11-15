@@ -1,7 +1,7 @@
 import type { Todo } from "./todos";
 import { api, credentialOwner, getToken, pastHub } from "./api";
 import { MANAGER_HEADER } from "./manager-choice";
-import type { RepositoryIdentity } from "./repository-identity";
+import { parseRepository, type RepositoryIdentity } from "./repository-identity";
 
 export type RepositoryBinding = RepositoryIdentity & {
   id: string; name?: string; aliases?: string[]; purpose?: string; verified_at: string; clone_url?: string;
@@ -66,8 +66,8 @@ const linkURL = (identity: RepositoryIdentity, kind: "issue" | "pull_request", n
   `${identity.canonical_url}/${LINK_SEGMENTS[identity.provider as keyof typeof LINK_SEGMENTS][kind]}/${number}`;
 
 /**
- * Reads an issue/PR link of a repository from either form the store accepts: a pasted URL (held to the saved identity
- * exactly as `repository.NormalizeLink` does) or a saved kind + number. Null when it does not belong to this repository.
+ * Reads an issue/PR link of a repository from either form the store accepts: a pasted URL (normalized by the shared
+ * parser exactly as `repository.NormalizeLink` does) or a saved kind + number. Null when it does not belong.
  */
 export function repositoryLinkView(identity: RepositoryIdentity, link: TaskRepositoryLink | RepositoryLinkInput): RepositoryLinkView | null {
   const segments = LINK_SEGMENTS[identity.provider as keyof typeof LINK_SEGMENTS];
@@ -76,15 +76,22 @@ export function repositoryLinkView(identity: RepositoryIdentity, link: TaskRepos
   if ("url" in link && link.url !== undefined) {
     const raw = link.url.trim();
     if (!raw || raw.length > 2048) return null;
-    let url: URL, base: URL;
-    try { url = new URL(raw); base = new URL(identity.canonical_url); } catch { return null; }
-    if (url.protocol !== base.protocol || !["http:", "https:"].includes(url.protocol) || url.username || url.password
-      || url.host !== base.host || url.search || url.hash) return null;
-    const prefix = base.pathname.replace(/\/$/, "") + "/";
+    let url: URL;
+    try { url = new URL(raw); } catch { return null; }
+    // The server accepts only http(s) link URLs, with no credentials, query (including a bare "?") or fragment.
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password
+      || url.search || url.hash || (raw.includes("?") && !url.search)) return null;
+    // Public HTTP aliases and repository-path case are normalized by the shared parser, as the server's Parse does;
+    // self-hosted instances keep their exact scheme and port.
+    const actual = parseRepository(raw, identity.provider);
+    if (!actual || actual.provider !== identity.provider || actual.instance_url !== identity.instance_url
+      || actual.path !== identity.path || actual.canonical_url !== identity.canonical_url) return null;
+    const prefix = `/${identity.path.replace(/^\/+|\/+$/g, "").toLowerCase()}/`;
+    const path = url.pathname.toLowerCase();
     for (const [candidate, segment] of Object.entries(segments)) {
-      if (!url.pathname.startsWith(prefix + segment + "/")) continue;
+      if (!path.startsWith(prefix + segment + "/")) continue;
       // The server reads the number to the end of the path, so a trailing slash or a deeper path is not this link.
-      const rest = url.pathname.slice(prefix.length + segment.length + 1);
+      const rest = path.slice(prefix.length + segment.length + 1);
       if (!rest || rest.includes("/")) return null;
       kind = candidate; number = rest;
       break;
@@ -120,10 +127,43 @@ function validIdentity(identity: RepositoryIdentity): boolean {
     return ["https:", "http:"].includes(instance.protocol) && instance.origin === identity.instance_url;
   } catch { return false; }
 }
-export function validRequestedRef(ref: RequestedRef): boolean {
-  if (!ref || typeof ref.kind !== "string") return false;
-  if (ref.kind === "default") return ref.value === undefined;
-  return ["branch", "tag", "commit", "ref"].includes(ref.kind) && typeof ref.value === "string" && !!ref.value;
+/** The same source-ref rule as repository.NormalizeRef in Go: an absent or empty ref is the default branch. */
+export function validRequestedRef(ref?: RequestedRef | null): boolean {
+  if (!ref) return true;
+  if (typeof ref.kind !== "string") return false;
+  const value = (ref as { value?: unknown }).value;
+  if (!ref.kind || ref.kind === "default") return value === undefined || value === "";
+  if (typeof value !== "string") return false;
+  if (ref.kind === "commit") return /^[0-9a-fA-F]{40}$/.test(value) || /^[0-9a-fA-F]{64}$/.test(value);
+  if (!["branch", "tag", "ref"].includes(ref.kind)) return false;
+  if (!value || new TextEncoder().encode(value).length > 1024 || value === "@" || value.startsWith("-")
+    || value.includes(" ") || /[~^:?*[\\]/.test(value) || value.includes("..") || value.includes("@{")
+    || value.endsWith(".") || /\p{Cc}/u.test(value)) return false;
+  if (ref.kind === "ref" && !value.startsWith("refs/")) return false;
+  return value.split("/").every((part) => part !== "" && !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
+/** The whole creation/edit draft: unique repository ids, valid aliases (case-insensitive) and source refs, bounded links. */
+export function validRepositoryDraft(rows: TaskRepositoryInput[]): boolean {
+  if (!Array.isArray(rows) || rows.length > 20) return false;
+  const ids = new Set<string>();
+  const aliases = new Set<string>();
+  return rows.every((row) => {
+    if (!row || typeof row.repo_id !== "string" || !row.repo_id || row.repo_id.length > 80 || ids.has(row.repo_id)) return false;
+    ids.add(row.repo_id);
+    if (row.directory_alias !== undefined && typeof row.directory_alias !== "string") return false;
+    if (!validRepositoryAlias(row.directory_alias ?? "")) return false;
+    if (row.directory_alias) {
+      const key = row.directory_alias.toLowerCase();
+      if (aliases.has(key)) return false;
+      aliases.add(key);
+    }
+    if (!validRequestedRef(row.requested_ref)) return false;
+    const links = row.links ?? [];
+    if (!Array.isArray(links) || links.length > 50) return false;
+    return links.every((link) => link && (("url" in link && typeof link.url === "string" && !!link.url.trim() && link.url.trim().length <= 2048)
+      || (link.kind === "issue" || link.kind === "pull_request") && typeof link.number === "string" && /^[1-9][0-9]{0,19}$/.test(link.number)));
+  });
 }
 export function validRepositorySet(set: TaskRepositorySet, manager: string, todoId: string): boolean {
   return !!set && set.schema_version === 1 && set.manager === manager && set.todo_id === todoId && revision(set.revision)
@@ -175,9 +215,12 @@ export function cleanRepositoryDraft(rows: TaskRepositoryInput[]): TaskRepositor
 
 /** Explicit association creation stays outside the ordinary Todo client's startup path. */
 export async function createTodoWithRepositories(context: RepositoryRequestContext, title: string, notes: string, due: { due_at?: string; due_date?: string } | undefined, bindings: CreateRepositoryBindings): Promise<Todo> {
+  const repositories = bindings ? cleanRepositoryDraft(bindings.repositories) : [];
+  // The form checks this too; the submit guard keeps an invalid optional draft from ever becoming a POST.
+  if (!bindings || !revision(bindings.catalog_revision) || !validRepositoryDraft(repositories)) throw new Error("Invalid repository association draft");
   const result = await api<{ todo: Todo }>("/todos", {
     ...repositoryRequestOptions(context), method: "POST",
-    json: { title: title.trim(), notes: notes.trim() || undefined, ...due, repository_bindings: { ...bindings, repositories: cleanRepositoryDraft(bindings.repositories) } },
+    json: { title: title.trim(), notes: notes.trim() || undefined, ...due, repository_bindings: { ...bindings, repositories } },
   });
   if (!context.isCurrent() || !result.todo || typeof result.todo.id !== "string") throw new Error("Invalid Todo creation response");
   return result.todo;

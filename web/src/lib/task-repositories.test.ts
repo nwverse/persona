@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import fixture from "../../../spec/fixtures/task-repositories/contract.json";
-import { cleanRepositoryDraft, repositoryDraft, repositoryLinkTitle, repositoryLinkView, repositoryRelativePath, validRepositoryAlias, validRepositorySet, validRequestedRef, validTaskRepositoryLink, type RequestedRef, type TaskRepository, type TaskRepositorySet } from "./task-repositories";
+import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDraft, repositoryLinkTitle, repositoryLinkView, repositoryRelativePath, repositoryRequestContext, validRepositoryAlias, validRepositoryDraft, validRepositorySet, validRequestedRef, validTaskRepositoryLink, type RequestedRef, type TaskRepository, type TaskRepositorySet } from "./task-repositories";
 
 it("shares alias, layout and typed-ref fixtures with the manager", () => {
   for (const alias of fixture.aliases.valid) expect(validRepositoryAlias(alias), alias).toBe(true);
@@ -24,14 +24,29 @@ const gitlab = { provider: "gitlab", instance_url: "https://gitlab.example.com",
 it("reads a pasted issue or PR URL only when it belongs to the saved repository", () => {
   expect(repositoryLinkView(github, { url: "https://github.com/example/web/pull/7" })).toEqual({ kind: "pull_request", number: "7", url: "https://github.com/example/web/pull/7", label: "PR #7" });
   expect(repositoryLinkView(github, { url: "https://github.com/example/web/issues/12" })).toMatchObject({ kind: "issue", number: "12", label: "#12" });
-  // Another repository, another host, another scheme, credentials, a query, a fragment, a deeper path or a non-number: all refused.
+  // Another repository, another host, another scheme, credentials, a query, a bare query, a fragment, a deeper path, an
+  // escaped number or a non-number: all refused.
   const credentials = "https://user:pw" + "@github.com/example/web/pull/7";
-  for (const url of ["https://github.com/example/docs/pull/7", "https://gitlab.com/example/web/pull/7", "http://github.com/example/web/pull/7",
-    credentials, "https://github.com/example/web/pull/7?x=1", "https://github.com/example/web/pull/7#c",
+  for (const url of ["https://github.com/example/docs/pull/7", "https://gitlab.com/example/web/pull/7",
+    credentials, "https://github.com/example/web/pull/7?x=1", "https://github.com/example/web/pull/7?",
+    "https://github.com/example/web/pull/7#c", "https://github.com/example/web/pull/%37",
+    "https://api.github.com/repos/example/web/pull/7", "https://github.com/example/web/PULL/7",
     "https://github.com/example/web/pull/7/files", "https://github.com/example/web/pull/", "https://github.com/example/web/pull/07",
     "https://github.com/example/web/pull/0", "https://github.com/example/web", "not a url", ""]) {
     expect(repositoryLinkView(github, { url }), url).toBeNull();
   }
+});
+
+it("accepts the public HTTP aliases and repository case the server accepts", () => {
+  expect(repositoryLinkView(github, { url: "http://github.com/example/web/pull/7" })).toMatchObject({ kind: "pull_request", number: "7" });
+  expect(repositoryLinkView(github, { url: "http://www.github.com/Example/Web/issues/12" })).toMatchObject({ kind: "issue", number: "12" });
+  // Public instances share one HTTPS identity; a self-hosted instance keeps the scheme it was saved with.
+  expect(repositoryLinkView(gitlab, { url: "http://gitlab.example.com/team/api/-/issues/9" })).toBeNull();
+  const http = { ...gitlab, instance_url: "http://gitlab.example.com", canonical_url: "http://gitlab.example.com/team/api" };
+  expect(repositoryLinkView(http, { url: "http://gitlab.example.com/Team/API/-/issues/9" })).toMatchObject({ kind: "issue", number: "9" });
+  expect(repositoryLinkView(http, { url: "https://gitlab.example.com/team/api/-/issues/9" })).toBeNull();
+  expect(repositoryLinkView(gitlab, { url: "https://gitlab.example.com:8443/team/api/-/issues/9" })).toBeNull();
+  expect(repositoryLinkView(gitlab, { url: "https://gitlab.example.com/team/other/-/issues/9" })).toBeNull();
 });
 
 it("reads saved kind and number for GitHub and GitLab, keeping the number a string", () => {
@@ -75,6 +90,44 @@ it("accepts the same title bounds as the server and keeps titles through a draft
     { url: "https://github.com/example/web/issues/8", title: "Reported crash" },
     { kind: "issue", number: "9" },
   ]);
+});
+
+it("validates source refs and the whole draft with the server's rules", () => {
+  expect(validRequestedRef(undefined)).toBe(true);
+  expect(validRequestedRef({ kind: "default" } as RequestedRef)).toBe(true);
+  expect(validRequestedRef({ kind: "default", value: "" } as unknown as RequestedRef)).toBe(true);
+  expect(validRequestedRef({ kind: "default", value: "main" } as unknown as RequestedRef)).toBe(false);
+  for (const ref of [
+    { kind: "branch", value: "main" }, { kind: "tag", value: "v1.0" }, { kind: "ref", value: "refs/heads/main" },
+    { kind: "branch", value: "x".repeat(1024) }, { kind: "commit", value: "a".repeat(40) }, { kind: "commit", value: "b".repeat(64) },
+  ] as RequestedRef[]) expect(validRequestedRef(ref), JSON.stringify(ref)).toBe(true);
+  for (const ref of [
+    { kind: "branch", value: "" }, { kind: "branch", value: "@" }, { kind: "branch", value: "-x" }, { kind: "branch", value: "a b" },
+    { kind: "branch", value: "a~b" }, { kind: "branch", value: "a^b" }, { kind: "branch", value: "a:b" }, { kind: "branch", value: "a?b" },
+    { kind: "branch", value: "a*b" }, { kind: "branch", value: "a[b" }, { kind: "branch", value: "a\\b" }, { kind: "branch", value: "a..b" },
+    { kind: "branch", value: "a@{b" }, { kind: "branch", value: "a." }, { kind: "branch", value: "a//b" }, { kind: "branch", value: "a/.b" },
+    { kind: "branch", value: "a/b.lock" }, { kind: "branch", value: "x".repeat(1025) }, { kind: "ref", value: "main" },
+    { kind: "commit", value: "a".repeat(39) }, { kind: "commit", value: "g".repeat(40) }, { kind: "other", value: "main" },
+  ] as RequestedRef[]) expect(validRequestedRef(ref), JSON.stringify(ref)).toBe(false);
+  expect(validRepositoryDraft([])).toBe(true);
+  expect(validRepositoryDraft([{ repo_id: "web", requested_ref: { kind: "branch", value: "main" } }])).toBe(true);
+  expect(validRepositoryDraft([{ repo_id: "web", requested_ref: { kind: "default" } }, { repo_id: "web", requested_ref: { kind: "default" } }])).toBe(false);
+  expect(validRepositoryDraft([{ repo_id: "web", directory_alias: "Web" }, { repo_id: "docs", directory_alias: "web" }])).toBe(false);
+  expect(validRepositoryDraft([{ repo_id: "web", directory_alias: "bad/alias" }])).toBe(false);
+  expect(validRepositoryDraft([{ repo_id: "web", requested_ref: { kind: "branch", value: "" } }])).toBe(false);
+  expect(validRepositoryDraft(Array.from({ length: 21 }, (_, i) => ({ repo_id: `r${i}`, requested_ref: { kind: "default" as const } })))).toBe(false);
+});
+
+it("refuses an invalid repository draft before any creation request", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const context = repositoryRequestContext("assistant", "owner", () => true);
+  await expect(createTodoWithRepositories(context, "Title", "", undefined, {
+    catalog_revision: 1,
+    repositories: [{ repo_id: "web", requested_ref: { kind: "branch", value: "" } }],
+  })).rejects.toThrow("Invalid repository association draft");
+  expect(fetchMock).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
 });
 
 it("validates a saved response's link against the repository it claims", () => {

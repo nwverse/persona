@@ -54,6 +54,9 @@ beforeEach(async () => {
   api.mockReset();
   api.mockImplementation(async (path, init) => {
     if (path === "/todos" && (init as { method?: string })?.method === "POST") return { todo: { ...todo, id: "t2", title: "Pack" } };
+    if (path === "/assistant/repositories") return { manager: "assistant", catalog_revision: 1, repositories: [
+      { id: "web", provider: "github", instance_url: "https://github.com", path: "example/web", canonical_url: "https://github.com/example/web", name: "Web app", verified_at: "2026-01-01T00:00:00Z" },
+    ] };
     if (path.endsWith("/decisions") && (init as { method?: string })?.method === "POST") return { decision: { id: "d1" } };
     if (path.endsWith("/decisions")) return { decisions: [] };
     if (path.endsWith("/launchers")) return { launchers: [] };
@@ -87,6 +90,13 @@ const press = async (el: HTMLElement, init: KeyboardEventInit) => {
   await act(async () => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })));
   await flush();
 };
+const choose = async (el: HTMLSelectElement, value: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await flush();
+};
 
 describe("⌘↩ / Ctrl+↩ in the To-dos page's dialogs", () => {
   it("creates the new to-do from its notes; Enter alone does not", async () => {
@@ -100,6 +110,39 @@ describe("⌘↩ / Ctrl+↩ in the To-dos page's dialogs", () => {
     expect(posts("/todos")).toEqual([]);
     await press(notes, { metaKey: true });
     expect(posts("/todos")).toEqual([{ title: "Pack", notes: "Passport, charger" }]);
+  });
+
+  it("refuses an invalid optional repository draft before creating the to-do", async () => {
+    await act(async () => button(t("todos.new_todo"))!.click());
+    await flush();
+    const title = dialog()!.querySelector<HTMLInputElement>("input[type=text]")!;
+    await write(title, "Pack");
+    await act(async () => button(t("task-repositories.title"))!.click());
+    await flush();
+    await act(async () => button(t("task-repositories.add"))!.click());
+    await flush();
+    await act(async () => document.querySelector<HTMLElement>('[role="option"]')!.click());
+    await flush();
+    await act(async () => dialog()!.querySelector("summary")!.click());
+    await flush();
+    await choose(dialog()!.querySelector<HTMLSelectElement>("select")!, "branch");
+    const refInput = dialog()!.querySelector("details")!.querySelectorAll<HTMLInputElement>("input")[1];
+    expect(refInput).toBeTruthy();
+    expect(dialog()!.textContent).toContain(t("task-repositories.ref_invalid"));
+    expect(button(t("todos.create"))!.disabled).toBe(true);
+    // Submitting the form with the invalid optional draft must not send a create request.
+    await press(dialog()!.querySelector("textarea")!, { metaKey: true });
+    expect(posts("/todos")).toEqual([]);
+    await write(refInput, "main");
+    await flush();
+    expect(dialog()!.textContent).not.toContain(t("task-repositories.ref_invalid"));
+    expect(button(t("todos.create"))!.disabled).toBe(false);
+    await act(async () => button(t("todos.create"))!.click());
+    await flush();
+    expect(posts("/todos")).toMatchObject([{
+      title: "Pack",
+      repository_bindings: { catalog_revision: 1, repositories: [{ repo_id: "web", requested_ref: { kind: "branch", value: "main" }, links: [] }] },
+    }]);
   });
 
   it("records a decision from its reason", async () => {

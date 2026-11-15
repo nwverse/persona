@@ -58,7 +58,7 @@ TODO_ID, LEGACY_PR = TODO["id"], TODO.get("pr_url", "")
 def fixture_source(legacy=False, empty=False, rich=False):
     """The whole page's fetch shim, installed before any page script so the section's first read finds it."""
     return """(() => {
-  const state = window.repoFixture = {calls: [], revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s, empty: %(empty)s, rich: %(rich)s};
+  const state = window.repoFixture = {calls: [], creation: null, revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s, empty: %(empty)s, rich: %(rich)s};
   const identity = %(identity)s, gitlabIdentity = %(gitlab)s, catalog = %(catalog)s, todoId = %(todo)s;
   const row = (id, source, links) => ({repo_id: id, requested_ref: {kind: 'default'},
     source_snapshot: {identity: source, clone_url: source.canonical_url, catalog_revision: 4, transport_origin: 'canonical_default'},
@@ -84,6 +84,11 @@ def fixture_source(legacy=False, empty=False, rich=False):
   const original = window.fetch.bind(window);
   window.fetch = async (url, init={}) => {
     const path = String(url).split('/api/v1')[1], method = (init.method || 'GET').toUpperCase();
+    if (path === '/todos' && method === 'POST') {
+      const body = init.body ? JSON.parse(init.body) : {};
+      state.creation = body;
+      return reply({todo: {id: 'created_todo', title: body.title || 'Created', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), agents: []}});
+    }
     if (!path || !path.includes('/repositories')) return original(url, init);
     if (state.legacy) return reply({code: 'not_found', error: 'Not Found'}, 404);
     const manager = new Headers(init.headers).get('X-Persona-Manager');
@@ -272,6 +277,14 @@ def run(theme, width, suffix=""):
     eventually("document.querySelector('[role=dialog]').innerText.includes('#3213')")
     check(True, f"{where}: Enter adds a link of this repository")
     shot(f"dialog-added-{width}-{theme}{suffix}")
+    # The server accepts a public HTTP alias and a mixed-case repository path; the editor now normalizes both.
+    press("Add issue or PR")
+    eventually("!!document.querySelector('[role=dialog] input[type=url]')")
+    type_url("http://github.com/Example/Web/issues/3216")
+    press("Add issue or PR")
+    eventually("document.querySelector('[role=dialog]').innerText.includes('#3216')")
+    check(True, f"{where}: a public HTTP alias and mixed-case repository path are accepted")
+    shot(f"dialog-alias-{width}-{theme}{suffix}")
     js("window.repoFixture.failNextSave = {code: 'task_repositories_revision_conflict', error: 'changed'}; true")
     press("Save")
     eventually("document.querySelector('[role=dialog] [role=alert]') && document.querySelector('[role=dialog]').innerText.includes('#3213')")
@@ -399,6 +412,77 @@ def run_rich(theme, width, suffix=""):
     shot(f"marks-titles-{width}-{theme}{suffix}")
 
 
+def open_creation(theme, width, suffix=""):
+    """The New to-do dialog on the To-dos list, with the isolated repository catalog and a captured create POST."""
+    fresh_tab()
+    open_fixture_tab(f"{WEB}/?token=mock")
+    wait_for_load()
+    js("localStorage.setItem('persona.token','mock'); localStorage.setItem('persona.language','en'); "
+       "localStorage.setItem('persona.todos.view','list'); localStorage.setItem('persona.theme',%s); true" % json.dumps(theme))
+    js("localStorage.setItem('persona.text-size', %s); true" % json.dumps("large" if suffix else "standard"))
+    open_fixture_tab(f"{WEB}/todos")
+    wait_for_load()
+    cdp("Page.enable")
+    js("navigator.serviceWorker?.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister())))")
+    js("caches?.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k))))")
+    cdp("Page.addScriptToEvaluateOnNewDocument", source=fixture_source())
+    cdp("Page.reload")
+    wait_for_load()
+    eventually("!!window.repoFixture")
+    cdp("Emulation.setDeviceMetricsOverride", width=width, height=1100 if width > 600 else 1700, deviceScaleFactor=1, mobile=width <= 600)
+    eventually("[...document.querySelectorAll('button')].some((b) => b.textContent.trim().includes('New to-do') || b.getAttribute('aria-label') === 'New to-do')", seconds=30)
+    settle()
+    if suffix:
+        check(js("document.documentElement.dataset.textSize") == "large", "the creation page is at the Large text size")
+
+
+def set_input(selector, value):
+    js("""(() => {
+      const el = %s;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, %s);
+      el.dispatchEvent(new Event('input', {bubbles: true}));
+    })()""" % (selector, json.dumps(value)))
+
+
+def run_creation(theme, width, suffix=""):
+    where = f"{theme} {width}px{suffix} creation"
+    open_creation(theme, width, suffix)
+    js("""(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim().includes('New to-do') || x.getAttribute('aria-label') === 'New to-do'); b.click(); })()""")
+    eventually("!!document.querySelector('[role=dialog]')")
+    set_input("document.querySelector('[role=dialog] input[type=text]')", "Pack")
+    js("""(() => { const b = [...document.querySelectorAll('[role=dialog] button')].find((x) => x.textContent.trim().startsWith('Repositories and links')); b.click(); })()""")
+    eventually("!!document.querySelector('[data-task-repository-editor]')")
+    js("""(() => { const b = [...document.querySelectorAll('[role=dialog] button')].find((x) => x.textContent.trim() === 'Add repository'); b.click(); })()""")
+    eventually("!!document.querySelector('[data-repository-picker]')")
+    js("document.querySelector('[data-repository-picker] [role=option]').click(); true")
+    settle()
+    js("document.querySelector('[data-task-repository-editor] details summary').click(); true")
+    js("""(() => { const s = document.querySelector('[role=dialog] select'); s.value = 'branch'; s.dispatchEvent(new Event('change', {bubbles: true})); })()""")
+    eventually("document.querySelector('[role=dialog]').innerText.includes('Use a valid branch, tag, commit or Git ref.')")
+    check(js("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Create').disabled"),
+          f"{where}: an empty branch disables Create")
+    js("""(() => { const el = document.querySelector('[role=dialog] textarea'); el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', metaKey: true, bubbles: true, cancelable: true})); })()""")
+    settle()
+    check(js("!window.repoFixture.creation"), f"{where}: the invalid draft sends no create POST")
+    shot(f"creation-invalid-{width}-{theme}{suffix}")
+    set_input("document.querySelector('[role=dialog] details').querySelectorAll('input')[1]", "main")
+    eventually("!document.querySelector('[role=dialog]').innerText.includes('Use a valid branch, tag, commit or Git ref.')")
+    check(not js("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Create').disabled"),
+          f"{where}: correcting the ref enables Create")
+    check(js("document.querySelector('[role=dialog]').scrollWidth <= document.querySelector('[role=dialog]').clientWidth"),
+          f"{where}: the creation dialog has no horizontal overflow")
+    shot(f"creation-corrected-{width}-{theme}{suffix}")
+    js("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Create' && b.type === 'submit').click(); true")
+    eventually("!!window.repoFixture.creation")
+    body = json.loads(js("JSON.stringify(window.repoFixture.creation)"))
+    check(body["title"] == "Pack", f"{where}: the corrected title is sent")
+    bindings = body["repository_bindings"]
+    check(bindings["catalog_revision"] == 4, f"{where}: the creation sends the catalog revision")
+    row0 = bindings["repositories"][0]
+    check(row0["repo_id"] == "web" and row0["requested_ref"] == {"kind": "branch", "value": "main"},
+          f"{where}: the corrected branch ref is sent with its repository")
+
+
 try:
     for theme in ("light", "dark"):
         for width in (1280, 390):
@@ -408,6 +492,10 @@ try:
     run_rich("light", 390, "-large")
     run_empty()
     run_legacy()
+    for theme in ("light", "dark"):
+        for width in (1280, 390):
+            run_creation(theme, width)
+    run_creation("light", 390, "-large")
     print("VERDICT: pass")
 except AssertionError as failure:
     print(f"VERDICT: FAIL {failure}")

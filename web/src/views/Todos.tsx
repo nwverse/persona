@@ -1,5 +1,5 @@
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
-import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
+import { cleanRepositoryDraft, createTodoWithRepositories, validRepositoryDraft, type CreateRepositoryBindings } from "../lib/task-repositories";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
@@ -2851,6 +2851,7 @@ function NewTodoDialog({
   const [dueDay, setDueDay] = useState("");
   const [dueTime, setDueTime] = useState("");
   const [allDay, setAllDay] = useState(true);
+  const bindingsValid = !repositoryBindings || validRepositoryDraft(cleanRepositoryDraft(repositoryBindings.repositories));
 
   useEffect(() => {
     if (open) {
@@ -2876,7 +2877,7 @@ function NewTodoDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!title.trim() || busy || !repositoryContext.isCurrent()) return;
+    if (!title.trim() || busy || !bindingsValid || !repositoryContext.isCurrent()) return;
     setBusy(true);
     try {
       const todo = repositoryBindings
@@ -2953,12 +2954,13 @@ function NewTodoDialog({
         </div>
 
         <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} />
+        {!bindingsValid && <p role="alert" className="text-submeta text-red">{t("task-repositories.draft_invalid")}</p>}
 
         <div className="mt-2 flex justify-end gap-2">
           <Button tone="secondary" disabled={busy} onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button tone="accent" type="submit" disabled={!title.trim() || busy} busy={busy}>
+          <Button tone="accent" type="submit" disabled={!title.trim() || busy || !bindingsValid} busy={busy}>
             {t("todos.create")}
           </Button>
         </div>
