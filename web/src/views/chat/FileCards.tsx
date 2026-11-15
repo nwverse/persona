@@ -35,7 +35,7 @@ export function FileCards({ files, mid, align = "end" }: { files: AttachedFile[]
           type="button"
           aria-expanded={all}
           onClick={() => setAll((v) => !v)}
-          className="flex max-w-[360px] min-w-0 items-center gap-1.5 rounded-[12px] bg-inset px-3 py-2 text-[13px] text-accent shadow-hairline hover:bg-hover"
+          className="flex max-w-[360px] min-w-0 items-center gap-1.5 rounded-[12px] bg-inset px-3 py-2 text-meta text-accent shadow-hairline hover:bg-hover"
           data-testid="file-cards-more"
         >
           {all ? t("chat-attachedphotos.files_less") : t("chat-attachedphotos.files_more", { count: files.length - FOLDED })}

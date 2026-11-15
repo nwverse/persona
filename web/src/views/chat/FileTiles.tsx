@@ -32,8 +32,8 @@ export function FileTiles({ draftKey, files }: { draftKey: string; files: Compos
           <>
             <Icon name={failed ? "warning" : "read"} size={16} className={cx("shrink-0", failed ? "text-red" : "text-ink-3")} />
             <span className="flex min-w-0 flex-col">
-              <span className="min-w-0 truncate text-[12px] text-ink-2">{f.name}</span>
-              <span className={cx("truncate text-[11.5px] tabular-nums", failed ? "text-red" : "text-ink-3")}>{status(f)}</span>
+              <span className="min-w-0 truncate text-label text-ink-2">{f.name}</span>
+              <span className={cx("truncate text-submeta tabular-nums", failed ? "text-red" : "text-ink-3")}>{status(f)}</span>
             </span>
           </>
         );
