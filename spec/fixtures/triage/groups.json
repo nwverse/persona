@@ -78,16 +78,7 @@
               }
             ],
             "origin": "conv",
-            "pr_url": "https://example.com/pull/9",
-            "pr_status": {
-              "url": "https://example.com/pull/9",
-              "state": "open",
-              "draft": false,
-              "review": "pending",
-              "checks": "none",
-              "conflicts": false,
-              "checked_at": "2026-11-10T12:00:00Z"
-            }
+            "pr_url": "https://example.com/pull/9"
           },
           {
             "id": "pr-b",
@@ -103,16 +94,7 @@
               }
             ],
             "origin": "conv",
-            "pr_url": "https://example.com/pull/9/",
-            "pr_status": {
-              "url": "https://example.com/pull/9/",
-              "state": "open",
-              "draft": false,
-              "review": "pending",
-              "checks": "none",
-              "conflicts": false,
-              "checked_at": "2026-11-10T12:00:00Z"
-            }
+            "pr_url": "https://example.com/pull/9/"
           },
           {
             "id": "lone",
