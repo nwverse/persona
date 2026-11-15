@@ -43,7 +43,7 @@ export function MainChatAgentNotice({ session, isMain, onNewMain }: { session: S
     return row ? providerTitle(row) : launcher;
   };
   return (
-    <div data-main-chat-agent-notice role="status" className="flex min-h-9 items-center gap-2 rounded-[12px] bg-surface px-3 py-1.5 text-[12px] text-ink-2 shadow-card">
+    <div data-main-chat-agent-notice role="status" className="flex min-h-9 items-center gap-2 rounded-[12px] bg-surface px-3 py-1.5 text-xs text-ink-2 shadow-card">
       <Icon name="info" size={13} className="shrink-0 text-ink-3" />
       <span className="min-w-0 flex-1 break-words">
         {t("assistant-mainagentnotice.main_other_kind", { configured: named(mismatch.configuredLauncher), actual: named(mismatch.actualLauncher) })}

@@ -385,7 +385,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             onChange={(runtime) => { if (!busy && chosenAgent === "claude") setDraft((d) => ({ ...d, runtime })); }} />
           {chosenAgent === "claude" && <span className="mt-1 block text-[11px] text-ink-3">{t("settings-modelconfiguration.runtime_hint")}</span>}
         </div>}
-        {mainMismatch && <p data-main-chat-agent-setting className="rounded-control bg-inset px-3 py-2 text-[12px] leading-relaxed text-ink-2">
+        {mainMismatch && <p data-main-chat-agent-setting className="rounded-control bg-inset px-3 py-2 text-xs leading-relaxed text-ink-2">
           {t("settings-modelconfiguration.main_other_kind", { configured: configuredMainName, actual: actualMainName })}
         </p>}
         <p className="text-[11.5px] leading-relaxed text-ink-3">{p.kind === "plugin" ? t("settings-modelconfiguration.save_note_plugin") : t("settings-modelconfiguration.save_note")}</p>
