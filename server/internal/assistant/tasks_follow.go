@@ -845,7 +845,7 @@ func (s *Service) sendToTaskAgent(ctx context.Context, conversation, todoID stri
 	err = s.call(sctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil)
 	note.sent(sctx, err)
 	if err != nil {
-		return FeedItem{}, err
+		return FeedItem{}, s.dialogRefusal(ctx, c, err) // a dialog_open refusal names the agent and the dialog (#7343)
 	}
 	body := map[string]string{"text": text}
 	if relay != "" {

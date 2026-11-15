@@ -141,11 +141,9 @@ func Call(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrOffline) {
 		status = http.StatusServiceUnavailable
 	}
-	code := NodeCode(err)
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code != "" {
-		code = re.Code
-		switch code {
+		switch re.Code {
 		case "internal", "node_unreachable", "timeout":
 			status = http.StatusBadGateway
 		case proto.CodeTerminalNotReady: // the node's new tab would not take the start command; nothing ran
@@ -153,6 +151,17 @@ func Call(w http.ResponseWriter, err error) {
 		default:
 			status = http.StatusConflict
 		}
+	}
+	CallStatus(w, status, err)
+}
+
+// CallStatus writes err, a node call's error, as Call does but with status: for a route whose clients already read
+// Call's status as something else (a to-do's accept, where every app takes a 409 for "already handled", #7343).
+func CallStatus(w http.ResponseWriter, status int, err error) {
+	code := NodeCode(err)
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code != "" {
+		code = re.Code
 	}
 	body := Body(status, code, err)
 	// delivered stays what the node said (sendsafe.go): the iOS app treats "unknown" as "maybe typed" and stops
