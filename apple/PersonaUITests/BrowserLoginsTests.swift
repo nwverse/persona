@@ -82,7 +82,7 @@ final class BrowserLoginsTests: XCTestCase {
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "the whole Browser Sign-ins list did not open:\n\(app.debugDescription)")
         XCTAssertTrue(bar.buttons["BackButton"].exists)
         XCTAssertFalse(app.buttons["shell-place-sidebar"].exists)
-        XCTAssertEqual(bar.buttons["BackButton"].count, 1, "the child has more than one leading button")
+        XCTAssertEqual(bar.buttons.matching(identifier: "BackButton").count, 1, "the child has more than one leading button")
         let trailing = bar.descendants(matching: .button).matching(identifier: "browser-logins-sort").allElementsBoundByIndex
         XCTAssertEqual(trailing.count, 1, "the one trailing menu is not directly accessible:\n\(bar.debugDescription)")
         try shot(app, "one-menu")
