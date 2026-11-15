@@ -334,7 +334,8 @@ internal class CatalogExtensionModel(
         val previous = removalWarnings[op.id].orEmpty()
         val merged = (previous + op.warnings.orEmpty().filter { it.isNotBlank() }).distinct()
         if (merged.isNotEmpty()) removalWarnings[op.id] = merged
-        return op.copy(warnings = merged.ifEmpty { op.warnings }) to merged.size > previous.size
+        val warnings = if (merged.isEmpty()) op.warnings else merged
+        return op.copy(warnings = warnings) to merged.size > previous.size
     }
 
     /** While the start request is in flight, only this extension's removal packets are held for its response's operation id. */
