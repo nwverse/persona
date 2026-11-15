@@ -290,6 +290,18 @@ func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, a
 	return transaction.backupRoot, transaction.rollback, nil
 }
 
+// dockerPasswordKept reports whether restore leaves the install's own
+// docker/db-password in place although the bundle carries one.
+func dockerPasswordKept(home string, manifest *Manifest) bool {
+	for _, entry := range manifest.Files {
+		if entry.Path == "runtime/docker/db-password" {
+			_, err := os.Lstat(filepath.Join(home, "docker", "db-password"))
+			return err == nil
+		}
+	}
+	return false
+}
+
 func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) ([]restoreItem, error) {
 	var items []restoreItem
 	for _, name := range []string{"hub.json", "secret.key"} {
@@ -297,10 +309,16 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 	}
 	for _, name := range optionalRootFiles {
 		source := filepath.Join(staging, "runtime", filepath.FromSlash(name))
-		// A bundle without it (a non-Docker install) must not move aside a
-		// Docker install's database password: the role's password is not part
-		// of the bundle, and the file is how the containers authenticate.
+		// A Docker install's database password stays: the role's password is
+		// not part of the bundle, so the new or surviving cluster only accepts
+		// the one its own file names, and a bundle's copy (from the cluster it
+		// was taken on) would stop the containers from starting. A bundle
+		// without it (a non-Docker install) must not move it aside either.
+		// Only an install with none gets the bundle's.
 		if name == "docker/db-password" {
+			if _, err := os.Lstat(filepath.Join(home, filepath.FromSlash(name))); err == nil {
+				continue
+			}
 			if _, err := os.Lstat(source); err != nil {
 				continue
 			}

@@ -316,7 +316,9 @@ func targetSecrets(target Target) []string {
 			secrets = append(secrets, password)
 		}
 	}
-	if cfg, err := pgx.ParseConfig(target.URL); err == nil {
+	// Without the TLS file parameters: unreadable files here must not hide a
+	// query-string password from the redaction.
+	if cfg, err := parseAddressing(target.URL); err == nil {
 		secrets = append(secrets, cfg.Password)
 	}
 	return secrets
@@ -503,9 +505,13 @@ func (b *postgresBackend) CheckClients(target Target, programs ...string) error 
 				"Run personad backup where PostgreSQL client tools of the server's major version are installed, or pass --%s-docker-container naming a container that has them",
 				target.Part, strings.Join(missing, " and "), target.Part)
 		}
+		if _, err := b.lookPath("docker"); err != nil {
+			return fmt.Errorf("the %s database needs %s, which is not installed here, and the docker command that would run them in container %q is not available either; install PostgreSQL client tools of the server's major version", target.Part, strings.Join(missing, " and "), container)
+		}
+		return nil
 	}
 	if _, err := b.lookPath("docker"); err != nil {
-		return fmt.Errorf("the %s database needs pg_dump/pg_restore, which are not installed here, and the docker command that would run them in container %q is not available either; install PostgreSQL client tools of the server's major version", target.Part, container)
+		return fmt.Errorf("the %s database is set to use pg_dump/pg_restore inside container %q, but the docker command is not available here", target.Part, container)
 	}
 	return nil
 }

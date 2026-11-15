@@ -262,3 +262,183 @@ func TestRestoreKeepsDockerPasswordFileAbsentFromBundle(t *testing.T) {
 		t.Fatalf("docker/db-password after restore = %q, %v", raw, err)
 	}
 }
+
+func restoreWithFault(t *testing.T, fixture *backupFixture, fault string) (Result, error) {
+	t.Helper()
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mutate(t)
+	fixture.backend.dropped = nil // only what the restore drops counts
+	fixture.backend.commitThenFail = fault
+	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if !fixture.backend.commitThenFired {
+		t.Fatal("the fault was never injected")
+	}
+	return result, err
+}
+
+func assertNothingDropped(t *testing.T, fixture *backupFixture, tolerated ...string) {
+	t.Helper()
+	for _, name := range fixture.backend.dropped {
+		ok := false
+		for _, prefix := range tolerated {
+			ok = ok || strings.HasPrefix(name, prefix)
+		}
+		if !ok {
+			t.Errorf("database %s was dropped after an uncertain rename", name)
+		}
+	}
+}
+
+// When the server cannot be asked whether the rename committed, it is taken to
+// have: the undo runs, and nothing is dropped.
+func TestRenameCheckFailureIsNotTakenForNotCommitted(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	fixture.backend.existsErr = true
+	_, err := restoreWithFault(t, fixture, "manager:install")
+	if err == nil {
+		t.Fatal("restore succeeded")
+	}
+	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != "manager-two" {
+		t.Fatalf("manager after rollback = %+v", got)
+	}
+	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database]; got == nil || got.dump != "hub-two" {
+		t.Fatalf("hub after rollback = %+v", got)
+	}
+	assertNothingDropped(t, fixture, "persona_staged_") // undone, so the staged copies are the ones to discard
+}
+
+// Both names existing, or neither, is not "the rename did not happen": nothing
+// is dropped, the previous database stays, and the operator is told which
+// staged database may remain.
+func TestAmbiguousRenameStateDropsNothing(t *testing.T) {
+	for _, shape := range []string{"both", "neither"} {
+		t.Run(shape, func(t *testing.T) {
+			fixture := newBackupFixture(t, "persona_manager")
+			fixture.backend.faultShape = shape
+			_, err := restoreWithFault(t, fixture, "manager:install")
+			if err == nil {
+				t.Fatal("restore succeeded")
+			}
+			assertNothingDropped(t, fixture, "persona_staged_h_")
+			found := false
+			for name, database := range fixture.backend.server(fixture.manager) {
+				if strings.HasPrefix(name, "persona_previous_m_") && database.dump == "manager-two" {
+					found = true
+				}
+				if database.dump == "manager-two" && !strings.HasPrefix(name, "persona_previous_m_") && name != fixture.manager.Database {
+					t.Errorf("unexpected copy of the previous database under %s", name)
+				}
+			}
+			if shape == "both" && !strings.Contains(err.Error(), "persona_staged_m_") {
+				t.Errorf("the error does not name the staged database that may remain: %v", err)
+			}
+			if !found && fixture.backend.server(fixture.manager)[fixture.manager.Database] == nil {
+				t.Errorf("the previous manager database is gone: %v", fixture.backend.server(fixture.manager))
+			}
+		})
+	}
+}
+
+// The server stays unreachable after an install rename committed: nothing can
+// be undone. Files must then stay consistent with the databases that are live,
+// and the error must say where the previous databases and files are.
+func TestUnreachableServerAfterCommitKeepsFilesAndNamesThePreviousState(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	fixture.backend.down = true
+	_, err := restoreWithFault(t, fixture, "manager:install")
+	if err == nil {
+		t.Fatal("restore succeeded")
+	}
+	raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
+	if string(raw) != "original knowledge" {
+		t.Errorf("files were rolled back under databases that stayed restored: %q", raw)
+	}
+	for _, part := range []Target{fixture.hub, fixture.manager} {
+		for name, database := range fixture.backend.server(part) {
+			if strings.HasPrefix(name, "persona_previous_") && !strings.Contains(err.Error(), name) {
+				t.Errorf("the error does not name the previous database %s (%s): %v", name, database.dump, err)
+			}
+		}
+	}
+	for _, wanted := range []string{"persona_previous_h_", "persona_previous_m_", "previous runtime files", "restore"} {
+		if !strings.Contains(err.Error(), wanted) {
+			t.Errorf("the error lacks %q: %v", wanted, err)
+		}
+	}
+	assertNothingDropped(t, fixture, "persona_staged_h_")
+}
+
+// An output inside a tree the backup collects (the knowledge base, runtime
+// directories) would be copied into itself with its staging directory.
+func TestCreateRefusesAnOutputInsideACollectedTree(t *testing.T) {
+	for _, inside := range []string{"data/backups", "data", "managers/assistant/out", "extensions/out", "skills"} {
+		t.Run(inside, func(t *testing.T) {
+			fixture := newBackupFixture(t, "persona_manager")
+			opts := fixture.options()
+			opts.Output = filepath.Join(fixture.home, filepath.FromSlash(inside), "install.backup")
+			_, err := fixture.operator().Create(context.Background(), opts)
+			if err == nil || !strings.Contains(err.Error(), "inside") {
+				t.Fatalf("create = %v", err)
+			}
+			if _, statErr := os.Stat(filepath.Dir(opts.Output)); statErr == nil && inside != "data" && inside != "managers/assistant/out" && inside != "skills" && inside != "data/backups" {
+				t.Errorf("the output directory was created: %v", statErr)
+			}
+			entries, _ := filepath.Glob(filepath.Join(fixture.home, filepath.FromSlash(inside), ".persona-backup-*"))
+			if len(entries) != 0 {
+				t.Errorf("staging left behind: %v", entries)
+			}
+		})
+	}
+}
+
+// Outside the collected trees (including a sibling that merely shares a prefix)
+// the output is fine, even inside the runtime directory.
+func TestCreateAllowsAnOutputBesideTheCollectedTrees(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	for _, dir := range []string{"backups", "data-old"} {
+		opts := fixture.options()
+		opts.Output = filepath.Join(fixture.home, dir, "install.backup")
+		if _, err := fixture.operator().Create(context.Background(), opts); err != nil {
+			t.Errorf("create into %s: %v", dir, err)
+		}
+	}
+}
+
+// A restore of a bundle with docker/db-password onto an install that already
+// has one keeps the install's: the role's password is not part of the bundle,
+// and a Compose cluster only accepts the one its own file names.
+func TestRestoreKeepsTheExistingDockerPasswordFile(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	password := filepath.Join(fixture.home, "docker", "db-password")
+	writeFixtureFile(t, password, []byte("old-cluster-password"))
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, password, []byte("new-cluster-password"))
+	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(password)
+	if string(raw) != "new-cluster-password" {
+		t.Fatalf("docker/db-password after restore = %q", raw)
+	}
+	if !result.KeptDockerPassword {
+		t.Error("the result does not report the kept password file")
+	}
+	if err := os.Remove(password); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mutate(t)
+	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(password)
+	if string(raw) != "old-cluster-password" {
+		t.Fatalf("an absent docker/db-password was not restored from the bundle: %q", raw)
+	}
+}

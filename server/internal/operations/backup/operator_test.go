@@ -40,8 +40,16 @@ type fakeBackend struct {
 	// an error, as a connection lost after the server committed would.
 	commitThenFail  string // "<part>:install" or "<part>:previous"
 	commitThenFired bool
-	active          map[string]int
-	clientErr       error
+	// shape of an install rename that reports an error after the fault: "" the
+	// rename happened, "both" the destination exists next to the source,
+	// "neither" the source is gone and the destination was never made.
+	faultShape string
+	// existsErr makes every Exists fail after the fault; down makes every
+	// Exists, Rename and Drop fail (the server is unreachable).
+	existsErr bool
+	down      bool
+	active    map[string]int
+	clientErr error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -147,6 +155,9 @@ func (f *fakeBackend) Restore(_ context.Context, target Target, database, dumpPa
 func (f *fakeBackend) Drop(_ context.Context, target Target, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.down && f.commitThenFired {
+		return errors.New("server unreachable")
+	}
 	delete(f.server(target), name)
 	f.dropped = append(f.dropped, name)
 	return nil
@@ -155,6 +166,9 @@ func (f *fakeBackend) Drop(_ context.Context, target Target, name string) error 
 func (f *fakeBackend) Rename(_ context.Context, target Target, from, to string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.down && f.commitThenFired {
+		return errors.New("server unreachable")
+	}
 	if f.failInstallPart == target.Part && !f.installFailed && strings.HasPrefix(from, "persona_staged_") && to == target.Database {
 		f.installFailed = true
 		if f.installErr != nil {
@@ -167,7 +181,12 @@ func (f *fakeBackend) Rename(_ context.Context, target Target, from, to string) 
 		return fmt.Errorf("invalid rename %s to %s", from, to)
 	}
 	server[to] = server[from]
-	delete(server, from)
+	if !(f.faultShape == "both" && !f.commitThenFired && f.commitThenFail == target.Part+":install" && strings.HasPrefix(from, "persona_staged_")) {
+		delete(server, from)
+	}
+	if f.faultShape == "neither" && !f.commitThenFired && f.commitThenFail == target.Part+":install" && strings.HasPrefix(from, "persona_staged_") {
+		delete(server, to)
+	}
 	f.renamed = append(f.renamed, from+"->"+to)
 	if !f.commitThenFired && f.commitThenFail != "" {
 		kind := ""
@@ -190,6 +209,9 @@ func (f *fakeBackend) CheckClients(Target, ...string) error { return f.clientErr
 func (f *fakeBackend) Exists(_ context.Context, target Target, name string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if (f.existsErr || f.down) && f.commitThenFired {
+		return false, errors.New("cannot check the database")
+	}
 	return f.server(target)[name] != nil, nil
 }
 

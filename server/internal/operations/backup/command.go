@@ -135,6 +135,9 @@ func runWithOperator(ctx context.Context, operator operatorRunner, args []string
 		if result.PreviousFiles != "" {
 			fmt.Fprintf(stdout, "previous runtime files preserved in %s\n", result.PreviousFiles)
 		}
+		if result.KeptDockerPassword {
+			fmt.Fprintln(stdout, "kept this install's docker/db-password: the bundle's copy belongs to the database cluster it was taken from, not to this one")
+		}
 	case result.Verified && command == "create":
 		fmt.Fprintf(stdout, "created and verified %s\n", result.Bundle)
 	default:

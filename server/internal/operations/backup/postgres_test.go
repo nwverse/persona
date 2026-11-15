@@ -310,3 +310,45 @@ func TestClientPreflightFailsEarlyWithoutUsableClients(t *testing.T) {
 		t.Errorf("container fallback available: %v", err)
 	}
 }
+
+// The redaction list must hold the query-string password even when TLS files
+// named in the URL cannot be read here.
+func TestTargetSecretsIncludeQueryPasswordWithUnreadableTLSFiles(t *testing.T) {
+	isolateLibpqEnvironment(t)
+	target := Target{URL: "postgres://u@db.example/db?sslmode=verify-full&sslrootcert=/nonexistent/ca.pem&password=query-secret"}
+	found := false
+	for _, secret := range targetSecrets(target) {
+		found = found || secret == "query-secret"
+	}
+	if !found {
+		t.Fatalf("targetSecrets = %q", targetSecrets(target))
+	}
+}
+
+// With an explicit container the programs are not looked up here, so a missing
+// docker command must not be reported as missing client tools.
+func TestPreflightDockerMessageIsAccurate(t *testing.T) {
+	isolateLibpqEnvironment(t)
+	target, err := makeTarget("hub", "postgres://u@db.example/db", "named-container", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (&postgresBackend{lookPath: func(string) (string, error) { return "", os.ErrNotExist }}).CheckClients(target, "pg_dump")
+	if err == nil || !strings.Contains(err.Error(), "docker") || !strings.Contains(err.Error(), "named-container") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), "not installed here") {
+		t.Errorf("the message claims the clients are missing without checking: %v", err)
+	}
+	// Clients on PATH while docker is missing: the explicit container still needs docker.
+	only := func(name string) (string, error) {
+		if name == "pg_dump" {
+			return "/bin/pg_dump", nil
+		}
+		return "", os.ErrNotExist
+	}
+	err = (&postgresBackend{lookPath: only}).CheckClients(target, "pg_dump")
+	if err == nil || strings.Contains(err.Error(), "not installed here") {
+		t.Fatalf("clients present, docker missing = %v", err)
+	}
+}

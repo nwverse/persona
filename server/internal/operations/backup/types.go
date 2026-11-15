@@ -115,4 +115,7 @@ type Result struct {
 	PreviousHubDB     string
 	PreviousManagerDB string
 	PreviousFiles     string
+	// KeptDockerPassword: the bundle has a docker/db-password, but the install's
+	// own was kept (see restoreItems).
+	KeptDockerPassword bool
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/secretkey"
@@ -35,6 +36,9 @@ func (o *Operator) Create(ctx context.Context, opts Options) (_ Result, err erro
 	}
 	output, err := filepath.Abs(opts.Output)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := refuseOutputInsideCollectedTree(opts.Home, output); err != nil {
 		return Result{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
@@ -209,10 +213,72 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 	previous, err := o.swapDatabases(ctx, hub, manager, hubStage, managerStage)
+	var undoFailed *undoFailedError
+	if errors.As(err, &undoFailed) {
+		// The databases could not be put back (the server went away after a
+		// rename), so the ones live may be the bundle's. Putting the files back
+		// under them would make the install inconsistent: keep the restored
+		// files, and tell the operator where everything previous is. Nothing is
+		// lost; running restore again converges.
+		return Result{}, fmt.Errorf("%w; the databases could not be rolled back (%v), so the runtime files were left as restored to match the databases that may be live. "+
+			"Previous hub database: %s; previous built-in manager database: %s; previous runtime files: %s. Check the server, then run restore again, or rename the previous databases back by hand",
+			undoFailed.cause, undoFailed.undo, nameOrNone(previous[0]), nameOrNone(previous[1]), nameOrNone(previousFiles))
+	}
 	if err != nil {
 		return Result{}, errors.Join(err, rollbackFiles())
 	}
-	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles}, nil
+	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: dockerPasswordKept(opts.Home, manifest)}, nil
+}
+
+func nameOrNone(name string) string {
+	if name == "" {
+		return "(none)"
+	}
+	return name
+}
+
+// refuseOutputInsideCollectedTree stops a bundle from being written inside a
+// tree it collects (the knowledge base and the runtime directories): staging
+// and the bundle would be copied into themselves, and every later backup would
+// carry the earlier ones.
+func refuseOutputInsideCollectedTree(home, output string) error {
+	homeAbs, err := filepath.Abs(home)
+	if err != nil {
+		return err
+	}
+	_, kbDir, err := knowledgeBaseLocator(homeAbs)
+	if err != nil {
+		return err
+	}
+	trees := []string{kbDir, filepath.Join(homeAbs, "managers", "assistant")}
+	for _, name := range optionalRuntimeDirectories {
+		trees = append(trees, filepath.Join(homeAbs, name))
+	}
+	resolvedOutput := resolveExisting(filepath.Dir(output))
+	for _, tree := range trees {
+		for _, candidate := range []string{filepath.Dir(output), resolvedOutput} {
+			for _, base := range []string{tree, resolveExisting(tree)} {
+				if rel, err := filepath.Rel(base, candidate); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					return fmt.Errorf("--output is inside %s, which the backup collects: choose a directory outside the knowledge base and the runtime's managers/assistant, extensions, skills and hub.machines_kept directories", tree)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// resolveExisting resolves symlinks in the longest existing prefix of a path.
+func resolveExisting(name string) string {
+	rest := ""
+	for current := filepath.Clean(name); ; current = filepath.Dir(current) {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		if filepath.Dir(current) == current {
+			return name
+		}
+		rest = filepath.Join(filepath.Base(current), rest)
+	}
 }
 
 type stagedDatabase struct {
@@ -394,13 +460,14 @@ func (o *Operator) checkClients(hub, manager Target, programs ...string) error {
 }
 
 func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubStage, managerStage *stagedDatabase) ([2]string, error) {
-	var previous [2]string
+	var previous [2]string // the previous databases still parked under their temporary names
 	type swapRecord struct {
 		target        Target
 		staged        *stagedDatabase
 		previous      string
 		previousMoved bool
 		installed     bool
+		index         int
 	}
 	var records []*swapRecord
 	rollback := func() error {
@@ -411,18 +478,26 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 			record := records[i]
 			if record.installed {
 				if err := o.backend.Rename(ctx, record.target, record.target.Database, record.staged.name); err != nil {
-					errs = append(errs, err)
+					errs = append(errs, fmt.Errorf("undo the install of staged database %s: %w", record.staged.name, err))
 				} else {
 					record.staged.active = true
 				}
 			}
 			if record.previousMoved {
 				if err := o.backend.Rename(ctx, record.target, record.previous, record.target.Database); err != nil {
-					errs = append(errs, err)
+					errs = append(errs, fmt.Errorf("rename the previous database %s back: %w", record.previous, err))
+				} else {
+					previous[record.index] = ""
 				}
 			}
 		}
 		return errors.Join(errs...)
+	}
+	fail := func(err error) error {
+		if undo := rollback(); undo != nil {
+			return &undoFailedError{cause: err, undo: undo}
+		}
+		return err
 	}
 	for index, item := range []struct {
 		target Target
@@ -430,18 +505,18 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 		role   string
 	}{{hub, hubStage, "h"}, {manager, managerStage, "m"}} {
 		if err := ctx.Err(); err != nil {
-			return previous, errors.Join(err, rollback())
+			return previous, fail(err)
 		}
 		exists, err := o.backend.Exists(ctx, item.target, item.target.Database)
 		if err != nil {
-			return previous, errors.Join(err, rollback())
+			return previous, fail(err)
 		}
-		record := &swapRecord{target: item.target, staged: item.staged}
+		record := &swapRecord{target: item.target, staged: item.staged, index: index}
 		records = append(records, record)
 		if exists {
 			record.previous, err = o.uniqueName(ctx, item.target, "persona_previous_"+item.role+"_")
 			if err != nil {
-				return previous, errors.Join(err, rollback())
+				return previous, fail(err)
 			}
 			err := o.backend.Rename(ctx, item.target, item.target.Database, record.previous)
 			if err != nil {
@@ -450,7 +525,7 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 				if record.previousMoved {
 					previous[index] = record.previous
 				}
-				return previous, errors.Join(err, rollback())
+				return previous, fail(err)
 			}
 			record.previousMoved = true
 			previous[index] = record.previous
@@ -462,13 +537,21 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 				item.staged.active = false
 				record.installed = true
 			}
-			return previous, errors.Join(err, rollback())
+			return previous, fail(err)
 		}
 		item.staged.active = false
 		record.installed = true
 	}
 	return previous, nil
 }
+
+// undoFailedError: a swap failed, and putting the databases back failed too.
+type undoFailedError struct {
+	cause, undo error
+}
+
+func (e *undoFailedError) Error() string   { return e.cause.Error() + "; rollback: " + e.undo.Error() }
+func (e *undoFailedError) Unwrap() []error { return []error{e.cause, e.undo} }
 
 // renameMayHaveCommitted reconciles a failed rename against the server: it is
 // treated as not committed only when the source still exists and the
