@@ -113,7 +113,7 @@ type assistantProc struct {
 	compactIdleAt int
 	compacting    bool     // an idle compaction is running (compactIdle)
 	compacted     bool     // compactIdle ran in this process: it is let go when idle again
-	manual        bool     // the compaction running is the user's (assistant_compact.go): its end is reported
+	manual        bool     // an explicit /compact (manual or idle-aware delivery): its end is reported
 	requested     bool     // its first request was logged
 	stderrTail    []string // its last assistantStderrTail stderr lines (watchAssistantStderr)
 	runtime       string   // proto.AssistantRuntimeAgentSDK when it runs on the bridge (assistant_sdk.go), "" on the CLI
@@ -560,6 +560,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 
 	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
+	if err := n.idleCompactBeforeInput(ctx, p); err != nil {
+		return "", err
+	}
 	n.noteAssistantRecoveryProcess(ctx, p)
 	if launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude" {
 		// An active process may retain its old environment while a switch waits. Never send selections to that
@@ -791,6 +794,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				manual := p.manual
 				p.manual = false
 				p.mu.Unlock()
+				n.recordIdleCompactionContext(p.id, ev.Compact.Post)
 				n.contextCompacted(p.id)
 				if manual {
 					n.compactionEnded(p.id, "")
@@ -899,6 +903,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			}
 			p.mu.Lock()
 			manual := p.manual
+			contextTokens := p.context
 			p.manual = false
 			window := reportedWindow(ev.ModelUsage, p.replyModel)
 			changed, idleAt := p.followWindow(window), p.compactIdleAt
@@ -915,10 +920,13 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			p.lastActive = time.Now()
 			p.partial.Reset()
 			p.mu.Unlock()
+			if contextTokens > 0 {
+				n.recordIdleCompactionContext(p.id, contextTokens)
+			}
 			if changed {
 				n.logger.Printf("assistant %s: the model's window is %d tokens, idle compaction at %d", p.id[:8], window, idleAt)
 			}
-			if manual { // the user's /compact ended without a boundary: it did not compact
+			if manual { // an explicit /compact ended without a boundary: it did not compact
 				n.compactionEnded(p.id, compactFailure(ev.IsError, ev.Result))
 			}
 			if f, err := n.file(p.id); err == nil {

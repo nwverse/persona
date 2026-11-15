@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -30,6 +31,7 @@ import (
 	"github.com/nwverse/persona/server/internal/node/machdiag"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -730,27 +732,30 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		TabName                 *string       `json:"tab_name"`
 		TZ                      string        `json:"tz"` // the user's time zone
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
-		HTTP           *quota.Request  `json:"http,omitempty"`
-		Async          bool            `json:"async"`
-		Title          *string         `json:"title"`
-		PermissionMode string          `json:"permission_mode"`
-		PlanThen       string          `json:"plan_then"`     // session.start in plan mode: the mode after its plan (planthen.go)
-		SecretTicket   string          `json:"secret_ticket"` // session.start: a hand-off's values for this new Claude Code start (secretenv.go)
-		Effort         string          `json:"effort"`
-		ServiceTier    string          `json:"service_tier"`
-		Ultracode      *bool           `json:"ultracode"`
-		DismissLost    bool            `json:"dismiss_lost"`
-		ResumeOnly     bool            `json:"resume_only"`
-		OnlyRunning    bool            `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
-		IsMain         bool            `json:"is_main"`
-		FollowsSetting bool            `json:"follows_setting"`
-		Interject      bool            `json:"interject_background"`
-		AtItemID       string          `json:"at_item_id"`     // session.fork: the reply to branch off at
-		Refresh        bool            `json:"refresh"`        // launchers.models: ask again, not the kept list
-		Configured     bool            `json:"configured"`     // launchers.models, .probe, .http, .model.check: hub.json names this launcher
-		Guest          *guestParams    `json:"guest"`          // assistant.send: a new guest conversation (assistant_guest.go)
-		NewSessionID   string          `json:"new_session_id"` // assistant.send: start the new conversation under this id
-		Raw            json.RawMessage `json:"-"`
+		HTTP           *quota.Request                `json:"http,omitempty"`
+		Async          bool                          `json:"async"`
+		Title          *string                       `json:"title"`
+		PermissionMode string                        `json:"permission_mode"`
+		PlanThen       string                        `json:"plan_then"`     // session.start in plan mode: the mode after its plan (planthen.go)
+		SecretTicket   string                        `json:"secret_ticket"` // session.start: a hand-off's values for this new Claude Code start (secretenv.go)
+		Effort         string                        `json:"effort"`
+		ServiceTier    string                        `json:"service_tier"`
+		Ultracode      *bool                         `json:"ultracode"`
+		DismissLost    bool                          `json:"dismiss_lost"`
+		ResumeOnly     bool                          `json:"resume_only"`
+		OnlyRunning    bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
+		IsMain         bool                          `json:"is_main"`
+		FollowsSetting bool                          `json:"follows_setting"`
+		Interject      bool                          `json:"interject_background"`
+		IdleCompaction *assistantwire.IdleCompaction `json:"idle_compaction"`
+		MessageSource  *proto.MessageSource          `json:"message_source"`
+		ClientMsgID    string                        `json:"client_msg_id"`
+		AtItemID       string                        `json:"at_item_id"`     // session.fork: the reply to branch off at
+		Refresh        bool                          `json:"refresh"`        // launchers.models: ask again, not the kept list
+		Configured     bool                          `json:"configured"`     // launchers.models, .probe, .http, .model.check: hub.json names this launcher
+		Guest          *guestParams                  `json:"guest"`          // assistant.send: a new guest conversation (assistant_guest.go)
+		NewSessionID   string                        `json:"new_session_id"` // assistant.send: start the new conversation under this id
+		Raw            json.RawMessage               `json:"-"`
 
 		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
 
@@ -803,6 +808,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if n.codexBlocked(p.ResumeSessionID) && devicewire.IsSessionStart(method) {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能恢复", nil)
+	}
+	if method == "assistant.send" || method == "session.send" {
+		source := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: p.Text, Source: p.MessageSource, ClientMsgID: p.ClientMsgID})
+		if source == nil && p.ClientMsgID == "" && !prompts.UserAuthoredContext(p.Text) {
+			if injected := prompts.ParseInjected(p.Text); injected != nil && injected.Kind == proto.InjectedTaskNotice {
+				source = &proto.MessageSource{Kind: proto.InjectedTaskNotice}
+			}
+		}
+		input := idleCompactionInput{
+			At: time.Now(), Policy: p.IdleCompaction, Source: source,
+		}
+		ctx = context.WithValue(ctx, idleCompactionInputKey{}, input)
+		n.noteIdleCompactionInput(p.SessionID, input)
 	}
 	if method == "session.skills" {
 		return n.sessionSkillCatalog(ctx, p.SkillOwner, p.SessionID)

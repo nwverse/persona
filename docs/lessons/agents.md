@@ -1,5 +1,16 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Compact unattended delivery from actual context and user activity (#8658)
+
+Supervision and scheduled messages are inputs but are not user activity. Keep their structured source when deciding
+whether the owner has been away; reset the idle clock when the owner's input arrives, before a send lock can wait.
+Claude's `result.usage` and `modelUsage` aggregate requests and cannot stand in for context size. Use the last
+main-model request's input plus cache-read and cache-creation tokens, or `compact_boundary`'s `post_tokens`.
+Wait for the compaction command's result, not just its boundary, before writing the next message: the result still
+ends that command. Persist the attempt latch with the session, and rearm only after user activity or a context drop
+below the threshold followed by another idle interval. Failed compactions must not turn every background wake into
+another summary attempt.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt

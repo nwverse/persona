@@ -1123,6 +1123,12 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any, lang i18n.Lang) error {
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
+	delete(p, "idle_compaction")
+	if p["is_main"] == true {
+		p["idle_compaction"] = assistantwire.IdleCompaction{
+			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
+		}
+	}
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}
