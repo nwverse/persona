@@ -262,7 +262,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", err
 		}
 		if name == "schedule_routine" {
-			return s.toolScheduleRoutine(ctx, self, args)
+			return s.toolScheduleRoutine(ctx, machine, self, args)
 		}
 		return s.toolScheduleFollowup(ctx, machine, self, args)
 	case "delete_routine", "cancel_followup":
