@@ -40,7 +40,8 @@ struct DictatePersonaControl: ControlWidget {
     static func configuration(kind: String) -> some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: kind) {
             ControlWidgetButton(action: OpenPersonaDictationIntent()) {
-                Label("Dictate to Persona", systemImage: Theme.Icon.dictate)
+                // Theme.Icon.dictate; the extension keeps its own symbol names, like the neighbouring controls.
+                Label("Dictate to Persona", systemImage: "mic")
             }
         }
         .displayName("Dictate to Persona")

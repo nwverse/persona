@@ -714,17 +714,17 @@ struct AssistantView: View {
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
             }
-            // Always adopt an accepted result and refresh Main. Only its navigation and feedback become stale when New
-            // Chat or Dictate opened meanwhile; the op check leaves a newer send's pending bubble alone.
             if makesMain { Task { await model.refreshAssistant() } }
-            model.began(s, text: text, images: images) // the message stays on screen until claude has written it
-            let current = newChat == model.assistantNewChat
-            if current { Haptics.success() }
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: true,
+                                                  space: space, showsPage: model.showsPage(of: api))
+            if decision.haptic == .success { Haptics.success() }
+            if decision.began { model.began(s, text: text, images: images) } // keep it until claude has written it
             withAnimation(Theme.Motion.standard) {
                 // Another manager's page by now: the conversation is listed on its own page, not opened on this one.
-                if current, space != nil || model.showsPage(of: api) { model.assistantCurrent = s.key }
-                if pending?.op == op { pending = nil }
-                if current {
+                if decision.open { model.assistantCurrent = s.key }
+                if decision.clearPending { pending = nil }
+                if decision.failure == .clear {
                     failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
                 }
             }
@@ -732,18 +732,19 @@ struct AssistantView: View {
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
             // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
-            let current = newChat == model.assistantNewChat
-            let here = current && (space != nil || model.showsPage(of: api)) // the card belongs to the page it failed on
+            let decision = AssistantStartDecision(startGeneration: newChat, currentGeneration: model.assistantNewChat,
+                                                  pendingOp: pending?.op, op: op, succeeded: false,
+                                                  space: space, showsPage: model.showsPage(of: api))
             withAnimation(Theme.Motion.standard) {
-                if pending?.op == op { pending = nil }
-                if here { model.readiness.failure = coded }
+                if decision.clearPending { pending = nil }
+                if decision.failure == .show { model.readiness.failure = coded }
                 failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
                                                      mayHaveStarted: FailedStart.mayHaveStarted(error),
-                                                     reason: coded == nil || !here ? error.shown : nil, at: .now,
+                                                     reason: coded == nil || decision.failure != .show ? error.shown : nil, at: .now,
                                                      manager: space == nil ? api.shownManager : nil))
             }
-            if here, coded != nil { model.readinessChanged() }
-            if current { Haptics.error() }
+            if decision.failure == .show, coded != nil { model.readinessChanged() }
+            if decision.haptic == .error { Haptics.error() }
         }
     }
 }

@@ -154,6 +154,120 @@ import Testing
         #expect(draft == "typed spoken words")
     }
 
+    @Test func leavingAfterCancelAppendsNothing() {
+        let dictation = FakeDictation(heard: "discarded words")
+        let bar = DictationBarModel()
+        var draft = "typed"
+        let text = Binding(get: { draft }, set: { draft = $0 })
+        bar.start(dictation, hints: [], reduceMotion: true)
+
+        bar.cancel(dictation, reduceMotion: true)
+        bar.reset(dictation, text: text)
+
+        #expect(draft == "typed")
+        #expect(dictation.stops == [true])
+        #expect(!bar.on)
+    }
+
+    @Test func leavingAfterAFailedStartAppendsNothing() {
+        let dictation = FakeDictation(failure: "synthetic permission denied", heard: "not heard")
+        let bar = DictationBarModel()
+        var draft = "typed"
+        let text = Binding(get: { draft }, set: { draft = $0 })
+
+        bar.start(dictation, hints: [], reduceMotion: true)
+        bar.reset(dictation, text: text)
+
+        #expect(draft == "typed")
+        #expect(!bar.on)
+    }
+
+    @Test func leavingAfterStopDoesNotAppendTheWordsAgain() async {
+        let dictation = FakeDictation(heard: "spoken words")
+        let bar = DictationBarModel()
+        var draft = "typed"
+        let text = Binding(get: { draft }, set: { draft = $0 })
+        bar.start(dictation, hints: [], reduceMotion: true)
+
+        bar.end(.stop, dictation, text: text, reduceMotion: true, send: { false })
+        for _ in 0..<100 where bar.on {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(draft == "typed spoken words")
+        #expect(dictation.finishes == [true])
+        #expect(!bar.on)
+
+        bar.reset(dictation, text: text)
+        #expect(draft == "typed spoken words")
+    }
+
+    @Test func theNewestNewChatCompletionAdoptsNavigatesAndClearsAsBefore() {
+        let op = UUID()
+        let decision = AssistantStartDecision(startGeneration: 4, currentGeneration: 4, pendingOp: op, op: op,
+                                              succeeded: true, space: nil, showsPage: true)
+
+        #expect(decision.began)
+        #expect(decision.open)
+        #expect(decision.haptic == .success)
+        #expect(decision.clearPending)
+        #expect(decision.failure == .clear)
+    }
+
+    @Test func aCompletionOvertakenByNewerNewChatHasNoVisibleFeedback() {
+        let op = UUID()
+        let accepted = AssistantStartDecision(startGeneration: 4, currentGeneration: 5, pendingOp: op, op: op,
+                                              succeeded: true, space: nil, showsPage: true)
+        #expect(accepted.began)
+        #expect(!accepted.open)
+        #expect(accepted.haptic == nil)
+        #expect(accepted.clearPending)
+        #expect(accepted.failure == .none)
+
+        let failed = AssistantStartDecision(startGeneration: 4, currentGeneration: 5, pendingOp: op, op: op,
+                                            succeeded: false, space: nil, showsPage: true)
+        #expect(!failed.began)
+        #expect(!failed.open)
+        #expect(failed.haptic == nil)
+        #expect(failed.clearPending)
+        #expect(failed.failure == .none)
+    }
+
+    @Test func aLateCompletionNeverClearsANewerSendsBubble() {
+        let op = UUID(), newer = UUID()
+        for succeeded in [true, false] {
+            let decision = AssistantStartDecision(startGeneration: 4, currentGeneration: 4, pendingOp: newer, op: op,
+                                                  succeeded: succeeded, space: nil, showsPage: true)
+            #expect(!decision.clearPending)
+        }
+    }
+
+    @Test func noInterveningNewChatMatchesEveryOriginalCompletionOutcome() {
+        struct Case {
+            let succeeded: Bool, space: String?, showsPage: Bool, open: Bool
+            let haptic: AssistantStartDecision.Haptic, failure: AssistantStartDecision.FailureAction
+        }
+        let cases = [
+            Case(succeeded: true, space: nil, showsPage: true, open: true, haptic: .success, failure: .clear),
+            Case(succeeded: true, space: nil, showsPage: false, open: false, haptic: .success, failure: .clear),
+            Case(succeeded: true, space: Session.healthSpace, showsPage: true, open: true, haptic: .success, failure: .clear),
+            Case(succeeded: true, space: Session.healthSpace, showsPage: false, open: true, haptic: .success, failure: .clear),
+            Case(succeeded: false, space: nil, showsPage: true, open: false, haptic: .error, failure: .show),
+            Case(succeeded: false, space: nil, showsPage: false, open: false, haptic: .error, failure: .none),
+            Case(succeeded: false, space: Session.healthSpace, showsPage: true, open: false, haptic: .error, failure: .show),
+            Case(succeeded: false, space: Session.healthSpace, showsPage: false, open: false, haptic: .error, failure: .show),
+        ]
+        let op = UUID()
+        for c in cases {
+            let decision = AssistantStartDecision(startGeneration: 7, currentGeneration: 7, pendingOp: op, op: op,
+                                                  succeeded: c.succeeded, space: c.space, showsPage: c.showsPage)
+            #expect(decision.began == c.succeeded)
+            #expect(decision.open == c.open)
+            #expect(decision.haptic == c.haptic)
+            #expect(decision.clearPending)
+            #expect(decision.failure == c.failure)
+        }
+    }
+
     private static func model(_ hub: FakeHub = FakeHub()) throws -> AppModel {
         let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "dictation-control-" + UUID().uuidString))
         model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
@@ -168,6 +282,8 @@ import Testing
 
 @MainActor private final class FakeDictation: DictationStarting {
     private(set) var starts = 0
+    private(set) var stops: [Bool] = []
+    private(set) var finishes: [Bool] = []
     let failure: String?
     let heard: String
 
@@ -179,5 +295,14 @@ import Testing
     func start(hints: [String], update: @escaping (String) -> Void, failed: @escaping (String) -> Void) {
         starts += 1
         if let failure { failed(failure) }
+    }
+
+    func finish(settling: Bool) async -> String {
+        finishes.append(settling)
+        return heard
+    }
+
+    func stop(settling: Bool) {
+        stops.append(settling)
     }
 }

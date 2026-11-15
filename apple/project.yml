@@ -335,7 +335,6 @@ targets:
       - path: Shared/NativeStateMigration.swift
       - path: Shared/StatusPalette.swift
       - path: Shared/Design/Palette.swift
-      - path: Shared/Design/Icons.swift
       - path: Shared/Design/IslandMetrics.swift
       # Read-only extension system surfaces, independent of the app's renderer and Keychain.
       - path: Shared/HubNaming.swift

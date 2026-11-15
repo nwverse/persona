@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor protocol DictationStarting {
     var heard: String { get }
     func start(hints: [String], update: @escaping (String) -> Void, failed: @escaping (String) -> Void)
+    func finish(settling: Bool) async -> String
+    func stop(settling: Bool)
 }
 
 extension Dictation: DictationStarting {}
@@ -69,7 +71,7 @@ final class DictationBarModel {
         })
     }
 
-    func cancel(_ dictation: Dictation, reduceMotion: Bool) {
+    func cancel(_ dictation: any DictationStarting, reduceMotion: Bool) {
         guard on, ending == nil else { return }
         feel()
         run = UUID()
@@ -80,7 +82,7 @@ final class DictationBarModel {
     /// ■ or ↑: the words heard go after the draft. ↑ then sends (`send` says whether it did) and keeps the bar up until
     /// the send has taken the draft (it clears it a moment later, in a task of its own): closed first, the composer
     /// opened into the card for that moment with the words in it, and closed again.
-    func end(_ how: Ending, _ dictation: Dictation, text: Binding<String>, reduceMotion: Bool, send: @escaping () -> Bool) {
+    func end(_ how: Ending, _ dictation: any DictationStarting, text: Binding<String>, reduceMotion: Bool, send: @escaping () -> Bool) {
         guard on, ending == nil, how != .cancel else { return }
         feel()
         run = UUID(); let mine = run
@@ -105,7 +107,7 @@ final class DictationBarModel {
 
     /// Dictation ended by itself (the recognizer's time limit, an error, the microphone taken): keep what was heard,
     /// as ■ does.
-    func listeningEnded(_ dictation: Dictation, text: Binding<String>, reduceMotion: Bool) {
+    func listeningEnded(_ dictation: any DictationStarting, text: Binding<String>, reduceMotion: Bool) {
         guard on, ending == nil else { return }
         run = UUID()
         text.wrappedValue = DictationHold.joined(text.wrappedValue, dictation.heard)
