@@ -28,6 +28,7 @@ const REFRESH_DELAY = 120 // ms: a watched agent's timeline is read again this l
 const LAST_TEXT_DELAY = 3000 // ms: an agent's last words are read again this long after it changed
 const PAGE = 200 // agents in a page of Paseo's directory
 const PAGES_MAX = 10 // directory pages read at connect
+const FEATURES_MAX = PAGE * PAGES_MAX // agents whose last features are kept at most: as many as the directory is read for
 // Agents archived in Paseo have their Claude session named to the node this long: its list of sessions not running
 // goes back 7 days. The ones archived before the bridge was told are read at connect (loadArchived).
 const UNLISTED_DAYS = 8
@@ -115,6 +116,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
   let hubBackAt = 0 // when a node with a hub was last there again
   const echoes = new Map() // Paseo message id → the client_msg_id the phone sent it with
   const lastTexts = new Map() // agent id → its last words (agents whose content is not a transcript)
+  const featuresSeen = new Map() // agent id → the features Paseo last listed for it, the latest last (withFeatures)
   // agent id → { agent, project, transcript?, at }: archived Claude agents and Persona-owned Codex agents (noteArchived),
   // the latest last
   const archived = new Map()
@@ -237,7 +239,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const prev = agents.get(agent.id)
     if (prev && (Date.parse(prev.agent.updatedAt) || 0) > (Date.parse(agent.updatedAt) || 0) && prev.agent.status === agent.status) return
     if (agent.archivedAt) return remove(agent.id, agent, project)
-    agent = withKept(agent, prev ?? archived.get(agent.id), !loading)
+    agent = withFeatures(withKept(agent, prev ?? archived.get(agent.id), !loading))
     archived.delete(agent.id) // back from the archive: listed again
     const oldSession = prev ? sessionIdOf(prev.agent, roots) : undefined
     agents.set(agent.id, { agent, project: project ?? prev?.project })
@@ -286,6 +288,25 @@ export function createPaseoBridge(deps = {}, options = {}) {
       return { ...agent, [KEPT]: id }
     }
     return agent
+  }
+
+  /**
+   * What Paseo sends of an agent it has not loaded (Paseo let its process go, Paseo restarted, a change to its stored
+   * record) is that record's projection, which lists no features (agent-projections buildStoredAgentPayload). The
+   * switches it listed while it had the agent loaded are still set, and Paseo sets them again when it loads the agent:
+   * the last ones seen stand in for them, so a Grok row still says Allow all (#8133). A list of features, an empty one
+   * too, is what Paseo has now. Kept while the agent is listed (remove drops them), FEATURES_MAX at most; a bridge started
+   * while Paseo has not loaded the agent has seen none.
+   */
+  function withFeatures(agent) {
+    if (Array.isArray(agent.features)) {
+      featuresSeen.delete(agent.id) // the latest last: the oldest go first when there are too many
+      featuresSeen.set(agent.id, agent.features)
+      while (featuresSeen.size > FEATURES_MAX) featuresSeen.delete(featuresSeen.keys().next().value)
+      return agent
+    }
+    const seen = featuresSeen.get(agent.id)
+    return seen ? { ...agent, features: seen } : agent
   }
 
   /**
@@ -339,6 +360,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     agents.delete(agentId)
     timelines.delete(agentId)
     lastTexts.delete(agentId)
+    featuresSeen.delete(agentId)
     for (const [id, x] of asks) if (x.agentId === agentId) x.abort()
     for (const [id, c] of rounds) if (c.agentId === agentId) forgetRequest(id)
     reindex()
@@ -1091,13 +1113,17 @@ export function createPaseoBridge(deps = {}, options = {}) {
     return Boolean(p) && p.id !== agent.id && p.workspaceId !== agent.workspaceId
   }
 
-  /** What agentRow takes beside the agent: its place, its last words, the agent that created it and its own fleet. */
+  /**
+   * What agentRow takes beside the agent: its place, its last words, the agent that created it, its own fleet, and the
+   * thinking options of its model (the efforts modes takes for it).
+   */
   function rowOptions(agentId, s, fam) {
     const a = agents.get(agentId)
     const spaceId = s.idOf(a?.project)
     const by = fam.creator.get(agentId)
     return { project: a?.project, roots, labels, lastText: lastTexts.get(agentId), spaceId, spaceName: s.names.get(spaceId),
-      parent: by && sessionOf(by), quiet: Boolean(a) && !workspaceOwn(a.agent), fleet: fam.fleet.get(agentId), canon }
+      parent: by && sessionOf(by), quiet: Boolean(a) && !workspaceOwn(a.agent), fleet: fam.fleet.get(agentId), canon,
+      thinking: a && thinkingOptions(a.agent) }
   }
 
   async function listSessions() {
