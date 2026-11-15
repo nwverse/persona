@@ -307,7 +307,8 @@ final class FileAttachments {
 
     /// Files picked for machine. `dest`: the composer's own destination (a health conversation's reports), else kept
     /// with the chat's pictures where the hub knows how (`upload_attachment`), else the temp directory as before.
-    /// `owned`: the app's own copies (a scan's PDF, DEBUG files), deleted with their folder once sent or removed.
+    /// `owned`: the app's own copies, each in a directory of its own (a scan's PDF, DEBUG files), deleted with it once
+    /// on the machine or removed.
     func start(_ urls: [URL], machine: MachineRef, model: AppModel, dest: String? = nil, owned: Bool = false) {
         let features = model.features(machine.group)
         if !features.isEmpty, !features.contains("file_upload") {
@@ -437,9 +438,9 @@ final class FileAttachments {
         }
     }
 
-    /// The app's own copy of a file and the folder made for it.
+    /// The app's own copy of a file, with the directory made for it.
     private static func discardOwned(_ url: URL) {
-        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 
     private func update(_ id: UUID, _ change: (inout Item) -> Void) {
