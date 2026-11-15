@@ -353,6 +353,15 @@ class RepositoryTests(unittest.TestCase):
                 self.assertEqual(self.catalog.values[f"status.{mode}.waiting.text"], self.catalog.values[f"common.{mode}.loop"])
                 self.assertEqual(self.catalog.values[f"status.{mode}.muted.text"], self.catalog.values[f"status.{mode}.idle.text"])
 
+    def test_ios_metric_colors_match(self):
+        swift = (gen.ROOT / "apple/Persona/Views/Machines/MetricCharts.swift").read_text()
+        for name in ("cpu", "mem", "rx", "tx", "load"):
+            found = re.search(rf'static let {name} = Color\(light: 0x([A-F0-9]+), dark: 0x([A-F0-9]+)\)', swift)
+            self.assertIsNotNone(found, f"MetricColor.{name} not found")
+            light, dark = found.groups()
+            for mode, value in (("light", light), ("dark", dark)):
+                self.assertEqual(self.catalog.values[f"metric.{mode}.{name}"], color(value), f"{name} {mode}")
+
     KOTLIN = gen.ROOT / "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
 
     def test_committed_kotlin_matches_the_generator(self):
