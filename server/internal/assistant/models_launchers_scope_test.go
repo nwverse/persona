@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -377,6 +378,49 @@ func TestNewAgentPickerSaysWhyAProviderSkipsThisComputer(t *testing.T) {
 	}
 	if mac := pickerOf(t, s, "mac", ""); !slices.Contains(mac.names(), "fill") || len(mac.Unavailable) != 0 {
 		t.Fatalf("after turning the rule off, mac lists %v, unavailable %+v", mac.names(), mac.Unavailable)
+	}
+}
+
+// A provider whose latest check failed. Where its own-service rule leaves it out anyway, that rule is the reason the
+// pickers give, the main chat's as New Agent's: with the check passing it would still not be listed. Where it would
+// run, the check alone hides it and no picker calls it skipped.
+func TestAFailedCheckDoesNotChangeTheOwnServiceReason(t *testing.T) {
+	s, f := scopeService(t)
+	f.launcherList = []proto.Launcher{{Name: "claude"}}
+	f.ownServices = map[string]proto.OwnServiceState{
+		"mac/claude":    {Agent: "claude", Known: true, Own: true, Via: "login"},
+		"server/claude": {Agent: "claude", Known: true},
+	}
+	addProvider(t, s, `{"name":"fill","display_name":"DeepSeek","base_url":"https://gw.example.com","model":"m1","api_key":"sk-test-fill-00000"}`)
+	failed := func(machine string) *LauncherHealth {
+		return &LauncherHealth{Machine: machine, Launcher: "fill", State: healthFailing, Error: "exit status 1", CheckedAt: time.Now()}
+	}
+	s.health.loaded = true
+	s.health.recs = map[string]*LauncherHealth{healthKey("mac", "fill"): failed("mac"), healthKey("server", "fill"): failed("server")}
+	fill := func(p picker) (unavailableLauncher, bool) {
+		i := slices.IndexFunc(p.Unavailable, func(u unavailableLauncher) bool { return u.Name == "fill" })
+		if i < 0 {
+			return unavailableLauncher{}, false
+		}
+		return p.Unavailable[i], true
+	}
+	for _, purpose := range []string{"", "agent.new", "assistant"} {
+		mac := pickerOf(t, s, "mac", purpose)
+		if u, ok := fill(mac); slices.Contains(mac.names(), "fill") || !ok || u.Code != proto.CodeLauncherOwnService {
+			t.Fatalf("%q: mac lists %v, unavailable %+v", purpose, mac.names(), mac.Unavailable)
+		}
+		server := pickerOf(t, s, "server", purpose)
+		if _, ok := fill(server); slices.Contains(server.names(), "fill") || ok {
+			t.Fatalf("%q: server lists %v, unavailable %+v", purpose, server.names(), server.Unavailable)
+		}
+	}
+	// The check passing again: the server lists it, the mac still says why not.
+	s.health.recs = map[string]*LauncherHealth{}
+	if server := pickerOf(t, s, "server", ""); !slices.Contains(server.names(), "fill") {
+		t.Fatalf("server after the check passed: %v", server.names())
+	}
+	if _, ok := fill(pickerOf(t, s, "mac", "")); !ok {
+		t.Fatal("mac stopped saying why after the check passed")
 	}
 }
 
