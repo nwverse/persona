@@ -23,6 +23,7 @@ import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.collectionItemInfo
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -71,7 +72,8 @@ internal data class MarkdownTablePlan(
             require(natural.all { it >= 0 })
             require(legacyNatural.size == natural.size && legacyNatural.all { it >= 0 })
             if (natural.isEmpty()) return MarkdownTablePlan(emptyList(), scrolls = false, fits = true)
-            val minimumTotal = minimum.toLong() * natural.size
+            val floors = natural.map { min(it, minimum) }
+            val floorTotal = floors.sumOf { it.toLong() }
             val legacyTotal = legacyColumnWidth.toLong() * natural.size
             // A whole column stays visible at the end unless the readable minimum itself needs more room.
             val columnMaximum = maxOf(minimum, min(maximum, available))
@@ -81,17 +83,18 @@ internal data class MarkdownTablePlan(
             if (legacyTotal <= available && legacyNatural.all { it <= equalShare }) {
                 return MarkdownTablePlan(natural, scrolls = false, fits = true)
             }
-            val content = natural.map { it.coerceAtLeast(minimum) }
-            if (minimumTotal > available) {
-                return MarkdownTablePlan(content.map { min(it, columnMaximum) }, scrolls = true, fits = false)
+            if (floorTotal > available) {
+                val widths = natural.mapIndexed { column, width -> width.coerceIn(floors[column], columnMaximum) }
+                return MarkdownTablePlan(widths, scrolls = true, fits = false)
             }
-            val widths = waterFill(content, available, minimum).map { min(it, columnMaximum) }
-            return MarkdownTablePlan(widths, scrolls = widths.sum() > available, fits = false)
+            // Short columns keep their natural width; long columns wrap between their own floor and the maximum.
+            val widths = waterFill(natural, available, floors).map { min(it, columnMaximum) }
+            return MarkdownTablePlan(widths, scrolls = false, fits = false)
         }
 
-        /** Short columns keep their content width; long columns share the remaining room without going below minimum. */
-        private fun waterFill(natural: List<Int>, available: Int, minimum: Int): List<Int> {
-            if (natural.sum() <= available) return natural
+        /** Short columns keep their content width; long columns share the rest without going below their own floor. */
+        private fun waterFill(natural: List<Int>, available: Int, floors: List<Int>): List<Int> {
+            if (natural.sumOf { it.toLong() } <= available) return natural
             val widths = IntArray(natural.size)
             val open = natural.indices.toMutableSet()
             var room = available
@@ -112,9 +115,9 @@ internal data class MarkdownTablePlan(
                 val total = open.sumOf { natural[it].toLong() }
                 var pinned = false
                 for (column in open.sorted()) {
-                    if (room.toDouble() * natural[column] / total < minimum) {
-                        widths[column] = minimum
-                        room -= minimum
+                    if (room.toDouble() * natural[column] / total < floors[column]) {
+                        widths[column] = floors[column]
+                        room -= floors[column]
                         open.remove(column)
                         pinned = true
                         break
@@ -161,9 +164,23 @@ fun ReadableMarkdownTable(content: String, node: ASTNode, style: TextStyle, enab
         val maximumPx = with(density) { (RichTextTokens.tableColumnMaximum * fontScale).roundToPx() }
         val headerStyle = style.copy(fontWeight = FontWeight.Bold)
         val textMeasurer = rememberTextMeasurer()
-        val measured = remember(source, style, headerStyle, density, cellPaddingPx, textMeasurer,
-            annotation.linkTextSpanStyle, annotation.codeSpanStyle, annotation.highlightSpanStyle, annotation.annotator) {
-            measureColumns(content, node, columnCount, style, headerStyle, annotation, textMeasurer, cellPaddingPx)
+        // One cache belongs to this table and its text environment. Streaming keeps unchanged cells' measurements;
+        // every pass drops removed cells, so the memo never grows beyond the cells in the current table.
+        val cellMeasurer = remember(style, headerStyle, density, cellPaddingPx, textMeasurer,
+            annotation.linkTextSpanStyle, annotation.codeSpanStyle, annotation.highlightSpanStyle, annotation.annotator,
+            annotation.referenceLinkHandler, annotation.linkInteractionListener) {
+            MarkdownTableCellMeasureCache(cellPaddingPx) { text, header ->
+                textMeasurer.measure(
+                    text = text,
+                    style = if (header) headerStyle else style,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                ).size.width
+            }
+        }
+        val measured = remember(source, cellMeasurer) {
+            measureColumns(content, node, columnCount, style, headerStyle, annotation, cellMeasurer)
         }
         val availablePx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(0)
         val legacyColumnWidthPx = with(density) { dimens.tableCellWidth.roundToPx() }
@@ -217,7 +234,8 @@ private fun TableRow(
     annotation: AnnotatorSettings,
 ) {
     Row(
-        verticalAlignment = Alignment.CenterVertically,
+        // A short body cell starts with its wrapped neighbors instead of floating halfway down the row.
+        verticalAlignment = if (rowIndex == 0) Alignment.CenterVertically else Alignment.Top,
         modifier = Modifier.requiredWidth(totalWidth).then(if (rowIndex == 0) Modifier.height(IntrinsicSize.Max) else Modifier),
     ) {
         row.children.filter { it.type == CELL }.forEachIndexed { column, cell ->
@@ -246,7 +264,46 @@ private fun TableRow(
     }
 }
 
-private data class MeasuredColumns(val natural: List<Int>, val legacyNatural: List<Int>)
+internal data class MeasuredColumns(val natural: List<Int>, val legacyNatural: List<Int>)
+
+internal data class MarkdownCellMeasurementInput(
+    val text: AnnotatedString,
+    val header: Boolean,
+    val imageOnly: Boolean,
+)
+
+/** The current table's measured cells. Its owner replaces the whole cache when the text environment changes. */
+internal class MarkdownTableCellMeasureCache(
+    private val cellPaddingPx: Int,
+    private val measureText: (AnnotatedString, Boolean) -> Int,
+) {
+    private data class Key(val text: AnnotatedString, val header: Boolean, val imageOnly: Boolean)
+    private data class Value(val natural: Int, val legacyNatural: Int)
+
+    private var cells = emptyMap<Key, Value>()
+
+    fun measure(rows: List<List<MarkdownCellMeasurementInput>>, columnCount: Int): MeasuredColumns {
+        val widths = IntArray(columnCount)
+        val legacyWidths = IntArray(columnCount)
+        val next = mutableMapOf<Key, Value>()
+        rows.forEach { row ->
+            row.forEachIndexed { column, cell ->
+                if (column >= columnCount) return@forEachIndexed
+                val key = Key(cell.text, cell.header, cell.imageOnly)
+                val value = next[key] ?: cells[key] ?: run {
+                    // Inline image source text is not the resolved image's drawn width; it must not reject legacy fit.
+                    val measured = measureText(cell.text, cell.header) + cellPaddingPx * 2
+                    Value(measured, if (cell.imageOnly) cellPaddingPx * 2 else measured)
+                }
+                next[key] = value
+                widths[column] = maxOf(widths[column], value.natural)
+                legacyWidths[column] = maxOf(legacyWidths[column], value.legacyNatural)
+            }
+        }
+        cells = next
+        return MeasuredColumns(widths.toList(), legacyWidths.toList())
+    }
+}
 
 private fun measureColumns(
     content: String,
@@ -255,38 +312,22 @@ private fun measureColumns(
     bodyStyle: TextStyle,
     headerStyle: TextStyle,
     annotation: AnnotatorSettings,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
-    cellPaddingPx: Int,
+    cache: MarkdownTableCellMeasureCache,
 ): MeasuredColumns {
-    val widths = IntArray(columnCount)
-    val legacyWidths = IntArray(columnCount)
-    fun measure(cell: ASTNode, column: Int, style: TextStyle) {
-        if (column >= columnCount) return
-        val text = buildAnnotatedString {
-            pushStyle(style.toSpanStyle())
-            buildMarkdownAnnotatedString(content, cell, annotation)
-            pop()
-        }
-        val textWidth = textMeasurer.measure(
-            text = text,
-            style = style,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Clip,
-        ).size.width
-        val measuredWidth = textWidth + cellPaddingPx * 2
-        widths[column] = maxOf(widths[column], measuredWidth)
-        // Inline image source text is not the resolved image's drawn width; it must not change a fitting upstream table.
-        val legacyWidth = if (cell.isImageOnly(content)) cellPaddingPx * 2 else measuredWidth
-        legacyWidths[column] = maxOf(legacyWidths[column], legacyWidth)
-    }
-    node.children.forEach { row ->
-        val style = if (row.type == HEADER) headerStyle else bodyStyle
-        if (row.type == HEADER || row.type == ROW) {
-            row.children.filter { it.type == CELL }.forEachIndexed { column, cell -> measure(cell, column, style) }
+    val rows = node.children.mapNotNull { row ->
+        if (row.type != HEADER && row.type != ROW) return@mapNotNull null
+        val header = row.type == HEADER
+        val style = if (header) headerStyle else bodyStyle
+        row.children.filter { it.type == CELL }.map { cell ->
+            val text = buildAnnotatedString {
+                pushStyle(style.toSpanStyle())
+                buildMarkdownAnnotatedString(content, cell, annotation)
+                pop()
+            }
+            MarkdownCellMeasurementInput(text, header, cell.isImageOnly(content))
         }
     }
-    return MeasuredColumns(widths.toList(), legacyWidths.toList())
+    return cache.measure(rows, columnCount)
 }
 
 private fun ASTNode.isImageOnly(content: String): Boolean {

@@ -35,12 +35,14 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Item
 import persona.core.contracts.SessionKey
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 
 @RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w360dp-h900dp-mdpi")
 class ChatTableInteractionTest {
     @get:Rule val rule = createComposeRule()

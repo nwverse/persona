@@ -17,8 +17,10 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
@@ -43,6 +45,10 @@ class ChatTableShotsTest {
 
     private data class Scene(val style: AppStyle, val dark: Boolean, val fontScale: Float) {
         val name = "${style.name.lowercase()}-${if (dark) "dark" else "light"}-f${fontScale.toString().replace('.', '-') }"
+    }
+
+    private data class NumberedScene(val language: String, val markdown: String, val scene: Scene) {
+        val name = "$language-${scene.name}"
     }
 
     private fun out() = File(System.getProperty("persona.shots") ?: "build/chat-table-shots").also { it.mkdirs() }
@@ -85,6 +91,46 @@ class ChatTableShotsTest {
         }
     }
 
+    @Test fun numberedTablesKeepTheIndexAndItemColumnsCompact() {
+        val scenes = listOf("en" to numberedEnglish, "zh" to numberedChinese).flatMap { (language, markdown) ->
+            (listOf(false, true).flatMap { dark ->
+                listOf(1f, 2f).map { scale -> Scene(AppStyle.Glass, dark, scale) }
+            } + listOf(Scene(AppStyle.Brief, dark = false, fontScale = 1f),
+                Scene(AppStyle.Board, dark = true, fontScale = 1f)))
+                .map { NumberedScene(language, markdown, it) }
+        }
+        var current by mutableStateOf(scenes.first())
+        rule.setContent {
+            PersonaTheme(style = current.scene.style, darkTheme = current.scene.dark, reduceMotion = true) {
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(density.density, current.scene.fontScale)) {
+                    Box(Modifier.testTag("numbered").width(360.dp).background(PersonaTheme.palette.background)) {
+                        MessageContent(Item("numbered-${current.language}", role = "assistant", kind = "text",
+                            text = current.markdown), user = false)
+                    }
+                }
+            }
+        }
+        for (scene in scenes) {
+            current = scene
+            waitForNumbered(scene)
+            if (scene.scene.fontScale == 1f) {
+                rule.onAllNodes(horizontalScroll).assertCountEquals(0)
+                capture("numbered", "numbered-${scene.name}.png")
+            } else {
+                rule.waitUntil(10_000) {
+                    rule.onAllNodes(horizontalScroll).fetchSemanticsNodes().singleOrNull()?.let { node ->
+                        node.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.maxValue()?.let { it > 0f }
+                    } == true
+                }
+                scrollWideToStart()
+                capture("numbered", "numbered-${scene.name}-start.png")
+                scrollWideToEnd()
+                capture("numbered", "numbered-${scene.name}-end.png")
+            }
+        }
+    }
+
     @Test fun ownBubbleKeepsItsCurrentPlainTextMarkdownControl() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
@@ -101,6 +147,17 @@ class ChatTableShotsTest {
             rule.waitForIdle()
             capture("own", "own-${current.name.lowercase()}-${if (isDark) "dark" else "light"}.png")
         }
+    }
+
+    private fun waitForNumbered(scene: NumberedScene) {
+        val firstItem = if (scene.language == "en") "Alpha" else "阿尔法"
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText(firstItem, substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodes(collection, useUnmergedTree = true).fetchSemanticsNodes().any { node ->
+                    node.config.getOrNull(SemanticsProperties.CollectionInfo)?.let { it.rowCount == 4 && it.columnCount == 3 } == true
+                }
+        }
+        rule.waitForIdle()
     }
 
     private fun scrollWideToStart() {
@@ -121,12 +178,29 @@ class ChatTableShotsTest {
 
     private companion object {
         val horizontalScroll = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val collection = SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo)
 
         val wideTable = """
             | Area | Finding | 中文说明 | Next step |
             | --- | --- | --- | --- |
             | Network retry | The request waits for a connection timeout before trying the next available route. | 网络请求会先等待连接超时，然后再尝试下一条可用路线，因此整个回复需要更长时间。 | Keep the successful route visible and explain each retry. |
             | Rendering | Explanatory sentences need readable columns instead of squeezing every word into a narrow strip. | 表格中的完整句子需要合适的列宽，中文内容也不能被挤压成每行一个字。 | Scroll only the table when every column cannot fit. |
+        """.trimIndent()
+
+        val numberedEnglish = """
+            | # | Item | Notes |
+            | --- | --- | --- |
+            | 1 | Alpha | The first result includes a complete sentence that wraps while the number stays compact. |
+            | 2 | Beta | A second sentence explains the next step without making the item column wide. |
+            | 3 | Gamma | The final row keeps every short cell aligned with the top of its wrapped note. |
+        """.trimIndent()
+
+        val numberedChinese = """
+            | # | 项目 | 说明 |
+            | --- | --- | --- |
+            | 1 | 阿尔法 | 第一条结果包含一句完整说明，长内容会换行，而序号列保持自己的窄宽度。 |
+            | 2 | 贝塔 | 第二条说明解释下一步，项目名称不会因为旁边的长句子而被撑宽。 |
+            | 3 | 伽马 | 最后一行的短内容会与旁边换行说明的顶部对齐，方便按行阅读。 |
         """.trimIndent()
 
         val smallTable = """

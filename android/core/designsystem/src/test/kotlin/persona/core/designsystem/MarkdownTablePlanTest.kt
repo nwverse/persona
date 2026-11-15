@@ -30,18 +30,18 @@ class MarkdownTablePlanTest {
         assertEquals(listOf(300), plan.widths)
     }
 
-    @Test fun overflowingShortColumnsStillHoldAFewWords() {
-        val plan = MarkdownTablePlan.fit(listOf(10, 20, 30, 40), available = 100, minimum = 160, maximum = 220)
+    @Test fun allShortColumnsThatCannotFitScrollWithoutBeingPadded() {
+        val plan = MarkdownTablePlan.fit(listOf(10, 20, 30, 40), available = 90, minimum = 160, maximum = 220)
         assertFalse(plan.fits)
         assertTrue(plan.scrolls)
-        assertEquals(List(4) { 160 }, plan.widths)
+        assertEquals(listOf(10, 20, 30, 40), plan.widths)
     }
 
     @Test fun longColumnsWrapAtTheMaximumAndOnlyTheTableScrolls() {
         val plan = MarkdownTablePlan.fit(listOf(500, 80, 700, 120), available = 360, minimum = 160, maximum = 220)
         assertFalse(plan.fits)
         assertTrue(plan.scrolls)
-        assertEquals(listOf(220, 160, 220, 160), plan.widths)
+        assertEquals(listOf(220, 80, 220, 120), plan.widths)
         assertTrue(plan.widths.sum() > 360)
     }
 
@@ -49,15 +49,16 @@ class MarkdownTablePlanTest {
         val plan = MarkdownTablePlan.fit(listOf(80, 600), available = 400, minimum = 160, maximum = 220)
         assertFalse(plan.fits)
         assertFalse(plan.scrolls)
-        assertEquals(listOf(160, 220), plan.widths)
+        assertEquals(listOf(80, 220), plan.widths)
     }
 
-    @Test fun waterFilledColumnsNeverDropBelowTheMinimum() {
-        val plan = MarkdownTablePlan.fit(listOf(160, 400, 800), available = 600, minimum = 100, maximum = 900)
+    @Test fun waterFilledColumnsNeverDropBelowTheirOwnFloors() {
+        val natural = listOf(160, 400, 800)
+        val plan = MarkdownTablePlan.fit(natural, available = 600, minimum = 100, maximum = 900)
         assertFalse(plan.fits)
         assertFalse(plan.scrolls)
         assertTrue(plan.widths.sum() <= 600)
-        assertTrue(plan.widths.all { it >= 100 })
+        assertTrue(plan.widths.zip(natural).all { (width, content) -> width >= minOf(content, 100) })
         assertEquals(160, plan.widths.first())
     }
 
@@ -75,12 +76,12 @@ class MarkdownTablePlanTest {
         assertFalse(plan.scrolls)
     }
 
-    @Test fun theUpstreamFixedWidthCanStillOverflowBelowTheDefaultFontScale() {
+    @Test fun naturalWidthsSurviveAnUpstreamFixedWidthOverflowBelowTheDefaultFontScale() {
         val plan = MarkdownTablePlan.fit(listOf(80, 100), available = 300, minimum = 136, maximum = 187,
             legacyColumnWidth = 160)
         assertFalse(plan.fits)
         assertFalse(plan.scrolls)
-        assertEquals(listOf(136, 136), plan.widths)
+        assertEquals(listOf(80, 100), plan.widths)
     }
 
     @Test fun pinningAColumnRecomputesTheRemainingProportionalShares() {
@@ -103,5 +104,29 @@ class MarkdownTablePlanTest {
             legacyColumnWidth = 160, legacyNatural = listOf(32, 80))
         assertTrue(plan.fits)
         assertFalse(plan.scrolls)
+    }
+
+    @Test fun aOneDigitColumnBesideTwoSentenceColumnsKeepsItsNaturalWidth() {
+        val plan = MarkdownTablePlan.fit(listOf(24, 500, 600), available = 360, minimum = 160, maximum = 220,
+            legacyColumnWidth = 160)
+        assertFalse(plan.fits)
+        assertFalse(plan.scrolls)
+        assertEquals(listOf(24, 160, 176), plan.widths)
+    }
+
+    @Test fun threeShortColumnsAndOneLongOneFitByWrappingOnlyTheLongOne() {
+        val plan = MarkdownTablePlan.fit(listOf(40, 60, 80, 500), available = 360, minimum = 160, maximum = 220,
+            legacyColumnWidth = 160)
+        assertFalse(plan.fits)
+        assertFalse(plan.scrolls)
+        assertEquals(listOf(40, 60, 80, 180), plan.widths)
+    }
+
+    @Test fun fontScaleTwoDoesNotPadTheShortFirstColumn() {
+        val plan = MarkdownTablePlan.fit(listOf(24, 500, 600), available = 360, minimum = 320, maximum = 440,
+            legacyColumnWidth = 160)
+        assertFalse(plan.fits)
+        assertTrue(plan.scrolls)
+        assertEquals(listOf(24, 360, 360), plan.widths)
     }
 }

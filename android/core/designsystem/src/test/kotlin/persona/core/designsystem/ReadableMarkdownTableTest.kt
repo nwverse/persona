@@ -24,8 +24,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-mdpi")
 class ReadableMarkdownTableTest {
     @get:Rule val rule = createComposeRule()
@@ -74,6 +76,14 @@ class ReadableMarkdownTableTest {
         val width = generateSequence(cell.parent) { it.parent }
             .first { it.config.getOrNull(SemanticsProperties.CollectionItemInfo) != null }.boundsInRoot.width
         assertEquals("upstream's 180 dp equal share minus two 16 dp cell paddings", 148f, width)
+    }
+
+    @Test fun shortBodyCellsStartAtTheTopOfWrappedRows() {
+        show(wide)
+        val short = rule.onAllNodesWithText("Network", substring = true, useUnmergedTree = true).fetchSemanticsNodes().single()
+        val wrapped = rule.onAllNodesWithText("A complete English sentence that wraps.", substring = true, useUnmergedTree = true)
+            .fetchSemanticsNodes().single()
+        assertEquals("a short cell starts with its wrapped neighbor", wrapped.boundsInRoot.top, short.boundsInRoot.top, 1f)
     }
 
     private fun showComparison(markdown: String) {
