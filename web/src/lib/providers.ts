@@ -284,7 +284,7 @@ export function mergeDiscovered(models: FormModel[], found: ProviderModel[], cha
     const i = out.findIndex((x) => x.id === m.id);
     if (i < 0) {
       const mismatch = chat && m.default_effort && m.efforts?.length && !m.efforts.includes(m.default_effort);
-      out.push(formModel(mismatch ? { ...m, efforts: [], default_effort: "" } : m, first));
+      out.push(formModel(mismatch ? { ...m, efforts: [], default_effort: "", all_efforts: undefined } : m, first));
     } else {
       if (!out[i].context_window && m.context_window) {
         out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
