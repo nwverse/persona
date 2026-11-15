@@ -20,8 +20,8 @@ import (
 
 func TestProviderTestClassifiesSyntheticGatewayFailures(t *testing.T) {
 	for _, tc := range []struct {
-		name, body, wantCode, wantHead, wantDetail string
-		status                                     int
+		name, body, wantCode, wantHead, wantDetail, notShown string
+		status                                               int
 	}{
 		{
 			name: "OpenAI nested 400 model code", status: http.StatusBadRequest,
@@ -36,6 +36,14 @@ func TestProviderTestClassifiesSyntheticGatewayFailures(t *testing.T) {
 			wantCode:   "model_not_found",
 			wantHead:   "The gateway is reachable",
 			wantDetail: "synthetic model detail",
+		},
+		{
+			name: "deeper nested 404 model code", status: http.StatusNotFound,
+			body:       `{"error":{"message":"outer synthetic message","error":{"code":"model_not_found","message":"actual deeper upstream message"}}}`,
+			wantCode:   "model_not_found",
+			wantHead:   "The gateway is reachable",
+			wantDetail: "actual deeper upstream message",
+			notShown:   `{"error"`,
 		},
 		{
 			name: "top-level 400 model code", status: http.StatusBadRequest,
@@ -115,6 +123,9 @@ func TestProviderTestClassifiesSyntheticGatewayFailures(t *testing.T) {
 			}
 			if strings.Contains(msg, fakeKey) {
 				t.Fatalf("upstream detail leaked the key: %q", msg)
+			}
+			if tc.notShown != "" && strings.Contains(msg, tc.notShown) {
+				t.Fatalf("error shows the raw envelope instead of its message: %q", msg)
 			}
 		})
 	}
@@ -290,6 +301,70 @@ func TestSavedDirectAPICheckExplainsClassifiedFailure(t *testing.T) {
 			}
 			if out.Check.OK || !strings.Contains(out.Check.Error, tc.wantExplanation) || !strings.Contains(out.Check.Error, "synthetic saved") {
 				t.Fatalf("check = %+v, want explanation %q and upstream detail", out.Check, tc.wantExplanation)
+			}
+		})
+	}
+}
+
+func TestChatProbeCompatibilityRetryHonorsNoRetryHeader(t *testing.T) {
+	calls := 0
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["max_tokens"] != float64(256) || body["max_completion_tokens"] != nil {
+			t.Errorf("request %d has an unexpected compatibility payload: %v", calls, body)
+		}
+		w.Header().Set("X-Should-Retry", "false")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"max_tokens is not supported; use max_completion_tokens"}}`))
+	}))
+	t.Cleanup(gw.Close)
+	s, _ := launcherTestService(t)
+	out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "synthetic-model", API: "chat"})
+	msg, _ := out["error"].(string)
+	if calls != 1 || out["ok"] != false || !strings.Contains(msg, "max_tokens is not supported; use max_completion_tokens") {
+		t.Fatalf("calls = %d, providerTest() = %v, want one non-retried failure with the upstream detail", calls, out)
+	}
+}
+
+func TestGatewayMessagePrecedenceAndBoundedFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+	}{
+		{
+			name: "deeper message wins",
+			raw:  `{"message":"top-level","error":{"message":"nested","error":{"message":"deeper"}}}`,
+			want: "deeper",
+		},
+		{
+			name: "nested message beats top-level",
+			raw:  `{"message":"top-level","error":{"message":"nested"}}`,
+			want: "nested",
+		},
+		{
+			name: "string error beats top-level",
+			raw:  `{"message":"top-level","error":"string error"}`,
+			want: "string error",
+		},
+		{name: "top-level message", raw: `{"message":"top-level"}`, want: "top-level"},
+		{name: "non-JSON fallback", raw: `<html>synthetic failure</html>`, want: `<html>synthetic failure</html>`},
+		{
+			name: "recognized JSON without message falls back",
+			raw:  `{"error":{"code":"future_code"}}`,
+			want: `{"error":{"code":"future_code"}}`,
+		},
+		{
+			name: "nesting is bounded",
+			raw:  `{"error":{"error":{"error":{"message":"too deep"}}}}`,
+			want: `{"error":{"error":{"error":{"message":"too deep"}}}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := gatewayMessage([]byte(tc.raw)); got != tc.want {
+				t.Fatalf("gatewayMessage() = %q, want %q", got, tc.want)
 			}
 		})
 	}

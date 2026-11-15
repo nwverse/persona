@@ -447,8 +447,8 @@ func regionOpenVendors(l i18n.Lang) string {
 	return strings.Join(names, pt(l, "list_sep"))
 }
 
-// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":"…"}, {"message"}), or
-// the start of the body.
+// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":{"error":{"message"}}},
+// {"error":"…"}, {"message"}), or the start of the body. Like the classifier, it reads at most error.error.
 func gatewayMessage(raw []byte) string {
 	var body struct {
 		Error   json.RawMessage `json:"error"`
@@ -456,12 +456,22 @@ func gatewayMessage(raw []byte) string {
 	}
 	if json.Unmarshal(raw, &body) == nil {
 		var e struct {
-			Message string `json:"message"`
+			Message string          `json:"message"`
+			Error   json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(body.Error, &e) == nil {
+			var deeper struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(e.Error, &deeper) == nil && deeper.Message != "" {
+				return deeper.Message
+			}
+			if e.Message != "" {
+				return e.Message
+			}
 		}
 		var s string
 		switch {
-		case json.Unmarshal(body.Error, &e) == nil && e.Message != "":
-			return e.Message
 		case json.Unmarshal(body.Error, &s) == nil && s != "":
 			return s
 		case body.Message != "":
@@ -510,7 +520,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	if err == nil && t.api == "chat" && res.StatusCode == http.StatusBadRequest {
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		if readErr == nil && ai.ChatRequiresCompletionTokens(raw) {
+		if readErr == nil && !ai.NoRetry(res.Header) && ai.ChatRequiresCompletionTokens(raw) {
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256
 			body, _ = json.Marshal(payload)
