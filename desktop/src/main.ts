@@ -27,7 +27,7 @@ let pendingDeepLink: string | undefined;
 let setupWindow: BrowserWindow | undefined;
 let screenLocked = false;
 let presenceTimer: ReturnType<typeof setInterval> | undefined;
-const hubWindow = new HubWindowLifecycle();
+const hubWindow = new HubWindowLifecycle<BrowserWindow | undefined>();
 const store = () => JSONStore.inUserData(app.getPath("userData"));
 
 function navigateFromDeepLink(raw: string): void {
@@ -79,7 +79,7 @@ function secureHubWindow(window: BrowserWindow): void {
 // A different hub needs a new window and its own persistent session, not navigation of the old window.
 async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow) => void): Promise<void> {
   const previous = mainWindow;
-  if (!previous || previous.isDestroyed()) return;
+  if (!previous || previous.isDestroyed()) { hubWindow.replace(); return; }
   // Sub-path containment is not equality: /old/ is inside a new / hub, but still needs its own origin-isolated session.
   if (inHub(next, previous.webContents.getURL()) && (() => { try { return parseHubAddress(previous.webContents.getURL()).url.href === next.url.href; } catch { return false; } })()) return;
   // Setting hub first lets closeToTray destroy this window without putting the old hub back on screen.
@@ -91,17 +91,17 @@ async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow
   mainWindow = undefined;
 }
 
-async function showMain(): Promise<void> {
-  await hubWindow.show(async () => {
+async function showMain(): Promise<BrowserWindow | undefined> {
+  return hubWindow.show(async (): Promise<BrowserWindow | undefined> => {
   const generation = hubWindow.generation;
   const owner = hub;
   if (!owner) {
     if (!setupWindow || setupWindow.isDestroyed()) await showSetup();
-    return;
+    return undefined;
   }
-  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return; }
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return mainWindow; }
   const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
-  if (owner !== hub || generation !== hubWindow.generation) return;
+  if (owner !== hub || generation !== hubWindow.generation) return undefined;
   const current = new BrowserWindow({
     ...DEFAULT_WINDOW,
     ...state,
@@ -183,14 +183,17 @@ async function showMain(): Promise<void> {
       if (mainWindow === current) mainWindow = undefined;
       if (!current.isDestroyed()) current.destroy();
       if (owner === hub && generation === hubWindow.generation) throw error;
-      return;
+      return undefined;
     }
     if (owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) {
       removeIPC();
       if (mainWindow === current) mainWindow = undefined;
       if (!current.isDestroyed()) current.destroy();
+      return undefined;
     }
+    return current;
   }
+  return undefined;
   });
 }
 
@@ -219,15 +222,17 @@ async function showSetup(): Promise<void> {
   const removeIPC = installSetupIPC(setup, {
     hub: () => hub,
     connect: async (raw: string) => {
+      const next = parseHubAddress(raw);
+      let generation: number | undefined;
       try {
-        const next = parseHubAddress(raw);
         await replaceMainWindow(next, window => window.destroy());
-        const generation = hubWindow.generation;
+        const generationValue = hubWindow.generation;
+        generation = generationValue;
         hub = next;
-        await showMain();
-        // An obsolete load may resolve normally after a replacement. It has no right to persist or close setup.
+        const loadedWindow = await showMain();
+        // An obsolete or destroyed load cannot persist or close setup.
         if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
-            !mainWindow || mainWindow.isDestroyed()) {
+            !loadedWindow || loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
           return { ok: false, error: "The hub connection was replaced before it finished." };
         }
         try {
@@ -244,12 +249,16 @@ async function showSetup(): Promise<void> {
           if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
           return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
         }
-        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
+        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
+            loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
           return { ok: false, error: "The hub connection was replaced before it finished." };
         }
         setup.close();
         return { ok: true };
       } catch (error) {
+        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
+          return { ok: false, error: "The hub connection was replaced before it finished." };
+        }
         const failedWindow = mainWindow;
         if (failedWindow && !failedWindow.isDestroyed()) {
           // A failed connection must not leave a live window after its global owner is cleared.
