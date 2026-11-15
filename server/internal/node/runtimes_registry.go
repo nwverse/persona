@@ -29,11 +29,15 @@ type runtimeRegistry struct {
 	// about it go to that runtime, never to the terminal host as a Claude session to resume (that sent a DSH
 	// session's message to herdr, on a machine without herdr).
 	known map[string]knownSession
-	// unclaimed: ids no connected runtime had when asked, and until when not to ask again.
-	unclaimed map[string]time.Time
+	// unclaimed: ids no connected runtime had when asked, until when not to ask again, and what the runtime whose own
+	// id it is answered then (runtimeFor).
+	unclaimed map[string]unclaimedID
 	// unlisted: runtime id -> the Claude transcripts it names as sessions of its own that it does not list, kept a
 	// while after it left (runtimeunlisted.go).
 	unlisted map[string]unlistedOf
+	// away: runtime id -> the rows of its last list whose conversation is a Claude transcript here, listed as not
+	// running for a while after it left (runtimeaway.go).
+	away map[string]awayOf
 	// logf reports what an operator should fix (a launcher two runtimes offer); nil: nowhere. warned: said once each.
 	logf   func(format string, args ...any)
 	warned map[string]bool
@@ -81,12 +85,19 @@ type knownSession struct {
 	at             time.Time
 }
 
+// unclaimedID is an id no connected runtime had (runtimeRegistry.unclaimed): until when it is not asked about again,
+// and the not-found of the runtime whose own id it is, when that one said so (nil otherwise).
+type unclaimedID struct {
+	until time.Time
+	gone  error
+}
+
 // maxKnown bounds the remembered sessions; the oldest go first.
 const maxKnown = 8192
 
 func newRuntimeRegistry() *runtimeRegistry {
 	return &runtimeRegistry{conns: map[int]*runtimeConn{}, owner: map[string]*runtimeConn{}, watching: map[string]int{},
-		watchParents: map[string]context.Context{}, known: map[string]knownSession{}, unclaimed: map[string]time.Time{}, warned: map[string]bool{}}
+		watchParents: map[string]context.Context{}, known: map[string]knownSession{}, unclaimed: map[string]unclaimedID{}, warned: map[string]bool{}}
 }
 
 // setHostOff replaces how launcher ownership excludes engine runtimes the serving node does not enable.
@@ -230,6 +241,11 @@ func (b *runtimeRegistry) byRuntime(rt string) *runtimeConn {
 // belongs is the runtime a session belongs to: the connection listing it, else the connected runtime that listed it
 // before; known: it belongs to a runtime (connected or not), with that runtime's name. A subagent of a runtime's
 // session ("<parent>@<child>", splitRuntimeChild) belongs to the parent's runtime, which answers for it.
+//
+// A session its runtime no longer lists and names as one of its Claude transcripts instead (unlisted_transcripts: an
+// agent archived in Paseo, runtimeunlisted.go) is no longer the runtime's to answer for, whatever it listed before:
+// it is a Claude session not running, read from its transcript, which a message has the machine's engine take over
+// (continueInRuntime). Sent to the runtime, every call about it was refused until the node restarted and forgot it.
 func (b *runtimeRegistry) belongs(id string) (h *runtimeConn, label string, known bool) {
 	if b == nil || id == "" {
 		return nil, "", false
@@ -243,7 +259,7 @@ func (b *runtimeRegistry) belongs(id string) (h *runtimeConn, label string, know
 		return o, "", true
 	}
 	k, ok := b.known[id]
-	if !ok {
+	if !ok || b.namesUnlisted(k.runtime, id) {
 		return nil, "", false
 	}
 	return b.byRuntime(k.runtime), k.label, true
@@ -272,7 +288,7 @@ func (b *runtimeRegistry) askable(id string) []*runtimeConn {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if until, ok := b.unclaimed[id]; ok && time.Now().Before(until) {
+	if u, ok := b.unclaimed[id]; ok && time.Now().Before(u.until) {
 		return nil
 	}
 	var out []*runtimeConn
@@ -287,16 +303,31 @@ func (b *runtimeRegistry) askable(id string) []*runtimeConn {
 	return out
 }
 
-// unclaim: no runtime had the session; it is not asked about again for a minute.
-func (b *runtimeRegistry) unclaim(id string) {
+// unclaim: no runtime had the session; it is not asked about again for a minute. gone: the not-found of the runtime
+// whose own id it is, given meanwhile for it (goneOf); nil when none said so.
+func (b *runtimeRegistry) unclaim(id string, gone error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for k, until := range b.unclaimed {
-		if time.Now().After(until) {
+	for k, u := range b.unclaimed {
+		if time.Now().After(u.until) {
 			delete(b.unclaimed, k)
 		}
 	}
-	b.unclaimed[id] = time.Now().Add(time.Minute)
+	b.unclaimed[id] = unclaimedID{until: time.Now().Add(time.Minute), gone: gone}
+}
+
+// goneOf is the not-found the runtime whose own id it is gave for session id when it was asked lately (unclaim); nil
+// when none did, or longer ago than a minute.
+func (b *runtimeRegistry) goneOf(id string) error {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if u, ok := b.unclaimed[id]; ok && u.gone != nil && time.Now().Before(u.until) {
+		return u.gone
+	}
+	return nil
 }
 
 // ready are the connections that said hello.
@@ -363,6 +394,7 @@ func (b *runtimeRegistry) remove(h *runtimeConn) {
 	defer b.mu.Unlock()
 	delete(b.conns, h.serial)
 	b.leftUnlisted(id)
+	b.leftRows(h, id)
 	b.recomputeOwners()
 }
 
@@ -401,7 +433,9 @@ func (b *runtimeRegistry) setSessions(h *runtimeConn, list []proto.Session) (map
 	defer b.mu.Unlock()
 	h.mu.Lock()
 	h.sessions = list
+	rt := h.hello.Runtime
 	h.mu.Unlock()
+	b.backAgain(rt) // its rows while it was away (runtimeaway.go): this list says what it has
 	b.recomputeOwners()
 	rewatch := map[string]int{}
 	var driven []string
@@ -440,8 +474,8 @@ func (b *runtimeRegistry) ownerOf(id string) *runtimeConn {
 
 // appendSessions appends every connected runtime's sessions to dst, each id once, in the order the runtimes connected:
 // straight into the caller's list (sessionList's), not into a slice of their own grown row by row and copied again.
-// b.mu is held while each connection's rows are read under its h.mu, the order setSessions takes them in; nothing
-// here calls out of the registry.
+// Then the rows the runtimes that left are still listed with (runtimeaway.go). b.mu is held while each connection's
+// rows are read under its h.mu, the order setSessions takes them in; nothing here calls out of the registry.
 func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 	if b == nil {
 		return dst
@@ -462,7 +496,7 @@ func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 		}
 		h.mu.Unlock()
 	}
-	return dst
+	return b.appendAway(dst)
 }
 
 // launcherOwners maps each launcher name the runtimes offer to the one connection that answers for it: the one
