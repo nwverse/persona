@@ -20,6 +20,7 @@ internal data class KnowledgeSelectionState(
     val loading: Boolean = false,
     val saving: Boolean = false,
     val unsupported: Boolean = false,
+    val unsupportedDocument: Boolean = false,
     val readOnly: Boolean = false,
     val readError: ResText? = null,
     val saveError: ResText? = null,
@@ -35,7 +36,7 @@ internal data class KnowledgeSelectionState(
     val removedItem: KnowledgeSelectionItem? = null,
 ) {
     val busy: Boolean get() = loading || saving
-    val editable: Boolean get() = document != null && !busy && !readOnly && !unsupported
+    val editable: Boolean get() = document != null && !busy && !readOnly && !unsupported && !unsupportedDocument
 }
 
 /** The Settings row's tri-state capability probe: a transient failure never retires a previously available page. */
@@ -75,14 +76,18 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
         }
         if (before.loading) return
         val ticket = ++generation
-        mutable.update { it.copy(loading = true, readError = null) }
+        mutable.update { it.copy(loading = true, readError = null, unsupportedDocument = false) }
         try {
-            val fresh = KnowledgeSelectionDocument(api.selection())
+            val fresh = readKnowledgeSelectionDocument(api.selection())
             if (ticket == generation) mutable.update {
-                it.copy(document = fresh, unsupported = false, readError = null)
+                it.copy(document = fresh, unsupported = false, unsupportedDocument = false, readError = null)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: KnowledgeSelectionUnreadableDocument) {
+            if (ticket == generation) mutable.update {
+                it.copy(document = null, unsupportedDocument = true, readError = null, saveError = null)
+            }
         } catch (_: KnowledgeSelectionUnsupported) {
             if (ticket == generation) mutable.update {
                 it.copy(document = null, unsupported = true, readError = ResText.of(R.string.settings_knowledge_selection_old_hub))
@@ -123,7 +128,7 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
         var putAttempted = false
         try {
             val stored = api.withPinnedConnection {
-                val fresh = KnowledgeSelectionDocument(selection())
+                val fresh = readKnowledgeSelectionDocument(selection())
                 val changed = change(fresh)
                 if (changed.root == fresh.root) fresh else {
                     putAttempted = true
@@ -136,6 +141,10 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
         } catch (cancelled: CancellationException) {
             if (ticket == generation) mutable.update { it.copy(document = original) }
             throw cancelled
+        } catch (_: KnowledgeSelectionUnreadableDocument) {
+            if (ticket == generation) mutable.update {
+                it.copy(document = null, unsupportedDocument = true, readError = null, saveError = null)
+            }
         } catch (_: KnowledgeSelectionUnsupported) {
             if (ticket == generation) mutable.update {
                 it.copy(document = original, unsupported = true,
@@ -156,7 +165,7 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
         } finally {
             if (ticket == generation) mutable.update { it.copy(saving = false) }
         }
-        val completed = state.value.saveError == null && !state.value.unsupported && !state.value.readOnly
+        val completed = state.value.saveError == null && !state.value.unsupported && !state.value.unsupportedDocument && !state.value.readOnly
         drainPendingReload()
         return completed
     }
@@ -254,13 +263,6 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
         return existing?.copy(id = id, name = candidate.name) ?: KnowledgeSelectionItem.newChat(candidate.source, candidate.id, candidate.name)
     }
 
-    /** Existing KB chats use detail.meta.source + source_id, never the KB filename or display title. */
-    fun storedChatItem(detail: KnowledgeDetail): KnowledgeSelectionItem? {
-        val kind = detail.meta.string("kind")
-        if (kind !in selectableChatKinds) return null
-        return storedItem(detail, "chat", "source_id")
-    }
-
     /** Documents use detail.meta.source + id; the KB detail.id is only the lookup key. */
     suspend fun documentItem(entry: KnowledgeEntry): KnowledgeSelectionItem? {
         val detail = try {
@@ -273,7 +275,7 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
             }
             return null
         }
-        val picked = storedItem(detail, "doc", "id")
+        val picked = storedDocumentItem(detail)
         if (picked == null) {
             mutable.update { it.copy(documentsError = ResText.of(R.string.settings_knowledge_selection_identity_missing)) }
             return null
@@ -281,12 +283,11 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
         return state.value.document?.item(picked.id) ?: picked.copy(name = entry.name)
     }
 
-    private fun storedItem(detail: KnowledgeDetail, kind: String, idField: String): KnowledgeSelectionItem? {
+    private fun storedDocumentItem(detail: KnowledgeDetail): KnowledgeSelectionItem? {
         val source = detail.meta.string("source")
-        val id = detail.meta.string(idField)
+        val id = detail.meta.string("id")
         if (source.isNullOrEmpty() || id.isNullOrEmpty()) return null
-        return if (kind == "chat") KnowledgeSelectionItem.newChat(source, id, detail.path.substringAfterLast('/'))
-        else KnowledgeSelectionItem.newDocument(source, id, detail.path.substringAfterLast('/'))
+        return KnowledgeSelectionItem.newDocument(source, id, detail.path.substringAfterLast('/'))
     }
 
     private suspend fun drainPendingReload() {
@@ -294,10 +295,14 @@ internal class KnowledgeSelectionModel(private val api: KnowledgeSelection) {
         pendingReload = false
         load()
     }
+}
 
-    private companion object {
-        val selectableChatKinds = setOf("dm", "group", "bot", "official", "system")
-    }
+private class KnowledgeSelectionUnreadableDocument(cause: Throwable) : Exception(cause)
+
+private fun readKnowledgeSelectionDocument(root: JsonObject): KnowledgeSelectionDocument = try {
+    KnowledgeSelectionDocument(root)
+} catch (error: Exception) {
+    throw KnowledgeSelectionUnreadableDocument(error)
 }
 
 private fun JsonObject?.string(key: String): String? =

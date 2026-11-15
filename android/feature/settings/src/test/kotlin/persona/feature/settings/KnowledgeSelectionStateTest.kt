@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
@@ -225,6 +226,61 @@ class KnowledgeSelectionStateTest {
         assertEquals(false, available.state.value)
     }
 
+    @Test fun versionTwoIsUnsupportedWithoutAReadErrorOrAnyWrite() = runBlocking {
+        val api = FakeSelection(JsonObject(KnowledgeSelectionDocument.defaults().root + ("version" to JsonPrimitive(2))))
+        val state = KnowledgeSelectionModel(api)
+        state.load()
+        assertTrue(state.state.value.unsupportedDocument)
+        assertNull(state.state.value.document)
+        assertNull(state.state.value.readError)
+        assertFalse(state.state.value.editable)
+        assertFalse(state.edit { it.setRuleOn(KnowledgeSelectionPart.Messages, "mentions", false) })
+        assertEquals(listOf("GET"), api.calls)
+        assertTrue(api.puts.isEmpty())
+    }
+
+    @Test fun anOrderNamingARuleTwiceIsUnsupportedWithoutAReadErrorOrAnyWrite() = runBlocking {
+        val base = KnowledgeSelectionDocument.defaults()
+        val messages = base.root.getValue("messages").jsonObject
+        val duplicated = JsonArray(base.order(KnowledgeSelectionPart.Messages).mapIndexed { index, level ->
+            JsonArray((if (index == 0) level + "mentions" else level).map(::JsonPrimitive))
+        })
+        val root = JsonObject(base.root + ("messages" to JsonObject(messages + ("order" to duplicated))))
+        val api = FakeSelection(root)
+        val state = KnowledgeSelectionModel(api)
+        state.load()
+        assertTrue(state.state.value.unsupportedDocument)
+        assertNull(state.state.value.document)
+        assertNull(state.state.value.readError)
+        assertFalse(state.state.value.editable)
+        assertFalse(state.edit { it.setRuleOn(KnowledgeSelectionPart.Messages, "mentions", false) })
+        assertEquals(listOf("GET"), api.calls)
+        assertTrue(api.puts.isEmpty())
+    }
+
+    @Test fun aTransportReadFailureKeepsItsRetryableReadError() = runBlocking {
+        val api = FakeSelection(KnowledgeSelectionDocument.defaults().root).apply {
+            readFailures += HubFailure(HubError.Timeout)
+        }
+        val state = KnowledgeSelectionModel(api)
+        state.load()
+        assertFalse(state.state.value.unsupportedDocument)
+        assertNull(state.state.value.document)
+        assertNotNull(state.state.value.readError)
+        assertTrue(api.puts.isEmpty())
+    }
+
+    @Test fun anUnsupportedFreshDocumentStopsBeforePutAndRetiresEditing() = runBlocking {
+        val api = FakeSelection(KnowledgeSelectionDocument.defaults().root)
+        val state = model(api)
+        api.reads += JsonObject(KnowledgeSelectionDocument.defaults().root + ("version" to JsonPrimitive(2)))
+        assertFalse(state.edit { it.setRuleOn(KnowledgeSelectionPart.Messages, "mentions", false) })
+        assertTrue(state.state.value.unsupportedDocument)
+        assertNull(state.state.value.document)
+        assertEquals(listOf("GET", "GET"), api.calls)
+        assertTrue(api.puts.isEmpty())
+    }
+
     @Test fun availabilitySurvivesTransientFailures() = runBlocking {
         val api = FakeSelection(KnowledgeSelectionDocument.defaults().root)
         val available = KnowledgeSelectionAvailability(api)
@@ -312,7 +368,7 @@ class KnowledgeSelectionStateTest {
         assertNull(state.state.value.candidateError)
     }
 
-    @Test fun documentAndStoredChatIdentityComeFromDetailMetadata() = runBlocking {
+    @Test fun documentIdentityComesFromDetailMetadata() = runBlocking {
         val api = FakeSelection(KnowledgeSelectionDocument.defaults().root)
         val state = model(api)
         api.details["kb-file-name"] = KnowledgeDetail(kind = "docs", id = "kb-file-name", path = "docs/kb-file-name.md",
@@ -322,16 +378,6 @@ class KnowledgeSelectionStateTest {
         val document = state.documentItem(KnowledgeEntry(kind = "docs", id = "kb-file-name", name = "Product plan"))!!
         assertEquals(KnowledgeItemId("drive", "doc", "source-document-id"), document.id)
         assertEquals("Product plan", document.name)
-
-        val chat = state.storedChatItem(KnowledgeDetail(kind = "chats", id = "kb-chat-file", path = "chats/kb-chat-file.md",
-            meta = buildJsonObject {
-                put("source", JsonPrimitive("messages")); put("source_id", JsonPrimitive("source-chat-id")); put("kind", JsonPrimitive("group"))
-            }))!!
-        assertEquals(KnowledgeItemId("messages", "chat", "source-chat-id"), chat.id)
-        assertNull(state.storedChatItem(KnowledgeDetail(kind = "chats", id = "mail", path = "chats/mail.md",
-            meta = buildJsonObject {
-                put("source", JsonPrimitive("mail")); put("source_id", JsonPrimitive("1")); put("kind", JsonPrimitive("mail"))
-            })))
     }
 
     @Test fun missingDocumentIdentityExplainsAndCannotAdd() = runBlocking {

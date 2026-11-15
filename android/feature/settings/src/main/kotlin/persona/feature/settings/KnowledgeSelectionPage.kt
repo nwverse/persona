@@ -40,6 +40,7 @@ import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JEmptyState
 import persona.core.designsystem.JGroupItem
+import persona.core.designsystem.JIconButton
 import persona.core.designsystem.JListPage
 import persona.core.designsystem.JLoading
 import persona.core.designsystem.JNotice
@@ -57,7 +58,7 @@ import persona.core.designsystem.failureReasonText
 import persona.core.designsystem.icons.PersonaIcons
 
 private data class RuleEditor(val part: KnowledgeSelectionPart, val name: String, val opened: KnowledgeSelectionRule)
-private data class LevelEditor(val part: KnowledgeSelectionPart, val index: Int)
+private data class LevelEditor(val part: KnowledgeSelectionPart, val firstRule: String)
 private data class ItemEditor(val item: KnowledgeSelectionItem, val isNew: Boolean)
 
 /** Settings › Knowledge Selection: a whole hub document, edited immediately without a page-level draft or Save button. */
@@ -94,6 +95,15 @@ internal fun KnowledgeSelectionPage(
         // A refusal can belong to a rule far down the page; bring its one explanation into view.
         if (state.saveError != null || state.readOnly) listState.animateScrollToItem(0)
     }
+    LaunchedEffect(state.unsupportedDocument) {
+        if (state.unsupportedDocument) {
+            levelEditor = null
+            ruleEditor = null
+            itemEditor = null
+            chatPicker = false
+            documentPicker = false
+        }
+    }
     LaunchedEffect(connectors, assistant.id, sourcesRetry) {
         sources = null
         sourcesError = null
@@ -127,6 +137,8 @@ internal fun KnowledgeSelectionPage(
         if (document == null && state.loading) item("loading") { JLoading() }
         else if (state.unsupported) item("old-hub") {
             JNotice(stringResource(R.string.settings_knowledge_selection_old_hub), status = Status.NeedsYou)
+        } else if (state.unsupportedDocument) item("unsupported-document") {
+            JNotice(stringResource(R.string.settings_knowledge_selection_unsupported_document), status = Status.NeedsYou)
         } else if (document == null) {
             item("read-error") {
                 JNotice(state.readError?.text() ?: stringResource(R.string.settings_knowledge_selection_old_hub),
@@ -169,16 +181,13 @@ internal fun KnowledgeSelectionPage(
                 levels.forEachIndexed { index, level ->
                     val key = "${part.wire}-$index"
                     item("header-$key") {
-                        JSectionHeader(stringResource(
-                            if (part == KnowledgeSelectionPart.Messages) R.string.settings_knowledge_selection_chat_priority
-                            else R.string.settings_knowledge_selection_document_priority,
-                            index + 1,
-                        ))
+                        KnowledgeSelectionLevelHeader(part, index, levels.size, level.size, state.editable,
+                            onActions = { level.firstOrNull()?.let { first -> levelEditor = LevelEditor(part, first) } })
                     }
                     level.forEachIndexed { ruleIndex, name ->
                         val rule = document.rule(part, name) ?: return@forEachIndexed
                         item("rule-${part.wire}-$name") {
-                            JGroupItem(GroupPosition.of(ruleIndex, level.size + 1)) {
+                            JGroupItem(GroupPosition.of(ruleIndex, level.size)) {
                                 val title = knowledgeRuleTitle(part, name)
                                 val up = stringResource(R.string.settings_knowledge_selection_move_up)
                                 val down = stringResource(R.string.settings_knowledge_selection_move_down)
@@ -198,29 +207,22 @@ internal fun KnowledgeSelectionPage(
                                         edit { it.regroup(part, name, joinPrevious = false) }; true
                                     })
                                 }
-                                JSwitchRow(
+                                JRow(
                                     title = title,
-                                    checked = rule.on,
-                                    onCheckedChange = { on -> edit { it.setRuleOn(part, name, on) } },
-                                    subtitle = knowledgeRuleSubtitle(part, name, rule),
-                                    subtitleLines = Int.MAX_VALUE,
+                                    subtitle = knowledgeRuleSubtitle(part, name),
+                                    subtitleLines = 1,
+                                    value = when {
+                                        !rule.on -> stringResource(R.string.settings_knowledge_selection_off)
+                                        rule.days != null -> stringResource(R.string.settings_knowledge_selection_days_value, rule.days!!)
+                                        else -> stringResource(R.string.settings_knowledge_selection_on)
+                                    },
                                     enabled = state.editable,
+                                    onClick = { ruleEditor = RuleEditor(part, name, rule) },
                                     modifier = Modifier.testTag("knowledge-rule-${part.wire}-$name").semantics {
                                         customActions = accessibility
                                     },
                                 )
                             }
-                        }
-                    }
-                    item("actions-$key") {
-                        JGroupItem(GroupPosition.of(level.size, level.size + 1)) {
-                            JRow(
-                                title = stringResource(R.string.settings_knowledge_selection_priority_actions),
-                                subtitle = stringResource(R.string.settings_knowledge_selection_priority_actions_about),
-                                enabled = state.editable,
-                                onClick = { levelEditor = LevelEditor(part, index) },
-                                modifier = Modifier.testTag("knowledge-priority-${part.wire}-$index"),
-                            )
                         }
                     }
                 }
@@ -236,47 +238,45 @@ internal fun KnowledgeSelectionPage(
 
     levelEditor?.let { opened ->
         val levels = state.document?.order(opened.part).orEmpty()
-        val level = levels.getOrNull(opened.index).orEmpty()
-        val actions = buildList {
-            add(JAction(stringResource(R.string.settings_knowledge_selection_move_up), PersonaIcons.queueUp,
-                enabled = state.editable && opened.index > 0,
-                onClick = {
-                    level.firstOrNull()?.let { name -> edit { it.moveLevel(opened.part, name, -1) } }
-                    levelEditor = null
-                }))
-            add(JAction(stringResource(R.string.settings_knowledge_selection_move_down), PersonaIcons.queueDown,
-                enabled = state.editable && opened.index < levels.lastIndex,
-                onClick = {
-                    level.firstOrNull()?.let { name -> edit { it.moveLevel(opened.part, name, 1) } }
-                    levelEditor = null
-                }))
-            level.forEach { name ->
-                val title = knowledgeRuleTitle(opened.part, name)
-                add(JAction(stringResource(R.string.settings_knowledge_selection_edit_rule, title), PersonaIcons.options,
-                    enabled = state.editable, onClick = {
-                        levelEditor = null
-                        state.document?.rule(opened.part, name)?.let { openedRule ->
-                            ruleEditor = RuleEditor(opened.part, name, openedRule)
-                        }
-                    }))
-                if (opened.index > 0) add(JAction(
-                    stringResource(R.string.settings_knowledge_selection_merge_into, title, opened.index),
-                    enabled = state.editable,
+        val openedIndex = levels.indexOfFirst { it.firstOrNull() == opened.firstRule }
+        if (openedIndex < 0) {
+            LaunchedEffect(opened) { levelEditor = null }
+        } else {
+            val level = levels[openedIndex]
+            val actions = buildList {
+                add(JAction(stringResource(R.string.settings_knowledge_selection_move_up), PersonaIcons.queueUp,
+                    enabled = state.editable && openedIndex > 0,
                     onClick = {
-                        edit { it.regroup(opened.part, name, joinPrevious = true) }
+                        edit { it.moveLevel(opened.part, opened.firstRule, -1) }
                         levelEditor = null
                     }))
-                if (level.size > 1) add(JAction(stringResource(R.string.settings_knowledge_selection_own_level, title),
-                    enabled = state.editable,
+                add(JAction(stringResource(R.string.settings_knowledge_selection_move_down), PersonaIcons.queueDown,
+                    enabled = state.editable && openedIndex < levels.lastIndex,
                     onClick = {
-                        edit { it.regroup(opened.part, name, joinPrevious = false) }
+                        edit { it.moveLevel(opened.part, opened.firstRule, 1) }
                         levelEditor = null
                     }))
+                level.forEach { name ->
+                    val title = knowledgeRuleTitle(opened.part, name)
+                    if (openedIndex > 0) add(JAction(
+                        stringResource(R.string.settings_knowledge_selection_merge_into, title, openedIndex),
+                        enabled = state.editable,
+                        onClick = {
+                            edit { it.regroup(opened.part, name, joinPrevious = true) }
+                            levelEditor = null
+                        }))
+                    if (level.size > 1) add(JAction(stringResource(R.string.settings_knowledge_selection_own_level, title),
+                        enabled = state.editable,
+                        onClick = {
+                            edit { it.regroup(opened.part, name, joinPrevious = false) }
+                            levelEditor = null
+                        }))
+                }
             }
+            JActionSheet(actions, onDismiss = { levelEditor = null },
+                title = stringResource(if (opened.part == KnowledgeSelectionPart.Messages) R.string.settings_knowledge_selection_chat_priority
+                    else R.string.settings_knowledge_selection_document_priority, openedIndex + 1))
         }
-        JActionSheet(actions, onDismiss = { levelEditor = null },
-            title = stringResource(if (opened.part == KnowledgeSelectionPart.Messages) R.string.settings_knowledge_selection_chat_priority
-                else R.string.settings_knowledge_selection_document_priority, opened.index + 1))
     }
 
     val editorProblem = state.saveError ?: if (state.readOnly) ResText.of(R.string.settings_knowledge_selection_read_only) else null
@@ -353,6 +353,30 @@ internal fun KnowledgeSelectionPage(
 }
 
 @Composable
+internal fun KnowledgeSelectionLevelHeader(
+    part: KnowledgeSelectionPart,
+    index: Int,
+    levelCount: Int,
+    ruleCount: Int,
+    enabled: Boolean,
+    onActions: () -> Unit,
+) {
+    val title = stringResource(
+        if (part == KnowledgeSelectionPart.Messages) R.string.settings_knowledge_selection_chat_priority
+        else R.string.settings_knowledge_selection_document_priority,
+        index + 1,
+    )
+    if (levelCount > 1 || ruleCount > 1) {
+        JSectionHeader(title, action = {
+            JIconButton(PersonaIcons.more, stringResource(R.string.settings_knowledge_selection_level_actions, title), onActions,
+                Modifier.testTag("knowledge-priority-${part.wire}-$index"), enabled = enabled)
+        })
+    } else {
+        JSectionHeader(title)
+    }
+}
+
+@Composable
 internal fun KnowledgeChatPickerContent(
     sources: List<HubConnector>?,
     source: String?,
@@ -394,7 +418,7 @@ internal fun KnowledgeChatPickerContent(
                             stringResource(R.string.settings_knowledge_selection_no_chats), icon = PersonaIcons.knowledge)
                         filtered.forEach { candidate ->
                             val details = buildList {
-                                add(stringResource(R.string.settings_knowledge_selection_kind, candidate.kind))
+                                knowledgeChatKindTitle(candidate.kind)?.let(::add)
                                 add(stringResource(when (candidate.read) {
                                     "whole" -> R.string.settings_knowledge_selection_read_whole
                                     "personal" -> R.string.settings_knowledge_selection_read_personal
@@ -490,7 +514,7 @@ private fun KnowledgeItemSheet(
         Column(Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             problem?.let { JNotice(it.text(), Modifier.testTag("knowledge-item-problem"), status = Status.NeedsYou) }
             Text(item.name.ifBlank { item.id.id }, style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
-            Text("${stringResource(R.string.settings_knowledge_selection_source)}: ${item.id.source}",
+            Text(stringResource(R.string.settings_knowledge_selection_source_value, item.id.source),
                 style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
             Text(stringResource(R.string.settings_knowledge_selection_what_to_store), style = PersonaTheme.type.callout,
                 color = PersonaTheme.palette.ink2)
@@ -543,7 +567,16 @@ private fun knowledgeRuleTitle(part: KnowledgeSelectionPart, name: String): Stri
 }
 
 @Composable
-private fun knowledgeRuleSubtitle(part: KnowledgeSelectionPart, name: String, rule: KnowledgeSelectionRule): String {
+private fun knowledgeChatKindTitle(kind: String): String? = when (kind) {
+    "dm" -> knowledgeRuleTitle(KnowledgeSelectionPart.Messages, "dm")
+    "group" -> knowledgeRuleTitle(KnowledgeSelectionPart.Messages, "group")
+    "bot" -> knowledgeRuleTitle(KnowledgeSelectionPart.Messages, "bot")
+    "official" -> knowledgeRuleTitle(KnowledgeSelectionPart.Messages, "official")
+    else -> null
+}
+
+@Composable
+private fun knowledgeRuleSubtitle(part: KnowledgeSelectionPart, name: String): String? {
     val descriptionResource = when {
         name == "mentions" && part == KnowledgeSelectionPart.Messages -> R.string.settings_knowledge_selection_rule_mentions_about
         name == "mentions" -> R.string.settings_knowledge_selection_rule_doc_mentions_about
@@ -560,14 +593,7 @@ private fun knowledgeRuleSubtitle(part: KnowledgeSelectionPart, name: String, ru
         part == KnowledgeSelectionPart.Messages && name == "done" -> R.string.settings_knowledge_selection_rule_done_about
         else -> null
     }
-    val description = descriptionResource?.let { stringResource(it) }
-    val textDays = rule.days?.let { stringResource(R.string.settings_knowledge_selection_text_days_value, it) }
-        ?: stringResource(if (part == KnowledgeSelectionPart.Messages) R.string.settings_knowledge_selection_days_default
-            else R.string.settings_knowledge_selection_days_no_deletion)
-    val attachmentDays = if (part == KnowledgeSelectionPart.Messages) rule.attachmentDays?.let {
-        stringResource(R.string.settings_knowledge_selection_attachment_days_value, it)
-    } ?: stringResource(R.string.settings_knowledge_selection_attachment_default) else null
-    return listOfNotNull(description, textDays, attachmentDays).joinToString("\n")
+    return descriptionResource?.let { stringResource(it) }
 }
 
 @Composable

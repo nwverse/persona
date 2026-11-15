@@ -17,10 +17,16 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -130,6 +136,8 @@ class KnowledgeSelectionShotsTest {
                 rule.waitUntil(5_000) { api.reads > 0 }
                 if (scenario == Scenario.ReadOnly || scenario == Scenario.Refused) {
                     rule.onNodeWithTag("knowledge-rule-messages-mentions").performClick()
+                    rule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("knowledge-rule-days"))).performTextInput("30")
+                    rule.onNodeWithTag("knowledge-rule-save").assertIsEnabled().performClick()
                     rule.waitUntil(5_000) { api.puts.size == 1 }
                 }
             }
@@ -159,6 +167,48 @@ class KnowledgeSelectionShotsTest {
                 writeComposite(File(out, "${scenario.file}-$locale-${textScale.toInt()}x.png"), textScale, frames)
             }
         }
+    }
+
+    @Test @Config(sdk = [35], qualifiers = "en-w360dp-h1200dp-mdpi")
+    fun levelActionsSheet() {
+        val out = File(System.getProperty("persona.shots") ?: "build/knowledge-selection-shots").also { it.mkdirs() }
+        val api = FakeSelection(document(Scenario.SharedLevels).root)
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                KnowledgeSelectionPage(api, null, onBack = {})
+            }
+        }
+        rule.waitUntil(5_000) { api.reads > 0 }
+        rule.onNodeWithTag("knowledge-priority-messages-1").performClick()
+        rule.waitForIdle()
+        val frames = mutableListOf<Bitmap>()
+        for ((nextStyle, nextDark) in listOf(AppStyle.Glass to false, AppStyle.Board to true)) {
+            rule.runOnIdle {
+                style = nextStyle
+                dark = nextDark
+                Snapshot.sendApplyNotifications()
+            }
+            rule.waitForIdle()
+            frames += rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+        }
+        val header = 48
+        val width = frames.maxOf { it.width }
+        val height = frames.maxOf { it.height }
+        val bitmap = Bitmap.createBitmap(width * frames.size, height + header, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 24f }
+        frames.forEachIndexed { index, frame ->
+            val left = index * width
+            paint.color = android.graphics.Color.rgb(232, 232, 232)
+            canvas.drawRect(left.toFloat(), 0f, (left + width).toFloat(), header.toFloat(), paint)
+            paint.color = android.graphics.Color.BLACK
+            canvas.drawText(if (index == 0) "Glass · light · level actions" else "Board · dark · level actions",
+                left + 12f, 33f, paint)
+            canvas.drawBitmap(frame, left.toFloat(), header.toFloat(), null)
+        }
+        File(out, "level-actions-en.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
     @androidx.compose.runtime.Composable

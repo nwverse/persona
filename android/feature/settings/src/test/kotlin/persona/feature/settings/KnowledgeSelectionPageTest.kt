@@ -3,12 +3,14 @@ package persona.feature.settings
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -23,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -59,7 +62,7 @@ class KnowledgeSelectionPageTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     private class FakeSelection(var stored: JsonObject) : KnowledgeSelection {
-        override val changes: Flow<KnowledgeSelectionChange> = emptyFlow()
+        override val changes = MutableSharedFlow<KnowledgeSelectionChange>(extraBufferCapacity = 1)
         val puts = mutableListOf<JsonObject>()
         var putFailure: Exception? = null
         var readFailure: Exception? = null
@@ -97,13 +100,21 @@ class KnowledgeSelectionPageTest {
 
     private fun putDocument(api: FakeSelection) = KnowledgeSelectionDocument(api.puts.last())
 
-    @Test fun ruleSwitchesSaveImmediately() {
-        val api = FakeSelection(KnowledgeSelectionDocument.defaults().root)
+    @Test fun ruleRowsShowOffOnAndDaysAndOpenTheirSheet() {
+        val original = KnowledgeSelectionDocument.defaults().setRuleDays(KnowledgeSelectionPart.Messages, "dm", 30)
+        val api = FakeSelection(original.root)
         show(api)
-        rule.onNodeWithTag("knowledge-rule-messages-mentions").assertIsOn().performClick()
+        rule.onNodeWithTag("knowledge-rule-messages-group").assert(hasText("Off"))
+        rule.onNodeWithTag("knowledge-rule-messages-mentions").assert(hasText("On"))
+        rule.onNodeWithTag("knowledge-rule-messages-dm").assert(hasText("30 days")).performClick()
+        rule.onNodeWithTag("knowledge-rule-sheet-on").assertIsOn().performClick()
+        rule.onNodeWithTag("knowledge-rule-save").performClick()
         rule.waitUntil(5_000) { api.puts.size == 1 }
-        assertFalse(putDocument(api).rule(KnowledgeSelectionPart.Messages, "mentions")!!.on)
+        rule.waitForIdle()
+        assertFalse(putDocument(api).rule(KnowledgeSelectionPart.Messages, "dm")!!.on)
+        assertEquals(30, putDocument(api).rule(KnowledgeSelectionPart.Messages, "dm")!!.days)
         assertEquals(2, api.reads) // initial read, then the save's fresh read
+        rule.onNodeWithTag("knowledge-rule-messages-dm").assert(hasText("Off"))
         assertTrue(rule.onAllNodesWithText("Save").fetchSemanticsNodes().isEmpty()) // no page-level Save
     }
 
@@ -133,6 +144,73 @@ class KnowledgeSelectionPageTest {
         rule.waitUntil(5_000) { api.puts.size == 3 }
         assertEquals(listOf("mentions", "mine"), putDocument(api).order(KnowledgeSelectionPart.Messages)[1])
         assertTrue(putDocument(api).order(KnowledgeSelectionPart.Messages).none { it.isEmpty() })
+    }
+
+    @Test fun headerButtonIsAbsentWhenOneLevelContainsOneRule() {
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                KnowledgeSelectionLevelHeader(KnowledgeSelectionPart.Messages, index = 0,
+                    levelCount = 1, ruleCount = 1, enabled = true, onActions = {})
+            }
+        }
+        rule.onNodeWithTag("knowledge-priority-messages-0").assertDoesNotExist()
+    }
+
+    @Test fun openLevelActionsFollowTheirFirstRuleAcrossAReloadReorder() {
+        val original = KnowledgeSelectionDocument.defaults()
+        val api = FakeSelection(original.root)
+        show(api)
+        rule.onNodeWithTag("knowledge-priority-messages-1").performClick()
+        rule.onNodeWithText("Merge Direct chats into Priority 1").assertExists()
+        api.stored = original.moveLevel(KnowledgeSelectionPart.Messages, "dm", 1).root
+        api.changes.tryEmit(KnowledgeSelectionChange())
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("Merge Direct chats into Priority 2").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("Move up").performClick()
+        rule.waitUntil(5_000) { api.puts.size == 1 }
+        assertEquals(listOf("mentions", "mine"), putDocument(api).order(KnowledgeSelectionPart.Messages)[0])
+        assertEquals(listOf("dm"), putDocument(api).order(KnowledgeSelectionPart.Messages)[1])
+        assertEquals(listOf("group"), putDocument(api).order(KnowledgeSelectionPart.Messages)[2])
+    }
+
+    @Test fun pickerUsesPlainChatKindNamesAndOmitsUnknownKinds() {
+        val candidates = listOf("dm", "group", "bot", "official", "system").mapIndexed { index, kind ->
+            KnowledgeSelectionCandidate(id = kind, name = "Chat $index", kind = kind, source = "lark", read = "whole")
+        }
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                KnowledgeChatPickerContent(
+                    sources = listOf(HubConnector("lark", "Lark")), source = "lark",
+                    candidates = KnowledgeSelectionCandidates(source = "lark", chats = candidates),
+                    loading = false, unavailable = false, error = null,
+                    onSource = {}, onCandidate = {}, onRetry = {},
+                )
+            }
+        }
+        for (title in listOf("Direct chats", "Group chats", "Bots and apps", "Official accounts")) {
+            assertTrue(title, rule.onAllNodesWithText(title, substring = true).fetchSemanticsNodes().isNotEmpty())
+        }
+        assertTrue(rule.onAllNodesWithText("Kind:", substring = true).fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodesWithText("system", substring = true).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test fun versionTwoDocumentShowsAPlainNoticeWithoutControlsOrRetry() {
+        val api = FakeSelection(JsonObject(KnowledgeSelectionDocument.defaults().root + ("version" to JsonPrimitive(2))))
+        show(api)
+        rule.onNodeWithText("This version of the app can't edit this hub's knowledge selection. Update the app to make changes.").assertExists()
+        rule.onNodeWithText("Add chat…").assertDoesNotExist()
+        rule.onNodeWithText(RuntimeEnvironment.getApplication().resources.getString(R.string.settings_retry_read)).assertDoesNotExist()
+        assertTrue(api.puts.isEmpty())
+    }
+
+    @Test fun transportFailureKeepsTheReadErrorAndRetry() {
+        val api = FakeSelection(KnowledgeSelectionDocument.defaults().root).apply {
+            readFailure = HubFailure(HubError.Timeout)
+        }
+        show(api)
+        rule.onNodeWithText("Couldn't read knowledge selection:", substring = true).assertExists()
+        rule.onNodeWithText(RuntimeEnvironment.getApplication().resources.getString(R.string.settings_retry_read)).assertIsEnabled()
     }
 
     @Test fun perItemSettingsHaveNoPriorityMovement() {
@@ -165,8 +243,7 @@ class KnowledgeSelectionPageTest {
     @Test fun ruleSheetValidatesDaysBeforeSending() {
         val api = FakeSelection(KnowledgeSelectionDocument.defaults().root)
         show(api)
-        rule.onNodeWithTag("knowledge-priority-messages-0").performClick()
-        rule.onNodeWithText("Mentions of you options").performClick()
+        rule.onNodeWithTag("knowledge-rule-messages-mentions").performClick()
         rule.textField("knowledge-rule-days").performTextInput("0")
         rule.onNodeWithTag("knowledge-rule-save").assertIsNotEnabled()
         assertTrue(api.puts.isEmpty())
@@ -186,8 +263,7 @@ class KnowledgeSelectionPageTest {
             putFailure = HubFailure(HubError.Server, "read-only device", 403)
         }
         show(api)
-        rule.onNodeWithTag("knowledge-priority-messages-0").performClick()
-        rule.onNodeWithText("Mentions of you options").performClick()
+        rule.onNodeWithTag("knowledge-rule-messages-mentions").performClick()
         rule.textField("knowledge-rule-days").performTextInput("30")
         rule.onNodeWithTag("knowledge-rule-save").performClick()
         rule.waitUntil(5_000) { api.puts.size == 1 }
@@ -201,8 +277,7 @@ class KnowledgeSelectionPageTest {
             putFailure = HubFailure(HubError.Server, "days must be from 1 to 36500", 400)
         }
         show(api)
-        rule.onNodeWithTag("knowledge-priority-messages-0").performClick()
-        rule.onNodeWithText("Mentions of you options").performClick()
+        rule.onNodeWithTag("knowledge-rule-messages-mentions").performClick()
         rule.textField("knowledge-rule-days").performTextInput("30")
         rule.onNodeWithTag("knowledge-rule-save").performClick()
         rule.waitUntil(5_000) { api.puts.size == 1 }
@@ -269,9 +344,13 @@ class KnowledgeSelectionPageTest {
         }
         show(api)
         rule.onNodeWithTag("knowledge-rule-messages-mentions").performClick()
+        rule.textField("knowledge-rule-days").performTextInput("30")
+        rule.onNodeWithTag("knowledge-rule-save").performClick()
         rule.waitUntil(5_000) { api.puts.size == 1 }
+        rule.onNodeWithText("Cancel").performClick()
+        rule.waitForIdle()
         rule.onNodeWithText("This device can read knowledge selection but can't change it. Use a device with full access to make changes.").assertExists()
-        rule.onNodeWithTag("knowledge-rule-messages-mentions").assertIsOn().assertIsNotEnabled()
+        rule.onNodeWithTag("knowledge-rule-messages-mentions").assertIsNotEnabled()
         rule.onNodeWithText("Add chat…").assertIsNotEnabled()
         rule.onNodeWithText("Add document…").assertIsNotEnabled()
         rule.onNodeWithTag("knowledge-priority-messages-0").assertIsNotEnabled()

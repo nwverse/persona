@@ -4,6 +4,7 @@
     <string name="settings_knowledge_selection_subtitle">Choose which chats and documents Persona reads and keeps</string>
     <string name="settings_knowledge_selection_search_aliases">knowledge base history retention messages documents chats priorities mentions</string>
     <string name="settings_knowledge_selection_old_hub">This hub doesn\'t have knowledge selection yet. Update the hub, then choose here what it keeps.</string>
+    <string name="settings_knowledge_selection_unsupported_document">This version of the app can\'t edit this hub\'s knowledge selection. Update the app to make changes.</string>
     <string name="settings_knowledge_selection_read_failed">Couldn\'t read knowledge selection: %1$s</string>
     <string name="settings_knowledge_selection_save_failed">Couldn\'t save the change: %1$s</string>
     <string name="settings_knowledge_selection_read_only">This device can read knowledge selection but can\'t change it. Use a device with full access to make changes.</string>
@@ -17,13 +18,11 @@
     <string name="settings_knowledge_selection_undo">Undo</string>
     <string name="settings_knowledge_selection_chat_priority">Chat rules · Priority %1$d</string>
     <string name="settings_knowledge_selection_document_priority">Document rules · Priority %1$d</string>
-    <string name="settings_knowledge_selection_priority_actions">Priority actions</string>
-    <string name="settings_knowledge_selection_priority_actions_about">Move this level, change how its rules are grouped, or edit a rule\'s days.</string>
+    <string name="settings_knowledge_selection_level_actions">%1$s: actions</string>
     <string name="settings_knowledge_selection_move_up">Move up</string>
     <string name="settings_knowledge_selection_move_down">Move down</string>
     <string name="settings_knowledge_selection_merge_into">Merge %1$s into Priority %2$d</string>
     <string name="settings_knowledge_selection_own_level">Give %1$s its own level</string>
-    <string name="settings_knowledge_selection_edit_rule">%1$s options</string>
     <string name="settings_knowledge_selection_messages_about">Levels are checked from the top. The first level with a matching rule decides: the message is stored if any matching rule there is on, and not stored if they are all off. Lower levels are not checked. Turning a rule off only stops new messages; what is stored stays until its days run out.</string>
     <string name="settings_knowledge_selection_documents_about">Documents follow the same order. Only days you set here add a deletion date; with none, documents are kept as before.</string>
     <string name="settings_knowledge_selection_rule_mentions">Mentions of you</string>
@@ -54,11 +53,6 @@
     <string name="settings_knowledge_selection_on">On</string>
     <string name="settings_knowledge_selection_off">Off</string>
     <string name="settings_knowledge_selection_days_value">%1$d days</string>
-    <string name="settings_knowledge_selection_days_default">Days: hub default</string>
-    <string name="settings_knowledge_selection_days_no_deletion">Days: no deletion date</string>
-    <string name="settings_knowledge_selection_attachment_default">Attachments: hub default</string>
-    <string name="settings_knowledge_selection_text_days_value">Text: %1$d days</string>
-    <string name="settings_knowledge_selection_attachment_days_value">Attachments: %1$d days</string>
     <string name="settings_knowledge_selection_store_matching">Store what matches</string>
     <string name="settings_knowledge_selection_days_text">Days to keep text</string>
     <string name="settings_knowledge_selection_days_attachments">Days to keep attachments</string>
@@ -73,6 +67,7 @@
     <string name="settings_knowledge_selection_chat_setting">Chat setting</string>
     <string name="settings_knowledge_selection_document_setting">Document setting</string>
     <string name="settings_knowledge_selection_source">Source</string>
+    <string name="settings_knowledge_selection_source_value">Source: %1$s</string>
     <string name="settings_knowledge_selection_what_to_store">What to store</string>
     <string name="settings_knowledge_selection_mode_skip">Don\'t read</string>
     <string name="settings_knowledge_selection_mode_rules_chat">Only mentions and my messages</string>
@@ -85,10 +80,6 @@
     <string name="settings_knowledge_selection_mode_all_document_about">The document is stored whatever the rules say. Leave the days empty to add no deletion date.</string>
     <string name="settings_knowledge_selection_days_keep">Days to keep</string>
     <string name="settings_knowledge_selection_item_days_invalid">Use a whole number from 1 to 36500, or leave it empty.</string>
-    <string name="settings_knowledge_selection_not_read">Not read</string>
-    <string name="settings_knowledge_selection_mentions_and_mine">Mentions and mine</string>
-    <string name="settings_knowledge_selection_by_rules">By rules</string>
-    <string name="settings_knowledge_selection_everything">Everything</string>
     <string name="settings_knowledge_selection_add_chat_title">Add chat</string>
     <string name="settings_knowledge_selection_add_document_title">Add document</string>
     <string name="settings_knowledge_selection_picker_search">Name</string>
@@ -102,8 +93,6 @@
     <string name="settings_knowledge_selection_read_whole">Whole chat</string>
     <string name="settings_knowledge_selection_read_personal">Mentions and mine</string>
     <string name="settings_knowledge_selection_read_none">Not read</string>
-    <string name="settings_knowledge_selection_kind">Kind: %1$s</string>
     <string name="settings_knowledge_selection_picker_failed">Couldn\'t load: %1$s</string>
     <string name="settings_knowledge_selection_identity_missing">The knowledge base doesn\'t record where this one came from, so it can\'t get a setting of its own.</string>
-    <string name="settings_knowledge_selection_chat_not_selectable">Mail, issues and pull requests are always stored. The selection doesn\'t apply to them.</string>
 </resources>

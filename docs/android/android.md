@@ -354,57 +354,30 @@ not emulator/handset screenshots, and do not prove system dialogs, background su
 ## Knowledge selection (Settings › Knowledge Selection, #2217)
 
 The current assistant's Settings places **Knowledge Selection** below Extensions, and Settings search finds the same
-entry. The page edits the existing selection document through `GET` / `PUT /api/v1/kb/selection`; chat candidates
-come from `GET /api/v1/kb/selection/candidates?source=<connector id>`, while document choices use the existing
-Knowledge list/detail routes. What the rules mean is in `docs/assistant/knowledge.md` ("Selection").
+entry. It edits `GET` / `PUT /api/v1/kb/selection`; chat candidates use `/api/v1/kb/selection/candidates?source=`, and
+document choices use the existing Knowledge list/detail routes. Rule meanings are in `docs/assistant/knowledge.md`
+("Selection"). A route 404 hides the entry, while a PUT 403 leaves the loaded page read-only with one explanation.
 
-- **Availability and access**: a selection GET 404 means an older hub without the route, so the Settings row and its
-  search result are hidden. Direct navigation to the page on such a hub instead shows a notice to update the hub,
-  without editable controls. A PUT 403 latches the page into read-only mode: the loaded document remains visible,
-  every editing control is disabled, and one line explains that this device cannot change the selection.
-- **Priorities**: per-item overrides are a fixed first section, ahead of every rule level, and cannot be moved.
-  Messages and documents have separate ordered priority levels, and several rules can share one level. Buttons and
-  TalkBack actions move a level up or down, join a rule to the preceding level, or split a rule out of a shared
-  level; dragging is not required. Every resulting `order` names every rule exactly once and leaves no empty level.
-- **Rules and items**: a rule's switch controls whether matching content is stored. Text retention days and, for
-  message rules, attachment days accept 1–36500; blank means the hub's default and is shown that way. Mentions has
-  the include-@all switch, and Mine has context from 0–200 messages on each side. A chat or document override can
-  skip reading, follow the applicable rules (for a chat, only mentions and your own messages), or keep everything
-  with its own optional days, and can be removed with Undo. Blank item days leave retention to the rule that would otherwise
-  decide.
-- **Pickers and stable identity**: Add Chat lists candidates per source with name, kind, what the selection would
-  read, and the estimate when the source supplies one; a cached response is labelled plainly as cached. A source
-  whose candidates route answers 404 offers no picker. A candidate's returned `source` and `id` identify its chat,
-  rather than assuming the queried connector is its filing source. For an existing Knowledge chat the identity is
-  `detail.meta.source` + `meta.source_id`; for a document it is `detail.meta.source` + `meta.id`. Overrides are keyed
-  by `(source, kind, id)`, never by a KB filename, path, display name or title.
-- **Lossless document edits**: `KnowledgeSelectionDocument.kt` edits the raw JSON and returns the complete document,
-  including `history`, optional fields, unknown fields at every level and unknown rule names. Where iOS presents an
-  unrecognized document as unsupported, Android retains that unknown data while the known controls are edited. This
-  is client-side preservation, not relaxed hub validation: the hub can still refuse a document it does not know.
-- **Immediate saves**: there is no page Save button and no separate draft. A change appears at once; the state holder
-  then GETs the latest document, applies that edit to it and PUTs the whole result. The document returned by the hub
-  replaces the optimistic one, so the page shows what was stored. A failure restores the previous value and shows
-  the hub's reason, including its detailed 400 validation text. One fresh-read/PUT pair stays on the same hub connection
-  even if the selected hub changes. A sheet reapplies only fields changed from its opening values, so an external reload
-  cannot make its untouched fields overwrite the fresh document. Existing chat and document overrides reopen with their
-  current mode and days. Fresh read–apply–PUT retains changes observed by
-  that read, but it is not compare-and-swap: another write arriving between the GET and PUT can still be overwritten.
-- **Live updates**: a `kb_selection` event reloads the document only while idle (neither loading nor saving). An
-  event received while busy is deferred, then reloads when the page becomes idle instead of replacing the optimistic
-  edit midway.
-- **Code**: pure document edits live in `KnowledgeSelectionDocument.kt`. `KnowledgeSelectionModel` owns loading,
-  optimistic saves, rollback, read-only state and deferred events behind the `KnowledgeSelection` API interface,
-  independently of Compose. The page uses the Android design system, with explicit move/join/split buttons and
-  TalkBack labels rather than drag-only actions.
-
-Verification: JVM unit tests cover lossless unknown-field/rule round trips, valid pure edits and bounds, fresh
-read–apply–PUT, rollback with hub errors, 404 hiding, latched 403 read-only behavior and deferred event reloads.
-Compose semantics tests cover switches, move/join/split actions, TalkBack labels and the absent old-hub entry. The
-page's `*ShotsTest` captures defaults, several and shared levels, rule days, cached/estimated candidates, read-only
-mode and a refused change in Glass, Brief and Board, dark and light, English and Chinese, including 360 dp and font
-scale 2.0. These are native JVM Compose renders, not emulator or handset screenshots; no emulator or device was
-available, so on-device rendering and system TalkBack behavior remain unverified.
+- **Unreadable documents and failures**: a version other than 1 or a shape `KnowledgeSelectionDocument` refuses shows
+  only a plain update-the-app notice, with no controls, Retry or writes. A transport failure instead keeps the detailed
+  Couldn't read notice and Retry. An unsupported fresh read during a save stops before PUT and retires editing.
+- **Layout**: per-item overrides stay fixed ahead of all rule levels. Each rule is a `JRow` with its one-line description
+  and Off, On, or its text days; its chevron opens the existing rule sheet for the store switch, text/attachment days,
+  include-@all and context. An eligible level's header has one More icon for move, merge and split actions. The button
+  is disabled when editing is unavailable and absent when one level holding one rule has nothing to do. The open sheet
+  finds its level by its first rule's name after reloads, never by a stale index. Rule rows keep the same custom
+  accessibility actions, removed when editing is unavailable.
+- **Rules, items and pickers**: days accept 1–36500 and context 0–200; blank days use the hub default. Item overrides
+  can skip, follow rules or store everything with optional days, and can be removed with Undo. Candidates use their
+  returned `source` + `id`, show plain chat-kind names, effective read and any estimate, and label cached results;
+  candidate 404 means no picker. Documents use `detail.meta.source` + `meta.id`, never a KB filename or title.
+- **Lossless immediate saves**: raw-JSON edits retain unknown fields/rules, explicit nulls, optional spellings and
+  history. Every edit is optimistic, then reapplied by identity to a fresh GET and written whole on one pinned hub
+  connection; the returned document replaces the display and failure restores the exact original. Stale sheets apply
+  only fields changed from their opening values. `kb_selection` reloads only while idle and is deferred while busy.
+  Fresh read–apply–PUT is not compare-and-swap: a write between GET and PUT can still be overwritten.
+- **Code**: `KnowledgeSelectionDocument.kt` holds pure edits, `KnowledgeSelectionModel` owns state behind the API,
+  and `KnowledgeSelectionPage.kt` builds the page from existing Android design-system components.
 
 ## Notifications (no push service)
 
