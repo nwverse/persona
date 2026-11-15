@@ -145,6 +145,8 @@ type updater struct {
 	// androidNote is what syncAndroid last logged: the same failure is not logged again every hour.
 	androidNote string
 	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any) error
+	// behindNote is the update source and release noteBehind last logged as behind: once per pair, not every hour.
+	behindNote string
 }
 
 func newUpdater(h *Hub) *updater {
@@ -539,6 +541,10 @@ func (u *updater) rollback(p update.Pending, reason string) {
 	if !u.adoptionUnresolved() {
 		u.removeDownloads(u.stagedDir(p.ToBuild))
 	}
+	// The old build reads only the hub.push_sent setting, and an exec skips the stop that writes it (lnmode.go).
+	if err := u.h.push.mirrorSent(context.Background()); err != nil {
+		u.h.logf("update: delivered pushes for %s: %v", p.FromVersion, err)
+	}
 	if err := u.exec(p.RunPath()); err != nil {
 		u.h.logf("update: run %s: %v", p.RunPath(), err)
 	}
@@ -697,6 +703,10 @@ type updateView struct {
 	UpdateURL   string `json:"update_url,omitempty"`
 	UpdateFrom  string `json:"update_url_from,omitempty"`
 	UpdateProxy string `json:"update_proxy,omitempty"`
+	// SourceBehind: the newest release the update source has (Latest) is older than this hub and than the release its
+	// code contains (Build.Behind, #8108): the source looks stopped, and nothing newer will come from it until update.url
+	// names another. Left out otherwise.
+	SourceBehind bool `json:"source_behind,omitempty"`
 }
 
 type latestView struct {
@@ -759,6 +769,9 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 				v.Latest.Held = u.developmentHold(r.Manifest)
 			}
 		}
+		// A deliberately selected saved program version is not evidence that
+		// the development Git source stopped publishing releases.
+		v.SourceBehind = r.Development == nil && u.h.build.Behind(r.Manifest)
 		if r.Development == nil && v.Latest.Newer && selfUpdates {
 			v.Latest.Held = u.h.build.Hold(r.Manifest)
 			if v.Latest.Held == "" && u.blocked != nil {

@@ -6,7 +6,7 @@ import { ApiError, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { t } from "../../i18n";
 import {
-  applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdate, hubUpdateBackups, hubUpdateHistory, latestWarning, recordTitle, recordTone, setHubUpdateSettings, startHubUpdate,
+  applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdate, hubUpdateBackups, hubUpdateHistory, latestWarning, recordTitle, recordTone, setHubUpdateSettings, sourceBehindWarning, startHubUpdate,
   updateFinished, updateStateTitle, updateView, updateWorking, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus,
 } from "../../lib/hub-update";
 import { navigate } from "../../lib/router";
@@ -163,6 +163,7 @@ function HubUpdates() {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   };
   const datedCommit = (commit?: string, date?: string) => commit ? `${updateDate(date)} · ${commit.slice(0, 12)}` : t("settings-hubsettings.unknown");
+  const behind = sourceBehindWarning(status);
 
   return (
     <>
@@ -260,12 +261,17 @@ function HubUpdates() {
           </>
         )}
         {(view.kind === "working" || (selectedBackup && working)) && <Progress s={status} onNow={() => setConfirmNow(true)} />}
-        {!selectedBackup && view.kind === "current" && !status.error && (status.source !== "web-dev" || status.last_check) && (
+        {!selectedBackup && view.kind === "current" && (status.source !== "web-dev" || status.last_check) && (behind ? (
+          <p className="flex items-start gap-1.5 px-4 py-3 text-meta leading-snug break-words text-orange">
+            <Icon name="info" size={13} className="mt-0.5 shrink-0" />
+            <span className="min-w-0">{behind}</span>
+          </p>
+        ) : !status.error && (
           <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-green">
             <Icon name="check" size={14} stroke={2.4} />
             {t("settings-hubsettings.up_to_date")}
           </div>
-        )}
+        ))}
         {status.error && !working && <p className={cx("px-4 py-2.5 text-[12px] break-words", status.state === "rolled_back" ? "text-orange" : "text-red")}>{status.error}</p>}
       </Group>
 

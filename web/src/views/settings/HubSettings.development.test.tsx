@@ -90,6 +90,18 @@ it("confirms program-only restoration and applies the selected backup", async ()
   expect((host.querySelector('select[aria-label="Update version"]') as HTMLSelectElement).disabled).toBe(true);
 });
 
+it("keeps the current-release message hidden when a historical backup is selected", async () => {
+  await mount();
+  await act(async () => events.get("hub_update")!({ update: {
+    ...status, last_check: "2026-11-14T10:00:00Z", latest: { ...status.latest!, newer: false },
+  } }));
+  expect(host.textContent).toContain("Up to date");
+  const version = host.querySelector('select[aria-label="Update version"]') as HTMLSelectElement;
+  await act(async () => { version.value = "snapshot-fixture"; version.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.textContent).toContain("Apply backup");
+  expect(host.textContent).not.toContain("Up to date");
+});
+
 it("refreshes backups when an update finishes without a changed build or receipt", async () => {
   await mount();
   expect(backupReads).toBe(1);

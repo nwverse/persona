@@ -218,6 +218,29 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 	}
 }
 
+func TestDevelopmentBackupIsNotAStoppedReleaseSource(t *testing.T) {
+	p := newPublisher(t, "v0.1.17-177-g563f7fde5b-202611071005", 202611071005)
+	h, _ := behindHub(t, p)
+	u := h.upd
+	if _, err := u.check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !u.view().SourceBehind {
+		t.Fatal("fixture does not exercise a stopped release source")
+	}
+	// A saved program version can predate the current release. Selecting it
+	// under Web development says nothing about the health of the Git source.
+	u.settings.Source = "web-dev"
+	u.release.Development = &update.DevelopmentCandidate{Commit: strings.Repeat("b", 40), BackupID: "snapshot-fixture"}
+	v, raw := getUpdate(t, u)
+	if v.SourceBehind || raw["source_behind"] != nil {
+		t.Fatal("historical backup reported as stopped update source")
+	}
+	if v.Latest == nil || v.Latest.Newer || v.Latest.BackupID != "snapshot-fixture" {
+		t.Fatal("backup selection was lost")
+	}
+}
+
 func TestDevelopmentRejectsUnrebuiltPackagesThatCannotBeSetAside(t *testing.T) {
 	h := newTestHub(t)
 	nodes := t.TempDir()

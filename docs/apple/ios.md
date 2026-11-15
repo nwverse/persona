@@ -197,10 +197,12 @@ Chat page:
   (polling fallback only: list 90 seconds, chat 60); while a Feishu list is in front, changed Inbox chats fetch the newest page into `lark-chat-<id>` cache, and with none in front they are only noted, the newest 20 fetched when one comes back (#4693; a chat opened before that shows its cached page until its own fetch lands); on hub connection catch up latest 20;
   unread chats open from cache if it reaches the first unread message.
 - Settings › Storage (`StorageView`): space used on this phone, size and share bars by category (Agent chats, chat images, Lark images/files, lists/Lark chats, websites,
-  network cache, other, App data); swipe left / long-press clears a category, or Clear all caches (settings and pairing retained; websites clear cache, not login).
+  network cache, other, App data); tapping a category asks to clear it, saying how much it frees and what comes back (#8355; a left swipe and the long press are shortcuts), or Clear all caches (settings and pairing retained; websites clear cache, not login).
   Memory copies clear too; background sync refetches. DEBUG `-tab settings -openStorage YES`.
+  Without the user: the first time the app goes to the background in a process, `CacheBudget` trims `chat-images` and `lark-media`
+  oldest first from over 200 MB to 150 MB and clears WebKit's disk cache over 200 MB (links `WebViewPool` preloads; logins stay), #8341.
 - Lazy images: history pages and pushes omit image bytes (`lazy_images`, reducing pages from MB to hundreds of KB), dimensions only; visible rows fetch through
-  `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid forever),
+  `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid until `CacheBudget` trims them),
   reserving dimensions before arrival to avoid jumps. Thumbnails and full viewer share it; locally sent images retain inline base64.
   A failed load (hub unreachable, download failed) does not spin forever (#182): tool-result and file-page images (`Base64Image`) say
   "Image didn't load. Tap to retry" on the placeholder, and the viewer's page says so with Retry, keeping its bars (and Close) and the
@@ -406,8 +408,8 @@ Chat page:
   and quotes above the text. While typing in `ShellComposerBar`, a Hide Keyboard button (`Theme.Icon.dismissKeyboard`, `shell-composer-dismiss-keyboard`, accessibility label `Hide Keyboard`) appears beside `+` in the card's bottom row (`ComposerRow` also offers `composer-row-dismiss-keyboard` on iOS when focused), committing any active IME marked text and dismissing the software keyboard while keeping the draft intact. It edits the same draft (`text` binding, `model.drafts` still the sole source); pending images and files remain in the composer below and send with the message as usual.
   The page owns its cursor (takes the caller's `selection` on opening, returns it on closing; directly binding to the caller sent every cursor update through it with delayed returns, occasionally losing characters on iPad).
   While open, the composer's own field binds to an idle `parkedSelection`, so it cannot move the caller's cursor underneath the sheet. Focus bindings cannot cross into sheets, so the page has its own `@FocusState`:
-  requests to focus the composer while open (uploaded file paths via `PathInsert.edit`, ⌘I) forward to the page, without showing a keyboard underneath. The composer is not treated as editing then;
-  paths append to the draft, and the page cursor follows them (only when the caller's cursor changed; ⌘I alone does not move it).
+  requests to focus the composer while open (⌘I) forward to the page, without showing a keyboard underneath. The composer is not treated as editing then;
+  the page cursor follows the caller's only when that changed (⌘I alone does not move it).
   Collapsing, swiping down or replacing the page (chat switch, tree replacement) first commits marked input (`TypedText.commitFocused`, #2203); returning to the composer preserves keyboard and cursor positions.
   Sending from the page (toolbar ⌘⏎ shortcut) is identical to composer Send and happens once; the composer's ⌘⏎ is disabled while the page is open, preventing another send underneath. Hidden line measurement lays out at most 4 lines from the first 600 draft characters, counts trailing newlines, and stops while the page is open.
   The button belongs in the button row, not over the input corner: a corner overlay either covers text or rewraps it when appearing. iOS only; Mac unchanged.
@@ -667,6 +669,7 @@ Chat page:
   watch summary leaves them out (`Interaction.showsOnWatch`: an older watch build would fail to decode the whole summary). Not pushed while the app is closed (#2433).
   `ElicitationCardTests` mock `MOCK_ELICITATION=1` / `=unsupported`.
 - Input: above (at most 4 photos, resized 1600px; library videos uploaded as files to computer, message file card, protocol.md ("Sending videos"); / shortcuts; Send becomes red Interrupt while working).
+- Files (#8361, protocol.md "Sending files"): + › Files and a scan's PDF become cards above the box (`FileAttachments`, `FileAttachmentsBar` in `Views/Chat/FileAttach.swift`), never words in the draft. Each is copied out of the picker first (`FileUploads.stage`), up to 10 per message, three uploading at once; ✕ cancels or removes, a failed card stays (tap to try again). They live in `ComposerAttachments.files` beside the videos, so a draft rebuilt (#2626) or a queued message taken back (#3022) keeps them. Sent, each is a `<persona-file kind="file">` tag after the words; the bubble draws it as `AttachedDocumentCard` (`Views/Chat/VideoCards.swift`; videos and recordings keep `AttachedVideoCard`), folding past four, opening the file viewer, dimmed when `FilePresence` says the computer no longer has it.
 - Navigation subtitle: Machine · Model · State.
 
 ## New shell (ChatGPT-style, 2026-11-01)
@@ -735,7 +738,7 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
 - Left circular **Chat history** button opens the sidebar; right circular **New chat** button (disabled on the new-chat page). Both icon-only.
 - **Sidebar** below the main page, 82% of screen width (at most 380pt). The main page covers it, remaining a same-size rounded card when slid right (thin dark-mode border separates it from the sidebar), dimming with progress (`Theme.Fill.scrim`, black 20% light / 45% dark, #334); sidebar stays horizontally fixed and rises only 8pt as revealed (`Theme.Motion.drawerLift`), with no scaling or fading. Tap the card or drag left to close.
   Content (2026-10-31, changed to match Doubao's sidebar from user screenshots): large avatar name (Persona) and a circular Search button on the right (becomes search field + Cancel);
-  Main chat is the first row (avatar App icon + Persona, identical to the new-shell drawer, #2004 / #5110), then a separator; actions below: New chat, Scheduled tasks, Knowledge, Health (icon + text, no cards; Health in `docs/assistant/health.md` ("iOS and Mac entry points")); separator; Directions (the leader conversations in the hub's order, each with its "N need you" and its spinner while anything under it runs, as in the new shell) then Recent (the 5 most recently active other chats whoever opened them, except the scheduled tasks' own chats #6228, the others with their source's mark, #4873, #5195; the heading folds it, #6228) and one **All Chats** row opening the full list; no inline Pinned group (#4331). Each row has one circular marker (pale chat bubble color chosen by session id, adjacent rows different) + one-line title,
+  Main chat is the first row (avatar App icon + Persona, identical to the new-shell drawer, #2004 / #5110), then a separator; actions below: New chat, Scheduled tasks, Knowledge, Health (icon + text, no cards; Health in `docs/assistant/health.md` ("iOS and Mac entry points")); separator; Directions (the leader conversations in the hub's order, each with its "N need you" and its spinner while anything under it runs, as in the new shell) then Recent (the 5 most recently active other chats whoever opened them, except the scheduled tasks' own chats #6228, the others with their source's mark, #4873, #5195; the heading folds it, #6228; **Show Scheduled Task Chats** brings the scheduled tasks' chats and the background supervisor back by time, #8324: the hub's `recent_task_chats`, one value for all of the user's devices, off by default, switched in Assistant Profile › **Sidebar's Recent** or the ⋯ at the top left of All Chats, opposite Done, a menu with its check; `AppModel.setRecentTaskChats` shows it at once and puts it back if the hub says no; a hub without it shows neither; the app reads the assistant's settings again when it comes back to the front, so a change made on another device shows) and one **All Chats** row opening the full list; no inline Pinned group (#4331). Each row has one circular marker (pale chat bubble color chosen by session id, adjacent rows different) + one-line title,
   with a right-side state mark only for Needs you / Unread / Working (`RowStateMark`: a blue dot, a green dot, the amber spinner; the same mark on the main chat's row, the Directions rows and in All Chats, #4538); the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
   (tap for profile), Settings on the right (drawer only; split mode has the tab bar beside it). Search lists only results (N chats). Long-press also copies session ID or ends the chat.
   **All Chats** (#3264, `AutoConversationsView`): every conversation, filtered along the top by All, Mine and each origin the hub reports (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Origin of assistant chats")): Inbox AI twin, scheduled tasks, Lark /agent, derived chats and extension-created chats. It opens on All every time (the last pick is not kept), and its rows carry the same source mark as the sidebar's (#5195). Same view in iPhone drawer, iPad split and Mac sidebar. Search still searches all. Old hubs without origins omit the source filters.
@@ -1059,11 +1062,20 @@ app treats as unsupported and off (no section, never offered).
 Two small labels above the chat input: permission mode (Manual approval / Auto-edit files / Plan only / Auto / Allow everything) and effort (Auto / Low … Max),
 like Claude Code's terminal bottom bar; tap to change (`SessionModeBar`, wording and icons in `SessionModes`). The new shell moves these into the input's bottom-right
 "Model · Effort" button (#1091, see the input under "New shell" above). New Agent forms and the assistant home page above its input
-also offer selection (unset means "Follow launcher"). New Agent offers a Paseo provider that is neither Claude Code nor Codex (a launcher with
-`source` `paseo` and an agent of its own, such as Grok) only Use Launcher's and Allow Everything, and only the efforts its model lists (`StartModes`, #8144):
-Paseo refuses Plan Only for it and drops the other modes. The mode remembered per computer is Claude Code's: such a start never sends it, never saves over it,
-and its pick is made on the sheet each time; its footer says the agent uses its own approval settings unless Allow Everything is chosen, and its first message's
-hint names no Claude. Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
+also offer selection (unset means "Follow launcher"). New Agent offers a launcher that lists the permission modes a start on it takes
+(`Launcher.permissionModes`, the node's `permission_modes`, #8261: Paseo's Grok, OpenCode or Codex, Codex's start included) only Use Launcher's (its own
+approval, sent as no mode) and, where it lists it, Allow Everything, and only the efforts its model lists (`StartModes`); one whose own approval is all it lists
+shows no mode field. A computer older than the list is told by the agent instead: a launcher with `source` `paseo` and an agent of its own, such as Grok, gets
+Use Launcher's and Allow Everything (#8144). Paseo refuses Plan Only for these and drops the other modes. The mode and effort remembered per computer are
+Claude Code's: such a start never sends them, never saves over them, and its picks are made on the sheet each time (`providerMode`, `providerEffort`); its
+footer says the agent uses its own approval settings unless Allow Everything is chosen (and, where the launcher lists its modes, that the chat can switch
+later), and its first message's hint names no Claude. Pickers name a launcher by its title (`display_name`: Paseo's label for its provider, a
+Persona-managed provider's name), and the search finds it by that too. A running chat whose row lists two modes (`capabilities.permission_modes`,
+`Session.listedModes`) offers those two rows alone in the header's mode menu (`HeaderModeButton`) and the composer's model menu (`SessionModesMenu`,
+`SessionModeBar`): Use Launcher's, drawn as a mode not known (the plain permissions symbol in no tone, never Ask First's hand, since its own settings may
+allow everything; no mode reported is this one), and Allow Everything, which asks first (`SessionModes.confirmation`); leaving it does not. Session Info
+names the mode the same way and leaves out Context, Compactions, Chat and Output where the node says nobody gives them (`usage_unknown`). The web and
+Android follow the same rule (`docs/design/DESIGN_SYSTEM.md`, "Permission modes a provider lists (#8261)"). Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
 show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")). When the row carries `capabilities.modes`, that Boolean decides instead: `false` hides the controls for Claude outside Persona's terminals, and `true` enables them for a compatible runtime such as Orca or agy. An older hub that omits the field keeps the agent-based behavior (`Session.canChangeModes`; `docs/protocol/protocol.md` "Codex sources and capabilities").
 For Claude Code sessions in herdr, the effort menu also has a Model section (#3119, matching web #2434; `SessionModes.switchesModel`):
 the launcher's list as above (#3754; the fixed Default / Opus / Sonnet / Haiku until it is read), ticked by the running model's exact ID or the alias that stands for it, so a version is never shown as its family; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
@@ -1086,7 +1098,9 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
   wand, Allow Everything a red shield; not reported yet the plain permissions shield (never a guessed Ask First). A tap opens the mode menu; going into
   Allow Everything asks first, and so does leaving it when `bypass_available` is false (no way back from the phone); the composer's model menu
   goes through the same `ChatView.requestMode`. Shown where the agent has a mode to see or change (`SessionModes.showsInHeader`): not Codex,
-  TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. Client-only: `permission_mode` is already in every
+  TRAEX or a runtime without modes, not hosted pages (one-row header, #3255), not the folded bar. A row that lists its own modes (#8261, Paseo's
+  Grok, OpenCode or Codex) shows its two rows instead, its own approval as the plain shield, a switch both ways (`SessionModes.menuOptions`,
+  `headerLook(session:)`; see the New Agent paragraph above). Client-only: `permission_mode` is already in every
   session row (read off the transcript tail the node reads anyway), so no request, push or poll was added (measured in the PR).
 - Assistant chats (Persona page, including the main chat) can choose Allow everything both at creation and while running (#2416); a red warning at the menu top explains consequences (`BypassWarning`). Persona does not start
   claude with `--dangerously-skip-permissions`, so a control request cannot switch to bypassPermissions: stop an idle process, then resume the next message with `--permission-mode bypassPermissions`;
@@ -1167,6 +1181,7 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
 In `LauncherPicker` a blocked row is gray with the line (`LauncherBlockLine`) and an info mark; a tap opens `LauncherBlockedHelp` (why, How to Fix, the record under Details, Add Provider → `ProviderWizard`, Try Anyway picks it once the sheet has closed),
 never picks it. The form says the line under the launcher row when the launcher that will run is blocked (Model Settings' default, or picked anyway); Start stays enabled. Run Agent Here picks a usable launcher first, lists blocked ones last in its menu under a section titled with the line (a picker menu drops an option's second line), and says it in its footer once picked.
 Both read the list with `AppModel.launchersForStart` (fresh, not the cache). Add Provider is offered only for a computer in the hub-level group (the wizard saves there).
+A Persona-managed provider whose own-service rule leaves it out on the computer (`own_service: skip` where Claude Code or Codex has a sign-in of its own, #8109) comes in the hub's `unavailable`, kept with the list (`AppModel.launcherUnavailable`). `LauncherPicker` lists it after the launchers under "Unavailable here", in the main chat model sheet's row (`UnavailableLauncherRow`, `Views/Chat/UnavailableLauncherRow.swift`: a lock, the name, the hub's reason), never picked; How to Fix under the reason pushes the provider's page (`ModelLauncherDetailView`, Settings › Model providers), whose Edit › Computers has the switch, and saving it reads the list again. As Add Provider, only for a computer in the hub-level group (Settings' pages read that hub); elsewhere the row says the reason only. Tests: `NewAgentUnavailableTests`, `NewAgentUnavailableUITests` (`MOCK_OWN_SERVICE_SKIP=1`).
 `StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Mock-data screenshots").
 
 ## Recent setups in New Agent (#2134)
@@ -1196,7 +1211,7 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
 - **Even reveal** (#6651): the model's text comes in bursts (a few dozen characters about every 350 ms, up to 2 s apart), so drawing what
   arrived showed a jump per burst. `StreamingText` reveals it a few characters a frame (`StreamReveal` in PersonaKit, driven by
-  `StreamRevealClock`'s display link, which runs only while text waits, at most 30 Hz: each change re-measures the chat list, #7135): a little slower than the stream's average so far,
+  `StreamRevealClock`'s display link, which runs only while text waits, 10 times a second: each change re-measures the chat list, so the rate is the owner's trade-off between smoothness and power, #7135): a little slower than the stream's average so far,
   faster when more waits (waiting / 0.6 s), never slower than 20 characters a second. Only that view redraws per frame; the store and the
   list see the deltas as before. A first text over 80 characters (a chat opened mid-stream) shows at once; when the stream ends
   (`ChatStore.liveDone`), or the user holds the list, or the reply's item replaces it, the whole text shows at once. The Mac shows text as
@@ -2206,7 +2221,7 @@ Files mentioned in chats, tool rows and the chat's Files page all open in `FileV
 **Body paths are links** (#1706, same rules as web #1669, `apple/Packages/PersonaKit/Sources/PersonaKit/PathRefs.swift`, #2095):
 - **Recognized**: `~/…`, absolute paths with at least two segments (`/tmp` does not count), relative paths with a directory and a letter-starting extension (`src/a.ts`; not `deepseek/v4.1`).
   Optional line suffixes: `:12`, `:12:5`, `:12-20` (start line), `#L12`; `stat` receives the path without line numbers.
-  Outside backticks only ASCII is recognized, stopping at Chinese or full-width punctuation (`/tmp/a.md里`, meaning "in /tmp/a.md"); sentence-final `.` is excluded. A whole backticked span counts as one path (may include Chinese and spaces); if it does not exist, check paths within the span and select existing non-overlapping ones, longer first at the same position.
+  Names may be in any script (#8386). Outside backticks a path stops at whitespace, at punctuation other than `_ . @ + -` (full-width punctuation too), and before a non-ASCII word right after an extension (`/tmp/a.md里`, meaning "in /tmp/a.md"); a relative path starts with an ASCII folder; sentence-final `.` is excluded. A whole backticked span counts as one path (may include Chinese and spaces); if it does not exist, check paths within the span and select existing non-overlapping ones, longer first at the same position. Same rules and cases as the web (`web/src/lib/path-refs.test.ts`, `PathRefsTests`).
   URL fragments, `and/or` and version numbers do not count; code blocks, indented code, existing links and formulas in replies remain unchanged.
 - **Rendering**: existing paths in replies (`LinkedMarkdown`) become Markdown links (`persona-path:<path>?line=N`, `PathLinkURL`), colored like other links (`.persona` link color); an entire backticked path's inline code is tappable.
   User bubbles (`PathText`) use underlined links in `Theme.UserBubbleInk.link`: accent on the main conversation's box and in light bubbles, bubble text color in colored bubbles (accent is invisible there).
@@ -2432,6 +2447,10 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   field, put back if the hub says no. The Mac's own banners (`MacAttention.managerMuted`) skip a muted manager's agents and cards
   of the hub-level group (another group's hub keeps its own prefs); its Dock badge still counts them. A prefs read already on its
   way when a page saves doesn't put the old prefs back (`AppModel.savedNotifyPrefs`).
+- **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
+  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
+  for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
+  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
   in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
