@@ -845,12 +845,11 @@ private struct AgentsList: View {
         var needsYou: Int?
 
         func update(_ projection: AgentListProjection) {
-            if self.projection?.identity != projection.identity {
-                self.projection = projection
-                machines = projection.machinesByRef
-                sessions = projection.sessionsByKey
-                scopes = projection.scopes
-            }
+            guard self.projection?.identity != projection.identity else { return }
+            self.projection = projection
+            machines = projection.machinesByRef
+            sessions = projection.sessionsByKey
+            scopes = projection.scopes
         }
     }
 
@@ -1757,7 +1756,7 @@ private struct AgentsList: View {
             SlotRow(session: s, muted: model.isMuted(s), space: context ? (s.spaceName ?? s.folderName) : nil,
                     machine: rowMachine(s, context: context), host: host,
                     hideState: inStateSection, surface: cardLast.map { .cardRow(last: $0) } ?? .capsule, time: time, pane: pane,
-                    rowStyle: listRowStyle, dense: !ownsTop, selected: open && floating)
+                    rowStyle: listRowStyle, dense: !ownsTop)
                 .equatable()
         }
     }
@@ -1960,11 +1959,13 @@ private struct AgentsList: View {
             } label: {
                 QuietSpaceRow(group: g, machine: machine(g.machineRef), showMachine: namesMachine, repo: repo)
             }
-            .listRowBackground(selected ? treeBackground(true) : nil)
             .accessibilityAddTraits(selected ? .isSelected : [])
             if open {
                 // A DisclosureGroup gives its identifier to every built child; leave the agent rows' own ids intact.
                 row
+            } else if selected {
+                row.accessibilityIdentifier("agents.quietSpace")
+                    .listRowBackground(treeBackground(true))
             } else {
                 row.accessibilityIdentifier("agents.quietSpace")
             }
@@ -3017,7 +3018,6 @@ private struct AgentsList: View {
                 FoldChevron(folded: !open)
             }
             .card(padding: Theme.Space.m)
-            .overlay { if selected { RepoTreeSelectionWash(top: Theme.Radius.card, bottom: Theme.Radius.card) } }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -4162,8 +4162,6 @@ nonisolated struct SlotRow: View, Equatable {
     var rowStyle: AgentRowStyle? = nil
     /// In a regular-width sidebar (an open iPhone Duo, an iPad): style A's latest words take one line.
     var dense = false
-    /// The open agent's wash over a floating card's own opaque surface (By Repository, beside the chat).
-    var selected = false
 
     enum Surface: Equatable {
         /// Bare: a List's row that has its own background and chevron.
@@ -4305,7 +4303,6 @@ nonisolated struct SlotRow: View, Equatable {
             }
         }
         .opacity(muted ? 0.8 : 1) // quieter than live agents, never fainter than the idle spaces below
-        .overlay { if selected { SlotRowSelection(surface: surface, open: session.leadWorkflow != nil) } }
     }
 
     /// Claude Code's ultracode is on (#1307): its mark beside the title; not on an offline row.
@@ -4435,28 +4432,6 @@ nonisolated struct SlotRow: View, Equatable {
     }
 }
 
-/// The selection wash over a floating row's own opaque card, using that card's existing corner geometry.
-private struct RepoTreeSelectionWash: View {
-    var top: CGFloat
-    var bottom: CGFloat
-    private var color: Color {
-        #if os(iOS)
-        Theme.Tree.selected
-        #else
-        // The repository tree and its selection are iOS-only; the shared view still type-checks elsewhere.
-        Color.clear
-        #endif
-    }
-
-    var body: some View {
-        UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom, bottomTrailingRadius: bottom,
-                               topTrailingRadius: top, style: .continuous)
-            .fill(color)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-}
-
 /// A quiet repository's narrow reader: opening a chat redraws its row, not the Agents list's body (P5), and the
 /// projection's membership dictionary makes the selection an O(1) lookup (P4).
 private struct QuietRepositorySelection<Content: View>: View {
@@ -4473,29 +4448,6 @@ private struct QuietRepositorySelection<Content: View>: View {
         let selected = AgentListProjection.selectedQuietRepositoryID(open: open, membership: membership,
             expandedQuiet: expandedQuiet, forceExpanded: forceExpanded) == group
         content(selected)
-    }
-}
-
-/// Selection over a floating agent row, matching the surface that row already draws rather than a list background behind it.
-private struct SlotRowSelection: View {
-    var surface: SlotRow.Surface
-    var open: Bool
-    @Environment(\.buiTheme) private var theme
-
-    var body: some View {
-        if AppStyle.current.usesBeautifulUI {
-            switch surface {
-            case .capsule:
-                let radius = open ? Theme.Radius.card : Theme.Radius.panel
-                RepoTreeSelectionWash(top: radius, bottom: radius)
-            case .cardRow(let last):
-                RepoTreeSelectionWash(top: 0, bottom: last ? theme.radii.card : 0)
-            case .none:
-                RepoTreeSelectionWash(top: 0, bottom: 0)
-            }
-        } else {
-            RepoTreeSelectionWash(top: Theme.Radius.card, bottom: Theme.Radius.card)
-        }
     }
 }
 
@@ -4797,7 +4749,6 @@ struct QuietSpaceCardHead: View {
     var repo = false
     var selected = false
     @Environment(AgentsFeed.self) private var feed: AgentsFeed?
-    @Environment(\.buiTheme) private var theme
 
     var body: some View {
         TaskRow(TaskItem(id: group.id, title: group.name,
@@ -4816,9 +4767,6 @@ struct QuietSpaceCardHead: View {
             }
         } detail: {
             EmptyView()
-        }
-        .overlay {
-            if selected { RepoTreeSelectionWash(top: theme.radii.card, bottom: open ? 0 : theme.radii.card) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityValue(open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]"))
