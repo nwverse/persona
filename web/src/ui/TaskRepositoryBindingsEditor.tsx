@@ -258,25 +258,48 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
   const loads = useRef(0);
   const editingNow = useRef(editing);
   editingNow.current = editing;
+  // A version change while the dialog is open must not start a read: its answer could replace the user's draft or the
+  // revision the dialog is editing from. It is remembered and read after the dialog closes instead.
+  const pendingRefresh = useRef(false);
   const read = useCallback(async () => {
     const n = ++loads.current;
     const result = await loadTaskRepositories(context, todoId);
     return n === loads.current && context.isCurrent() ? result : undefined;
   }, [context, todoId]);
+  const applyLoaded = useCallback((result: TaskRepositorySet) => {
+    if (!context.isCurrent()) return;
+    if (editingNow.current) { pendingRefresh.current = true; return; }
+    setSaved(result); setDraft(repositoryDraft(result.repositories)); setUnsupported(false);
+  }, [context]);
   // Viewing reads the store: the Agent keeps it, so the detail is its newest word without opening an editor. StrictMode
   // runs this effect twice (and the version re-runs it), so a second run joins the read in flight instead of being
   // turned away by a lock; one that did that would leave the section on its spinner for good.
   const inFlight = useRef<Promise<TaskRepositorySet | undefined> | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    if (editingNow.current || !context.isCurrent()) return;
+  const refresh = useCallback(async () => {
+    if (!context.isCurrent()) return;
     setError(""); setBusy(true);
     inFlight.current ??= read();
-    void inFlight.current.then(
-      (result) => { if (!context.isCurrent() || !result) return; setSaved(result); setDraft(repositoryDraft(result.repositories)); setUnsupported(false); },
-      (failure) => { if (!context.isCurrent()) return; if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure)); },
-    ).finally(() => { inFlight.current = undefined; if (context.isCurrent()) setBusy(false); });
-  }, [context, todoId, version, attempt, read]);
+    try {
+      const result = await inFlight.current;
+      if (result) applyLoaded(result);
+    } catch (failure) {
+      if (!context.isCurrent()) return;
+      if (editingNow.current) { pendingRefresh.current = true; return; }
+      if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure));
+    } finally { inFlight.current = undefined; if (context.isCurrent() && !editingNow.current) setBusy(false); }
+  }, [context, read, applyLoaded]);
+  useEffect(() => {
+    if (!context.isCurrent()) return;
+    if (editingNow.current) { pendingRefresh.current = true; return; }
+    void refresh();
+  }, [context, todoId, version, attempt, read, refresh]);
+  // Closing the dialog (save, cancel or a failed close attempt) fulfils the refresh that was held back while editing.
+  useEffect(() => {
+    if (editing || !pendingRefresh.current || !context.isCurrent()) return;
+    pendingRefresh.current = false;
+    void refresh();
+  }, [editing, context, refresh]);
   // Editing always starts from the store's newest value and catalog: the Agent may have added a link since the load.
   const openEditor = async () => {
     if (lock.current || !context.isCurrent()) return;
@@ -284,6 +307,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     try {
       const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), read()]);
       if (!context.isCurrent() || !latest) return;
+      pendingRefresh.current = false;
       setCatalog(nextCatalog); setSaved(latest); setDraft(repositoryDraft(latest.repositories)); setEditing(true); setUnsupported(false);
     } catch (failure) {
       if (context.isCurrent()) { if (isUnsupported(failure)) setUnsupported(true); else setError(errorMessage(failure)); }
@@ -295,6 +319,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     try {
       const [nextCatalog, latest] = await Promise.all([loadRepositoryCatalog(context), read()]);
       if (!context.isCurrent() || !latest) return;
+      pendingRefresh.current = false;
       setCatalog(nextCatalog); setSaved(latest); setDraft(repositoryDraft(latest.repositories));
     } catch (failure) { if (context.isCurrent()) setError(errorMessage(failure)); }
     finally { lock.current = false; if (context.isCurrent()) setBusy(false); }

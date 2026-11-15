@@ -22,6 +22,7 @@ legacy link. Screenshots stay outside Git (`REPOSITORY_EVIDENCE_DIR`, default `/
 
 import json
 import os
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -161,13 +162,23 @@ def type_url(value):
       el.dispatchEvent(new Event('input', {bubbles: true})); })()""" % json.dumps(value))
 
 
-owned_tabs = set()
+OWNED_TABS: set[str] = set()
+
+
+def close_owned_tabs():
+    """Close only tabs this fixture created; a browser may carry the user's own tabs, which it never touches."""
+    for target in tuple(OWNED_TABS):
+        try:
+            close_tab(target)
+        except Exception:
+            pass
+        OWNED_TABS.discard(target)
 
 
 def open_fixture_tab(url):
     # Supplying a URL may reuse a blank tab; create one explicitly before taking ownership.
     target = new_tab()
-    owned_tabs.add(target)
+    OWNED_TABS.add(target)
     goto_url(url)
 
 
@@ -176,11 +187,11 @@ def fresh_tab():
     ensure_real_tab()
     current = current_tab()
     keep = current.get("target_id") or current.get("targetId")
-    for target in tuple(owned_tabs):
+    for target in tuple(OWNED_TABS):
         if target != keep:
             try:
                 close_tab(target)
-                owned_tabs.discard(target)
+                OWNED_TABS.discard(target)
             except Exception:
                 pass
 
@@ -380,3 +391,5 @@ try:
 except AssertionError as failure:
     print(f"VERDICT: FAIL {failure}")
     sys.exit(1)
+finally:
+    close_owned_tabs()

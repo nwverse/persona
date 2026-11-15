@@ -42,7 +42,7 @@ const answerEditor = async (catalogBody: unknown, setBody: unknown) => {
   await answer(pendingCall("/todos/todo_example/repositories")!, setBody);
 };
 const legacy = (url: string) => ({ url, text: url.endsWith("/3211") ? "PR #3211" : "PR" });
-const render = async (manager = "assistant", todoId = "todo_example", prURL?: string) => act(async () => root.render(<><TodoRepositoryBindings manager={manager} todoId={todoId} owner={credentialOwner()} legacyPRs={prURL ? [legacy(prURL)] : []} /><Toasts /></>));
+const render = async (manager = "assistant", todoId = "todo_example", prURL?: string, version?: unknown) => act(async () => root.render(<><TodoRepositoryBindings manager={manager} todoId={todoId} owner={credentialOwner()} legacyPRs={prURL ? [legacy(prURL)] : []} version={version} /><Toasts /></>));
 const settle = async () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
 /** The editor's add-link field: named by its own label, not by a repository's link count. */
 const linkInput = () => document.querySelector<HTMLInputElement>('input[type="url"]')!;
@@ -129,6 +129,92 @@ it("keeps the draft on a revision conflict, and reload truly reads the newest sa
   await settle();
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain("#12");
   expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain("#8");
+});
+
+it("holds a to-do version change until the editor closes, then saves from the newest revision", async () => {
+  await render("assistant", "todo_example", undefined, 1);
+  await answer(calls[0], set);
+  await click("Manage links");
+  await answerEditor(catalog, set);
+  await settle();
+  // The to-do changes while the dialog is open: no background read may replace the draft.
+  const before = calls.length;
+  await render("assistant", "todo_example", undefined, 2);
+  expect(calls.length).toBe(before);
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/8");
+  await press(linkInput(), "Enter");
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("#8");
+  // Closing fulfils the held refresh and takes the store's newer revision.
+  const newer = { ...twoLinks, revision: 3, repositories: [{ ...set.repositories[0], links: [
+    { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
+    { kind: "issue", number: "12", canonical_url: identity.canonical_url + "/issues/12" },
+  ] }] };
+  await click("Cancel");
+  await answer(pendingCall("/todos/todo_example/repositories")!, newer);
+  await settle();
+  const section = document.querySelector("[data-todo-repositories]")!;
+  expect(section.textContent).toContain("#12");
+  expect(section.textContent).not.toContain("#8");
+  // Reopening reads revision 3, so the later save does not conflict.
+  await click("Manage links");
+  await answerEditor(catalog, newer);
+  await settle();
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/9");
+  await press(linkInput(), "Enter");
+  await click("Save");
+  const save = calls.at(-1)!;
+  expect(JSON.parse(save.init.body as string).expected_revision).toBe(3);
+  await answer(save, { ...newer, revision: 4 });
+});
+
+it("does not apply an older read that answers while the editor holds unsaved input", async () => {
+  await render("assistant", "todo_example", undefined, 1);
+  await answer(calls[0], set);
+  // A version change starts a background read; keep it unanswered.
+  await render("assistant", "todo_example", undefined, 2);
+  const background = pendingCall("/todos/todo_example/repositories")!;
+  expect(background).toBeTruthy();
+  await click("Manage links");
+  await answerEditor(catalog, set);
+  await settle();
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/8");
+  await press(linkInput(), "Enter");
+  // The older read answers late with another set: the draft must stay exactly as the user left it.
+  await answer(background, { ...twoLinks, revision: 9, repositories: [{ ...set.repositories[0], links: [
+    { kind: "pull_request", number: "99", canonical_url: identity.canonical_url + "/pull/99" },
+  ] }] });
+  await settle();
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("#8");
+  expect(dialog.textContent).not.toContain("#99");
+  await click("Save");
+  const save = calls.at(-1)!;
+  expect(JSON.parse(save.init.body as string).expected_revision).toBe(1);
+  await answer(save, twoLinks);
+});
+
+it("does not let an older read replace the saved result after the editor saves", async () => {
+  await render("assistant", "todo_example", undefined, 1);
+  await answer(calls[0], set);
+  await render("assistant", "todo_example", undefined, 2);
+  const background = pendingCall("/todos/todo_example/repositories")!;
+  await click("Manage links");
+  await answerEditor(catalog, set);
+  await settle();
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/8");
+  await press(linkInput(), "Enter");
+  await click("Save");
+  const save = calls.at(-1)!;
+  await answer(save, twoLinks);
+  // The read that began before opening answers after the save: the saved #8 must stay.
+  await answer(background, set);
+  await settle();
+  const section = document.querySelector("[data-todo-repositories]")!;
+  expect(section.textContent).toContain("#8");
 });
 
 it("falls back to the legacy PR link on a hub without the association route", async () => {
