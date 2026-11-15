@@ -28,7 +28,7 @@ import (
 // on fallback metadata. Codex reads a catalog from a provider's model_catalog_url (0.156 and later; by default since
 // 0.161, when api_key_model_discovery became stable), asking `<url>?client_version=<its version>` with the provider's
 // key. Once a provider has one, it is the only list Codex uses: one that fails leaves Codex with no list, so the
-// URL is passed only where the node found a catalog there just now.
+// URL is passed only where the node found a catalog there, and kept through a probe that could not tell.
 //
 // The node looks for it by the answer's shape, never the gateway's name (docs/integrations/codex.md, "Gateway model
 // catalog"): the probe asks what Codex would, and a catalog is an object whose `models` are Codex model entries.
@@ -45,33 +45,48 @@ var codexCatalogMinVersion = [3]int{0, 161, 0}
 // codexCatalogTimeout bounds the whole probe (both paths at once), as Codex bounds its own catalog request.
 var codexCatalogTimeout = 5 * time.Second
 
-// codexCatalogTTL: a probe's answer, a catalog or none, is kept this long per gateway, key and Codex version.
+// codexCatalogTTL: an answer, a catalog or none, is fresh this long per gateway, key, proxy and Codex version.
 const codexCatalogTTL = 10 * time.Minute
+
+// codexCatalogStale: an answer older than codexCatalogTTL but younger than this is still given at once, and the gateway
+// is asked again in the background for the next start: once a gateway has answered, a start never waits on the probe.
+const codexCatalogStale = 24 * time.Hour
+
+// codexCatalogRetry: after a probe that could not tell (no answer in time, a 5xx, 408 or 429), or a codex --version
+// that failed, it is tried again this soon; a catalog found before is kept meanwhile.
+const codexCatalogRetry = time.Minute
 
 // codexCatalogMost is the most of an answer the probe reads; a larger one is not taken for a catalog.
 const codexCatalogMost = 32 << 20
 
+// codexCatalogAnswer is what the probe last learned of a gateway.
+type codexCatalogAnswer struct {
+	url   string    // the catalog, "" for none
+	at    time.Time // when the gateway said so
+	fresh time.Time // until when it is not asked again
+}
+
 var codexCatalogCache = struct {
 	sync.Mutex
-	at     map[string]time.Time
-	url    map[string]string
+	got    map[string]codexCatalogAnswer
 	flight singleflight.Group
-}{at: map[string]time.Time{}, url: map[string]string{}}
+}{got: map[string]codexCatalogAnswer{}}
 
-// codexCatalogURL is the model catalog URL for l's codex (no client_version: Codex adds its own), or "" when l is no
-// Codex provider with a gateway and a key, this computer's codex is too old to read one, or its gateway serves none.
-func (n *Node) codexCatalogURL(ctx context.Context, l proto.ManagedLauncher) string {
+// codexCatalog is the model catalog URL for l's codex (no client_version: Codex adds its own) and the codex executable
+// whose version allowed it; "" when l is no Codex provider with a gateway and a key, this computer's codex is too old
+// to read one, or its gateway serves none.
+func (n *Node) codexCatalog(ctx context.Context, l proto.ManagedLauncher) (catalog, codex string) {
 	if l.AgentType() != "codex" || codexChoosesProvider(l.Args) {
-		return ""
+		return "", ""
 	}
 	env := managedEnv(l)
 	base, key := strings.TrimRight(envValue(env, "OPENAI_BASE_URL"), "/"), envValue(env, "OPENAI_API_KEY")
 	if u, err := url.Parse(base); base == "" || key == "" || err != nil || u.RawQuery != "" || u.Fragment != "" {
-		return ""
+		return "", ""
 	}
-	version := codexVersion(ctx)
+	exe, version := codexVersion(ctx)
 	if !codexReadsCatalog(version) {
-		return ""
+		return "", ""
 	}
 	gw := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -87,62 +102,97 @@ func (n *Node) codexCatalogURL(ctx context.Context, l proto.ManagedLauncher) str
 	sum := sha256.Sum256([]byte(key))
 	cacheKey := strings.Join([]string{version, base, hex.EncodeToString(sum[:]), gw["http_proxy"], gw["HTTP_PROXY"],
 		gw["https_proxy"], gw["HTTPS_PROXY"], gw["no_proxy"], gw["NO_PROXY"]}, "\x00")
-	codexCatalogCache.Lock()
-	at, ok := codexCatalogCache.at[cacheKey]
-	found := codexCatalogCache.url[cacheKey]
-	codexCatalogCache.Unlock()
-	if ok && time.Since(at) < codexCatalogTTL {
-		return found
-	}
-	v, _, _ := codexCatalogCache.flight.Do(cacheKey, func() (any, error) {
-		found := probeCodexCatalog(context.WithoutCancel(ctx), base, key, version, gw)
-		if found != "" {
+	ask := func() (any, error) {
+		found, sure := probeCodexCatalog(context.WithoutCancel(ctx), base, key, version, gw)
+		now := time.Now()
+		codexCatalogCache.Lock()
+		defer codexCatalogCache.Unlock()
+		prev, had := codexCatalogCache.got[cacheKey]
+		a := codexCatalogAnswer{url: found, at: now, fresh: now.Add(codexCatalogTTL)}
+		if found == "" && !sure {
+			a.fresh = now.Add(codexCatalogRetry)
+			if had && prev.url != "" { // a gateway that did not answer this time still has the catalog it had
+				a.url, a.at = prev.url, prev.at
+			}
+		}
+		if found != "" && prev.url != found {
 			n.logf("launcher %s: its gateway serves Codex's model catalog at %s", l.Name, found)
 		}
-		codexCatalogCache.Lock()
-		if len(codexCatalogCache.at) > 64 {
-			codexCatalogCache.at, codexCatalogCache.url = map[string]time.Time{}, map[string]string{}
+		if !had && len(codexCatalogCache.got) >= 64 {
+			codexCatalogCache.got = map[string]codexCatalogAnswer{}
 		}
-		codexCatalogCache.at[cacheKey], codexCatalogCache.url[cacheKey] = time.Now(), found
-		codexCatalogCache.Unlock()
-		return found, nil
-	})
-	return v.(string)
+		codexCatalogCache.got[cacheKey] = a
+		return a.url, nil
+	}
+	codexCatalogCache.Lock()
+	a, ok := codexCatalogCache.got[cacheKey]
+	codexCatalogCache.Unlock()
+	switch now := time.Now(); {
+	case ok && now.Before(a.fresh):
+	case ok && now.Sub(a.at) < codexCatalogStale:
+		codexCatalogCache.flight.DoChan(cacheKey, ask) // for the next start; one already asking is joined
+	default:
+		v, _, _ := codexCatalogCache.flight.Do(cacheKey, ask)
+		a.url = v.(string)
+	}
+	if a.url == "" {
+		return "", ""
+	}
+	return a.url, exe
 }
 
 // probeCodexCatalog asks each of codexCatalogPaths below base at once, as Codex would ask its model_catalog_url, and
-// is the first, in that order, that answers with a catalog; "" when none does in time.
-func probeCodexCatalog(ctx context.Context, base, key, version string, env map[string]string) string {
+// is the first, in that order, that answers with a catalog. With none, sure says whether every path answered (an
+// answer that is no catalog), not an error, no answer in time or a status that may pass (5xx, 408, 429).
+func probeCodexCatalog(ctx context.Context, base, key, version string, env map[string]string) (catalog string, sure bool) {
+	const (
+		none = iota
+		found
+		unsure
+	)
 	ctx, cancel := context.WithTimeout(ctx, codexCatalogTimeout)
 	defer cancel()
 	client := gatewayClient(env) // no redirect: Codex follows none for a catalog either
-	ok := make([]chan bool, len(codexCatalogPaths))
+	got := make([]chan int, len(codexCatalogPaths))
 	for i, path := range codexCatalogPaths {
-		ok[i] = make(chan bool, 1)
+		got[i] = make(chan int, 1)
 		go func() {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path+"?"+url.Values{"client_version": {codexCatalogClientVersion(version)}}.Encode(), nil)
 			if err != nil {
-				ok[i] <- false
+				got[i] <- none
 				return
 			}
 			req.Header.Set("Authorization", "Bearer "+key)
 			req.Header.Set("Accept", "application/json")
 			modelhttp.SetDefaultUserAgent(req.Header) // Persona's own request, as its other gateway requests (#8775)
 			resp, err := client.Do(req)
-			if err != nil {
-				ok[i] <- false
+			switch {
+			case err != nil:
+				got[i] <- unsure
+				return
+			case resp.StatusCode >= 500, resp.StatusCode == http.StatusRequestTimeout, resp.StatusCode == http.StatusTooManyRequests:
+				resp.Body.Close()
+				got[i] <- unsure
 				return
 			}
 			defer resp.Body.Close()
-			ok[i] <- resp.StatusCode == http.StatusOK && isCodexCatalog(resp.Body)
+			if resp.StatusCode == http.StatusOK && isCodexCatalog(resp.Body) {
+				got[i] <- found
+				return
+			}
+			got[i] <- none
 		}()
 	}
+	sure = true
 	for i, path := range codexCatalogPaths {
-		if <-ok[i] {
-			return base + path
+		switch <-got[i] {
+		case found:
+			return base + path, true
+		case unsure:
+			sure = false
 		}
 	}
-	return ""
+	return "", sure
 }
 
 // isCodexCatalog: r is a catalog Codex can use, `{"models":[…]}` with at least one entry, each with the fields Codex
@@ -183,23 +233,30 @@ func isCodexCatalog(r io.Reader) bool {
 var codexVersionCache = struct {
 	sync.Mutex
 	stamp, version string
+	until          time.Time // a failed run's: asked again after it; zero for an answer, kept while the file is
 }{}
 
-// codexVersion is this computer's codex's version as Codex sends it with a catalog request (major.minor.patch, from
-// `codex --version`), with a "-" suffix for a prerelease; "" when there is no codex or it says no version. Kept while
-// the executable is unchanged.
-func codexVersion(ctx context.Context) string {
+// codexVersion is this computer's codex (agentExecutable's) and its version (codexVersionAt).
+func codexVersion(ctx context.Context) (exe, version string) {
 	exe, err := agentExecutable("codex")
 	if err != nil {
-		return ""
+		return "", ""
 	}
+	return exe, codexVersionAt(ctx, exe)
+}
+
+// codexVersionAt is the version of the codex at exe as Codex sends it with a catalog request (major.minor.patch, from
+// `codex --version`), with a "-" suffix for a prerelease; "" when it says none or cannot be run. Kept while the
+// executable is unchanged; a run that failed or hung is tried again after codexCatalogRetry, not on every start.
+func codexVersionAt(ctx context.Context, exe string) string {
 	st, err := os.Stat(exe)
 	if err != nil {
 		return ""
 	}
 	stamp := exe + "\x00" + st.ModTime().String() + "\x00" + strconv.FormatInt(st.Size(), 10)
 	codexVersionCache.Lock()
-	kept, version := codexVersionCache.stamp == stamp, codexVersionCache.version
+	kept := codexVersionCache.stamp == stamp && (codexVersionCache.until.IsZero() || time.Now().Before(codexVersionCache.until))
+	version, until := codexVersionCache.version, time.Time{}
 	codexVersionCache.Unlock()
 	if kept {
 		return version
@@ -207,12 +264,12 @@ func codexVersion(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, exe, "--version").Output()
-	if err != nil { // asked again next time: one slow or failed run says nothing of the version
-		return ""
+	version, until = parseCodexVersion(string(out)), time.Time{}
+	if err != nil {
+		version, until = "", time.Now().Add(codexCatalogRetry)
 	}
-	version = parseCodexVersion(string(out))
 	codexVersionCache.Lock()
-	codexVersionCache.stamp, codexVersionCache.version = stamp, version
+	codexVersionCache.stamp, codexVersionCache.version, codexVersionCache.until = stamp, version, until
 	codexVersionCache.Unlock()
 	return version
 }
@@ -255,3 +312,16 @@ func codexReadsCatalog(version string) bool {
 
 // codexCatalogClientVersion is the client_version Codex sends for version: major.minor.patch, no prerelease.
 func codexCatalogClientVersion(version string) string { return strings.TrimSuffix(version, "-") }
+
+// sameFile: paths a and b name one file (a link and its target too); false when either is empty or missing.
+func sameFile(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	sb, err := os.Stat(b)
+	return err == nil && os.SameFile(sa, sb)
+}

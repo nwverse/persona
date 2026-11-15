@@ -57,10 +57,10 @@ func forgetCodexCatalogs(t *testing.T) {
 	t.Helper()
 	reset := func() {
 		codexCatalogCache.Lock()
-		codexCatalogCache.at, codexCatalogCache.url = map[string]time.Time{}, map[string]string{}
+		codexCatalogCache.got = map[string]codexCatalogAnswer{}
 		codexCatalogCache.Unlock()
 		codexVersionCache.Lock()
-		codexVersionCache.stamp, codexVersionCache.version = "", ""
+		codexVersionCache.stamp, codexVersionCache.version, codexVersionCache.until = "", "", time.Time{}
 		codexVersionCache.Unlock()
 		agentExecutableMu.Lock()
 		delete(agentExecutableCache, "codex")
@@ -101,6 +101,49 @@ func codexProvider(base string) proto.ManagedLauncher {
 }
 
 func quietNode() *Node { return &Node{logger: log.New(io.Discard, "", 0)} }
+
+// catalogOf is the catalog URL the node gives l's codex.
+func catalogOf(n *Node, l proto.ManagedLauncher) string {
+	u, _ := n.codexCatalog(context.Background(), l)
+	return u
+}
+
+// ageCodexCatalogs makes every kept answer d older, as if it had been given d earlier.
+func ageCodexCatalogs(d time.Duration) {
+	codexCatalogCache.Lock()
+	defer codexCatalogCache.Unlock()
+	for k, a := range codexCatalogCache.got {
+		a.at, a.fresh = a.at.Add(-d), a.fresh.Add(-d)
+		codexCatalogCache.got[k] = a
+	}
+}
+
+// waitAsked waits until g has had n requests and the answer they gave is kept (fresh again).
+func waitAsked(t *testing.T, g *catalogGateway, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(g.requests()) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d requests, want %d", len(g.requests()), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	for {
+		codexCatalogCache.Lock()
+		kept := len(codexCatalogCache.got) > 0
+		for _, a := range codexCatalogCache.got {
+			kept = kept && time.Now().Before(a.fresh)
+		}
+		codexCatalogCache.Unlock()
+		if kept {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the answer was not kept")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 // Each place a gateway may serve Codex's catalog is found by what it answers, the first in order winning; OpenAI's
 // list, an error, a body that is no catalog or no answer in time is none.
@@ -147,7 +190,7 @@ func TestCodexCatalogFoundByShape(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			fakeCodex(t, "0.167.0")
 			g := newCatalogGateway(t, c.handler)
-			got := quietNode().codexCatalogURL(context.Background(), codexProvider(g.URL+"/v1"))
+			got := catalogOf(quietNode(), codexProvider(g.URL+"/v1"))
 			want := ""
 			if c.want != "" {
 				want = g.URL + c.want
@@ -183,7 +226,7 @@ func TestCodexCatalogFoundByShape(t *testing.T) {
 		})
 		defer close(release)
 		start := time.Now()
-		if got := quietNode().codexCatalogURL(context.Background(), codexProvider(g.URL+"/v1")); got != "" {
+		if got := catalogOf(quietNode(), codexProvider(g.URL+"/v1")); got != "" {
 			t.Fatalf("got %q", got)
 		}
 		if took := time.Since(start); took > 3*time.Second {
@@ -216,7 +259,7 @@ func TestCodexCatalogNotProbed(t *testing.T) {
 			if c.edit != nil {
 				c.edit(&l)
 			}
-			if got := quietNode().codexCatalogURL(context.Background(), l); got != "" {
+			if got := catalogOf(quietNode(), l); got != "" {
 				t.Fatalf("got %q", got)
 			}
 			if reqs := g.requests(); len(reqs) != 0 {
@@ -226,39 +269,110 @@ func TestCodexCatalogNotProbed(t *testing.T) {
 	}
 	t.Run("no gateway", func(t *testing.T) {
 		fakeCodex(t, "0.167.0")
-		if got := quietNode().codexCatalogURL(context.Background(), proto.ManagedLauncher{Name: "plain", Agent: "codex", APIKey: "k"}); got != "" {
+		if got := catalogOf(quietNode(), proto.ManagedLauncher{Name: "plain", Agent: "codex", APIKey: "k"}); got != "" {
 			t.Fatalf("got %q", got)
 		}
 	})
 }
 
-// A probe's answer, a catalog or none, is kept for the same gateway, key and codex; another key asks again.
-func TestCodexCatalogKept(t *testing.T) {
+// A probe's answer is kept for the same gateway, key and codex, and another key asks again. Past its freshness it is
+// still given at once while the gateway is asked again in the background; an answer that could not tell keeps the
+// catalog found before (and is retried soon), and only a gateway that says it has none drops it.
+func TestCodexCatalogKeptAndAskedAgain(t *testing.T) {
 	fakeCodex(t, "0.169.0")
+	var mu sync.Mutex
+	serve := "catalog"
 	g := newCatalogGateway(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/codex/models" {
+		mu.Lock()
+		mode := serve
+		mu.Unlock()
+		switch {
+		case mode == "down":
+			w.WriteHeader(http.StatusBadGateway)
+		case mode == "catalog" && r.URL.Path == "/v1/codex/models":
 			io.WriteString(w, codexCatalogBody)
-			return
+		default:
+			io.WriteString(w, openAIModelsBody)
 		}
-		io.WriteString(w, openAIModelsBody)
 	})
+	set := func(mode string) { mu.Lock(); serve = mode; mu.Unlock() }
 	n := quietNode()
 	l := codexProvider(g.URL + "/v1")
+	want := g.URL + "/v1/codex/models"
 	for range 3 {
-		if got := n.codexCatalogURL(context.Background(), l); got != g.URL+"/v1/codex/models" {
+		if got := catalogOf(n, l); got != want {
 			t.Fatalf("got %q", got)
 		}
 	}
-	if reqs := g.requests(); len(reqs) != len(codexCatalogPaths) {
+	paths := len(codexCatalogPaths)
+	if reqs := g.requests(); len(reqs) != paths {
 		t.Fatalf("%d requests for three starts, want one probe", len(reqs))
 	}
 	if r := g.requests()[0]; r.URL.Query().Get("client_version") != "0.169.0" {
 		t.Fatalf("client_version %q", r.URL.Query().Get("client_version"))
 	}
+
+	// Past its freshness, with the gateway down for a while: the catalog at once, asked again, still kept.
+	set("down")
+	ageCodexCatalogs(codexCatalogTTL + time.Second)
+	if got := catalogOf(n, l); got != want {
+		t.Fatalf("a stale answer: got %q", got)
+	}
+	waitAsked(t, g, 2*paths)
+	if got := catalogOf(n, l); got != want {
+		t.Fatalf("after a probe that could not tell: got %q", got)
+	}
+	if reqs := g.requests(); len(reqs) != 2*paths {
+		t.Fatalf("asked again at once after a probe that could not tell: %d requests", len(reqs))
+	}
+
+	// Retried soon, and a gateway that answers without a catalog drops it.
+	set("none")
+	ageCodexCatalogs(codexCatalogRetry + time.Second)
+	catalogOf(n, l) // the kept one, once more
+	waitAsked(t, g, 3*paths)
+	if got := catalogOf(n, l); got != "" {
+		t.Fatalf("a gateway with no catalog any more: got %q", got)
+	}
+
+	// An answer older than codexCatalogStale is not given: the start asks itself.
+	set("catalog")
+	ageCodexCatalogs(codexCatalogStale)
+	if got := catalogOf(n, l); got != want {
+		t.Fatalf("a day-old answer: got %q", got)
+	}
+
+	before := len(g.requests())
 	l.APIKey = "sk-other"
-	n.codexCatalogURL(context.Background(), l)
-	if reqs := g.requests(); len(reqs) != 2*len(codexCatalogPaths) {
+	catalogOf(n, l)
+	if reqs := g.requests(); len(reqs) != before+paths {
 		t.Fatalf("another key was answered from the first one's probe")
+	}
+}
+
+// A codex whose --version fails is not run again on every start, and is again once codexCatalogRetry has passed.
+func TestCodexVersionFailureKeptBriefly(t *testing.T) {
+	fakeCodex(t, "0.167.0")
+	exe, err := agentExecutable("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := filepath.Join(t.TempDir(), "runs")
+	writeFile(t, exe, "#!/bin/sh\necho run >> '"+runs+"'\nexit 1\n")
+	for range 3 {
+		if _, v := codexVersion(context.Background()); v != "" {
+			t.Fatalf("version %q", v)
+		}
+	}
+	if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 1 {
+		t.Fatalf("ran codex --version %d times", strings.Count(string(b), "run"))
+	}
+	codexVersionCache.Lock()
+	codexVersionCache.until = time.Now().Add(-time.Second)
+	codexVersionCache.Unlock()
+	codexVersion(context.Background())
+	if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 2 {
+		t.Fatal("not asked again after codexCatalogRetry")
 	}
 }
 
@@ -277,11 +391,12 @@ func TestLauncherEnvCodexCatalog(t *testing.T) {
 	a, b := codexProvider(with.URL+"/v1"), codexProvider(without.URL+"/v1")
 	a.Name, b.Name = "with", "without"
 	n.setManaged([]proto.ManagedLauncher{a, b})
-	if got := n.launcherEnv("with")["codex_catalog_url"]; got != with.URL+"/v1/models" {
-		t.Fatalf("with a catalog: %v", got)
+	exe, _ := agentExecutable("codex")
+	if env := n.launcherEnv("with"); env["codex_catalog_url"] != with.URL+"/v1/models" || env["codex_catalog_codex"] != exe {
+		t.Fatalf("with a catalog: %v, checked codex %v", env["codex_catalog_url"], env["codex_catalog_codex"])
 	}
-	if got, ok := n.launcherEnv("without")["codex_catalog_url"]; ok {
-		t.Fatalf("without a catalog: %v", got)
+	if env := n.launcherEnv("without"); env["codex_catalog_url"] != nil || env["codex_catalog_codex"] != nil {
+		t.Fatalf("without a catalog: %v", env)
 	}
 }
 

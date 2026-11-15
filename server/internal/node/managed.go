@@ -366,9 +366,10 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		// for a provider whose bypass list joins the inherited ones (mergesNoProxy): the user's settings env's lists, which
 		// come before the shell's. An older node does not send it: the provider's list alone.
 		NoProxyMerge map[string]string `json:"no_proxy_merge"`
-		// for a Codex provider whose gateway serves Codex's model catalog (codex_catalog.go): its URL. An older node
-		// does not send it: no catalog, as before.
-		CodexCatalogURL string `json:"codex_catalog_url"`
+		// for a Codex provider whose gateway serves Codex's model catalog (codex_catalog.go): its URL, and the codex
+		// whose version the node checked. An older node sends neither: no catalog, as before.
+		CodexCatalogURL   string `json:"codex_catalog_url"`
+		CodexCatalogCodex string `json:"codex_catalog_codex"`
 	}
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return err
@@ -416,7 +417,11 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		}
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
-	argv := launchArgv(agent, args, resp.Args, resp.Effort, resp.Model, resp.Env, resp.CodexCatalogURL)
+	catalog := resp.CodexCatalogURL
+	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) && !codexReadsCatalog(codexVersionAt(ctx, exe)) {
+		catalog = "" // the node checked another codex than this one (another PATH), and this one would not read it
+	}
+	argv := launchArgv(agent, args, resp.Args, resp.Effort, resp.Model, resp.Env, catalog)
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
@@ -616,8 +621,8 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	if effort := launcherDefaultEffort(l); effort != "" {
 		out["effort"] = effort
 	}
-	if catalog := n.codexCatalogURL(context.Background(), l); catalog != "" {
-		out["codex_catalog_url"] = catalog
+	if catalog, codex := n.codexCatalog(context.Background(), l); catalog != "" {
+		out["codex_catalog_url"], out["codex_catalog_codex"] = catalog, codex
 	}
 	if mergesNoProxy(l) {
 		out["no_proxy_merge"] = n.userNoProxy(l)

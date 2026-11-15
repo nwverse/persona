@@ -465,7 +465,7 @@ func codexModelList(w io.Writer, r io.Reader) ([]proto.AgentModel, error) {
 					a.Efforts = append(a.Efforts, e.Effort)
 				}
 			}
-			if len(a.Efforts) == 0 { // a model that takes no level (Codex says its default is "none") offers none
+			if len(a.Efforts) == 0 && a.DefaultEffort == "none" { // a model that takes no level (a gateway catalog's) has no default one
 				a.DefaultEffort = ""
 			}
 			out = append(out, a)

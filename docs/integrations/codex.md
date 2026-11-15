@@ -180,24 +180,35 @@ the gateway's models from it (`server/internal/node/codex_catalog.go`).
   `/v1/models`), at once, with the provider's key and proxy and this computer's `codex --version`, in 5 seconds in all.
   The first, in that order, whose answer is a catalog (a `models` list whose entries each have a unique slug, a display
   name, a list of levels and a visibility, one of them listed) is taken; OpenAI's `{"data":[…]}`, an error, a redirect
-  or no answer is none. Nothing depends on the gateway's name. The answer, a catalog or none, is kept 10 minutes per
-  gateway, key, proxy and Codex version, so starts after the first do not wait.
+  or no answer is none. Nothing depends on the gateway's name. The answer, a catalog or none, is fresh for 10 minutes
+  per gateway, key, proxy and Codex version; for a day after that it is still given at once while the gateway is asked
+  again in the background, so only a provider's first start waits on the probe. A probe that cannot tell (no answer in
+  time, a 5xx, 408 or 429) keeps the catalog found before and is tried again after a minute; only a gateway that
+  answers without a catalog drops it. A `codex --version` that fails is tried again after a minute, not on every start.
+- **Which codex**: the node checks the codex it finds, and `launcher.env` names it (`codex_catalog_codex`). The codex
+  `personad launch` runs comes from the shell's `PATH`, which may name another install: then `personad launch` asks
+  that one its version and passes no catalog to one before 0.161.
 - **Exactly as before** without one: no gateway, no key (codex would not fetch it and would list nothing), a codex
   before 0.161 or a prerelease of it, arguments that choose their own provider or profile (the provider and everything
   in it are left out then), a base URL with a query, or a probe that found nothing. The arguments are then the same,
-  byte for byte, and an older node or `personad` simply does not pass the field (`codex_catalog_url`, node.sock only;
-  nothing new on the hub–node wire). The user's `~/.codex/config.toml` is never written.
+  byte for byte, and an older node or `personad` simply does not pass the fields (`codex_catalog_url`,
+  `codex_catalog_codex`, node.sock only; nothing new on the hub–node wire). The probe runs on the node with the node's
+  environment and the provider's: a proxy only the shell sets is not used for it, so such a computer may find no
+  catalog its codex could read (it then starts as before); codex reads the catalog from the same gateway it talks to. The user's `~/.codex/config.toml` is never written.
 - **The picker**: the node lists a managed Codex launcher's models by running `personad launch <name> app-server` and
   asking `model/list` (`node/launcher_models.go`). That is the same codex a start runs, with the same catalog, so the
   picker's models and levels are the ones codex is given. A model whose catalog entry has no levels offers none, and no
-  default level (Codex reports its default as `none`). Before #8797 the node ran `personad launch <name>` alone, whose
+  default level when Codex reports that default as `none`. Before #8797 the node ran `personad launch <name>` alone, whose
   codex started its TUI and exited with "stdin is not a terminal", so the picker had no list for these launchers.
 - **Tests**: `node/codex_catalog_test.go` (found at either path by shape, the first in order winning; OpenAI's list, an
   error, a redirect, a body that is no catalog and no answer in time are none; no probe for an old or prerelease codex,
-  no codex, no key, the launcher's own provider or profile; kept per key), `node/managed_test.go`
+  no codex, no key, the launcher's own provider or profile; kept per key; given at once when stale and asked again;
+  kept through a probe that cannot tell, dropped by a gateway without one; a failing `codex --version` not rerun on
+  every start), `node/managed_test.go`
   `TestLaunchArgsCodexGateway` (the catalog goes in the provider table only; arguments unchanged without it),
   `node/launcher_models_test.go` `TestManagedCodexModelsAskTheAppServer`, and `cmd/personad`
-  `TestLaunchCodexGatewayCatalog` (a fake node and a fake codex: catalog, none, the caller's own provider).
+  `TestLaunchCodexGatewayCatalog` (a fake node and a fake codex: catalog, none, the caller's own provider, another
+  codex than the node checked that reads one or is too old).
 
 ## Sessions in the Codex desktop App (App-local IPC)
 
