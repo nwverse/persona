@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -270,7 +269,7 @@ func TestAssistantSupervisionStoppedCompactionRefreshesRole(t *testing.T) {
 	f.fh.mu.Lock()
 	f.fh.model = map[string]any{"launcher": "claude", "supervision_instructions": ""}
 	f.fh.mu.Unlock()
-	if err := f.n.assistantCompact(ctx, id); err != nil {
+	if err := f.n.assistantCompact(ctx, id, false); err != nil {
 		t.Fatal(err)
 	}
 	f.idle(t, id)
@@ -343,7 +342,6 @@ func TestFakeSupervisionCodexServer(t *testing.T) {
 		}
 		write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": result})
 		if m.Method == "turn/start" || m.Method == "turn/steer" {
-			time.Sleep(5 * time.Millisecond)
 			write(map[string]any{"jsonrpc": "2.0", "method": "turn/completed", "params": map[string]any{
 				"threadId": thread, "turn": map[string]any{"id": "test-turn", "status": "completed"}}})
 		}
