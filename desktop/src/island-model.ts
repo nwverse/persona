@@ -112,13 +112,13 @@ export function islandDisplay<T extends IslandDisplay>(all: readonly T[], primar
   return all.find(d => d.internal) ?? primary;
 }
 
-/** Where the island's window goes: closed, the menu bar's height around the notch (or the same pill without one) at
- *  the top center; open, wide enough for the list and tall enough for its rows. */
 /** The menu bar's height on that display: the closed pill's, and the open list's top row. */
 export function menuBar(d: IslandDisplay): number {
   return Math.max(d.workArea.y - d.bounds.y, 24);
 }
 
+/** Where the island's window goes: closed, the menu bar's height around the notch (or the same pill without one) at
+ *  the top center; open, wide enough for the list and tall enough for its rows. */
 export function islandRect(d: IslandDisplay, open: boolean, rows: number): IslandRect {
   const bar = menuBar(d);
   const width = open ? LIST_WIDTH : (hasNotch(d) ? NOTCH_WIDTH : 0) + 2 * ISLAND_SIDE;

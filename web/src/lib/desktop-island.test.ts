@@ -74,7 +74,9 @@ describe("islandState", () => {
     act(() => setIslandOn(false));
     expect(lists.completeOn).toBe(false);
     expect(sent()).toEqual(["示例 n1"]);
+    // the shell gone (the credential stopped working): nothing of this account stays at the notch
     act(() => root.unmount());
+    expect(setIslandState).toHaveBeenLastCalledWith({ needsYou: 0, working: 0, unread: 0, rows: [], summary: "" });
     delete (window as { personaDesktop?: unknown }).personaDesktop;
   });
 });

@@ -53,9 +53,11 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   Agents list, which pushes only its first page, they come from the complete list the pins and grouping read
   (`useFullAgentSessions`), and only while the island is on, as the web learns from `getIsland` at start and from the
   Settings switch; the pushed page stands in until it has loaded. A row's line finds its card as the Agents list does,
-  including a question from a child session folded under it (`sessionCard`).
+  including a question from a child session folded under it (`sessionCard`). Signing out, or a credential that stops
+  working, sends it an empty state, as signing out clears the native notices: nothing of that account stays at the notch.
 - **Shell**: `desktop/src/island.ts` draws it from a local page (`island.html`, as the setup window), in a frameless,
-  transparent, always-on-top panel that takes no focus and stays on every Space and over full-screen apps. The page's
+  transparent, always-on-top panel that takes no focus and stays on every Space and over full-screen apps, without
+  Electron's default of making the whole app a background one for that (no Dock icon or badge; the e2e checks it). The page's
   preload (`island-preload.cts`) has two fixed operations: the pointer over it or away, and a clicked row's route. A
   route is checked as a notification's (`contract.cts`) and must be one of the rows shown. The renderer's state is
   untrusted input: `island-model.ts` keeps only numbers, known states, the hub's own routes and bounded text.

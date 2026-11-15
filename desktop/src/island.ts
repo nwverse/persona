@@ -73,7 +73,9 @@ export class NotchIsland {
       },
     });
     w.setAlwaysOnTop(true, "screen-saver");
-    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // skipTransformProcessType: Electron's default makes the whole app a background one (no Dock icon or badge, no menu
+    // bar) for as long as it runs. The panel type is what lets this window over full-screen apps.
+    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     w.webContents.on("will-navigate", event => event.preventDefault());
     w.webContents.on("did-finish-load", this.placeNow);

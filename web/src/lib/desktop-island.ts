@@ -67,6 +67,9 @@ export function setIslandOn(on: boolean): void {
   islandListeners.forEach((listener) => listener());
 }
 
+/** What the island shows of nobody: once the shell is gone (signed out, or the credential stopped working). */
+const NOTHING: DesktopIslandState = { needsYou: 0, working: 0, unread: 0, rows: [], summary: "" };
+
 /** Sends the island's state when it changes. A leaf, as AttentionSignals: a sessions push re-renders only it. */
 export function DesktopIslandSignals(): null {
   const on = useSyncExternalStore(subscribeIsland, getIslandOn, getIslandOn);
@@ -82,10 +85,12 @@ export function DesktopIslandSignals(): null {
   const sessions = complete.loaded ? complete.sessions : pushed;
   const interactions = useStore((s) => s.interactions);
   const counts = useCounts();
+  // No language among the inputs: a page shows one, and choosing another reloads it (i18n setLanguagePreference).
   const state = useMemo(() => islandState(sessions, interactions, counts), [sessions, interactions, counts]);
   const sent = JSON.stringify(state);
   useEffect(() => {
     window.personaDesktop?.setIslandState?.(JSON.parse(sent) as DesktopIslandState);
   }, [sent]);
+  useEffect(() => () => window.personaDesktop?.setIslandState?.(NOTHING), []);
   return null;
 }

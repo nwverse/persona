@@ -258,6 +258,19 @@ async function rootScenario() {
     if (typeof setLogin.enabled !== "boolean") throw new Error(`the hub window lost its login-item setter: ${JSON.stringify(setLogin)}`);
     return { localWindows: localSettings.length, boundary, hubPath: await path() };
   });
+  await step("the notch island turns on and off and keeps the app in the Dock", async () => {
+    // Only a Mac draws it (#7669). Electron's default for a window over full-screen apps would make the whole app a
+    // background one, without its Dock icon and badge.
+    const mac = process.platform === "darwin";
+    const before = await page("window.personaDesktop.getIsland()");
+    if (before.supported !== mac || before.enabled) throw new Error(`the island before anyone turned it on: ${JSON.stringify(before)}`);
+    const on = await page("window.personaDesktop.setIslandEnabled(true)");
+    const dock = mac ? app.dock.isVisible() : undefined;
+    const off = await page("window.personaDesktop.setIslandEnabled(false)");
+    if (on.enabled !== mac || off.enabled) throw new Error(`the island answered ${JSON.stringify(on)}, then ${JSON.stringify(off)}`);
+    if (dock === false) throw new Error("turning the island on took the app out of the Dock");
+    return { on, off, ...(dock !== undefined ? { dock } : {}) };
+  });
 
   let target;
 
