@@ -1260,11 +1260,14 @@ nonisolated struct APIClient: Sendable {
         var turns: Int
         var startedAt: Date?
         var lastActivity: Date?
+        /// Nobody gives this session's counts (#8261, `usage_unknown`: Paseo sends no usage for an agent that is not
+        /// Claude Code's): Session Info leaves out the tokens, compactions and turns rather than showing zeros.
+        var usageUnknown: Bool?
         enum CodingKeys: String, CodingKey {
             case cwd, model, launcher, version, compactions, turns, effort
             case sessionID = "session_id", transcriptPath = "transcript_path", gitBranch = "git_branch",
                  permissionMode = "permission_mode", contextTokens = "context_tokens", outputTokens = "output_tokens",
-                 startedAt = "started_at", lastActivity = "last_activity"
+                 startedAt = "started_at", lastActivity = "last_activity", usageUnknown = "usage_unknown"
         }
     }
     func sessionInfo(_ k: SessionKey) async throws -> SessionInfo { try await get(sp(k) + "/info") }
