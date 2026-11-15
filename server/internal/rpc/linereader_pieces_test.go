@@ -8,6 +8,7 @@ import (
 	"io"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -248,5 +249,34 @@ func TestLineReaderReusesTwoPieces(t *testing.T) {
 	}()
 	if limit := uint64(lines*length + linePiece); least > limit {
 		t.Errorf("reading %d lines of %d bytes allocated %d bytes, over %d (the lines)", lines, length, least, limit)
+	}
+}
+
+// The middle hook is told of each read that goes on with a line begun before it and does not finish it, the middle of
+// a frame, and of no other: not of the read that begins a line, nor of one that finishes it, so small lines cut at
+// any read boundary are never the middle of anything (#8771). The scanned harness checks the same against readShapes
+// for every read pattern, lines read in pieces included.
+func TestLineReaderMiddleHook(t *testing.T) {
+	reads := []string{"a", "b", "c\nd", "e\n", "fg", "h", "\n"}
+	sc := newLineReaderSize(readerFunc(func(p []byte) (int, error) {
+		if len(reads) == 0 {
+			return 0, io.EOF
+		}
+		n := copy(p, reads[0])
+		reads = reads[1:]
+		return n, nil
+	}), 32, 8<<20)
+	var told []string
+	var lines []string
+	sc.middle = func() { told = append(told, string(sc.buf[sc.start:sc.end])) }
+	for sc.Scan() {
+		lines = append(lines, string(sc.Bytes()))
+	}
+	if sc.Err() != nil || !slices.Equal(lines, []string{"abc", "de", "fgh"}) {
+		t.Fatalf("lines %q, %v", lines, sc.Err())
+	}
+	// Told after "b" (abc so far) and "h" (fgh so far): "c\nd" and "e\n" finish lines, "fg" begins one.
+	if !slices.Equal(told, []string{"ab", "fgh"}) {
+		t.Fatalf("told of the middle of %q, want [ab fgh]", told)
 	}
 }

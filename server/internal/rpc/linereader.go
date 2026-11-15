@@ -38,6 +38,9 @@ type lineReader struct {
 	err        error
 	token      []byte
 	owned      bool
+	// middle, when set, is told of each read that went on with a line begun before it and did not finish it: the
+	// middle of a frame, which Serve counts as ping activity while the frame is still arriving (PingActivity).
+	middle func()
 }
 
 // linePiece is the buffer from which a line is read in pieces, and the size of a piece: the largest buffer grownBufs
@@ -64,8 +67,8 @@ func (s *lineReader) Bytes() []byte { return s.token }
 func (s *lineReader) Owned() bool { return s.owned }
 
 // buffered is the input already read after the current token, valid until the next Scan. Ping activity uses it to
-// classify complete later lines, and traffic that identifies itself as an event, request or result, before a reply
-// wakes its caller.
+// find replies among the later lines, and an unfinished line that names a result, before a deadline reply wakes its
+// caller (bufferedActivity).
 func (s *lineReader) buffered() []byte { return s.buf[s.start:s.end] }
 
 // Err is what ended the input, nil for io.EOF.
@@ -96,6 +99,11 @@ func (s *lineReader) Scan() bool {
 				s.start += s.seen + i + 1
 				s.seen = 0
 				return true
+			}
+			// The bytes not searched yet came in the latest read, those searched or held before it in earlier ones: if
+			// there were any, that read went on with a line without finishing it.
+			if s.middle != nil && len(data) > s.seen && (s.seen > 0 || s.held > 0) {
+				s.middle()
 			}
 			s.seen = len(data)
 			if s.err != nil && (len(data) > 0 || s.held > 0) {
