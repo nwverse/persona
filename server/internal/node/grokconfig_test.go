@@ -222,3 +222,46 @@ func TestGrokPermissionDetailsSayTheyApproveEverything(t *testing.T) {
 		}
 	}
 }
+
+func TestTomlQuotedHeaderEndsTheTable(t *testing.T) {
+	in := "[ui]\nyolo = true\n\n[projects.\"/home/me/repo\"]\ntrust_level = \"trusted\"\ncompact_mode = true\n"
+	v := tomlValues(in)
+	if _, ok := v["ui.compact_mode"]; ok {
+		t.Fatalf("a key under a quoted header is not the previous table's: %v", v)
+	}
+	if v["ui.yolo"] != true {
+		t.Fatalf("%v", v)
+	}
+	got, err := tomlSetDotted(in, "ui.compact_mode", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[ui]\nyolo = true\ncompact_mode = false\n\n[projects.\"/home/me/repo\"]\ntrust_level = \"trusted\"\ncompact_mode = true\n"
+	if got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	if got := tomlValues(got)["ui.compact_mode"]; got != false {
+		t.Fatalf("read back %v", got)
+	}
+}
+
+func TestTomlSetDottedKeepsDottedKeyTables(t *testing.T) {
+	in := "theme = \"dark\"\nui.yolo = true\nui.note = \"\"\"\nx\n\"\"\"\n\n[models]\ndefault = \"a\"\n"
+	got, err := tomlSetDotted(in, "ui.compact_mode", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "theme = \"dark\"\nui.yolo = true\nui.note = \"\"\"\nx\n\"\"\"\nui.compact_mode = true\n\n[models]\ndefault = \"a\"\n"
+	if got != want {
+		t.Fatalf("a table defined by dotted keys gets a dotted key, not a second [ui]:\ngot\n%s\nwant\n%s", got, want)
+	}
+
+	in = "[tui]\nui.yolo = true\n"
+	got, err = tomlSetDotted(in, "tui.ui.compact_mode", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[tui]\nui.yolo = true\nui.compact_mode = true\n"; got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
