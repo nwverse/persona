@@ -4,16 +4,25 @@
 // looked itself: confirmed, contradicted (in the caution color, with the warning mark: color is never the only signal)
 // or not checked. It is not part of the transcript: the reply that carried the raw block shows without it while this
 // card is there (lib/closeout.ts stripCloseout).
-import { useState } from "react";
+// Verified commands get only the facts recorded in this closeout's own exchange, never a badge: CloseoutEvidence, a chunk
+// of its own that loads when a card with a Verified claim draws, so its matching code and strings stay off the first
+// screen (#8118).
+import { Suspense, useState } from "react";
 import { t } from "../../i18n";
 import { closeoutClaim, shownCloseout, type Claim } from "../../lib/closeout";
+import { lazyPage } from "../../lib/lazy-page";
 import { clickLink, linkHref } from "../../lib/links";
-import type { Session } from "../../lib/types";
+import type { Segment } from "../../lib/turns";
+import type { Item, Session } from "../../lib/types";
 import { Collapse, cx } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { prLink } from "../TodoStageBar";
 
 const KIND_ICON: Record<string, IconName> = { pr: "pullRequest", commit: "commit", branch: "branch", doc: "file", build: "tool", url: "link" };
+
+const CloseoutEvidence = lazyPage(() => import("./CloseoutEvidence").then((m) => m.CloseoutEvidence));
+
+type ExpandFold = (fold: Item) => Promise<boolean | void>;
 
 /** An artifact's reference as a web link, when it is one (http or https only). */
 function webLink(ref: string): string | undefined {
@@ -25,7 +34,7 @@ function webLink(ref: string): string | undefined {
   }
 }
 
-export function CloseoutCard({ session }: { session: Session }) {
+export function CloseoutCard({ session, segment, expandFold }: { session: Session; segment?: Segment; expandFold?: ExpandFold }) {
   const c = shownCloseout(session);
   const [open, setOpen] = useState(true);
   if (!c) return null;
@@ -76,6 +85,11 @@ export function CloseoutCard({ session }: { session: Session }) {
               {merged && <Field label={t("chat-chatview.closeout_merged")}><ClaimLine what="merged" claim={merged} /></Field>}
               {deployed && <Field label={t("chat-chatview.closeout_deployed")}><ClaimLine what="deployed" claim={deployed} /></Field>}
               {c.verified && <Field label={t("chat-chatview.closeout_verified")}>{c.verified}</Field>}
+              {c.verified && (
+                <Suspense fallback={null}>
+                  <CloseoutEvidence session={session} verified={c.verified} open={open} segment={segment} expandFold={expandFold} />
+                </Suspense>
+              )}
               {c.missing && <Field label={t("chat-chatview.closeout_missing")}>{c.missing}</Field>}
             </dl>
           </Collapse>

@@ -3,6 +3,7 @@ package screenlink
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -34,6 +35,9 @@ type Limits struct {
 	AttachWait time.Duration
 	// Tick: how often the limits are checked.
 	Tick time.Duration
+	// FlowSilence: a UDP flow (#7873) the phone has sent nothing on this long is closed and its video goes on over
+	// the flow's TLS connection. 0: no such rule.
+	FlowSilence time.Duration
 }
 
 // DefaultLimits are the limits a node runs with.
@@ -45,6 +49,7 @@ var DefaultLimits = Limits{
 	VideoBacklog: 200 * time.Millisecond,
 	AttachWait:   3 * time.Second,
 	Tick:         250 * time.Millisecond,
+	FlowSilence:  5 * time.Second,
 }
 
 // maxVideoMessage is the video wire's own bound on one message (ScreenVideoWire.maxMessageBytes).
@@ -71,6 +76,7 @@ type Session struct {
 	logf   func(string, ...any)
 	now    func() time.Time
 	onEnd  func()
+	direct *Direct // the direct routes' listener, for UDP flows; nil: relays only
 
 	mu           sync.Mutex
 	cond         *sync.Cond
@@ -128,12 +134,23 @@ type transport struct {
 	ctl     [][]byte                      // control messages waiting to go out
 	acks    map[byte]uint64               // acknowledgements waiting to go out, the newest per channel
 	counter func() (retrans, sent uint32) // TCP counters for pongs; nil on a relay
+	tls     *tls.Conn                     // a direct route's connection: UDP flows take their keys from it
+
+	// A UDP flow (#7873): it carries the video channel only, and goes with parent, the direct route it was opened on.
+	flow       *udpFlow
+	parent     *transport
+	resend     []udpResend
+	sentAt     time.Time // when the flow last sent video (fresh or again)
+	probes     int       // tail probes since then
+	probeTimer *time.Timer
+	armedDue   time.Time // when probeTimer wakes the flow's sender
 }
 
 // Registry is the node's sessions by pair.
 type Registry struct {
 	limits Limits
 	logf   func(string, ...any)
+	direct *Direct // the direct routes' listener; nil: relays only
 
 	mu     sync.Mutex
 	byPair map[string]*Session
@@ -154,6 +171,13 @@ func (r *Registry) Get(pair string) *Session {
 	return r.byPair[pair]
 }
 
+// EnableDirect has the registry's sessions offer direct routes through d.
+func (r *Registry) EnableDirect(d *Direct) {
+	r.mu.Lock()
+	r.direct = d
+	r.mu.Unlock()
+}
+
 // Len is how many sessions are live (tests, logs).
 func (r *Registry) Len() int {
 	r.mu.Lock()
@@ -167,25 +191,36 @@ func (r *Registry) Open(pair string, rfb io.ReadWriteCloser) (*Session, io.ReadW
 	if old := r.Get(pair); old != nil {
 		old.End()
 	}
-	s := &Session{pair: pair, token: newToken(), limits: r.limits, logf: r.logf, now: time.Now,
+	r.mu.Lock()
+	direct := r.direct
+	r.mu.Unlock()
+	s := &Session{pair: pair, token: newToken(), limits: r.limits, logf: r.logf, now: time.Now, direct: direct,
 		chans: map[byte]*channel{}, ts: map[*transport]bool{}, done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
+	r.mu.Lock()
+	r.byPair[pair] = s
+	r.mu.Unlock()
 	s.onEnd = func() {
 		r.mu.Lock()
 		if r.byPair[pair] == s {
 			delete(r.byPair, pair)
 		}
 		r.mu.Unlock()
+		if direct != nil {
+			direct.dropFlows(func(f *udpFlow) bool { return f.s == s })
+			direct.leave(s)
+		}
 	}
-	r.mu.Lock()
-	r.byPair[pair] = s
-	r.mu.Unlock()
+	paths := Paths{Version: 1, Token: s.token, Candidates: []Candidate{}}
+	if direct != nil {
+		paths = direct.join(s)
+	}
+	body, _ := json.Marshal(paths)
 	s.mu.Lock()
 	ch := s.addChannelLocked(RFB, rfb, s.limits.WindowRFB)
 	relay := s.addTransportLocked(true, RFB, false)
 	ch.active, ch.home = relay, relay
-	paths, _ := json.Marshal(Paths{Version: 1, Token: s.token, Candidates: []Candidate{}})
-	relay.ctl = append(relay.ctl, frame(TypePaths, paths))
+	relay.ctl = append(relay.ctl, frame(TypePaths, body))
 	s.mu.Unlock()
 	go s.watch()
 	return s, s.startTransport(relay)
@@ -261,6 +296,59 @@ func (s *Session) Reattach(video bool) (io.ReadWriteCloser, bool) {
 	return s.startTransport(t), true
 }
 
+// setPaths tells the phone the direct routes changed (the node's addresses moved, or the firewall changed), on the
+// transport carrying RFB.
+func (s *Session) setPaths(p Paths) {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended {
+		return
+	}
+	t := s.chans[RFB].active
+	if t == nil || t.dead || t.pending {
+		for c := range s.ts {
+			if !c.dead && !c.pending && c.flow == nil {
+				t = c
+				break
+			}
+		}
+	}
+	if t == nil {
+		return
+	}
+	t.ctl = append(t.ctl, frame(TypePaths, body))
+	s.cond.Broadcast()
+}
+
+// addDirect is a direct connection that attached with this session's token (Direct.handshake): one more transport,
+// reading on with r. False when the session ended or has maxDirect already.
+func (s *Session) addDirect(conn net.Conn, r *reader, counter func() (uint32, uint32)) bool {
+	s.mu.Lock()
+	n := 0
+	for t := range s.ts {
+		if !t.relay && !t.dead && t.flow == nil {
+			n++
+		}
+	}
+	if s.ended || n >= maxDirect {
+		s.mu.Unlock()
+		return false
+	}
+	t := &transport{conn: conn, acks: map[byte]uint64{}, counter: counter}
+	t.tls, _ = conn.(*tls.Conn)
+	t.ctl = append(t.ctl, frame(TypeAttached))
+	s.ts[t] = true
+	s.cond.Broadcast()
+	s.mu.Unlock()
+	go s.writeLoop(t)
+	go s.readFrom(t, r)
+	return true
+}
+
 // End ends the session: every transport and channel closes. Safe to call more than once.
 func (s *Session) End() {
 	s.mu.Lock()
@@ -323,7 +411,7 @@ func (s *Session) startTransport(t *transport) io.ReadWriteCloser {
 	t.conn = mine
 	s.mu.Unlock()
 	go s.writeLoop(t)
-	go s.readLoop(t)
+	go s.readFrom(t, newReader(mine))
 	if t.pending {
 		time.AfterFunc(s.limits.AttachWait, func() {
 			s.mu.Lock()
@@ -549,8 +637,7 @@ func (s *Session) dropBacklogLocked(ch *channel) {
 
 // MARK: phone → node
 
-func (s *Session) readLoop(t *transport) {
-	r := newReader(t.conn)
+func (s *Session) readFrom(t *transport, r *reader) {
 	for {
 		typ, body, err := r.next()
 		if err != nil {
@@ -631,6 +718,9 @@ func (s *Session) handle(t *transport, typ byte, body []byte) bool {
 			return false
 		}
 		s.peerClose(id, off)
+		return true
+	case TypeUDPOpen:
+		s.udpOpen(t)
 		return true
 	}
 	return true // a type this node doesn't know: skipped, as on the video wire
@@ -743,6 +833,12 @@ func (s *Session) lose(t *transport) {
 	t.dead = true
 	delete(s.ts, t)
 	now := s.now()
+	var flows []*transport
+	for c := range s.ts {
+		if c.parent == t {
+			flows = append(flows, c) // a UDP flow goes with the route it was opened on
+		}
+	}
 	for _, ch := range s.chans {
 		if ch.home == t {
 			ch.home = nil
@@ -750,7 +846,9 @@ func (s *Session) lose(t *transport) {
 		if ch.active != t || ch.finished {
 			continue
 		}
-		if alt := s.fallbackLocked(ch); alt != nil {
+		if p := t.parent; p != nil && !p.dead && !p.pending {
+			s.moveLocked(ch, p, ch.base) // off a UDP flow: onto its own TLS route first
+		} else if alt := s.fallbackLocked(ch); alt != nil {
 			s.moveLocked(ch, alt, ch.base)
 		} else {
 			ch.active, ch.lostAt = nil, now
@@ -765,6 +863,12 @@ func (s *Session) lose(t *transport) {
 	if conn != nil {
 		_ = conn.Close()
 	}
+	for _, c := range flows {
+		s.lose(c)
+	}
+	if t.tls != nil && s.direct != nil {
+		s.direct.dropFlows(func(f *udpFlow) bool { return f.parent == t }) // flows the phone never proved an address for
+	}
 }
 
 func (s *Session) fallbackLocked(ch *channel) *transport {
@@ -772,7 +876,7 @@ func (s *Session) fallbackLocked(ch *channel) *transport {
 		return ch.home
 	}
 	for t := range s.ts {
-		if !t.dead && !t.pending {
+		if !t.dead && !t.pending && t.flow == nil { // a UDP flow carries video only, and only when the phone asks
 			return t
 		}
 	}
@@ -837,6 +941,13 @@ func (s *Session) watch() {
 		}
 		if !s.noRelaySince.IsZero() && now.Sub(s.noRelaySince) >= s.limits.Grace {
 			end = true
+		}
+		if s.limits.FlowSilence > 0 {
+			for t := range s.ts {
+				if t.flow != nil && !t.dead && t.flow.heardSince() >= s.limits.FlowSilence {
+					stuck = append(stuck, t)
+				}
+			}
 		}
 		s.mu.Unlock()
 		for _, t := range stuck {

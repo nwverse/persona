@@ -105,6 +105,9 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigEscalated && len(g.Cards) > 0 { // a leader's escalated cards, apart from its needs_user
 		return g.Todo + "|" + g.Kind + ":cards"
 	}
+	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "sent" {
+		return g.Todo + "|" + g.Kind + ":agent_copy" // delivered copies never absorb an earlier failed delivery
+	}
 	return g.Todo + "|" + g.Kind
 }
 
@@ -388,13 +391,14 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	routed := s.routedSessions()
 	s.pruneTurns(ctx) // the turns' ledger: read before the first signal (what was told before a restart is not told again), closed tasks off it
 	tasks := s.todosOf(ctx, "*")
+	lists := machineSessions{}   // each machine listed once for all the supervised tasks (#3029)
 	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
 	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
 		s.remedyWatch(ctx, t, now) // a failed start's kept tab expired (start_remedy.go)
-		agents := s.taskAgents(ctx, t)
+		agents := s.taskAgentsIn(ctx, t, lists)
 		for _, g := range watchSignals(t, agents, now) {
 			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
 				continue // its card is with the supervisor as an ask already

@@ -34,6 +34,7 @@ type runtimeHub struct {
 	asked    []proto.Interaction
 	resolve  func(proto.Interaction) proto.Resolution
 	nodePeer *rpc.Peer
+	cancel   context.CancelFunc
 	// answer takes the other hub calls (mcp.tools, assistant.context…); handled false: an unexpected call.
 	answer func(method string, params json.RawMessage) (res any, err error, handled bool)
 }
@@ -90,7 +91,7 @@ func runtimeNodeTapped(t *testing.T, shared *RuntimeHost, tap io.Writer) (*Node,
 	n.peer.OnRequest = n.handle
 	peer := n.peer // served below: a test may give the node another connection later
 	hub := rpc.New("h", h2nW)
-	end := &runtimeHub{nodePeer: hub, resolve: func(proto.Interaction) proto.Resolution { return proto.Resolution{Dismiss: true} }}
+	end := &runtimeHub{nodePeer: hub, cancel: cancel, resolve: func(proto.Interaction) proto.Resolution { return proto.Resolution{Dismiss: true} }}
 	hub.OnEvent = func(event string, params json.RawMessage) {
 		end.mu.Lock()
 		defer end.mu.Unlock()
@@ -162,6 +163,7 @@ type fakeRuntime struct {
 	answer func(method string, params json.RawMessage) (any, error)
 	events []string       // event names the node pushed, in order
 	hubs   []bool         // runtime.hub pushes: whether a hub is connected
+	driven []string       // runtime.driven pushes: the sessions the hub started through another runtime
 	helloR map[string]any // what runtime.hello answered
 	closed chan struct{}  // closed when the connection ends (helloAt)
 }
@@ -207,6 +209,13 @@ func dialRuntimeAt(t *testing.T, path string, hello map[string]any) *fakeRuntime
 			}
 			_ = json.Unmarshal(params, &p)
 			f.hubs = append(f.hubs, p.Connected)
+		}
+		if event == "runtime.driven" {
+			var p struct {
+				SessionID string `json:"session_id"`
+			}
+			_ = json.Unmarshal(params, &p)
+			f.driven = append(f.driven, p.SessionID)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())

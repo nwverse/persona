@@ -357,6 +357,8 @@ fun JRow(
     leadingIconTint: Color? = null,
     /** The start of the title in the quiet ink, drawn before [title]: a hub conversation title's day and kind ("1101 | Fix | "), so its topic is what the eye finds (iOS `ConversationTitle`). */
     titleLead: String? = null,
+    /** A subtitle with part of it marked (a search match). Drawn instead of [subtitle] when set, on one line. */
+    subtitleMark: AnnotatedString? = null,
     /** Lines the title may take before it ends in an ellipsis; rows whose labels must remain readable pass more than one. */
     titleLines: Int = 1,
 ) {
@@ -379,7 +381,11 @@ fun JRow(
                 titleText(Modifier.weight(1f, fill = false))
                 titleAccessory()
             }
-            subtitle?.let { Text(it, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis) }
+            val caption = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal)
+            when {
+                subtitleMark != null -> Text(subtitleMark, style = caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                subtitle != null -> Text(subtitle, style = caption, color = palette.ink2, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
