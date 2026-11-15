@@ -139,11 +139,12 @@ class ChatDetailsShotsTest {
         repeat(10) { rule.mainClock.advanceTimeByFrame() }
         val image = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
         val output = File(System.getProperty("persona.shots") ?: "build/chat-details-shots").also { it.mkdirs() }
-        val language = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
-            .resources.configuration.locales[0].language
-        val locale = if (name == "safe-suggestion" || name == "risky-suggestion") "-$language" else ""
-        File(output, "$name$locale-${style.name.lowercase()}-${if (dark) "dark" else "light"}${if (large) "-large" else ""}.png").outputStream()
-            .use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+        try {
+            File(output, "$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}${if (large) "-large" else ""}.png").outputStream()
+                .use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+        } finally {
+            image.recycle()
+        }
     }
 
     @Test fun readyGlass() = scene("ready", AppStyle.Glass, false)
@@ -173,44 +174,15 @@ class ChatDetailsShotsTest {
     @Test fun readyGlassLarge() = scene("ready", AppStyle.Glass, false, large = true)
     @Test fun recapGlassLarge() = scene("recap", AppStyle.Glass, false, large = true)
 
+    // Semantics tests own the action difference. These six scenes only prove risk does not change the chip's drawing:
+    // one risky chip per style, light and dark, Chinese, the largest text, and one safe comparison.
     @Test fun safeSuggestionGlass() = scene("safe-suggestion", AppStyle.Glass, false)
-    @Test fun safeSuggestionGlassDark() = scene("safe-suggestion", AppStyle.Glass, true)
-    @Test fun safeSuggestionBrief() = scene("safe-suggestion", AppStyle.Brief, false)
-    @Test fun safeSuggestionBriefDark() = scene("safe-suggestion", AppStyle.Brief, true)
-    @Test fun safeSuggestionBoard() = scene("safe-suggestion", AppStyle.Board, false)
-    @Test fun safeSuggestionBoardDark() = scene("safe-suggestion", AppStyle.Board, true)
     @Test fun riskySuggestionGlass() = scene("risky-suggestion", AppStyle.Glass, false)
-    @Test fun riskySuggestionGlassDark() = scene("risky-suggestion", AppStyle.Glass, true)
-    @Test fun riskySuggestionBrief() = scene("risky-suggestion", AppStyle.Brief, false)
     @Test fun riskySuggestionBriefDark() = scene("risky-suggestion", AppStyle.Brief, true)
     @Test fun riskySuggestionBoard() = scene("risky-suggestion", AppStyle.Board, false)
-    @Test fun riskySuggestionBoardDark() = scene("risky-suggestion", AppStyle.Board, true)
 
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun safeSuggestionZhGlass() = scene("safe-suggestion", AppStyle.Glass, false)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun safeSuggestionZhGlassDark() = scene("safe-suggestion", AppStyle.Glass, true)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun safeSuggestionZhBrief() = scene("safe-suggestion", AppStyle.Brief, false)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun safeSuggestionZhBriefDark() = scene("safe-suggestion", AppStyle.Brief, true)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun safeSuggestionZhBoard() = scene("safe-suggestion", AppStyle.Board, false)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun safeSuggestionZhBoardDark() = scene("safe-suggestion", AppStyle.Board, true)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun riskySuggestionZhGlass() = scene("risky-suggestion", AppStyle.Glass, false)
     @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
     @Test fun riskySuggestionZhGlassDark() = scene("risky-suggestion", AppStyle.Glass, true)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun riskySuggestionZhBrief() = scene("risky-suggestion", AppStyle.Brief, false)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun riskySuggestionZhBriefDark() = scene("risky-suggestion", AppStyle.Brief, true)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun riskySuggestionZhBoard() = scene("risky-suggestion", AppStyle.Board, false)
-    @Config(sdk = [35], qualifiers = "zh-w400dp-h760dp-xhdpi")
-    @Test fun riskySuggestionZhBoardDark() = scene("risky-suggestion", AppStyle.Board, true)
 
-    @Test fun safeSuggestionGlassLarge() = scene("safe-suggestion", AppStyle.Glass, false, large = true)
     @Test fun riskySuggestionGlassLarge() = scene("risky-suggestion", AppStyle.Glass, false, large = true)
 }
