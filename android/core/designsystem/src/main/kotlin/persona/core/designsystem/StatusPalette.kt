@@ -351,3 +351,7 @@ fun statusTone(status: Status, darkTheme: Boolean): StatusTone =
 /** A diff's words that changed in a line (UI version 5, #3136): the add / delete colour, deeper than the line's own tint. */
 val PersonaPalette.diffAddWord: Color get() = diffAdd.copy(alpha = 0.30f)
 val PersonaPalette.diffDelWord: Color get() = diffDel.copy(alpha = 0.30f)
+
+/** An added or removed line's own tint behind its code (iOS `Theme.Diff.addFill` / `delFill`), under [diffAddWord] / [diffDelWord]. */
+val PersonaPalette.diffAddFill: Color get() = diffAdd.copy(alpha = Tokens.Common.Light.Diff.addFill.alpha)
+val PersonaPalette.diffDelFill: Color get() = diffDel.copy(alpha = Tokens.Common.Light.Diff.delFill.alpha)
