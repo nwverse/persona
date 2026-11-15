@@ -209,6 +209,7 @@ type Store interface {
 	LiveActivities(ctx context.Context) ([]db.LiveActivity, error)
 	SaveLiveActivity(ctx context.Context, v db.LiveActivity) error
 	ClaimLiveActivityStart(ctx context.Context, device, startToken string, at time.Time, cooldown, maxAge time.Duration) (time.Time, bool, error)
+	HoldLiveActivityStart(ctx context.Context, device string, asOf time.Time, hold time.Duration) (bool, error)
 	Setting(ctx context.Context, key string, out any) (bool, error)
 	PutSetting(ctx context.Context, key string, v any) error
 	TakeSetting(ctx context.Context, key string, out any) (bool, error)
@@ -348,6 +349,8 @@ func (h *Hub) closeDatabaseAfterWorkers(cancel context.CancelFunc, closeDatabase
 	if h.stopping.Load() {
 		h.shutdown.step(h, "hand over the event log", func(ctx context.Context) error { h.saveEventLog(ctx); return nil })
 	}
+	// Every stop, planned or not: the next process may be a build from before hub_push_sent (lnmode.go mirrorSent).
+	h.shutdown.step(h, "delivered pushes for an older build", h.push.mirrorSent)
 	h.shutdown.step(h, "close database", closeDatabase)
 }
 

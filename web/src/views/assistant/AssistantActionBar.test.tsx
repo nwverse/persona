@@ -409,7 +409,7 @@ describe("Assistant Needs you / In progress trays", () => {
     await openRows();
     expect(host.textContent!.split(todo.title).length - 1, "an opened row names its task once").toBe(1);
     const row = host.querySelector('[data-brief-row="accept"]')!;
-    expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-tasks.later"), t("assistant-tasks.dismiss_draft"), t("assistant-brief.take")]);
+    expect([...row.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual([t("assistant-brief.open"), t("assistant-brief.finish"), t("assistant-task-actions.later"), t("assistant-task-actions.dismiss_draft"), t("assistant-brief.take")]);
     const read = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (url, init) => {
       if (init?.method === "PATCH") {
@@ -429,6 +429,30 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(writes.filter((path) => /accept|message|resume/.test(path))).toEqual([]);
   });
 
+  it("lists a task waiting for its supervisor's review in In progress, saying so, and in Needs you once the review is an hour old or has no start", async () => {
+    moreSessions = [{ machine_id: "demo", session_id: "review-worker", title: "Review agent", cwd: "/demo", state: "idle", status: "idle", updated_at: at } as Session];
+    const reviewed = (pending_since?: string): Todo => ({
+      ...todo, id: "tray-review", title: "Reviewed task", pr_url: undefined, plan_id: undefined,
+      agents: [{ machine_id: "demo", session_id: "review-worker", linked_at: at }],
+      supervision: { supervisor: conversation, state: "pending_review", updated_at: at, reviews: [], ...(pending_since ? { pending_since } : {}) },
+    });
+    moreTodos = [reviewed("2026-11-10T08:50:00Z")]; // ten minutes before `now`
+    await act(async () => { await refresh(); await refreshTodos(); });
+    // the supervisor's review is not the owner's: Needs you stays empty and uncounted
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}2`]);
+    act(() => entry("running").click());
+    expect(trayRow("Reviewed task")!.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.review_supervisor"));
+    // an hour on, nobody reviewed it: the owner's
+    act(() => putTodo(reviewed("2026-11-10T08:00:00Z")));
+    expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}1`]);
+    expect(trayRow("Reviewed task")).toBeUndefined();
+    // a hub that does not say since when: the owner's, as before
+    act(() => putTodo(reviewed("2026-11-10T08:50:00Z")));
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}2`]);
+    act(() => putTodo(reviewed()));
+    expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}1`]);
+  });
+
   it("puts a task waiting on the user and a draft in Needs you only, without sending anything", async () => {
     const draft: FeedItem = { id: "tray-draft", conversation, at, kind: "message", ref: "draft-ref", body: { draft: "Demo reply", text: "Demo message" } };
     getFeedState().feeds[conversation] = [...feed, draft];
@@ -445,7 +469,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.textContent).toContain(t("assistant-tasks.review_needs_user"));
     const draftCard = host.querySelector('[data-testid="message-card"]')!;
     const actions = [...draftCard.querySelectorAll("button")];
-    expect(actions.map((button) => button.textContent)).toEqual([t("assistant-tasks.send"), t("assistant-tasks.later"), t("assistant-tasks.dismiss_draft")]);
+    expect(actions.map((button) => button.textContent)).toEqual([t("assistant-task-actions.send"), t("assistant-task-actions.later"), t("assistant-task-actions.dismiss_draft")]);
     act(() => actions[1].click());
     expect(host.querySelector('[data-testid="message-card"]')).toBeNull();
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, label.running]);

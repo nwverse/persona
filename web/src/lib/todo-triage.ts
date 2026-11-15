@@ -169,7 +169,9 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   // rule 8's signals, read here so rule 9 yields to them: a turn or review nobody has looked at stays Just finished
   const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   // a parked hold is its supervisor's reading of the latest turn: an agent session left unread does not hide its PR
-  if (!(finished && !seen(last) && reviewState(todo) !== "parked") && waitingForMerge(todo, lookup, now)) return at("pr", "pr_open");
+  // accepted or deployed work is finished whatever its PR facts say: rule 9 never outranks those rules (#7614 review)
+  const settled = !concern && (acceptanceStands(todo) || todo.delivery?.state === "live");
+  if (!settled && !(finished && !seen(last) && reviewState(todo) !== "parked") && waitingForMerge(todo, lookup, now)) return at("pr", "pr_open");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
   // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
