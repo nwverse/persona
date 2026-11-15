@@ -15108,6 +15108,29 @@
         }
       }
     },
+    "Agents that stop with an error show up here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents that stop with an error show up here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エラーで止まったエージェントがここに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出错停下的 Agent 会显示在这里。"
+          }
+        }
+      }
+    },
     "AI Draft Reply" : {
       "localizations" : {
         "en" : {
@@ -25468,6 +25491,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "助手资料"
+          }
+        }
+      }
+    },
+    "Assistant [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistant"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅回答"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタント"
           }
         }
       }
@@ -61125,6 +61171,29 @@
       },
       "extractionState" : "manual"
     },
+    "Errors [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Errors"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报错异常"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エラー"
+          }
+        }
+      }
+    },
     "Esc" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -66796,6 +66865,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Full Text [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full Text"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全文"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全文"
+          }
+        }
+      }
     },
     "Full Transcript" : {
       "extractionState" : "manual",
@@ -93515,6 +93607,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No Agents with Errors" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Agents with Errors"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エラーのあるエージェントはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有出错的 Agent"
+          }
+        }
+      }
     },
     "No API key yet: see where each provider signs you up" : {
       "localizations" : {
@@ -131761,6 +131876,29 @@
       },
       "extractionState" : "manual"
     },
+    "Search In [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search In"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索範囲"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索范围"
+          }
+        }
+      }
+    },
     "Search In [Full Search]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -132013,6 +132151,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Search in: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search in: %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索范围：%1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索範囲：%1$@"
+          }
+        }
+      }
     },
     "Search names or numbers" : {
       "localizations" : {
@@ -166320,6 +166481,29 @@
       },
       "extractionState" : "manual"
     },
+    "Title [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅标题"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイトルのみ"
+          }
+        }
+      }
+    },
     "Title, e.g. “Morning briefing”" : {
       "localizations" : {
         "en" : {
@@ -175877,6 +176061,29 @@
       },
       "extractionState" : "manual"
     },
+    "User [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "User"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅用户"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ユーザー"
+          }
+        }
+      }
+    },
     "Username" : {
       "localizations" : {
         "en" : {
@@ -182725,6 +182932,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用「%@」"
+          }
+        }
+      }
+    },
+    "Without Tools [Agent Search Scope]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Without Tools"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话正文"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツール除外"
           }
         }
       }
