@@ -219,11 +219,19 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", err
 		}
-		// The Feishu bot and the channels with pushes on (channels_handler.go).
-		s.channelsPushed(machine, self, a.Title, a.Body)
+		// The Feishu bot and the channels with pushes on (channels_copies.go), unless the hub's low-distraction mode held
+		// the notice for the briefing (a P1 one, or a repeat of a related key within 12 hours): a copy there would
+		// interrupt where the phone does not, as a conclusion's card would (push_quiet.go). A held notice marks no
+		// channel pushed, so a turn-end mirror goes as it would without it (#8268).
+		var copies *copyReport
+		if res.Held {
+			s.logf("assistant: notify_user held by low-distraction mode (%s): no copy to the chat channels", res.Reason)
+		} else {
+			copies = s.channelsCopied(machine, self, a.Title, a.Body)
+		}
 		s.recordNotify(ctx, machine, self, notifyMissed(res)) // an interruption when a device took it (north_star.go)
 		s.promoteSupervision(self)
-		return notifyAnswerText(s.lang(ctx), res), nil
+		return notifyAnswerText(s.lang(ctx), res, copies.wait(notifyCopyWait)), nil
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
 	case "conversation_read":
