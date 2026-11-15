@@ -352,3 +352,31 @@ func TestPreflightDockerMessageIsAccurate(t *testing.T) {
 		t.Fatalf("clients present, docker missing = %v", err)
 	}
 }
+
+// The default container needs docker too; without it the message names what is
+// missing and the container.
+func TestPreflightMissingDockerForTheDefaultContainerNamesBoth(t *testing.T) {
+	isolateLibpqEnvironment(t)
+	local, err := makeTarget("hub", "postgres://persona@127.0.0.1:5432/persona", "", "persona-postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	only := func(name string) (string, error) {
+		if name == "pg_dump" {
+			return "/bin/pg_dump", nil
+		}
+		return "", os.ErrNotExist
+	}
+	err = (&postgresBackend{lookPath: only}).CheckClients(local, "pg_dump", "pg_restore")
+	if err == nil {
+		t.Fatal("missing pg_restore and docker was accepted")
+	}
+	for _, wanted := range []string{"pg_restore", "docker", "persona-postgres"} {
+		if !strings.Contains(err.Error(), wanted) {
+			t.Errorf("error lacks %q: %v", wanted, err)
+		}
+	}
+	if strings.Contains(err.Error(), "pg_dump and") || strings.Contains(err.Error(), "and pg_restore") {
+		t.Errorf("error names a program that is present: %v", err)
+	}
+}

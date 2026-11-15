@@ -48,8 +48,21 @@ type fakeBackend struct {
 	// Exists, Rename and Drop fail (the server is unreachable).
 	existsErr bool
 	down      bool
-	active    map[string]int
-	clientErr error
+	// preCommit makes one rename ("<part>:previous" or "<part>:install") fail
+	// without happening; preCommitDown also takes the server down with it.
+	preCommit     string
+	preCommitDown bool
+	preFired      bool
+	downNow       bool
+	// existsFailures Exists calls fail (armed by the injected failure).
+	existsFailures    int
+	armExistsFailures int
+	// existsErrName makes Exists of that name fail once a fault has fired.
+	existsErrName string
+	// failUndoPart makes undoing an install of that part fail.
+	failUndoPart string
+	active       map[string]int
+	clientErr    error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -155,7 +168,7 @@ func (f *fakeBackend) Restore(_ context.Context, target Target, database, dumpPa
 func (f *fakeBackend) Drop(_ context.Context, target Target, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.down && f.commitThenFired {
+	if f.downNow || (f.down && f.commitThenFired) {
 		return errors.New("server unreachable")
 	}
 	delete(f.server(target), name)
@@ -166,11 +179,30 @@ func (f *fakeBackend) Drop(_ context.Context, target Target, name string) error 
 func (f *fakeBackend) Rename(_ context.Context, target Target, from, to string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.down && f.commitThenFired {
+	if f.downNow || (f.down && f.commitThenFired) {
 		return errors.New("server unreachable")
+	}
+	if f.failUndoPart == target.Part && from == target.Database && strings.HasPrefix(to, "persona_staged_") {
+		return errors.New("injected refusal to undo the install")
+	}
+	if f.preCommit != "" && !f.preFired {
+		kind := ""
+		switch {
+		case strings.HasPrefix(from, "persona_staged_") && to == target.Database:
+			kind = "install"
+		case from == target.Database && strings.HasPrefix(to, "persona_previous_"):
+			kind = "previous"
+		}
+		if kind != "" && f.preCommit == target.Part+":"+kind {
+			f.preFired = true
+			f.downNow = f.preCommitDown
+			f.existsFailures = f.armExistsFailures
+			return errors.New("injected failure before the rename happened")
+		}
 	}
 	if f.failInstallPart == target.Part && !f.installFailed && strings.HasPrefix(from, "persona_staged_") && to == target.Database {
 		f.installFailed = true
+		f.existsFailures = f.armExistsFailures
 		if f.installErr != nil {
 			return f.installErr
 		}
@@ -209,8 +241,15 @@ func (f *fakeBackend) CheckClients(Target, ...string) error { return f.clientErr
 func (f *fakeBackend) Exists(_ context.Context, target Target, name string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if (f.existsErr || f.down) && f.commitThenFired {
+	if f.downNow || ((f.existsErr || f.down) && f.commitThenFired) {
 		return false, errors.New("cannot check the database")
+	}
+	if f.existsFailures > 0 {
+		f.existsFailures--
+		return false, errors.New("cannot check the database (briefly)")
+	}
+	if f.existsErrName == name && f.commitThenFired {
+		return false, errors.New("cannot check that database")
 	}
 	return f.server(target)[name] != nil, nil
 }

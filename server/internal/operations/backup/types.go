@@ -118,4 +118,7 @@ type Result struct {
 	// KeptDockerPassword: the bundle has a docker/db-password, but the install's
 	// own was kept (see restoreItems).
 	KeptDockerPassword bool
+	// PreviousExternalKB: where an approved external knowledge base's previous
+	// copy was kept (its own directory, beside the knowledge base).
+	PreviousExternalKB string
 }

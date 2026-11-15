@@ -203,7 +203,8 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	previousFiles, rollbackFiles, err := applyFiles(ctx, opts.Home, staging, manifest, opts.AllowExternalKB, id)
+	keptPassword := dockerPasswordKept(opts.Home, manifest) // before applyFiles installs the bundle's copy
+	previousFiles, previousKB, rollbackFiles, err := applyFiles(ctx, opts.Home, staging, manifest, opts.AllowExternalKB, id)
 	if err != nil {
 		return Result{}, err
 	}
@@ -214,20 +215,21 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 	}
 	previous, err := o.swapDatabases(ctx, hub, manager, hubStage, managerStage)
 	var undoFailed *undoFailedError
-	if errors.As(err, &undoFailed) {
-		// The databases could not be put back (the server went away after a
-		// rename), so the ones live may be the bundle's. Putting the files back
-		// under them would make the install inconsistent: keep the restored
-		// files, and tell the operator where everything previous is. Nothing is
-		// lost; running restore again converges.
-		return Result{}, fmt.Errorf("%w; the databases could not be rolled back (%v), so the runtime files were left as restored to match the databases that may be live. "+
-			"Previous hub database: %s; previous built-in manager database: %s; previous runtime files: %s. Check the server, then run restore again, or rename the previous databases back by hand",
-			undoFailed.cause, undoFailed.undo, nameOrNone(previous[0]), nameOrNone(previous[1]), nameOrNone(previousFiles))
+	if errors.As(err, &undoFailed) && undoFailed.bundleMayBeLive {
+		// A bundle database may be live because it could not be renamed back
+		// (the server went away after its install rename). Putting the files
+		// back under it would make the install inconsistent: keep the restored
+		// files, and say where everything previous is. Nothing is lost;
+		// running restore again converges.
+		return Result{}, fmt.Errorf("%w; a database from the bundle may be live and could not be rolled back (%v), so the runtime files were left as restored to match it. "+
+			"Previous hub database: %s; previous built-in manager database: %s (a name is only a database that may still exist; (none) was put back or never made); previous runtime files: %s; previous external knowledge base: %s. "+
+			"Check the server, then run restore again, or rename the previous databases back by hand",
+			undoFailed.cause, undoFailed.undo, nameOrNone(previous[0]), nameOrNone(previous[1]), nameOrNone(previousFiles), nameOrNone(previousKB))
 	}
 	if err != nil {
 		return Result{}, errors.Join(err, rollbackFiles())
 	}
-	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: dockerPasswordKept(opts.Home, manifest)}, nil
+	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: keptPassword, PreviousExternalKB: previousKB}, nil
 }
 
 func nameOrNone(name string) string {
@@ -470,6 +472,16 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 		index         int
 	}
 	var records []*swapRecord
+	// notInstalled: the staged database still exists and the target does not,
+	// both established, so an install rename taken for committed did not happen.
+	notInstalled := func(ctx context.Context, record *swapRecord) bool {
+		stagedExists, err := o.backend.Exists(ctx, record.target, record.staged.name)
+		if err != nil || !stagedExists {
+			return false
+		}
+		targetExists, err := o.backend.Exists(ctx, record.target, record.target.Database)
+		return err == nil && !targetExists
+	}
 	rollback := func() error {
 		ctx, cancel := cleanupContext()
 		defer cancel()
@@ -478,14 +490,29 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 			record := records[i]
 			if record.installed {
 				if err := o.backend.Rename(ctx, record.target, record.target.Database, record.staged.name); err != nil {
-					errs = append(errs, fmt.Errorf("undo the install of staged database %s: %w", record.staged.name, err))
+					// The install is only assumed when its result was unknown: if the
+					// staged database is plainly still there and the target is not,
+					// it never happened.
+					if notInstalled(ctx, record) {
+						record.installed = false
+						record.staged.active = true
+					} else {
+						errs = append(errs, fmt.Errorf("undo the install of staged database %s: %w", record.staged.name, err))
+					}
 				} else {
+					record.installed = false
 					record.staged.active = true
 				}
 			}
 			if record.previousMoved {
 				if err := o.backend.Rename(ctx, record.target, record.previous, record.target.Database); err != nil {
-					errs = append(errs, fmt.Errorf("rename the previous database %s back: %w", record.previous, err))
+					// Nothing to put back when the previous database is plainly not
+					// there and the target is: its rename never happened.
+					if o.plainlyAbsentBeside(ctx, record.target, record.previous, record.target.Database) {
+						previous[record.index] = ""
+					} else {
+						errs = append(errs, fmt.Errorf("rename the previous database %s back (it may not exist if its rename never took effect): %w", record.previous, err))
+					}
 				} else {
 					previous[record.index] = ""
 				}
@@ -495,7 +522,11 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 	}
 	fail := func(err error) error {
 		if undo := rollback(); undo != nil {
-			return &undoFailedError{cause: err, undo: undo}
+			live := false
+			for _, record := range records {
+				live = live || record.installed
+			}
+			return &undoFailedError{cause: err, undo: undo, bundleMayBeLive: live}
 		}
 		return err
 	}
@@ -548,10 +579,23 @@ func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubSt
 // undoFailedError: a swap failed, and putting the databases back failed too.
 type undoFailedError struct {
 	cause, undo error
+	// bundleMayBeLive: an install rename may have taken effect and could not be
+	// undone, so a database from the bundle may be the live one.
+	bundleMayBeLive bool
 }
 
 func (e *undoFailedError) Error() string   { return e.cause.Error() + "; rollback: " + e.undo.Error() }
 func (e *undoFailedError) Unwrap() []error { return []error{e.cause, e.undo} }
+
+// plainlyAbsentBeside: name does not exist and other does, both established.
+func (o *Operator) plainlyAbsentBeside(ctx context.Context, target Target, name, other string) bool {
+	nameExists, err := o.backend.Exists(ctx, target, name)
+	if err != nil || nameExists {
+		return false
+	}
+	otherExists, err := o.backend.Exists(ctx, target, other)
+	return err == nil && otherExists
+}
 
 // renameMayHaveCommitted reconciles a failed rename against the server: it is
 // treated as not committed only when the source still exists and the

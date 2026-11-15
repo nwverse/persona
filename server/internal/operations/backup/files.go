@@ -255,18 +255,18 @@ type fileTransaction struct {
 
 // applyFiles stages every target beside itself before renaming anything. The
 // previous files remain in mode-0700 transaction directories after success.
-func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, allowExternal bool, id string) (previous string, rollback func() error, returnErr error) {
+func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, allowExternal bool, id string) (previous, previousExternal string, rollback func() error, returnErr error) {
 	home, err := filepath.Abs(home)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	items, err := restoreItems(home, staging, manifest, allowExternal)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	transaction := &fileTransaction{id: id, backupRoot: filepath.Join(home, ".persona-backup-previous-"+id)}
 	if err := os.MkdirAll(transaction.backupRoot, 0o700); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	committed := false
 	defer func() {
@@ -276,10 +276,10 @@ func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, a
 	}()
 	for _, item := range items {
 		if err := ctx.Err(); err != nil {
-			return "", nil, err
+			return "", "", nil, err
 		}
 		if err := transaction.apply(item); err != nil {
-			return "", nil, err
+			return "", "", nil, err
 		}
 	}
 	committed = true
@@ -287,7 +287,7 @@ func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, a
 		_ = os.Remove(transaction.backupRoot)
 		transaction.backupRoot = ""
 	}
-	return transaction.backupRoot, transaction.rollback, nil
+	return transaction.backupRoot, transaction.externalRoot, transaction.rollback, nil
 }
 
 // dockerPasswordKept reports whether restore leaves the install's own

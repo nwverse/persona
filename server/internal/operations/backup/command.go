@@ -22,6 +22,9 @@ const Usage = `personad backup create --output <file> --writes-quiesced [databas
   personad backup restore --bundle <file> --writes-quiesced [--allow-external-kb] [database options]
                            stage both databases and runtime files, preserve the previous databases, and roll back on failure
 
+  Put create's --output outside the knowledge base and the runtime's managers/assistant, extensions, skills and
+  hub.machines_kept directories: they are collected, so create refuses it (a case-insensitive file system may let a
+  differently-cased path through, so spell the path as it is).
   Needs pg_dump/pg_restore of the server's major version on PATH, or (for a loopback server) docker with the
   persona-postgres container. The shipped Docker Compose deployment (database host "postgres", hub image without
   client tools or docker) is not supported yet and stops before any work.`
@@ -134,6 +137,9 @@ func runWithOperator(ctx context.Context, operator operatorRunner, args []string
 		}
 		if result.PreviousFiles != "" {
 			fmt.Fprintf(stdout, "previous runtime files preserved in %s\n", result.PreviousFiles)
+		}
+		if result.PreviousExternalKB != "" {
+			fmt.Fprintf(stdout, "previous external knowledge base preserved in %s\n", result.PreviousExternalKB)
 		}
 		if result.KeptDockerPassword {
 			fmt.Fprintln(stdout, "kept this install's docker/db-password: the bundle's copy belongs to the database cluster it was taken from, not to this one")

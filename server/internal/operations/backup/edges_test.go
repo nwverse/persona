@@ -434,11 +434,227 @@ func TestRestoreKeepsTheExistingDockerPasswordFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.mutate(t)
-	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
+	result, err = operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ = os.ReadFile(password)
 	if string(raw) != "old-cluster-password" {
 		t.Fatalf("an absent docker/db-password was not restored from the bundle: %q", raw)
+	}
+	if result.KeptDockerPassword {
+		t.Error("the result reports a kept password file, but the bundle's copy was installed")
+	}
+}
+
+// Neither the bundle nor the install has the file: nothing was kept.
+func TestRestoreWithoutAnyDockerPasswordFileReportsNothingKept(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.KeptDockerPassword {
+		t.Error("the result reports a kept password file")
+	}
+	if _, err := os.Stat(filepath.Join(fixture.home, "docker", "db-password")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a password file appeared: %v", err)
+	}
+}
+
+func readNote(t *testing.T, fixture *backupFixture) string {
+	t.Helper()
+	raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
+	return string(raw)
+}
+
+func assertDatabases(t *testing.T, fixture *backupFixture, hub, manager string) {
+	t.Helper()
+	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database]; got == nil || got.dump != hub {
+		t.Errorf("hub database = %+v, want %s", got, hub)
+	}
+	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != manager {
+		t.Errorf("manager database = %+v, want %s", got, manager)
+	}
+}
+
+// The server dies before the first rename took effect: no bundle database can
+// be live, so the files go back, and nothing is claimed about a previous
+// database that was never made.
+func TestServerDownBeforeTheFirstRenameRollsFilesBack(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mutate(t)
+	fixture.backend.preCommit, fixture.backend.preCommitDown = "hub:previous", true
+	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err == nil || !strings.Contains(err.Error(), "injected failure before") {
+		t.Fatalf("restore error = %v", err)
+	}
+	if got := readNote(t, fixture); got != "changed knowledge" {
+		t.Errorf("files were kept under databases that are the install's own: %q", got)
+	}
+	if strings.Contains(err.Error(), "left as restored") || strings.Contains(err.Error(), "by hand") {
+		t.Errorf("the error claims bundle databases may be live: %v", err)
+	}
+	assertDatabases(t, fixture, "hub-two", "manager-two")
+}
+
+// One existence check fails briefly while the server is back for the undo.
+func TestBriefExistenceFailureDoesNotKeepBundleFiles(t *testing.T) {
+	for _, fault := range []string{"previous", "install"} {
+		t.Run(fault, func(t *testing.T) {
+			fixture := newBackupFixture(t, "persona_manager")
+			fixture.backend.armExistsFailures = 1
+			operator := fixture.operator()
+			if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+				t.Fatal(err)
+			}
+			fixture.mutate(t)
+			fixture.backend.dropped = nil
+			if fault == "previous" {
+				fixture.backend.preCommit = "hub:previous"
+			} else {
+				fixture.backend.failInstallPart = "manager"
+			}
+			_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+			if err == nil || !strings.Contains(err.Error(), "injected") {
+				t.Fatalf("restore error = %v", err)
+			}
+			if got := readNote(t, fixture); got != "changed knowledge" {
+				t.Errorf("files were kept although no bundle database is live: %q", got)
+			}
+			if strings.Contains(err.Error(), "left as restored") {
+				t.Errorf("the error claims bundle databases may be live: %v", err)
+			}
+			if fault == "previous" && strings.Contains(err.Error(), "persona_previous_") {
+				t.Errorf("the error names a previous database that was never made: %v", err)
+			}
+			assertDatabases(t, fixture, "hub-two", "manager-two")
+			assertNothingDropped(t, fixture, "persona_staged_")
+		})
+	}
+}
+
+// The undo of the manager works and the hub's does not: a bundle database is
+// live (the hub's), so the files stay as restored, and only the previous
+// database still parked is named.
+func TestPartialUndoKeepsFilesAndNamesOnlyWhatIsStillParked(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	fixture.backend.failUndoPart = "hub"
+	_, err := restoreWithFault(t, fixture, "manager:install")
+	if err == nil {
+		t.Fatal("restore succeeded")
+	}
+	if got := readNote(t, fixture); got != "original knowledge" {
+		t.Errorf("files were rolled back under a live bundle database: %q", got)
+	}
+	assertDatabases(t, fixture, "hub-one", "manager-two") // the hub is the bundle's; the manager was put back
+	var hubPrevious, managerPrevious string
+	for name := range fixture.backend.server(fixture.hub) {
+		if strings.HasPrefix(name, "persona_previous_h_") {
+			hubPrevious = name
+		}
+	}
+	for name := range fixture.backend.server(fixture.manager) {
+		if strings.HasPrefix(name, "persona_previous_m_") {
+			managerPrevious = name
+		}
+	}
+	if hubPrevious == "" || !strings.Contains(err.Error(), "Previous hub database: "+hubPrevious) {
+		t.Errorf("the error does not name the hub's previous database %q: %v", hubPrevious, err)
+	}
+	if managerPrevious != "" {
+		t.Errorf("the manager's previous database was not renamed back: %s", managerPrevious)
+	}
+	if !strings.Contains(err.Error(), "previous built-in manager database: (none)") {
+		t.Errorf("the error names a manager database that was already put back: %v", err)
+	}
+}
+
+// The destination's existence check failing is no evidence that the rename did
+// not happen.
+func TestDestinationCheckFailureIsNotTakenForNotCommitted(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	fixture.backend.existsErrName = fixture.manager.Database
+	_, err := restoreWithFault(t, fixture, "manager:install")
+	if err == nil {
+		t.Fatal("restore succeeded")
+	}
+	assertDatabases(t, fixture, "hub-two", "manager-two")
+	if got := readNote(t, fixture); got != "changed knowledge" {
+		t.Errorf("files = %q", got)
+	}
+}
+
+// A restore onto an external knowledge base names the copy it keeps.
+func TestRestoreReportsThePreviousExternalKnowledgeBase(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	external := filepath.Join(t.TempDir(), "knowledge")
+	writeFixtureFile(t, filepath.Join(external, "fact.md"), []byte("external original"))
+	writeFixtureFile(t, filepath.Join(fixture.home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"persona_manager","kb_dir":`+strconvQuote(external)+`}`))
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, filepath.Join(external, "fact.md"), []byte("external changed"))
+	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true, AllowExternalKB: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PreviousExternalKB == "" {
+		t.Fatal("the result does not name the previous external knowledge base")
+	}
+	if info, err := os.Stat(result.PreviousExternalKB); err != nil || !info.IsDir() {
+		t.Fatalf("the named directory does not exist: %v", err)
+	}
+}
+
+// The refusal sees through symlinks: an output reached through a link into the
+// knowledge base, and a knowledge base or collected directory that is itself a
+// link, are inside the collected tree.
+func TestOutputRefusalResolvesSymlinks(t *testing.T) {
+	for _, shape := range []string{"link-to-kb", "kb-is-link", "collected-dir-is-link"} {
+		t.Run(shape, func(t *testing.T) {
+			fixture := newBackupFixture(t, "persona_manager")
+			outside := t.TempDir()
+			var output string
+			switch shape {
+			case "link-to-kb":
+				link := filepath.Join(t.TempDir(), "link")
+				if err := os.Symlink(filepath.Join(fixture.home, "data"), link); err != nil {
+					t.Skip("symlinks unavailable: ", err)
+				}
+				output = filepath.Join(link, "x.backup")
+			case "kb-is-link":
+				if err := os.RemoveAll(filepath.Join(fixture.home, "data")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, filepath.Join(fixture.home, "data")); err != nil {
+					t.Skip("symlinks unavailable: ", err)
+				}
+				output = filepath.Join(outside, "x.backup")
+			case "collected-dir-is-link":
+				if err := os.Symlink(outside, filepath.Join(fixture.home, "skills")); err != nil {
+					t.Skip("symlinks unavailable: ", err)
+				}
+				output = filepath.Join(outside, "x.backup")
+			}
+			opts := fixture.options()
+			opts.Output = output
+			_, err := fixture.operator().Create(context.Background(), opts)
+			if err == nil || !strings.Contains(err.Error(), "inside") {
+				t.Fatalf("create = %v", err)
+			}
+			if entries, _ := filepath.Glob(filepath.Join(filepath.Dir(output), ".persona-backup-*")); len(entries) != 0 {
+				t.Errorf("staging left behind: %v", entries)
+			}
+		})
 	}
 }
