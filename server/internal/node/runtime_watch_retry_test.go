@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,8 +60,9 @@ func waitForAutomaticWatchFailure(t *testing.T, n *Node, h *runtimeConn, id stri
 // runtimeRetryWatchFailed observes the completion of watchFailed itself rather than assuming another RPC is a barrier.
 func runtimeRetryWatchFailed(h *runtimeConn) <-chan struct{} {
 	ch := make(chan struct{})
+	var once sync.Once
 	h.mu.Lock()
-	h.onWatchFailed = func() { close(ch) }
+	h.onWatchFailed = func() { once.Do(func() { close(ch) }) }
 	h.mu.Unlock()
 	return ch
 }
