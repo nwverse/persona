@@ -170,7 +170,7 @@ final class InboxHandOffBarTests: XCTestCase {
         let bubble = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", ask)).firstMatch
         XCTAssertTrue(bubble.waitForExistence(timeout: 4), "the chat did not open on the local first message:\n\(app.debugDescription)")
         XCTAssertTrue(bubble.isHittable, "the first message is still behind New Agent")
-        XCTAssertTrue(app.buttons["chat.compactTitle"].exists, "the new Agent chat is not open")
+        XCTAssertTrue(app.buttons["chat.title"].exists, "the new Agent chat is not open")
         shot(app, "new-agent-local-first-message")
 
         let started = mockEntries(hub, "started", key: "started")
