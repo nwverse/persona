@@ -252,7 +252,7 @@ import Testing
             Case(succeeded: true, space: Session.healthSpace, showsPage: true, open: true, haptic: .success, failure: .clear),
             Case(succeeded: true, space: Session.healthSpace, showsPage: false, open: true, haptic: .success, failure: .clear),
             Case(succeeded: false, space: nil, showsPage: true, open: false, haptic: .error, failure: .show),
-            Case(succeeded: false, space: nil, showsPage: false, open: false, haptic: .error, failure: .none),
+            Case(succeeded: false, space: nil, showsPage: false, open: false, haptic: .error, failure: .record),
             Case(succeeded: false, space: Session.healthSpace, showsPage: true, open: false, haptic: .error, failure: .show),
             Case(succeeded: false, space: Session.healthSpace, showsPage: false, open: false, haptic: .error, failure: .show),
         ]

@@ -738,10 +738,12 @@ struct AssistantView: View {
             withAnimation(Theme.Motion.standard) {
                 if decision.clearPending { pending = nil }
                 if decision.failure == .show { model.readiness.failure = coded }
-                failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
-                                                     mayHaveStarted: FailedStart.mayHaveStarted(error),
-                                                     reason: coded == nil || decision.failure != .show ? error.shown : nil, at: .now,
-                                                     manager: space == nil ? api.shownManager : nil))
+                if decision.failure == .show || decision.failure == .record {
+                    failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
+                                                         mayHaveStarted: FailedStart.mayHaveStarted(error),
+                                                         reason: coded == nil || decision.failure != .show ? error.shown : nil, at: .now,
+                                                         manager: space == nil ? api.shownManager : nil))
+                }
             }
             if decision.failure == .show, coded != nil { model.readinessChanged() }
             if decision.haptic == .error { Haptics.error() }

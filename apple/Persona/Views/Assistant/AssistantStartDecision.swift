@@ -4,7 +4,8 @@ import Foundation
 /// visible page, feedback and failure UI become stale when a newer New Chat has taken over.
 nonisolated struct AssistantStartDecision: Equatable, Sendable {
     enum Haptic: Equatable, Sendable { case success, error }
-    enum FailureAction: Equatable, Sendable { case none, clear, show }
+    /// `record` keeps another manager's failure for its own page; `none` drops a stale completion's failure UI.
+    enum FailureAction: Equatable, Sendable { case none, clear, show, record }
 
     let began: Bool
     let open: Bool
@@ -20,6 +21,12 @@ nonisolated struct AssistantStartDecision: Equatable, Sendable {
         open = succeeded && current && here
         haptic = current ? (succeeded ? .success : .error) : nil
         clearPending = pendingOp == op
-        failure = succeeded && current ? .clear : !succeeded && current && here ? .show : .none
+        if succeeded {
+            failure = current ? .clear : .none
+        } else if !current {
+            failure = .none
+        } else {
+            failure = here ? .show : .record
+        }
     }
 }
