@@ -180,7 +180,7 @@ fun ChatLinkHost(
             val density = LocalDensity.current
             // Until the host is measured (its first frame) the window's height stands in.
             val windowHeight = LocalWindowInfo.current.containerSize.height
-            val geometry by remember(safeDrawing, density, hostBar, windowHeight) {
+            val geometryState = remember(safeDrawing, density, hostBar, windowHeight) {
                 derivedStateOf {
                     val pixels = (if (hostHeight >= 0) hostHeight else windowHeight).toFloat()
                     // Window insets use window coordinates; this host may already start below its page bar or a sheet's safe top.
@@ -188,9 +188,12 @@ fun ChatLinkHost(
                     LinkGeometry(pixels, maxOf(with(density) { hostBar.toPx() }, remainingSafeTop).coerceIn(0f, pixels))
                 }
             }
+            val geometry by geometryState
             val drag = remember { AnchoredDraggableState(LinkDetent.Hidden) }
-            LaunchedEffect(drag) {
-                snapshotFlow { geometry }.collect { (pixels, above) ->
+            // Keyed on the derived state itself: one made anew for a new bar, inset or window (now and then, never per
+            // keyboard frame) restarts the collector, which would otherwise keep the old one's anchors.
+            LaunchedEffect(drag, geometryState) {
+                snapshotFlow { geometryState.value }.collect { (pixels, above) ->
                     drag.updateAnchors(DraggableAnchors {
                         LinkDetent.Full at above
                         LinkDetent.Peek at above + (pixels - above) * 0.4f

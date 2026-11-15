@@ -325,4 +325,35 @@ class ChatLinkHostManagerTest {
         rule.waitForIdle()
         assertCardTop(24.dp)
     }
+
+    /** The host's bar growing while a card is open moves the card's anchors too, not only what composition reads. */
+    @Test fun aHostBarChangedWhileTheCardIsOpenMovesItsAnchors() {
+        var bar by mutableStateOf(16.dp)
+        rule.setContent {
+            composeView = LocalView.current
+            PersonaTheme(reduceMotion = true) {
+                CompositionLocalProvider(LocalInboxRepository provides Paired(Documents()), LocalChromeInsets provides ChromeInsets(top = bar)) {
+                    ChatLinkHost { _ ->
+                        ManagerLinks("m-3") {
+                            val uri = LocalUriHandler.current
+                            Text("Open the first document", Modifier.clickable { uri.openUri("https://example.feishu.cn/docx/GrowingBar") })
+                        }
+                    }
+                }
+            }
+        }
+        rule.onNodeWithText("Open the first document").performClick()
+        rule.waitForIdle()
+        assertCardTop(16.dp)
+        rule.runOnIdle { bar = 96.dp }
+        rule.waitForIdle()
+        assertCardTop(96.dp)
+        // And a drag target taken afterwards uses the new bar: Peek is 40% of the way down from it.
+        val root = rule.onRoot().getUnclippedBoundsInRoot()
+        rule.onNodeWithContentDescription("Shrink and keep chatting").performClick()
+        rule.waitForIdle()
+        // Within a pixel: the card's height is laid out in whole pixels (mdpi here).
+        val peek = 96.dp + (root.bottom - root.top - 96.dp) * 0.4f
+        assertEquals(peek.value, rule.onNodeWithTag("chat_link_card").getUnclippedBoundsInRoot().top.value, 1f)
+    }
 }
