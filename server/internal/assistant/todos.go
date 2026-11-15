@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -76,11 +77,12 @@ type Todo struct {
 	Supervision *Supervision `json:"supervision,omitempty"`
 	// Stage is how far its work got (plan, develop, review, merge, deploy, verify; "" not known) and PRURL the PR it
 	// named, read off its agents' replies (reports.go, #2768); the apps draw the stage bar from them.
-	Stage         string `json:"stage,omitempty"`
-	PRURL         string `json:"pr_url,omitempty"`
-	StageKind     string `json:"stage_kind,omitempty"` // code or general; absent on older hubs
-	stageVerified bool   // explicit acceptance, kept with the stage setting
-	planPending   bool   // a live plan-approval card; never persisted as progress
+	Stage         string        `json:"stage,omitempty"`
+	PRURL         string        `json:"pr_url,omitempty"`
+	PRStatus      *TodoPRStatus `json:"pr_status,omitempty"`
+	StageKind     string        `json:"stage_kind,omitempty"` // code or general; absent on older hubs
+	stageVerified bool          // explicit acceptance, kept with the stage setting
+	planPending   bool          // a live plan-approval card; never persisted as progress
 	// PRs are the earlier PRs its agents named before PRURL, newest last (reports.go todoStage.PRs): the Inbox links
 	// a comment on any of them to the task (inbox_task_links.go, #6507). Not sent to the apps.
 	PRs []string `json:"-"`
@@ -378,6 +380,7 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	for id, st := range s.todoStages(ctx) {
 		if t, ok := tmap[id]; ok {
 			t.Stage, t.PRURL, t.PRs, t.StageKind, t.Delivery, t.stageVerified, t.Check = st.Stage, st.PR, st.PRs, st.Kind, st.Delivery, st.Verified, st.Check
+			t.PRStatus = st.PRStatus
 		}
 	}
 
@@ -455,6 +458,7 @@ func (s *Service) todosPushSoon() {
 // linksChanged: which todo an agent works for changed (or a todo's title, or whether it is done): the hub is told
 // (the snapshot's TodoReport: it pushes the session lists that look different now) and the herdr marks follow.
 func (s *Service) linksChanged(ctx context.Context) {
+	s.mcpChanges.notify()
 	s.taskPlanApproval()
 	s.publish(context.WithoutCancel(ctx))
 	s.syncLinkedTodoTokens()
@@ -536,11 +540,19 @@ func (s *Service) newTodoAs(ctx context.Context, id, title, notes, origin, planI
 }
 
 // insertTodo stores todo row, puts it in memory and tells the apps.
-func (s *Service) insertTodo(ctx context.Context, row db.TodoRow) (Todo, error) {
+func (s *Service) insertTodo(ctx context.Context, row db.TodoRow, bindings ...*repository.CreateBindings) (Todo, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, err
 	}
-	if st := s.todoDB(); st != nil {
+	if len(bindings) > 0 && bindings[0] != nil {
+		st, ok := s.store().(todoRepositoryStore)
+		if !ok {
+			return Todo{}, repository.Problem("store_unavailable")
+		}
+		if err := st.CreateTodoWithRepositories(ctx, row, *bindings[0]); err != nil {
+			return Todo{}, err
+		}
+	} else if st := s.todoDB(); st != nil {
 		if err := st.CreateTodo(ctx, row); err != nil {
 			return Todo{}, err
 		}
@@ -807,6 +819,7 @@ func (s *Service) closedTaskOf(ctx context.Context, mid, sid string) (Todo, bool
 var errTodosUnavailable = errors.New("todos service unavailable")
 
 func (s *Service) todoRoutes() {
+	s.todoRepositoryRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()
@@ -861,10 +874,11 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		var in struct {
-			Title   string  `json:"title"`
-			Notes   string  `json:"notes"`
-			Project *string `json:"project"`
-			Kind    string  `json:"kind"`
+			Title              string          `json:"title"`
+			Notes              string          `json:"notes"`
+			Project            *string         `json:"project"`
+			Kind               string          `json:"kind"`
+			RepositoryBindings json.RawMessage `json:"repository_bindings"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -890,11 +904,20 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		bindings, err := parseCreateBindings(in.RepositoryBindings)
+		if err != nil {
+			taskRepositoriesError(w, err)
+			return
+		}
 		var resTodo Todo
 		if kind == db.KindConcern {
-			resTodo, err = s.createConcern(r.Context(), title, strings.TrimSpace(in.Notes), plan)
+			resTodo, err = s.createConcern(r.Context(), title, strings.TrimSpace(in.Notes), plan, bindings)
 		} else {
-			resTodo, err = s.createPlainTodo(r.Context(), title, in.Notes, plan)
+			resTodo, err = s.createPlainTodo(r.Context(), title, in.Notes, plan, bindings)
+		}
+		if bindings != nil && err != nil {
+			taskRepositoriesError(w, err)
+			return
 		}
 		if errors.Is(err, errConcernNoStore) {
 			apierr.Write(w, http.StatusServiceUnavailable, err)

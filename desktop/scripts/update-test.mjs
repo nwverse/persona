@@ -206,6 +206,8 @@ function launch(executable, profile, installed) {
   const env = { ...process.env, ...runPaths.environment, PERSONA_UPDATE_TEST_EXECUTABLE_DIR: installed, ...(platform === "linux" ? { APPIMAGE_EXTRACT_AND_RUN: "1", TMPDIR: join(work, "tmp") } : {}) };
   for (const name of ["PERSONA_HUB_URL", "PERSONA_DESKTOP_DISABLE_UPDATE", "PERSONA_DESKTOP_SMOKE", "ELECTRON_RUN_AS_NODE"]) delete env[name];
   const args = [`--user-data-dir=${profile}`];
+  // The packaged window's persistent cookie store must not wait for a headless runner's Keychain prompt.
+  if (platform === "darwin") args.push("--use-mock-keychain");
   if (platform === "linux") args.push("--no-sandbox", "--disable-gpu");
   const child = spawn(executable, args, { env, stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32" });
   const record = processes.track(child);
