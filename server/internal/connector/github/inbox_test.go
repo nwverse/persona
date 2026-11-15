@@ -158,7 +158,7 @@ func TestNotificationsBecomeThings(t *testing.T) {
 	pr := got["example-org/example-repo#12"]
 	if pr.Kind != "review_requested" || pr.Label != "请你 review" || pr.Tier != "action" || pr.Done != "" || !pr.CanReply ||
 		pr.Sender != "bob" || pr.Preview != "请看一下示例" || pr.URL != "https://github.com/example-org/example-repo/pull/12" ||
-		pr.ReplyTo != "评论到 example-org/example-repo#12（仓库可见的人都能看到）" || pr.Last != fixtureAt(8*time.Hour+59*time.Minute) ||
+		pr.ReplyTo != "评论到 example-org/example-repo#12（仓库可见的人都能看到）" || messageLastTime(t, pr.Last) != fixtureAt(8*time.Hour+59*time.Minute) ||
 		pr.Why != "规则：请你 review" {
 		t.Errorf("review request: %+v", pr)
 	}
@@ -281,7 +281,7 @@ func TestPushOrEditIsNoNewMessage(t *testing.T) {
 	c := f.server(t)
 	c.poll(context.Background())
 	pr := things(t, c)["example-org/example-repo#12"]
-	if pr.Last != reviewAt || pr.Preview != "评审了 Automated review found 2 issues." {
+	if messageLastTime(t, pr.Last) != reviewAt || pr.Preview != "评审了 Automated review found 2 issues." {
 		t.Fatalf("after the review: %+v", pr)
 	}
 
@@ -302,7 +302,7 @@ func TestPushOrEditIsNoNewMessage(t *testing.T) {
 	f.notifications = "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, fixtureAt(9*time.Hour+41*time.Minute)) + "]"
 	c.inbox.fullAt = time.Time{}
 	c.poll(context.Background())
-	if last := things(t, c)["example-org/example-repo#12"]; last.Last != newer {
+	if last := things(t, c)["example-org/example-repo#12"]; messageLastTime(t, last.Last) != newer {
 		t.Fatalf("a new review kept Last %q", last.Last)
 	}
 }
@@ -325,7 +325,7 @@ func TestNewestReviewBeyondTheFirstPage(t *testing.T) {
 	f.notifications = "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, t1) + "]"
 	c := f.server(t)
 	c.poll(context.Background())
-	if pr := things(t, c)["example-org/example-repo#12"]; pr.Last != fixtureAt(150*time.Minute) {
+	if pr := things(t, c)["example-org/example-repo#12"]; messageLastTime(t, pr.Last) != fixtureAt(150*time.Minute) {
 		t.Fatalf("before the new review: %+v", pr)
 	}
 
@@ -336,7 +336,17 @@ func TestNewestReviewBeyondTheFirstPage(t *testing.T) {
 	f.mu.Unlock()
 	c.inbox.fullAt = time.Time{}
 	c.poll(context.Background())
-	if pr := things(t, c)["example-org/example-repo#12"]; pr.Last != newer || pr.Preview != "批准了 Looks good now." {
+	if pr := things(t, c)["example-org/example-repo#12"]; messageLastTime(t, pr.Last) != newer || pr.Preview != "批准了 Looks good now." {
 		t.Fatalf("a review on the second page was not the newest message: %+v", pr)
 	}
+}
+
+func messageLastTime(t *testing.T, last string) string {
+	t.Helper()
+	var head messageHead
+	if !strings.HasPrefix(unmarkedLast(last), messageLastPrefix) ||
+		json.Unmarshal([]byte(strings.TrimPrefix(unmarkedLast(last), messageLastPrefix)), &head) != nil {
+		t.Fatalf("invalid message identity: %q", last)
+	}
+	return head.At.UTC().Format(time.RFC3339)
 }
