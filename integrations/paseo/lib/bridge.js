@@ -1696,12 +1696,15 @@ export function createPaseoBridge(deps = {}, options = {}) {
       const row = rowOf(res.agent)
       if (row) return { session: row }
     }
-    // Still being created (its provider starting): the row it will have.
+    // Still being created (its provider starting): the row it will have, named as agentRow names it: a provider the
+    // apps do not know by its label, never by the engine's name (#8142).
+    const agent = appAgent(root)
     return {
       session: {
         session_id: sessionId, cwd, title: prompt.trim() ? snippet(prompt) : basename(cwd),
         status: prompt.trim() ? 'working' : 'idle', updated_at: new Date().toISOString(), rev: Date.now(),
-        ...placeOf(workspaceId, cwd), agent: appAgent(root), launcher: provider,
+        ...placeOf(workspaceId, cwd), agent, launcher: provider,
+        ...(agent === RUNTIME && labels[provider] ? { agent_label: labels[provider] } : {}),
         ...(config.model ? { model: config.model } : {}),
       },
     }
