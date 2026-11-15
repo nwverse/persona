@@ -86,6 +86,15 @@ class EnginesTest {
     private fun withHosts(hosts: List<String>?, online: Boolean = true, engines: List<DetectedEngine> = listOf(herdr)) =
         machine(online = online, engines = engines).copy(engineHosts = hosts)
 
+    /** Screens that judge by herdr read this: the empty set is none, everything else is `engine` as reported (a blank one stays blank). */
+    @Test fun judgedFollowsTheChoiceAndLeavesOlderHubsAsTheyWere() {
+        assertEquals(Engines.NONE, Engines.judged(withHosts(emptyList()).copy(engine = "herdr")))
+        assertEquals("herdr", Engines.judged(withHosts(listOf("herdr")).copy(engine = "herdr")))
+        assertEquals("herdr", Engines.judged(withHosts(null).copy(engine = "herdr")))
+        assertEquals("orca", Engines.judged(withHosts(listOf("orca")).copy(engine = "orca")))
+        assertEquals("", Engines.judged(withHosts(null).copy(engine = "")))
+    }
+
     @Test fun noTerminalEngineIsReadFromTheEmptyHostSetOnly() {
         assertTrue(Engines.isNone(withHosts(emptyList())))
         // Not chosen, not detected, offline and an older hub are not "none": only the empty set is.

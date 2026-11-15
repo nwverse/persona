@@ -42,6 +42,12 @@ object Engines {
     /** The chosen engine: [NONE] for the empty set, else the machine's engine; herdr when the hub sent none. */
     fun current(machine: Machine): String = if (isNone(machine)) NONE else machine.engine.ifBlank { DEFAULT }
 
+    /**
+     * The engine a screen judges the machine by (herdr's stopped notice, the health features): [NONE] for the empty set, else the
+     * reported `engine` as is. Unlike [current] a blank one stays blank, so a hub that reports no engine is read as before.
+     */
+    fun judged(machine: Machine): String = if (isNone(machine)) NONE else machine.engine
+
     /** The chosen engine's name: the hub's name for it, else the known one, else its id. */
     fun currentName(machine: Machine): String = name(current(machine), machine)
 
