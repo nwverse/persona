@@ -14,7 +14,7 @@ struct InboxHandOffNewAgentDeliveryTests {
         var finished = 0
         var opened = 0
         var done = 0
-        var result = InboxHandOffModel.AgentSendResult.sent
+        var result = InboxHandOffModel.AgentSendResult(delivered: true, error: nil, filed: false)
         var delay: Duration?
     }
 
