@@ -374,6 +374,13 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
+- Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
+  field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
+  about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,
+  a `well`-sized tile of the file's kind (`FileViewer.symbol`, accent tint; `danger` and the error mark once failed), its
+  name on one line truncated in the middle, and under it how far it got ("1.3 MB / 2.4 MB"), Waiting, its size, or
+  Failed · Tap to Retry, a thin accent bar along the bottom while it waits or uploads, and the photos' ✕ at the top
+  corner (hit through `tapTargetOutset(.all)`). Up to 10, three uploading at once; a tap on a failed card tries again. Send waits for them as for a video.
 - Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
   `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
   controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
@@ -502,6 +509,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Delete). A failed one with messages sent after it sits before the first of them, at the end of the exchange it was
   written in (`ChatLines.placeFailed`; Android in every style, `placeFailed`). Android draws the bubble so on Glass
   (`OutboxBubble`, #4339 C9) and keeps its status line for a delivery the phone has to check.
+- Files sent with a message (iOS `AttachedFileCards`, #8361; web `FileCards`, Android `FileCards.kt`): above your bubble,
+  right-aligned, one card each, at most `box280` wide: a video or a recording plays (`AttachedVideoCard`), any other file
+  opens the file viewer (`AttachedDocumentCard`: an `avatarL` tile of its kind in the accent's tint, the name in
+  `secondaryMedium` truncated in the middle, its size in `label`; Copy Path on a long press). More than four show three and
+  an "N More Files" row (`tapTarget` tall) in the accent color that opens the rest in place (Show Less folds them). A file the computer no
+  longer has is dimmed to 0.6 with the missing-file mark and "No longer on the computer", and takes no tap.
 - The images a turn's work looked at (iOS `ViewedImagesRow`, docs/protocol/protocol.md "Images viewed this turn"): bare
   thumbnails between the work line and the answer, `box64` tall in a strip that scrolls sideways, one alone `box80`, each
   as wide as its picture (¾ to 1.6 of its height), with a small mark for a screenshot or a web page and nothing written
