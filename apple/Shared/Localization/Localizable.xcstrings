@@ -13256,29 +13256,6 @@
         }
       }
     },
-    "10K+" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "10K+"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1万+"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1万+"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "24 Hours" : {
       "localizations" : {
         "en" : {
@@ -37726,6 +37703,29 @@
       },
       "extractionState" : "manual"
     },
+    "Clear context" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear context"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキストをクリア"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理上下文"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Clear context and start a new session" : {
       "localizations" : {
         "en" : {
@@ -45989,6 +45989,29 @@
           }
         }
       }
+    },
+    "Couldn't clear the context: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't clear the context: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキストをクリアできませんでした：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能清理上下文：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Couldn't clear: %@" : {
       "localizations" : {

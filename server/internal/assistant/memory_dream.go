@@ -159,7 +159,7 @@ func memoryDreamMessages(items []proto.Item, after int) ([]string, int) {
 	seq := after
 	left := memoryDreamBatchBytes
 	for _, it := range items {
-		if it.Seq <= seq || it.Role != "user" || it.FullSize > 0 || it.Wake || it.Source != nil || it.Task != nil || it.Compact != nil || it.ToolUseID != "" {
+		if it.Seq <= after || it.Role != "user" || it.FullSize > 0 || it.Wake || it.Source != nil || it.Task != nil || it.Compact != nil || it.ToolUseID != "" {
 			continue
 		}
 		// extensionMessage also rejects cross-conversation text and Persona injections,
@@ -176,7 +176,7 @@ func memoryDreamMessages(items []proto.Item, after int) ([]string, int) {
 			break
 		}
 		messages = append(messages, text)
-		seq = it.Seq
+		seq = max(seq, it.Seq)
 		left -= len(text)
 	}
 	return messages, seq
