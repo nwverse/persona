@@ -1279,7 +1279,8 @@ object ExtensionHubRole {
 object ExtensionHubCapability {
     const val INBOX_GROUP = "inbox_group"
     const val INBOX_GROUP_STATE = "inbox_group_state"
-    val ALL = listOf("inbox_group", "inbox_group_state")
+    const val TOOL_IMAGES = "tool_images"
+    val ALL = listOf("inbox_group", "inbox_group_state", "tool_images")
 }
 
 /**
