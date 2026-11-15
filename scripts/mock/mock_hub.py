@@ -25882,7 +25882,8 @@ class H(BaseHTTPRequestHandler):
 
     def upload(self):
         """POST /api/v1/machines/{mid}/files?name=…: the body read slowly enough to watch the progress bar
-        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads."""
+        (MOCK_UPLOAD_KBPS, default 2048); MOCK_UPLOAD_OLD_NODE=1 answers like a node from before uploads;
+        MOCK_UPLOAD_FAIL=<part of a name>: those fail once their bytes are in, as a full disk would (#8361)."""
         q = parse_qs(urlparse(self.path).query)
         name = (q.get("name") or ["file"])[0]
         n = int(self.headers.get("Content-Length") or 0)
@@ -25904,6 +25905,8 @@ class H(BaseHTTPRequestHandler):
             left -= len(got)
             if video: body.append(got)
             time.sleep(len(got) / 1024 / kbps)
+        if os.environ.get("MOCK_UPLOAD_FAIL") and os.environ["MOCK_UPLOAD_FAIL"] in name:
+            return self.send_json({"error": "no space left on device"}, 500)
         stem, dot, ext = name.rpartition(".")
         if not stem: stem, dot, ext = ext, "", ""
         path = "/tmp/%s-%s%s%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"), dot, ext)
