@@ -246,13 +246,16 @@ func TestTodoRepositoryReportsNotifyWithoutChangingLegacyProgress(t *testing.T) 
 	first := "https://github.com/example/web/pull/7"
 	s.advanceTaskReply(t.Context(), todo, "", "", first)
 	todo = todoNow(s, todo.ID)
+	todosTold(t, s)
 	before := strings.Count(f.eventTypes(), "todos")
 	s.advanceTaskReply(t.Context(), todo, "", "", first+" https://github.com/example/web/pull/8")
+	todosTold(t, s)
 	after := strings.Count(f.eventTypes(), "todos")
 	if after <= before {
 		t.Fatal("new association with unchanged legacy stage/PR sent no update")
 	}
 	s.advanceTaskReply(t.Context(), todo, "", "", first+" https://github.com/example/web/pull/8")
+	todosTold(t, s)
 	if got := strings.Count(f.eventTypes(), "todos"); got != after {
 		t.Fatal("replayed links emitted another update", after, got)
 	}
@@ -268,6 +271,7 @@ func TestTodoRepositoryReportsNotifyWithoutChangingLegacyProgress(t *testing.T) 
 	if got := todoNow(s, todo.ID); got.Stage != "merge" || got.DoneAt != nil {
 		t.Fatal("metadata limit changed legacy progress", got)
 	}
+	todosTold(t, s)
 }
 
 func TestTodoRepositoryLegacyPRsImportOnceBeforeFirstEdit(t *testing.T) {

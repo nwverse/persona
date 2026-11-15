@@ -56,7 +56,7 @@ func TestInboxGitHubCommentGoesToTheTaskAgent(t *testing.T) {
 		}
 	}
 	n := f.notices()[0]
-	for _, want := range []string{"任务「修登录崩溃」", "收件箱里有别人发来的新消息说到它", linkedPRURL, "直接发给它的 Agent（它收到了），这里是副本", "不要再 agent_send 转一遍"} {
+	for _, want := range []string{"任务「修登录崩溃」", "signal=inbox", "收件箱事件", linkedPRURL, "直接发给它的 Agent（它收到了），这里是副本"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("supervisor message lacks %q:\n%s", want, n)
 		}
@@ -136,8 +136,7 @@ func TestInboxGitHubCIItemStaysWithTheSupervisor(t *testing.T) {
 	}
 }
 
-// A closed agent is resumed and the send waited for: the copy is marked only once it reached the agent, and a failed
-// resume or send leaves the supervisor's entry unmarked, so the comment is not lost to both.
+// An unknown stopped agent is not resumed by an Inbox comment, and the undelivered comment is not marked as a copy.
 func TestInboxGitHubCommentToAClosedAgent(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		s, f := newQuietService(t)
@@ -145,6 +144,7 @@ func TestInboxGitHubCommentToAClosedAgent(t *testing.T) {
 		todo := agentTask(t, s, f)
 		f.setSessions("box", proto.Session{SessionID: "sec00001", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "秘书",
 			Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: time.Now()})
+		before := len(sentToAgent(f))
 		if fail {
 			f.mu.Lock()
 			f.failSend = errors.New("resume failed")
@@ -153,8 +153,8 @@ func TestInboxGitHubCommentToAClosedAgent(t *testing.T) {
 		it := linkedPRItem(s, todo.ID, "c1", "Please merge current main")
 		s.superviseInbox(context.Background(), []*InboxItem{it}, map[*InboxItem]bool{it: true})
 		waitFor(t, "the signal", func() bool { return len(f.notices()) == 1 })
-		if marked := strings.Contains(f.notices()[0], "这里是副本"); marked == fail {
-			t.Fatalf("send failed=%v, copy marked=%v:\n%s", fail, marked, f.notices()[0])
+		if marked := strings.Contains(f.notices()[0], "这里是副本"); marked || len(sentToAgent(f)) != before {
+			t.Fatalf("unknown stop was sent to or marked as delivered (send failure=%v)", fail)
 		}
 	}
 }
