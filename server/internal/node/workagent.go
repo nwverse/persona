@@ -92,8 +92,13 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 		// holds the same lock (runAgentInPane); acquiring it again here would deadlock.
 		unlock := n.typing.lock(workAgentPaneLockPrefix + pane)
 		defer unlock()
-		// The tab may have been claimed or adopted before the lock was acquired. Recheck instead of typing over its agent.
-		if err := n.refreshHosts(ctx); err != nil {
+		// The tab may have been claimed or adopted before the lock was acquired. Recheck instead of typing over its agent,
+		// using only this pane's host: a successful answer from another host cannot prove this pane is empty.
+		h := n.hosts.Get(host.ParsePane(pane).Kind)
+		if h == nil {
+			return nil, fmt.Errorf("host %s is unavailable", host.ParsePane(pane).Kind)
+		}
+		if err := n.refreshHosts(ctx, h); err != nil {
 			return nil, err
 		}
 		if id := n.sessionOfPane(pane); id != "" {
@@ -261,14 +266,18 @@ func (n *Node) abandonStart(ctx context.Context, created *host.Created, kind str
 		if id == "" {
 			return err
 		}
-		stopped, quitErr := n.quitAgent(cctx, id, pane)
+		h := n.hosts.Get(host.ParsePane(pane).Kind)
+		if h == nil {
+			return err
+		}
+		stopped, quitErr := n.quitAgentRound(cctx, id, pane, h, true)
 		if quitErr != nil {
 			log.Printf("abandon start in pane %s: quit %s: %v", pane, kind, quitErr)
 			return err
 		}
 		if !stopped {
-			log.Printf("abandon start in pane %s: quit %s was not confirmed; leaving the terminal for the user", pane, kind)
-			return err
+			// The agent is still present. Only another fresh discovery may authorize another Ctrl+C pair.
+			continue
 		}
 	}
 }

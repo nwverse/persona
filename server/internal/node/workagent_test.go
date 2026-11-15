@@ -219,6 +219,36 @@ func TestWorkAgentStartHoldsPaneLockThroughCleanup(t *testing.T) {
 	closesNothing(t, f)
 }
 
+func TestAbandonStartStopsKeysWhenRefreshFails(t *testing.T) {
+	n, f, home, created := newWorkAgentTestTab(t)
+	running := agentOf(cursorAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, cursorAgent)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{running}, nil))
+	presses := 0
+	f.after(func(c herdrCall) {
+		if c.Method != "pane.send_keys" || str(c.Params["pane_id"]) != "w1:p2" {
+			return
+		}
+		presses++
+		if presses == 2 {
+			f.handle("session.snapshot", func(map[string]any) any {
+				return herdrFail{Code: "unavailable", Message: "host went away"}
+			})
+			f.handle("agent.list", func(map[string]any) any {
+				return herdrFail{Code: "unavailable", Message: "host went away"}
+			})
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := n.abandonStart(ctx, created, cursorAgent, ctx.Err()); err != context.Canceled {
+		t.Fatalf("abandonStart: %v", err)
+	}
+	assertTrace(t, f.trace("pane.send_keys"), []string{
+		sendKeys("w1:p2", "ctrl+c"), sendKeys("w1:p2", "ctrl+c"),
+	})
+	closesNothing(t, f)
+}
+
 func TestAbandonStartWithoutReportedAgentSendsNoKeys(t *testing.T) {
 	n, f, _, created := newWorkAgentTestTab(t)
 	old := abandonStartWait
@@ -279,6 +309,25 @@ func TestWorkAgentLaunchRunErrorKeepsTabAndQuitsAgent(t *testing.T) {
 	if got := f.trace("agent.prompt"); len(got) != 0 {
 		t.Errorf("delivered the first prompt: %v", got)
 	}
+}
+
+func TestWorkAgentStartRefusesWhenPaneHostRefreshFails(t *testing.T) {
+	n, f, home := herdrNode(t)
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	f.handle("session.snapshot", func(map[string]any) any {
+		return herdrFail{Code: "unavailable", Message: "snapshot failed"}
+	})
+	f.handle("agent.list", func(map[string]any) any {
+		return herdrFail{Code: "unavailable", Message: "snapshot failed"}
+	})
+	_, err := n.startWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), home, cursorAgent, cursorAgent, "", "", "w1", "")
+	if err == nil || !strings.Contains(err.Error(), "snapshot failed") {
+		t.Fatalf("start: %v", err)
+	}
+	if got := f.trace("pane.send_input", "pane.send_keys"); len(got) != 0 {
+		t.Errorf("typed into a pane whose host could not be checked: %v", got)
+	}
+	closesNothing(t, f)
 }
 
 func TestRunAgentInPaneStartsCursorWithoutReentrantLock(t *testing.T) {
