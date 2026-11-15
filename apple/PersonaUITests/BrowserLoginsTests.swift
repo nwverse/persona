@@ -74,6 +74,10 @@ final class BrowserLoginsTests: XCTestCase {
         XCTAssertTrue(detail.waitForExistence(timeout: 20), "the machine did not open")
         XCTAssertTrue(detail.buttons["BackButton"].exists)
         XCTAssertFalse(app.buttons["shell-place-sidebar"].exists)
+        let summary = app.buttons["browser-logins-summary"]
+        for _ in 0..<10 where !(summary.exists && summary.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(summary.isHittable, "Browser Sign-ins summary is not reachable:\n\(app.debugDescription)")
+        summary.tap()
         let bar = app.navigationBars["浏览器登录"]
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "the whole Browser Sign-ins list did not open:\n\(app.debugDescription)")
         XCTAssertTrue(bar.buttons["BackButton"].exists)
