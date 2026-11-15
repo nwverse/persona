@@ -1,4 +1,4 @@
-Replace one repository's issue/PR links using the exact revision from todo_repositories_get. Each entry is either {url} or {kind,number}; links must belong to the saved repository identity. Multiple PRs are independent, and task progress and completion remain independently verified. [] clears links. On conflict read again and reconcile. Optional title is the full source title as plain text; omitted or empty titles preserve known titles for retained links.
+Replace all links for repo_id at the revision from todo_repositories_get; URLs must match its saved identity. Use {url} or {kind,number}. [] clears; omitted/empty titles preserve retained titles. On conflict reread and reconcile. No files, task progress or completion changes.
 
 ```json
 {
@@ -41,7 +41,7 @@ Replace one repository's issue/PR links using the exact revision from todo_repos
           },
           "title": {
             "type": "string",
-            "description": "Full source title; at most 1,024 UTF-8 bytes after trimming whitespace.",
+            "description": "Full source title as plain text; max 1,024 UTF-8 bytes after trimming.",
             "maxLength": 1024
           }
         },
