@@ -93,8 +93,7 @@ describe("codePathRef", () => {
     expect(codePathRef("src/a.ts:12")).toMatchObject({ path: "src/a.ts", line: 12 });
     expect(codePathRef(" /tmp/x/y.md ")).toMatchObject({ path: "/tmp/x/y.md", start: 1, end: 12 });
     expect(codePathRef("~/报告/第四季度.docx")).toMatchObject({ path: "~/报告/第四季度.docx" });
-    // any folder may lead a relative one in a code span
-    expect(codePathRef("报告/第四季度.docx:7")).toMatchObject({ path: "报告/第四季度.docx", line: 7 });
+    expect(codePathRef("docs/设计/说明.md:7")).toMatchObject({ path: "docs/设计/说明.md", line: 7 });
     expect(codePathRef("和/或")).toBeUndefined();
     expect(codePathRef("ls /tmp/x/y.md")).toBeUndefined();
     expect(codePathRef("/tmp")).toBeUndefined();

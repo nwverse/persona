@@ -96,9 +96,8 @@ struct PathRefsTests {
         let r = PathRefs.codePathRef(" /tmp/x/y.md ")
         #expect(r?.path == "/tmp/x/y.md" && r?.range == NSRange(location: 1, length: 11))
         #expect(PathRefs.codePathRef("~/报告/第四季度.docx")?.path == "~/报告/第四季度.docx")
-        // any folder may start a relative one in a code span
-        let rel = PathRefs.codePathRef("报告/第四季度.docx:7")
-        #expect(rel?.path == "报告/第四季度.docx" && rel?.line == 7 && rel?.whole == true)
+        let rel = PathRefs.codePathRef("docs/设计/说明.md:7")
+        #expect(rel?.path == "docs/设计/说明.md" && rel?.line == 7 && rel?.whole == true)
         #expect(PathRefs.codePathRef("和/或") == nil)
         #expect(PathRefs.codePathRef("ls /tmp/x/y.md") == nil)
         #expect(PathRefs.codePathRef("/tmp") == nil)

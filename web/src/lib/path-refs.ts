@@ -7,7 +7,7 @@
 // - Its names may be in any script (Chinese, Japanese, accented). Outside backticks it ends at a space, at punctuation
 //   other than _ . @ + - (full-width commas, full stops and brackets too), and before a Chinese word right after an
 //   extension (/tmp/a.md followed by one); a relative one starts with an ASCII folder, so the words before it stay out.
-//   A path in backticks is whole, whatever it is written in, spaces too, and any folder may start a relative one.
+//   A path in backticks is whole, whatever it is written in, spaces too: a home path whose folder and file names are Chinese.
 // - Not inside a URL or a longer word; a sentence's full stop after it is not part of it.
 
 export type PathRef = {
@@ -23,13 +23,10 @@ export type PathRef = {
 // A name: ASCII, or a letter or digit of any script not right after an extension.
 const SEG = "(?:[A-Za-z0-9_.@+\\-]|(?<!\\.[A-Za-z][A-Za-z0-9]{0,7})[\\p{L}\\p{M}\\p{N}])+";
 const LINE = String.raw`(?::(\d{1,7})(?::(\d{1,5}))?(?:[-–]\d{1,7})?|#L(\d{1,7})(?:-L?\d{1,7})?)?`;
-const paths = (lead: string) =>
-  new RegExp(
-    String.raw`(?<![A-Za-z0-9_/:.\-~])(~(?:/${SEG})+/?|/${SEG}(?:/${SEG})+/?|${lead}(?:/${SEG})+\.[A-Za-z][A-Za-z0-9]{0,7})${LINE}(?![A-Za-z0-9_/\-])`,
-    "gu",
-  );
-const TEXT = paths("[A-Za-z0-9_.@\\-]+");
-const SPAN = paths(SEG);
+const TEXT = new RegExp(
+  String.raw`(?<![A-Za-z0-9_/:.\-~])(~(?:/${SEG})+/?|/${SEG}(?:/${SEG})+/?|[A-Za-z0-9_.@\-]+(?:/${SEG})+\.[A-Za-z][A-Za-z0-9]{0,7})${LINE}(?![A-Za-z0-9_/\-])`,
+  "gu",
+);
 const CODE_SPAN = /`([^`\n]+)`/g;
 // A whole code span that is a path: ~/ or / then anything but a backtick (non-ASCII names too), and a line (the path
 // takes as little as it can, so a line at the end is the line, not part of the name).
@@ -64,7 +61,7 @@ export function codePathRef(code: string): PathRef | undefined {
     const ref = fromMatch(w, 0);
     if (ref && ref.path.split("/").filter(Boolean).length >= (ref.path.startsWith("~") ? 1 : 2)) return shift(ref, lead);
   }
-  for (const m of t.matchAll(SPAN)) {
+  for (const m of t.matchAll(TEXT)) {
     if (m.index !== 0 || m[0].length !== t.length) break;
     const ref = fromMatch(m, 0);
     if (ref) return shift(ref, lead);
