@@ -14,20 +14,21 @@ export type AgentRowKey = "working" | "waiting" | "needs_you" | "unread" | "idle
 
 const MARK: Record<AgentRowKey, AgentState> = {
   working: "working", needs_you: "needs_you", unread: "unread", idle: "idle", waiting: "idle", interrupted: "idle",
-  usage_limit: "idle", stopped: "offline", failed: "offline", starting: "unknown", not_started: "unknown",
+  usage_limit: "idle", stopped: "offline", failed: "offline", starting: "working", not_started: "offline", // as #7594 draws them
 };
 
 /** The Agent's own state for a task row: live background work first, then the task's status where it is the Agent's
  *  (needs you, working, done not seen, waiting, interrupted, a usage limit, never started), then its lead session's own
  *  state for a task whose status is the to-do's (finished, follow up, parked): stopped when it is gone, idle when it is
- *  there and quiet. `todo` false: no to-do yet (a plan card), so nothing has started. */
-export function agentRowKey(o: { live: boolean; status: string; lead?: Session; todo: boolean; agents: number }): AgentRowKey {
+ *  there and quiet. `todo` false: no to-do yet (a plan card), so nothing has started; `starting`: its start is in flight
+ *  (startInFlight), so a to-do nobody dispatched reads Not started (#7594). */
+export function agentRowKey(o: { live: boolean; status: string; lead?: Session; todo: boolean; starting: boolean }): AgentRowKey {
   if (o.live) return "working";
   switch (o.status) {
     case "needs_you": case "working": case "unread": case "waiting": case "interrupted": case "usage_limit": case "failed":
       return o.status;
     case "not_started":
-      return o.todo && o.agents === 0 ? "starting" : "not_started";
+      return o.todo && o.starting ? "starting" : "not_started"; // only while a start is in flight (#7594)
   }
   if (!o.todo) return "not_started";
   if (!o.lead) return "stopped";
