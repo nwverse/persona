@@ -1033,6 +1033,23 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   The header's mode button moved into the composer beside the pill (decision 11). The divider uses the model mark (no
   arrows-left-right glyph in Android's set yet). Not yet: the other engine's switch and its dialog (#5054), Codex's Fast,
   quota bars and prices, forgetting a typed id.
+- Apple main-chat equivalent (#6542, `AssistantModelSheet`): the composer's existing Model row opens a system sheet with
+  medium and large detents and a visible drag indicator, reusing the assistant-eligible launcher list and the same
+  conversation PUT/DELETE. Only the hub-named main conversation gets it, on the computer named by `main_machine_id` (or
+  `machine_id` on an older hub). If the confirmed route moves, the open conversation follows it only when the user was
+  already viewing that main chat; a deliberately opened side conversation stays put. Siri, Share and CarPlay use that
+  same confirmed key. The composer's current-model entry shows a disclosure chevron; its first menu row is
+  explicitly **Change Model…**, with the effective model as its detail, so the conversation page itself shows how to
+  reach the sheet. The macOS BeautifulUI prompt bar uses the same Change Model… action; other macOS styles use the shell composer.
+  Each launcher's catalog supplies its rows; an empty or older-node 404 catalog falls back to its configured model, a
+  locked launcher keeps only its valid Default choice, and a Default row sends no model ID so it follows later default
+  changes. When Default and a concrete alias resolve to the same model, the concrete alias is ticked; choosing the
+  current row is a no-op, never a new pick that pins the default. Resolved aliases use a lookup built when the catalog
+  loads. A refresh failure keeps the last good rows beside Retry, and a provider removed from both lists is named as
+  unavailable with the follow-default recovery path. An existing Claude/Codex conversation marks the other engine as
+  needing a new conversation instead of offering a pick the hub would refuse. Typed IDs require `typed_models`,
+  independently of `assistant_model_pick`. The sheet refreshes every catalog on pull-to-refresh; the composer's effective label redraws
+  from fresh hub answers and Model Settings/assistant snapshots, never from a per-second transcript-revision poll. No new token, style, component or navigation pattern.
 
 ### 3.9 Empty states
 

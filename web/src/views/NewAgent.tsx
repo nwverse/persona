@@ -23,6 +23,7 @@ import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
   effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, pickerLauncher, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
+  type UnavailableLauncher,
 } from "../lib/launcher-models";
 import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
@@ -47,6 +48,7 @@ import { currentHosts, engineName, startHosts } from "../lib/engines";
 import { CODEX_APP_SOURCE, projectsFolder, startsInDesktopApp } from "../lib/desktop-start";
 import { initialLauncher, launcherBlock } from "../lib/launcher-health";
 import { navigate } from "../lib/router";
+import { providersPath } from "../lib/readiness";
 import { settingsHref } from "./settings/nav";
 import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../lib/provider-names";
@@ -108,6 +110,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const [workspacePicked, setWorkspacePicked] = useState(false);
   const [launcher, setLauncher] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
+  // the providers left out on this computer, with why (#8109): listed off in the model panel, "How to fix" opens one
+  const [skipped, setSkipped] = useState<UnavailableLauncher[]>([]);
   // the model configuration's providers' names (#5029): titles for a launcher ID this computer's list doesn't have (a
   // preset's, a recent setup's, the default's)
   const [providerNames, setProviderNames] = useState<Named[]>([]);
@@ -365,6 +369,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     carrying.current = carry;
     touched.current = false;
     setLaunchers([]);
+    setSkipped([]);
     setProviderNames([]);
     setHelpFor("");
     setDropped(null);
@@ -389,6 +394,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
         if (controller.signal.aborted) return;
         const ls = r.launchers ?? [];
         setLaunchers(ls);
+        setSkipped(r.unavailable ?? []);
         setHubDefault(r.default);
         setTiers(r.tiers ?? []);
         setLaunchersOf(mid);
@@ -900,6 +906,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                     runs={runs}
                     configured={unified ? configured : null}
                     tiers={tiers}
+                    unavailable={skipped}
                     follow={unified ? { label: t("newagent.follow_row"), active: launcher === "", detail: followDetail, warning: defaultBlock?.reason } : undefined}
                     fallback={modelDefault || t("chat-modelpill.default_model")}
                     ultracode={ultracodeShown ? <div data-testid="new-agent-ultracode"><UltracodeStartRow on={ultracode} onChange={setUltracode} blocked={ultracodeBlocked} /></div> : undefined}
@@ -910,7 +917,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                       if (x) pickTier(x);
                     }}
                     onFollow={followDefault}
-                    onHelp={setHelpFor}
+                    onHelp={(name) => {
+                      // a provider left out here: its page in Settings, where "Computers" turns its own-service rule off
+                      if (!skipped.some((u) => u.name === name)) return setHelpFor(name);
+                      onClose();
+                      navigate(providersPath(name));
+                    }}
                     onConfigure={() => {
                       onClose();
                       navigate(settingsHref("models", null, false, null, "providers"));
