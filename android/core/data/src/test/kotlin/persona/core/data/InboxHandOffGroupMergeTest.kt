@@ -62,7 +62,7 @@ class InboxHandOffGroupMergeTest {
             source = Room.databaseBuilder(base, PersistentDatabase::class.java, sourceFile.absolutePath)
                 .allowMainThreadQueries().build()
             RoomOutboxStore(checkNotNull(source), originScope, originJournal).enqueue(OutboxEntry(
-                request.operationId, pending.session, request.text, createdAt = 1, agentHandOff = pending))
+                request.operationId, pending.session, request.text, createdAt = 1).withAgentHandOff(pending))
             source.close()
             source = null
 

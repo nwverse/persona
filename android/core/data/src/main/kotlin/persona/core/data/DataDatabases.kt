@@ -133,7 +133,8 @@ class RoomOutboxStore(
         rows.map { row ->
             OutboxEntry(row.client_msg_id, SessionKey(row.machine, row.session), row.text, row.clear_draft,
                 OutboxState.entries.single { it.wire == row.state }, row.error, row.created_at, row.main_target, row.op_id,
-                row.launcher, row.model, applySwitch = row.apply_switch, agentHandOff = handOffs[row.client_msg_id])
+                row.launcher, row.model, applySwitch = row.apply_switch)
+                .withAgentHandOff(handOffs[row.client_msg_id])
         }
     }
 
@@ -182,7 +183,7 @@ class RoomOutboxStore(
 
     override suspend fun persistAgentHandOffDelivery(entry: OutboxEntry): OutboxEntry {
         val handOff = entry.agentHandOff ?: return entry
-        val delivered = entry.copy(agentHandOff = handOff.copy(
+        val delivered = entry.copyForDelivery(agentHandOff = handOff.copy(
             delivered = true, deliveryScopes = handOff.deliveryScopes + scope.path))
         if (journal != null) journal.update(scope.path) { saved ->
             saved.commitAgentHandOffDelivery(checkNotNull(delivered.agentHandOff))

@@ -18,8 +18,7 @@ enum class OutboxState(val wire: String, val delivery: DeliveryState) {
     Shown("shown", DeliveryState.Sent),
 }
 
-@ConsistentCopyVisibility
-data class OutboxEntry internal constructor(
+data class OutboxEntry(
     val clientMessageId: String,
     val session: SessionKey,
     val text: String,
@@ -35,10 +34,25 @@ data class OutboxEntry internal constructor(
     val model: String? = null,
     /** It carries out the session's waiting launcher switch ([persona.core.contracts.api.MessageSender.sendApplyingSwitch]). */
     val applySwitch: Boolean = false,
-    /** Internal delivery evidence carries this back to its originating inbox; never part of the hub request. */
-    internal val agentHandOff: InboxAgentHandOff? = null,
 ) {
+    /** Journal-owned delivery evidence stays out of the public data-class and generated copy signatures. */
+    internal var agentHandOff: InboxAgentHandOff? = null
+        private set
+
     val operationId: String get() = opId ?: clientMessageId
+
+    /** Attaches evidence to a new entry or a fresh public copy. */
+    internal fun withAgentHandOff(handOff: InboxAgentHandOff?): OutboxEntry = apply { agentHandOff = handOff }
+
+    /** The internal counterpart of the public generated copy, including journal-owned delivery evidence. */
+    internal fun copyForDelivery(
+        session: SessionKey = this.session,
+        state: OutboxState = this.state,
+        error: String? = this.error,
+        opId: String? = this.opId,
+        agentHandOff: InboxAgentHandOff? = this.agentHandOff,
+    ): OutboxEntry = copy(session = session, state = state, error = error, opId = opId)
+        .withAgentHandOff(agentHandOff)
 }
 
 /** All methods operate on exactly one pairing scope. */
@@ -50,7 +64,7 @@ interface OutboxStore {
      * Commit authoritative hand-off evidence before it is published. The Room store overrides this to commit the
      * pairing's reply journal; the returned entry always carries the evidence. Ordinary messages are unchanged.
      */
-    suspend fun persistAgentHandOffDelivery(entry: OutboxEntry): OutboxEntry = entry.copy(
+    suspend fun persistAgentHandOffDelivery(entry: OutboxEntry): OutboxEntry = entry.copyForDelivery(
         agentHandOff = entry.agentHandOff?.copy(delivered = true),
     )
     /** Whether [persistAgentHandOffDelivery] also committed the originating inbox's replay journal. */

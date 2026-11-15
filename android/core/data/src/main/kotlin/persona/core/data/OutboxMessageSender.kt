@@ -226,7 +226,7 @@ class OutboxMessageSender(
                 GroupKeys.rawKey(handOff.session) == GroupKeys.rawKey(entry.session)) {
                 "Hand-off does not match its outbox message"
             }
-            entry.copy(agentHandOff = handOff)
+            entry.copyForDelivery(agentHandOff = handOff)
         }
         store.enqueue(stored)
         if (transport.readyToSend.value) receiptState.preparing(stored.session, stored.clientMessageId, false)
@@ -552,7 +552,7 @@ class OutboxMessageSender(
                         return
                     }
                 }
-                entry = entry.copy(session = target)
+                entry = entry.copyForDelivery(session = target)
             }
             if (entry.state !in allowed) continue
             if (!store.transition(entry.clientMessageId, allowed, OutboxState.Sending)) continue
@@ -604,14 +604,14 @@ class OutboxMessageSender(
         try {
             var storeCommitted = false
             val persisted = if (recovering) {
-                entry.copy(agentHandOff = entry.agentHandOff?.copy(delivered = true))
+                entry.copyForDelivery(agentHandOff = entry.agentHandOff?.copy(delivered = true))
             } else try {
                 store.persistAgentHandOffDelivery(entry).also { storeCommitted = true }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 // Recording metadata must never change an already authoritative message result.
-                entry.copy(agentHandOff = entry.agentHandOff?.copy(delivered = true))
+                entry.copyForDelivery(agentHandOff = entry.agentHandOff?.copy(delivered = true))
             }
             val originCommitted = (storeCommitted || recovering) && store.agentHandOffOriginCommitted(persisted)
             AuthoritativeMessageDeliveries.publish(persisted.delivery(originCommitted))
