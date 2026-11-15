@@ -271,7 +271,9 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeModesOnComputer: "rpc-errors.modes_on_computer",
 	proto.CodeModesNotRunning: "rpc-errors.modes_not_running",
 	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
-	"agent_stopped": "rpc-errors.agent_stopped",
+	"agent_stopped":      "rpc-errors.agent_stopped",
+	"resume_not_allowed": "rpc-errors.resume_not_allowed",
+	"stop_not_saved":     "rpc-errors.stop_not_saved",
 	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)
 	proto.CodeDirectoryUntypable: "rpc-errors.directory_untypable",
 	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)
