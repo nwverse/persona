@@ -15922,6 +15922,26 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
     mock_message_lift()
 
 
+# MOCK_CODE_WIDE=1: an Agents chat whose answer holds a code block with lines far wider than any column (#8212): one in
+# English and one with Chinese, as a pasted prompt is, after a table as wide. They scroll sideways inside their block;
+# nothing is drawn past it. The code block ends the answer, so it sits whole above the composer.
+CODE_WIDE = "a1f3c2d4-0000-4000-8000-0000000c1e30"
+if os.environ.get("MOCK_CODE_WIDE") == "1":
+    _wide = ("A table first, as wide:\n\n"
+             "| Step | What it does | Where |\n| --- | --- | --- |\n"
+             "| Fetch | Brings origin/main up to date before any work starts, every working day without exception | scripts/hooks |\n"
+             "| Merge | Merges origin/main into the branch, never a rebase and never a force push to a shared branch | the branch |\n\n"
+             "The prompt below can be copied as it is:\n\n```text\n"
+             "Background: the last round took about 51 hours; half of it went to building, running tests and waiting for them to finish.\n"
+             "1. Push the branch and open a draft PR on the day you claim an issue, with the plan in its body; never work only locally.\n"
+             "2. 每天开工先 git fetch，把 origin/main merge 进分支（不 rebase）；再按关键词和文件路径搜一下同一块有没有新的 issue 或 PR。\n"
+             "short line\n```\n\nThe end of the answer, after the block.")
+    ITEMS[CODE_WIDE] = [it("user", "text", 6, text="Write the prompt for the next session"),
+                        it("assistant", "text", 5, text=_wide)]
+    SESSIONS.append(sess("macbook", CODE_WIDE, "Wide code block", "/Users/me/code/shop-app", "done", "done", "shop-app", 17,
+                         "wide", 3, 5, "The end of the answer, after the block."))
+
+
 # MOCK_SUBAGENT_PARALLEL=1: three subagents launched together in the live exchange (#5602, the grid): one done, one
 # still running (its latest call is what its card says it does), one that failed.
 SUBPAR = "a1f3c2d4-0000-4000-8000-0000000c1e05"
