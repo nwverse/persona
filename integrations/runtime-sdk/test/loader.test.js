@@ -209,14 +209,6 @@ test('a failed version receipt rolls back to one connected previous version', as
   await loader.offer(v2)
   assert.equal(n.packageCalls.length, fetches, 'the failed hash is not tried again')
 
-  rmSync(join(store, 'current.json'), { recursive: true })
-  const v3 = packageOf('v3')
-  n.offer = v3
-  await loader.offer(v3)
-  await until('v3 connected after the rollback', () => n.hello?.version === 'v3' && n.peers.size === 1, 5000)
-  assert.deepEqual(loader.running, { hash: v3.hash, shipped: false })
-  assert.equal(JSON.parse(readFileSync(join(store, 'current.json'), 'utf8')).hash, v3.hash)
-
   await loader.stop()
   await until('every runtime disconnected', () => n.peers.size === 0)
 })
@@ -322,4 +314,32 @@ test('the previous version failing to restart after a receipt failure leaves not
   assert.equal(loader.running, undefined)
   assert.deepEqual(host.starts, ['v1', 'v2'])
   assert.equal(logs.filter((l) => /did not start again: v1 cannot restart/.test(l)).length, 1)
+})
+
+test('a valid offer after a receipt rollback switches and writes its receipt', async (t) => {
+  const { n, root, store, host, loader } = await setup(t)
+  const v1 = packageHash(readShipped(root, PATTERNS))
+  const v2 = packageOf('v2')
+  await loader.start()
+  await n.ready
+  host.started = async (version) => {
+    if (version === 'v2') await until('v2 connected', () => n.hello?.version === 'v2')
+  }
+  n.offerUpdates = false
+  n.offer = v2
+  mkdirSync(join(store, 'current.json'))
+  await loader.offer(v2)
+  await until('the previous version connected after rollback', () => n.hello?.version === 'v1' && loader.running?.hash === v1 &&
+    n.peers.size === 1, 5000)
+
+  rmSync(join(store, 'current.json'), { recursive: true })
+  const v3 = packageOf('v3')
+  n.offer = v3
+  await loader.offer(v3)
+  await until('v3 connected alone', () => n.hello?.version === 'v3' && n.peers.size === 1, 5000)
+  assert.deepEqual(loader.running, { hash: v3.hash, shipped: false })
+  assert.equal(JSON.parse(readFileSync(join(store, 'current.json'), 'utf8')).hash, v3.hash)
+  assert.deepEqual(host.starts, ['v1', 'v2', 'v1', 'v3'])
+  await loader.stop()
+  await until('every runtime disconnected', () => n.peers.size === 0)
 })
