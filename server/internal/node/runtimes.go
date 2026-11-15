@@ -126,6 +126,8 @@ type runtimeConn struct {
 	// reset while it can have an RPC outstanding, so a late error cannot clear a newer attempt or a later hub watch.
 	watchTokens    map[string]uint64
 	nextWatchToken uint64
+	// onWatchFailed is nil in production and used by concurrency tests to observe completion after locks are released.
+	onWatchFailed func()
 	// drivenTold: sessions this connection was told the hub started through another runtime (runtime.driven).
 	drivenTold map[string]bool
 	// What its list said beyond the rows the apps see: the terminal pane a session runs in (pane_id: the extension of a

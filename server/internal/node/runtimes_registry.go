@@ -635,6 +635,9 @@ func (b *runtimeRegistry) watchFailed(h *runtimeConn, id string, token uint64) {
 	if b == nil || h == nil || token == 0 {
 		return
 	}
+	if h.onWatchFailed != nil {
+		defer h.onWatchFailed()
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.conns[h.serial] != h {

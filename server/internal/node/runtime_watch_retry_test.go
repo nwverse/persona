@@ -50,13 +50,19 @@ func automaticRetryWatch(t *testing.T) (*Node, *runtimeHub, *fakeRuntime) {
 	return n, hub, second
 }
 
-// waitForAutomaticWatchFailure gives the asynchronous caller time to consume an error. A correct implementation clears
-// watched; the old implementation remains watched for the whole grace period, after which the next list exposes the bug.
-func waitForAutomaticWatchFailure(n *Node, h *runtimeConn, id string) {
-	deadline := time.Now().Add(time.Second)
-	for n.runtimes.watchedOn(h, id) && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+// waitForAutomaticWatchFailure waits until the asynchronous caller has cleared the failed attempt. The old implementation
+// never clears it, so the next list exposes the bug.
+func waitForAutomaticWatchFailure(t *testing.T, n *Node, h *runtimeConn, id string) {
+	waitFor(t, "the automatic watch failure to clear its registration", func() bool { return !n.runtimes.watchedOn(h, id) })
+}
+
+// runtimeRetryWatchFailed observes the completion of watchFailed itself rather than assuming another RPC is a barrier.
+func runtimeRetryWatchFailed(h *runtimeConn) <-chan struct{} {
+	ch := make(chan struct{})
+	h.mu.Lock()
+	h.onWatchFailed = func() { close(ch) }
+	h.mu.Unlock()
+	return ch
 }
 
 func TestRuntimeWatchRetriesAfterTransientError(t *testing.T) {
@@ -74,7 +80,7 @@ func TestRuntimeWatchRetriesAfterTransientError(t *testing.T) {
 
 	pushRuntimeRetryList(t, host, runtimeRetryList(runtimeRetrySession))
 	waitFor(t, "the failed automatic watch", func() bool { return len(host.got("session.watch")) == 1 })
-	waitForAutomaticWatchFailure(n, h, runtimeRetrySession)
+	waitForAutomaticWatchFailure(t, n, h, runtimeRetrySession)
 	pushRuntimeRetryList(t, host, runtimeRetryList(runtimeRetrySession))
 	waitFor(t, "exactly one retry after the next list", func() bool { return len(host.got("session.watch")) == 2 })
 
@@ -145,8 +151,9 @@ func TestRuntimeWatchPendingAttemptFencesOlderFailure(t *testing.T) {
 	if got := len(host.got("session.watch")); got != 2 {
 		t.Fatalf("newer explicit watch calls = %d, want 2", got)
 	}
+	failed := runtimeRetryWatchFailed(h)
 	close(release)
-	time.Sleep(150 * time.Millisecond)
+	<-failed
 	if !n.runtimes.watchedOn(h, runtimeRetrySession) {
 		t.Fatal("stale attempt A failure cleared successful attempt B")
 	}
@@ -194,8 +201,9 @@ func TestRuntimeWatchStaleFailureCannotClearRewatch(t *testing.T) {
 				runtimeSessionCall(t, hub, "session.unwatch", map[string]any{"session_id": runtimeRetrySession})
 			}
 			runtimeSessionCall(t, hub, "session.watch", map[string]any{"session_id": runtimeRetrySession, "since_seq": 12})
+			failed := runtimeRetryWatchFailed(h)
 			close(release)
-			time.Sleep(150 * time.Millisecond)
+			<-failed
 			if !n.runtimes.watchedOn(h, runtimeRetrySession) {
 				t.Fatal("stale failure cleared the new watch generation")
 			}
@@ -236,8 +244,9 @@ func TestRuntimeWatchStaleFailureCannotClearNewConnection(t *testing.T) {
 	if newConn == oldConn {
 		t.Fatal("the replacement connection did not become the owner")
 	}
+	failed := runtimeRetryWatchFailed(oldConn)
 	close(release)
-	time.Sleep(150 * time.Millisecond)
+	<-failed
 	if !n.runtimes.watchedOn(newConn, runtimeRetrySession) {
 		t.Fatal("an error on the old connection serial cleared the new connection")
 	}
@@ -353,7 +362,7 @@ func TestRuntimeWatchTranscriptMovedFailureRetriesOnNextList(t *testing.T) {
 	host.mu.Unlock()
 	pushRuntimeRetryList(t, host, list)
 	waitFor(t, "the moved transcript watch", func() bool { return len(host.got("session.watch")) == 2 })
-	waitForAutomaticWatchFailure(n, h, "moved-watch-retry")
+	waitForAutomaticWatchFailure(t, n, h, "moved-watch-retry")
 	pushRuntimeRetryList(t, host, list)
 	waitFor(t, "the moved transcript watch retry", func() bool { return len(host.got("session.watch")) == 3 })
 	calls := host.got("session.watch")
@@ -365,7 +374,7 @@ func TestRuntimeWatchTranscriptMovedFailureRetriesOnNextList(t *testing.T) {
 }
 
 func TestReviewRuntimeWatchFailureDuringOwnershipGap(t *testing.T) {
-	_, _, host := automaticRetryWatch(t)
+	n, _, host := automaticRetryWatch(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
@@ -389,8 +398,10 @@ func TestReviewRuntimeWatchFailureDuringOwnershipGap(t *testing.T) {
 	// The session can briefly disappear while its automatic watch is still pending. The failed RPC belongs to this
 	// same live connection, so listing the session again must retry it even though ownership was empty at the error.
 	pushRuntimeRetryList(t, host, map[string]any{"sessions": []map[string]any{}})
+	h := runtimeRetryConn(n)
+	failed := runtimeRetryWatchFailed(h)
 	close(release)
-	time.Sleep(250 * time.Millisecond)
+	<-failed
 	pushRuntimeRetryList(t, host, runtimeRetryList(runtimeRetrySession))
 	waitFor(t, "retry when the same connection lists the session again", func() bool {
 		return len(host.got("session.watch")) == 2
