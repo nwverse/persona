@@ -2435,6 +2435,10 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   field, put back if the hub says no. The Mac's own banners (`MacAttention.managerMuted`) skip a muted manager's agents and cards
   of the hub-level group (another group's hub keeps its own prefs); its Dock badge still counts them. A prefs read already on its
   way when a page saves doesn't put the old prefs back (`AppModel.savedNotifyPrefs`).
+- **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
+  push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
+  for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
+  shows at once, and a refusal puts it back and says why. `docs/server/server.md` "Push grading (push urgency filtering, `hub/lnmode.go`)".
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
   in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
