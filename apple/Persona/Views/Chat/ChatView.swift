@@ -2793,6 +2793,9 @@ struct ChatView: View {
                     #else
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     #endif
+                } else if session == nil, let reason = model.missingSessionReason(key) {
+                    // Opened outside the current manager's filtered list and the hub could not supply the row (#8748).
+                    Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     AnyView(Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
@@ -7912,31 +7915,52 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
     @ViewBuilder var full: () -> Full
     @ViewBuilder var compact: () -> Compact
 
+    /// Only the fold modifiers read how far it is folded (`ChromeFold`), not this body: the fold changes on every frame
+    /// of a drag, and this body built the whole open header again each time (its agents' tabs, chips and glass), as
+    /// its content is a closure SwiftUI cannot compare.
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("ChromeHeader")
         #endif
-        let maxC = chrome.maxCollapse
-        let c = min(max(chrome.collapse, 0), maxC)
-        let p = maxC > 0 ? c / maxC : 0 // 0 open … 1 folded
         ZStack(alignment: .top) {
             ChatRegion(name: "ChromeFull.body", content: full)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome.height = $0 }
+                .modifier(ChromeFold(chrome: chrome, part: .full))
+            // Not there at all until it starts to show (it is clear below half way).
+            ChatRegion(name: "ChromeCompact.body", content: compact)
+                .modifier(ChromeFold(chrome: chrome, part: .compact))
+        }
+        .modifier(ChromeFold(chrome: chrome, part: .frame))
+        .clipped()
+        .background(.bar, ignoresSafeAreaEdges: .top)
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
+    }
+}
+
+/// One part of the header's fold, driven by `chrome.collapse`: the open header slides up and fades, the slim bar fades
+/// in past half way, and the whole is clipped to what is left. Its content is drawn by `ChromeHeader` and only moved here.
+private struct ChromeFold: ViewModifier {
+    enum Part { case full, compact, frame }
+    var chrome: ChatChrome
+    var part: Part
+
+    func body(content: Content) -> some View {
+        let maxC = chrome.maxCollapse
+        let c = min(max(chrome.collapse, 0), maxC)
+        let p = maxC > 0 ? c / maxC : 0 // 0 open … 1 folded
+        switch part {
+        case .full:
+            content
                 .offset(y: -c)
                 .opacity(Double(1 - min(1, p * 1.5)))
                 .allowsHitTesting(p < 0.5)
                 .modifier(GoneWhen(gone: p * 1.5 >= 1))
-            // Not there at all until it starts to show (it is clear below half way).
-            if p > 0.5 {
-                ChatRegion(name: "ChromeCompact.body", content: compact)
-                    .opacity(Double(max(0, (p - 0.5) * 2)))
-            }
+        case .compact:
+            if p > 0.5 { content.opacity(Double(max(0, (p - 0.5) * 2))) }
+        case .frame:
+            content.frame(height: chrome.height > 0 ? max(chrome.height - c, ChatChrome.compactHeight) : nil, alignment: .top)
         }
-        .frame(height: chrome.height > 0 ? max(chrome.height - c, ChatChrome.compactHeight) : nil, alignment: .top)
-        .clipped()
-        .background(.bar, ignoresSafeAreaEdges: .top)
-        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in touched() })
     }
 }
 

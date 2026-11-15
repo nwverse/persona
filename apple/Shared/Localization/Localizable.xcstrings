@@ -162944,6 +162944,29 @@
         }
       }
     },
+    "This conversation isn't available" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation isn't available"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話は利用できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话现在不可用"
+          }
+        }
+      }
+    },
     "This conversation's launcher is no longer available. Follow the Main Chat default or choose another launcher." : {
       "extractionState" : "manual",
       "localizations" : {
