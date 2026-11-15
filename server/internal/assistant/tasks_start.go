@@ -680,7 +680,9 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if !ok {
 		return nil, db.ErrTodoNotFound
 	}
-	if cur.PlanID == "" || cur.Origin == "" {
+	// A to-do no conversation opened is nobody's task to start again. One with no plan id of its own (a plan took it
+	// over through todo_id) is: the plan that binds it is found below (currentPlanAssignment, #8770).
+	if cur.Origin == "" {
 		return nil, errTaskNotRetryable
 	}
 	if cur.DoneAt == nil {
