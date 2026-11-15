@@ -26,6 +26,10 @@ import PersonaWire
     /// The Persona rows' search and dialogs (`AssistantSidebarUI`), shared by the head, the rows in the Agents list and
     /// the presenters around the column. Lazy: made when the column is first drawn (P3).
     @ObservationIgnored lazy var ui = AssistantSidebarUI()
+    /// The Separate layout's Agents tab (#8596): the Persona tab's part, whose Pages heading gives the line the head's face
+    /// stands on (`AssistantSidebarUI.rowsLeading`). The Agents tab has no Pages heading, and its own list's rows start at
+    /// another inset on the iPad than on the open Duo, so it takes the Persona tab's line once that is measured.
+    @ObservationIgnored weak var linedUpWith: UnifiedSidebar?
     /// The page beside the sidebar: its root, picked in the sidebar, and the drill-down path each root was left with
     /// (#8359, `SidebarPageRoots`). A pick replaces the root; only what is opened inside the page is pushed.
     private(set) var roots = SidebarPageRoots()

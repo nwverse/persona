@@ -201,6 +201,10 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
   swipe or VoiceOver's escape to reach.
 - **Drill-downs**: what a page opens inside itself (an Inbox item, a machine's details, a recording, a conversation an item
   links to) is pushed on the root, with Back, as before.
+- **The top-leading button follows how the page was reached, not what it is (#8603)**: a root has the button that opens the
+  sidebar (the main conversation's, `Theme.Icon.sidebar`; the persona's face in a phone's drawer; the system's Show Sidebar
+  under side bars), never a ‹; a drill-down has ‹, which goes back one page. The same Agent's chat is a root when picked in
+  the sidebar and a drill-down when opened from a waiting Agent on the main conversation or in Inbox.
 - **Each root keeps its drill-down** while the user is elsewhere (`SidebarPageRoots`, a pure value with unit tests,
   `PersonaTests/SidebarPageRootsTests`); picking the root in front goes back to it (the tab-bar rule); another conversation
   picked while the conversation is in front starts at its root without a pop. Another assistant or hub forgets every root.
@@ -218,5 +222,7 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
 - **Checks**: `SidebarRootsUITests` reads the app's `probe.sidebar-page` (root, path, and how many animated UIKit navigation
   transitions ran): from the conversation Recordings and an Agent replace the root with no transition and no Back; Machines →
   a machine pushes with Back; Machines keeps that page while the conversation is in front; Machines in front picked again goes
-  to its root; an edge swipe at a root stays on it. Run on the iPad, the open Duo upright and on its side, and an iPhone.
+  to its root; an edge swipe at a root stays on it; an Agent's chat picked in the sidebar has the sidebar's button and no ‹,
+  pushed from a page it has ‹ (`testTheLeadingButtonFollowsHowThePageWasReached`). Run on the iPad, the open Duo upright and
+  on its side, and an iPhone.
 

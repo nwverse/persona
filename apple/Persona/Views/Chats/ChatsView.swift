@@ -252,6 +252,12 @@ struct ChatsView: View {
     /// The top on a phone: its own search field and layout (#2478).
     @State private var header = AgentsHeader()
     private var ownsTop: Bool { widthClass != .regular && unified == nil }
+    /// The Separate layout's tab at regular width, the system's tab bar across the top: the split makes the tab bar's
+    /// room once (`TabBarRoomOnce`, #8596).
+    private var tabSplit: Bool {
+        widthClass == .regular && !splitSideBars && (unified?.part == .persona || unified?.part == .agents)
+    }
+    @Environment(\.splitSideBars) private var splitSideBars
     /// This page opens the Agents' chats asked for from outside: all but the Persona tab's (the Separate layout's new
     /// look, #4206), whose column has no Agents; the Agents tab's takes them.
     private var takesAgents: Bool { unified?.part != .persona }
@@ -426,6 +432,9 @@ struct ChatsView: View {
             // back, #340). On a phone the room is the list's first row's (`AgentsHeader`).
             .background { ShellNavigationClearance(active: shell != nil && !ownsTop && !searching) }
             .background { StackStillProbe(watcher: stackStill) }
+            #if os(iOS)
+            .background { if tabSplit { TabBarRoomOnce() } }
+            #endif
             #if os(macOS)
             .onAppear { MacShellState.shared.agentsList = menuActions } // the shell's toolbar menu, Display › Collapse All / Expand All
             #endif
@@ -1743,13 +1752,18 @@ private struct AgentsList: View {
         .padding(.trailing, Theme.Space.s)
         .padding(.top, Theme.Space.s)
         .scaledFrame(minHeight: Theme.Size.tapTarget)
-        // The Separate layout's Agents tab has no Pages heading for the head to place its face by (`rowsLeading`): this
-        // heading gives the same line, its row's start plus the Persona rows' extra inset. Without it the face sat
+        // The Separate layout's Agents tab has no Pages heading for the head to place its face by (`rowsLeading`): it
+        // takes the Persona tab's line (`linedUpWith`, #8596). Before the Persona tab is laid out this heading gives an
+        // estimate, its row's start plus the Persona rows' extra inset on an iPad. Without either the face sat
         // `Theme.Space.xl` in, 4 pt left of the Persona tab's (#8359).
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(UnifiedSidebar.columnSpace)).minX } action: { x in
             guard sidebarRows == nil, let unified, x >= 0 else { return }
-            let leading = x + Theme.Space.s
+            let leading = unified.linedUpWith?.ui.rowsLeading ?? x + Theme.Space.s
             if unified.ui.rowsLeading != leading { unified.ui.rowsLeading = leading }
+        }
+        .onChange(of: sidebarRows == nil ? unified?.linedUpWith?.ui.rowsLeading : nil, initial: true) { _, line in
+            guard let line, let unified, unified.ui.rowsLeading != line else { return }
+            unified.ui.rowsLeading = line
         }
         .id(UnifiedSidebar.agentsAnchor)
     }
@@ -5406,3 +5420,58 @@ enum AgentsNeedsYou {
         }
     }
 }
+
+#if os(iOS)
+/// The Separate layout's tabs at regular width (#8596): the system's tab bar floats across the top, and the split already
+/// makes its room in its columns (64 pt on an iPad). The tab's own top safe area held that room a second time for a tab
+/// first shown after a switch, until UIKit let it go: it did for the Persona tab within a moment, never for the Agents
+/// tab, whose column head sat 64 pt lower. This takes the part of the tab's top safe area beyond the window's own (the
+/// status bar's) back off the tab's hosting controller, so the room is made once, by the split, on both tabs; where UIKit
+/// let it go already there is nothing to take off.
+private struct TabBarRoomOnce: UIViewRepresentable {
+    func makeUIView(context: Context) -> Reader {
+        let v = Reader()
+        v.isUserInteractionEnabled = false
+        return v
+    }
+
+    func updateUIView(_ v: Reader, context: Context) { v.apply() }
+
+    static func dismantleUIView(_ v: Reader, coordinator: ()) { v.release() }
+
+    final class Reader: UIView {
+        /// The tab's hosting controller this took room off, to give it back when the split goes.
+        private weak var tab: UIViewController?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            apply()
+        }
+
+        override func safeAreaInsetsDidChange() {
+            super.safeAreaInsetsDidChange()
+            apply()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            apply()
+        }
+
+        func apply() {
+            guard let window, let split = sequence(first: self as UIResponder, next: { $0.next })
+                .compactMap({ $0 as? UISplitViewController }).first,
+                  let tab = split.parent, tab.parent is UITabBarController else { return }
+            self.tab = tab
+            // The top the tab's controller is given before this one's own change, against the window's own top.
+            let given = tab.view.safeAreaInsets.top - tab.additionalSafeAreaInsets.top
+            let extra = max(0, given - window.safeAreaInsets.top)
+            if abs(tab.additionalSafeAreaInsets.top + extra) > 0.5 { tab.additionalSafeAreaInsets.top = -extra }
+        }
+
+        func release() {
+            if let tab, tab.additionalSafeAreaInsets.top != 0 { tab.additionalSafeAreaInsets.top = 0 }
+        }
+    }
+}
+#endif

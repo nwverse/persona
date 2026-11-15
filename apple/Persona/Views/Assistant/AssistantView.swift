@@ -349,7 +349,7 @@ struct AssistantView: View {
         // No system bar: the top bar floats over the conversation with a fog under it (it scrolls beneath).
         .toolbarVisibility(.hidden, for: .navigationBar)
         #if os(iOS) || os(visionOS)
-        .background { RootBarHidden(atRoot: atRoot) }
+        .background { RootBarHidden(atRoot: atRoot, roots: embedded ? unified : nil) }
         #endif
         .overlay(alignment: .top) {
             AssistantTopBar(key: pending == nil ? current : nil,
@@ -1912,6 +1912,10 @@ struct StarterModesMenu: View {
 /// title and, on the open Duo upright, the button that brings the sidebar back.
 private struct RootBarHidden: UIViewRepresentable {
     var atRoot: Bool
+    /// The Sidebar layout's roots (#8596): a hide runs only while the conversation is still the root in front, read when
+    /// it runs. The view taken away (`dismantleUIView`) was not enough: SwiftUI kept it in the window a moment after
+    /// Recordings had replaced it, and a hide waiting 0.4 s hid Recordings' bar (the open Duo, one run in two).
+    var roots: UnifiedSidebar?
 
     /// The conversation is still on screen: cleared when it is taken away (`dismantleUIView`).
     final class Coordinator {
@@ -1933,10 +1937,12 @@ private struct RootBarHidden: UIViewRepresentable {
     func updateUIView(_ v: UIView, context: Context) {
         guard atRoot else { return }
         let coordinator = context.coordinator
+        let roots = roots
         // Now, and once the pop and the search's own dismissal have finished.
         for delay in [0.0, 0.4, 0.9] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak v] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak v, weak roots] in
                 guard coordinator.live, v?.window != nil else { return }
+                if let roots, roots.root.value != nil { return } // another root is in front now
                 var r: UIResponder? = v
                 while let next = r?.next, !(next is UIViewController) { r = next }
                 guard let nav = (r?.next as? UIViewController)?.navigationController,
