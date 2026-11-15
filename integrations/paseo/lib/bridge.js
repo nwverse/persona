@@ -1889,15 +1889,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
       if (row && !row.effort && config.thinkingOptionId && EFFORTS.includes(config.thinkingOptionId)) row.effort = config.thinkingOptionId
       if (row) return { session: row, ...said }
     }
-    // Still being created (its provider starting): the row it will have, named as agentRow names it: a provider the
-    // apps do not know by its label, never by the engine's name (#8142).
-    const agent = appAgent(root)
+    // Still being created (its provider starting): the row it will have, labelled as listed (#8142).
     return {
       session: {
         session_id: sessionId, cwd, title: prompt.trim() ? snippet(prompt) : basename(cwd),
         status: prompt.trim() ? 'working' : 'idle', updated_at: new Date().toISOString(), rev: Date.now(),
-        ...placeOf(workspaceId, cwd), agent, launcher: provider,
-        ...(agent === RUNTIME && labels[provider] ? { agent_label: labels[provider] } : {}),
+        ...placeOf(workspaceId, cwd), agent: appAgent(root), launcher: provider,
+        ...(appAgent(root) === RUNTIME && labels[provider] ? { agent_label: labels[provider] } : {}),
         ...(config.model ? { model: config.model } : {}),
         ...(EFFORTS.includes(config.thinkingOptionId) ? { effort: config.thinkingOptionId } : {}),
       },
