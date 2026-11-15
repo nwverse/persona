@@ -17,6 +17,9 @@ import java.time.OffsetDateTime
 
 // Wire types mirror docs/protocol/protocol.md and tolerate optional enhancements according to D5.
 
+/** How long past its reset a usage-limit wait still counts (the hub's limitResumeGrace). */
+internal const val USAGE_LIMIT_GRACE_MS = 10 * 60 * 1000L
+
 val JsonCodec = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
@@ -271,6 +274,8 @@ data class WorkState(
     val wait: String? = null,
     val then: String? = null,
     @WireTime @SerialName("wake_at") val wakeAt: String? = null,
+    /** When a usage limit that blocked this turn resets, if the session's own time is absent. */
+    @WireTime @SerialName("resets_at") val resetsAt: String? = null,
     val attempts: Int? = null,
     val max: Int? = null,
     @SerialName("interaction_id") val interactionId: String? = null,
@@ -485,6 +490,15 @@ data class Session(
     /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
     @SerialName("turn_error") val turnError: String? = null,
     /**
+     * What the agent or the hub called [turnError] (docs/protocol/protocol.md): `usage_limit` is a subscription limit
+     * until it resets, not a turn to continue as an interruption. Older hubs never send it.
+     */
+    @SerialName("turn_error_kind") val turnErrorKind: String? = null,
+    /** When a `usage_limit` resets (RFC3339). Absent when that time is not known. */
+    @WireTime @SerialName("turn_error_resets_at") val turnErrorResetsAt: String? = null,
+    /** The CLI goes on by itself once a usage limit resets. Absent or false: nothing of the CLI will. */
+    @SerialName("turn_error_resumes") val turnErrorResumes: Boolean? = null,
+    /**
      * What the hub recognized of [turnError] (docs/protocol/protocol.md): not_logged_in, auth_failed, model_route,
      * rate_limited or model_fallback_unavailable (the model Claude Code fell back to after a refusal can't be used, #2528:
      * "Continue" would only go to it again). Older hubs never send it.
@@ -610,8 +624,30 @@ data class Session(
         agentState != AgentState.Working && (children?.sidesUnread ?: 0) > 0 -> AgentState.Unread
         else -> agentState
     }
-    /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
-    val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
+    /**
+     * Stopped on a model API error ([turnError]): cut off, not finished (#1516). A subscription usage limit still in
+     * force is not this ([isUsageLimited]): its row stays in progress.
+     */
+    val interrupted: Boolean get() = !turnError.isNullOrBlank() && !isUsageLimited() &&
+        (agentState == AgentState.Unread || agentState == AgentState.Idle)
+
+    /**
+     * Stopped on a subscription usage limit whose reset is still ahead, or not known (#8237). A known reset more than
+     * [USAGE_LIMIT_GRACE_MS] ago is over: the turn reads as interrupted again. [now] is epoch millis.
+     */
+    fun isUsageLimited(now: Long = System.currentTimeMillis()): Boolean {
+        if (turnError.isNullOrBlank() || turnErrorKind != "usage_limit") return false
+        if (agentState != AgentState.Unread && agentState != AgentState.Idle) return false
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)?.toEpochMilli() ?: return true
+        return now <= at + USAGE_LIMIT_GRACE_MS
+    }
+
+    /** The CLI said it goes on by itself, or the hub scheduled this limit's continuation. */
+    fun usageLimitContinues(): Boolean {
+        if (turnErrorResumes == true) return true
+        val waiting = work ?: return false
+        return waiting.phase == "blocked" && parseTime(waiting.resetsAt) != null && parseTime(waiting.wakeAt) != null
+    }
     val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */

@@ -1,7 +1,9 @@
 package persona.feature.chat
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -46,7 +49,13 @@ import persona.core.domain.tasks.RunningEntry
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.notDoneReason
 import persona.core.domain.tasks.orphanedLine
+import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.assistantEntries
+import persona.core.domain.tasks.finishedSummary
+import persona.core.domain.tasks.triage
+import persona.core.domain.tasks.TriageSection
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import persona.core.domain.tasks.HeldPushItem
 import persona.core.domain.tasks.HeldPushDestination
 import persona.core.domain.tasks.heldPushDestination
@@ -243,6 +252,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     val bySession = host.sessions.associateBy { it.key }
     val context = LocalContext.current
     val restores = remember(context) { TodoRestores(context) }
+    val scope = rememberCoroutineScope()
     // a minute's tick moves tasks across the 48 h shelving line while nothing else changes, as on the To-dos page
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(60_000); nowMs = System.currentTimeMillis() } }
@@ -332,9 +342,13 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                 items(deciding.filter(group::has), key = { it.key }) { entry ->
                                     val todo = entry.todo
                                     val row = progressByTodo[todo.id]
-                                    if (todo.ask?.outcome == "decide") TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
-                                    else TrayDecisionRow(todo.title, todo.ask?.verdict ?: row?.text.orEmpty(), R.string.chat_tray_review,
-                                        "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
+                                    when {
+                                        todo.ask?.outcome == "decide" -> TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
+                                        entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
+                                            TrayOutcomeRow(entry, host, enabled, taskBusy)
+                                        else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: row?.text.orEmpty(), R.string.chat_tray_review,
+                                            "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
+                                    }
                                 }
                                 val groupDrafts = drafts.takeIf { group.conversation == host.conversation }.orEmpty()
                                 if (groupDrafts.isNotEmpty()) item { JSectionHeader(stringResource(R.string.chat_tray_drafts)) }
@@ -382,8 +396,18 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                         val row = if (entry.hasAgentsElsewhere) projected.copy(blocked = false,
                                             stopped = entry.status == TriageStatus.Unread || entry.status == TriageStatus.FollowUp)
                                         else projected
-                                        TrayProgressRow(row, activity = entry.activity, waiting = entry.waiting,
-                                            working = entry.status == TriageStatus.Working, onClick = { openTask(host, entry.todo) })
+                                        val limited = host.tasks.agentsOf(entry.todo, host.sessions)
+                                            .firstOrNull { it.isUsageLimited() && !it.usageLimitContinues() }
+                                        Column(Modifier.fillMaxWidth()) {
+                                            TrayProgressRow(row, activity = entry.activity, waiting = entry.waiting,
+                                                working = entry.status == TriageStatus.Working, onClick = { openTask(host, entry.todo) })
+                                            if (limited != null) Row(Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.xs)) {
+                                                JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(entry.todo, host.onError) },
+                                                    size = JButtonSize.Small, enabled = enabled,
+                                                    loading = TasksStore.retryKey(entry.todo.id) in taskBusy,
+                                                    modifier = Modifier.testTag("assistant-tray-continue"))
+                                            }
+                                        }
                                     }
                                     is RunningEntry.Agent -> {
                                         val agent = entry.session
@@ -410,6 +434,16 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (shelvedLine && entries.shelved.isNotEmpty()) item(key = "shelved") {
                                 TrayShelvedLine(entries.shelved.size) { state.expanded = null; host.sheet.value = TaskSheet.Board }
                             }
+                            if (entries.justFinished.isNotEmpty()) {
+                                item(key = "just-finished") {
+                                    JSectionHeader(stringResource(R.string.chat_tray_just_finished), count = entries.justFinished.size,
+                                        modifier = Modifier.testTag("assistant-just-finished"))
+                                }
+                                items(entries.justFinished, key = { "finished:${it.key}" }) { entry ->
+                                    val task = entry as RunningEntry.Task
+                                    JustFinishedRow(task.todo, host, feed, bySession, scope)
+                                }
+                            }
                             if (schedules.isNotEmpty() || backgroundRecords) item { JSectionHeader(stringResource(R.string.chat_tray_quiet)) }
                             items(schedules, key = { "schedule:${it.id}" }) { schedule ->
                                 JRow(schedule.title, subtitle = schedule.lastError?.takeIf(String::isNotBlank)
@@ -426,7 +460,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (backgroundRecords && onBackground != null) item {
                                 JRow(stringResource(R.string.chat_tray_background), onClick = onBackground, leadingIcon = PhIcons.Clock)
                             }
-                            if (entries.running.isEmpty() && schedules.isEmpty() && !backgroundRecords &&
+                            if (entries.running.isEmpty() && entries.justFinished.isEmpty() && schedules.isEmpty() && !backgroundRecords &&
                                 !(shelvedLine && entries.shelved.isNotEmpty())) item {
                                 JEmptyState(stringResource(R.string.chat_tray_no_progress), "", icon = PhIcons.ListChecks)
                             }
@@ -652,3 +686,64 @@ private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null,
 
 /** Whether [entry] is one of this group's rows. */
 private fun NeedsYouGroup.has(entry: NeedsYouEntry): Boolean = entries.any { it.key == entry.key }
+
+/**
+ * A failed start or a cut-off turn (#8237): a danger wash, ink words, and its own buttons under the row. The row opens
+ * the task. Retry and Remove, or Continue, are separate taps.
+ */
+@Composable
+private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, enabled: Boolean, taskBusy: Set<String>) {
+    val palette = PersonaTheme.palette
+    val todo = entry.todo
+    val failed = entry.status == TriageStatus.Failed
+    val lead = host.tasks.lead(todo, host.sessions)
+    val why = if (failed) startFailureRowLine(todo.startError.orEmpty()) else interruptedWhy(lead?.turnError)
+    val retrying = TasksStore.retryKey(todo.id) in taskBusy
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.card)).background(palette.danger.tint)
+        .testTag(if (failed) "assistant-tray-failed" else "assistant-tray-interrupted")) {
+        JRow(todo.title, subtitle = why.takeIf { it.isNotBlank() }, onClick = { openTask(host, todo) },
+            leading = { JIcon(PhIcons.WarningCircle, decorative = true, size = Tokens.Space.l, tint = palette.danger.dot) },
+            trailing = {
+                Text((if (failed) TaskState.Failed else TaskState.Interrupted).label.text(),
+                    style = PersonaTheme.type.micro, color = palette.ink, maxLines = 1)
+            })
+        Row(Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.s),
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            if (failed) {
+                JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) },
+                    size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-retry"))
+                JButton(stringResource(R.string.chat_tasks_remove), { host.tasks.removeTask(todo, host.onError) },
+                    kind = JButtonKind.Destructive, size = JButtonSize.Small, enabled = enabled,
+                    modifier = Modifier.testTag("assistant-tray-remove"))
+            } else {
+                JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(todo, host.onError) },
+                    size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-continue"))
+            }
+        }
+    }
+}
+
+/** A handed-out task that finished in the last day and has not been opened since. Opening it marks it seen when the hub can. */
+@Composable
+private fun JustFinishedRow(todo: Todo, host: AssistantTaskHost, feed: List<FeedItem>, sessions: Map<SessionKey, Session>,
+    scope: kotlinx.coroutines.CoroutineScope) {
+    val palette = PersonaTheme.palette
+    val lead = host.tasks.lead(todo, sessions.values.toList())
+    val summary = finishedSummary(todo, feed, lead)
+    JRow(todo.title, subtitle = summary, subtitleLines = 2, onClick = {
+        openTask(host, todo)
+        if (host.tasks.features?.value?.contains("todo_seen") == true) scope.launch {
+            try {
+                val placed = todo.triage({ sessions[it] }, System.currentTimeMillis())
+                if (placed.section == TriageSection.JustDone) host.tasks.setTodoSeen(todo.id, true, after = placed.last)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+            }
+        }
+    }, modifier = Modifier.testTag("assistant-just-finished-row"), leading = {
+        JIcon(PhIcons.Check, decorative = true, size = Tokens.Space.l, tint = palette.positive)
+    }, trailing = {
+        Text(stringResource(R.string.chat_tray_finished_done), style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1)
+    })
+}

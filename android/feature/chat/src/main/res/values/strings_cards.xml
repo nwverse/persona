@@ -14,6 +14,13 @@
     <string name="chat_handoff_active_now">last active just now</string>
     <string name="chat_handoff_not_active">no activity yet</string>
     <string name="chat_handoff_not_started">Didn\'t start</string>
+    <string name="chat_start_failed_details">Didn\'t start. Open it for details.</string>
+    <string name="chat_start_cause_connection">The connection to this computer dropped</string>
+    <string name="chat_start_cause_offline">This computer is offline</string>
+    <string name="chat_start_cause_timeout">It took too long to start</string>
+    <string name="chat_start_cause_denied">This computer didn\'t allow it</string>
+    <string name="chat_start_cause_update">Persona on this computer needs an update</string>
+    <string name="chat_handoff_interrupted">Interrupted · %1$s</string>
     <string name="chat_handoff_gone">This task no longer exists</string>
     <string name="chat_handoff_closed">Closed before an Agent started</string>
     <string name="chat_handoff_minutes_ago">%1$d min. ago</string>
