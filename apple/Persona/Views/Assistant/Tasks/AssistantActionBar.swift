@@ -5,7 +5,9 @@ import SwiftUI
 // progress: each thing once"): two entries, Needs You and In Progress, each thing in exactly one of them. The split is
 // `AssistantEntries`, a port of the web's `assistantEntries` (web/src/lib/assistant-entries.ts, Android's
 // AssistantEntries.kt, #3387) replaying the shared fixture spec/fixtures/entries/cases.json. Each entry opens a tray above
-// the bar, one at a time; the entries are drawn as the old dock's capsules (`DockCapsule`), so the bar is as low.
+// the bar, one at a time; the entries are drawn as the old dock's capsules (`DockCapsule`), so the bar is as low. In the
+// main conversation with low-distraction mode on, Held Pushes (#7782, PushInterceptsView.swift) comes after them, and its
+// tray opens in the same place (#8223).
 
 /// One of the bar's entries, and the tray it opens.
 nonisolated enum ActionTray: String, CaseIterable, Identifiable, Sendable {
@@ -403,6 +405,10 @@ struct AssistantActionBar: View {
     /// What the user picked on each plan row's card; the tray draws Start, Edit and Don't Start of the open one under its
     /// list (`PlanActions`), so a tall card never scrolls them away.
     @State private var planChoices: [String: PlanChoices] = [:]
+    /// The main conversation's held pushes (#7782), made the first time the bar reads them there, and whether their tray
+    /// is the one open: in the trays' place, so never with `open` (#8223).
+    @State private var held: PushInterceptsModel?
+    @State private var heldOpen = false
     private var store: TasksStore { .shared }
 
     private var entryRow: AnyLayout { AnyLayout(HStackLayout(spacing: Theme.Space.s)) }
@@ -410,15 +416,24 @@ struct AssistantActionBar: View {
     var body: some View {
         let content = Self.content(conversation, key: key)
         let row = entryRow
+        let inMain = conversation == AppModel.shared.assistantMain?.sessionID && AppModel.shared.api != nil
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let open {
                 tray(open, content)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if heldOpen, let held {
+                PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
-                if conversation == AppModel.shared.assistantMain?.sessionID, let api = AppModel.shared.api {
-                    PushInterceptsEntry(api: api, otherTrayOpen: open != nil, onOpen: { open = nil })
+                if inMain, let held {
+                    PushInterceptsEntry(model: held, open: heldOpen) {
+                        withAnimation(Theme.Motion.state) {
+                            open = nil
+                            heldOpen.toggle()
+                        }
+                    }
                 }
                 if ComputerActivityPill.shows(computer) {
                     ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
@@ -432,7 +447,17 @@ struct AssistantActionBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
-        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } }
+        // One tray at a time: Needs You's or In Progress' opening closes the held pushes'.
+        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { heldOpen = false } }
+        // The held pushes are read in the main conversation while its tab is in front, every 30 s, with ln mode off too,
+        // so the entry comes when the mode is turned on; the bar reads none of the model's values itself.
+        .tabActiveTask(id: inMain) {
+            guard inMain, let api = AppModel.shared.api else { return }
+            let model = held ?? PushInterceptsModel(api: api)
+            if held == nil { held = model }
+            await model.run()
+        }
+        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false } }
         #if DEBUG
         .onAppear {
             if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
