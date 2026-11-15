@@ -140,7 +140,9 @@ func TestProviderEnvMaxOutputTokens(t *testing.T) {
 			l.OpusModel = "sonnet"
 			l.SubagentModel = "mid"
 		}), "opus", "-"},
-		{"another alias", with(func(l *proto.ManagedLauncher) { l.SubagentModel = "mid" }), "best", "-"},
+		{"best is the Opus tier", with(func(l *proto.ManagedLauncher) { l.SubagentModel = "mid" }), "best", "-"},
+		{"best on a gateway Opus tier", with(func(l *proto.ManagedLauncher) { l.OpusModel = "mid" }), "best", "64000"},
+		{"opusplan stays Claude Code's", with(func(l *proto.ManagedLauncher) { l.OpusModel = "mid"; l.SonnetModel = "mid" }), "opusplan", "-"},
 		{"a tier with less", with(func(l *proto.ManagedLauncher) { l.OpusModel = "mid" }), "", "64000"},
 		{"a tier with none reported", with(func(l *proto.ManagedLauncher) { l.SonnetModel = "plain" }), "", "-"},
 		{"a tier with no window", with(func(l *proto.ManagedLauncher) { l.SonnetModel = "no-window" }), "", "-"},
@@ -210,7 +212,9 @@ func TestClaudeKnows(t *testing.T) {
 	for m, want := range map[string]bool{
 		"claude-opus-5-5": true, "anthropic/claude-sonnet-5-5": true, "us.anthropic.claude-haiku-4-5-v1:0": true,
 		"claude-3-5-sonnet-20241022": true, "CLAUDE-FABLE-5-2": true, "claude-sonnet-4-5@20250929": true,
+		"claude-instant-1": true, "claude-opus-4": true,
 		"mixed-claude-distill": false, "claude-proxy-x": false, "example-model": false, "claude": false,
+		"claude-opus-distill-qwen": false, "claude-sonnet-latest": false,
 	} {
 		if got := claudeKnows(m); got != want {
 			t.Errorf("%s: %v, want %v", m, got, want)
@@ -416,6 +420,22 @@ func TestNestedLaunchDropsOnlyPersonasValue(t *testing.T) {
 		}
 		if !slices.Equal(kept, c.want) {
 			t.Errorf("%v: %q, want %q", c.l.Models, kept, c.want)
+		}
+	}
+}
+
+// outputLimits gives each model what outputLimit counts for it, the window declared once for the whole list.
+func TestOutputLimitsMatchOutputLimit(t *testing.T) {
+	l := proto.ManagedLauncher{Name: "p", Kind: "api", Model: "a", MaxContext: 600000, Env: "CLAUDE_CODE_MAX_CONTEXT_TOKENS=500000",
+		Models: []proto.ProviderModel{{ID: "a", ContextWindow: 1000000, MaxOutputTokens: 128000},
+			{ID: "b", ContextWindow: 320000, MaxOutputTokens: 128000}, {ID: "c", MaxOutputTokens: 128000}, {ID: "d", ContextWindow: 1000000}}}
+	got := outputLimits(l)
+	if want := map[string]int{"a": 62500, "b": 40000, "c": 62500}; !maps.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for _, pm := range l.Models {
+		if got[pm.ID] != outputLimit(l, pm.ID) {
+			t.Errorf("%s: %d vs %d", pm.ID, got[pm.ID], outputLimit(l, pm.ID))
 		}
 	}
 }

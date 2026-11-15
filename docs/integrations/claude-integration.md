@@ -96,14 +96,16 @@ reasoning model, whose thinking counts toward the reply, stops at "Claude's resp
 maximum". `CLAUDE_CODE_MAX_OUTPUT_TOKENS` raises it, up to 128,000 for such an ID (`200000` is sent as 128,000, the
 reference says the same); a Claude model already gets its own limit (128,000 for Opus 5.5) and is held to it. Claude
 Code knows a Claude ID anywhere in a name (`anthropic/claude-opus-5-5`, a dated ID), so Persona treats an ID with
-`claude-` followed by a Claude family name or version (`claude-opus-…`, `claude-3-5-…`) as one it may know
-(`claudeKnows`); a gateway's `…-claude-distill` is not. The variable is one value for the whole process, each model
+`claude-` followed by a Claude family name and a version, or a version (`claude-opus-5-…`, `claude-3-5-…`), as one it
+may know (`claudeKnows`); a gateway's `…-claude-distill` or `claude-opus-distill-…`, and `claude-sonnet-latest`, are
+not. The variable is one value for the whole process, each model
 capped at its own limit, so `outputTokens` sets it to the least of what the models the process runs may be asked for:
 the session's, each tier's, the small model's, the sub-Agent model's and the `/model` menu's extra entry, after the
 provider's `env` (which may name one). What a model may be asked for is its reported `max_output_tokens`, at most an
 eighth of the window Persona knows for it (`outputLimit`, below), and nothing when either is unknown. The value is set
-only when the session's model is not a Claude one (a tier alias such as `opus` counts as its tier's model, and as
-Claude's own when that tier names none of the gateway's; a lower value would lower the Claude model's own limit), when
+only when the session's model is not a Claude one (a tier alias such as `opus`, or `best`, which runs what `opus` does,
+counts as its tier's model, and as Claude's own when that tier names none of the gateway's; `opusplan` and `default`
+always count as Claude's own; a lower value would lower the Claude model's own limit), when
 every other model has a limit or looks like a Claude one (a model with none could be asked for more than it writes,
 and a strict gateway refuses that; a Claude-looking ID that reports one counts), and when the result is over 32,000 (a
 lower value would lower what every model is asked for today). A session on a Claude model whose tiers are gateway
@@ -118,10 +120,14 @@ through, but one worded as an OpenAI-compatible upstream words it (`This model's
 requested …`, a translating gateway passing it on) ends the turn as "Prompt is too long · the provider said …", and
 in a session that fetches no feature flags (a gateway's) Claude Code then compacts. Asking 128,000 of a 200K model
 would make such a gateway refuse every turn from about 72K of input on, where 32,000 reached the compaction point
-first. So a model is asked for at most an eighth of its window: any stretch where such a gateway refuses is the last
-eighth, right before Claude Code would compact anyway (a 1M model up to 125,000, a 400K one 50,000; a window of 256K
-or less gets no more than 32,000). The window is the smaller of the model's `context_window` and the provider's
-context limit (`max_context`, or `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in its `env`). A provider whose gateway forwards
+first. So Persona raises a model's reply to at most an eighth of its window: what it adds is a stretch in the last
+eighth, right before Claude Code would compact anyway (a 1M model up to 125,000, a 400K one 50,000). A window of 256K
+or less gets no raise and keeps Claude Code's own 32,000, exactly as before #8805, with the stretch that default
+leaves (a 128K model refused from about 96K, compacting near 108K); Persona does not lower it, which would cut replies
+short for every gateway. The window is the smaller of the model's `context_window` and the provider's context limit
+(`max_context`, or `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in its `env`); a model with neither gets no raise, and stops the
+raise for the whole process like one with no reported limit, since Claude Code's own guess for an unknown ID (1M on
+2.1.325) says nothing of the gateway's. A provider whose gateway forwards
 Anthropic's wording, or that wants more anyway, sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in its `env`; one that sees
 refusals near the end of the window sets a smaller value there.
 
@@ -132,11 +138,14 @@ value out again for the model the start runs (its last `--model`, a tier alias r
 SDK bridge builds its whole environment for the conversation's model, its empty tiers following that model, so the two
 runtimes of the main conversation can differ when the provider's model reports nothing and the conversation's does:
 each counts the models its own process runs. Neither pins Persona's value in its settings: it is in the process
-environment, and a value in the user's own settings `env` wins over it. Persona marks the value it writes
+environment, and a value in the user's own settings `env` wins over it, as it did before #8798 (a default the user
+set elsewhere wins, `docs/design/PRINCIPLES.md`, "Defaults first"); one in the provider's `env` is pinned. Persona marks the value it writes
 (`PERSONA_MAX_OUTPUT_TOKENS`, the same value): Claude Code passes its environment to the commands it runs (measured:
 `env` in a Bash call shows both), so a `personad launch` inside such a session drops an inherited value that still
 equals the mark when it sets none itself (`inheritedOutputClear`), and keeps one the user set (no mark, or a value
-the mark no longer matches). A model picked in a running session's `/model` menu that is none of the models above is
+the mark no longer matches). A session started by #8805's version carries an unmarked value, which a launch inside it
+keeps; and a plain `claude` run inside any Persona session inherits the provider's whole environment, its gateway and
+models with this value, as it always has. A model picked in a running session's `/model` menu that is none of the models above is
 still asked for the process's value. The reserve below the window is the same for 32,000 and anything above it, so
 the value does not move where Claude Code compacts.
 

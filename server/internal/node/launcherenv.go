@@ -242,14 +242,16 @@ var processModelVars = []string{"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL
 var claudeTierAliases = []string{"opus", "sonnet", "haiku", "fable", "best", "opusplan", "default", "inherit"}
 
 var tierAliasVars = map[string]string{"opus": "ANTHROPIC_DEFAULT_OPUS_MODEL", "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
-	"haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "fable": "ANTHROPIC_DEFAULT_FABLE_MODEL"}
+	"haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "fable": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+	"best": "ANTHROPIC_DEFAULT_OPUS_MODEL"} // best runs what opus does (Claude Code 2.1.321)
 
 // claudeKnows: m looks like one of Claude's own IDs, also inside a gateway's spelling of it (anthropic/claude-opus-5-5,
 // a dated ID, claude-3-5-sonnet): Claude Code matches its known IDs anywhere in a name and asks such a model for its
-// own output limit. "claude-" alone is not enough: a gateway's …-claude-distill is a model Claude Code does not know.
+// own output limit. A family name with a version is needed: a gateway's …-claude-distill or claude-opus-distill-…,
+// and claude-sonnet-latest, are IDs Claude Code does not know.
 func claudeKnows(m string) bool { return claudeIDRe.MatchString(m) }
 
-var claudeIDRe = lazyre.New(`(?i)claude-(?:opus|sonnet|haiku|fable|mythos|instant|[0-9])`)
+var claudeIDRe = lazyre.New(`(?i)claude-(?:(?:opus|sonnet|haiku|fable|mythos|instant)-[0-9]|[0-9])`)
 
 // isTierAlias: m is a name Claude Code resolves to a model of its own (claudeTierAliases), "[1m]" or not.
 func isTierAlias(m string) bool {
@@ -303,14 +305,25 @@ func outputTokens(limit func(string) int, env map[string]string) int {
 	return min(n, unknownModelOutputCap)
 }
 
-// outputLimit is what outputTokens counts for l's model m ("<id>" or "<id>[1m]"): its reported max_output_tokens, at
-// most an eighth of the window Persona knows for it (providerCapacity, outputWindowShare); 0 when either is unknown.
+// outputLimit is what outputTokens counts for l's model m ("<id>" or "<id>[1m]"): modelOutputLimit by the window l
+// declares for its process (declaredCapacity).
 func outputLimit(l proto.ManagedLauncher, m string) int {
 	pm, _ := providerModel(l, m)
-	if w := providerCapacity(l, m); pm.MaxOutputTokens > 0 && w > 0 {
+	return modelOutputLimit(pm, declaredCapacity(l))
+}
+
+// modelOutputLimit is pm's reported max_output_tokens, at most an eighth of its window (its context_window, or declared
+// when that is smaller, as providerCapacity reads them; outputWindowShare); 0 when either is unknown.
+func modelOutputLimit(pm proto.ProviderModel, declared int) int {
+	if w := smallerCapacity(pm.ContextWindow, declared); pm.MaxOutputTokens > 0 && w > 0 {
 		return min(pm.MaxOutputTokens, w/outputWindowShare)
 	}
 	return 0
+}
+
+// declaredCapacity is the window l declares for every model of its process, 0 none: providerCapacity without a model.
+func declaredCapacity(l proto.ManagedLauncher) int {
+	return providerCapacity(proto.ManagedLauncher{MaxContext: l.MaxContext, Env: l.Env, Args: l.Args}, "")
 }
 
 // outputLimits are outputLimit of l's models by ID, for `personad launch` to work out the reply limit for the model the
@@ -321,8 +334,9 @@ func outputLimits(l proto.ManagedLauncher) map[string]int {
 		return nil
 	}
 	var out map[string]int
+	declared := declaredCapacity(l)
 	for _, pm := range l.Models {
-		if n := outputLimit(l, pm.ID); n > 0 {
+		if n := modelOutputLimit(pm, declared); n > 0 {
 			if out == nil {
 				out = map[string]int{}
 			}
@@ -350,16 +364,16 @@ func inheritedOutputClear(clear, env []string, lookup func(string) string) []str
 	if mark == "" {
 		return clear
 	}
+	gone := []string{outputMarkEnv}
+	if !slices.Contains(envNames(env), maxOutputEnv) && lookup(maxOutputEnv) == mark {
+		gone = append(gone, maxOutputEnv)
+	}
 	clear = slices.Clone(clear)
-	add := func(k string) {
+	for _, k := range gone {
 		if !slices.Contains(clear, k) {
 			clear = append(clear, k)
 		}
 	}
-	if !slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, maxOutputEnv+"=") }) && lookup(maxOutputEnv) == mark {
-		add(maxOutputEnv)
-	}
-	add(outputMarkEnv)
 	return clear
 }
 
@@ -399,9 +413,7 @@ func sessionOutput(env, clear []string, limits map[string]int, session string) (
 		m["ANTHROPIC_MODEL"] = session
 	}
 	n := outputTokens(func(x string) int { return cmp.Or(limits[x], limits[strings.TrimSuffix(x, oneMillionSuffix)]) }, m)
-	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
-		return strings.HasPrefix(kv, maxOutputEnv+"=") || strings.HasPrefix(kv, outputMarkEnv+"=")
-	})
+	env = withoutEnv(env, []string{maxOutputEnv, outputMarkEnv})
 	if n > 0 {
 		v := strconv.Itoa(n)
 		env = append(env, maxOutputEnv+"="+v, outputMarkEnv+"="+v)
