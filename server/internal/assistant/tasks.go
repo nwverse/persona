@@ -221,10 +221,12 @@ type tasksState struct {
 	// manager that restarts with one out takes it as a send whose answer is unknown. sendsSaving orders reading and
 	// writing them, the latest state last, and guards the three flags: sendsLoaded, what the manager before kept was
 	// read; sendsDirty, the latest write failed, so what is kept is not what is in memory; sendsRetrying,
-	// retrySendsOut is writing them again.
+	// retrySendsOut is writing them again. sendsRetryAfter: retrySendsOut's first wait (sendsRetryEvery as the
+	// service was made: a retry still running from an earlier service never reads what a test sets).
 	sendsOut                               map[[2]string]*sendsOut
 	sendsSaving                            sync.Mutex
 	sendsLoaded, sendsDirty, sendsRetrying bool
+	sendsRetryAfter                        time.Duration
 	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
 	retrying map[string]bool
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).
@@ -256,6 +258,7 @@ func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]bool{},
 		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, sendsOut: map[[2]string]*sendsOut{},
+		sendsRetryAfter: sendsRetryEvery,
 		turns: turnsState{again: map[string]bool{}, looked: map[string]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
 			retry:   map[string]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}

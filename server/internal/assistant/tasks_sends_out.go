@@ -42,12 +42,11 @@ import (
 // bounds what is kept for an agent that never works again.
 const sendKeep = 7 * 24 * time.Hour
 
-// sendsRetryEvery is how soon a write of the sends of more that failed is first tried again (retrySendsOut), and
-// sendsRetries how many times; vars so tests shorten them.
-var (
-	sendsRetryEvery = 5 * time.Second
-	sendsRetries    = 30
-)
+// sendsRetryEvery is how soon a write of the sends of more that failed is first tried again (retrySendsOut); a var so
+// tests shorten it, read as a service is made (tasksState.sendsRetryAfter). sendsRetries is how many times.
+var sendsRetryEvery = 5 * time.Second
+
+const sendsRetries = 30
 
 // sendsOutKey is the settings key the sends of more for accepted tasks are kept under (saveSendsOut).
 const sendsOutKey = "assistant.sends_out"
@@ -482,7 +481,7 @@ func (s *Service) saveSendsOut(ctx context.Context) error {
 // next turn. One of them runs at a time (sendsRetrying).
 func (s *Service) retrySendsOut() {
 	ctx := s.runCtx()
-	wait := sendsRetryEvery
+	wait := s.tasks.sendsRetryAfter
 	for try := 1; ; try++ {
 		timer := time.NewTimer(wait)
 		select {
