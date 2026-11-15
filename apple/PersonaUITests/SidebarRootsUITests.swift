@@ -105,10 +105,16 @@ final class SidebarRootsUITests: XCTestCase {
         return jump.exists && row.exists && row.frame.insetBy(dx: 0, dy: -24).intersects(jump.frame)
     }
 
-    /// Taps a row clear of the jump: the column scrolled a little first where it lies over the row.
+    /// The column's head (and the main conversation held under it) over a row scrolled to the column's top takes the tap.
+    @MainActor private func underHead(_ row: XCUIElement) -> Bool {
+        let main = element("sidebar-main")
+        return main.exists && row.exists && row.frame.midY < main.frame.maxY + 8
+    }
+
+    /// Taps a row clear of the jump and the head: the column scrolled a little first where either lies over the row.
     @MainActor private func tapClear(_ row: XCUIElement) {
-        for _ in 0..<3 where underJump(row) {
-            column.swipeUp(velocity: .slow)
+        for _ in 0..<3 where underJump(row) || underHead(row) {
+            if underJump(row) { column.swipeUp(velocity: .slow) } else { column.swipeDown(velocity: .slow) }
             Thread.sleep(forTimeInterval: 0.6) // the list's glide
         }
         row.tap()
@@ -122,7 +128,7 @@ final class SidebarRootsUITests: XCTestCase {
         // Any Agent: the first row in reach and clear of the jump; a named one: its row.
         func find() -> XCUIElement {
             if let title { return rows.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch }
-            return rows.allElementsBoundByIndex.first { $0.exists && $0.isHittable && !underJump($0) } ?? rows.firstMatch
+            return rows.allElementsBoundByIndex.first { $0.exists && $0.isHittable && !underJump($0) && !underHead($0) } ?? rows.firstMatch
         }
         var row = find()
         for _ in 0..<16 where !(row.exists && row.isHittable) {
