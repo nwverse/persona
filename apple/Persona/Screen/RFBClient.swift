@@ -7,6 +7,13 @@ nonisolated protocol RFBTransport: AnyObject, Sendable {
     /// The next bytes that came; throws once it is closed.
     func receive() async throws -> [UInt8]
     func close()
+    /// The HTTP status the hub refused this connection with (429: the Mac already sends video to two devices, #8320);
+    /// nil when it opened, or for a route that isn't the hub's relay.
+    var refusedStatus: Int? { get }
+}
+
+nonisolated extension RFBTransport {
+    var refusedStatus: Int? { nil }
 }
 
 /// The hub's relay of the Mac's 5900 (`/api/v1/machines/{mid}/ports/5900/connect`, docs/operations/ports.md): one binary
@@ -66,6 +73,12 @@ nonisolated final class RFBWebSocket: RFBTransport, @unchecked Sendable {
     }
 
     func close() { task.cancel(with: .normalClosure, reason: nil) }
+
+    /// The status of a handshake the hub answered with something other than 101 (the socket never opened).
+    var refusedStatus: Int? {
+        guard let status = (task.response as? HTTPURLResponse)?.statusCode, status != 101 else { return nil }
+        return status
+    }
 
     /// The subprotocol the hub selected, once the socket is open (after the first message); nil for none.
     var subprotocol: String? {
@@ -308,6 +321,10 @@ nonisolated final class RFBClient: @unchecked Sendable {
     func key(_ keysym: UInt32, down: Bool) {
         send([4, down ? 1 : 0, 0, 0] + RFBAuth.be32(keysym))
     }
+
+    /// A pixel scroll record (#7775, PersonaInputKit's ScrollRecord: client message type 200) for the Mac's node, which
+    /// takes it out of the stream for Persona Input. Only to a node that says it reads them: Screen Sharing would not.
+    func input(_ record: [UInt8]) { send(record) }
 
     /// Text onto the Mac's clipboard (ClientCutText: Latin-1 is all RFB carries; anything else goes as "?").
     func cutText(_ text: String) {

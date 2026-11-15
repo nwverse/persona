@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -187,13 +188,15 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			resp = inventory
 		}
 	case "preflight": // personad node doctor's path-access check, read with this node's permissions (preflight.go)
-		resp = n.preflight(ctx)
+		resp = n.preflightIn(ctx, i18n.Resolve(req.Locale).Or(i18n.Default))
 	case "ask": // personad ask (scriptcli.go)
 		resp = n.handleAsk(ctx, req)
 	case "notify": // personad notify (scriptcli.go)
 		resp = n.handleNotify(ctx, req)
 	case "launcher.env": // personad launch <name>
 		resp = n.launcherEnvFor(req)
+	case "launcher.pi": // pi's Persona extension: the providers pi can use here (pi_providers.go)
+		resp = n.piProvidersFor(ctx, req)
 	case "secret.env": // personad launch --ticket (secretenv.go)
 		resp = n.secretEnvFor(req)
 	case "mcp.tools":

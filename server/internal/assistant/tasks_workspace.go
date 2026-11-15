@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 
@@ -113,6 +112,7 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	}
 	var sourceCwd string // the inferred cwd's workspace, and the other task that writes there
 	var owner *Todo
+	t.cwdStatus, t.cwdStatusOf = nil, "" // never an answer about a folder an earlier resolve asked of
 	if t.Workspace == nil || t.WorkspaceInferred {
 		mode := workspaceNone
 		if !t.Readonly {
@@ -120,16 +120,18 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 			if err := s.call(ctx, t.Machine, "worktree.status", map[string]any{"cwd": t.Cwd}, &st); err != nil {
 				return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.infer", i18n.Args{"machine": t.Machine}), err)
 			}
+			// What the machine says of t.Cwd, for resolveTaskRepo: used only while t runs in that folder (or its checkout).
+			t.cwdStatus, t.cwdStatusOf = &st, t.Machine+"\x00"+proto.NodeClean(t.Cwd)
 			if st.Path != "" {
 				mode = workspaceExisting
 				var source proto.Workspace
 				if err := s.call(ctx, t.Machine, "workspace.resolve", map[string]any{"path": t.Cwd}, &source); err != nil {
 					return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.resolve", i18n.Args{"path": t.Cwd}), err)
 				}
-				if !source.Available || !path.IsAbs(source.Cwd) {
+				if !source.Available || !proto.NodeAbs(source.Cwd) {
 					return i18n.ErrEnglish("assistant-tasks_workspace.unavailable", i18n.Args{"path": t.Cwd})
 				}
-				sourceCwd, owner = source.Cwd, s.taskWorkspaceOwner(ctx, t.Machine, source.Cwd, t.TodoID)
+				sourceCwd, owner = source.Cwd, s.taskWorkspaceOwner(ctx, t.Machine, source.Cwd, firstNonEmpty(t.TodoID, t.ReuseTodo))
 				if s.taskWorkspacePreference(ctx) == preferNew || owner != nil {
 					mode = workspaceNew
 				}
@@ -141,7 +143,7 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		}
 		t.WorkspaceInferred = true
 	}
-	res := &TaskWorkspaceResolved{Machine: t.Machine, Path: path.Clean(t.Cwd)}
+	res := &TaskWorkspaceResolved{Machine: t.Machine, Path: proto.NodeClean(t.Cwd)}
 	switch t.Workspace.Mode {
 	case workspaceNone:
 	case workspaceExisting:
@@ -152,7 +154,7 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		if m, ok := s.machineByName(ctx, t.Machine); ok {
 			selected = proto.ExpandHome(selected, m.Home)
 		}
-		if !path.IsAbs(selected) {
+		if !proto.NodeAbs(selected) {
 			var list proto.WorkspacesResponse
 			if err := s.call(ctx, t.Machine, "workspaces.list", map[string]any{}, &list); err != nil {
 				return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.list", i18n.Args{"machine": t.Machine}), err)
@@ -177,10 +179,10 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		if err := s.call(ctx, t.Machine, "workspace.resolve", map[string]any{"path": selected}, &resolved); err != nil {
 			return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.resolve", i18n.Args{"path": selected}), err)
 		}
-		if !resolved.Available || !path.IsAbs(resolved.Cwd) {
+		if !resolved.Available || !proto.NodeAbs(resolved.Cwd) {
 			return i18n.ErrEnglish("assistant-tasks_workspace.unavailable", i18n.Args{"path": selected})
 		}
-		res.Path = path.Clean(resolved.Cwd)
+		res.Path = proto.NodeClean(resolved.Cwd)
 	case workspaceNew:
 		res.Branch = firstNonEmpty(t.Workspace.Branch, "task/"+firstNonEmpty(t.TodoID, t.ReservedTodoID))
 		var prep proto.WorktreePrepare
@@ -195,7 +197,7 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 						i18n.Args{"id": owner.ID, "title": owner.Title, "machine": t.Machine, "path": sourceCwd})
 				}
 				res.Branch = ""
-				t.Workspace, res.Path = &TaskWorkspace{Mode: workspaceExisting, Existing: t.Cwd}, path.Clean(sourceCwd)
+				t.Workspace, res.Path = &TaskWorkspace{Mode: workspaceExisting, Existing: t.Cwd}, proto.NodeClean(sourceCwd)
 				break
 			}
 			if t.WorkspaceInferred && sourceCwd != "" && engineCannotPrepare(err) {
@@ -205,16 +207,16 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 				if owner != nil {
 					t.Workspace, res.Shared = &TaskWorkspace{Mode: workspaceNone}, true
 				} else {
-					t.Workspace, res.Path = &TaskWorkspace{Mode: workspaceExisting, Existing: t.Cwd}, path.Clean(sourceCwd)
+					t.Workspace, res.Path = &TaskWorkspace{Mode: workspaceExisting, Existing: t.Cwd}, proto.NodeClean(sourceCwd)
 				}
 				break
 			}
 			return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.prepare", i18n.Args{"machine": t.Machine}), err)
 		}
-		if !path.IsAbs(prep.Path) {
+		if !proto.NodeAbs(prep.Path) {
 			return i18n.ErrEnglish("assistant-tasks_workspace.engine_path")
 		}
-		res.Path = path.Join(prep.Path, herdr.WorktreeDirName(res.Branch))
+		res.Path = proto.NodeJoin(prep.Path, herdr.WorktreeDirName(res.Branch))
 	default:
 		return fmt.Errorf("unknown task workspace policy %q", t.Workspace.Mode)
 	}
@@ -237,8 +239,9 @@ func repositoryWithoutCommits(err error) bool {
 
 // taskWorkspaceOwner checks durable active task links, and the gap between
 // admission and linking. Callers that admit a writer hold workspaceMu as well.
+// Directories compare by proto.NodeKey: on a Windows machine, case aside.
 func (s *Service) taskWorkspaceOwner(ctx context.Context, machine, cwd, except string) *Todo {
-	machine, cwd = s.effectiveBoardMachine(machine), path.Clean(cwd)
+	machine, cwd = s.effectiveBoardMachine(machine), proto.NodeKey(cwd)
 	s.tasks.mu.Lock()
 	owner := s.tasks.workspaceClaims[machine+"\x00"+cwd]
 	s.tasks.mu.Unlock()
@@ -252,7 +255,7 @@ func (s *Service) taskWorkspaceOwner(ctx context.Context, machine, cwd, except s
 			continue
 		}
 		for _, a := range t.Agents {
-			if a.ReleasedAt == nil && a.DismissedAt == nil && s.effectiveBoardMachine(a.MachineID) == machine && path.Clean(a.Cwd) == cwd {
+			if a.ReleasedAt == nil && a.DismissedAt == nil && s.effectiveBoardMachine(a.MachineID) == machine && proto.NodeKey(a.Cwd) == cwd {
 				return &t
 			}
 		}
@@ -288,16 +291,26 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.create"), err)
 			}
-			if !path.IsAbs(wt.Path) {
+			if !proto.NodeAbs(wt.Path) {
 				return i18n.ErrEnglish("assistant-tasks_workspace.engine_path")
 			}
-			t.WorkspaceResolved = &TaskWorkspaceResolved{Machine: t.Machine, Path: path.Clean(wt.Path),
+			t.WorkspaceResolved = &TaskWorkspaceResolved{Machine: t.Machine, Path: proto.NodeClean(wt.Path),
 				Branch: firstNonEmpty(wt.Branch, t.WorkspaceResolved.Branch), WorkspaceID: wt.WorkspaceID, Created: true}
 			// Once created it is machine-local, including automatic and explicit retries.
 			t.MachinePolicy = machineFixed
 		}
 	}
 	t.Cwd = t.WorkspaceResolved.Path
+	// A shared fallback has mode none, but its resolved marker must still survive the start.
+	keep := t.Workspace.Mode != workspaceNone || t.WorkspaceResolved.Shared
+	// The repository is the one this folder is in, not the one the plan was made from: an existing workspace, or the
+	// checkout the engine made, can be another repository (#8259). Saved below with the admitted cwd, and what
+	// "start these directly" remembers. A task without a workspace runs where it was planned: nothing to ask again
+	// unless it is to be remembered.
+	repo := t.Repo
+	if t.repoOf != t.Machine+"\x00"+proto.NodeClean(t.Cwd) && (keep || t.rememberKind) {
+		s.resolveTaskRepo(ctx, t)
+	}
 	if t.Workspace.Mode != workspaceNone {
 		if err := s.taskWorkspaceBusy(ctx, t.Machine, t.Cwd, t.TodoID); err != nil {
 			return err
@@ -307,17 +320,19 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 			if s.tasks.workspaceClaims == nil {
 				s.tasks.workspaceClaims = map[string]string{}
 			}
-			s.tasks.workspaceClaims[s.effectiveBoardMachine(t.Machine)+"\x00"+t.Cwd] = t.TodoID
+			s.tasks.workspaceClaims[s.effectiveBoardMachine(t.Machine)+"\x00"+proto.NodeKey(t.Cwd)] = t.TodoID
 			s.tasks.mu.Unlock()
 		}
 	}
-	// A shared fallback has mode none, but its resolved marker must still survive the start.
-	if t.planID != "" && (t.Workspace.Mode != workspaceNone || t.WorkspaceResolved != nil && t.WorkspaceResolved.Shared) {
+	if t.planID != "" && keep {
 		// Persist the engine's answer before starting, so a retry never creates a second tree.
 		return s.patchPlanTask(ctx, t.planID, t.planIndex, func(pt *PlanTask) {
-			pt.Cwd, pt.Workspace, pt.WorkspaceResolved = t.Cwd, t.Workspace, t.WorkspaceResolved
+			pt.Cwd, pt.Repo, pt.Workspace, pt.WorkspaceResolved = t.Cwd, t.Repo, t.Workspace, t.WorkspaceResolved
 			pt.WorkspaceInferred, pt.ReservedTodoID, pt.MachinePolicy = t.WorkspaceInferred, t.ReservedTodoID, t.MachinePolicy
 		})
+	}
+	if t.planID != "" && t.Repo != repo { // no workspace, same folder: only what its repository is came out otherwise
+		return s.patchPlanTask(ctx, t.planID, t.planIndex, func(pt *PlanTask) { pt.Repo = t.Repo })
 	}
 	return nil
 }
