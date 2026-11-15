@@ -313,3 +313,86 @@ func TestDesktopSessionsHaveACountOfTheirOwn(t *testing.T) {
 		t.Fatal("another platform's run is listed because the index names it")
 	}
 }
+
+// A session deleted in the app leaves the list at once when this node read its entry before: the app removes the entry
+// and writes deleted_<uuid> beside it, so desktopEntryGrace is not waited out. An entry removed without the marker, or
+// one the node never read (it restarted since), still waits it out; the marker's record goes after desktopEntryGrace.
+func TestDesktopSessionDeletedInTheAppLeavesAtOnce(t *testing.T) {
+	const (
+		deleted = "dddddddd-2222-4000-8000-000000000001" // read, then deleted in the app
+		earlier = "dddddddd-2222-4000-8000-000000000002" // deleted's earlier transcript
+		removed = "dddddddd-2222-4000-8000-000000000003" // its entry went without the marker
+		unseen  = "dddddddd-2222-4000-8000-000000000004" // deleted before the node read its entry
+		kept    = "dddddddd-2222-4000-8000-000000000005"
+	)
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{deleted, removed, unseen, kept} {
+		writeEntrypointTranscript(t, dir, id, "claude-desktop-3p", 10*time.Second) // all within desktopEntryGrace
+	}
+	writeEntrypointTranscript(t, dir, earlier, "claude-desktop-3p", 20*time.Second)
+	_, third := useDesktopDirs(t)
+	gone := writeDesktopEntry(t, third, "deleted", deleted, false, []string{earlier}, "")
+	bare := writeDesktopEntry(t, third, "removed", removed, false, nil, "")
+	writeDesktopEntry(t, third, "kept", kept, false, nil, "")
+	listed := func() map[string]bool {
+		out := map[string]bool{}
+		for _, s := range n.scanOffline() {
+			out[s.SessionID] = true
+		}
+		return out
+	}
+	if got := listed(); !got[deleted] || !got[removed] || !got[kept] || got[earlier] {
+		t.Fatalf("before the delete: %v", got)
+	}
+	late := writeDesktopEntry(t, third, "unseen", unseen, false, nil, "")
+	marker := func(entry string) {
+		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(entry), "local_"), ".json")
+		if err := os.Remove(entry); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(filepath.Dir(entry), "deleted_"+name), []byte("1794736695195"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker(gone)
+	marker(late)
+	if err := os.Remove(bare); err != nil {
+		t.Fatal(err)
+	}
+	got := listed()
+	for id, want := range map[string]bool{deleted: false, earlier: false, removed: true, unseen: true, kept: true} {
+		if got[id] != want {
+			t.Errorf("after the delete: %s listed=%v, want %v", id, got[id], want)
+		}
+	}
+	// Still left out on the next scan, which no longer finds the entry it read.
+	if listed()[deleted] {
+		t.Error("the deleted session came back on the next scan")
+	}
+	// After desktopEntryGrace the record goes; the transcript, quiet as long, is gone by its age.
+	claudeDesktopFiles.Lock()
+	f, ok := claudeDesktopFiles.byPath[gone]
+	if !ok || f.deletedAt.IsZero() {
+		claudeDesktopFiles.Unlock()
+		t.Fatalf("no record of the delete: %+v %v", f, ok)
+	}
+	f.deletedAt = f.deletedAt.Add(-desktopEntryGrace - time.Second)
+	claudeDesktopFiles.byPath[gone] = f
+	claudeDesktopFiles.Unlock()
+	writeEntrypointTranscript(t, dir, deleted, "claude-desktop-3p", desktopEntryGrace+time.Minute)
+	n.metas = map[string]quickMeta{}
+	if listed()[deleted] {
+		t.Error("the deleted session came back once its record went")
+	}
+	claudeDesktopFiles.Lock()
+	_, ok = claudeDesktopFiles.byPath[gone]
+	claudeDesktopFiles.Unlock()
+	if ok {
+		t.Error("the record of the delete was kept past desktopEntryGrace")
+	}
+}

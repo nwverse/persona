@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,8 @@ import (
 // (claudeDesktopIndex.gone, #8314). Only that: a transcript another client ran is never judged by the index; an index
 // with no readable entry (not there, another layout) leaves out nothing; an entry that cannot be read keeps every id it
 // mentions; and a transcript written in the last desktopEntryGrace stays, as the app may not have written its entry yet.
+// The app writes deleted_<uuid> beside the entry it removes (measured 2026-11-15: the time of the delete, in ms), so the
+// transcript of an entry this node read before is left out at once (claudeDesktopFile.deletedAt), grace or not.
 //
 // A scheduled task's runs are sessions of their own in the index, each naming the task (scheduledTaskId); the app's
 // sidebar lists them under the task in its own section, apart from the projects. The list draws a task's runs the
@@ -85,6 +88,9 @@ type claudeDesktopFile struct {
 	entry claudeDesktopEntry // transcript "": unreadable
 	// mentions are the ids an unreadable entry holds as far as it is read (mentionedIDs): none of them is gone.
 	mentions []string
+	// deletedAt: when a scan found the file gone and the app's deleted_<uuid> marker beside it (deletedInApp): the session
+	// was deleted in the app. Kept for desktopEntryGrace, after which gone no longer needs it.
+	deletedAt time.Time
 }
 
 var claudeDesktopFiles = struct {
@@ -108,6 +114,9 @@ type claudeDesktopIndex struct {
 	// entries counts the readable entries. gone reads both.
 	named   map[string]bool
 	entries int
+	// deleted: the transcripts (current and earlier) of entries the app removed with its deleted_<uuid> marker since
+	// this node read them: gone without waiting out desktopEntryGrace.
+	deleted map[string]bool
 }
 
 type claudeDesktopAbout struct{ title, cwd, local string }
@@ -126,7 +135,7 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		paths = append(paths, found...)
 	}
 	x := claudeDesktopIndex{visible: map[string]bool{}, earlier: map[string][]claudeDesktopNow{}, about: map[string]claudeDesktopAbout{},
-		parents: map[string]string{}, seen: map[string]claudeDesktopSeen{}, named: map[string]bool{}}
+		parents: map[string]string{}, seen: map[string]claudeDesktopSeen{}, named: map[string]bool{}, deleted: map[string]bool{}}
 	claudeDesktopFiles.Lock()
 	defer claudeDesktopFiles.Unlock()
 	current := make(map[string]bool, len(paths))
@@ -140,7 +149,7 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		}
 		current[p] = true
 		f, ok := claudeDesktopFiles.byPath[p]
-		if !ok || !f.mtime.Equal(st.ModTime()) || f.size != st.Size() {
+		if !ok || !f.mtime.Equal(st.ModTime()) || f.size != st.Size() || !f.deletedAt.IsZero() {
 			f = claudeDesktopFile{mtime: st.ModTime(), size: st.Size()}
 			if st.Size() <= 4<<20 {
 				f.entry = readClaudeDesktopEntry(p)
@@ -198,12 +207,45 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 			}
 		}
 	}
-	for p := range claudeDesktopFiles.byPath {
-		if !current[p] {
+	roots := make([]string, 0, 2)
+	for _, dir := range claudeDesktopDirs(home) {
+		roots = append(roots, filepath.Join(dir, "claude-code-sessions")+string(filepath.Separator))
+	}
+	for p, f := range claudeDesktopFiles.byPath {
+		if current[p] {
+			continue
+		}
+		mine := slices.ContainsFunc(roots, func(r string) bool { return strings.HasPrefix(p, r) })
+		switch {
+		case !f.deletedAt.IsZero() && time.Since(f.deletedAt) > desktopEntryGrace:
 			delete(claudeDesktopFiles.byPath, p)
+			continue
+		case !mine: // another home's (tests run many in one process)
+			if f.deletedAt.IsZero() {
+				delete(claudeDesktopFiles.byPath, p)
+			}
+			continue
+		case f.deletedAt.IsZero():
+			if f.entry.transcript == "" || !deletedInApp(p) {
+				delete(claudeDesktopFiles.byPath, p)
+				continue
+			}
+			f.deletedAt = time.Now()
+			claudeDesktopFiles.byPath[p] = f
+		}
+		x.deleted[f.entry.transcript] = true
+		for _, old := range f.entry.prior {
+			x.deleted[old] = true
 		}
 	}
 	return x
+}
+
+// deletedInApp: the app removed the entry at path (local_<uuid>.json) as it deletes a session: deleted_<uuid> is beside it.
+func deletedInApp(path string) bool {
+	name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "local_"), ".json")
+	_, err := os.Stat(filepath.Join(filepath.Dir(path), "deleted_"+name))
+	return err == nil
 }
 
 func readClaudeDesktopEntry(path string) claudeDesktopEntry {
@@ -261,11 +303,12 @@ var desktopIDRe = lazyre.New(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 // for a deleted session's: the app writes a new session's entry as it starts the session.
 const desktopEntryGrace = 2 * time.Minute
 
-// gone: transcript id, which the desktop app ran, belongs to a session deleted in the app: the index has readable
-// entries, none names id and nothing unreadable mentions it, and the transcript was last written (written) longer than
-// desktopEntryGrace ago. The caller asks only about a transcript whose entrypoint is the desktop app's.
+// gone: transcript id, which the desktop app ran, belongs to a session deleted in the app: no entry names id and nothing
+// unreadable mentions it, and either the app removed the entry that did with its deleted_<uuid> marker (deleted), or
+// the index has readable entries and the transcript was last written (written) longer than desktopEntryGrace ago. The
+// caller asks only about a transcript whose entrypoint is the desktop app's.
 func (x claudeDesktopIndex) gone(id string, written time.Time) bool {
-	return x.entries > 0 && !x.named[id] && time.Since(written) > desktopEntryGrace
+	return !x.named[id] && (x.deleted[id] || x.entries > 0 && time.Since(written) > desktopEntryGrace)
 }
 
 // localID is id when it is the app's own form of a session id (local_<uuid>), else "": it goes into a link.
