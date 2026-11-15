@@ -22162,6 +22162,39 @@ if os.environ.get("MOCK_COMPUTER", "") not in ("", "off"):
                                             tool_name="mcp__cua-driver__click",
                                             tool_input={"app": "Simulator", "role": "button", "name": "小组件"})]
 
+def frame_png(w, h, top, bottom, band):
+    """A made-up video frame (stdlib only): a vertical gradient from top to bottom, with a band of one color across
+    its lower part, where a frame's burnt-in subtitle sits."""
+    import zlib
+    rows = []
+    for y in range(h):
+        if h * 0.78 <= y < h * 0.86:
+            px = bytes(band)
+        else:
+            t = y / max(h - 1, 1)
+            px = bytes(round(a + (b - a) * t) for a, b in zip(top, bottom))
+        rows.append(b"\0" + px * w)
+    def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+
+
+if os.environ.get("MOCK_TOOL_IMAGES") == "1":
+    # A connector's tool answered with pictures (#8484): the hub gives the model the text, then a line and a picture for
+    # each frame, as the transcript has them (one result, image items on the call). Made-up frames of a made-up video.
+    _frames = [("00:00 片头", (250, 214, 160), (214, 120, 72)), ("00:14 煎蛋", (255, 236, 179), (236, 170, 60)),
+               ("00:38 摆盘", (200, 228, 201), (90, 150, 110))]
+    _ask_pic = it("user", "text", 2, text="帮我看看这个早餐视频讲了什么")  # numbered first: it() numbers in order
+    _text = "视频「周末早餐」，0:42，3 帧，有声音。\n" + "\n".join(
+        "[image %d of %d] %s" % (i + 1, len(_frames), c) for i, (c, _, _) in enumerate(_frames))
+    _video = looked("mcp__persona__example_video", {"note": "n-1024", "frames": 3}, _text, 1,
+                    *[(base64.b64encode(frame_png(216, 384, a, b, (40, 40, 40))).decode(), 216, 384) for _, a, b in _frames])
+    ASK_PIC = "b2e4d6f8-0000-4000-8000-0000000000c7"  # a conversation of its own: -openAssistant server/<it>
+    ASSISTANT.append(assistant_sess(ASK_PIC, "这个早餐视频讲了什么", 1, "一段 42 秒的早餐视频：先煎蛋，最后摆盘。"))
+    ITEMS[ASK_PIC] = [_ask_pic] + _video + \
+        [it("assistant", "text", 1, text="一段 42 秒的早餐视频：开头是片头，14 秒开始煎蛋，最后在 38 秒摆盘。"
+                                         "画面里能看到的步骤就这三个，具体火候视频里没说。")]
+
 if os.environ.get("MOCK_CHURN") == "1":
     # Machines enough that the ⋯ menu scrolls, as it does with six on a phone.
     for _i, _n in enumerate(["构建机", "测试机", "Mac mini", "Mac mini 2", "训练机"]):

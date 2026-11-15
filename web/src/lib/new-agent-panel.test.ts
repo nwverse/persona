@@ -85,6 +85,21 @@ describe("the panel's providers", () => {
     expect(blocked.models?.map((m) => m.name)).toEqual(["默认：glm-5.3"]);
   });
 
+  it("a provider left out on this computer comes after the launchers, off with the hub's reason (#8109)", () => {
+    const reason = "Mac 已经有自己的 Claude Code 服务，而 DeepSeek 设置为跳过这样的电脑";
+    const p = panel({ unavailable: [
+      { name: "deepseek", display_name: "DeepSeek", kind: "launcher", code: "launcher_own_service", reason },
+      { name: "claude", kind: "launcher", code: "launcher_own_service", reason: "not this one" }, // listed already: stays as listed
+      { name: "cx-gw", kind: "launcher", agent: "codex", code: "launcher_own_service", reason },
+    ] });
+    expect(p.providers.map((x) => x.id)).toEqual(["claude", "work_gw", "sonnetcc", "codex", "p-relay", "deepseek", "cx-gw"]);
+    expect(provider(p, "deepseek")).toEqual({ id: "deepseek", name: "DeepSeek", engine: "claude", models: null, unavailable: reason });
+    expect(provider(p, "cx-gw").engine).toBe("codex");
+    expect(provider(p, "claude").unavailable).toBeUndefined();
+    // the row lit stays the launcher that runs
+    expect(p.state.current?.provider).toBe("claude");
+  });
+
   it("a launcher that fixes its own --model offers its Default row alone, with why, and no typed ID", () => {
     const locked = provider(panel(), "sonnetcc");
     expect(locked.models).toHaveLength(1);
