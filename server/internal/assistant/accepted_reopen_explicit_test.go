@@ -1114,3 +1114,99 @@ func TestAHeldTurnStaysWhileItsAnswerOpensTheTask(t *testing.T) {
 		})
 	}
 }
+
+// More for an accepted task is sent its agent, and before the agent's next turn the task is accepted again as it
+// stands (still closed, on the same done_at). That acceptance answers the send: whether its answer was unknown, or it
+// is still out and taken after (a turn held for it meanwhile included, or a later send out then), the task stays as
+// accepted through the agent's next turns, across a manager restart too (also one before the acceptance again, whose first read of the kept sends
+// fails), and its supervisor hears nothing. A send after the acceptance again opens the task as ever.
+func TestAnAcceptanceAgainEndsTheSendsBeforeIt(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		out     bool // the send is still out when the task is accepted again (its answer, taken, comes after)
+		held    bool // a turn of the agent started while it was out
+		restart bool // the manager restarts after the acceptance again
+		// readFails: the manager restarts before the acceptance again, and its first read of the kept sends fails
+		readFails bool
+	}{
+		{"its answer unknown", false, false, false, false},
+		{"its answer unknown, then a restart", false, false, true, false},
+		{"its answer unknown, a restart that cannot read the kept sends at first", false, false, false, true},
+		{"still out, taken after", true, false, false, false},
+		{"still out with a turn held, taken after", true, true, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			var st Store
+			var keep *sendsKeepFails
+			if c.restart || c.readFails {
+				keep = &sendsKeepFails{DB: taskRecoveryDatabase(t)}
+				st = keep
+			}
+			s, f, accepted := acceptedPlanTask(t, st)
+			note, err := s.noteAgentSend(ctx, "conv1", "box", longAgent, "", "Please cover the landscape case too")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !c.out {
+				note.sent(ctx, context.DeadlineExceeded) // kept, for the agent's next turn
+			}
+			if c.held {
+				longTurn(s, f, proto.StatusWorking, "") // held for the answer
+			}
+			closedUnchanged(t, s, accepted)
+			if c.readFails {
+				s, f = newQuietServiceOn(t, keep)
+				f.judge = `{"verdict":"done","reason":"merged"}`
+				keep.arm(true, false)
+			}
+			again := reviewAndWait(t, s, accepted.ID, reviewAccepted)
+			if c.readFails && keep.take(&keep.failRead) {
+				t.Fatal("the acceptance again did not read the kept sends")
+			}
+			if !again.DoneAt.Equal(*accepted.DoneAt) || again.DoneBy != db.DoneByReview || again.ReopenedAt != nil {
+				t.Fatalf("not accepted again as it stood: %+v", again)
+			}
+			before := supervisionOf(s, f, accepted.ID)
+			if c.held { // the turn held for the send ends
+				longTurn(s, f, proto.StatusDone, "Landscape covered: PR https://github.com/o/r/pull/78 is merged")
+				closedUnchanged(t, s, again)
+			}
+			if c.out { // the answer comes while a send after the acceptance again is out, which then fails
+				later, err := s.noteAgentSend(ctx, "conv1", "box", longAgent, "", "And the portrait case")
+				if err != nil {
+					t.Fatal(err)
+				}
+				note.sent(ctx, nil)
+				closedUnchanged(t, s, again)
+				later.sent(ctx, errors.New("the input box holds a draft; nothing was typed"))
+				closedUnchanged(t, s, again)
+			}
+			if c.restart {
+				if kept := keptSends(t, keep.DB); len(kept) != 0 {
+					t.Fatalf("still kept after the acceptance again: %+v", kept)
+				}
+				s, f = newQuietServiceOn(t, keep)
+				f.judge = `{"verdict":"done","reason":"merged"}`
+				s.recoverSendsOut(ctx) // as Run does when the manager starts
+				before = supervisionOf(s, f, accepted.ID)
+			}
+			judged := judgeCalls(f)
+			longTurn(s, f, proto.StatusWorking, "")
+			closedUnchanged(t, s, again)
+			longTurn(s, f, proto.StatusDone, "The other dashboard looks fine")
+			closedUnchanged(t, s, again)
+			if n := judgeCalls(f); n != judged {
+				t.Fatalf("a turn after the acceptance again was judged: %d judgments, %d before", n, judged)
+			}
+			nothingToldAfter(t, s, f, accepted.ID, before)
+
+			if err := sendTo(t, s, "agent_send", "conv1", "And the portrait case"); err != nil {
+				t.Fatalf("the send after the acceptance again: %v", err)
+			}
+			if got := todoNow(s, accepted.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+				t.Fatalf("the send after the acceptance again, taken, left the task closed: %+v", got)
+			}
+		})
+	}
+}

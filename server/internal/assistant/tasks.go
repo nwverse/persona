@@ -227,6 +227,9 @@ type tasksState struct {
 	sendsSaving                            sync.Mutex
 	sendsLoaded, sendsDirty, sendsRetrying bool
 	sendsRetryAfter                        time.Duration
+	// sendsAcceptedUnread: by task, the latest acceptance made while the sends kept before could not be read
+	// (sendsAccepted), applied to them as they are read (loadSendsOut); under mu.
+	sendsAcceptedUnread map[string]time.Time
 	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
 	retrying map[string]bool
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).

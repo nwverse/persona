@@ -26,7 +26,8 @@ import (
 //     the text may still arrive, whenever the agent reads it: queued behind a long turn, or held in a Claude's inbox
 //     until the person at the computer lets it in. The note stays, and the agent's next turn opens the task
 //     (closedTurnReopens). It goes once the task is no longer the agent's closed task on that acceptance (it opened
-//     again, was accepted again, or the agent went to another task: sendsPrune), and at the latest after sendKeep.
+//     again, or the agent went to another task: sendsPrune), once the task is accepted again, closed or not
+//     (sendsAccepted), and at the latest after sendKeep.
 //
 // A turn of the agent that starts while such a send is out is held for the answer (closedTurnHeld), and so is its end
 // (endHeld). Taken or unknown, the turn is the task's: the task opens and the turn is followed from then, its end too
@@ -212,14 +213,21 @@ func (n *agentSendNote) sent(ctx context.Context, err error) {
 // send leaves that turn held while another send for the task is still out, and as other work when none is: the task
 // stays closed, and the turn's end is dropped. An unknown answer with no turn held keeps the note, for the agent's next
 // turn. A failed send's note is gone from what is kept too: should that write fail, it is tried again (retrySendsOut),
-// since the note read back after a restart would be a send whose answer is unknown.
+// since the note read back after a restart would be a send whose answer is unknown. The answer to a send that no longer
+// counts (forgotten meanwhile: sendsPrune, sendsAccepted) makes nothing of the task.
 func (s *Service) sendAnswered(ctx context.Context, n *agentSendNote, how sendOutcome) {
 	s.tasks.completionMu.Lock()
 	defer s.tasks.completionMu.Unlock()
 	s.tasks.mu.Lock()
 	o := s.tasks.sendsOut[n.key]
 	n.answered = true
-	if how == sendFailed && o != nil {
+	if o == nil || !slices.Contains(o.notes, n) {
+		// It no longer counts: its task opened again or moved, or was accepted again since (sendsAccepted). It asks
+		// nothing of the task now, and whatever forgot it wrote that.
+		s.tasks.mu.Unlock()
+		return
+	}
+	if how == sendFailed {
 		o.notes = slices.DeleteFunc(o.notes, func(m *agentSendNote) bool { return m == n })
 		if len(o.notes) == 0 && o.held == "" {
 			delete(s.tasks.sendsOut, n.key)
@@ -328,6 +336,47 @@ func (s *Service) sendsOpened(ctx context.Context, t Todo, mid, sid string) {
 	s.saveSendsOut(ctx)
 }
 
+// sendsAccepted: task id was accepted (task_review, a task leader's review) at at. That acceptance answers every send
+// of more for the task noted before it, also when the task was closed already and stays closed on the same done_at (an
+// acceptance again, which sendsPrune cannot tell): those sends stop counting, an answer to one still out opens nothing
+// (sendAnswered), and a turn held for them is let go, its end a closed task's. A send noted after at counts as ever.
+// The sends a manager before this one kept are read first; should that read fail, the acceptance is applied to them as
+// they are read (sendsAcceptedUnread).
+func (s *Service) sendsAccepted(ctx context.Context, id string, at time.Time) {
+	loaded := s.loadSendsOut(ctx) == nil
+	s.tasks.completionMu.Lock()
+	defer s.tasks.completionMu.Unlock()
+	now, gone := time.Now(), false
+	s.tasks.mu.Lock()
+	if !loaded {
+		if s.tasks.sendsAcceptedUnread == nil {
+			s.tasks.sendsAcceptedUnread = map[string]time.Time{}
+		}
+		if at.After(s.tasks.sendsAcceptedUnread[id]) {
+			s.tasks.sendsAcceptedUnread[id] = at
+		}
+	}
+	for key, o := range s.tasks.sendsOut {
+		kept := len(o.notes)
+		o.notes = slices.DeleteFunc(o.notes, func(n *agentSendNote) bool { return n.task == id && n.at.Before(at) })
+		gone = gone || len(o.notes) < kept
+		if o.held == id {
+			if pending, answered := o.asking(id, o.heldAt, now); !pending && !answered {
+				o.letGo()
+				gone = true
+			}
+		}
+		if len(o.notes) == 0 && o.held == "" {
+			delete(s.tasks.sendsOut, key)
+		}
+	}
+	s.tasks.mu.Unlock()
+	if gone {
+		s.logf("task %s: accepted: the sends of more for it before are answered", id)
+		s.saveSendsOut(ctx)
+	}
+}
+
 // endHeld: agent mid/sid ended a turn held for the answers of sends of more for its task (closedTurnReopens). The end
 // is put off and noted, and the answer that decides the turn takes it up again once the task is open (sendsSettle);
 // when the sends failed, the turn was other work, and its end is dropped with it. A turn held for sends that no longer
@@ -415,7 +464,7 @@ func (s *Service) loadSendsOut(ctx context.Context) error {
 		key := [2]string{r.Machine, r.Session}
 		var notes []*agentSendNote
 		for _, e := range r.Sends {
-			if e.Task != "" && !e.DoneAt.IsZero() && now.Before(e.Until) {
+			if e.Task != "" && !e.DoneAt.IsZero() && now.Before(e.Until) && !e.At.Before(s.tasks.sendsAcceptedUnread[e.Task]) {
 				notes = append(notes, &agentSendNote{s: s, key: key, from: e.From, at: e.At, task: e.Task, doneAt: e.DoneAt,
 					until: e.Until, answered: true})
 			}
@@ -434,6 +483,7 @@ func (s *Service) loadSendsOut(ctx context.Context) error {
 		}
 		taken += len(notes)
 	}
+	s.tasks.sendsAcceptedUnread = nil
 	s.tasks.mu.Unlock()
 	s.tasks.sendsLoaded = true
 	if taken > 0 {
