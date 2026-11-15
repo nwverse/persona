@@ -319,6 +319,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // part of (agentmenus, chat-comments, chat-contextgroup, chat-modelpill, chat-subagentcard, composer, context,
 // lib-tasks, lib-todos, node-health, settings-nav, work-entry, worktree), measured in one environment against that
 // main: ja 480,853 B to 479,549 B (en 477,669 B to 476,385 B, zh-Hans 478,451 B to 477,198 B), 1,090 B of room.
+// #8380: the changes since used that room and put ja 569 B over (en 478,073 B, ja 481,208 B, zh-Hans 478,862 B).
+// The budget stays. Recovery cards and refusal notices, the external-image consent gate, and the archived-agents and
+// script-request routes load on intent. Their words, and other strings used only by already-lazy components, live in
+// client-rest beside those components rather than in a whole startup namespace. Measured against that main:
+// en 478,073 B to 475,459 B, ja 481,208 B to 478,512 B, zh-Hans 478,862 B to 476,223 B; 2,127 B of room.
 export const FIRST_SCREEN_BUDGET = 480_639;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
