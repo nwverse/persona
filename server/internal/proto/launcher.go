@@ -24,10 +24,31 @@ type Launcher struct {
 	RunHere bool `json:"run_here,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
+	// AutoAccept: a runtime's launcher whose agents ask for approval unless a switch is on, which a start in
+	// bypassPermissions turns on (Paseo's Auto Accept: its ACP providers such as Grok, and OpenCode;
+	// docs/integrations/paseo.md). The Agents Persona itself starts on it run with the switch on, as Claude Code's run in
+	// bypassPermissions (#8141). Older nodes and runtimes leave it out.
+	AutoAccept bool `json:"auto_accept,omitempty"`
 	// Pi: a Persona-managed provider pi can use on this computer too (ManagedLauncher.PiAPI, docs/integrations/pi.md
 	// "Persona's model providers").
 	Pi bool `json:"pi,omitempty"`
 }
+
+// StartInstead is what a new session's start asked for and does not run with, as an engine runtime that runs only its
+// own launchers answers session.start (caps.same_kind, Paseo; docs/integrations/paseo.md "A launcher Paseo does not
+// have"): the launcher it has no usable provider of (one of the same kind of agent runs instead: the session's
+// launcher), the model that one does not offer (it runs its own default), the effort the model does not offer (the
+// session's effort is the one it runs at; none: the model's default). Each empty field ran as asked. The node passes it
+// on with the session (session.start's instead); the hub and the manager say it where the start was asked for.
+type StartInstead struct {
+	Launcher string `json:"launcher,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+}
+
+// CodeLauncherKindMissing: such an engine has no usable provider of the kind of agent a start's launcher starts, so
+// nothing was started and no other kind of agent runs in its place (#8140).
+const CodeLauncherKindMissing = "launcher_kind_missing"
 
 // LauncherDetail is what a ~/.zshrc launcher really sets (the node runs it with the agent stubbed out,
 // node/launcherprobe.go): every field the page shows; secrets are never in it.
