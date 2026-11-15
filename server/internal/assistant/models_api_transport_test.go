@@ -182,8 +182,12 @@ func TestDirectAPITransportProbe(t *testing.T) {
 				} else {
 					out = s.providerDiscover(ctx, in)
 				}
+				want := int32(1)
+				if operation == "discover" {
+					want = 2 // the model list, then the capability report
+				}
 				if tc.allowed {
-					if calls.Load() != 1 || out["error"] != nil {
+					if calls.Load() != want || out["error"] != nil {
 						t.Fatalf("allowed calls=%d result=%v", calls.Load(), out)
 					}
 				} else if calls.Load() != 0 || out["error"] != i18n.T(i18n.En, "assistant-models_launchers.err_api_transport") {

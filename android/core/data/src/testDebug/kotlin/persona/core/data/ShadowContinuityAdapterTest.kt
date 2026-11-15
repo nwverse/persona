@@ -10,7 +10,6 @@ import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.Item
 import persona.core.contracts.JsonCodec
-import persona.core.domain.ContinuityReducer.Gap
 import persona.core.domain.ContinuitySync.Action
 import persona.core.rustcore.CoreHost
 import persona.core.rustcore.RustCore
@@ -40,7 +39,7 @@ class ShadowContinuityAdapterTest {
                 fold = persona.core.contracts.Fold(items = 2, throughSeq = 5, throughId = "5#0"))), "private-history", toSeq = 5)),
             ContinuityAdapter.Input.OpenFold("private-fold"),
             ContinuityAdapter.Input.Range(listOf(item(4), item(5))),
-            ContinuityAdapter.Input.RangeFailed,
+            ContinuityAdapter.Input.RangeFailed(),
         )
         try {
             assertFalse(adapter.asynchronous)
@@ -56,12 +55,43 @@ class ShadowContinuityAdapterTest {
         assertEquals(emptyList<ContinuityMismatch>(), reports.toList())
     }
 
+    @Test fun verificationAuthorityIsTestedSeparatelyFromPairwiseState() = runBlocking {
+        val driver = RustContinuityDriver(FlushContinuityFrameScheduler())
+        val rust = RustContinuityAdapter("chat", driver)
+        val kotlin = KotlinContinuityAdapter("chat")
+        val reports = ConcurrentLinkedQueue<ContinuityMismatch>()
+        val shadow = ShadowContinuityAdapter("chat", sink = { reports.add(it) }, afterFirstFrame = { it() })
+        val inputs = listOf(
+            ContinuityAdapter.Input.Restore(ContinuityAdapter.State(listOf(item(1)), "private-history", 1, true, true)),
+            ContinuityAdapter.Input.Push(batch(2)),
+            ContinuityAdapter.Input.Latest(batch(3)),
+        )
+        try {
+            val expectedRustVerification = listOf(false, false, true)
+            inputs.forEachIndexed { index, input ->
+                val authoritative = kotlin.accept(input)
+                val candidate = requireNotNull(rust.accept(input))
+                assertTrue(authoritative.verified)
+                assertEquals(expectedRustVerification[index], candidate.verified)
+                assertEquals(authoritative, shadow.accept(input))
+                assertEquals(authoritative.state, candidate.state)
+                assertEquals(authoritative.requests, candidate.requests)
+            }
+        } finally {
+            shadow.close()
+            rust.close()
+            driver.close()
+            ShadowContinuityDiagnostics.awaitIdle()
+        }
+        assertEquals(emptyList<ContinuityMismatch>(), reports.toList())
+    }
+
     @Test fun everyComparedFieldReportsOnlyRuleAndShape() = runBlocking {
         val reports = ConcurrentLinkedQueue<ContinuityMismatch>()
         val adapter = ShadowContinuityAdapter("secret-chat", sink = { reports.add(it) }, createShadow = { _, _ ->
             AlteredAdapter { value -> value.copy(state = value.state.copy(
                 items = listOf(item(91).copy(text = "secret-shadow-text")), history = "secret-shadow-history",
-                covered = 918273, hasMore = false, loadedOnce = false), gap = Gap.Reload,
+                covered = 918273, hasMore = false, loadedOnce = false), verified = false,
                 requests = listOf(Action.FetchAfter(918273))) }
         })
         val input = ContinuityAdapter.Input.Latest(ContinuityAdapter.Batch(listOf(item(1).copy(
@@ -69,9 +99,9 @@ class ShadowContinuityAdapterTest {
         adapter.accept(input)
         adapter.close()
         ShadowContinuityDiagnostics.awaitIdle()
-        assertEquals(setOf("item-ids-order", "items", "covered", "history", "hasMore", "loadedOnce", "gap", "requests"),
+        assertEquals(setOf("item-ids-order", "items", "covered", "history", "hasMore", "loadedOnce", "requests"),
             reports.map { it.rule }.toSet())
-        assertEquals(8, adapter.mismatchCount)
+        assertEquals(7, adapter.mismatchCount)
         reports.forEach { report ->
             assertEquals("continuity", report.domain)
             assertEquals("latest items=1 history=set fromSeq=unset toSeq=set backlog=true hasMore=true moreAfter=false", report.inputShape)
@@ -102,6 +132,8 @@ class ShadowContinuityAdapterTest {
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             assertEquals(1, release.count)
             assertNotSame(Thread.currentThread(), thread.get())
+            adapter.close()
+            assertEquals("close must return while Rust is still blocked", 1, release.count)
         } finally {
             release.countDown()
             adapter.close()
@@ -121,7 +153,7 @@ class ShadowContinuityAdapterTest {
             creates.incrementAndGet()
             object : ContinuityAdapter by KotlinContinuityAdapter("chat") {
                 private val kotlin = KotlinContinuityAdapter("chat")
-                override suspend fun accept(input: ContinuityAdapter.Input): ContinuityAdapter.Applied {
+                override suspend fun accept(input: ContinuityAdapter.Input, operation: Long?): ContinuityAdapter.Applied {
                     inputs.add(input)
                     return kotlin.accept(input)
                 }
@@ -143,7 +175,7 @@ class ShadowContinuityAdapterTest {
         val creationThread = AtomicReference<Thread>()
         val adapter = ShadowContinuityAdapter("chat", afterFirstFrame = { frame.set(it); frameScheduled.countDown() },
             createShadow = { scheduler, rejected ->
-                val driver = RustContinuityDriver(scheduler, rejected = rejected) {
+                val driver = RustContinuityDriver(scheduler, onRejected = rejected) {
                     creates.incrementAndGet()
                     creationThread.set(Thread.currentThread())
                     RustCore(Config(), it)
@@ -169,7 +201,7 @@ class ShadowContinuityAdapterTest {
     }
 
     @Test fun loadCreationAcceptAndRejectedFailuresDisableOnlyShadowWithoutContent() = runBlocking {
-        for (failure in listOf("load", "creation", "accept", "rejected")) {
+        for (failure in listOf("load", "creation", "accept", "rejected", "rejected-creation", "rejected-accept", "rejected-applied")) {
             val reports = ConcurrentLinkedQueue<ContinuityMismatch>()
             val attempts = AtomicInteger()
             val adapter = ShadowContinuityAdapter("secret-chat", sink = { reports.add(it) }, afterFirstFrame = { it() },
@@ -178,8 +210,11 @@ class ShadowContinuityAdapterTest {
                     when (failure) {
                         "load" -> throw UnsatisfiedLinkError("secret-token")
                         "creation" -> error("secret-token")
+                        "rejected-creation" -> { rejected(); error("secret-token") }
+                        "rejected-accept" -> AlteredAdapter { rejected(); error("secret-token") }
+                        "rejected-applied" -> AlteredAdapter { it.copy(rejected = true, diagnosticOnly = true) }
                         "rejected" -> {
-                            val driver = RustContinuityDriver(scheduler, rejected = rejected) { host ->
+                            val driver = RustContinuityDriver(scheduler, onRejected = rejected) { host ->
                                 host.run(Effect.Rejected("secret-token"))
                                 RustCore(Config(), host)
                             }
@@ -199,8 +234,36 @@ class ShadowContinuityAdapterTest {
             ShadowContinuityDiagnostics.awaitIdle()
             assertEquals(1, attempts.get())
             val report = reports.single()
-            assertEquals(when (failure) { "load", "creation" -> "rust-creation"; "rejected" -> "rust-rejected"; else -> "rust-failure" }, report.rule)
+            assertEquals(when {
+                failure.startsWith("rejected") -> "rust-rejected"
+                failure == "load" || failure == "creation" -> "rust-creation"
+                else -> "rust-failure"
+            }, report.rule)
             assertFalse(JsonCodec.encodeToString(ContinuityMismatch.serializer(), report).contains("secret"))
+        }
+    }
+
+    @Test fun rejectionSurvivesImplicitOpenAndInputWithinOneSynchronousAccept() = runBlocking {
+        lateinit var driver: RustContinuityDriver
+        var observedCount = 0L
+        driver = RustContinuityDriver(FlushContinuityFrameScheduler(), onRejected = {
+            observedCount = driver.rejections.count
+        }) { host ->
+            host.run(Effect.Rejected("secret-rejection-reason"))
+            RustCore(Config(), host)
+        }
+        val adapter = RustContinuityAdapter("chat", driver)
+        try {
+            val result = requireNotNull(adapter.accept(ContinuityAdapter.Input.Push(batch(1)), operation = 42))
+            assertEquals(1L, observedCount)
+            assertEquals(1L, driver.rejections.count)
+            assertTrue("the implicit OpenChat rejection must survive the subsequent Push apply", result.rejected)
+            assertFalse("the same accept also changed the chat", result.diagnosticOnly)
+            assertEquals(listOf(42L), result.operations.map { it.id })
+            assertEquals(listOf(item(1)), result.state.items)
+        } finally {
+            adapter.close()
+            driver.close()
         }
     }
 
@@ -208,7 +271,7 @@ class ShadowContinuityAdapterTest {
         private val kotlin = KotlinContinuityAdapter("fake")
         override val state get() = kotlin.state
         override val behind get() = kotlin.behind
-        override suspend fun accept(input: ContinuityAdapter.Input) = alter(kotlin.accept(input))
+        override suspend fun accept(input: ContinuityAdapter.Input, operation: Long?) = alter(kotlin.accept(input))
     }
     private fun item(seq: Int) = Item("$seq#0", seq, role = "assistant", kind = "text", text = "private line")
     private fun batch(seq: Int) = ContinuityAdapter.Batch(listOf(item(seq)), "private-history", seq - 1, seq)

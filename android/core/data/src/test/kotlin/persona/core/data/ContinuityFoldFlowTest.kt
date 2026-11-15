@@ -8,7 +8,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.ItemsQuery
 import persona.core.contracts.api.ChatSnapshot
 
-/** Runs on both selections. Native requests serialize folds; this is not iOS parallel-fold parity. */
+/** Runs on both selections: the Kotlin reference serializes folds, while Rust uses independent fold IDs. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ContinuityFoldFlowTest {
     @get:org.junit.Rule val shadowParity = ShadowParityRule()
@@ -57,7 +57,8 @@ class ContinuityFoldFlowTest {
         val first = async { repository.expandFold(key, 2, 3) }
         val second = async { repository.expandFold(key, 5, 6) }
         runCurrent()
-        assertEquals(listOf(2), requests.map { it.fromSeq })
+        val parallel = System.getProperty("persona.continuity", "kotlin") == "rust"
+        assertEquals(if (parallel) listOf(2, 5) else listOf(2), requests.map { it.fromSeq })
         held.complete(ItemsResponse(listOf(work(2), work(3))))
         first.await(); second.await()
         runCurrent()

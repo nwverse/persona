@@ -70,7 +70,9 @@ class ContinuityAdapterFixtureTest(
                 assertEquals("$label published state", result.state, adapter.state)
                 assertEquals("$label item_ids", want.getValue("item_ids").jsonArray.map { it.jsonPrimitive.content },
                     result.state.items.map { it.id })
-                assertEquals("$label gap", want.text("gap"), when (result.gap) {
+                // Gap is the Kotlin reducer's step result, not a Rust boundary field. Rust verification is
+                // tested through ChatPatch.verified; do not rebuild a second continuity state machine here.
+                if (selection != "rust") assertEquals("$label gap", want.text("gap"), when (result.gap) {
                     Gap.None -> "none"
                     Gap.Fill -> "fill"
                     Gap.Reload -> "reload"

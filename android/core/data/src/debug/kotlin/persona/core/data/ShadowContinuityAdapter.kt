@@ -52,8 +52,8 @@ class ShadowContinuityAdapter(
     override val state get() = kotlin.state
     override val behind get() = kotlin.behind
 
-    override suspend fun accept(input: ContinuityAdapter.Input): ContinuityAdapter.Applied {
-        val result = kotlin.accept(input)
+    override suspend fun accept(input: ContinuityAdapter.Input, operation: Long?): ContinuityAdapter.Applied {
+        val result = kotlin.accept(input, operation)
         if (!closed) ShadowContinuityDiagnostics.enqueue {
             if (!disabled) {
                 val shape = input.shape()
@@ -62,19 +62,19 @@ class ShadowContinuityAdapter(
                     val other = shadow ?: run {
                         val scheduler = ShadowFrames(afterFirstFrame)
                         (createShadow?.invoke(scheduler) { rejected = true } ?: run {
-                            val owned = RustContinuityDriver(scheduler, rejected = { rejected = true })
+                            val owned = RustContinuityDriver(scheduler, onRejected = { rejected = true })
                             driver = owned
                             RustContinuityAdapter(chat, owned)
                         }).also { shadow = it }
                     }
                     rule = "rust-failure"
-                    val actual = runBlocking { requireNotNull(other.accept(input)) }
-                    if (rejected) {
+                    val actual = runBlocking { requireNotNull(other.accept(input, operation)) }
+                    if (rejected || actual.rejected) {
                         report("rust-rejected", shape)
                         disable()
                     } else compare(result, actual, shape)
                 } catch (_: Throwable) {
-                    report(rule, shape)
+                    report(if (rejected) "rust-rejected" else rule, shape)
                     disable()
                 }
             }
@@ -91,7 +91,8 @@ class ShadowContinuityAdapter(
         if (a.history != b.history) report("history", shape)
         if (a.hasMore != b.hasMore) report("hasMore", shape)
         if (a.loadedOnce != b.loadedOnce) report("loadedOnce", shape)
-        if (expected.gap != actual.gap) report("gap", shape)
+        // Kotlin's gap/verified describe this step; Rust's verified is persistent core authority.
+        // Cache restores and live pushes intentionally differ. Their contract is tested separately.
         if (expected.requests != actual.requests) report("requests", shape)
     }
 
@@ -150,12 +151,12 @@ private fun ContinuityAdapter.Input.shape(): String = when (this) {
     is ContinuityAdapter.Input.Reload -> "reload items=${items.size} history=${history.presence()} toSeq=${toSeq.presence()} hasMore=$hasMore"
     is ContinuityAdapter.Input.Older -> "older items=${items.size} hasMore=$hasMore"
     is ContinuityAdapter.Input.OpenFold -> "openFold id=set"
-    is ContinuityAdapter.Input.Range -> "range items=${items.size} more=$more"
+    is ContinuityAdapter.Input.Range -> "range items=${items.size} more=$more foldId=${foldId.presence()}"
     ContinuityAdapter.Input.HubChanged -> "hubChanged"
     ContinuityAdapter.Input.ContinueFill -> "continueFill"
     ContinuityAdapter.Input.Reconnect -> "reconnect"
     ContinuityAdapter.Input.LoadOlder -> "loadOlder"
     ContinuityAdapter.Input.FillFailed -> "fillFailed"
     ContinuityAdapter.Input.OlderFailed -> "olderFailed"
-    ContinuityAdapter.Input.RangeFailed -> "rangeFailed"
+    is ContinuityAdapter.Input.RangeFailed -> "rangeFailed foldId=${foldId.presence()}"
 }

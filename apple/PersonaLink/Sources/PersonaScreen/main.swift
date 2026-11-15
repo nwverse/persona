@@ -1,5 +1,5 @@
 import Foundation
-import PersonaScreenKit
+import PersonaScreenCore
 #if canImport(CoreGraphics)
 import CoreGraphics
 #endif
@@ -66,6 +66,13 @@ enum PersonaScreenMain {
         let socket = try UnixSocketClient.connect(path: socketPath)
         defer { socket.close() }
         try socket.writeAll(Data((token + "\n").utf8))
+
+        // A windowless helper is one macOS may nap. Clamped, VideoToolbox's callbacks come late and a frame's encode reads
+        // 18–35 ms instead of 8 (#8713), so the stream holds a latency-critical activity. Idle system sleep stays allowed:
+        // whether the Mac stays awake is the node's `keep_awake`.
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "Live screen stream")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
 
         #if canImport(ScreenCaptureKit)
         let source: ScreenSource = ScreenCaptureSource()

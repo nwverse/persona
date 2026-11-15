@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 extension Theme {
     /// SF Symbols by meaning: one meaning, one symbol. Views write `Image(systemName: Theme.Icon.copy)`, not the name.
@@ -198,6 +199,8 @@ extension Theme {
         static let undo = "arrow.uturn.backward"
         static let redo = "arrow.uturn.forward"
         static let interrupt = "stop.fill"
+        /// The dictation bar's stop: the words go into the draft, nothing is sent (`DictationBar`).
+        static let stopDictating = interrupt
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
         /// Resume a stopped Agent in a terminal on its computer (#5521): the web's Resume shows the same play mark.
@@ -726,6 +729,8 @@ extension Theme {
         /// A subagent the agent started (the Agent / Task tool, a session's subagents); one at work.
         static let subagent = "person.2"
         static let subagentWorking = "person.2.badge.gearshape"
+        /// A session's side sessions (a Claude desktop app's side chats), kept in its chat behind one button (#7944).
+        static let sideSessions = "rectangle.portrait.on.rectangle.portrait"
         /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
         static let agentChat = "bubble.left.and.text.bubble.right"
         /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
@@ -740,6 +745,8 @@ extension Theme {
         static let glossary = "character.book.closed"
         /// Hub transcription on Wi-Fi only (#3862 phase 5): Wi-Fi.
         static let wifiOnly = pluginWifi
+        /// Mobile data (#6396): the live screen's picture on cellular or a personal hotspot.
+        static let mobileData = "cellularbars"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).

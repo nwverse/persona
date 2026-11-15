@@ -41,6 +41,7 @@
   "err_model_no_id": "モデル一覧にIDのないモデルがあります",
   "err_model_duplicate": "モデル{model}が重複しています",
   "err_model_context_negative": "モデル{model}のコンテキストウィンドウは負の値にできません",
+  "err_model_output_negative": "モデル{model}の出力上限は負の値にできません",
   "err_model_effort_empty": "モデル{model}に空の思考の強さがあります",
   "err_model_default_effort_unlisted": "モデル{model}のデフォルトの思考の強さが、サポートされている値に含まれていません",
   "err_timeout_negative": "タイムアウトは負の値にできません",

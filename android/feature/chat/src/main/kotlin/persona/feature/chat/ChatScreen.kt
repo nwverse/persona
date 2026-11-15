@@ -22,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -42,8 +44,12 @@ import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
 import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
+import persona.core.domain.sort.canSwitchListedModes
 import persona.core.domain.sort.canInterrupt
 import persona.core.domain.sort.canSend
+import persona.core.domain.sort.isStoppedAgent
+import persona.core.domain.sort.TerminalResume
+import persona.core.domain.sort.terminalResume
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.canTypeClaudeCommands
 import persona.core.domain.sort.shownCloseout
@@ -67,6 +73,9 @@ import kotlinx.coroutines.withContext
 
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
 private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
+
+/** Guidance supplied by the Assistant host for its main conversation's composer. */
+val LocalMainChatGuidance = androidx.compose.runtime.compositionLocalOf<(@Composable () -> Unit)?> { null }
 
 /** The shell supplies repositories and optional terminal/navigation affordances, never wire clients. */
 @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
@@ -94,8 +103,15 @@ fun ChatScreen(
     historyFooter: (@Composable () -> Unit)? = null,
     /** Display metadata for a history entry that is absent from the live session list. */
     historySession: Session? = null,
+    /** The host already knows this is Health; do not briefly route its files as ordinary attachments while the row loads. */
+    healthChat: Boolean = false,
 ) {
     PersonaTheme(darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+        LaunchedEffect(sessionKey, chrome.childSessionId) {
+            chrome.childSessionId?.let {
+                persona.core.navigation.MessageJumps.request(sessionKey.machineId, sessionKey.sessionId, persona.core.domain.lines.ChildSessionCards.call(it))
+            }
+        }
         val storage = repository as? ChatLocalStorage
         val local by (storage?.localStorage ?: remember { kotlinx.coroutines.flow.MutableStateFlow<ChatStorageSnapshot?>(null) })
             .collectAsStateWithLifecycle()
@@ -107,7 +123,7 @@ fun ChatScreen(
                 scopedReadingKey, anchorStore ?: local?.anchors,
                 renderStyle, textUpdates,
                 composerService, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
-                embedded, showTopBar, historyReadOnly, historyFooter, historySession)
+                embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat)
         }
     }
 }
@@ -125,7 +141,7 @@ private fun ChatPage(
     statusBindings: ChatStatusBindings,
     embedded: Boolean, showTopBar: Boolean,
     historyReadOnly: Boolean, historyFooter: (@Composable () -> Unit)?,
-    historySession: Session?,
+    historySession: Session?, healthChat: Boolean,
 ) {
     val pageSources = rememberChatPageSources(key, repository, sender, interactions, sessions, chrome, textUpdates,
         statusBindings)
@@ -189,6 +205,9 @@ private fun ChatPage(
     var footerHeight by remember { mutableIntStateOf(0) }
     var taskHeight by remember { mutableIntStateOf(0) }
     var stackHeight by remember { mutableIntStateOf(0) }
+    // The page's height above the keyboard, in pixels, read only where it is used (PendingStack.cap, the trays' room): it moves
+    // on every frame the keyboard slides, and a BoxWithConstraints here composed the whole page again on each of them.
+    var pageHeightPx by remember { mutableIntStateOf(-1) }
     val pageTrays = rememberChatPageTrays(key, chrome, renderStyle, connection)
     val assistantTrays = pageTrays.assistantTrays
     var trayApproving by pageTrays.trayApproving
@@ -242,6 +261,7 @@ private fun ChatPage(
     }
     fun deliveryAction(message: OutboxMessage, action: DeliveryAction) {
         if (readOnly) return
+        if (!message.state.allows(action, canSend)) return
         scope.launch {
             try {
                 if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage, ::removed))
@@ -331,8 +351,9 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
+    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
     val pageLines = rememberChatPageLines(key, renderStyle, snapshot, session, foldsBackground, tasks, taskTodos, search,
-        openWork, projection, feed, taskPlans, taskCardProjection)
+        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList())
     var jumpItem by pageLines.jumpItem
     val assistantPresentation = pageLines.assistantPresentation
     val subagentCards = pageLines.subagentCards
@@ -571,13 +592,19 @@ private fun ChatPage(
     val pageSubagents = rememberChatPageSubagents(key, chrome, readOnly, session)
     val subagentLinks = pageSubagents.subagentLinks
     val subagentFolds = pageSubagents.subagentFolds
+    LaunchedEffect(chrome.childSessionId, subagentFolds) {
+        chrome.childSessionId?.let { subagentFolds.open(persona.core.domain.lines.ChildSessionCards.call(it)) }
+    }
     val workflowCards = pageSubagents.workflowCards
     var viewer by remember { mutableStateOf<ViewerRequest?>(null) }
     val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
     // A "Continue" already on its way counts as working: the card offers no second one.
     // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
+    // Every model of a main or leader conversation's recovery chain failed (#7824): the turn's last error card names
+    // the cause and when the configured model is back, and keeps "Retry" whatever the error says.
+    val exhausted = exhaustedRecovery(projection.lines, session?.modelFallback)
     val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(),
-        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE)
+        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null)
     val currentOpenPath by rememberUpdatedState(chrome.onOpenPath)
     // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
     val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
@@ -590,7 +617,7 @@ private fun ChatPage(
     // Stays the same object while the conversation streams: rows read it, and a new one would redraw them all.
     val continueText = stringResource(R.string.chat_screen_continue_message)
     val imageDescription = stringResource(R.string.chat_content_image)
-    val rowActions = remember(key, repository, photos, retryId, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
+    val rowActions = remember(key, repository, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
         ChatRowActions(key, fullText = { item -> repository.fullText(key, item.id) },
             openPath = if (chrome.onOpenPath != null) ({ path, line -> currentOpenPath?.invoke(path, line) }) else null,
             paths = pathPresence,
@@ -600,7 +627,7 @@ private fun ChatPage(
             thumbnails = chrome.files?.let { files ->
                 val cwd = session?.cwd.orEmpty().ifBlank { "~" }
                 ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) })
+            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted)
     }
     LaunchedEffect(snapshot.items) {
         // Replies render each text part under "<item id>/<part index>" (MessageContent), so prewarm those keys, each with
@@ -793,7 +820,7 @@ private fun ChatPage(
             try { repository.loadOlder(key) } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
         })
-    ChatSearchNavigation(search, chatList, lines)
+    ChatSearchNavigation(search, chatList, lines, foldErrors.keys)
     ChatMessageJump(key, repository, chatList, lines, snapshot.hasOlder, snapshot.loading || snapshot.loadingOlder, search,
         onItem = { jumpItem = it }, onNotice = { notice = it })
     LaunchedEffect(list, chrome.covered, search.visible, search.pending, search.returning, chatList.restored, chatList.programmaticScroll, overlay, chromeOverlay, fullText, linkVisible, statusSheet, terminalHelp, taskPageVisible, lifecycle, snapshot.verified) {
@@ -824,10 +851,18 @@ private fun ChatPage(
     val callJumps = pageLinks.callJumps
     val toolNames = pageLinks.toolNames
     val linkManager = pageLinks.linkManager
+    // The live turn's reply says nothing about cost until the turn stops, unless it is waiting on you (its reply is in).
+    val liveAnswerId = if (live && !waitingOnYou) projection.liveTurnId?.let { id ->
+        projection.turns.firstOrNull { it.id == id }?.answer?.item?.id
+    } else null
+    val replyUsage = rememberReplyUsage(snapshot.items, projection.lines,
+        persona = renderStyle == ChatRenderStyle.Assistant, hideAnswerId = liveAnswerId, catalog = actionsService)
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
-        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames) {
+        LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames,
+        LocalReplyUsage provides replyUsage, LocalChatChildren provides childCards,
+        LocalSubagentHarness provides session?.let { subagentHarness(it, res) }) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
             .then(if (embedded) Modifier else Modifier.imePadding())
@@ -840,9 +875,12 @@ private fun ChatPage(
                     followEnd()
                 }
             }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
-            BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
-                val pageHeight = maxHeight
-                val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+            val windowHeightPx = LocalWindowInfo.current.containerSize.height
+            val pageDensity = LocalDensity.current
+            // Until the page is measured (its first frame) the window's height stands in.
+            val pageHeight: () -> Dp = { with(pageDensity) { (if (pageHeightPx >= 0) pageHeightPx else windowHeightPx).toDp() } }
+            val trayMax: () -> Dp = { pageHeight() * AssistantTrayTokens.maximumHeightFraction }
+            Box(Modifier.fillMaxSize().padding(bottom = linkInset).onSizeChanged { pageHeightPx = it.height }) {
                 // The rule a question a supervisor passed up suggests, under its card (#4929); a hub from before sends none.
                 val ruleLine: (@Composable (Interaction) -> Unit)? = if (tasks == null) null else { card ->
                     RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
@@ -857,10 +895,12 @@ private fun ChatPage(
                     val density = LocalDensity.current
                     val above = LocalChromeInsets.current.top
                     val otherShown = if (task) stackCards.isNotEmpty() else taskAsk != null
-                    val cap by remember(pageHeight, keyboard, density, above, task, otherShown) {
+                    // The window's height is a key too: it stands in for the page's until the page is measured, and the
+                    // lambda this derived state keeps must see the window's current one after a resize.
+                    val cap by remember(keyboard, density, above, task, otherShown, windowHeightPx) {
                         derivedStateOf {
                             with(density) {
-                                PendingStack.cap(pageHeight, keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
+                                PendingStack.cap(pageHeight(), keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
                                     header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
                                     other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
                             }
@@ -935,7 +975,8 @@ private fun ChatPage(
                                         onSearch = { search.open(chatList) { timeline.freeze(currentItems); timelineVersion++ } },
                                         onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null,
                                         onResumeInTerminal = resumeInTerminal,
-                                        turnStart = runningSince)
+                                        turnStart = runningSince,
+                                        sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -973,7 +1014,9 @@ private fun ChatPage(
                             if (agentChat) computerPill?.invoke(Modifier.padding(horizontal = Tokens.Space.m))
                             // This agent has nothing left for you, others have (#4325): one tap to the next, no jump.
                             val openRequest = chrome.onOpenRequest
-                            val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+                            val ime = WindowInsets.ime
+                            val imeDensity = LocalDensity.current
+                            val keyboard by remember(ime, imeDensity) { derivedStateOf { ime.getBottom(imeDensity) > 0 } }
                             if (showsNextWaiting(offerNext, requests.size, readOnly, canOpen = openRequest != null, keyboard = keyboard))
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
@@ -1003,6 +1046,8 @@ private fun ChatPage(
                             if (!historyOnly && !readOnly && session != null) ModelFallbackCard(session, chrome.actions)
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                            else if (session?.isStoppedAgent == true && machine?.online != false) ChatStoppedNote(agentTerminal,
+                                resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
                             else {
                                 // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
@@ -1047,14 +1092,22 @@ private fun ChatPage(
                                 if (assistantChat) pendingCards(stackCards, false, keyboard)
                                 // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
                                 // above the composer, as iOS's footer has it (every style: it is behaviour; each draws its own strip, #4339 C6).
-                                if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
+                                if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.mainSuggestions(composer.value.text,
+                                        clear = canSend && LocalMainChatClear.current != null, resources = res).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
+                                if (embedded && assistantChat) LocalMainChatGuidance.current?.invoke()
                                 val claudeCommands = session?.canTypeClaudeCommands == true
+                                // Brief and Board's "Mode" sheet: a permission mode, an effort or a model to change (a
+                                // listed model needs the computer's launcher lists), or the modes a provider lists (#8261).
+                                val modeSheet = session != null && (session.canChangeModes || session.canChangeEffortOnly ||
+                                    session.canSwitchListedModes || (chrome.worktrees != null && SessionModes.listsModels(session)))
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
-                                    service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
+                                    service = composerService, uploadDestination = if (healthChat || session?.isHealth == true) "health" else null,
+                                    onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(),
+                                    assistantChat = assistantChat,
                                     enabled = canSend, placeholder = when {
                                         !canSend -> READ_ONLY.text()
                                         // "Ask Persona…", as the assistant's blank page and iOS say (#4339 C18).
@@ -1069,14 +1122,16 @@ private fun ChatPage(
                                         glass -> if (session != null && SessionModes.showsInComposer(session)) ({
                                             HeaderModeButton(session, controls, connection == null || connection == ConnectionState.Online) { modeOverlay = it }
                                         }) else null
-                                        session?.canChangeModes == true || session?.canChangeEffortOnly == true -> ({
+                                        // Brief and Board: also an agent whose model the node switches itself (a Paseo
+                                        // provider's), its launcher's models listed in the sheet (#8143).
+                                        modeSheet -> ({
                                             ChatModeBar(session, controls, connection == null || connection == ConnectionState.Online,
                                                 onOverlay = { modeOverlay = it }, onPickModel = { model -> send("/model $model") },
-                                                openRequested = openModes, onOpenHandled = { openModes = false })
+                                                openRequested = openModes, onOpenHandled = { openModes = false }, creation = chrome.worktrees)
                                         })
                                         else -> null
                                     },
-                                    modeHint = if (glass) null else chatModeHint(session, includeModes = session?.canChangeModes == true || session?.canChangeEffortOnly == true),
+                                    modeHint = if (glass) null else chatModeHint(session, includeModes = modeSheet),
                                     // The model pill (#5055, the web's ModelPill): Glass's, in an Agent's chat and a Persona chat.
                                     modelPill = if (!glass || switchSession == null) null else ({ width ->
                                         val online = connection == null || connection == ConnectionState.Online
@@ -1141,7 +1196,8 @@ private fun ChatPage(
                                     // Glass: iOS's bubble, its mark and small menu in place of the status line, which still says why
                                     // one did not go (#4339 C9); a delivery to check keeps the status line.
                                     if (glass && drawsAsPendingBubble(deliveryState)) {
-                                        OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy, onAction)
+                                        OutboxBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState, busy,
+                                            canSend = canSend, onAction = onAction)
                                         if (receipt?.processing == true) Text(stringResource(persona.core.designsystem.R.string.designsystem_message_processing),
                                             Modifier.align(Alignment.End), style = PersonaTheme.type.caption,
                                             color = PersonaTheme.palette.ink2, maxLines = 1)
@@ -1151,11 +1207,11 @@ private fun ChatPage(
                                         UserBubble(composerMessagePreview(message.text), message.clientMessageId, deliveryState)
                                         OutboxStatus(message.copy(state = deliveryState,
                                             error = delivery?.refusal?.code ?: message.error),
-                                            busy = busy, onAction = onAction, receipt = receipt, onDetails = { statusSheet = true })
+                                            busy = busy, onAction = onAction, receipt = receipt, canSend = canSend, onDetails = { statusSheet = true })
                                     }
                                     if (!readOnly && failed) {
                                         // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
-                                        ComposerRefusalActions(message, composerService, delivery, terminal,
+                                        ComposerRefusalActions(message, composerService, delivery, terminal, canSend = canSend,
                                             edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
                                     }
                                 }
@@ -1256,7 +1312,7 @@ private fun ChatPage(
                 }
             }
             if (search.visible) ChatSearchScreen(search, searchableItems, projection.turns.size, snapshot.hasOlder,
-                repository, key, onClose = { search.close(chatList) })
+                repository, key, snapshot.history, onClose = { search.close(chatList) })
             if (terminalHelp) TerminalHelpDialog { terminalHelp = false }
             if (activitySheet) session?.takeIf(ChatActivity::shown)?.let { s ->
                 ChatActivitySheet(s, onStop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),
