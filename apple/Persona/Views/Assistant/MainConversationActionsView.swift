@@ -28,6 +28,12 @@ extension AppModel {
         mainClear = MainClearState()
     }
 
+    /// New Chat from an open conversation forgets a cleared main, so the welcome page shows.
+    /// From the empty cleared page (`current` nil) that page stays.
+    func forgetMainClearForNewChat(from current: SessionKey?) {
+        if current != nil { forgetMainClear() }
+    }
+
     /// Asks the hub to compact `key`; its progress comes on the session (`compaction`). A refusal (already answering, already compacting…)
     /// is the hub's own words.
     func compactConversation(_ key: SessionKey) async {

@@ -649,6 +649,9 @@ struct AssistantView: View {
             NewChatCheck.shared.watch(from: from, current: { [model] in NewChatCheck.name(model.assistantCurrent, main: model.assistantMain) },
                                       miss: { [model] line in Self.newChatMissed(line, model: model) })
         }
+        // From an open conversation, New chat is the welcome page. The empty page after Clear context stays only
+        // when New chat is tapped from that page (nothing is open) (#5100).
+        model.forgetMainClearForNewChat(from: current)
         withAnimation(Theme.Motion.standard) {
             model.assistantCurrent = nil
             pending = nil

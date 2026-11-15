@@ -5366,52 +5366,51 @@ struct Composer: View, Equatable {
     }
 
     private var promptCommands: [PromptCommand] {
-        if offersMainClear {
-            return [PromptCommand(MainClearCommand.word, detail: String(localized: "Clear the chat and start over"))]
-        }
-        return PromptItems.commands(clear: canClear && !status.isActive && !clearing, loop: canLoop) + declarations.prompts.map {
+        // The main conversation adds `/clear` (#5100). The quick messages, /loop and extension prompts stay.
+        var commands = PromptItems.commands(clear: canClear && !offersMainClear && !status.isActive && !clearing, loop: canLoop) + declarations.prompts.map {
             PromptCommand(String(localized: "/extension/\($0.title)", comment: "Menu name of a prompt an extension adds"), detail: $0.ownerName, insert: $0.text)
         }
+        if offersMainClear, !commands.contains(where: { $0.name == MainClearCommand.word }) {
+            commands.append(PromptCommand(MainClearCommand.word, detail: String(localized: "Clear the chat and start over")))
+        }
+        return commands
     }
 
     /// Quick messages and /clear in the + menu (`ComposerRow`, and an agent's in the shell).
-    /// The main conversation offers only `/clear` (#5100), and it does not ask first.
+    /// The main conversation adds `/clear` (#5100), and it does not ask first.
     @ViewBuilder private var quickCommands: some View {
         Section("Quick Commands [Chat View c813e6]") {
+            ForEach(SlashCommand.commands(loop: canLoop)) { cmd in
+                Button {
+                    if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
+                } label: { Label(cmd.title, systemImage: cmd.symbol) }
+            }
             if offersMainClear {
                 Button { Task { await runMainClear() } } label: {
                     Label("Clear Context /clear", systemImage: Theme.Icon.clearContext)
                 }
                 .disabled(model.mainClear.busy)
-            } else {
-                ForEach(SlashCommand.commands(loop: canLoop)) { cmd in
-                    Button {
-                        if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
-                    } label: { Label(cmd.title, systemImage: cmd.symbol) }
+            } else if canClear {
+                Button(role: .destructive) { confirmClear = true } label: {
+                    Label("Clear Context /clear", systemImage: Theme.Icon.clearContext)
                 }
-                if canClear {
-                    Button(role: .destructive) { confirmClear = true } label: {
-                        Label("Clear Context /clear", systemImage: Theme.Icon.clearContext)
-                    }
-                    .disabled(status.isActive || clearing)
-                }
+                .disabled(status.isActive || clearing)
             }
         }
     }
 
-    /// The "/" list for the draft (`SlashMenu`): an agent's chat in the composers without the prompt bar's own menu.
+    /// The "/" list for the draft (`SlashMenu`): an agent's chat in the composers without the prompt bar's own menu,
+    /// and the main conversation's, which adds `/clear` to those rows (#5100).
     /// `/model` only where typing it switches the model (`Session.takesModelCommand`): a runtime's session that takes a
     /// model through its menus would get the words as a message (#8144).
     private var slashRows: [SlashMenuRow] {
-        guard text.hasPrefix("/"), text != slashPicked else { return [] }
-        if offersMainClear {
-            // The prompt bar has its own "/" menu; this list is the shell's and the plain input line's.
-            guard usesShellComposer || !AppStyle.current.usesBeautifulUI else { return [] }
-            return SlashMenuRow.matching(text, in: [.clear])
-        }
-        guard !shellChat, model.session(key)?.assistant != true, usesShellComposer || !AppStyle.current.usesBeautifulUI else { return [] }
-        let typesModel = model.session(key)?.takesModelCommand == true
-        return SlashMenuRow.matching(text, in: SlashMenuRow.rows(model: typesModel, loop: canLoop, clear: canClear && !status.isActive && !clearing))
+        let plain = usesShellComposer || !AppStyle.current.usesBeautifulUI
+        let agentList = !shellChat && model.session(key)?.assistant != true && plain
+        // The prompt bar has its own "/" menu; this list is the shell's and the plain input line's.
+        let mainList = offersMainClear && plain
+        return SlashMenuRow.slashRows(draft: text, picked: slashPicked, showsList: agentList || mainList,
+                                       model: model.session(key)?.takesModelCommand == true, loop: canLoop,
+                                       agentClear: canClear && !status.isActive && !clearing, mainClear: offersMainClear)
     }
 
     /// A "/" row picked: its text in the box to send or edit, as on the web; an agent's /clear asks first, as the + menu's.
@@ -5680,7 +5679,7 @@ struct Composer: View, Equatable {
                     mentionMenuItem
                     voiceMenuItem
                     extensionPrompts
-                    if !shellChat || offersMainClear { quickCommands } // an agent's, as its composer offered them before the shell's; the main chat's /clear (#5100)
+                    if !shellChat || offersMainClear { quickCommands } // an agent's, as its composer offered them before the shell's; the main chat adds /clear (#5100)
                     #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
@@ -6003,18 +6002,16 @@ struct Composer: View, Equatable {
                                                 // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.
                                                 meeting: isMain ? { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } } : nil,
                                                 mention: { typeMention() }, context: { contextPick = $0 })
-        if offersMainClear {
-            sections.append(AttachMoreSection(id: "main-clear", title: String(localized: "Quick Commands [Chat View c813e6]"), rows: [
-                AttachMoreRow(id: "attach-main-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
-                              word: "/clear", disabled: model.mainClear.busy) { Task { await runMainClear() } },
-            ], symbol: Theme.Icon.quickCommands))
-        } else if !shellChat {
+        if !shellChat || offersMainClear {
             var rows = SlashCommand.commands(loop: canLoop).map { cmd in
                 AttachMoreRow(id: "attach-command-\(cmd.title)", title: cmd.title, symbol: cmd.symbol, word: cmd.word) {
                     if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
                 }
             }
-            if canClear {
+            if offersMainClear {
+                rows.append(AttachMoreRow(id: "attach-main-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
+                                          word: "/clear", disabled: model.mainClear.busy) { Task { await runMainClear() } })
+            } else if canClear {
                 rows.append(AttachMoreRow(id: "attach-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
                                           word: "/clear", destructive: true, disabled: status.isActive || clearing) { confirmClear = true })
             }
@@ -6227,6 +6224,15 @@ struct SlashMenuRow: Identifiable, Equatable {
         if loop { out.append(.loop) }
         if clear { out.append(.clear) }
         return out
+    }
+
+    /// The composer's "/" list. The main conversation adds `/clear` to the rows it already had (#5100);
+    /// an agent's own `/clear` stays where `rows` put it. The prompt bar does not use this list (`showsList` false).
+    static func slashRows(draft: String, picked: String?, showsList: Bool, model: Bool, loop: Bool, agentClear: Bool, mainClear: Bool) -> [SlashMenuRow] {
+        guard showsList, draft.hasPrefix("/"), draft != picked else { return [] }
+        var listed = rows(model: model, loop: loop, clear: agentClear && !mainClear)
+        if mainClear, !listed.contains(where: { $0.word == Self.clear.word }) { listed.append(.clear) }
+        return matching(draft, in: listed)
     }
 
     /// The rows for a draft: one word after a "/" at the start, matched at the start of the command or anywhere in its

@@ -111,6 +111,29 @@ struct MainClearTests {
         #expect(!state.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: "new"))
     }
 
+    @Test @MainActor func newChatFromAnOpenConversationForgetsTheClearedPage() {
+        let model = AppModel()
+        var state = MainClearState()
+        let started = state.begin(group: "hub", manager: "", sessionID: "old")
+        #expect(started)
+        state.succeed()
+        model.mainClear = state
+        let side = SessionKey(machineID: "m", sessionID: "side")
+        model.forgetMainClearForNewChat(from: side)
+        #expect(model.mainClear.cleared == nil)
+        #expect(!model.mainClear.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: nil),
+                "New chat from an open conversation shows the welcome page")
+
+        var staying = MainClearState()
+        let again = staying.begin(group: "hub", manager: "", sessionID: "old")
+        #expect(again)
+        staying.succeed()
+        model.mainClear = staying
+        model.forgetMainClearForNewChat(from: nil)
+        #expect(model.mainClear.showsPage(group: "hub", manager: "", currentEmpty: true, mainSessionID: nil),
+                "New chat from the empty page stays on it")
+    }
+
     @Test func aFailureOrARefusalDropsTheEmptyPage() {
         var state = MainClearState()
         let started = state.begin(group: "hub", manager: "", sessionID: "old")
