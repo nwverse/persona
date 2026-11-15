@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync/atomic"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 var fsWatchEpochCounter atomic.Uint64
@@ -91,13 +93,17 @@ func (h *Hub) initFSWatchEpoch() {
 	if h.store == nil {
 		return
 	}
+	store, ok := h.store.(*db.DB)
+	if !ok {
+		return
+	}
 	var previous uint64
-	if ok, err := h.store.Setting(context.Background(), fsWatchEpochKey, &previous); err == nil && ok && previous >= base-1 {
+	if ok, err := store.Setting(context.Background(), fsWatchEpochKey, &previous); err == nil && ok && previous >= base-1 {
 		h.fsWatchEpoch = previous + 1
 	} else if err != nil {
 		h.logf("fs.watch epoch: %v", err)
 	}
-	if err := h.store.PutSetting(context.Background(), fsWatchEpochKey, h.fsWatchEpoch); err != nil {
+	if err := store.PutSetting(context.Background(), fsWatchEpochKey, h.fsWatchEpoch); err != nil {
 		h.logf("fs.watch epoch: save: %v", err)
 	}
 }

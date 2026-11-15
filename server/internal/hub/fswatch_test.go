@@ -3,11 +3,15 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/db/dbtest"
 )
 
 // fsClient is a connected browser of the test hub.
@@ -163,7 +167,21 @@ func TestFSWatchGenerationAdvancesAcrossHubs(t *testing.T) {
 }
 
 func TestFSWatchEpochPersistsAcrossRestart(t *testing.T) {
-	store := newMeshStore()
+	base := os.Getenv(dbtest.Env)
+	if base == "" {
+		t.Skip(dbtest.Env + " not set")
+	}
+	ctx := context.Background()
+	url, done, err := dbtest.Own(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	store, err := db.Open(ctx, url, db.HubSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 	first := newTestHub(t)
 	first.store = store
 	before := first.nextFSWatchGeneration("m1")
