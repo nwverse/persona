@@ -13635,17 +13635,16 @@ def fs_find(mid):
 
 
 def fs_convs():
-    """The Feishu page's chats with MOCK_LARK: the rich f1/f2/f3 list, plus the topic group when MOCK_LARK_TOPIC is on.
-    MOCK_LARK used to answer this route first and drop f4, so PerfInboxTests looking for the topic cards found none."""
+    """The Feishu page's chats with MOCK_LARK, plus the topic group when MOCK_LARK_TOPIC is on.
+    Only the perf inbox mock sets both; plain MOCK_LARK keeps FS_CONVS alone."""
     rows = list(FS_CONVS)
-    if os.environ.get("MOCK_LARK_TOPIC"):
-        have = {c["id"] for c in rows}
-        rows += [c for c in LARK_CHATS if c["id"] not in have]
+    have = {c["id"] for c in rows}
+    rows += [c for c in LARK_CHATS if c["id"] not in have]
     return rows
 
 
 def fs_thread(mid, q):
-    """A topic thread from LARK_THREADS, else the rich-page FS_THREADS."""
+    """A topic thread from LARK_THREADS (MOCK_LARK_TOPIC), else the rich-page FS_THREADS."""
     thread = LARK_THREADS.get(mid)
     if thread and thread[0].get("thread_id"):
         page = lark_window(thread[1:], q)
@@ -13705,18 +13704,22 @@ def fs_get(h, p, q):
         return True
     if p == "/api/v1/lark/conversations":
         # Optimized before/after list-scroll measurements use the same paginated synthetic workload (#6553).
-        rows = fs_convs()
         if os.environ.get("MOCK_LARK_LIST"):
-            rows = rows + [dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
-                           for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
+            rows = (fs_convs() if os.environ.get("MOCK_LARK_TOPIC") else FS_CONVS) + [
+                dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
+                for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
             cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
             h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
                          "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
             return True
-        h.send_json({"conversations": rows, "next_cursor": "", "account_id": LARK_ACCOUNT_ID}); return True
+        # Plain MOCK_LARK keeps the body it had on main (no account_id). TOPIC adds f4 and the account stamp
+        # the Messages page requires (`LarkConversationsModel.owner`); without it the list is "Hub update needed".
+        if os.environ.get("MOCK_LARK_TOPIC"):
+            h.send_json({"conversations": fs_convs(), "next_cursor": "", "account_id": LARK_ACCOUNT_ID}); return True
+        h.send_json({"conversations": FS_CONVS, "next_cursor": ""}); return True
     if p.startswith("/api/v1/lark/conversations/") and p.endswith("/messages"):
         feed = p.split("/")[5]
-        if feed in LARK_TOPIC_FEEDS:
+        if os.environ.get("MOCK_LARK_TOPIC") and feed in LARK_TOPIC_FEEDS:
             page = lark_window(LARK_MESSAGES.get(feed, []), q)
             page["topic"] = True
             h.send_json(page); return True
@@ -13725,7 +13728,11 @@ def fs_get(h, p, q):
             h.send_json(lark_window(LARK_MESSAGES[feed], q)); return True
         h.send_json(fs_page(feed, q)); return True
     if p.startswith("/api/v1/lark/messages/") and p.endswith("/thread"):
-        h.send_json(fs_thread(p.split("/")[5], q)); return True
+        mid = p.split("/")[5]
+        if os.environ.get("MOCK_LARK_TOPIC"):
+            h.send_json(fs_thread(mid, q)); return True
+        root = fs_find(mid)
+        h.send_json({"messages": ([root] if root else []) + FS_THREADS.get(mid, []), "has_older": False}); return True
     if p.startswith("/api/v1/lark/messages/") and p.endswith("/url-preview"):
         h.send_json({"title": "公司圈", "card": {"author": "Tom", "avatarUrl": "/api/v1/lark/media/avatar-u_tom", "subtitle": "工程效率",
                                                  "body": "周末徒步回来，顺手整理了一份新人上手清单，欢迎补充。", "footer": "12 赞 · 1 评论"}})

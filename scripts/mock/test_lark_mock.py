@@ -147,7 +147,9 @@ class LarkTopicGroupTests(unittest.TestCase):
         """MOCK_LARK=1 used to swallow /api/v1/lark/conversations and f4's topics (#8561)."""
         hub = MockHub(MOCK_LARK="1", MOCK_LARK_TOPIC="1", MOCK_LARK_RICH="1")
         self.addCleanup(hub.stop)
-        chats = hub.get("/api/v1/lark/conversations")["conversations"]
+        listed = hub.get("/api/v1/lark/conversations")
+        self.assertEqual(listed.get("account_id"), "mock-lark-account")
+        chats = listed["conversations"]
         self.assertIn("f3", [c["id"] for c in chats])
         chat = next(c for c in chats if c["id"] == "f4")
         self.assertTrue(chat["is_topic"])
@@ -157,6 +159,20 @@ class LarkTopicGroupTests(unittest.TestCase):
         hiking = hub.get("/api/v1/lark/conversations/f3/messages")
         self.assertTrue(hiking["has_older"])
         self.assertEqual(len(hiking["messages"]), 40)
+
+    def test_plain_mock_lark_keeps_the_rich_page_body(self):
+        """Without TOPIC/RICH, MOCK_LARK's conversations, f3 page and threads stay as they were on main."""
+        hub = MockHub(MOCK_LARK="1")
+        self.addCleanup(hub.stop)
+        listed = hub.get("/api/v1/lark/conversations")
+        self.assertEqual(set(listed), {"conversations", "next_cursor"})
+        self.assertEqual([c["id"] for c in listed["conversations"]], ["f1", "f2", "f3"])
+        hiking = hub.get("/api/v1/lark/conversations/f3/messages")
+        self.assertFalse(hiking["has_older"])
+        self.assertLessEqual(len(hiking["messages"]), 40)
+        thread = hub.get("/api/v1/lark/messages/lm_f2_187/thread")
+        self.assertEqual([m["id"] for m in thread["messages"] if m], ["lm_f2_187", "lm_f2_1871", "lm_f2_1872"])
+        self.assertFalse(thread["has_older"])
 
 
 class LarkDeliveryProofTests(unittest.TestCase):
