@@ -10,8 +10,9 @@ final class ShellSwitchTests: XCTestCase {
     private var app: XCUIApplication!
     private var finger: ShellFinger!
 
-    override func setUp() {
+    override func setUpWithError() throws {
         continueAfterFailure = false
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the iPhone shell's switch: the iPad has its sidebar column and tabs") }
     }
 
     @MainActor @discardableResult private func see(_ e: XCUIElement, _ what: String, timeout: TimeInterval = 10) -> XCUIElement {
