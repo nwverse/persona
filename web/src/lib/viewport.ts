@@ -84,15 +84,15 @@ function stopMouseWatch() {
   if (!watchingMouse) return;
   watchingMouse = false;
   MOUSE_EVENTS.forEach((type) => window.removeEventListener(type, mousePointer, true));
-  mediaList(FINE)?.removeEventListener("change", mouseMediaChanged);
+  mediaList(FINE)?.removeEventListener("change", mousePointer);
 }
 
-function mouseMediaChanged() {
-  // An imperative hasFinePointer() caller may have started the watch without any hook being mounted.
-  if (matches(FINE)) stopMouseWatch();
-}
-
-function mousePointer(e: PointerEvent) {
+function mousePointer(e: PointerEvent | MediaQueryListEvent) {
+  // The media listener also covers an imperative hasFinePointer() caller with no hook mounted.
+  if ("matches" in e) {
+    if (e.matches) stopMouseWatch();
+    return;
+  }
   // Only a mouse proves the query wrong. A stylus already matches any-pointer:fine where reported correctly; promoting
   // pen would change the keyboard on a pen-only touch device, and touch's compatibility mouse events are not pointer events.
   if (e.pointerType !== "mouse") return;
@@ -102,11 +102,11 @@ function mousePointer(e: PointerEvent) {
 }
 
 function watchMouse() {
-  if (sawMouse || watchingMouse || matches(FINE) || typeof window === "undefined") return;
+  if (watchingMouse || typeof window === "undefined") return;
   watchingMouse = true;
   // A click need not move the mouse first. Capture before a surface stops propagation; passive because this only observes.
   MOUSE_EVENTS.forEach((type) => window.addEventListener(type, mousePointer, { capture: true, passive: true }));
-  mediaList(FINE)?.addEventListener("change", mouseMediaChanged);
+  mediaList(FINE)?.addEventListener("change", mousePointer);
 }
 
 /** Some pointer is precise (a mouse, a trackpad; an iPad with its keyboard and trackpad): Enter sends there. Once a real
@@ -125,7 +125,7 @@ export function hasFinePointer(): boolean {
  *  only the button sends. Mod+Enter always sends, but Mod+Alt+Enter is left out: that is the waiting-card shortcut
  *  (lib/shortcuts.ts), and the composer must not swallow the key before the shortcut dispatcher sees it. */
 export function enterSends(e: { key: string; shiftKey: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }, fine: boolean): boolean {
-  const mod = Boolean(e.ctrlKey || e.metaKey);
+  const mod = e.ctrlKey || e.metaKey;
   return e.key === "Enter" && !e.shiftKey && (mod ? !e.altKey : fine);
 }
 
@@ -150,22 +150,18 @@ export function useMedia(query: string): boolean {
   return useSyncExternalStore(subscribe, () => matches(query), () => false);
 }
 
+function subscribeFine(listener: () => void) {
+  fineListeners.add(listener);
+  hasFinePointer();
+  return () => {
+    fineListeners.delete(listener);
+  };
+}
+
 /** Whether a precise pointer is there, following the media query and the one-time mouse promotion. */
 export function useFinePointer(): boolean {
-  const subscribe = useCallback((listener: () => void) => {
-    fineListeners.add(listener);
-    const query = mediaList(FINE);
-    const changed = () => {
-      if (matches(FINE)) stopMouseWatch();
-      else watchMouse();
-      listener();
-    };
-    query?.addEventListener("change", changed);
-    hasFinePointer();
-    return () => {
-      fineListeners.delete(listener);
-      query?.removeEventListener("change", changed);
-    };
-  }, []);
-  return useSyncExternalStore(subscribe, hasFinePointer, () => false);
+  const fine = useMedia(FINE);
+  const mouse = useSyncExternalStore(subscribeFine, () => sawMouse, () => false);
+  if (!fine && !mouse) watchMouse();
+  return fine || mouse;
 }

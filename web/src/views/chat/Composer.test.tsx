@@ -3,7 +3,8 @@
 // conversation (#2378), including ones still being read or a send that fails after the box moved on.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import { addQuote, getQuotes, sendDraft, setQuotes } from "../../lib/drafts";
 import { toast } from "../../ui/atoms";
 import { Composer, type Outgoing } from "./Composer";
@@ -29,6 +30,10 @@ const create = vi.fn(() => `blob:test/${++urls}`);
 const revoke = vi.fn();
 let host: HTMLDivElement;
 let root: Root;
+
+beforeAll(async () => {
+  await loadPages();
+});
 
 beforeEach(() => {
   urls = 0;

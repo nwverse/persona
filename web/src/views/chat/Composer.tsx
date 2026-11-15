@@ -16,7 +16,6 @@ import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-d
 import { uuid } from "../../lib/format";
 import { lazyPage } from "../../lib/lazy-page";
 import { enterSends, hasFinePointer, useMedia } from "../../lib/viewport";
-import { useModalFocus } from "../../ui/overlay";
 import { COMPACT_COMPOSER, COMPOSER_LINES, lineCount, offersExpand } from "./composer-grow";
 import { INPUT_MAX } from "./dock";
 import { imagePayload, MAX_IMAGE, quotePath, releaseAttachments, sendFile } from "../../lib/attachments";
@@ -47,6 +46,8 @@ import type { VoiceOffer } from "./voice/VoiceParts";
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
 // The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
+const ExpandedComposer = lazyPage(() => import("./ComposerOverlays").then((m) => m.ExpandedComposer));
+const SuggestionPill = lazyPage(() => import("./ComposerOverlays").then((m) => m.SuggestionPill));
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
@@ -456,6 +457,9 @@ export const Composer = memo(function Composer({
   }, [draft, compact, grow.over]);
   const showExpand = compact && grow.over && !disabled;
   useEffect(() => {
+    if (showExpand) void ExpandedComposer.preload().catch(() => {});
+  }, [showExpand]);
+  useEffect(() => {
     if (!compact || disabled) setExpanded(false);
   }, [compact, disabled]);
   // Back from the full editor: the caret where it was there, in the box.
@@ -834,7 +838,7 @@ export const Composer = memo(function Composer({
         </Suspense>
       )}
 
-      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} />}
+      {pill && <Suspense fallback={null}><SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={suggestionRisky ? undefined : () => { setSentPill(pill); void submit(pill); }} /></Suspense>}
 
       <div
         className={cx(
@@ -932,16 +936,17 @@ export const Composer = memo(function Composer({
               if (e.key === "Escape") e.stopPropagation();
               return;
             }
-            // The window owns these chords even while a slash or @ palette is open; do not pick a row instead.
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && (e.altKey || e.shiftKey)) return;
+            const send = enterSends(e, hasFinePointer());
+            // Mod+Enter sends rather than choosing a slash/@ row; Mod+Alt/Shift falls through to the window unchanged.
+            const modEnter = e.ctrlKey || e.metaKey;
             // `/model` alone opens the model panel instead of sending (where the agent switches models)
-            if (enterSends(e, hasFinePointer()) && isModelCommand(draft) && requestModelPicker(draftKey)) {
+            if (send && isModelCommand(draft) && requestModelPicker(draftKey)) {
               e.preventDefault();
               setDraft("");
               return;
             }
             // so does `/permissions` alone: the permission menu (#6476)
-            if (enterSends(e, hasFinePointer()) && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
+            if (send && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
               e.preventDefault();
               setDraft("");
               return;
@@ -954,8 +959,8 @@ export const Composer = memo(function Composer({
             }
             if (history.onKeyDown(e)) return;
             if (mOpen) {
-              // ↑ ↓ move in the panel, Enter / Tab pick its row (none while it is empty, or its chunk still on the way)
-              if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === "Tab") && panel.current?.key(e.key)) {
+              // ↑ ↓ move in the panel, unmodified Enter / Tab pick its row (none while it is empty or still loading)
+              if ((e.key === "ArrowDown" || e.key === "ArrowUp" || (e.key === "Enter" && !modEnter) || e.key === "Tab") && panel.current?.key(e.key)) {
                 e.preventDefault();
                 return;
               }
@@ -973,7 +978,7 @@ export const Composer = memo(function Composer({
                 return;
               }
               // with nothing matching, Enter sends the words as they are: the list holds only a few of the agent's commands
-              if ((e.key === "Enter" || e.key === "Tab") && rows.length) {
+              if (((e.key === "Enter" && !modEnter) || e.key === "Tab") && rows.length) {
                 e.preventDefault();
                 pick(rows[Math.min(active, rows.length - 1)]);
                 return;
@@ -1008,7 +1013,7 @@ export const Composer = memo(function Composer({
             }
             // a touch keyboard's return is a new line there; the send button sends (a hardware keyboard with a
             // trackpad, an iPad's, sends on Enter)
-            if (enterSends(e, hasFinePointer())) {
+            if (send) {
               e.preventDefault();
               // any Enter while blocked says why (also an empty box or attachments only): submit() would do nothing
               if (blocked) nudgeBlocked(e.repeat);
@@ -1127,27 +1132,29 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {expanded && (
-        <ExpandedComposer
-          value={draft}
-          placeholder={placeholder}
-          selection={[input.current?.selectionStart ?? draft.length, input.current?.selectionEnd ?? draft.length]}
-          onChange={(v) => {
-            setDraft(v);
-            setDismissed(false);
-          }}
-          onCollapse={(sel) => {
-            collapsedSel.current = sel;
-            setExpanded(false);
-          }}
-          canSend={Boolean(canSend) && !blocked}
-          blocked={Boolean(blocked)}
-          onSend={(sel, repeat = false) => {
-            collapsedSel.current = sel;
-            setExpanded(false);
-            if (blocked) nudgeBlocked(repeat);
-            else void submit();
-          }}
-        />
+        <Suspense fallback={null}>
+          <ExpandedComposer
+            value={draft}
+            placeholder={placeholder}
+            selection={[input.current?.selectionStart ?? draft.length, input.current?.selectionEnd ?? draft.length]}
+            onChange={(v) => {
+              setDraft(v);
+              setDismissed(false);
+            }}
+            onCollapse={(sel) => {
+              collapsedSel.current = sel;
+              setExpanded(false);
+            }}
+            canSend={Boolean(canSend) && !blocked}
+            blocked={Boolean(blocked)}
+            onSend={(sel, repeat = false) => {
+              collapsedSel.current = sel;
+              setExpanded(false);
+              if (blocked) nudgeBlocked(repeat);
+              else void submit();
+            }}
+          />
+        </Suspense>
       )}
       {editing && (
         <Suspense fallback={null}>
@@ -1190,124 +1197,6 @@ function StopButton({ stopping, onStop }: { stopping?: boolean; onStop: () => vo
     >
       {stopping ? <Spinner size={12} /> : <span aria-hidden className="size-2.5 rounded-[1.5px] bg-current" />}
     </button>
-  );
-}
-
-/** The draft full screen on a phone (#5688): collapse at the top right, the text filling the visible height, send at the
- *  bottom right. It edits the box's own draft; closing hands back the caret so the box picks up where this left off. */
-function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, blocked, onSend }: {
-  value: string;
-  placeholder: string;
-  selection: [number, number];
-  onChange: (v: string) => void;
-  onCollapse: (sel: [number, number]) => void;
-  canSend: boolean;
-  blocked: boolean;
-  onSend: (sel: [number, number], repeat?: boolean) => void;
-}) {
-  const panel = useRef<HTMLDivElement>(null);
-  const field = useRef<HTMLTextAreaElement>(null);
-  const start = useRef(selection);
-  useModalFocus(panel);
-  useLayoutEffect(() => {
-    const el = field.current;
-    if (!el) return;
-    el.focus({ preventScroll: true });
-    el.setSelectionRange(start.current[0], start.current[1]);
-  }, []);
-  const sel = (): [number, number] => [field.current?.selectionStart ?? value.length, field.current?.selectionEnd ?? value.length];
-  return (
-    <div
-      ref={panel}
-      role="dialog"
-      aria-modal="true"
-      aria-label={t("chat-composer.message")}
-      tabIndex={-1}
-      data-testid="composer-expanded"
-      className="fixed inset-x-0 z-50 flex flex-col bg-surface outline-none"
-      style={{ top: "var(--kb-top)", height: "var(--kb-h)", animation: `fade-in 160ms ease-out both` }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape" && !e.nativeEvent.isComposing) {
-          e.preventDefault();
-          e.stopPropagation();
-          onCollapse(sel());
-        }
-      }}
-    >
-      <div className="flex justify-end px-2 pt-[max(env(safe-area-inset-top),8px)]">
-        <button
-          type="button"
-          data-testid="composer-collapse"
-          aria-label={t("chat-composer.collapse")}
-          title={t("chat-composer.collapse")}
-          onClick={() => onCollapse(sel())}
-          className="touch-hit flex size-9 items-center justify-center rounded-[10px] text-ink-2 transition-colors hover:bg-hover hover:text-ink"
-        >
-          <Icon name="collapse" size={18} stroke={2} />
-        </button>
-      </div>
-      <textarea
-        ref={field}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          // The full editor always keeps plain Enter as a newline; an explicit Mod+Enter sends on any pointer.
-          if (!enterSends(e, false)) return;
-          e.preventDefault();
-          if (canSend || blocked) onSend(sel(), e.repeat);
-        }}
-        placeholder={placeholder}
-        aria-label={t("chat-composer.message")}
-        className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 py-1 text-[16px] leading-[24px] text-ink outline-none [overflow-wrap:anywhere] placeholder:text-ink-3"
-      />
-      <div className="flex justify-end px-3 pt-2 pb-[max(env(safe-area-inset-bottom),12px)]">
-        <button
-          type="button"
-          data-testid="composer-expanded-send"
-          aria-label={t("chat-composer.send")}
-          disabled={!canSend}
-          onClick={() => onSend(sel())}
-          className="touch-hit flex size-9 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.94]"
-          style={{ background: canSend ? "var(--ink)" : "var(--line-strong)", color: canSend ? "var(--surface)" : "var(--ink-2)" }}
-        >
-          <Icon name="up" size={18} stroke={2.4} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** The suggested next message over the box (iOS SuggestionPill): the row fills it in, the arrow sends it as it is; a
- *  risky one (no onSend) has no arrow (#4644). */
-function SuggestionPill({ text, onFill, onSend }: { text: string; onFill: () => void; onSend?: () => void }) {
-  return (
-    <div data-testid="composer-suggestion" className="mb-2 flex items-center gap-1 rounded-full bg-surface p-1 pl-1 shadow-card" style={{ animation: `fade-up 200ms ${EASE} both` }}>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onFill}
-        aria-label={t("chat-composer.suggestion_label", { suggestion: text })}
-        title={hasFinePointer() ? t("chat-composer.suggestion_use_hint") : undefined}
-        className="touch-hit flex min-w-0 flex-1 items-center gap-2 rounded-full py-1 pr-1 pl-2.5 text-left transition-colors hover:bg-hover"
-      >
-        <Icon name="sparkles" size={13} stroke={2} className="shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">{text}</span>
-        <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-accent">{t("chat-composer.suggestion_use")}</span>
-      </button>
-      {onSend && (
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onSend}
-          aria-label={t("chat-composer.suggestion_send")}
-          title={t("chat-composer.suggestion_send")}
-          className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
-        >
-          <Icon name="send" size={14} stroke={2} />
-        </button>
-      )}
-    </div>
   );
 }
 

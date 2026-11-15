@@ -2,7 +2,8 @@
 // The composer grows to six lines; native scrolling and the existing phone-only expanded editor stay intact.
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import { Composer } from "./Composer";
 import { COMPOSER_LINES, lineCount, offersExpand } from "./composer-grow";
 
@@ -25,6 +26,10 @@ const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHei
 let phone = true;
 let host: HTMLDivElement;
 let root: Root;
+
+beforeAll(async () => {
+  await loadPages();
+});
 
 beforeEach(() => {
   phone = true;

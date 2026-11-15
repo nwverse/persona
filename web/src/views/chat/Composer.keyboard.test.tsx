@@ -2,7 +2,8 @@
 // Keyboard sending must not depend on a browser's sometimes-wrong precise-pointer media query (#8249).
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import { onModelPicker } from "../../lib/model-switch";
 import { onPermissionPicker } from "../../lib/permissions-command";
 import { Composer, type Outgoing } from "./Composer";
@@ -12,6 +13,11 @@ import { Composer, type Outgoing } from "./Composer";
 let host: HTMLDivElement;
 let root: Root;
 const cleanups: (() => void)[] = [];
+
+beforeAll(async () => {
+  Element.prototype.scrollIntoView ??= () => {};
+  await loadPages();
+});
 
 beforeEach(() => {
   localStorage.clear();
@@ -42,8 +48,10 @@ const setValue = (el: HTMLTextAreaElement, value: string) => {
   el.dispatchEvent(new Event("input", { bubbles: true }));
 };
 const type = async (value: string) => act(async () => {
-  setValue(box(), value);
-  box().setSelectionRange(value.length, value.length);
+  const el = box();
+  valueSetter.call(el, value);
+  el.setSelectionRange(value.length, value.length);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
   await Promise.resolve();
 });
 const press = async (extra: KeyboardEventInit = {}) => {
@@ -67,8 +75,31 @@ const plainEnter = async () => {
   }
   return allowed;
 };
+const rowReady = async (selector: string) => act(async () => {
+  await vi.waitFor(() => expect(host.querySelector(selector)).not.toBeNull());
+});
 
 describe.sequential("composer keyboard sending without a reliable pointer query", () => {
+  it("sends on the first Ctrl+Enter with a selectable slash row open", async () => {
+    const onSend = vi.fn(async (_m: Outgoing) => true);
+    mount({ commands: [{ word: "/compact", desc: "Compact", text: "/compact" }], onSend });
+    await type("/compact");
+    await rowReady("[data-slash-palette] [role=option]");
+    expect((await press({ ctrlKey: true })).defaultPrevented).toBe(true);
+    expect(onSend.mock.calls.map(([message]) => message.text)).toEqual(["/compact"]);
+    expect(box().value).toBe("");
+  });
+
+  it("sends on the first Cmd+Enter with a selectable mention row open", async () => {
+    const onSend = vi.fn(async (_m: Outgoing) => true);
+    mount({ mention: { files: () => ["/code/app/lib/links.ts"] }, onSend });
+    act(() => box().focus());
+    await type("see @links");
+    await rowReady('[data-composer-panel="at"] [role=option]');
+    expect((await press({ metaKey: true })).defaultPrevented).toBe(true);
+    expect(onSend.mock.calls.map(([message]) => message.text)).toEqual(["see @links"]);
+    expect(box().value).toBe("");
+  });
   it("keeps plain Enter as a newline, sends Ctrl/Cmd+Enter and the command pickers, then promotes Enter after a mouse", async () => {
     const onSend = vi.fn(async (_m: Outgoing) => true);
     mount({ onSend });

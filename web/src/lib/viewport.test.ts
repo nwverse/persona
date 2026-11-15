@@ -83,20 +83,20 @@ describe("enterSends", () => {
 describe("fine pointer detection", () => {
   it("follows the query, promotes only for a real mouse move or click, and removes its global listeners", () => {
     let fine = true;
-    const mediaListeners = new Set<() => void>();
+    const mediaListeners = new Set<(event: { matches: boolean }) => void>();
     vi.stubGlobal("matchMedia", (query: string) => ({
       media: query,
       get matches() { return query === "(any-pointer: fine)" && fine; },
-      addEventListener(type: string, listener: () => void) {
+      addEventListener(type: string, listener: (event: { matches: boolean }) => void) {
         if (query === "(any-pointer: fine)" && type === "change") mediaListeners.add(listener);
       },
-      removeEventListener(type: string, listener: () => void) {
+      removeEventListener(type: string, listener: (event: { matches: boolean }) => void) {
         if (query === "(any-pointer: fine)" && type === "change") mediaListeners.delete(listener);
       },
     }));
     const changeFine = (value: boolean) => {
       fine = value;
-      act(() => mediaListeners.forEach((listener) => listener()));
+      act(() => mediaListeners.forEach((listener) => listener({ matches: value })));
     };
     const add = vi.spyOn(window, "addEventListener");
     const remove = vi.spyOn(window, "removeEventListener");
