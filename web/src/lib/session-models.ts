@@ -70,8 +70,12 @@ export interface AssistantLaunchers {
 const assistantMachines = new Map<string, { info?: AssistantLaunchers; loading?: boolean; error?: string }>();
 const assistantReads = new Map<string, Promise<void>>();
 
-/** The Persona chats' launchers of `mid` as last read (`info` undefined before the first answer). */
-export const assistantLaunchers = (mid: string): { info?: AssistantLaunchers; loading?: boolean; error?: string } => assistantMachines.get(mid) ?? {};
+/** The Persona chats' launchers of `mid` as last read (`info` undefined before the first answer), plus the in-flight
+ *  read's identity for a caller that must know whether its refresh joined that exact request. */
+export const assistantLaunchers = (mid: string): { info?: AssistantLaunchers; loading?: boolean; error?: string; read?: Promise<void> } => ({
+  ...(assistantMachines.get(mid) ?? {}),
+  read: assistantReads.get(mid),
+});
 
 /** Reads them: once (a pill that needs the default), or `again` behind the ones shown (an opening of the panel). */
 export function readAssistantLaunchers(mid: string, o: { again?: boolean } = {}): Promise<void> {
@@ -191,7 +195,7 @@ export async function forgetModel(mid: string, launcher: string, id: string): Pr
 
 // ── the session's model, from what was read ──────────────────────────────────
 
-/** The engine a session runs (AgentMark ids: claude, codex, agy…). */
+/** The engine a session runs (AgentMark ids: claude, codex, agy…; one of Paseo's providers is that provider, grok…). */
 export const sessionEngine = (s: Session): string => agentId(sessionAgent(s).agent);
 
 /** The hub moves a running Agent between Claude Code and Codex with the user's next message (#5054,
@@ -199,11 +203,12 @@ export const sessionEngine = (s: Session): string => agentId(sessionAgent(s).age
 export const ENGINE_SWITCH_FEATURE = "engine_switch";
 
 /** Whether `s` may move to the other engine on a hub with ENGINE_SWITCH_FEATURE: a running Claude Code Agent whose model
- *  the app switches (one in a terminal, as for another launcher, #5035), or a Codex Agent in a terminal (its own row: a
- *  Codex app thread or a runtime's session has a source). The node refuses the rest (`switch_unsupported`). */
+ *  the app switches in a terminal (as for another launcher, #5035), or a Codex Agent in a terminal (its own row: a Codex
+ *  app thread or a runtime's session has a source; a runtime's Claude Code switches its model there, not its engine,
+ *  #8142). The node refuses the rest (`switch_unsupported`). */
 export function engineSwitchable(s: Session): boolean {
   const engine = sessionEngine(s);
-  if (engine === "claude") return canSwitchModel(s);
+  if (engine === "claude") return !s.source_kind && canSwitchModel(s);
   return engine === "codex" && !s.assistant && !s.source_kind && Boolean(s.pane_id) && sessionCan(s, "send") && stateOf(s) !== "offline";
 }
 
@@ -234,6 +239,9 @@ export function modelLabel(id: string): string {
 export interface PillSetup {
   /** The engine (AgentMark ids: claude, codex…). */
   engine: string;
+  /** What the engine is called when the app has no name of its own for it: a runtime provider's label ("Grok", the
+   *  row's agent_label, #8142); its mark and its name in the tooltip. */
+  engineLabel?: string;
   /** The provider (launcher) name: its tile, and the tooltip. */
   provider: string;
   /** The model's name; absent while not known (no reply yet and no list to say what the launcher runs by default). */
@@ -283,6 +291,7 @@ export function pillView(s: Session, e: ModelList): PillView {
   const row = currentModelRow(e.list?.models ?? [], s.model);
   const model = row ? modelName(row) : s.model ? modelLabel(s.model) : undefined;
   const out: PillView = { engine: sessionEngine(s), provider: sessionLauncher(s), loading: e.list === undefined && Boolean(e.loading), failed: e.list === undefined && Boolean(e.error) };
+  if (s.agent_label) out.engineLabel = s.agent_label;
   if (model) out.model = model;
   if (s.effort) out.effort = s.effort;
   if (s.service_tier === "priority") out.fast = true;

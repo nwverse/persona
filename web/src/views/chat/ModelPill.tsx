@@ -6,8 +6,9 @@
 // context size, `pillShortName`) and gives way
 // only when the row is short, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
 // provider's tile and the chevron (64 px). An agent that can switch neither its model nor its effort gets the same
-// words as a label, not a button. A Persona chat (and the new-chat page) has `AssistantModelPill` (#5033): the same pill
-// over what the assistant's computer can run Persona chats on, its panel saying whether the chat follows the default.
+// words as a label, except Codex: its panel explains why. A Persona chat (and the new-chat page) has `AssistantModelPill`
+// (#5033): the same pill over what the assistant's computer can run Persona chats on, its panel saying whether the chat
+// follows the default.
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
@@ -17,7 +18,7 @@ import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
+  assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -85,7 +86,7 @@ export function ModelPill({
   const unknown = !shown.model;
   const name = shown.model ?? (loading ? t("chat-modelpill.loading") : failed ? t("chat-modelpill.failed") : t("chat-modelpill.default_model"));
   const describe = (x: PillSetup) =>
-    [agentName(x.engine), x.model ?? name, x.provider, x.effort && effortTitle(x.effort), x.fast && t("chat-sessiondialogs.speed_fast")].filter(Boolean).join(" · ");
+    [agentName(x.engine, x.engineLabel), x.model ?? name, x.provider, x.effort && effortTitle(x.effort), x.fast && t("chat-sessiondialogs.speed_fast")].filter(Boolean).join(" · ");
   const title = pending
     ? t("chat-modelpill.current_and_next", { current: describe(current), next: describe(pending) })
     : [describe(current), failed && !unknown ? t("chat-modelpill.failed") : ""].filter(Boolean).join(" · ");
@@ -93,10 +94,13 @@ export function ModelPill({
   const effort = shown.effort ? effortTitle(shown.effort) : "";
   // what the next message runs on, before its model: the engine when it changes (Cindy's case), else the launcher
   // (Persona's in-session switch, #5035)
-  const target = pending ? (pending.engine !== current.engine ? agentName(pending.engine) : pending.provider) : "";
-  const label = pending
-    ? t(effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending", { agent: target, model: name, effort })
-    : t(effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria", { model: name, effort });
+  const target = pending ? (pending.engine !== current.engine ? agentName(pending.engine, pending.engineLabel) : pending.provider) : "";
+  const label = t(
+    pending
+      ? (effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending")
+      : (effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria"),
+    { agent: target, model: name, effort },
+  );
 
   const body: ReactNode = (
     <>
@@ -120,7 +124,7 @@ export function ModelPill({
       )}
       {/* the engine's mark is the separator before the effort: no "·" */}
       <span aria-hidden data-pill-engine={shown.engine} className={cx("ml-1 flex shrink-0 items-center @max-[520px]/composer:scale-[0.917]", ULTRA_HIDDEN)}>
-        <AgentMark agent={shown.engine} size={12} decorative className="text-ink-2" />
+        <AgentMark agent={shown.engine} label={shown.engineLabel} size={12} decorative className="text-ink-2" />
       </span>
       {shown.effort && (
         <span title={effort} data-pill-effort className={cx("shrink-0 whitespace-nowrap text-ink @max-[600px]/composer:min-w-0 @max-[600px]/composer:shrink @max-[600px]/composer:truncate", ULTRA_HIDDEN)}>
@@ -179,15 +183,15 @@ export function ModelPill({
 }
 
 /** An Agent's pill: what the session runs, and its panel. Loads the session's own model list once, for the name its list
- *  gives the model and to say when that list can't be read. It opens where the model or the effort can change, or the
- *  engine (a Codex Agent in a terminal on a hub that moves it to Claude Code, #5054). */
+ *  gives the model and to say when that list can't be read. It opens where the model or effort can change, and for Codex
+ *  to explain unsupported effort controls (including a terminal Agent that may switch engines, #5054). */
 export const AgentModelPill = memo(function AgentModelPill({ session }: { session: Session }) {
   useModelLists();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
   const switches = sessionSwitches(session);
-  const engineSwitch = useStore((s) => hubHas(s.features, ENGINE_SWITCH_FEATURE)) && engineSwitchable(session);
-  const opens = switches.model || switches.effort || engineSwitch;
+  const view = pillView(session, modelList(mid, own));
+  const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true });
   }, [opens, mid, own]);
@@ -212,7 +216,6 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
     if (target && target !== own) void readModels(mid, target);
   }, [target, own, mid]);
 
-  const view = pillView(session, modelList(mid, own));
   const pending = pendingView(session, (name) => modelList(mid, name));
   if (!opens && !view.model) return null;
   const workflow = ultracodeOn(session) ? {} : view.engine === "codex" && session.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;

@@ -315,6 +315,9 @@
     <string name="chat_modes_model_sonnet_detail">Balanced</string>
     <string name="chat_modes_model_haiku_detail">Fastest</string>
     <string name="chat_modes_unknown_detail">This version of the app doesn\'t know this mode yet</string>
+    <string name="chat_modes_launcher_default">Follow launcher</string>
+    <string name="chat_modes_launcher_default_detail">Its own approval settings decide what it asks, and may already allow everything</string>
+    <string name="chat_modes_bypass_listed_detail">Approves everything without asking; can be switched back in the chat</string>
     <string name="chat_modes_effort_hint">Thinking: %1$s</string>
     <string name="chat_modes_hint_separator">", "</string>
     <string name="chat_modes_button_bypass">Mode: allow everything</string>
@@ -446,6 +449,7 @@
     <string name="chat_slash_report_text">Briefly report your progress so far and what\'s left</string>
     <string name="chat_slash_clear_title">Clear context /clear</string>
     <string name="chat_slash_clear_detail">Clear the context and start a new session</string>
+    <string name="chat_slash_clear_main_detail">Clear the chat and start over</string>
     <string name="chat_tasks_origin_gone">The earlier record is no longer in the list</string>
     <string name="chat_tasks_load_failed">Couldn\'t load the related records. Expand the work steps and try again</string>
     <string name="chat_tasks_record_gone">The related record is no longer in the list</string>
