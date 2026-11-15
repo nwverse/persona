@@ -1210,3 +1210,41 @@ func TestAnAcceptanceAgainEndsTheSendsBeforeIt(t *testing.T) {
 		})
 	}
 }
+
+// A bare /exit or /quit on the card of an accepted task whose agents have all stopped asks the task for nothing, and
+// what it would close is closed already: no new agent starts, the card says so, and the task stays exactly as accepted,
+// its supervisor told nothing.
+func TestAQuitCommandToAStoppedTaskStartsNothing(t *testing.T) {
+	for _, text := range []string{"/exit", " /quit\n"} {
+		t.Run(strings.TrimSpace(text), func(t *testing.T) {
+			ctx := context.Background()
+			s, f, todo := doneAndReviewed(t)
+			accepted := reviewAndWait(t, s, todo.ID, reviewAccepted)
+			before := supervisionOf(s, f, todo.ID)
+			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+				LastText: "Fixed it: PR https://github.com/o/r/pull/77 is merged", Status: proto.StatusOffline, State: proto.StateOffline,
+				UpdatedAt: time.Now(), Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}, ReadOnlyReason: "stopped"})
+			starts := func() int {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				n := 0
+				for _, c := range f.calls {
+					if c.Method == DeviceSessionStart {
+						n++
+					}
+				}
+				return n
+			}
+			started := starts()
+			_, err := s.routeToTask(ctx, "conv1", todo.ID, text)
+			if msg := (*i18n.Message)(nil); !errors.As(err, &msg) || msg.Key != "assistant-tasks.route_agents_exited" {
+				t.Fatalf("%q on the card of a task whose agents stopped: %v, want route_agents_exited", text, err)
+			}
+			if n := starts() - started; n != 0 {
+				t.Fatalf("%q started %d new agents", text, n)
+			}
+			closedUnchanged(t, s, accepted)
+			nothingToldAfter(t, s, f, todo.ID, before)
+		})
+	}
+}

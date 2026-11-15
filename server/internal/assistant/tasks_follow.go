@@ -726,6 +726,9 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 		if relay != "" {
 			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_stopped")
 		}
+		if exitText(text) { // what it would close is closed: no new agent, and a closed task stays closed (#7539)
+			return FeedItem{}, i18n.Err("assistant-tasks.route_agents_exited")
+		}
 		started, err := s.startTaskSuccessor(ctx, t, last, text)
 		if hubClosedTask(&t) && (err == nil || sendUnknown(err)) { // a start that never went out asked for nothing
 			s.successorOpens(ctx, t, started)
