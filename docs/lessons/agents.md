@@ -12,6 +12,13 @@ check. This demonstrates the confirmation gap, not the cause of any particular l
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
 
+## Task branch reuse is not forced worktree creation (#8357)
+
+An explicitly named task branch may already have a checkout outside the engine's usual directory. Discover it from Git,
+not from the generated path or an error message. Reuse needs successful clean-tree and complete live-Agent checks on the node,
+plus the hub's unfinished-task claim check under workspace admission. Missing inspection is not proof of safety.
+Persist reuse separately from creation and keep its machine/path on retry; do not relax ordinary `worktree.create` or Start approval.
+
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
@@ -537,6 +544,15 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 
 - Claude Code runs `personad hook` (or `persona-node hook`) on each of Persona's hook events and waits for it to exit. Most of that run was package initialization of the server it links: the i18n catalogs (parsed at start, and still parsed after they were made lazy because `extension.UISlots` and `assistant.silentTurnError` called `i18n.T` in package variables), every prompt template (parsed at start, and still parsed after they were made lazy because `prompts.peerMessageHead` rendered one in a package variable), about 460 package-level regexps (one `[\p{L}\p{N}_-]{1,64}` alone 0.8 ms and 2.5 MB), and the six garbage collections those 28 MB of allocations set off. On a busy Apple silicon Mac, where a Go program that only reads stdin took 6.8 ms, the hook took 40.4 ms (median of 50 runs; persona-node 45.3 ms); after making them lazy (`internal/lazyre` for patterns, `sync.OnceValue` for the rest and in the contract packages, which use the standard library only) it takes 15.2 ms (persona-node 16.4 ms), with init down from 29.5 ms / 28 MB to 3.6 ms / 1.4 MB and no collection. Keep package-level work out of anything personad links: `GODEBUG=inittrace=1 personad hook </dev/null` lists what each package's init costs, `GODEBUG=gctrace=1` the collections during it; a package-level `i18n.T` or prompt render defeats the lazy catalogs and templates, and `lazyre`'s guard test refuses a package-level `regexp.MustCompile`.
 
+## A session with no space is in "No project", whatever its repository (2026-11-15, #8521)
+
+The clients' Agents list by **Project** groups by `space_id` (the hub's catalog of spaces), not by `repo_root`. A source
+that never sets a space puts all its sessions under "No project" even when `repo_root` is right, so the **Repository**
+grouping looks fine and the bug shows only in the other one. Hosts set it (herdr, Orca, Paseo); a desktop app's sessions
+need the node to set one: the Codex App's always had one, the Claude desktop app's had none until #8521. A new source of
+sessions outside the engines should set a space too. On the list path, take the repository from the list's Git places
+(`fillGitPlace`, read in the background) rather than running git per row: it runs every second.
+
 ## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
 
 - `pollAgents` rebuilds the whole list every second, so a lookup made once per row is made once per row per second. With 199 Codex rollouts on disk, `codexSessions` resolved each rollout's directory through `realPath` (an `lstat` per path part, a `readlink` per link), stat'ed the rollout up to three times, resolved the Codex home per rollout and rebuilt the assistant's project name with a regexp: about 19 stats per rollout per pass, 5,600 `newfstatat` and 380 `readlinkat` a second from an idle node, half its CPU. A pass-local memo (`codexListPass`) that keeps each directory's resolved path, each rollout's stat, the App socket check per home and the project name for that one call brought it to about 1,000 `newfstatat` and 13 `readlinkat` a second, with the rows unchanged. Keep such a memo local to the call: nothing is shared between callers, and nothing can go stale for longer than one pass. Count with `strace -c -f -p <node pid>` over a steady window against a copy of a real corpus (symlinks to `~/.claude/projects` and `~/.codex/sessions` in a scratch HOME), not on a fixture with a handful of files.
@@ -1055,3 +1071,13 @@ while that is the running gateway. Several providers on one computer overwrite e
 `initialize` answer is not a stable source for a provider's gateway models. Turning discovery off to hide entries is
 wrong too: it removes the gateway's list from every `/model` the user opens. Read the gateway itself
 (`node/launcher_gateway_models.go`) and compare lists from several computers before concluding a list is clean.
+
+## A Claude session without Persona's hooks still asks with AskUserQuestion (#8515)
+
+The desktop app's sessions (and claude in other terminals) run no hook of Persona's, so their questions never became
+cards; the apps showed only a "reply to answer" line, and the questions and options were nowhere to be seen. The peer
+message prompt asked the model to offer numbered options in plain text instead (#5887), but models still opened
+AskUserQuestion, often with several questions. Read the open call from the transcript (`node/claudeoutside_ask.go`)
+rather than counting on the model to follow the prompt, and check a real transcript's `tool_use` input shape before
+parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
+workaround that outlives the fix it stood in for is wrong advice to the model.
