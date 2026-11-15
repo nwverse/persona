@@ -341,6 +341,28 @@ class RepairIntegrationTests(unittest.TestCase):
             self.assertEqual((nested / "file.txt").read_text(), "resolved\n")
             self.assertEqual((root / "other.txt").read_text(), "keep\n")
 
+    def test_pr_symlink_cannot_mount_an_external_sentinel_into_the_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "file.txt").write_text("conflict\n")
+            sentinel = root / "sentinel.txt"
+            sentinel.write_text("must not be mounted\n")
+            (repo / "link.txt").symlink_to(sentinel)
+            (root / "home").mkdir()
+            argv = pr_watch_repair.repair_worker_argv(["repair-worker"], repo, home=root / "home",
+                                                      writable_paths=["file.txt"])
+            triples = [argv[i:i + 3] for i in range(len(argv) - 2)]
+            self.assertNotIn(["--ro-bind", str(repo / "link.txt"), str(repo / "link.txt")], triples)
+            self.assertNotIn(["--ro-bind", str(sentinel), str(sentinel)], triples)
+            result = pr_watch_repair.run(argv[:-1] + ["/usr/bin/python3", "-c",
+                                                       "from pathlib import Path\ntry:\n print(Path('link.txt').read_text())\nexcept FileNotFoundError:\n print('external sentinel unavailable')"],
+                                         cwd=repo, timeout=45,
+                                         environ={key: value for key, value in os.environ.items() if key in ("PATH", "LANG")})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "external sentinel unavailable")
+
     def test_conflict_worker_can_resolve_a_deletion(self):
         self.conflicting_merge()
         def resolve(root):

@@ -492,16 +492,20 @@ def repair_worker_argv(argv, worktree, home=None, writable_paths=()):
         # replacement. Protect .git separately, and never cover it with a
         # read-only parent mount.
         for path in Path(worktree).rglob("*"):
+            if path.is_symlink():
+                # A PR-controlled link may point outside the repository. Do
+                # not let bwrap resolve it on the host into a credential mount.
+                continue
             if path in writable or any(path == directory or directory in path.parents for directory in directories):
                 continue
-            if path.is_dir() and not path.is_symlink():
+            if path.is_dir():
                 result.extend(["--ro-bind", str(path), str(path)])
-            elif path.exists() or path.is_symlink():
+            elif path.exists():
                 result.extend(["--ro-bind", str(path), str(path)])
         for directory in directories:
             result.extend(["--bind", str(directory), str(directory)])
             for path in Path(directory).iterdir():
-                if path in writable:
+                if path in writable or path.is_symlink():
                     continue
                 if any(child != path and child.is_relative_to(path) for child in directories):
                     continue
@@ -510,7 +514,9 @@ def repair_worker_argv(argv, worktree, home=None, writable_paths=()):
             # A delete/delete or delete/modify conflict may have no file yet;
             # its existing parent directory is the writable mount, not a
             # nonexistent file. The outer type/tree checks decide the result.
-            if path.exists() and not path.is_file() and not path.is_symlink():
+            if path.is_symlink():
+                raise WatchError("a conflicted symlink cannot be an isolated bind source")
+            if path.exists() and not path.is_file():
                 raise WatchError("conflict repair needs a regular file or symlink mount")
     else:
         result.extend(["--bind", worktree, worktree])
