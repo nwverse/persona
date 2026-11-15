@@ -119,6 +119,20 @@ describe("the panel's providers", () => {
     expect(provider(p, "p-relay")).toMatchObject({ models: null, loading: true });
   });
 
+  // A launcher that lists its permission modes (#8261, Paseo's Grok and its Codex providers) takes the efforts its models
+  // list: each row its model's own, the Default row the default model's, none for a model nobody lists the levels of.
+  it("a launcher that lists its permission modes offers each model's own efforts, and none where nobody says", () => {
+    const grok: Launcher = { name: "grok", agent: "paseo", source: "paseo", display_name: "Grok", permission_modes: ["default", "bypassPermissions"] };
+    const paseoCodex: Launcher = { name: "my-codex", agent: "codex", source: "paseo", permission_modes: ["default", "bypassPermissions"] };
+    const grokList: LauncherModels = { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true, efforts: ["low", "high"] }, { id: "grok-mini", name: "Grok mini" }] };
+    const p = newAgentPanel({ launchers: [grok, paseoCodex], listOf: (n) => (n === "grok" ? { list: grokList } : { list: codexList }), choice: none, configured: null, runs: "grok", tiers: [] });
+    expect(provider(p, "grok").name).toBe("Grok");
+    expect(provider(p, "grok").models?.map((m) => [m.id, m.efforts])).toEqual([["default", ["low", "high"]], ["grok-4", ["low", "high"]], ["grok-mini", []]]);
+    expect(provider(p, "my-codex").models?.map((m) => m.efforts)).toEqual([["low", "medium", "high"], ["low", "medium", "high"], ["low", "medium", "high"]]);
+    expect(newAgentPill({ launchers: [grok], runs: "grok", list: { list: grokList }, choice: { launcher: "grok", model: "", effort: "high" }, configured: null, fallback: "" }).effort)
+      .toBe("high");
+  });
+
   it("an ID typed for this start that the list lacks gets its own row, so it is lit", () => {
     const p = panel({ choice: { launcher: "claude", model: "vendor/new", effort: "" }, configured: null });
     expect(provider(p, "claude").models?.at(-1)).toMatchObject({ id: "vendor/new", efforts: EFFORTS });
@@ -204,6 +218,26 @@ describe("engines", () => {
     expect(engineSetup(choices[1], { provider: "claude", model: "gateway/glm-5.3", effort: "high" })).toEqual({ provider: "codex", model: "gateway/glm-5.3" });
     const def = rows.length ? panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [], recent: [], overrides: {} }).flatMap((s) => s.rows).find((r) => r.provider.id === "claude" && r.model.providerDefault)! : glm;
     expect(engineChoices(p.providers, def, p.state)).toHaveLength(1);
+  });
+
+  it("each of Paseo's providers is an engine of its own, by its provider, never 'paseo' (#8142)", () => {
+    const shared = { id: "anthropic/claude-sonnet-5-5", name: "Sonnet 5.5" };
+    const paseo: Launcher[] = [
+      { name: "opencode", agent: "paseo", agent_type: "paseo", source: "paseo" },
+      { name: "pi", agent: "paseo", agent_type: "paseo", source: "paseo" },
+      { name: "grok", agent: "paseo", agent_type: "paseo", source: "paseo" },
+    ];
+    const paseoLists: Record<string, ModelList> = {
+      opencode: { list: { agent: "paseo", models: [{ ...shared, default: true }] } },
+      pi: { list: { agent: "paseo", models: [{ ...shared, default: true }] } },
+      grok: { list: { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true }] } },
+    };
+    const p = newAgentPanel({ launchers: paseo, listOf: (n) => paseoLists[n] ?? {}, choice: none, configured: null, runs: "opencode", tiers: [] });
+    expect(p.providers.map((x) => x.engine)).toEqual(["opencode", "pi", "grok"]);
+    // the same model through OpenCode and Pi: two engines, as the flyout's engine pills offer them
+    const row = { kind: "model" as const, provider: p.providers[0], model: p.providers[0].models!.find((m) => m.id === shared.id)! };
+    expect(engineChoices(p.providers, row, p.state).map((c) => [c.engine, c.provider.id])).toEqual([["opencode", "opencode"], ["pi", "pi"]]);
+    expect(newAgentPill({ launchers: paseo, runs: "grok", list: paseoLists.grok, choice: none, configured: null, fallback: "" }).engine).toBe("grok");
   });
 
   it("of one engine, a launcher that can take the pick is offered over one that can't", () => {

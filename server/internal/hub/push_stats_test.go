@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 // statsRequest serves one GET against the push grading routes with an optional principal (nil is a full credential).
@@ -287,7 +288,8 @@ func TestPushDailyStatsHeldToManager(t *testing.T) {
 	}
 }
 
-// The delivered-push record lives in hub_settings, so a restart keeps the counts like the switch and the held list.
+// The delivered-push record lives in the store (hub_push_sent), so a restart keeps the counts like the switch and the
+// held list.
 func TestPushSentPersists(t *testing.T) {
 	h, f := lnHub(t)
 	if _, err := h.deliverPushFrom("manager-a", lnNotification(assistantwire.LevelP1, "persisted-sent", "x")); err != nil {
@@ -319,26 +321,39 @@ func TestPushPairingReceiptCountsAsSent(t *testing.T) {
 	}
 }
 
-// flakyPutStore fails the first failsLeft PutSetting calls, then delegates to the real in-memory store.
+// flakyPutStore fails the first failsLeft PutSetting and AddPushSent calls, then delegates to the real in-memory store.
 type flakyPutStore struct {
 	*lnStore
 	mu        sync.Mutex
 	failsLeft int
 }
 
-func (s *flakyPutStore) PutSetting(ctx context.Context, key string, v any) error {
+func (s *flakyPutStore) fail() bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failsLeft > 0 {
 		s.failsLeft--
-		s.mu.Unlock()
+		return true
+	}
+	return false
+}
+
+func (s *flakyPutStore) PutSetting(ctx context.Context, key string, v any) error {
+	if s.fail() {
 		return errors.New("database down")
 	}
-	s.mu.Unlock()
 	return s.lnStore.PutSetting(ctx, key, v)
 }
 
-// A failed settings write is retried instead of dropped: waitInterceptsSaved must not report idle while the change is
-// unsaved, and the row eventually lands.
+func (s *flakyPutStore) AddPushSent(ctx context.Context, entries []db.PushSent) error {
+	if s.fail() {
+		return errors.New("database down")
+	}
+	return s.lnStore.AddPushSent(ctx, entries)
+}
+
+// A failed write is retried instead of dropped: waitInterceptsSaved must not report idle while the change is unsaved,
+// and the row eventually lands, once.
 func TestPushWriterRetriesFailedSave(t *testing.T) {
 	h, f := lnHub(t)
 	store := &flakyPutStore{lnStore: h.push.store.(*lnStore), failsLeft: 2}
@@ -356,12 +371,11 @@ func TestPushWriterRetriesFailedSave(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("the flaky store still has %d failures budgeted, want all retries spent", left)
 	}
-	var saved []pushSent
-	if ok, err := store.Setting(context.Background(), pushSentSettingKey, &saved); err != nil || !ok || len(saved) != 1 {
-		t.Fatalf("saved row = %d (ok %v, err %v), want one delivered push", len(saved), ok, err)
+	if rows := store.sentTable(); len(rows) != 1 || rows[0].RelatedKey != "retry-me" {
+		t.Fatalf("saved rows = %+v, want one delivered push", rows)
 	}
 	h.push.lnMu.Lock()
-	idle := !h.push.lnWriting && !h.push.lnDirty && !h.push.sentDirty
+	idle := !h.push.lnWriting && !h.push.lnDirty && len(h.push.sentPending) == 0
 	h.push.lnMu.Unlock()
 	if !idle {
 		t.Fatal("the writer stayed busy after the retry landed")
@@ -376,9 +390,9 @@ func TestPushInterceptsAllowlist(t *testing.T) {
 	h.cfg = &Config{InterceptReaders: []string{"ext-push-panels"}}
 	now := h.push.now()
 	h.push.recordIntercept(pushIntercept{At: now.UTC(), Level: assistantwire.LevelP0, Reason: interceptReasonDedup,
-		Title: "a card", Body: "summary for a", Manager: "manager-a"})
+		Title: "a card", Body: "summary for a", Manager: "manager-a", TodoID: "todo_a", MachineID: "machine-a", SessionID: "session-a"})
 	h.push.recordIntercept(pushIntercept{At: now.Add(time.Second).UTC(), Level: assistantwire.LevelP1, Reason: interceptReasonP1,
-		Title: "b card", Body: "summary for b", Manager: "manager-b"})
+		Title: "b card", Body: "summary for b", Manager: "manager-b", TodoID: "todo_b", MachineID: "machine-b", SessionID: "session-b"})
 
 	// No allow-list entry matches: extension tokens are refused even though they carry the notify scope.
 	if code, _ := statsRequest(t, h, &principal{Role: roleExtension, Manager: "manager-a", Extension: "ext-other"},
@@ -404,6 +418,17 @@ func TestPushInterceptsAllowlist(t *testing.T) {
 	}
 	if len(out.Intercepts) != 1 || out.Intercepts[0].Manager != "manager-a" {
 		t.Fatalf("allow-listed extension read %+v, want only manager-a's entry", out.Intercepts)
+	}
+	var rawOut struct {
+		Intercepts []map[string]any `json:"intercepts"`
+	}
+	if err := json.Unmarshal(body, &rawOut); err != nil || len(rawOut.Intercepts) != 1 {
+		t.Fatalf("raw allow-listed response = %s (%v), want one entry", body, err)
+	}
+	for key, want := range map[string]string{"todo_id": "todo_a", "machine_id": "machine-a", "session_id": "session-a"} {
+		if got := rawOut.Intercepts[0][key]; got != want {
+			t.Fatalf("allow-listed response %s = %#v, want %q: %s", key, got, want, body)
+		}
 	}
 
 	// A full credential still sees both managers.
@@ -461,9 +486,9 @@ func TestPushInterceptsSanitizeOldRowsOnLoad(t *testing.T) {
 	h, _ := lnHub(t)
 	store := h.push.store.(*lnStore)
 	longBody := strings.Repeat("密", pushInterceptBodyMaxRunes+80)
-	legacy := []pushIntercept{{
-		At: h.push.now().UTC(), Level: assistantwire.LevelP1, Reason: interceptReasonP1,
-		Title: "legacy card", Body: longBody, Manager: "manager-a",
+	legacy := []map[string]any{{
+		"at": h.push.now().UTC(), "level": assistantwire.LevelP1, "reason": interceptReasonP1,
+		"title": "legacy card", "body": longBody, "manager": "manager-a",
 	}}
 	raw, err := json.Marshal(legacy)
 	if err != nil {
@@ -477,6 +502,9 @@ func TestPushInterceptsSanitizeOldRowsOnLoad(t *testing.T) {
 	view := restarted.lnInterceptsView("", 0)
 	if len(view) != 1 {
 		t.Fatalf("reloaded view = %d entries, want 1", len(view))
+	}
+	if view[0].TodoID != "" || view[0].MachineID != "" || view[0].SessionID != "" {
+		t.Fatalf("legacy row gained a source on load: %+v", view[0])
 	}
 	if n := len([]rune(view[0].Body)); n != pushInterceptBodyMaxRunes || !strings.HasSuffix(view[0].Body, "…") {
 		t.Fatalf("reloaded body length %d, want a %d-rune summary", n, pushInterceptBodyMaxRunes)
@@ -496,5 +524,14 @@ func TestPushInterceptsSanitizeOldRowsOnLoad(t *testing.T) {
 	}
 	if len([]rune(back[0].Body)) != pushInterceptBodyMaxRunes {
 		t.Fatalf("persisted body length %d, want the summary limit", len([]rune(back[0].Body)))
+	}
+	var rawBack []map[string]any
+	if err := json.Unmarshal(persisted, &rawBack); err != nil || len(rawBack) != 1 {
+		t.Fatalf("raw persisted rows = %s (%v), want one", persisted, err)
+	}
+	for _, key := range []string{"todo_id", "machine_id", "session_id"} {
+		if value, present := rawBack[0][key]; present {
+			t.Fatalf("legacy row was written back with %s = %#v; want the optional key omitted", key, value)
+		}
 	}
 }
