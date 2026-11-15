@@ -48,9 +48,10 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | --- | --- |
 | `cursor(sessionId)` | The current `to_seq`, or `{to_seq, history}` (with history, a rewrite with the same item count can still be detected; if omitted, the `to_seq` and `history` of a `turns: 1` page are used) |
 | `image(params)` / `item(params)` | Raw image data / the full text of a truncated item |
-| `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect |
-| `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
-| `hasLocalClient()` | Whether this runtime's own UI is open (decides who gets permission requests first, see below) |
+| `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect. Resolve to `{queued: true}` when the message only waits behind the running turn, so that nobody takes it for read (#8097) |
+| `interrupt({session_id})` | Stop the running turn. Resolve to `{settled: true}` once the turn has actually ended, and throw when it could not be stopped; resolving to nothing means "asked to stop, not confirmed" (#8097). A turn waiting on the user (a dialog, a card) must end too |
+| `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field). The apps offer Rename and Close on its rows from `capabilities.rename` / `capabilities.close`, which carry `caps.rename` (not on a sub-Agent's row) and `caps.close` (#6294) |
+| `hasLocalClient(sessionId)` | Whether this runtime's own UI is open for that session (decides who gets permission requests first, see below) |
 | `unlistedTranscripts()` | The Claude session ids of sessions of its own that `listSessions()` no longer lists (archived in the runtime), or nothing while it cannot say yet; no capability is declared. See "Runtimes that run Claude Code" below |
 | `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
 | `rewind({session_id, prompt, occurrence, prompts_after, restore})` | Rewinding a conversation to before one of the user's messages (`caps.rewind`): find the message by its text, its occurrence counting from the end and how many of the user's came after it, and refuse (`rewind_mismatch`) rather than cut elsewhere. Its rows may narrow it per session in their own `capabilities` (`rewind: false`), and only a row's `rewind_code: true` lets `restore: "code_and_conversation"` through (`docs/protocol/protocol.md` "Codex sources and capabilities") |
@@ -113,15 +114,26 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
 - **Tool names match Claude's**: the App draws commands, diffs and files for `Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`,
   and parameter names are Claude's too (`command`, `file_path`, `old_string` / `new_string`, `pattern`). Unrecognized names are shown as is.
 - **Length**: in a page, at most 24 KB of text per item and 4 KB of tool output, cut with the SDK's `light(item)` (with the "truncated" note the App recognizes and `full_size`); the full text goes via `item`.
-  Tool input objects use `clipInput`, which clips long strings at any depth, including arrays such as MultiEdit's `edits[]`,
-  while preserving keys and structure. For inputs over 24 KB it follows the hub's `clipJSON`: first keep at most 12 KB per string, then, if the
-  input still exceeds the 24 KB budget, share the remaining budget among strings longer than 256 bytes, accounting for
-  JSON escapes and the truncation note. Cuts respect UTF-8 boundaries and the second pass only cuts when the string becomes
-  strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes for a three-digit
-  original length); a longer or more heavily escaped tail may be cut. Each implementation measures its own wire encoding:
-  both leave `<>&` raw, but `JSON.stringify` also leaves U+2028/U+2029 raw while the hub's Go encoder escapes them, so their shares can differ.
-  Top-level arrays and other non-object inputs stay unchanged. This is still **not a total input size limit**: many short
-  values, large keys, or enough strings at the 256-byte floor can exceed 24 KB. Bounding those inputs remains open in #2907.
+  Tool input objects use `clipInput`, which follows the hub's `clipJSON` in three passes. First keep at most 12 KB per string at any
+  depth, including arrays such as MultiEdit's `edits[]`; if the input still exceeds 24 KB, share the remaining budget among strings
+  longer than 256 bytes, accounting for JSON escapes and the truncation note. Cuts respect UTF-8 boundaries and the second pass only
+  cuts when the string becomes strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes
+  for a three-digit original length); a longer or more heavily escaped tail may be cut.
+  If the result is still over budget, a third pass drops tail items from the currently longest arrays (the most retained items,
+  preorder breaking ties), then trailing fields from the currently widest objects the same way. Object children use Unicode
+  code-point order for removal and preorder ties, matching the hub's UTF-8 byte-wise sort rather than JavaScript's UTF-16 or
+  integer-first enumeration order. Surviving array items keep their order; surviving object fields keep each implementation's
+  own output order and value types. For every top-level object accepted by the JSON decoder, the final encoded input is at
+  most **24,576 bytes**, including the marker: one collision-safe top-level field named `zz_persona_clipped` (suffixed `_2`,
+  `_3`, … if needed), whose value is an object of the form `{"note":"Omitted X array items and Y object fields.\n…（已截断，共 N 字节）"}`.
+  The note counts direct removals and ends with the usual cut note and the original whole-input byte size. The object wrapper
+  is deliberate: old and new clients' "first string argument" subject and summary fallbacks cannot mistake the marker for the
+  call's subject. Typed tool projections ignore the unknown root field; generic argument and Raw Input views show it.
+  Inputs at or under budget are untouched. Each implementation measures its own wire encoding: both leave `<>&` raw, but
+  `JSON.stringify` also leaves U+2028/U+2029 raw while the hub's Go encoder escapes them, so their shares and output bytes can differ.
+  Malformed input, trailing JSON and nesting the decoder rejects (deeper than 10,000 levels) pass through unchanged as before.
+  A valid number outside float64 range, such as `1e1000`, is retried with `UseNumber` so its object is still clipped. Top-level
+  arrays and other non-object inputs stay unchanged.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
 
 ## Interactions
@@ -130,6 +142,10 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   anything not among the options is what the user typed), `plan` (`plan` body; answer `approve` + `feedback`), `permission` (`tool_name`, `tool_input`, `summary`; answer `allow`).
 - **Who answers first** (`answerFirst`): `auto` (default) = the phone first if the phone sent this session a message or created it in the last 6 hours, or the local UI isn't open; otherwise the local UI first.
   `phone` / `local` pin one side. "Hand back to computer" on the phone and expiry both return `{dismiss: true}`, and the runtime then hands it to the local UI, so it never ends up unattended on both sides.
+  A session the hub started through another runtime counts as phone-driven here too: the node says so with `runtime.driven` (#8097).
+- **Waiting in its own UI**: while a session waits on the user in the runtime's own dialog, call `rt.waitingOnUser(sessionId)` and the returned
+  release when it ends: the session lists as `blocked` meanwhile, as for a card on the phone. A dialog nobody may be looking at (a web page
+  with no browser open) must also be withdrawable: pass the turn's abort signal to it, so that an interrupt ends it (#8097).
 - **Cards belong to the runtime**: node tags cards it asks with `agent` (the Agent the runtime runs) and `agent_label` (its name), and the App draws them as "another Agent's card"
   (the same kind as Codex's: "DSH Needs Your Permission", Approve / Deny, `reason` above the command). **Always Approve** only appears when the card has `always_label` (saying exactly what is always approved);
   don't send it if the runtime can't do it. `always_label` itself is just text; "always" is enforced by the runtime (opencode's save rules and Paseo's suggestions are both narrower than the whole tool).
@@ -418,11 +434,21 @@ on success, failure or timeout. Completed probe workspaces stay out of the user 
 The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
 node's shell check. Shell and managed launchers keep their own execution context.
 
+A chat gets Persona's MCP server once, named `persona`, through ACP `mcpServers`. `agy` defers the tools over its
+declaration budget, largest first, and has no `call_mcp_tool` for servers passed through ACP, so an assistant chat's
+server runs behind `integrations/antigravity/mcp-proxy.mjs`, which adds a small `persona_call` tool that calls any
+Persona tool by name (#7333).
+
 Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
 
 Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
 empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.
 Each prompt clears its live text on completion, including when another prompt is queued.
+
+While a conversation is watched, the companion polls its native export every 400 ms. Persona-owned ACP turns reuse
+their existing poll. Unwatch, disconnection and shutdown release the watched poll. Native records that update an
+existing step carry a stable content revision in the history token, so a response completed at the same sequence
+replaces retained content. Ordinary appends preserve that revision and continue through incremental item batches.
 
 Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
 Antigravity declares `caps.rewind` for idle Agent conversations. The selected message, duplicate occurrence from the

@@ -86,7 +86,8 @@ that statement whenever the cookie behavior changes.
 - **Download section** (`#download`, the top bar's 下载): one tile per device with the latest stable files straight
   from GitHub, filled from `/releases/data.json` with the releases page's own `model.js` (same file choice, same
   fallback to an older release while one is uploading, same address check). Without the data each tile links to its
-  card on `/releases/`; the visitor's device is marked, and the web app tile says how to open it instead.
+  card on `/releases/`; the visitor's device is marked, and the web app tile says how to open it instead. Demo-only
+  selectors are scoped to `.chat`, so the marked tile keeps the same grid-cell width and row height as its neighbours.
 - **Light only.** The previous page also had a dark variant; this one follows the app icon's paper in both schemes.
 
 ## Legal pages and support

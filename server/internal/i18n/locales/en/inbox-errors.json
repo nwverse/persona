@@ -17,7 +17,7 @@
   "bulk_done_required": "done and items are required",
   "bulk_action": "action is done, dismiss or reopen",
   "todo_read_only": "this device cannot change to-dos",
-  "merge_few": "pick at least two rows to merge",
+  "merge_too_few_rows": "pick at least two rows to merge",
   "merge_none": "nothing to merge: the rows are gone or already merged",
   "merge_failed": "the merge could not be saved; nothing changed",
   "todo_targets": "pick the rows to add to to-dos",
