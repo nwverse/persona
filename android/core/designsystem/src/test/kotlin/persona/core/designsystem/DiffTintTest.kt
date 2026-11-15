@@ -13,12 +13,20 @@ class DiffTintTest {
     private val light = Tokens.Common.Light.Diff
     private val dark = Tokens.Common.Dark.Diff
 
-    @Test fun glassTakesTheTokensColourForTheLineAndTheSameColourForTheWords() {
+    /** The emphasis is a generated token, not a number in a view: iOS `Theme.Diff.addEmphasis` / `delEmphasis` (0.32 / 0.30) on the fill's colour. */
+    @Test fun theEmphasisTokensAreTheFillsColourAtTheIosStrength() {
+        for (token in listOf(light, dark)) {
+            assertEquals(token.addFill.copy(alpha = 0.32f), token.addEmphasis)
+            assertEquals(token.delFill.copy(alpha = 0.30f), token.delEmphasis)
+        }
+    }
+
+    @Test fun glassTakesTheTokensColourForTheLineAndForTheWords() {
         for ((palette, token) in listOf(Palettes.of(AppStyle.Glass, false) to light, Palettes.of(AppStyle.Glass, true) to dark)) {
             assertEquals(token.addFill, palette.diffAddFill)
             assertEquals(token.delFill, palette.diffDelFill)
-            assertEquals(token.addFill.copy(alpha = 0.32f), palette.diffAddEmphasis)
-            assertEquals(token.delFill.copy(alpha = 0.30f), palette.diffDelEmphasis)
+            assertEquals(token.addEmphasis, palette.diffAddEmphasis)
+            assertEquals(token.delEmphasis, palette.diffDelEmphasis)
         }
     }
 

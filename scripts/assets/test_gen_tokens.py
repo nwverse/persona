@@ -353,6 +353,15 @@ class RepositoryTests(unittest.TestCase):
                 self.assertEqual(self.catalog.values[f"status.{mode}.waiting.text"], self.catalog.values[f"common.{mode}.loop"])
                 self.assertEqual(self.catalog.values[f"status.{mode}.muted.text"], self.catalog.values[f"status.{mode}.idle.text"])
 
+    def test_diff_fills_and_emphasis_follow_theme_swift(self):
+        swift = (gen.ROOT / "apple/Shared/Design/Theme.swift").read_text()
+        for name in ("addFill", "delFill", "addEmphasis", "delEmphasis"):
+            found = re.search(rf'static let {name} = Color\(light: 0x([A-F0-9]+), dark: 0x([A-F0-9]+)\)\.opacity\(([0-9.]+)\)', swift)
+            self.assertIsNotNone(found, f"Theme.Diff.{name} not found in Theme.swift")
+            light, dark, alpha = found.groups()
+            for mode, h in (("light", light), ("dark", dark)):
+                self.assertEqual(self.catalog.values[f"common.{mode}.diff.{name}"], color(h, float(alpha)), f"{name} {mode}")
+
     KOTLIN = gen.ROOT / "android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
 
     def test_committed_kotlin_matches_the_generator(self):
