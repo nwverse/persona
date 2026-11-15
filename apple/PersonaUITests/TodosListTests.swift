@@ -81,9 +81,8 @@ final class TodosListTests: XCTestCase {
             }
             first = false
 
-            let working = reveal("concern_working")
-            XCTAssertTrue(working.waitForExistence(timeout: 60))
-            XCTAssertTrue(app.descendants(matching: .any)["todos.section.working"].exists, "the linked working agent puts the concern in Working")
+            let working = reveal("todo_concern_working", wait: 60)
+            assertSection("working", rowID: "todo_concern_working")
             check(working, tag: item.tag)
             if board.alerts.firstMatch.waitForExistence(timeout: 2) {
                 for label in ["OK", "好"] where board.alerts.buttons[label].exists { // i18n-ignore: the system's buttons
@@ -92,8 +91,10 @@ final class TodosListTests: XCTestCase {
             }
             concernShot("todos-concerns-\(item.language)-\(item.scheme)-\(item.largest ? "largest" : "default")-top")
 
-            XCTAssertTrue(app.descendants(matching: .any)["todos.section.other"].exists, "an unanswered concern stays in Other open")
-            let ordinary = reveal("concern_control")
+            let sharedOpen = reveal("todo_concern_open")
+            assertSection("other", rowID: "todo_concern_open")
+            check(sharedOpen, tag: item.tag)
+            let ordinary = reveal("concern_control", towardTop: true)
             XCTAssertFalse(ordinary.label.contains(item.tag), "an ordinary to-do keeps its row unchanged: \(ordinary.label)")
             XCTAssertFalse(app.buttons["todos.related.concern_control"].exists, "an open concern must not fold into a task")
             let accepted = reveal("concern_accepted")
@@ -104,8 +105,8 @@ final class TodosListTests: XCTestCase {
             let open = reveal("concern_open")
             check(open, tag: item.tag)
             XCTAssertFalse(app.buttons["todos.related.concern_open"].exists, "an open concern must not fold related work")
-            let closed = reveal("concern_closed")
-            XCTAssertTrue(app.descendants(matching: .any)["todos.section.just_done"].exists, "the report closes the concern into Just finished")
+            let closed = reveal("todo_concern_closed")
+            assertSection("just_done", rowID: "todo_concern_closed")
             check(closed, tag: item.tag)
             concernShot("todos-concerns-\(item.language)-\(item.scheme)-\(item.largest ? "largest" : "default")-bottom")
             let unseen = reveal("concern_unseen")
@@ -120,16 +121,112 @@ final class TodosListTests: XCTestCase {
         app?.terminate()
     }
 
-    @MainActor private func reveal(_ id: String) -> XCUIElement {
+    @MainActor private func reveal(_ id: String, towardTop: Bool = false, wait: TimeInterval = 2) -> XCUIElement {
         let row = app.descendants(matching: .any)["todos.row.\(id)"].firstMatch
         let window = app.windows.firstMatch.frame
-        for _ in 0..<12 where !row.exists || !row.isHittable || !window.contains(row.frame) {
-            if !row.waitForExistence(timeout: 2) || !row.isHittable || !window.contains(row.frame) {
-                app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        if !row.exists { _ = row.waitForExistence(timeout: wait) }
+        var seen = Set<String>()
+        for _ in 0..<40 {
+            if fullyVisible(row, in: window) { return row }
+            if !seen.insert(listSignature()).inserted { break }
+            scrollToward(row, in: window, towardTop: towardTop)
+        }
+        XCTAssertTrue(fullyVisible(row, in: window),
+                      "missing or not fully visible \(id); loaded rows: \(listSignature())\n\(app.debugDescription)")
+        return row
+    }
+
+    @MainActor private func fullyVisible(_ element: XCUIElement, in window: CGRect) -> Bool {
+        element.exists && element.isHittable && window.insetBy(dx: -0.5, dy: -0.5).contains(element.frame)
+    }
+
+    @MainActor private func listSignature() -> String {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'todos.row.'"))
+            .allElementsBoundByIndex.map { "\($0.identifier):\($0.frame)" }.sorted().joined(separator: "|")
+    }
+
+    @MainActor private func scrollToward(_ row: XCUIElement, in window: CGRect, towardTop: Bool = false) {
+        if row.exists, row.frame.midY < window.midY {
+            app.collectionViews.firstMatch.swipeDown(velocity: .slow)
+        } else if towardTop {
+            app.collectionViews.firstMatch.swipeDown(velocity: .slow)
+        } else {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+    }
+
+    /// Prove a row's section, not merely that a header happens to be loaded after an arbitrary swipe (#3582, round 5).
+    @MainActor private func assertSection(_ section: String, rowID: String) {
+        let header = app.descendants(matching: .any)["todos.section.\(section)"].firstMatch
+        let row = app.descendants(matching: .any)["todos.row.\(rowID)"].firstMatch
+        let window = app.windows.firstMatch.frame
+        var seen = Set<String>()
+        for _ in 0..<40 {
+            if fullyVisible(header, in: window), fullyVisible(row, in: window) {
+                if let frames = settledOrderedFrames(header: header, row: row) {
+                    assertNearest(header, headerFrame: frames.header, above: row, rowFrame: frames.row,
+                                  section: section, rowID: rowID)
+                    print("SECTION-PAIR \(section) \(rowID) header=\(frames.header) row=\(frames.row)")
+                    _ = reveal(rowID)
+                    return
+                }
+                // The last swipe is still settling. Poll the visible pair instead of comparing different positions.
+                continue
+            }
+            if !seen.insert(listSignature()).inserted { break }
+            if fullyVisible(row, in: window), !fullyVisible(header, in: window) {
+                app.collectionViews.firstMatch.swipeDown(velocity: .slow)
+            } else {
+                scrollToward(row, in: window)
             }
         }
-        XCTAssertTrue(row.isHittable && window.contains(row.frame), "missing or not fully visible \(id):\n\(app.debugDescription)")
-        return row
+
+        // Some sizes cannot fit the complete header and row together. Their visible header and the row's top still pin
+        // the row to the same nearest section; the full row is restored before the caller checks or captures it.
+        seen.removeAll()
+        for _ in 0..<40 {
+            let rowTop = row.exists && row.isHittable && row.frame.minY >= window.minY - 0.5
+                && row.frame.minY <= window.maxY + 0.5
+            if fullyVisible(header, in: window), rowTop {
+                if let frames = settledOrderedFrames(header: header, row: row) {
+                    assertNearest(header, headerFrame: frames.header, above: row, rowFrame: frames.row,
+                                  section: section, rowID: rowID)
+                    print("SECTION-FALLBACK \(section) \(rowID) header=\(frames.header) row=\(frames.row)")
+                    _ = reveal(rowID)
+                    return
+                }
+                continue
+            }
+            if !seen.insert(listSignature()).inserted { break }
+            if fullyVisible(row, in: window), !fullyVisible(header, in: window) {
+                app.collectionViews.firstMatch.swipeDown(velocity: .slow)
+            } else {
+                scrollToward(row, in: window)
+            }
+        }
+        XCTFail("Section \(section) row \(rowID) could not put its header above the row; loaded rows: \(listSignature())")
+    }
+
+    @MainActor private func settledOrderedFrames(header: XCUIElement, row: XCUIElement)
+        -> (header: CGRect, row: CGRect)? {
+        let headerFrame = header.frame
+        let rowFrame = row.frame
+        guard headerFrame == header.frame, rowFrame == row.frame,
+              headerFrame.maxY <= rowFrame.minY + 0.5 else { return nil }
+        return (headerFrame, rowFrame)
+    }
+
+    @MainActor private func assertNearest(_ header: XCUIElement, headerFrame: CGRect, above row: XCUIElement,
+                                          rowFrame: CGRect, section: String, rowID: String) {
+        let headers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'todos.section.'"))
+        let between = headers.allElementsBoundByIndex.filter {
+            $0.exists && $0.identifier != header.identifier && $0.frame.minY >= headerFrame.minY
+                && $0.frame.minY < rowFrame.minY
+        }
+        let detail = "\(section) must be the nearest section header above \(rowID): header=\(headerFrame), "
+            + "row=\(rowFrame), between=\(between.map(\.identifier))"
+        XCTAssertLessThanOrEqual(headerFrame.maxY, rowFrame.minY + 0.5, detail)
+        XCTAssertTrue(between.isEmpty, detail)
     }
 
     @MainActor private func check(_ row: XCUIElement, tag: String) {
