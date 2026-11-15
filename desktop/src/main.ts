@@ -180,7 +180,10 @@ async function showMain(): Promise<void> {
     if (pendingDeepLink) navigateFromDeepLink(pendingDeepLink);
     pendingDeepLink = undefined;
   });
-  current.once("closed", () => { removeIPC(); if (mainWindow === current) mainWindow = undefined; });
+  // The island's state is this page's (#7669): once the page is gone (a hub change destroys this window, its renderer
+  // crashed), the island forgets it, so nothing of this hub stays at the notch before another hub's page signs in.
+  current.webContents.on("render-process-gone", () => island.clear());
+  current.once("closed", () => { removeIPC(); island.clear(); if (mainWindow === current) mainWindow = undefined; });
   if (hub) await current.loadURL(hub.url.href);
 }
 

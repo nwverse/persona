@@ -40,6 +40,16 @@ export class NotchIsland {
     this.render();
   }
 
+  /** Forgets the web's state: the page that sent it is gone (its window closed for another hub, its renderer
+   *  crashed), so nothing of that hub stays at the notch; hidden until a signed-in page sends its own. */
+  clear(): void {
+    if (this.closing) clearTimeout(this.closing);
+    this.closing = undefined;
+    this.state = EMPTY_ISLAND;
+    this.open = false;
+    this.render();
+  }
+
   private create(): void {
     if (this.window && !this.window.isDestroyed()) return;
     const w = new BrowserWindow({
