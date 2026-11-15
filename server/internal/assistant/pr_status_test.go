@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -203,5 +204,103 @@ func TestPRStatusIgnoresAReplacedPR(t *testing.T) {
 	}
 	if got := todoNow(s, task.ID); got.PRStatus != nil || got.Supervision.State != reviewParked || got.PRURL != newURL {
 		t.Fatalf("a stale response changed the replacement PR's task: %+v", got)
+	}
+}
+
+// pendingReviewSignal says whether a supervisor wake for task id's review is queued.
+func pendingReviewSignal(s *Service, id string) bool {
+	b := &s.supervise
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, signal := range b.pending {
+		if signal.Todo == id && signal.Kind == sigReview {
+			return true
+		}
+	}
+	return false
+}
+
+// A terminal PR wakes only a park waiting on an outside event or someone else: a task at work (no review yet) keeps
+// its state, and no review is queued (#7614).
+func TestPRStatusTerminalPRLeavesAnUnparkedTaskAlone(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx, now := context.Background(), time.Now()
+	s.setTaskStage(ctx, task.ID, "review", "https://github.com/example/app/pull/12")
+	f := &statusForge{status: TodoPRStatus{State: "open", Checks: "success"}}
+	s.deploy.forge = f
+	s.sweepPRStatuses(ctx, now)
+	before := todoNow(s, task.ID).Supervision.State
+	f.status.State = "merged"
+	s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+	got := todoNow(s, task.ID)
+	if got.PRStatus == nil || got.PRStatus.State != "merged" {
+		t.Fatalf("merged PR facts not kept: %+v", got.PRStatus)
+	}
+	if got.Supervision.State != before || got.Supervision.State == reviewPending || pendingReviewSignal(s, task.ID) {
+		t.Fatalf("a merged PR changed an unparked task's supervision %q -> %q", before, got.Supervision.State)
+	}
+}
+
+// The stage's PR is checked before the supervision: an observation of a PR replaced while it was read (the to-do
+// still names the old one, the stage the new) neither wakes the park nor keeps its facts (#7614).
+func TestPRStatusReplacedInFlightDoesNotWakeTheSupervisor(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx := context.Background()
+	oldURL, newURL := "https://github.com/example/app/pull/12", "https://github.com/example/app/pull/13"
+	s.setTaskStage(ctx, task.ID, "review", oldURL)
+	if _, err := reviewErr(s, task.ID, waitingPark()); err != nil {
+		t.Fatal(err)
+	}
+	old := todoNow(s, task.ID)
+	b := &s.reports
+	b.mu.Lock()
+	st := b.stages[task.ID]
+	st.PR = newURL // the replacement landed in the stages; the to-do is published next
+	b.stages[task.ID] = st
+	b.mu.Unlock()
+	if err := s.applyPRStatus(ctx, old, TodoPRStatus{URL: oldURL, State: "merged", CheckedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := todoNow(s, task.ID); got.Supervision.State != reviewParked || pendingReviewSignal(s, task.ID) {
+		t.Fatalf("a replaced PR's observation woke the supervisor: %+v", got.Supervision)
+	}
+}
+
+type hangingStatusForge struct {
+	fakeForge
+	called func()
+}
+
+func (f *hangingStatusForge) PRStatus(ctx context.Context, _ string, _ int) (TodoPRStatus, error) {
+	f.called()
+	<-ctx.Done()
+	return TodoPRStatus{}, ctx.Err()
+}
+
+// PR observations come after the deploy checks, on a deadline of their own: a hanging forge read neither runs
+// before the hub's commit is read nor holds the pass for the deploy checks' two minutes (#7614).
+func TestPRStatusPassRunsAfterTheDeployChecksOnItsOwnDeadline(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	s.setTaskStage(context.Background(), task.ID, "review", "https://github.com/example/app/pull/12")
+	var mu sync.Mutex
+	var order []string
+	note := func(what string) { mu.Lock(); order = append(order, what); mu.Unlock() }
+	s.deploy.forge = &hangingStatusForge{called: func() { note("pr") }}
+	s.deploy.hubBuild = func(context.Context) (string, string, error) {
+		note("hub")
+		return "", "", errors.New("hub build unavailable")
+	}
+	old := prStatusPassMost
+	prStatusPassMost = 50 * time.Millisecond
+	t.Cleanup(func() { prStatusPassMost = old })
+	start := time.Now()
+	s.sweepDeploys(time.Now())
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("a hanging PR read held the pass for %s", took)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(order, ",") != "hub,pr" {
+		t.Fatalf("order %v, want the hub's commit before the PR reads", order)
 	}
 }

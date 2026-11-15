@@ -198,32 +198,13 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		return nil
 	}
 	t = current
-	// Returning from a known open PR (or a legacy PR-stage hold) wakes the same
-	// supervisor. A merged PR alone is never acceptance, and unrelated later parks stay put.
+	// Returning from a known open PR (or a legacy PR-stage hold) wakes the same supervisor, read before the new facts
+	// are kept. A merged PR alone is never acceptance, and unrelated later parks stay put.
 	wasOpen := t.PRStatus != nil && t.PRStatus.URL == status.URL && t.PRStatus.State == "open"
 	legacyHold := t.PRStatus == nil && (t.Delivery != nil && t.Delivery.State == deliveryPR || t.Stage == "review")
 	terminal := status.State == "merged" || status.State == "closed"
-	if terminal && (wasOpen || legacyHold) && t.Supervision != nil {
-		v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			if v.State == reviewNeedsUser || v.State == reviewAccepted || v.State == reviewCancelled {
-				return false
-			}
-			if p := v.parking(); p != nil && p.WaitingOn != parkExternalEvent && p.WaitingOn != parkSomeoneElse {
-				return false
-			}
-			if v.State == reviewPending {
-				return false
-			}
-			v.State = reviewPending
-			return true
-		})
-		if err != nil {
-			return err
-		}
-		if changed {
-			s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "PR " + status.State + ": " + status.URL})
-		}
-	}
+	// The stage's PR is checked under the stage lock first: an observation of a PR an Agent reply replaced while the
+	// request was in flight changes nothing, neither the facts nor the supervision.
 	b := &s.reports
 	b.stageWriting.Lock()
 	b.mu.Lock()
@@ -260,8 +241,42 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	s.todos.mu.Unlock()
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
+	if terminal && (wasOpen || legacyHold) && t.Supervision != nil {
+		// Only the hold that waits on this PR wakes: a park waiting on an outside event or someone else, the same park
+		// (its review's time) as when the PR was read, and the stage's PR still this one. Anything else (ongoing work,
+		// rework, a review in progress, a later park, a replaced PR) stays as it is.
+		held := t.Supervision.parking()
+		if held != nil && (held.WaitingOn == parkExternalEvent || held.WaitingOn == parkSomeoneElse) {
+			at := held.At
+			v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+				p := v.parking()
+				if p == nil || !p.At.Equal(at) || p.WaitingOn != parkExternalEvent && p.WaitingOn != parkSomeoneElse {
+					return false
+				}
+				if now, ok := s.todoNow(t.ID); !ok || now.DoneAt != nil || now.PRURL != status.URL || s.stagePR(t.ID) != status.URL {
+					return false
+				}
+				v.State = reviewPending
+				return true
+			})
+			if err != nil {
+				return err
+			}
+			if changed {
+				s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "PR " + status.State + ": " + status.URL})
+			}
+		}
+	}
 	if status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStage(ctx, t.ID, "merge", "")
 	}
 	return nil
+}
+
+// stagePR is the PR task id's stage holds now ("" when none).
+func (s *Service) stagePR(id string) string {
+	b := &s.reports
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stages[id].PR
 }
