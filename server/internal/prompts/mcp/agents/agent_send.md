@@ -1,4 +1,4 @@
-Send a message to an agent as the user would type it (answers its question, tells it to continue, gives new instructions). Queued if the agent is working. Only send what the user asked for. An agent that has stopped (a finished task's agent stops after a few idle minutes, an idle one after hours; its terminal stays) is read-only: the send is refused and nothing is sent. To go on with its work, start a new agent with agent_start in its directory (with the task when it had one) and give it what it needs; only the user can resume a stopped agent, with Resume on its terminal page. A branch the user made that has not run yet is started by its first message. A text of only /exit or /quit stops a running agent (its terminal tab stays) and does nothing to one that has stopped; a finished task's agent is stopped for you, so there is no need to. An agent on a task another conversation supervises is not yours to stop: /exit to it is refused and nothing is sent (the user can close it in the app, or with agent_archive and close once it is idle).
+Send a message to an agent as the user would type it (answers its question, tells it to continue, gives new instructions). Queued if the agent is working. Only send what the user asked for. An agent that has stopped (a finished task's agent stops after a few idle minutes, an idle one after hours; its terminal stays) takes no plain messages: the send is refused and nothing is sent. Decide how to go on. Resume it (send again with resume true and resume_why) when the next work depends on its context: it has just investigated this and should now fix it, rework of its own work, or the user asked for the agent that has the context. That resumes the same session as the user's Resume on its terminal page does (its own launcher, directory and permission mode, in the terminal it left when that is still there) with your text as its first message; the user sees which agent you resumed and resume_why. A resumed agent must be supervised: from the main conversation give task (a new task of yours, its card marked resumed) unless it is still on an open task of yours. A resume is refused with the reason when its computer is offline, its context is nearly full, or its computer cannot resume it (session record gone, launcher unavailable, open elsewhere): then start a new agent. Start a new agent with agent_start in its directory (with the task when it had one, reading this one with agent_read for what the new one needs) for unrelated work, or when its context is nearly full or it went off track. When you cannot tell which, ask the user with ask_user: reuse this agent, or start a new one. A branch the user made that has not run yet is started by its first message. A text of only /exit or /quit stops a running agent (its terminal tab stays) and does nothing to one that has stopped; a finished task's agent is stopped for you, so there is no need to. An agent on a task another conversation supervises is not yours to stop: /exit to it is refused and nothing is sent (the user can close it in the app, or with agent_archive and close once it is idle).
 
 When a dialog holds the agent's terminal the send is refused (dialog_open) with the dialog's first line, and whether it is only a notice that Enter closes ("Enter to continue", no options). Send again with dismiss_notice true to close such a notice first. Confirmations, permissions and pickers are never closed for you: tell the user, or answer them with interaction_answer.
 
@@ -17,6 +17,14 @@ When you hand new work to an agent that runs already (one the user opened, a lon
     },
     "text": {
       "type": "string"
+    },
+    "resume": {
+      "type": "boolean",
+      "description": "resume this stopped agent with its context, as the user's Resume does, and send text as its first message; needs resume_why. Ignored for an agent that runs"
+    },
+    "resume_why": {
+      "type": "string",
+      "description": "with resume: one line on why this agent's own context is needed (the user sees it), e.g. it just found the cause and should now fix it"
     },
     "dismiss_notice": {
       "type": "boolean",
