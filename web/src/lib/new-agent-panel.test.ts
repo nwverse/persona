@@ -119,6 +119,20 @@ describe("the panel's providers", () => {
     expect(provider(p, "p-relay")).toMatchObject({ models: null, loading: true });
   });
 
+  // A launcher that lists its permission modes (#8261, Paseo's Grok and its Codex providers) takes the efforts its models
+  // list: each row its model's own, the Default row the default model's, none for a model nobody lists the levels of.
+  it("a launcher that lists its permission modes offers each model's own efforts, and none where nobody says", () => {
+    const grok: Launcher = { name: "grok", agent: "paseo", source: "paseo", display_name: "Grok", permission_modes: ["default", "bypassPermissions"] };
+    const paseoCodex: Launcher = { name: "my-codex", agent: "codex", source: "paseo", permission_modes: ["default", "bypassPermissions"] };
+    const grokList: LauncherModels = { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true, efforts: ["low", "high"] }, { id: "grok-mini", name: "Grok mini" }] };
+    const p = newAgentPanel({ launchers: [grok, paseoCodex], listOf: (n) => (n === "grok" ? { list: grokList } : { list: codexList }), choice: none, configured: null, runs: "grok", tiers: [] });
+    expect(provider(p, "grok").name).toBe("Grok");
+    expect(provider(p, "grok").models?.map((m) => [m.id, m.efforts])).toEqual([["default", ["low", "high"]], ["grok-4", ["low", "high"]], ["grok-mini", []]]);
+    expect(provider(p, "my-codex").models?.map((m) => m.efforts)).toEqual([["low", "medium", "high"], ["low", "medium", "high"], ["low", "medium", "high"]]);
+    expect(newAgentPill({ launchers: [grok], runs: "grok", list: { list: grokList }, choice: { launcher: "grok", model: "", effort: "high" }, configured: null, fallback: "" }).effort)
+      .toBe("high");
+  });
+
   it("an ID typed for this start that the list lacks gets its own row, so it is lit", () => {
     const p = panel({ choice: { launcher: "claude", model: "vendor/new", effort: "" }, configured: null });
     expect(provider(p, "claude").models?.at(-1)).toMatchObject({ id: "vendor/new", efforts: EFFORTS });

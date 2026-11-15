@@ -116,7 +116,8 @@ func (g superviseSignal) id() string {
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
-		sigRecheck, sigUndecidable, sigOwnerCannot: // the owner waits on a decision they cannot answer as it is
+		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
+		sigParkDecided: // the owner answered: what they said is acted on soon
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -423,6 +424,10 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			s.signal(g)
 		}
 		if g, ok := s.orphanSignal(t); ok && !allStopped { // a fresh complete group outranks the minute pass's orphan snapshot
+			s.signal(g)
+		}
+		s.parkDecidedRetry(ctx, t)             // a stored decision ends its parking when the ledger write missed it then (parked.go)
+		if g, ok := parkDecidedSignal(t); ok { // a decision ended its parking, and no message carried that yet (parked.go)
 			s.signal(g)
 		}
 		if g, ok := s.undecidableSignal(ctx, t, now); ok { // waits for the owner with nothing to answer (decision.go)
