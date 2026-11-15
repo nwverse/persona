@@ -2409,3 +2409,16 @@ nothing ran the old build after the new one.
 - Do not write the old record from a start that failed to read it: its list may be shorter than what is stored.
 - Test the round trip with the old build's reader: upgrade, deliver, old build (reads only the old record), deliver,
   upgrade again, the same counts at each step (`TestPushSentSurvivesSwitchBackAndForward`).
+
+## A 409 from start options is not always "confirm this computer" (2026-11-14, #7425)
+
+- New work session's `start-options` answers 409 for two different reasons: the manager's `machine_pending` (the hub
+  keeps the computer out of its list) and every refusal the node's strict work-session check makes
+  (`work_launcher_unavailable`, `apierr.Call` maps a coded node error to 409). The hub's log line is the same; the web
+  dialog tells them apart (its "This launcher cannot start a session…" line is only the node's). Read that code before
+  tracing trust or ownership. A fast answer says nothing either: the node refuses from its cached launcher list
+  before any login shell runs.
+- A list the manager shows is not the node's own list: the pickers add plain `claude` back on a computer whose shell
+  has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
+  and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
+  `knownLauncher` does.

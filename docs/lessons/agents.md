@@ -1069,6 +1069,8 @@ wrong too: it removes the gateway's list from every `/model` the user opens. Rea
 
 The desktop app's sessions (and claude in other terminals) run no hook of Persona's, so their questions never became
 cards; the apps showed only a "reply to answer" line, and the questions and options were nowhere to be seen. The peer
-message prompt asks the model to offer numbered options in plain text instead, but models still open AskUserQuestion,
-often with several questions. Read the open call from the transcript (`node/claudeoutside_ask.go`) rather than counting
-on the model to follow the prompt, and check a real transcript's `tool_use` input shape before parsing it.
+message prompt asked the model to offer numbered options in plain text instead (#5887), but models still opened
+AskUserQuestion, often with several questions. Read the open call from the transcript (`node/claudeoutside_ask.go`)
+rather than counting on the model to follow the prompt, and check a real transcript's `tool_use` input shape before
+parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
+workaround that outlives the fix it stood in for is wrong advice to the model.
