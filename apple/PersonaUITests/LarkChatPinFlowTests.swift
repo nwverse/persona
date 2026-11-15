@@ -36,6 +36,10 @@ final class LarkChatPinFlowTests: XCTestCase {
         app.buttons["lark.pins.open"].tapCenter()
         XCTAssertTrue(app.buttons["lark.pins.close"].waitForExistence(timeout: 10))
     }
+    @MainActor private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
+        for _ in 0..<8 where !element.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(element.isHittable)
+    }
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
         let a = XCTAttachment(screenshot: app.screenshot()); a.name = name; a.lifetime = .keepAlways; add(a)
         if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
