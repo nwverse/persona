@@ -732,6 +732,7 @@ func TestASendOfMoreThatCannotBeKeptIsNotSent(t *testing.T) {
 				if n := sessionSends(f); n != before+1 {
 					t.Fatalf("sent again: %d session.send, want 1", n-before)
 				}
+				closedUnchanged(t, s, accepted) // nothing arrived yet, and the turn before was other work
 
 				// The manager restarts before the agent takes up the text it queued.
 				restarted, hub := newQuietServiceOn(t, database.DB)
