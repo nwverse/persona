@@ -554,8 +554,9 @@ export function probeBody(f: ProviderForm, stored: string | null, model?: string
   const b: Record<string, unknown> = { base_url: f.base_url.trim(), api: f.api };
   if (asksAuth(f)) b.auth = chosenAuth(f) || "auto";
   if (stored) b.name = stored;
-  // the protocol a gateway's capability report is asked about follows the agent (a Codex launcher's api is messages)
-  if (f.kind !== "api" && f.agent !== "claude") b.agent = f.agent;
+  // the protocol a gateway's capability report is asked about follows the agent (a Codex launcher's api is messages);
+  // always named, so a stored provider's agent never stands in for the one the form has now
+  b.agent = f.kind === "api" ? "" : f.agent;
   if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;

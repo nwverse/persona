@@ -273,8 +273,8 @@ describe("probes", () => {
   });
 
   it("by name when editing, the typed key and touched headers over it", () => {
-    expect(probeBody(ready({ api_key: "", auth: "bearer" }), "gw", "m1")).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "messages", name: "gw", model: "m1", effort: "" });
-    expect(probeBody(ready({ api: "responses", auth: "bearer", headers: "", headers_touched: true }), null)).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "responses", api_key: "sk-test-1", headers: "" });
+    expect(probeBody(ready({ api_key: "", auth: "bearer" }), "gw", "m1")).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "messages", name: "gw", agent: "claude", model: "m1", effort: "" });
+    expect(probeBody(ready({ api: "responses", auth: "bearer", headers: "", headers_touched: true }), null)).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "responses", agent: "claude", api_key: "sk-test-1", headers: "" });
   });
   it("asks the hub to find the method while Automatic, then sends the one the check found (#5329)", () => {
     expect(probeBody(ready(), null).auth).toBe("auto");
@@ -312,10 +312,10 @@ describe("probes", () => {
     expect(merged[2]).toMatchObject({ context_window: "300", efforts: [], default_effort: "" });
     expect(merged[3]).toMatchObject({ context_window: "400", efforts: ["high"], default_effort: "high" });
   });
-  it("names a launcher's agent other than Claude Code, so discovery asks about the protocol it goes on (#8796)", () => {
-    expect(probeBody(ready({ agent: "codex", api: "messages" }), null).agent).toBe("codex");
-    expect(probeBody(ready(), null)).not.toHaveProperty("agent");
-    expect(probeBody(ready({ kind: "api", api: "responses" }), null)).not.toHaveProperty("agent");
+  it("names the form's agent, so discovery asks about the protocol it goes on (#8796)", () => {
+    expect(probeBody(ready({ agent: "codex", api: "messages" }), "gw").agent).toBe("codex");
+    expect(probeBody(ready(), "gw").agent).toBe("claude");
+    expect(probeBody(ready({ kind: "api", api: "responses" }), null).agent).toBe("");
   });
   it("gives rows already there what the gateway reports now, nothing included (#8778, #8796)", () => {
     const rows = [formModel({ id: "a", context_window: 100 }), formModel({ id: "c", no_effort: true }), formModel({ id: "d", max_output_tokens: 1 })];

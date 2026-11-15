@@ -89,7 +89,11 @@ func (in *launcherInput) UnmarshalJSON(b []byte) error {
 	in.modelsNamed = nil
 	if json.Unmarshal(b, &raw) == nil {
 		for _, m := range raw.Models {
-			in.modelsNamed = append(in.modelsNamed, slices.ContainsFunc(reportedKeys, func(k string) bool { _, ok := m[k]; return ok }))
+			named := false // the keys as encoding/json matches them, in any case
+			for k := range m {
+				named = named || slices.ContainsFunc(reportedKeys, func(r string) bool { return strings.EqualFold(k, r) })
+			}
+			in.modelsNamed = append(in.modelsNamed, named)
 		}
 	}
 	return nil

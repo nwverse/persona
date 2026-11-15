@@ -42,8 +42,9 @@ var (
 // readModelMeta reads what one entry of a model list or of a capability report says beyond id, name and window into
 // m: the thinking levels in the gateway's words (m.AllEfforts, the default in m.DefaultEffort, an explicit none as
 // m.NoEffort; settleDiscoveredEfforts projects them), the output limit, image input and tool calls. chat is false when
-// the entry marks a model that is no chat model; guessed is true when m.NoEffort was only inferred from what its
-// parameter list leaves out (reportedEfforts), which a catalog entry with levels outweighs (parseModelsList).
+// the entry marks a model that is no chat model; guessed is true when its parameter list only suggests it takes no
+// level (reportedEfforts), which discovery applies last and only to a model nothing else said levels for
+// (guessNoEffort).
 // A null, or a list with an entry of a shape it can't read, says nothing (rawBool, rawStrings).
 func readModelMeta(fields map[string]json.RawMessage, m *proto.ProviderModel) (chat, guessed bool) {
 	for _, k := range modelKindFields {
@@ -54,7 +55,7 @@ func readModelMeta(fields map[string]json.RawMessage, m *proto.ProviderModel) (c
 	modalities := rawObject(fields["modalities"])
 	architecture := rawObject(fields["architecture"])
 	if out, ok := firstStrings(modalities["output"], fields["output_modalities"], architecture["output_modalities"]); ok &&
-		len(out) > 0 && !slices.Contains(out, "text") {
+		!slices.Contains(out, "text") {
 		return false, false
 	}
 	if ends, ok := rawStrings(fields["supported_endpoint_types"]); ok && len(ends) > 0 &&
@@ -70,8 +71,7 @@ func readModelMeta(fields map[string]json.RawMessage, m *proto.ProviderModel) (c
 	m.ImageInput = firstBool(fields["supports_image_input"], fields["supports_vision"], fields["vision"],
 		capabilities["vision"], capabilities["image_input"], rawObject(capabilities["image_input"])["supported"])
 	if m.ImageInput == nil {
-		// an empty list of input kinds is one left unfilled, not a model that reads nothing
-		if in, ok := firstStrings(modalities["input"], fields["input_modalities"], architecture["input_modalities"]); ok && len(in) > 0 {
+		if in, ok := firstStrings(modalities["input"], fields["input_modalities"], architecture["input_modalities"]); ok {
 			m.ImageInput = boolPtr(slices.Contains(in, "image"))
 		}
 	}
@@ -95,8 +95,9 @@ func fullParameters(params []string) bool {
 // reasoning object whose status is unsupported, reasoning false); and the default level it names, if any. A top-level
 // list wins over the signals of none, the first list in the order below over the others. A reasoning object's levels
 // count only when it names some and its status is neither unknown nor unsupported (a capability report's
-// {"status","allowed","default"}). Last, a whole parameter list (fullParameters) without a reasoning parameter is a
-// guess at none (guessed), unless reasoning is said to be true.
+// {"status","allowed","default"}). Last, a whole parameter list (fullParameters) without a reasoning parameter
+// suggests none (guessed, not none: guessNoEffort decides once everything else is read), unless reasoning is said to
+// be true.
 func reportedEfforts(fields map[string]json.RawMessage) (levels []string, none, guessed bool, def string) {
 	reasoning := rawObject(fields["reasoning"])
 	def = effortWord(cmp.Or(rawString(fields["default_reasoning_level"]), rawString(fields["default_reasoning_effort"]),
@@ -135,7 +136,7 @@ func reportedEfforts(fields map[string]json.RawMessage) (levels []string, none, 
 	}
 	if params, _ := rawStrings(fields["supported_parameters"]); !thinks && fullParameters(params) &&
 		!slices.ContainsFunc(params, func(p string) bool { return slices.Contains(reasoningParameters, p) }) {
-		return nil, true, true, def
+		return nil, false, true, def
 	}
 	return nil, false, false, def
 }
@@ -171,6 +172,21 @@ func effortWord(s string) string {
 		return s
 	}
 	return ""
+}
+
+// guessNoEffort settles a model whose parameter list suggested it takes no level (readModelMeta's guessed), once its
+// repeated entries and the capability report are read: it takes none only if none of them said anything of its levels
+// and the built-in catalog knows no levels for it (exact or inherited). A wrong "none" costs more than "unknown": the
+// launch paths then send no thinking level at all.
+func guessNoEffort(m proto.ProviderModel) proto.ProviderModel {
+	if reportedLevels(m) {
+		return m
+	}
+	if c, ok := catalogModel(m.ID); ok && len(c.Efforts) > 0 {
+		return m
+	}
+	m.NoEffort = true
+	return m
 }
 
 // reportedLevels: m says something of its thinking levels, either levels or none.
@@ -298,7 +314,7 @@ func (t probeTarget) capabilityProtocol() string {
 // protocol) is left out. The report only adds: a gateway without one (404), any failure, an answer it can't read or
 // one past capabilitiesTimeout leaves the list as it was. Not asked when the list is empty, or read from an endpoint
 // other than the base's (DeepSeek's documented /models), where there is no such report.
-func (t *probeTarget) applyCapabilities(ctx context.Context, models []proto.ProviderModel) []proto.ProviderModel {
+func (t *probeTarget) applyCapabilities(ctx context.Context, models []proto.ProviderModel, guessed map[string]bool) []proto.ProviderModel {
 	if len(models) == 0 || t.modelsEndpoint() != t.endpoint("models") {
 		return models
 	}
@@ -338,9 +354,13 @@ func (t *probeTarget) applyCapabilities(ctx context.Context, models []proto.Prov
 			unreachable[id] = true
 			continue
 		}
-		if chat, _ := readModelMeta(fields, &m); !chat {
+		chat, guess := readModelMeta(fields, &m)
+		if !chat {
 			unreachable[id] = true
 			continue
+		}
+		if guess {
+			guessed[id] = true
 		}
 		byID[id] = m
 	}
@@ -385,15 +405,20 @@ func rawObject(raw json.RawMessage) map[string]json.RawMessage {
 }
 
 // rawStrings is raw as a list of words, lowered and trimmed: strings, or objects naming one in effort, value, id or
-// name ({"effort":"low"}, Codex's supported_reasoning_levels). ok is false when raw is no list (null included), and
-// when an entry is of another shape: a list read only in part says nothing, rather than less than it holds.
+// name ({"effort":"low"}, Codex's supported_reasoning_levels); a blank string is skipped. ok is false when raw is no
+// list (null included), when an entry is of another shape, and when it has entries but only blank ones: a list read
+// only in part says nothing, rather than less than it holds.
 func rawStrings(raw json.RawMessage) (out []string, ok bool) {
 	var list []json.RawMessage
 	if len(raw) == 0 || json.Unmarshal(raw, &list) != nil || list == nil {
 		return nil, false
 	}
 	for _, item := range list {
-		s := rawString(item)
+		var s string
+		if json.Unmarshal(item, &s) == nil && strings.TrimSpace(s) == "" && string(item) != "null" {
+			continue // "" or blanks
+		}
+		s = rawString(item)
 		if s == "" {
 			o := rawObject(item)
 			s = cmp.Or(rawString(o["effort"]), rawString(o["value"]), rawString(o["id"]), rawString(o["name"]))
@@ -403,13 +428,17 @@ func rawStrings(raw json.RawMessage) (out []string, ok bool) {
 		}
 		out = append(out, strings.ToLower(s))
 	}
+	if len(list) > 0 && len(out) == 0 {
+		return nil, false
+	}
 	return out, true
 }
 
-// firstStrings is the first of raws that is a list of words.
+// firstStrings is the first of raws that is a list of some words: an empty list, like one it can't read, is one left
+// unfilled (modalities, input kinds), so the next spelling is read.
 func firstStrings(raws ...json.RawMessage) ([]string, bool) {
 	for _, raw := range raws {
-		if out, ok := rawStrings(raw); ok {
+		if out, ok := rawStrings(raw); ok && len(out) > 0 {
 			return out, true
 		}
 	}

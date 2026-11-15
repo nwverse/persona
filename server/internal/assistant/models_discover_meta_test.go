@@ -484,9 +484,15 @@ func TestDiscoveryReadsOnlyWhatIsSaid(t *testing.T) {
 		{"id":"example-whole-params","supported_parameters":["tools","temperature","max_tokens"]},
 		{"id":"glm-5.3","supported_parameters":["temperature","max_tokens"]},
 		{"id":"example-said-none","reasoning_levels":[]},
-		{"id":"example-odd-protocols"}]}`},
-		`{"data":[{"model_id":"example-odd-protocols","protocols":[{"protocol":"messages"}],"reasoning":{"status":"supported","allowed":["low"]}}]}`)
-	if failure != nil || len(models) != 8 {
+		{"id":"example-odd-protocols"},
+		{"id":"example-guess-then-report","supported_parameters":["temperature","max_tokens"]},
+		{"id":"example-guess-then-entry","supported_parameters":["temperature"]},
+		{"id":"example-guess-then-entry","reasoning_levels":["high"]},
+		{"id":"example-empty-then-other-input","modalities":{"input":[]},"architecture":{"input_modalities":["text","image"]}},
+		{"id":"example-blanks","supported_parameters":["temperature","tools",""],"reasoning_levels":["",""]}]}`},
+		`{"data":[{"model_id":"example-odd-protocols","protocols":[{"protocol":"messages"}],"reasoning":{"status":"supported","allowed":["low"]}},
+		  {"model_id":"example-guess-then-report","protocols":["messages"],"reasoning":{"status":"supported","allowed":["low","high"]}}]}`)
+	if failure != nil || len(models) != 12 { // the repeated entry is one model
 		t.Fatalf("%v %+v", failure, models)
 	}
 	want := []discovered{
@@ -498,6 +504,12 @@ func TestDiscoveryReadsOnlyWhatIsSaid(t *testing.T) {
 		{id: "glm-5.3", name: exact.Name, window: exact.ContextWindow, efforts: exact.Efforts, def: exact.DefaultEffort, tools: "false", inheritedFromEmpty: true},
 		{id: "example-said-none", none: true, inheritedFromEmpty: true},
 		{id: "example-odd-protocols", efforts: []string{"low"}, inheritedFromEmpty: true},
+		// a guessed none loses to levels the report or a repeated entry gives
+		{id: "example-guess-then-report", efforts: []string{"low", "high"}, tools: "false", inheritedFromEmpty: true},
+		{id: "example-guess-then-entry", efforts: []string{"high"}, tools: "false", inheritedFromEmpty: true},
+		{id: "example-empty-then-other-input", images: "true", inheritedFromEmpty: true},
+		// blank entries are skipped; a list of only blanks says nothing
+		{id: "example-blanks", none: true, tools: "true", inheritedFromEmpty: true},
 	}
 	for i, m := range models {
 		if got := discoveredOf(m); !sameDiscovered(got, want[i]) {
@@ -508,9 +520,18 @@ func TestDiscoveryReadsOnlyWhatIsSaid(t *testing.T) {
 
 // A Codex launcher not saved yet is asked about Responses: the web names its agent, while its api is still messages.
 func TestDiscoveryAsksAboutTheNamedAgentsProtocol(t *testing.T) {
-	_, _, asked := discoverFrom(t, probeInput{API: "messages", Agent: "codex"}, map[string]string{"": `{"data":[{"id":"example-codex-1"}]}`}, "")
+	_, _, asked := discoverFrom(t, probeInput{API: "messages", Agent: ptr("codex")}, map[string]string{"": `{"data":[{"id":"example-codex-1"}]}`}, "")
 	if asked != "protocol=responses|Bearer "+fakeKey {
 		t.Fatalf("asked as %q", asked)
+	}
+	// a stored Codex launcher the form turns into a Claude Code one is asked about Messages
+	s, _ := launcherTestService(t)
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "cx", Agent: "codex", BaseURL: "https://gw.example.com/v1", Model: "m"}})
+	for want, agent := range map[string]*string{"responses": nil, "messages": ptr("claude")} {
+		tg, err := s.probeTarget(context.Background(), probeInput{Name: "cx", Agent: agent})
+		if err != nil || tg.capabilityProtocol() != want {
+			t.Errorf("agent %v: %s, %v; want %s", agent, tg.capabilityProtocol(), err, want)
+		}
 	}
 }
 
