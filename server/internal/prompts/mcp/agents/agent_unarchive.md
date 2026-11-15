@@ -1,4 +1,4 @@
-Bring an archived coding agent's session back into the Agents list (find it with agents_list and state archived). Nothing is reopened on the computer: a stopped agent stays stopped until the user's Resume on its terminal page, or agent_send with resume, brings it back. Persona also asks the agent's own tool to restore it where that tool archived it too; the result says whether it did.
+Bring an archived coding agent's session back into the Agents list (find it with agents_list and state archived). Nothing is reopened on the computer: a stopped agent stays stopped until resumed (agent_send with resume). Persona also asks the agent's own tool to restore it where that tool archived it too; the result says whether it did.
 
 ```json
 {

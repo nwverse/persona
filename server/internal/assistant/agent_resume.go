@@ -117,7 +117,9 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 	if task != nil {
 		said = task.sent(sctx, s, told)
 		s.noteResume(sctx, self, task.todo.ID, note)
+		s.ensureSupervisor(sctx, task.todo.ID) // made or kept by adoptAgent; never left without a supervisor
 	} else if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
+		s.ensureSupervisor(sctx, t.ID) // its task goes on with a supervisor, as a successor's does (tasks_successor.go)
 		s.releaseHold(sctx, t.ID) // its supervisor sent it on: follow-ups go again (decision.go)
 		if _, err := s.appendFeed(sctx, self, feedRouted, t.ID, map[string]string{"text": told, "from": routedFromAssistant}); err != nil {
 			s.logf("task %s: routed feed: %v", t.ID, err)
