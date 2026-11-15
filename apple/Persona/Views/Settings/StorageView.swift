@@ -26,7 +26,7 @@ nonisolated enum StorageKind: String, CaseIterable, Identifiable, Sendable {
         case .chatImages: String(localized: "Screenshots and other images, downloaded only once")
         case .feishuMedia: String(localized: "Images, videos, and files from Lark messages")
         case .pageState: String(localized: "Agents and Inbox lists, and recent messages in Lark chats")
-        case .web: String(localized: "Pages from links in chats, opened or loaded ahead (sign-ins are kept)")
+        case .web: String(localized: "Pages from links in chats, opened or loaded ahead")
         case .network: String(localized: "Copies the system keeps for network requests")
         case .other: String(localized: "Temporary files and other caches")
         case .appData: String(localized: "Settings and pairing info, kept when you clear caches")
@@ -225,6 +225,7 @@ struct StorageView: View {
                 #endif
             }
 
+            // Above the rows, on the first screen: a hint below them was never seen (#8355).
             Section {
                 ForEach(StorageKind.allCases) { kind in
                     row(kind)
@@ -239,8 +240,8 @@ struct StorageView: View {
                             }
                         }
                 }
-            } footer: {
-                Text("Tap an item to clear it.")
+            } header: {
+                Text("Tap an item to clear it.").textCase(nil)
             }
 
             Section {
@@ -269,7 +270,13 @@ struct StorageView: View {
         .themedPage()
         .detailTitle(String(localized: "Storage"))
         .navigationBarTitleDisplayMode(.inline)
-        .task { await measure() }
+        .task {
+            await measure()
+            #if DEBUG
+            // `-openStorageClear <kind>` (screenshots): that row's confirmation, as a tap on it opens it.
+            if let k = UserDefaults.standard.string(forKey: "openStorageClear").flatMap(StorageKind.init(rawValue:)) { confirmOne = k }
+            #endif
+        }
         .refreshable { await measure() }
         .confirmationDialog("Clear all \(clearableTotal.storageText) of caches? Settings and pairing info are kept.", isPresented: $confirmAll, titleVisibility: .visible) {
             Button("Clear [Image Editor bce237]", role: .destructive) { Task { await clear(StorageKind.allCases.filter(\.clearable)) } }
@@ -308,7 +315,8 @@ struct StorageView: View {
     /// and the long press stay as shortcuts; App Data and an empty kind have no action.
     @ViewBuilder private func row(_ kind: StorageKind) -> some View {
         if kind.clearable, (usage?[kind] ?? 0) > 0, clearing == nil {
-            Button { confirmOne = kind } label: { rowContent(kind).foregroundStyle(.primary) }
+            Button { confirmOne = kind } label: { rowContent(kind) }
+                .tint(.primary) // the row reads as before; the footer says a tap clears it
                 .accessibilityHint(Text("Clears it after you confirm"))
         } else {
             rowContent(kind)

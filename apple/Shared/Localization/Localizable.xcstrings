@@ -197920,29 +197920,6 @@
         }
       }
     },
-    "Pages from links in chats, opened or loaded ahead (sign-ins are kept)" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pages from links in chats, opened or loaded ahead (sign-ins are kept)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "チャット内のリンク先ページ（開いたものと先読みしたもの。ログイン状態は含みません）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "聊天里链接的网页，包括打开过的和提前加载的（不含登录状态）"
-          }
-        }
-      }
-    },
     "Chats download again from the hub when you open them." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -198146,6 +198123,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "确认后清除"
+          }
+        }
+      }
+    },
+    "Pages from links in chats, opened or loaded ahead" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pages from links in chats, opened or loaded ahead"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャット内のリンク先ページ（開いたものと先読みしたもの）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天里链接的网页，包括打开过的和提前加载的"
           }
         }
       }
