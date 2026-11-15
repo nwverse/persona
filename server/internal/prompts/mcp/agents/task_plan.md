@@ -77,7 +77,7 @@ Workspace policy: set workspace="new" for an isolated checkout, {"new":{"branch"
               "auto",
               "bypassPermissions"
             ],
-            "description": "permission mode; empty: the default for writable tasks. Set an explicit writable mode (for example bypassPermissions) with readonly=false when a replacement Agent must implement fixes on the same todo. Claude-family launchers use bypassPermissions; readonly=true adds a read-only prompt constraint. Codex readonly=true keeps plan/read-only sandbox"
+            "description": "permission mode; empty: the default for writable tasks. Set an explicit writable mode (for example bypassPermissions) with readonly=false when a replacement Agent must implement fixes on the same todo. Claude-family launchers use bypassPermissions; readonly=true adds a read-only prompt constraint; Codex keeps plan; traex and omp take none"
           },
           "role": {
             "type": "string",

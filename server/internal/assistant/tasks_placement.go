@@ -89,19 +89,19 @@ func (t *PlanTask) noteWhy(note string) {
 
 // fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
 // is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. It also
-// reports whether the task's Agent runs with Allow all (startAgent.allowAll: Claude Code, or a provider whose approval
-// is an Auto Accept switch), using the same launcher list rather than another probe.
-func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (bool, error) {
+// reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with Allow all), using the same
+// launcher list rather than another probe.
+func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
 	note, agent, err := s.fitLauncher(ctx, m, own, params)
 	if err != nil || note == "" {
-		return agent.allowAll(), err
+		return agent, err
 	}
 	t.Launcher, _ = params["launcher"].(string)
 	t.Model, _ = params["model"].(string)
 	t.Effort, _ = params["effort"].(string)
 	t.Tier = ""
 	t.noteWhy(note)
-	return agent.allowAll(), nil
+	return agent, nil
 }
 
 // taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or
@@ -184,12 +184,17 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
 	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
 	// which is then about the launcher that will run.
-	allowAll, err := s.fitTaskLauncher(ctx, t, m, own, params)
+	fit, err := s.fitTaskLauncher(ctx, t, m, own, params)
 	if err != nil {
 		return "", "", err
 	}
-	if allowAll && !t.preservePermission {
+	if fit.allowAll() && !t.preservePermission {
 		t.Permission = "bypassPermissions"
+	}
+	modes := startTakesModes(fit.agent)
+	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
+		delete(params, "effort")
+		t.Effort = ""
 	}
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
@@ -253,11 +258,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.Model != "" {
 		params["model"] = t.Model
 	}
-	mode := t.Permission
-	if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
-		mode = s.taskPermission(ctx, m.ID, nil)
-	}
-	params["permission_mode"] = mode
+	if modes {
+		mode := t.Permission
+		if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
+			mode = s.taskPermission(ctx, m.ID, nil)
+		}
+		params["permission_mode"] = mode
+	} // else none, plan included: a read-only task's first message carries the constraint (above)
 	if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}

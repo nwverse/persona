@@ -33,6 +33,20 @@ Preloads expose fixed operations, not arbitrary IPC, WebSocket messages, paths, 
 
 Closing the main window hides it to the tray while the signed-in renderer stays alive. The tray opens the current main window, not a destroyed setup window; explicit Quit exits. Only the desktop app itself is controlled by launch at login, not the Link service. macOS may still require approval in System Settings, which the setting must report rather than claim success.
 
+### Icons
+
+The app and its tray use the Persona helper, the same art as the iPhone, Mac and web icons; no desktop-only mark. `scripts/assets/make_icon.py desktop` makes them all from the iPhone set's `icon.png`, so replacing the art is rerunning it (the script's other modes do the same for the Apple targets).
+
+| File | Where it shows | What it is |
+| --- | --- | --- |
+| `desktop/build/icon.png` | macOS: Dock, Finder, the installer | The Mac icon (macOS's icon grid: an 824-of-1024 rounded square with its shadow), 1024 px; electron-builder makes the `.icns` |
+| `desktop/build/icon.ico` | Windows: the executable, taskbar, Start, the installer | The art in a rounded square, 16 to 256 px |
+| `desktop/src/assets/trayTemplate.png`, `trayTemplate@2x.png` | macOS menu bar | A template image (black and alpha; the menu bar colours it for light, dark and highlighted): the helper's outline thickened to read at 18 points, 1x and 2x |
+| `desktop/src/assets/tray.ico` | Windows notification area | The colour helper without its paper, 16 to 48 px (100 % to 300 % scaling) |
+| `desktop/src/assets/tray.png` | Development runs elsewhere | The colour helper, 32 px |
+
+`desktop/src/tray-icon.ts` picks the tray file by platform; `desktop/scripts/copy-assets.mjs` copies `src/assets` into `dist/assets`. `desktop/test/icons.test.ts` checks every file is there at its sizes and that `electron-builder.yml` names the app icons. The taskbar's Needs-you overlay stays the plain dot in `src/badge-art.ts`.
+
 ## Packaging and verification
 
 `electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.
