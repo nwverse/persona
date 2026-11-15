@@ -114,7 +114,100 @@ func TestAbandonStartWaitsForLateAgent(t *testing.T) {
 	}
 }
 
-func TestAbandonStartWithoutReportedAgentDoesNotInventSession(t *testing.T) {
+func TestAbandonStartFollowsPiSessionIDChange(t *testing.T) {
+	n, f, home, created := newWorkAgentTestTab(t)
+	fallback := agentOf(piAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, piAgent)
+	const realID = "pi-real-session"
+	running := agentOf(piAgent, realID, proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, piAgent)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{fallback}, nil))
+	presses := 0
+	f.after(func(c herdrCall) {
+		if c.Method != "pane.send_keys" || str(c.Params["pane_id"]) != "w1:p2" {
+			return
+		}
+		presses++
+		switch presses {
+		case 2:
+			// The fallback row disappears, but the same pi is still live under its real session ID.
+			f.reply("session.snapshot", snapshot(nil, nil, []any{running}, nil))
+		case 4:
+			f.reply("session.snapshot", snapshot(nil, nil, nil, []any{shellPane("w1:p2", "w1:t2", "w1", home, realID)}))
+		}
+	})
+	withStop(t, 1, time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := n.abandonStart(ctx, created, piAgent, ctx.Err()); err != context.Canceled {
+		t.Fatalf("abandonStart: %v", err)
+	}
+	assertTrace(t, f.trace("pane.send_keys"), []string{
+		sendKeys("w1:p2", "ctrl+c"), sendKeys("w1:p2", "ctrl+c"),
+		sendKeys("w1:p2", "ctrl+c"), sendKeys("w1:p2", "ctrl+c"),
+	})
+	closesNothing(t, f)
+}
+
+func TestWorkAgentStartHoldsPaneLockThroughCleanup(t *testing.T) {
+	n, f, home := herdrNode(t)
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cleaning := false
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	f.handle("session.snapshot", func(map[string]any) any {
+		if cleaning {
+			close(cleanupStarted)
+			cleaning = false
+			<-releaseCleanup
+		}
+		return snapshot(nil, nil, nil, nil)
+	})
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=cursor") {
+			cleaning = true
+			cancel()
+		}
+	})
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := n.startWorkAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), home, cursorAgent, cursorAgent, "", "do the thing", "w1", "")
+		startDone <- err
+	}()
+	select {
+	case <-cleanupStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("start did not reach abandoned cleanup")
+	}
+	lockTaken := make(chan struct{})
+	go func() {
+		unlock := n.typing.lock(workAgentPaneLockPrefix + "w1:p2")
+		close(lockTaken)
+		unlock()
+	}()
+	select {
+	case <-lockTaken:
+		t.Fatal("another start took the pane lock during cleanup")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseCleanup)
+	select {
+	case err := <-startDone:
+		if err == nil {
+			t.Fatal("cancelled start unexpectedly succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("abandoned start did not return")
+	}
+	select {
+	case <-lockTaken:
+	case <-time.After(time.Second):
+		t.Fatal("pane lock was not released after cleanup")
+	}
+	closesNothing(t, f)
+}
+
+func TestAbandonStartWithoutReportedAgentSendsNoKeys(t *testing.T) {
 	n, f, _, created := newWorkAgentTestTab(t)
 	old := abandonStartWait
 	abandonStartWait = 20 * time.Millisecond
@@ -124,7 +217,9 @@ func TestAbandonStartWithoutReportedAgentDoesNotInventSession(t *testing.T) {
 	if err := n.abandonStart(ctx, created, cursorAgent, ctx.Err()); err != context.Canceled {
 		t.Fatalf("abandonStart: %v", err)
 	}
-	assertTrace(t, f.trace("pane.send_keys"), []string{sendKeys("w1:p2", "ctrl+c")})
+	if got := f.trace("pane.send_keys"); len(got) != 0 {
+		t.Errorf("sent unverified keys: %v", got)
+	}
 	closesNothing(t, f)
 }
 
@@ -174,14 +269,56 @@ func TestWorkAgentLaunchRunErrorKeepsTabAndQuitsAgent(t *testing.T) {
 	}
 }
 
+func TestRunAgentInPaneStartsCursorWithoutReentrantLock(t *testing.T) {
+	n, f, home := actionNode(t)
+	f.reply("pane.process_info", map[string]any{"process_info": map[string]any{"foreground_processes": []any{
+		map[string]any{"pid": 1, "name": "zsh", "argv0": "-zsh"}}}})
+	f.reply("agent.prompt", map[string]any{})
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=cursor") {
+			f.reply("session.snapshot", snapshot(nil, nil, []any{
+				agentOf(cursorAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, cursorAgent),
+			}, nil))
+		}
+	})
+	type answer struct {
+		s   *proto.Session
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		s, err := n.runAgentInPane(context.Background(), "w1:p2", cursorAgent)
+		done <- answer{s, err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.s.Agent != cursorAgent || got.s.PaneID != "w1:p2" {
+			t.Fatalf("session: %+v", got.s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("adopted work-agent start deadlocked on the pane lock")
+	}
+	if got := f.trace("agent.prompt"); len(got) != 0 {
+		t.Errorf("unexpected first-prompt call for Run Agent Here: %v", got)
+	}
+	closesNothing(t, f)
+}
+
 // The first message of a cursor or agy start goes through herdr's agent.prompt once herdr reports the agent, and the
 // session is bound to the pane with the launcher and model it was started with.
 func TestWorkAgentStartPromptsThroughHerdr(t *testing.T) {
 	n, f, home := herdrNode(t)
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
-	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("cursor", "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, "cursor")}, nil))
 	f.reply("agent.prompt", map[string]any{})
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=cursor") {
+			f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("cursor", "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, "cursor")}, nil))
+		}
+	})
 	s, err := n.startWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), home, "cursor", cursorAgent,
 		"cursor/grok-4.7", "do the thing", "w1", "")
 	if err != nil {

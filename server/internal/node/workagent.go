@@ -18,8 +18,9 @@ import (
 // (session.send); cursor-agent's and agy's go through herdr's agent.prompt, which only reaches an agent herdr detects.
 
 const (
-	cursorAgent = "cursor"
-	agyAgent    = "agy"
+	cursorAgent             = "cursor"
+	agyAgent                = "agy"
+	workAgentPaneLockPrefix = "run-agent-in-pane:"
 )
 
 // workAgent is one such agent: its herdr name, and the program a start types when the launcher is the agent itself.
@@ -86,6 +87,19 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 		return nil, err
 	}
 	pane := created.Pane.String()
+	if adoptedPane(ctx) == nil {
+		// Keep another start from taking this pane while its command or cleanup is still in flight. The adopted caller
+		// holds the same lock (runAgentInPane); acquiring it again here would deadlock.
+		unlock := n.typing.lock(workAgentPaneLockPrefix + pane)
+		defer unlock()
+		// The tab may have been claimed or adopted before the lock was acquired. Recheck instead of typing over its agent.
+		if err := n.refreshHosts(ctx); err != nil {
+			return nil, err
+		}
+		if id := n.sessionOfPane(pane); id != "" {
+			return nil, fmt.Errorf("pane %s already runs agent session %s", pane, id)
+		}
+	}
 	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
 		return nil, err
 	}
@@ -223,10 +237,10 @@ func (n *Node) abandonStartAfterDone(ctx context.Context, created *host.Created,
 	return n.abandonStart(ctx, created, kind, err)
 }
 
-// abandonStart gives a slow-starting agent a bounded chance to appear, quits its reported session through quitAgent,
-// and keeps the terminal for the user. A user-picked pane is left untouched because pane and kind do not prove which
-// start owns its foreground process. If no agent is reported, one final Ctrl+C is only a best-effort interrupt: without
-// a real session id there is no verified agent to quit, and no fabricated id is passed to quitAgent.
+// abandonStart gives a slow-starting agent a bounded chance to appear and quits its reported session through quitAgent,
+// keeping the terminal for the user. A user-picked pane is left untouched because pane and kind do not prove which
+// start owns its foreground process. Discovery failure or ambiguity never sends keys. After each quit, fresh discovery
+// runs again so a pi that moved from its pane-derived fallback ID to its real session ID is not mistaken for an exit.
 func (n *Node) abandonStart(ctx context.Context, created *host.Created, kind string, err error) error {
 	if created == nil || adoptedPane(ctx) != nil {
 		return err
@@ -234,33 +248,29 @@ func (n *Node) abandonStart(ctx context.Context, created *host.Created, kind str
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	pane := created.Pane.String()
-	id, ambiguous, discoverErr := n.waitForAbandonedWorkAgent(cctx, pane, kind)
-	if discoverErr != nil {
-		log.Printf("abandon start in pane %s: discover %s: %v", pane, kind, discoverErr)
-	}
-	if ambiguous {
-		log.Printf("abandon start in pane %s: more than one %s agent is reported; leaving them for the user", pane, kind)
-		return err
-	}
-	if id == "" {
-		if sendErr := n.sendKeys(cctx, pane, "ctrl+c"); sendErr != nil {
-			log.Printf("abandon start in pane %s: interrupt %s: %v", pane, kind, sendErr)
-		}
-		id, ambiguous, discoverErr = n.waitForAbandonedWorkAgent(cctx, pane, kind)
+	for {
+		id, ambiguous, discoverErr := n.waitForAbandonedWorkAgent(cctx, pane, kind)
 		if discoverErr != nil {
-			log.Printf("abandon start in pane %s: discover %s after interrupt: %v", pane, kind, discoverErr)
+			log.Printf("abandon start in pane %s: discover %s: %v", pane, kind, discoverErr)
+			return err
 		}
 		if ambiguous {
 			log.Printf("abandon start in pane %s: more than one %s agent is reported; leaving them for the user", pane, kind)
 			return err
 		}
-	}
-	if id != "" {
-		if _, quitErr := n.quitAgent(cctx, id, pane); quitErr != nil {
+		if id == "" {
+			return err
+		}
+		stopped, quitErr := n.quitAgent(cctx, id, pane)
+		if quitErr != nil {
 			log.Printf("abandon start in pane %s: quit %s: %v", pane, kind, quitErr)
+			return err
+		}
+		if !stopped {
+			log.Printf("abandon start in pane %s: quit %s was not confirmed; leaving the terminal for the user", pane, kind)
+			return err
 		}
 	}
-	return err
 }
 
 // waitForAbandonedWorkAgent polls fresh host snapshots for one unambiguous work agent in pane. A stale in-memory row
