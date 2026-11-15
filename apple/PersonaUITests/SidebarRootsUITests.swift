@@ -218,8 +218,14 @@ final class SidebarRootsUITests: XCTestCase {
         shot("3-machine")
 
         // A phone's drawer: a sub-page has only Back, the drawer opens from a root (docs/design/sidebar-navigation.md,
-        // "One button on each side"). The rest needs the column beside or over the page.
+        // "One button on each side"). The rest needs the column beside the page.
         if app.windows.firstMatch.frame.width < 600 { return }
+        // The same with the column laid over the page (the open Duo upright, #8603): a sub-page has Back alone, so the
+        // sidebar is reached from a root.
+        if !(element("sidebar-main").exists && element("sidebar-main").isHittable) {
+            XCTAssertFalse(element("sidebar-show-button").exists, "a sidebar button beside Back on a sub-page")
+            return
+        }
 
         // Machines keeps its drill-down while the conversation is in front.
         pick("sidebar-main", "the conversation")
@@ -412,6 +418,14 @@ final class SidebarRootsUITests: XCTestCase {
         XCTAssertEqual(popped.path, 0, "‹ did not go back to \(under): \(popped)")
         XCTAssertFalse(backShown(), "back at \(under), a ‹ still shows:\n\(app.debugDescription)")
         shot("8603-popped")
+        // Back at the root, one button brings the sidebar back: not none (UIKit's toggle went after the pop), not two.
+        let openers = app.buttons.matching(NSPredicate(format: "identifier IN %@ OR label IN %@",
+                                                       ["ToggleSidebar", "sidebar-show-button", "assistant-sidebar-button", "sidebar-drawer-button", "shell-place-sidebar"],
+                                                       ["Show Sidebar", "显示边栏", "显示侧边栏"]))
+            .allElementsBoundByIndex.filter { $0.exists && $0.isHittable }
+        if !(element("sidebar-main").exists && element("sidebar-main").isHittable) {
+            XCTAssertEqual(Set(openers.map(\.frame.minX)).count, 1, "back at \(under): \(openers.count) buttons bring the sidebar back:\n\(app.debugDescription)")
+        }
 
         // (b) The same Agent picked in the sidebar: a root.
         let root = pickAgent("the same Agent picked in the sidebar", titled: title)
