@@ -155,8 +155,11 @@ describe("fine pointer detection", () => {
       expect(renders).toBe(beforePointer);
     }
 
-    // A click can be the first mouse event: there is no requirement to move the mouse first.
-    act(() => window.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse" })));
+    // A click can be the first mouse event. Window capture sees it before the target stops its bubble.
+    const surface = document.createElement("button");
+    surface.addEventListener("pointerdown", (event) => event.stopPropagation());
+    host.append(surface);
+    act(() => surface.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true })));
     expect(hasFinePointer()).toBe(true);
     expect(rendered.at(-1)).toBe(true);
     expect(renders).toBe(beforePointer + 1);

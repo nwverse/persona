@@ -195,4 +195,58 @@ describe("the expanded composer keyboard", () => {
     expect(onNudge).toHaveBeenCalledTimes(1);
     expect(onSend).not.toHaveBeenCalled();
   });
+
+  it("keeps an empty, unblocked draft open with its caret on Mod+Enter", async () => {
+    const onSend = vi.fn(async () => true);
+    const field = open(onSend);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    field.setSelectionRange(0, 0);
+    expect((await press(field, { ctrlKey: true })).defaultPrevented).toBe(true);
+    expect(editor()).not.toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(field.value).toBe("");
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, 0]);
+  });
+});
+
+describe("the expanded composer chunk", () => {
+  it("opens on the first tap after a late chunk, keeping the draft and caret", async () => {
+    const chunk = { calls: 0, open: () => {} };
+    vi.resetModules();
+    vi.doMock("./ComposerOverlays", async () => {
+      chunk.calls++;
+      await new Promise<void>((resolve) => { chunk.open = resolve; });
+      return vi.importActual<typeof import("./ComposerOverlays")>("./ComposerOverlays");
+    });
+    try {
+      const { initI18n } = await import("../../i18n");
+      await initI18n("zh-Hans");
+      const { Composer: DeferredComposer } = await import("./Composer");
+      await act(async () => {
+        root.render(<DeferredComposer draftKey="deferred-expand" placeholder="" onSend={async () => true} />);
+      });
+      type(lines(9));
+      box().setSelectionRange(5, 9);
+      const control = expandButton()!;
+      act(() => control.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true })));
+      await vi.waitFor(() => expect(chunk.calls).toBe(1));
+      expect(editor()).toBeNull();
+
+      await act(async () => { control.click(); });
+      expect(editor()).toBeNull();
+      chunk.open();
+      for (let i = 0; i < 50 && !editor(); i++) await act(async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+      });
+      expect(editor()).not.toBeNull();
+      const field = editor()!.querySelector<HTMLTextAreaElement>("textarea")!;
+      expect(field.value).toBe(lines(9));
+      expect([field.selectionStart, field.selectionEnd]).toEqual([5, 9]);
+    } finally {
+      vi.doUnmock("./ComposerOverlays");
+    }
+  }, 20_000);
 });

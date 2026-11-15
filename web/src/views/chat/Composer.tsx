@@ -46,7 +46,8 @@ import type { VoiceOffer } from "./voice/VoiceParts";
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
 // The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
-const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay), { idle: true });
+const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay));
+const preloadComposerOverlay = () => void ComposerOverlay.preload().catch(() => {});
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
@@ -1028,6 +1029,8 @@ export const Composer = memo(function Composer({
             data-testid="composer-expand"
             aria-label={t("chat-composer.expand")}
             title={t("chat-composer.expand")}
+            onPointerDown={preloadComposerOverlay}
+            onFocus={preloadComposerOverlay}
             onClick={() => setExpanded(true)}
             className="touch-hit absolute top-0.5 right-0 flex size-7 items-center justify-center rounded-[8px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
           >

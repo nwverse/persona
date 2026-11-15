@@ -824,3 +824,37 @@ describe("the / palette", () => {
     expect(palette()).toBeNull();
   });
 });
+
+describe("Composer suggestion chunk", () => {
+  it("appears and fills the box after its chunk resolves", async () => {
+    const chunk = { calls: 0, open: () => {} };
+    vi.resetModules();
+    vi.doMock("./ComposerOverlays", async () => {
+      chunk.calls++;
+      await new Promise<void>((resolve) => { chunk.open = resolve; });
+      return vi.importActual<typeof import("./ComposerOverlays")>("./ComposerOverlays");
+    });
+    try {
+      const { initI18n } = await import("../../i18n");
+      await initI18n("zh-Hans");
+      const { Composer: DeferredComposer } = await import("./Composer");
+      await act(async () => {
+        root.render(<DeferredComposer draftKey="deferred-pill" placeholder="" suggestion="late suggestion" onSend={async () => true} />);
+      });
+      const pill = () => host.querySelector('[data-testid="composer-suggestion"]');
+      expect(pill()).toBeNull();
+      await vi.waitFor(() => expect(chunk.calls).toBe(1));
+
+      chunk.open();
+      for (let i = 0; i < 50 && !pill(); i++) await act(async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+      });
+      expect(pill()).not.toBeNull();
+      act(() => pill()!.querySelector("button")!.click());
+      expect(host.querySelector("textarea")!.value).toBe("late suggestion");
+      expect(pill()).toBeNull();
+    } finally {
+      vi.doUnmock("./ComposerOverlays");
+    }
+  }, 20_000);
+});
