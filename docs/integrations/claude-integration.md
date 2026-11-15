@@ -73,7 +73,82 @@ Code does not know (`400000` makes it count 400,000, and the session's `1000000`
 window is over 200K and sets the compact window to that window (#3066); a tier, the small model or the sub-Agent model
 set to a model of its own is marked only when that model's window is 1M or more (#5149), since nothing per model would
 hold a smaller one to its size. An ID already ending in `[1m]` is left alone, and one with no known window is passed as
-it is.
+it is. The reply limit and thinking levels a gateway reports are in "What a gateway reports about a model" below.
+
+## What a gateway reports about a model (tested 2.1.325, #8798)
+
+Model discovery saves what a gateway says of each model (`docs/integrations/launchers.md`, "Provider model and gateway
+parameters"). The launch passes on two of those facts; a provider whose models report neither launches exactly as
+before (`TestProviderEnvUnchangedWithoutReportedLimits`). Measured with `claude -p` against a local fake gateway that
+logs each request body, launched as Persona launches a provider (`ANTHROPIC_BASE_URL`,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`), and checked against Claude Code's official
+[environment variable reference](https://code.claude.com/docs/en/env-vars).
+
+| Variable or flag | What Persona does | Why |
+| --- | --- | --- |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | Set from the models' `max_output_tokens` (rule below) | A model Claude Code does not know is asked for at most 32,000 tokens |
+| `--effort` (the provider's default level) | Left out when the session's model is marked `no_effort` | The gateway says the model takes no level |
+| `CLAUDE_CODE_MODEL_CAPABILITIES` | Not set | Works on 2.1.325, but is not in the official reference |
+| `CLAUDE_CODE_AUTO_MODE_SERVER` | Not set; a provider's `env` may set it | Turning it off changes how auto mode checks actions: a product decision |
+
+**Reply limit.** Claude Code asks a model ID it cannot resolve to one of its own for `max_tokens: 32000`, so a
+reasoning model, whose thinking counts toward the reply, stops at "Claude's response exceeded the 32000 output token
+maximum". `CLAUDE_CODE_MAX_OUTPUT_TOKENS` raises it, up to 128,000 for such an ID (`200000` is sent as 128,000, the
+reference says the same); a Claude model already gets its own limit (128,000 for Opus 5.5) and is held to it. Claude
+Code knows a Claude ID anywhere in a name (`anthropic/claude-opus-5-5`, a dated ID), so Persona treats an ID
+containing `claude-` as one it may know (`claudeKnows`). The variable is one value for the whole process, each model
+capped at its own limit, so `outputTokens` sets it to the least reported `max_output_tokens` of the models the process
+runs: the session's, each tier's, the small model's, the sub-Agent model's and the `/model` menu's extra entry, after
+the provider's `env` (which may name one). It is set only when the session's model does not look like a Claude one
+(a lower value would lower that model's own limit), when every other model reports a limit or looks like a Claude one
+(a model with none could be asked for more than it writes, and a strict gateway refuses that; a Claude-looking ID
+that does report one counts), and when the result is over 32,000 (a lower value would lower what every model is asked
+for today). A session on a Claude model whose tiers are gateway models therefore gets nothing, and its sub-Agents keep
+32,000; the provider's `env` can set the value. The provider's `env` wins (an empty value leaves Claude Code's own
+limit), and is pinned in the settings file like the rest of it.
+
+The value follows the model the session runs, not only the provider's default. `launcher.env` sends the models'
+reported limits (`max_output_tokens`), and `personad launch` works it out again for the model the start runs (its last
+`--model`, a tier alias such as `opus` resolved to that tier's model, else `ANTHROPIC_MODEL`) beside the provider's
+tiers (`sessionOutput`); the Agent SDK bridge is given the conversation's model. So the CLI's settings file does not
+pin Persona's value, and one in the user's own settings `env` wins over it. The shell's copy is dropped only when the
+launch sets one, so a value the user exports for their own gateway still reaches a session that gets none. A model
+picked in a running session's `/model` menu that is none of the models above is still asked for the process's value.
+It does not move auto-compaction: 2.1.325 keeps `min(max output, 20000)` free below the window, and 32,000 already
+reserves the full 20,000.
+
+**Thinking levels.** The provider's default level reaches an Agent as `--effort` from `personad launch` (the `effort`
+field in `docs/integrations/launchers.md`). `launcher.env` now also lists the provider's models marked `no_effort`, and `personad launch` leaves the level out when the session runs one of them (`launchEffort`, the
+session's model read as above). Claude Code still sends its own default to a model it does
+not know (`output_config.effort: high` with no `--effort`; `low`, `xhigh` and `max` are sent as given), and when the
+gateway forwards the model's refusal of the field unmodified, Claude Code retries without it and leaves it out after
+([gateway protocol: automatic retry](https://code.claude.com/docs/en/llm-gateway-protocol#automatic-retry-and-error-forwarding)).
+What else was verified, not used:
+
+- `CLAUDE_CODE_MODEL_CAPABILITIES` (`<model>=<capability>,…;…`, a trailing `*` a prefix, `-` before a capability to
+  turn it off) is read behind `ANTHROPIC_BASE_URL`: `example-model=-effort` drops `output_config.effort`, and
+  `example-model=effort,-xhigh_effort,-max_effort` sends `high` for `--effort xhigh` or `max`. It is not in the official
+  reference, so its format may change without notice; Persona does not write it.
+- The documented per-tier `ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES` apply only on Bedrock, Vertex and Foundry
+  ([model configuration: pinned model
+  capabilities](https://code.claude.com/docs/en/model-config#customize-pinned-model-display-and-capabilities)); 2.1.325 ignores them behind `ANTHROPIC_BASE_URL`.
+- The documented way to send no level is `CLAUDE_CODE_EFFORT_LEVEL=auto` (or `unset`), measured to drop the field. It
+  is one value for the process and wins over `--effort` and `/effort`, so it would lock the session's effort control
+  (#2307); a provider can set it in its `env` for an Agent, and the main conversation ignores it there.
+
+**Auto mode's server-side review.** In auto mode, Claude Code asks the server to check the actions it would send for
+review, as part of the model requests (`safeguards` in the body, a `dangerous-tool-use-…` beta); behind an
+`ANTHROPIC_BASE_URL` gateway it does so by default from 2.1.278
+([server-side classifier review](https://code.claude.com/docs/en/permission-modes#server-side-classifier-review)).
+`CLAUDE_CODE_AUTO_MODE_SERVER=0` stops asking and makes Claude Code send its own classifier requests instead. Measured
+on 2.1.325 as Persona launches a provider: a gateway that returns no review results gets every action that needs the
+check refused ("Auto mode can't check actions in this session … every action that needs the check is refused"), not a
+fall-back to the local classifier that the page describes; with `0`, the classifier requests go to the gateway on the
+model `ANTHROPIC_DEFAULT_SONNET_MODEL` names (Persona always sets it: the Sonnet tier, else the session's model), and a
+model that answers with no verdict Claude Code can read still gets the action blocked ("Auto mode could not evaluate
+this action"). So `0` helps only when that model can act as the classifier, and it turns off the server's own check.
+Persona does not set the variable; a user whose gateway cannot carry the review can put `CLAUDE_CODE_AUTO_MODE_SERVER=0` in
+the provider's `env`, or use another permission mode.
 
 ## Persona tools Agents call without a card
 
