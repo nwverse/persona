@@ -33,8 +33,8 @@ export interface ProviderModel extends ReportedMeta {
 
 /** What a gateway reported of a model that the form does not show (#8778): its output limit, every thinking level in
  *  its own words when some fall outside `efforts`, that it takes none, and whether it takes images and tools. Carried
- *  through the form and saved as it came; the hub keeps `all_efforts` and `no_effort` only while they agree with the
- *  levels saved, so changing the levels by hand needs nothing from here. */
+ *  through the form and saved as it came: the hub keeps `all_efforts` and `no_effort` only while they agree with the
+ *  levels saved (assistant/models_discover_meta.go settleSavedEfforts), so levels changed by hand need nothing here. */
 export interface ReportedMeta {
   max_output_tokens?: number;
   all_efforts?: string[];
@@ -48,8 +48,8 @@ const META_KEYS = ["max_output_tokens", "all_efforts", "no_effort", "image_input
 /** The reported fields of m, in a fixed order (a PUT compares models as JSON). */
 function metaOf(m: ReportedMeta): ReportedMeta {
   const out: Record<string, unknown> = {};
-  for (const k of META_KEYS) if (m[k] !== undefined) out[k] = Array.isArray(m[k]) ? [...(m[k] as string[])] : m[k];
-  return out as ReportedMeta;
+  for (const k of META_KEYS) if (m[k] !== undefined) out[k] = m[k];
+  return out;
 }
 
 /** GET /api/v1/launchers' managed launcher (hub LauncherView): never the key, the headers or the environment, only
@@ -202,17 +202,6 @@ export function formModel(m: ProviderModel, checked = true): FormModel {
   return { id: m.id, name: m.name ?? "", context_window: numText(m.context_window), efforts: [...(m.efforts ?? [])], default_effort: m.default_effort ?? "", checked, meta: metaOf(m) };
 }
 
-/** A row's reported fields with what discovery found filled in where the row has none: the levels in the gateway's
- *  words only when the row's levels are the ones found, "takes none" only while the row has no level. */
-function fillMeta(row: FormModel, found: ProviderModel): ReportedMeta {
-  const out: ReportedMeta = { ...row.meta };
-  if (out.max_output_tokens === undefined && found.max_output_tokens !== undefined) out.max_output_tokens = found.max_output_tokens;
-  if (out.image_input === undefined && found.image_input !== undefined) out.image_input = found.image_input;
-  if (out.tool_calls === undefined && found.tool_calls !== undefined) out.tool_calls = found.tool_calls;
-  if (out.all_efforts === undefined && found.all_efforts && sameJSON(row.efforts, found.efforts ?? [])) out.all_efforts = [...found.all_efforts];
-  if (out.no_effort === undefined && found.no_effort && !row.efforts.length) out.no_effort = true;
-  return metaOf(out);
-}
 
 /** How a saved provider signs in: what it stores, else x-api-key (providers saved before the choice existed). */
 export const storedAuth = (v: ProviderView): AuthMethod => v.auth ?? "api_key";
@@ -276,7 +265,7 @@ export function formFromView(v: ProviderView): ProviderForm {
 export const AUTO_CHECK = 8;
 
 /** Discovered models merged in: new ones added unchecked (all checked when nothing was there and the list is short),
- *  what was typed kept. */
+ *  what was typed kept; a row with nothing reported yet takes what the gateway reported. */
 export function mergeDiscovered(models: FormModel[], found: ProviderModel[], chat = false): FormModel[] {
   const out = [...models];
   const first = models.length === 0 && found.length <= AUTO_CHECK;
@@ -284,12 +273,12 @@ export function mergeDiscovered(models: FormModel[], found: ProviderModel[], cha
     const i = out.findIndex((x) => x.id === m.id);
     if (i < 0) {
       const mismatch = chat && m.default_effort && m.efforts?.length && !m.efforts.includes(m.default_effort);
-      out.push(formModel(mismatch ? { ...m, efforts: [], default_effort: "", all_efforts: undefined } : m, first));
+      out.push(formModel(mismatch ? { ...m, efforts: [], default_effort: "" } : m, first));
     } else {
       if (!out[i].context_window && m.context_window) {
         out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
       }
-      out[i] = { ...out[i], meta: fillMeta(out[i], m) };
+      if (!Object.keys(out[i].meta).length) out[i] = { ...out[i], meta: metaOf(m) };
     }
   }
   return out;
