@@ -18,6 +18,11 @@
   archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
   instructions must stay hidden too. Preserve item-chain links and the main conversation.
 
+- An owner's bot handoff is not a third-party task update (#8351). Exclude it in the shared task-link policy, not by
+  asking the judge to pick no task. Apply that policy when admitting supervisor signals and following task
+  continuations too: a persisted association can outlive the router that created it. A link-only correction must
+  preserve ordinary human messages and the handoff's handling, suggestions and history.
+
 - Count repeated conditional instructions at the runtime-send boundary, not just in a prompt golden (#5665).
   Two adjacent decision blocks repeated the same handling rules, but the newer one also required recording the choice.
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
