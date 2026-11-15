@@ -122,9 +122,11 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		return InboxItem{}, errAnswerOnly
 	}
 	if g != nil && g.Conversation != nil {
+		resetInboxFollowChecks(it)
 		return s.actOnHandedSuggestion(ctx, it, g, in, text) // it lets b.mu go
 	}
 	w := beginWrite(it)
+	resetInboxFollowChecks(it)
 	if it.Agent == nil { // an old draft's item, or a first instruction: its conversation's bookkeeping starts here
 		it.Agent = &InboxAgent{State: AgentSkipped}
 	}
@@ -140,15 +142,18 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	switch {
 	case in.Action == suggestReject:
 		b.chainAdd(it, rejectedEntry(l, g.Text, now))
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteRejected, Text: g.Text}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case in.Action == suggestInstruct:
 		words := strings.TrimSpace(*in.Text)
 		b.chainAdd(it, instructedEntry(l, words, now))
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: words}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case !execute: // handback: the conversation does it
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteHandback, Text: text, Edited: edited}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 	case g.Kind == SuggestConclusion:

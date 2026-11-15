@@ -133,3 +133,64 @@ func TestTaskRepositorySameNumberAcrossRepositories(t *testing.T) {
 		t.Fatal("case-insensitive duplicate alias", err)
 	}
 }
+
+func TestTaskLinkReportsPreserveSourcesAndNormalizeReferences(t *testing.T) {
+	urls := []string{"https://GitHub.com/Example/Web/pull/7", "https://github.com/example/web/pull/7", "https://github.com/example/api/pull/7", "https://gitlab.example.com/Team/Api/merge_requests/7"}
+	rows, err := MergeTaskLinks(nil, urls, Catalog{})
+	if err != nil || len(rows) != 3 || len(rows[0].Links) != 1 || rows[2].Links[0].CanonicalURL != "https://gitlab.example.com/team/api/-/merge_requests/7" {
+		t.Fatal(rows, err)
+	}
+	first := rows[0]
+	first.DirectoryAlias = "frontend"
+	first.RequestedRef = RequestedRef{Kind: "branch", Value: "release"}
+	rows[0] = first
+	catalog := Catalog{Revision: 9, Repositories: []CatalogEntry{{ID: first.RepoID, Identity: rows[1].SourceSnapshot.Identity}}}
+	got, err := MergeTaskLinks(rows, []string{"https://github.com/example/web/issues/7"}, catalog)
+	if err != nil || got[0].SourceSnapshot != first.SourceSnapshot || got[0].RequestedRef != first.RequestedRef || got[0].DirectoryAlias != first.DirectoryAlias || len(got[0].Links) != 2 || len(rows[0].Links) != 1 {
+		t.Fatal("report overwrote source/ref/alias or input", got, rows, err)
+	}
+	before, _ := json.Marshal(rows)
+	if _, err := MergeTaskLinks(rows, []string{"https://github.com/example/web/pull/9", "https://github.com/example/web/pull/0"}, catalog); err == nil {
+		t.Fatal("invalid batch accepted")
+	}
+	after, _ := json.Marshal(rows)
+	if string(before) != string(after) {
+		t.Fatal("failed batch mutated input")
+	}
+	for _, raw := range []string{"https://user:secret@" + "github.com/example/web/pull/7", "https://github.com/example/web/pull/7?token=secret", "https://github.com/example/web/pull/%37", "https://github.com/Example/Web/pull/%37", "https://github.com/example/web/pull/7#note", "ssh://git@" + "github.com/example/web/pull/7"} {
+		if _, _, err := ParseTaskLink(raw); err == nil {
+			t.Fatal("accepted unsafe/noncanonical reference", raw)
+		}
+	}
+}
+
+func TestTaskLinkTitlesSurviveOlderEditsAndURLReports(t *testing.T) {
+	identity, _ := Parse("https://github.com/example/web", "")
+	catalog := Catalog{Repositories: []CatalogEntry{{ID: "web", Identity: identity}}}
+	rows, err := Bind(nil, []TaskInput{{RepoID: "web", Links: []LinkInput{{Kind: "pull_request", Number: "7", Title: "  Keep the full review title  "}, {Kind: "issue", Number: "7", Title: "Fix sign in"}}}}, catalog)
+	if err != nil || rows[0].Links[0].Title != "Keep the full review title" {
+		t.Fatal(rows, err)
+	}
+	// An older editor knows only the link's identity. It must not erase newer metadata.
+	kept, err := Bind(rows, []TaskInput{{RepoID: "web", Links: []LinkInput{{Kind: "pull_request", Number: "7"}, {Kind: "issue", Number: "7"}}}}, catalog)
+	if err != nil || kept[0].Links[0].Title != rows[0].Links[0].Title || kept[0].Links[1].Title != "Fix sign in" {
+		t.Fatal(kept, err)
+	}
+	updated, err := MergeTaskLinkDetails(kept, []LinkInput{{URL: identity.CanonicalURL + "/pull/7", Title: "Updated review title"}}, catalog)
+	if err != nil || len(updated[0].Links) != 2 || updated[0].Links[0].Title != "Updated review title" || kept[0].Links[0].Title != rows[0].Links[0].Title {
+		t.Fatal(updated, kept, err)
+	}
+	reported, err := MergeTaskLinks(updated, []string{identity.CanonicalURL + "/pull/7"}, catalog)
+	if err != nil || reported[0].Links[0].Title != "Updated review title" {
+		t.Fatal(reported, err)
+	}
+	cleared, err := Bind(rows, []TaskInput{{RepoID: "web", Links: []LinkInput{}}}, catalog)
+	if err != nil || len(cleared[0].Links) != 0 {
+		t.Fatal(cleared, err)
+	}
+	for _, title := range []string{"bad\x00title", "bad\ntitle", strings.Repeat("a", 1025), string([]byte{0xff})} {
+		if _, err := NormalizeLink(identity, LinkInput{Kind: "issue", Number: "7", Title: title}); err == nil {
+			t.Fatal("accepted invalid title")
+		}
+	}
+}

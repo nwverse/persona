@@ -158,7 +158,7 @@ Two checks preserve steps 1–3; regressions turn tests red:
 - `RenderBudgetTests` fails above budget: with the page at rest, a push changes one field in one session (average of 5 per type); views recomputed per push must stay within budget.
   Budgets are the numbers in "Cost of one push" above: Agents list `rev` 1 (that row's time), `last` 2 (that row and its time), Agent chat and Persona chat both 0;
   one extra call across 5 pushes is allowed (0.2, a row's time happens to cross its refresh boundary); two extra calls count as regression.
-- `AllSessionsReadersTests` (PersonaTests, source scan): only Agent-listing views under `Persona/Views` and `Mac` may read `allSessions`; each file's read count and reason are registered in the test,
+- `AllSessionsReadersTests` (PersonaTests, source scan): only Agent-listing views under `Persona/Views` may read `allSessions`; each file's read count and reason are registered in the test,
   and adding or removing a read requires updating the registration:
   - single-session displays read `model.session(_:)` cells;
   - actions needing all sessions only when tapped (@ menus, quoting another session, next / previous Agent, terminal space switching) read `model.sessionsNow`: the same data as `allSessions`, unobserved,
@@ -443,7 +443,7 @@ Why it works this way:
 Measurement: decode simulator recordings frame by frame, calculate content displacement relative to the previous frame, last-row distance from the composer, and "large change then reversal within a frame" jumps. In the App, `-scrollTrace YES`
 records UIKit / AppKit offset, content height, finger / inertia, and follow state each frame (`ScrollTrace`). Cases: `StreamingScrollTests` (mock `/mock/say?preset=markdown`:
 code blocks, tables, lists, delta every 80 ms like the hub; `&late=600` clears first and sends the committed message 600 ms later). A locked Mac can't record the screen and has no real trackpad:
-`MacScrollLab` sends synthetic two-finger scroll and inertia to the list, rendering the window every 0.1 s (`docs/apple/mac.md`). Tools live in `scripts/diag/stream-scroll/`.
+`MacScrollLab` sent synthetic two-finger scroll and inertia to the list, rendering the window every 0.1 s (`docs/archive/apple/mac.md`). Tools live in `scripts/diag/stream-scroll/`.
 
 | Symptom (before the fix) | Cause | Fix |
 | --- | --- | --- |

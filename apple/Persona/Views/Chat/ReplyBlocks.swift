@@ -49,6 +49,9 @@ struct ReplyCodeBlock: View {
                     .fontDesign(.monospaced)
                     .padding(Theme.Space.m)
             }
+            // A scroll view clips to its frame plus the safe area beside it: on the iPhone Duo's displays, whose status
+            // bar runs down the side, long lines were drawn past the block and under that bar (#8212).
+            .clipped()
             .background(Theme.codeBackground, in: UnevenRoundedRectangle(bottomLeadingRadius: Theme.Radius.control,
                                                                          bottomTrailingRadius: Theme.Radius.control, style: .continuous))
         }
@@ -92,6 +95,7 @@ struct ReplyQuote: View {
             }
             .frame(maxHeight: folded ? fold : nil, alignment: .top)
             .clipped()
+            .contentShape(.rect) // what is folded away takes no touches: it runs on over the rows below (#6645)
             .mask {
                 if folded {
                     VStack(spacing: 0) {

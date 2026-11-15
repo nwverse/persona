@@ -253,6 +253,8 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"send now unsupported", &rpc.Error{Code: "send_now_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unsupported"},
 		{"send now unrecognized", &rpc.Error{Code: "send_now_unrecognized", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unrecognized"},
 		{"untypable directory", &rpc.Error{Code: "directory_untypable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.directory_untypable"},
+		// a read of an agent its engine let go, which only an open chat starts (Paseo, #8132)
+		{"not loaded", &rpc.Error{Code: proto.CodeNotLoaded, Message: "the runtime's own words"}, "rpc-errors.not_loaded"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -282,6 +284,25 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 	rec = httptest.NewRecorder()
 	if body := call(t, langWriter{rec, i18n.Ja}, rec, typed); body["error"] != i18n.T(i18n.Ja, "inbox-errors.no_item") {
 		t.Fatal("typed summary overwritten")
+	}
+}
+
+func TestAssistantServiceTierFailuresWithholdNativeDiagnostics(t *testing.T) {
+	for _, code := range []string{"assistant_service_tier_start_only", "assistant_service_tier_unsupported", "assistant_service_tier_refused"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			rec := httptest.NewRecorder()
+			raw := &rpc.Error{Code: code, Message: "native English diagnostic", Data: json.RawMessage(`{"delivered":"none","retryable":false}`)}
+			body := call(t, langWriter{rec, lang}, rec, raw)
+			if rec.Code != http.StatusConflict || body["code"] != code || body["error"] != i18n.T(lang, "rpc-errors."+code) {
+				t.Fatalf("%s %s: %d %v", code, lang, rec.Code, body)
+			}
+			if _, exists := body["detail"]; exists {
+				t.Fatalf("%s %s exposed the native diagnostic: %v", code, lang, body)
+			}
+			if body["delivered"] != "none" || body["retryable"] != false {
+				t.Fatalf("%s %s changed delivery: %v", code, lang, body)
+			}
+		}
 	}
 }
 

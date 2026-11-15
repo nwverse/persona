@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Task associations describe work. They never authorize or prepare disk resources.
@@ -52,11 +53,13 @@ type LinkInput struct {
 	URL    string `json:"url,omitempty"`
 	Kind   string `json:"kind,omitempty"`
 	Number string `json:"number,omitempty"`
+	Title  string `json:"title,omitempty"`
 }
 type TaskLink struct {
 	Kind         string `json:"kind"`
 	Number       string `json:"number"`
 	CanonicalURL string `json:"canonical_url"`
+	Title        string `json:"title,omitempty"`
 }
 type TaskInput struct {
 	RepoID         string       `json:"repo_id"`
@@ -195,13 +198,23 @@ func CloneTransport(raw string, identity Identity) (string, error) {
 }
 
 func NormalizeLink(identity Identity, in LinkInput) (TaskLink, error) {
+	in.Title = strings.TrimSpace(in.Title)
+	if !utf8.ValidString(in.Title) || len(in.Title) > 1024 || strings.ContainsFunc(in.Title, unicode.IsControl) {
+		return TaskLink{}, Problem("invalid")
+	}
 	if in.URL != "" {
 		if in.Kind != "" || in.Number != "" || len(in.URL) > 2048 {
 			return TaskLink{}, Problem("invalid")
 		}
 		u, err := url.Parse(in.URL)
 		base, baseErr := url.Parse(identity.CanonicalURL)
-		if err != nil || baseErr != nil || (u.Scheme != "http" && u.Scheme != "https" || u.Scheme != base.Scheme) || u.User != nil || u.Host != base.Host || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
+		if err != nil || baseErr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
+			return TaskLink{}, Problem("link_repository_mismatch")
+		}
+		// Validate the actual URL before comparing its normalized source identity.
+		// Public HTTP aliases share HTTPS identity; self-hosted schemes/ports do not.
+		actual, err := Parse(in.URL, identity.Provider)
+		if err != nil || actual != identity {
 			return TaskLink{}, Problem("link_repository_mismatch")
 		}
 		prefix := base.Path + "/"
@@ -209,10 +222,11 @@ func NormalizeLink(identity Identity, in LinkInput) (TaskLink, error) {
 		if identity.Provider == "gitlab" {
 			paths = map[string]string{"-/issues/": "issue", "-/merge_requests/": "pull_request"}
 		}
+		path := strings.ToLower(u.Path)
 		for suffix, kind := range paths {
-			if strings.HasPrefix(u.Path, prefix+suffix) {
+			if strings.HasPrefix(path, prefix+suffix) {
 				in.Kind = kind
-				in.Number = strings.TrimPrefix(u.Path, prefix+suffix)
+				in.Number = strings.TrimPrefix(path, prefix+suffix)
 				break
 			}
 		}
@@ -238,7 +252,23 @@ func NormalizeLink(identity Identity, in LinkInput) (TaskLink, error) {
 			segment = "-/merge_requests"
 		}
 	}
-	return TaskLink{Kind: in.Kind, Number: in.Number, CanonicalURL: identity.CanonicalURL + "/" + segment + "/" + in.Number}, nil
+	return TaskLink{Kind: in.Kind, Number: in.Number, CanonicalURL: identity.CanonicalURL + "/" + segment + "/" + in.Number, Title: in.Title}, nil
+}
+
+// PreserveLinkTitles keeps metadata when older clients send only link identities.
+// Removing a link still removes its title; a nonempty title replaces the saved title.
+func PreserveLinkTitles(current, next []TaskLink) {
+	for i := range next {
+		if next[i].Title != "" {
+			continue
+		}
+		for _, old := range current {
+			if old.Kind == next[i].Kind && old.Number == next[i].Number {
+				next[i].Title = old.Title
+				break
+			}
+		}
+	}
 }
 
 func NormalizeLinks(identity Identity, input []LinkInput) ([]TaskLink, error) {
@@ -321,10 +351,12 @@ func Bind(current []TaskRepository, input []TaskInput, catalog Catalog) ([]TaskR
 		}
 		identities[row.SourceSnapshot.Identity] = true
 		if in.Links != nil {
+			previous := row.Links
 			row.Links, err = NormalizeLinks(row.SourceSnapshot.Identity, in.Links)
 			if err != nil {
 				return nil, err
 			}
+			PreserveLinkTitles(previous, row.Links)
 		}
 		if row.Links == nil {
 			row.Links = []TaskLink{}
@@ -342,6 +374,9 @@ func CatalogState(row TaskRepository, catalog Catalog) string {
 			}
 			return "identity_changed"
 		}
+	}
+	if strings.HasPrefix(row.RepoID, "linked_") {
+		return "unlisted"
 	}
 	return "removed"
 }
@@ -409,4 +444,95 @@ func DefaultAlias(identity Identity) string {
 		return "repo"
 	}
 	return alias
+}
+
+// ParseTaskLink derives a credential-free source from an exact issue/PR URL, offline.
+func ParseTaskLink(raw string) (Identity, TaskLink, error) {
+	provider := "github"
+	if strings.Contains(raw, "/merge_requests/") || strings.Contains(raw, "/-/issues/") {
+		provider = "gitlab"
+	}
+	if provider == "gitlab" && !strings.Contains(raw, "/-/") {
+		raw = strings.Replace(raw, "/merge_requests/", "/-/merge_requests/", 1)
+	}
+	identity, err := Parse(raw, provider)
+	if err != nil {
+		return Identity{}, TaskLink{}, Problem("invalid")
+	}
+	link, err := NormalizeLink(identity, LinkInput{URL: raw})
+	return identity, link, err
+}
+
+// MergeTaskLinks appends references without overwriting aliases, refs or source snapshots.
+// A reported repository need not be preconfigured in the manager catalog.
+func MergeTaskLinks(current []TaskRepository, urls []string, catalog Catalog) ([]TaskRepository, error) {
+	input := make([]LinkInput, 0, len(urls))
+	for _, raw := range urls {
+		input = append(input, LinkInput{URL: raw})
+	}
+	return MergeTaskLinkDetails(current, input, catalog)
+}
+
+// ParseTaskLinkInput accepts an exact URL and optional title, without a remote lookup.
+func ParseTaskLinkInput(in LinkInput) (Identity, TaskLink, error) {
+	if in.Kind != "" || in.Number != "" {
+		return Identity{}, TaskLink{}, Problem("invalid")
+	}
+	identity, link, err := ParseTaskLink(in.URL)
+	if err != nil {
+		return identity, link, err
+	}
+	link, err = NormalizeLink(identity, LinkInput{Kind: link.Kind, Number: link.Number, Title: in.Title})
+	return identity, link, err
+}
+
+// MergeTaskLinkDetails adds references or refreshes known titles without erasing them.
+func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog Catalog) ([]TaskRepository, error) {
+	out := slices.Clone(current)
+	for i := range out {
+		out[i].Links = slices.Clone(out[i].Links)
+	}
+	for _, in := range input {
+		identity, link, err := ParseTaskLinkInput(in)
+		if err != nil {
+			return nil, err
+		}
+		index := slices.IndexFunc(out, func(r TaskRepository) bool { return r.SourceSnapshot.Identity == identity })
+		if index < 0 {
+			if len(out) >= MaxTaskRepositories {
+				return nil, Problem("limit")
+			}
+			digest := sha256.Sum256([]byte(identity.Provider + "|" + identity.CanonicalURL))
+			id := "linked_" + hex.EncodeToString(digest[:12])
+			source := SourceSnapshot{Identity: identity, CloneURL: identity.CanonicalURL, TransportOrigin: "canonical_default"}
+			for _, entry := range catalog.Repositories {
+				if entry.Identity == identity && !slices.ContainsFunc(out, func(r TaskRepository) bool { return r.RepoID == entry.ID }) {
+					id = entry.ID
+					source.CatalogRevision = catalog.Revision
+					if entry.CloneURL != "" {
+						source.CloneURL = entry.CloneURL
+						source.TransportOrigin = "catalog"
+					}
+					break
+				}
+			}
+			if _, err := CloneTransport(source.CloneURL, identity); err != nil {
+				return nil, err
+			}
+			out = append(out, TaskRepository{RepoID: id, RequestedRef: RequestedRef{Kind: "default"}, SourceSnapshot: source, Links: []TaskLink{}})
+			index = len(out) - 1
+		}
+		existing := slices.IndexFunc(out[index].Links, func(l TaskLink) bool { return l.Kind == link.Kind && l.Number == link.Number })
+		if existing >= 0 {
+			if link.Title != "" {
+				out[index].Links[existing].Title = link.Title
+			}
+			continue
+		}
+		if len(out[index].Links) >= MaxRepositoryLinks {
+			return nil, Problem("limit")
+		}
+		out[index].Links = append(out[index].Links, link)
+	}
+	return out, nil
 }

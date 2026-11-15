@@ -70,6 +70,9 @@ const (
 	// MethodCall {machine_id, method, params, timeout_ms?} → the node's result: the apps' and the hub's calls to a
 	// machine's node. session.watch / session.unwatch also tell the manager what to watch again after a reconnect.
 	MethodCall = "devices.call"
+	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
+	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
+	MethodFileCall = "devices.file_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -396,6 +399,9 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",
+	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
+	"GET /api/v1/machines/{mid}/diagnosis",
+	"POST /api/v1/machines/{mid}/cleanup",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
@@ -408,6 +414,8 @@ var Routes = []string{
 	// The file transfer switch (#3065, internal/devices transfer_settings.go).
 	"GET /api/v1/machines/{mid}/file-transfer/settings",
 	"PUT /api/v1/machines/{mid}/file-transfer/settings",
+	// Pollable copy / zip progress (#6113, internal/devices fileoperation.go).
+	"GET /api/v1/machines/{mid}/files/operations/{oid}",
 }
 
 // TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),

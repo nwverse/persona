@@ -30,9 +30,13 @@ ADMIN_CIDRS="${PERSONA_ADMIN_CIDRS:-}"
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --admin-access) ADMIN_ACCESS="${2:-}"; shift ;;
+    --admin-access)
+      [ $# -ge 2 ] || { echo "--admin-access needs a value" >&2; exit 2; }
+      ADMIN_ACCESS="$2"; shift ;;
     --admin-access=*) ADMIN_ACCESS="${1#*=}" ;;
-    --admin-cidrs) ADMIN_CIDRS="${2:-}"; shift ;;
+    --admin-cidrs)
+      [ $# -ge 2 ] || { echo "--admin-cidrs needs a value" >&2; exit 2; }
+      ADMIN_CIDRS="$2"; shift ;;
     --admin-cidrs=*) ADMIN_CIDRS="${1#*=}" ;;
     *) ARGS+=("$1") ;;
   esac
@@ -68,7 +72,9 @@ cd server
 # Straight from the default branch, for when a change cannot wait for a release: the build number is the build time
 # (UTC), so an older release never replaces it and the next release does (docs/operations/hub-update.md "Direct deploys").
 BUILD="$(date -u +%Y%m%d%H%M)"
-VERSION="$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD"
+# The nearest vX.Y.Z tag names it, a lightweight one too (a GitHub release's tag is one; plain `git describe` counts
+# annotated tags only, so builds after v0.4.0 read v0.3.1-…, #7201); testflight/<build> and other tags never do.
+VERSION="$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD"
 TARGETS=("$@")
 [ ${#TARGETS[@]} -eq 0 ] && read -ra TARGETS <<< "$PERSONA_MACHINES"
 
@@ -135,6 +141,10 @@ COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 # The update source built in: the config's publish.update_url, else publish.site_url's dl/ (scripts/persona_config.py
 # update_url); none without either. hub.json's update.url replaces it at run time (docs/operations/hub-update.md "Update source").
 UPDATE_URL="${PERSONA_UPDATE_URL:-${PERSONA_PUBLISH_URL:+$PERSONA_PUBLISH_URL/dl}}"
+# Without publish.update_url the hub carries the site's dl/, which may no longer take releases (#8108): say so once.
+if [ -z "$(python3 ../scripts/persona_config.py get publish.update_url 2>/dev/null)" ]; then
+  echo "note: publish.update_url is not set, so the hub's update source is ${UPDATE_URL:-none (it will not look for releases)}; publish.update_url in the config, or update.url in the hub's hub.json, sets another (docs/operations/hub-update.md \"Update source\")" >&2
+fi
 LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$COMMIT${UPDATE_URL:+ -X main.updateURL=$UPDATE_URL}"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 go generate ./internal/runtimepkg

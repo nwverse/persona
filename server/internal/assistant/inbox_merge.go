@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -121,8 +122,43 @@ func (b *inboxBook) merge(items []*InboxItem, now time.Time) (*InboxItem, []*Inb
 	b.chainAdd(sv, InboxChainEntry{Kind: ChainMerged, At: now.UTC(),
 		Text: i18n.T(b.userLang(), "assistant-inbox_chain.merged_from", i18n.Args{"n": len(sv.MergedFrom) + 1})})
 	sv.Read = false
-	sv.TriagedAt = "" // the merged row is judged again, with the members' text
+	sv.TriagedAt, sv.RuleOf = "", "" // the merged row is judged again, with the members' text
 	return sv, took
+}
+
+// liftMerged keeps a survivor's tier at the highest of the rows it stands for: its own before the merge and its members'
+// now. A model's verdict on the merged row (triage) or a member's tier that moved since the merge never lowers it; the
+// verdict still supplies the summary. The reason of the row the tier came from goes with it, and urgency with an action
+// tier. Under b.mu; it reports whether it changed anything.
+func (b *inboxBook) liftMerged(sv *InboxItem) bool {
+	if len(sv.MergedFrom) == 0 {
+		return false
+	}
+	tier, reason, urgent := "", "", false
+	if t := strings.TrimSuffix(sv.PreMergeTier, "|"); t != "" {
+		tier = t
+	}
+	for _, ref := range sv.MergedFrom {
+		m := b.items[ref.ID]
+		if m == nil || m.MergedInto != sv.ID {
+			continue
+		}
+		if tierRank(m.Tier) > tierRank(tier) {
+			tier, reason = m.Tier, m.Reason
+		}
+		urgent = urgent || m.Urgent
+	}
+	changed := false
+	if tierRank(tier) > tierRank(sv.Tier) {
+		sv.Tier, changed = tier, true
+		if reason != "" {
+			sv.Reason = reason
+		}
+	}
+	if urgent && sv.Tier == TierAction && !sv.Urgent {
+		sv.Urgent, changed = true, true
+	}
+	return changed
 }
 
 // unmerge gives the members of survivor sv their rows back. Under b.mu. It returns the rows that changed.
@@ -134,6 +170,7 @@ func (b *inboxBook) unmerge(sv *InboxItem, now time.Time) []*InboxItem {
 			continue
 		}
 		m.MergedInto = ""
+		restoreMergeTitle(m) // a row that was itself a merged row's survivor: its own title comes back too
 		sv.Count = max(sv.Count-m.Count, 1)
 		out = append(out, m)
 	}
@@ -142,7 +179,8 @@ func (b *inboxBook) unmerge(sv *InboxItem, now time.Time) []*InboxItem {
 		sv.Tier = t[:len(t)-1]
 		sv.PreMergeTier = ""
 	}
-	sv.TriagedAt = ""
+	sv.TriagedAt, sv.RuleOf = "", ""
+	restoreMergeTitle(sv)
 	b.chainAdd(sv, InboxChainEntry{Kind: ChainMerged, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.unmerged")})
 	return out
 }
@@ -173,7 +211,7 @@ func (b *inboxBook) followMerged(changed []*InboxItem, now time.Time) []*InboxIt
 		if it.Context != "" {
 			sv.Context = clipRunesTo(it.Context+"\n\n"+sv.Context, mergeCtxMax)
 		}
-		sv.TriagedAt = ""
+		sv.TriagedAt, sv.RuleOf = "", ""
 		b.chainAdd(sv, InboxChainEntry{Kind: ChainReceived, At: it.UpdatedAt.UTC(), Count: 1, Sender: it.Sender, Via: it.Source,
 			Link: firstLink(it), Text: receivedText(b.userLang(), it, 1, it.Sender)})
 		if !containsItem(changed, sv) {
@@ -269,6 +307,7 @@ func (s *Service) mergeInbox(ctx context.Context, targets []inboxBulkTarget, now
 	}
 	b.mu.Unlock()
 	out.Undo.ID = sv.ID
+	s.titleMerged(ctx, sv.ID) // the model's title for the whole row, when it answers (inbox_merge_title.go)
 	return out, nil
 }
 

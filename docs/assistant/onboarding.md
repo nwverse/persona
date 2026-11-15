@@ -166,9 +166,9 @@ This round's goal: **"Add computer" in the app is enough**, without `/admin`, en
 4. **Visible receipts**: when a device generates a computer code, a new device redeems an app code, or a new computer connects, notify other paired devices with "Not you? Revoke" (revocation endpoint already exists). Today this only appears in hub logs (`pairing.go:187`).
 5. Send the link to that computer, with a screen for its OS:
    - **Linux**: a single command containing the link (`install.sh --node --pair '<link>'`, already exists), "Copy" + "Open a terminal on that computer, paste, and press Enter."
-   - **Mac**: "Download Persona Link" (before decision 1, link to `docs/operations/persona-link-install.md` and honestly say "Currently requires building it yourself") + "Send this link to that computer" (system share). Persona Link registers both `persona` and `persona` URL schemes; opening a link shows and prefills the pairing window (today `apple/PersonaLink/Info.plist` has no URL scheme). Hub still sends `persona://link?…` (`pairing.go:57`), recognized by old Persona Link and node.
-   - **Windows**: provide commands from `docs/operations/windows.md`; explain the tray app is still in development (#299).
-6. `personad hub pair --machine <id>`: if the machine does not exist, `--add [--name]` adds it automatically; without it, ask "Add --add," rather than returning 400 `hub.json has no machine …`. Update Persona Link's pairing window and `install.sh` instructions accordingly.
+   - **Mac**: "Install Persona Link" ([installation guide](../operations/persona-link-install.md), which honestly says when a local build is required) + "Send this link to that computer" (system share). The independent Link service is paired with the optional desktop setup or the `persona-link pair` command; the old menu bar pairing window is retired. Hub still sends `persona://link?…` (`pairing.go:57`), recognized by Persona Link and node.
+   - **Windows**: provide commands from `docs/operations/windows.md`; the independent scheduled task does not require a tray app.
+6. `personad hub pair --machine <id>`: if the machine does not exist, `--add [--name]` adds it automatically; without it, ask "Add --add," rather than returning 400 `hub.json has no machine …`. Update the independent Link pairing flow and `install.sh` instructions accordingly.
 7. Old hubs without TLS: 409 `tls_required` + action `enable_tls`; the app says "Hub has not enabled secure connections, so computers cannot join." If managed, enable and restart in one tap.
 8. **Member hubs in linked hubs**: app codes are currently forwarded to the primary hub (`pairing.go:161-164`); the computer flow is undecided. This round, adding a computer from a member-hub device returns 409 `mesh_member`, "Add it on the primary hub." New users will not reach this.
 
@@ -470,6 +470,7 @@ Implementation (#3710, `server/internal/assistant/readiness.go`; endpoint detail
 - The shared Apple client gives a probe 130 seconds, covering the hub's 100-second check and 12-second self-check; an ordinary readiness read keeps its 30-second budget. Starting another try removes the previous try's result, and only the latest try may land or end its spinner. The checklist keeps the result beside the row whose button started it. A timeout, offline failure, or non-404 HTTP failure leaves its reason there instead of silently restoring an older result; cancellation stays silent, and 404 still means an older hub and clears every probe display (`APIClient.assistantReadiness`, `AssistantReadinessModel`).
 - `dismiss` accepts `{"dismissed": false}` to undo; an empty body means `true`.
 - Once `first_message` succeeds, it stays `ok` (stored in `assistant.readiness`, even after main chat changes).
+- Completed main-chat success is retained in `assistant.readiness.success`, keyed by machine, launcher and model-binding fingerprint, with the original reply timestamp (#8480). The settled-turn callback records it even if no client is polling; readiness also records a successful live reply it observes. Releasing the process or restarting the manager does not revive an older failed probe. A superseded failed probe for the same machine and launcher is retired. Newer authentication, routing, sign-out and rate-limit evidence still wins; changed model bindings do not inherit the old success. Offline text alone is not success evidence, and ordinary readiness reads start no model probe.
 - Model problems `auth_failed` and `model_route` also offer `test_assistant` as an alternative to editing or connecting the provider, so a repaired model can be verified without replacing the current chat after its first answer (#1894).
 
 ### 5.2 Structured main-chat errors
@@ -670,7 +671,7 @@ Separate P1 issues: "Chat only" mode (after decision 9), node `claude.install`, 
 ### 7.3 iOS / macOS work assigned to a Mac
 
 Each issue references the protocol in section 5 and states "The Linux development machine cannot compile Swift; note in the PR if Xcode 26.0 was not verified." UI uses only the design system (`.surface`, `EmptyStateView(action:)`, `Theme.*`); do not raise the `TokenRatchetTests` baseline. Single-line buttons; light and dark screenshots.
-The native Mac app is frozen ([mac.md](../apple/mac.md)): in M1–M4 and M6, the Mac gets only what the shared iOS code brings, with no Mac-only work and no Mac screenshots or acceptance beyond keeping an existing Mac flow working (M2's paste-link pairing). M5 is Persona Link, which is not frozen.
+The retired native Mac app was frozen ([mac.md](../archive/apple/mac.md)): in M1–M4 and M6, it received only what the shared iOS code brought. M5 is Persona Link, which remains independently installable and is not frozen ([desktop.md](../desktop/desktop.md)).
 
 | # | Title | Changes | Acceptance |
 | --- | --- | --- | --- |

@@ -2,7 +2,7 @@ import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./backg
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { reviewState } from "./supervision";
-import { supersededFailedStarts } from "./todo-triage";
+import { supersededFailedStarts, triage } from "./todo-triage";
 import { dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
@@ -39,6 +39,12 @@ export interface AssistantEntries {
   /** Open tasks with no progress for 48 hours and nothing running (the To-dos page's shelved, #3331): folded under
    *  In progress, not counted. */
   shelved: RunningItem[];
+  /** Fresh open PRs with no active agent, separate from In progress; still open tasks. */
+  pr: RunningItem[];
+  /** Handed-out tasks that finished in the last 24 hours and that the owner has not opened since (the To-dos page's Just
+   *  finished, todo-triage), newest first: a group under In progress, not counted (#8237). How a task ended is told
+   *  here, not by a card in the chat. */
+  justFinished: RunningItem[];
 }
 
 export interface AssistantEntriesInput {
@@ -68,6 +74,12 @@ export interface AssistantEntriesInput {
 const WAITS_ON_YOU: ReadonlySet<TodoStatus> = new Set(["needs_you", "interrupted"]);
 
 const sessionKey = (mid: string, sid: string) => `${mid}/${sid}`;
+
+/** A task's status when some of its Agents ask under another task (`own`: its status from its own Agents alone): it
+ *  does not wait on the user for them, so a Needs you that only those bring is the task at work instead. */
+function withNeeds(all: TodoStatus, own: TodoStatus): TodoStatus {
+  return all === "needs_you" && own !== "needs_you" ? (own === "not_started" ? "working" : own) : all;
+}
 
 /** A task's status, failed too when only its plan says the start failed (a hub from before #1077). */
 export function entryStatus(todo: Todo, lookup: SessionLookup, plans: Record<string, TaskPlan>): TodoStatus {
@@ -116,14 +128,38 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const deciding: { item: NeedsYouItem; rank: number; at: string }[] = [];
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
+  const pr: { item: RunningItem; at: string }[] = [];
+  const finished: { item: RunningItem; at: number }[] = [];
   const folded = new Set<string>();
-  for (const card of taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain)) {
+  const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
+  const activeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at));
+  // One home per request (docs/design/DESIGN_SYSTEM.md 4.8): an Agent several of these tasks list asks under one of them,
+  // the task the hub ties its session to (`todo`), else the first that lists it. The others neither repeat its cards nor
+  // wait on the user for them; they are in progress.
+  const listing = new Map<string, string[]>();
+  for (const card of slots) {
+    const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
+    if (!todo) continue;
+    for (const a of activeAgents(todo)) {
+      const k = sessionKey(a.machine_id, a.session_id);
+      const ids = listing.get(k) ?? [];
+      if (!ids.includes(todo.id)) listing.set(k, [...ids, todo.id]);
+    }
+  }
+  const homeOf = (mid: string, sid: string): string | undefined => {
+    const ids = listing.get(sessionKey(mid, sid));
+    const tied = lookup(mid, sid)?.todo?.id;
+    return tied && ids?.includes(tied) ? tied : ids?.[0];
+  };
+  for (const card of slots) {
     const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     // a plan task with no to-do yet is its plan's row (below); a to-do the hub no longer sends is finished
     if (!todo) continue;
-    const status = entryStatus(todo, lookup, plans);
-    const active = todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at);
-    const asks = active.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
+    const active = activeAgents(todo);
+    const own = active.filter((a) => homeOf(a.machine_id, a.session_id) === todo.id);
+    // what the task waits on the user for is its own Agents' (an Agent another task holds asks there)
+    const status = own.length < active.length ? withNeeds(entryStatus(todo, lookup, plans), todoStatus({ ...todo, agents: own }, lookup)) : entryStatus(todo, lookup, plans);
+    const asks = own.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
     const key = `task:${todo.id}`;
     const bucket = cardBucket(card, todo, plans, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
     const countsOpen = bucket === "open";
@@ -138,9 +174,15 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       }
     }
     // a parked task waits on purpose (#3804): with the tasks in progress however long it has been still, never folded away
+    else if (triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "pr") pr.push({ item: { kind: "task", key, card, todo, status, countsOpen }, at: card.at });
     else if (bucket === "open" || reviewState(todo) === "parked") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup), countsOpen }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: card.at });
-    else continue;
+    else {
+      // finished work a conversation handed out (a failed start a related to-do finished is history, not news)
+      const tr = triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
+      if (tr.section === "just_done" && status !== "failed" && todo.origin) finished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: tr.last });
+      continue;
+    }
     for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
   }
 
@@ -171,6 +213,8 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     ],
     running: [...open.sort(newest).map((row) => row.item), ...agentsRunning],
     shelved: shelved.sort(newest).map((row) => row.item),
+    pr: pr.sort(newest).map((row) => row.item),
+    justFinished: finished.sort((a, b) => b.at - a.at).map((row) => row.item),
   };
 }
 

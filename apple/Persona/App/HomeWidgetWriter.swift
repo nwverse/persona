@@ -16,7 +16,7 @@ import WidgetKit
 final class HomeWidgetWriter {
     static let shared = HomeWidgetWriter()
     static let pause: Duration = .seconds(5)
-    static let heartbeat: TimeInterval = 20 * 60
+    nonisolated static let heartbeat: TimeInterval = 20 * 60
 
     /// What to write: the app's state (`AppModel.homeSnapshot()`); DEBUG `-showHomeWidgetSample` writes the sample.
     var source: () -> HomeSnapshot? = { nil }
@@ -38,11 +38,12 @@ final class HomeWidgetWriter {
     #endif
 
     private var pending: Task<Void, Never>?
-    private var written: (body: Data, parts: [HomeKind: Data], at: Date)?
-    private let store: HomeSnapshotStore
+    /// The last write handed to `output`: the next one waits for it, so writes land in the order they were made.
+    private var writing: Task<Void, Never>?
+    private let output: Output
 
     init(store: HomeSnapshotStore = .shared) {
-        self.store = store
+        output = Output(store: store)
     }
 
     /// Whether the hub knows this device has the widgets (nil: not told since launch).
@@ -104,26 +105,45 @@ final class HomeWidgetWriter {
         #endif
         guard var snapshot = made else { return }
         snapshot.recording = recording ?? snapshot.recording
-        snapshot.at = 0
-        guard let body = Self.encode(snapshot) else { return }
-        if let written, written.body == body, now.timeIntervalSince(written.at) < Self.heartbeat { return }
-        let parts = Self.parts(snapshot)
-        let changed = HomeKind.allCases.filter { written?.parts[$0] != parts[$0] }
-        let kinds = written?.body == body ? HomeKind.allCases : changed
-        snapshot.at = now.timeIntervalSince1970
-        guard let data = Self.encode(snapshot) else { return }
-        self.written = (body, parts, now)
-        let store = store
-        Task.detached(priority: .utility) {
+        // Encoding, comparing and writing happen off the main actor: a snapshot of a busy hub took 28 ms of JSON
+        // encoding on the main thread each time, every few seconds while Agents worked (#8412).
+        let output = output, previous = writing
+        writing = Task.detached(priority: .utility) {
+            await previous?.value
+            guard let kinds = await output.write(snapshot, now: now) else { return }
+            await MainActor.run {
+                for kind in kinds { WidgetCenter.shared.reloadTimelines(ofKind: kind.widgetKind) }
+            }
+        }
+    }
+
+    /// The snapshot's file, and what was last written to it.
+    private actor Output {
+        private let store: HomeSnapshotStore
+        private var written: (body: Data, parts: [HomeKind: Data], at: Date)?
+
+        init(store: HomeSnapshotStore) { self.store = store }
+
+        /// Writes `snapshot` unless the same content was written within `heartbeat`; returns the kinds whose widgets
+        /// should reload (nil: nothing written).
+        func write(_ snapshot: HomeSnapshot, now: Date) -> [HomeKind]? {
+            var snapshot = snapshot
+            snapshot.at = 0
+            guard let body = HomeWidgetWriter.encode(snapshot) else { return nil }
+            if let written, written.body == body, now.timeIntervalSince(written.at) < HomeWidgetWriter.heartbeat { return nil }
+            let parts = HomeWidgetWriter.parts(snapshot)
+            let changed = HomeKind.allCases.filter { written?.parts[$0] != parts[$0] }
+            let kinds = written?.body == body ? HomeKind.allCases : changed
+            snapshot.at = now.timeIntervalSince1970
+            guard let data = HomeWidgetWriter.encode(snapshot) else { return nil }
+            written = (body, parts, now)
             do {
                 try store.write(data)
             } catch {
                 HomeSnapshotStore.log.error("widget snapshot not written: \(error.localizedDescription, privacy: .public)")
-                return
+                return nil
             }
-            await MainActor.run {
-                for kind in kinds { WidgetCenter.shared.reloadTimelines(ofKind: kind.widgetKind) }
-            }
+            return kinds
         }
     }
 
@@ -241,7 +261,7 @@ extension AppModel {
         s.inbox = HomeInbox.build(InboxStore.shared)
         let data = HomeWidgetData.shared
         let now = Date()
-        s.today = HomeToday.build(calendar: data.events, hub: HomeToday.hubMeetings(TasksStore.shared, now: now), now: now)
+        s.today = HomeToday.build(calendar: data.events, days: data.days, hub: HomeToday.hubMeetings(TasksStore.shared, now: now), now: now)
         s.todos = HomeTodos.build(TodoStore.shared.todos, ticks: HomeWidgetActions.ticks, now: now)
         let stats = mergedFleet().stats
         s.usage = HomeUsage.build(UsageWindows.live(UsageWindowsStore.shared.accounts, now: now), tokens: stats?.tokens ?? 0,
@@ -254,10 +274,23 @@ extension AppModel {
 /// Today's events: the phone's calendar when Persona may read it, else the hub's meetings on today's card (Feishu's),
 /// else none, which the widget tells how to change.
 enum HomeToday {
-    static func build(calendar: [HomeSnapshot.Event]?, hub: [HomeSnapshot.Event]?, now: Date) -> HomeSnapshot.Today? {
-        if let calendar { return .init(events: calendar, source: .calendar) }
+    /// `days`, the phone's calendar over the weeks around today, goes only with its own events: the hub's meetings are
+    /// today's alone.
+    static func build(calendar: [HomeSnapshot.Event]?, days: HomeSnapshot.Days? = nil, hub: [HomeSnapshot.Event]?, now: Date) -> HomeSnapshot.Today? {
+        if let calendar { return .init(events: calendar, source: .calendar, days: days) }
         if let hub { return .init(events: hub, source: .hub) }
         return .init(events: [], source: nil)
+    }
+
+    /// The rest of today: the events on today not yet over, all-day ones first, then by start, at most `Today.cap`.
+    nonisolated static func rest(_ events: [HomeSnapshot.Event], now: Date, calendar: Calendar = .current) -> [HomeSnapshot.Event] {
+        let start = calendar.startOfDay(for: now).timeIntervalSince1970
+        let end = HomeDays.nextMidnight(after: now, calendar: calendar).timeIntervalSince1970
+        let t = now.timeIntervalSince1970
+        return Array(events
+            .filter { $0.start < end && ($0.end > start || $0.start >= start) && ($0.allDay || $0.end > t) }
+            .sorted { ($0.allDay ? 0 : 1, $0.start) < ($1.allDay ? 0 : 1, $1.start) }
+            .prefix(HomeSnapshot.Today.cap))
     }
 
     /// The meetings on today's card in any conversation's feed (`TodayBody.meetings`); nil when no card is today's.
@@ -410,3 +443,4 @@ enum HomeInbox {
     }
 }
 #endif
+import PersonaWire

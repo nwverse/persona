@@ -52,7 +52,7 @@ func open(t testing.TB) *DB {
 var openTables = []string{"push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
 	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
 	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
-	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user"}
+	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent"}
 
 // open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
 // that had no row in that cascade its files: it truncates only what has a row.
@@ -817,6 +817,35 @@ func TestMailAccountsReplace(t *testing.T) {
 	got, err := d.MailAccounts(ctx)
 	if err != nil || len(got) != 1 || got[0].ID != "2" {
 		t.Fatalf("accounts = %+v, %v", got, err)
+	}
+}
+
+// An ask_user that let go of its turn (assistant/ask_release.go, #7392) is marked resumable while it is pending: a
+// restart then keeps it, as it keeps one asked with wait false. One that ended or never was is not marked.
+func TestMarkInteractionResumableKeepsTheCardAcrossARestart(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Now()
+	for _, id := range []string{"ixheld", "ixended", "ixkept"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "server", SessionID: "s", Kind: proto.IxQuestion,
+			ToolName: "ask_user", CreatedAt: at, ExpiresAt: at.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.FinishInteraction(ctx, "ixended", "resolved", &proto.Resolution{Answers: map[string]string{"q": "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{"ixheld": true, "ixended": false, "nope": false} {
+		if ok, err := d.MarkInteractionResumable(ctx, id); err != nil || ok != want {
+			t.Fatalf("mark %s: %v, %v; want %v", id, ok, err, want)
+		}
+	}
+	kept, cancelled, err := d.ExpireStaleInteractions(ctx)
+	if err != nil || len(kept) != 1 || kept[0].ID != "ixheld" || !kept[0].Resumable || kept[0].ToolName != "ask_user" ||
+		len(kept[0].Questions) != 0 {
+		t.Fatalf("kept %+v, %v", kept, err)
+	}
+	if !slices.Equal(cancelled, []string{"ixkept"}) {
+		t.Fatalf("cancelled %v: only the one never marked", cancelled)
 	}
 }
 
