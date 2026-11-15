@@ -46,6 +46,36 @@ func TestWorkAgentStartTypesTheModel(t *testing.T) {
 	}
 }
 
+// Abandoning after the start's context was cancelled still quits the work agent under its pane-derived session id,
+// without closing the terminal it leaves for the user.
+func TestAbandonStartAfterCancelQuitsAgentAndKeepsTheTab(t *testing.T) {
+	for _, kind := range []string{piAgent, cursorAgent, agyAgent} {
+		t.Run(kind, func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+			created, err := n.newTab(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), home, "w1", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := otherSession(host.Agent{Agent: kind, PaneID: "w1:p2"})
+			running := agentOf(kind, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, kind)
+			f.reply("session.snapshot", snapshot(nil, nil, []any{running}, nil))
+			quitsOn(f, "w1:p2", id, nil, shellPane("w1:p2", "w1:t2", "w1", home, id))
+			withStop(t, 1, time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := n.abandonStart(ctx, created, kind, ctx.Err()); err != context.Canceled {
+				t.Fatalf("abandonStart: %v", err)
+			}
+			assertTrace(t, f.trace("pane.send_keys"), []string{
+				sendKeys("w1:p2", "ctrl+c"), sendKeys("w1:p2", "ctrl+c"),
+			})
+			closesNothing(t, f)
+		})
+	}
+}
+
 // The first message of a cursor or agy start goes through herdr's agent.prompt once herdr reports the agent, and the
 // session is bound to the pane with the launcher and model it was started with.
 func TestWorkAgentStartPromptsThroughHerdr(t *testing.T) {
@@ -73,22 +103,32 @@ func TestWorkAgentStartPromptsThroughHerdr(t *testing.T) {
 	}
 }
 
-// A pi whose extension never lists the session is closed, and the first message is not typed into the pane.
-func TestPiStartWithoutExtensionClosesTheTab(t *testing.T) {
+// A pi whose extension never lists the session is quit and keeps its tab; the first message is not typed into the pane.
+func TestPiStartWithoutExtensionQuitsAgentAndKeepsTheTab(t *testing.T) {
 	n, f, home := herdrNode(t)
 	old := piResumeWait
 	piResumeWait = 300 * time.Millisecond
 	t.Cleanup(func() { piResumeWait = old })
+	withStop(t, 1, time.Millisecond)
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
 	f.reply("pane.read", map[string]any{"text": ""})
+	const id = "pi-session"
+	running := agentOf(piAgent, id, proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, piAgent)
+	quitsOn(f, "w1:p2", id, nil, shellPane("w1:p2", "w1:t2", "w1", home, id))
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=pi") {
+			f.reply("session.snapshot", snapshot(nil, nil, []any{running}, nil))
+		}
+	})
 	_, err := n.startWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), home, piAgent, piAgent, "", "hi", "w1", "")
 	if err == nil || !strings.Contains(err.Error(), "pi_no_extension") && !strings.Contains(err.Error(), "没有 Persona 扩展") {
 		t.Fatalf("start: %v", err)
 	}
-	if got := f.trace("tab.close"); len(got) != 1 {
-		t.Errorf("closed %v", got)
-	}
+	assertTrace(t, f.trace("pane.send_keys"), []string{
+		sendKeys("w1:p2", "ctrl+c"), sendKeys("w1:p2", "ctrl+c"),
+	})
+	closesNothing(t, f)
 	for _, c := range f.trace("pane.send_input", "agent.prompt") {
 		if strings.Contains(c, "hi") {
 			t.Errorf("the message went in: %s", c)

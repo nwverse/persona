@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -73,7 +74,8 @@ func workAgentResume(kind, cmd, id string) string {
 
 // startWorkAgent opens a tab in ws and runs the work agent there, then delivers the first message: to pi through the
 // extension that lists the session (finishPiStart), to cursor-agent and agy through herdr's agent.prompt once herdr
-// reports the agent. A pi whose extension never lists the session is closed: typing the message into pi is refused.
+// reports the agent. A pi whose extension never lists the session is quit; its tab stays at the shell, and typing the
+// message into pi is refused.
 func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, launcher, kind, model, prompt, ws, tabName string) (*proto.Session, error) {
 	herdrName, program, ok := workAgent(kind)
 	if !ok {
@@ -85,7 +87,7 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 	}
 	pane := created.Pane.String()
 	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
-		return nil, n.abandonStart(ctx, launch, created, ws, err)
+		return nil, n.abandonStart(ctx, created, kind, err)
 	}
 	shells := paneShells(ctx, created)
 	cmd := withHerdrAgent(typedHerdrAgent(launch, herdrName, shells...), workAgentCommand(launcher, program, model))
@@ -101,7 +103,7 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 	}
 	id, agent, err := n.waitWorkAgent(ctx, pane, herdrName)
 	if err != nil {
-		return nil, n.abandonStart(ctx, launch, created, ws, err)
+		return nil, n.abandonStart(ctx, created, kind, err)
 	}
 	n.noteWorkAgent(ctx, launch, pane, id, cwd, launcher, kind, model)
 	if prompt != "" {
@@ -115,7 +117,7 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 }
 
 // finishPiStart waits for the extension in the pi just started to list its session, then sends the first message
-// through it. The tab is closed when the extension never lists it: the message is not typed into pi.
+// through it. The agent is quit and its tab is kept when the extension never lists it: the message is not typed into pi.
 func (n *Node) finishPiStart(ctx context.Context, launch host.Launcher, created *host.Created, cwd, launcher, model, prompt string) (*proto.Session, error) {
 	pane := created.Pane.String()
 	deadline := time.Now().Add(piResumeWait)
@@ -142,11 +144,11 @@ func (n *Node) finishPiStart(ctx context.Context, launch host.Launcher, created 
 			screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 			err := refusal("pi_no_extension", fmt.Sprintf("pi 起来了，但 %d 秒内没有 Persona 扩展报这个会话，首条消息没有发送。装上扩展（pi install）再开。\n%s",
 				int(piResumeWait.Seconds()), lastLines(screen, 12)), nil)
-			return nil, n.abandonStart(ctx, launch, created, created.SpaceID, err)
+			return nil, n.abandonStart(ctx, created, piAgent, err)
 		}
 		select {
 		case <-ctx.Done():
-			return nil, n.abandonStart(ctx, launch, created, created.SpaceID, ctx.Err())
+			return nil, n.abandonStart(ctx, created, piAgent, ctx.Err())
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
@@ -205,16 +207,32 @@ func (n *Node) waitWorkAgent(ctx context.Context, pane, herdrName string) (strin
 	}
 }
 
-// abandonStart closes the tab a start opened and returns err. A pane the user picked is left open.
-func (n *Node) abandonStart(ctx context.Context, launch host.Launcher, created *host.Created, ws string, err error) error {
-	if org, ok := launch.(host.Organizer); ok && adoptedPane(ctx) == nil && created != nil {
-		space := ws
-		if space == "" {
-			space = created.SpaceID
+// abandonStart quits the agent a start may have left in created's pane, keeps the pane for the user, and returns err.
+// The cleanup survives cancellation of the start. Without a reported agent there is no safe session id to quit: the
+// start may not have run its command yet, so leave the shell alone.
+func (n *Node) abandonStart(ctx context.Context, created *host.Created, kind string, err error) error {
+	if created == nil {
+		return err
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	pane := created.Pane.String()
+	if refreshErr := n.refreshHosts(cctx); refreshErr != nil {
+		log.Printf("abandon start in pane %s: refresh hosts: %v", pane, refreshErr)
+	}
+	n.mu.Lock()
+	id := ""
+	for candidate, a := range n.agents {
+		if a.PaneID == pane && a.Agent == kind && (id == "" || candidate < id) {
+			id = candidate
 		}
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		_ = org.Close(cctx, created.Pane, space, created.SlotID)
-		cancel()
+	}
+	n.mu.Unlock()
+	if id == "" {
+		return err
+	}
+	if _, quitErr := n.quitAgent(cctx, id, pane); quitErr != nil {
+		log.Printf("abandon start in pane %s: quit %s: %v", pane, kind, quitErr)
 	}
 	return err
 }
