@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -23,8 +22,7 @@ import (
 // machine can have many. The node looks in all of them:
 //   - the node's own default ($CLAUDE_CONFIG_DIR of the node, else ~/.claude);
 //   - the machine's Agent directory, private assistant profiles, and explicitly selected assistant directories;
-//   - every running claude process's CLAUDE_CONFIG_DIR (scanned every 30 s; also tells which directory a pid uses;
-//     not with PERSONA_CLAUDE_SCAN=off, claudeScanEnv);
+//   - every running claude process's CLAUDE_CONFIG_DIR (scanned every 30 s; also tells which directory a pid uses);
 //   - the hub's list: hub.json machines[].claude_config_dirs plus directories scanned earlier (node.configure), so a
 //     profile's past sessions stay listed when none of its claudes runs.
 // Directories are compared by their real path: ~/.claude/projects symlinked into a profile is the same directory.
@@ -34,11 +32,6 @@ import (
 
 // claudeScanEvery is how often running claude processes are scanned for their config directory.
 const claudeScanEvery = 30 * time.Second
-
-// claudeScanEnv turns that scan off (off / 0 / false / no; on otherwise): the node then takes no other process's
-// config directory, so it lists no transcript outside its own. The Paseo end-to-end check's node runs so
-// (docs/integrations/paseo.md "Verification"), beside the machine's real claudes.
-const claudeScanEnv = "PERSONA_CLAUDE_SCAN"
 
 type claudeDirs struct {
 	mu        sync.Mutex
@@ -61,21 +54,7 @@ type procEnv struct {
 }
 
 func newClaudeDirs() *claudeDirs {
-	scan := scanClaudeProcesses
-	if claudeScanOff() {
-		scan = func() map[int]procEnv { return nil }
-	}
-	return &claudeDirs{byPID: map[int]string{}, bySession: map[string]procEnv{}, scan: scan}
-}
-
-// claudeScanOff: claudeScanEnv says off.
-func claudeScanOff() bool {
-	v, _ := identity.LookupEnv(claudeScanEnv)
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "0", "off", "false", "no":
-		return true
-	}
-	return false
+	return &claudeDirs{byPID: map[int]string{}, bySession: map[string]procEnv{}, scan: scanClaudeProcesses}
 }
 
 // defaultClaudeDir is the inherited legacy default, also kept for old-session discovery.

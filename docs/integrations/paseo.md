@@ -501,8 +501,9 @@ launcher ran on another account, and a provider added in Persona never applied i
     worktree deleted after its preview (refused while its Agent is at work): Paseo no longer lists it, its folder is gone, its branch stays.
   - A new Agent's own worktree made by Paseo (`worktree.add`): refused for removal while the Agent runs, Persona's once it is closed, and
     removed through Paseo with its branch.
-  - Use only temporary directories, without touching the active local Paseo or `~/.claude`. Node runs with `PERSONA_CLAUDE_SCAN=off`: it takes no config
-    directory from the machine's other running claudes (as a node otherwise does, `server/internal/node/claudedirs.go`), so it lists none of their transcripts.
+  - Use only temporary directories, writing nothing to the active local Paseo or `~/.claude`. Node still reads the config directory each of the machine's
+    other running claudes names (`CLAUDE_CONFIG_DIR`), as every node does (`server/internal/node/claudedirs.go`), so its list can hold their transcripts
+    too; the checks pick out the run's own sessions, by ID, folder or engine.
   - Add `KEEP=1` to retain temporary directories, or `DEBUG=1` to print the bridge lines from node's log.
 - How the web names and draws providers (#8142): the mock hub's `MOCK_PASEO_PROVIDERS=1` (`scripts/mock/mock_hub.py`, on the
   Paseo computer of `MOCK_PASEO=1`) adds two of Paseo's providers the apps have no id for, Grok waiting on an approval and
