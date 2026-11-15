@@ -11,7 +11,7 @@ import UIKit
 /// The composers' fields are SwiftUI's vertical `TextField`, which takes Return as a line break and never submits. So
 /// the software keyboard's Return is read off the draft: an edit that only adds one line break is Return typed. A
 /// hardware keyboard's Return is caught as a key press first (`onKeyPress`), and when that does not reach the field,
-/// read off the draft the same way, with Shift held (`GCKeyboard`) leaving the line break. While the keyboard is still
+/// read off the draft the same way, with Shift or Option held (`GCKeyboard`, either side) leaving the line break. While the keyboard is still
 /// composing (marked text: Pinyin, kana) Return confirms the composition as it always has and sends nothing (#2203).
 nonisolated enum ReturnSends {
     static let enabledKey = "ui.returnSends"
@@ -34,10 +34,23 @@ nonisolated enum ReturnSends {
     /// (`paused`), not a hardware Shift- or Option-Return let through (`allowed`), and never while the keyboard still
     /// has marked text (`composing`): a keyboard that confirms its composition with a line break must not send (#2203).
     /// `composing` is read only after a line break was typed: it asks the field (this runs on every keystroke).
+    /// `keyHeld` is the hardware fallback: a key that makes Return a new line is held (`lineBreakKeyHeld`), for when the
+    /// press itself did not reach the field; read last, like `composing`.
     static func breakSends(from old: String, to new: String, composing: @autoclosure () -> Bool,
-                           allowed: Bool = false, paused: Bool = false) -> Bool {
-        !paused && !allowed && breakTyped(from: old, to: new) && !composing()
+                           keyHeld: @autoclosure () -> Bool = false, allowed: Bool = false, paused: Bool = false) -> Bool {
+        !paused && !allowed && breakTyped(from: old, to: new) && !composing() && !keyHeld()
     }
+
+    #if os(iOS)
+    /// The hardware keys that, held, make Return a new line: Shift and Option, on either side (`keySends` reads the same
+    /// two off a press that reaches the field).
+    static let lineBreakKeys: [GCKeyCode] = [.leftShift, .rightShift, .leftAlt, .rightAlt]
+
+    /// One of `lineBreakKeys` is held, as `isPressed` (a hardware keyboard's buttons) says.
+    static func lineBreakKeyHeld(_ isPressed: (GCKeyCode) -> Bool) -> Bool {
+        lineBreakKeys.contains(where: isPressed)
+    }
+    #endif
 
     /// What a hardware Return does with these modifiers held: send with none, else what the field does (Shift and
     /// Option a new line, ⌘ the send button's shortcut). Caps Lock and the keypad's Enter are no modifiers.
@@ -103,10 +116,9 @@ private struct ReturnSendsModifier: ViewModifier {
                 let allowed = breakAllowed
                 breakAllowed = false
                 // The cheap checks first: this runs on every keystroke (docs/apple/performance.md P4); the field's
-                // marked text and Shift are read only once a line break was typed.
+                // marked text and the keyboard's Shift and Option are read only once a line break was typed.
                 guard ReturnSends.breakSends(from: old, to: new, composing: TypedText.composingFocused,
-                                             allowed: allowed, paused: paused),
-                      !Self.shiftHeld else { return }
+                                             keyHeld: Self.lineBreakKeyHeld, allowed: allowed, paused: paused) else { return }
                 // Take the line break back out of the field itself as well as the draft: sending confirms what the
                 // field shows (`TypedText.commitFocused`), which would otherwise put it back.
                 if let view = FirstResponder.current as? UITextView, view.text == new { view.text = old }
@@ -123,10 +135,11 @@ private struct ReturnSendsModifier: ViewModifier {
         }
     }
 
-    /// Shift is held on a hardware keyboard (the key press did not reach the field, so its modifiers were not read).
-    private static var shiftHeld: Bool {
+    /// Shift or Option is held on a hardware keyboard (the key press did not reach the field, so its modifiers were
+    /// not read). No hardware keyboard: nothing is held.
+    private static var lineBreakKeyHeld: Bool {
         guard let keys = GCKeyboard.coalesced?.keyboardInput else { return false }
-        return keys.button(forKeyCode: .leftShift)?.isPressed == true || keys.button(forKeyCode: .rightShift)?.isPressed == true
+        return ReturnSends.lineBreakKeyHeld { keys.button(forKeyCode: $0)?.isPressed == true }
     }
 }
 #endif

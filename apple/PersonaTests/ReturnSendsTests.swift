@@ -1,3 +1,4 @@
+import GameController
 import SwiftUI
 import Testing
 @testable import Persona
@@ -57,6 +58,32 @@ struct ReturnSendsTests {
         _ = ReturnSends.breakSends(from: "a", to: "ab", composing: composing())
         #expect(asked == 0)
         _ = ReturnSends.breakSends(from: "a", to: "a\n", composing: composing())
+        #expect(asked == 1)
+    }
+
+    /// Review of 75c30cc: a hardware Return whose press did not reach the field (the draft path) stays a new line with
+    /// Shift or Option held on either side, as the press path does; any other key held does not change it.
+    @Test(arguments: [GCKeyCode.leftShift, .rightShift, .leftAlt, .rightAlt])
+    func theFallbackKeepsALineBreakWithShiftOrOptionHeld(_ key: GCKeyCode) {
+        let held = ReturnSends.lineBreakKeyHeld { $0 == key }
+        #expect(held)
+        #expect(!ReturnSends.breakSends(from: "draft", to: "draft\n", composing: false, keyHeld: held))
+    }
+
+    @Test func theFallbackSendsWithNoModifierHeld() {
+        #expect(!ReturnSends.lineBreakKeyHeld { _ in false })
+        #expect(!ReturnSends.lineBreakKeyHeld { $0 == .leftControl || $0 == .leftGUI || $0 == .keyA })
+        #expect(ReturnSends.breakSends(from: "draft", to: "draft\n", composing: false,
+                                       keyHeld: ReturnSends.lineBreakKeyHeld { $0 == .keyA }))
+    }
+
+    /// The keyboard is asked for held keys only once a line break was typed (the check runs on every keystroke).
+    @Test func heldKeysAreReadOnlyForALineBreak() {
+        var asked = 0
+        func held() -> Bool { asked += 1; return false }
+        _ = ReturnSends.breakSends(from: "a", to: "ab", composing: false, keyHeld: held())
+        #expect(asked == 0)
+        _ = ReturnSends.breakSends(from: "a", to: "a\n", composing: false, keyHeld: held())
         #expect(asked == 1)
     }
 

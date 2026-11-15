@@ -1446,7 +1446,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   bar leaves Return alone while its @ / / list or a menu is open. The fields are SwiftUI's vertical `TextField`, which never submits on
   Return, so the software key is read off the draft (`ReturnSends.breakSends`: an edit that only adds one line break, while the field holds no marked text), the line break taken
   back out of the text view as well as the draft before the send confirms what the field shows; a hardware Return is caught by
-  `onKeyPress` first, with `GCKeyboard`'s Shift as the fallback when the press does not reach the field. A paste that brings a line break
+  `onKeyPress` first, with `GCKeyboard`'s Shift and Option (either side, `ReturnSends.lineBreakKeyHeld`) as the fallback when the press does not reach the field. A paste that brings a line break
   with other text never sends. The web has no setting (Enter sends with a precise pointer, `enterSends`) and Android none, so there is no
   shared key. `PersonaTests/ReturnSendsTests`; UI test `ReturnSendsUITests` (Return sends with the switch on, a new line with it off);
   `-ui.returnSends YES` turns it on for screenshots.

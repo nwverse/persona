@@ -6,7 +6,11 @@ import XCTest
 final class ReturnSendsUITests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
-    private let agent = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
+    /// An agent of the default manager's computers (Mac Studio's "博客迁移到 Astro", idle). The weather agent other composer
+    /// tests use runs on the MacBook of the mock's second manager, whose sessions the app holds only while that
+    /// manager's assistant is the current one: opened by key from the default assistant, its composer is disabled
+    /// (#8640).
+    private let agent = "studio/a1f3c2d4-0000-4000-8000-000000000003"
     private let assistant = "server/b2e4d6f8-0000-4000-8000-000000000001"
 
     override func setUpWithError() throws {
@@ -79,6 +83,16 @@ final class ReturnSendsUITests: XCTestCase {
         clear(field)
         sleep(2)
         app.terminate()
+        // The same in an Agent conversation.
+        open(isAssistant: false, on: true)
+        startTyping()
+        field.typeText("Also keep the old URLs")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard for the picture")
+        sleep(2)
+        shot("agent-composer-on")
+        clear(field)
+        sleep(2)
+        app.terminate()
         app.launchArguments = ["-AppleLanguages", "(\(language))", "-ui.returnSends", "YES", "-ui.scheme", appearance, "-tab", "settings"]
         app.launchPinned()
         let row = element("settings-appearance")
@@ -128,6 +142,7 @@ final class ReturnSendsUITests: XCTestCase {
         app.launchPinned()
         XCTAssertTrue(field.waitForExistence(timeout: 20), "the conversation did not open:\n\(app.debugDescription)")
         sleep(2)
+        XCTAssertTrue(field.isEnabled, "the composer is disabled: the app does not hold this conversation (#8640)")
     }
 
     /// The keyboard on the box, the box empty (drafts are kept across runs).
