@@ -26,6 +26,11 @@ func TestUserAgent(t *testing.T) {
 	if got := raw.Get("User-Agent"); got != "forwarded-client" {
 		t.Errorf("forwarded User-Agent = %q", got)
 	}
+	duplicate := http.Header{"User-Agent": {"canonical"}, "user-agent": {"duplicate"}}
+	SetDefaultUserAgent(duplicate)
+	if got := duplicate.Get("User-Agent"); got != "canonical" || len(duplicate) != 1 {
+		t.Errorf("duplicate User-Agent headers = %v", duplicate)
+	}
 	h := http.Header{}
 	SetDefaultUserAgent(h)
 	if got := h.Get("User-Agent"); got != "Persona/1.2.3" {

@@ -6,29 +6,31 @@ import (
 	"strings"
 )
 
-var version = "dev"
+var userAgent = "Persona/dev"
 
 // SetVersion is called at process startup with the version injected into the binary.
 func SetVersion(v string) {
 	if v != "" {
-		version = v
+		userAgent = "Persona/" + v
 	}
 }
 
 // UserAgent returns the identity sent to model gateways.
-func UserAgent() string { return "Persona/" + version }
+func UserAgent() string { return userAgent }
 
 // SetDefaultUserAgent preserves a caller-supplied header, including an empty value.
 func SetDefaultUserAgent(h http.Header) {
-	if _, ok := h["User-Agent"]; ok {
-		return
-	}
+	// Forwarded headers may use non-canonical names. net/http recognizes only the
+	// canonical key when deciding whether to add its own User-Agent.
 	for name, values := range h {
-		if strings.EqualFold(name, "User-Agent") {
+		if name != "User-Agent" && strings.EqualFold(name, "User-Agent") {
+			if _, ok := h["User-Agent"]; !ok {
+				h["User-Agent"] = values
+			}
 			delete(h, name)
-			h["User-Agent"] = values
-			return
 		}
 	}
-	h.Set("User-Agent", UserAgent())
+	if _, ok := h["User-Agent"]; !ok {
+		h.Set("User-Agent", UserAgent())
+	}
 }
