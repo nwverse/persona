@@ -66,12 +66,18 @@ final class FileAttachShotsTests: XCTestCase {
         if hide.exists { hide.tap() }
         sleep(1)
         XCTAssertEqual(field.value as? String, Self.typed, "the words changed")
-        shot(app, "6-one-failed")
+        let strip = app.scrollViews["file-attachments"].firstMatch
         let failed = app.descendants(matching: .any)["file-attachment-failed"].firstMatch
+        XCTAssertTrue(failed.exists, "no failed card (MOCK_UPLOAD_FAIL)")
+        for _ in 0..<3 where !failed.isHittable { strip.swipeLeft(velocity: .slow) } // the failed one is fifth
+        sleep(1)
+        shot(app, "6-one-failed")
         if failed.exists {
             app.buttons["移除 logs-1114.zip"].firstMatch.tap() // i18n-ignore: the zh-Hans label the tests run in
             sleep(1)
         }
+        for _ in 0..<3 { strip.swipeRight(velocity: .fast) }
+        sleep(1)
         shot(app, "7-ready")
         let send = app.buttons.matching(NSPredicate(format: "identifier == %@ AND enabled == true", "shell-composer-send")).firstMatch
         XCTAssertTrue(send.waitForExistence(timeout: 10), "no send button:\n\(app.debugDescription)")
