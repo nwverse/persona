@@ -274,6 +274,18 @@ class MessageSelectionTest {
         assertNull("the selection is over", menu.selecting)
     }
 
+    @Test fun toolbarCopyTakesTheWordsAndEndsTheSelection() {
+        show { Reply("a", "改好了：先备份，再迁移。") }
+        select("a", "改好了：先备份，再迁移。")
+        val copyItem = items().single { it.label == "复制" }
+        rule.runOnIdle { copyItem.onClick(object : TextContextMenuSession { override fun close() {} }) }
+        rule.waitForIdle()
+        assertEquals("改好了：先备份，再迁移。", copied.lastOrNull())
+        // The toolbar's Copy releases the selection. A few frames later the message is not selecting.
+        settle()
+        assertNull("selecting=${menu.selecting?.id} copied=$copied", menu.selecting)
+    }
+
     @Test fun noQuoteWhereTheChatDoesNotQuote() {
         show(writes = false) { Reply("a", "只读的对话。") }
         select("a", "只读的对话。")

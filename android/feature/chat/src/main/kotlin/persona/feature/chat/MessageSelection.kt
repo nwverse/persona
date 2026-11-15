@@ -88,7 +88,8 @@ private fun SelectedWords(menu: MessageMenuState, target: MessageTarget, content
     // Everything selected to begin with, once the same words have been listed for a couple of frames, and not before:
     // a later text change releases that selection (`onSelectableChange` → `onRelease`) whether or not composition has
     // seen it, and Copy then does nothing while the message stays selecting. Keep taking it until the bound runs out.
-    // A finger is the user (a tap, a long press): that clear is not taken back. Nothing to select is not left selecting.
+    // A finger is the user (a tap, a long press), and so is the toolbar's Copy (`toolbarCopy` is `copy()` then
+    // `onRelease()`): that clear is not taken back. Nothing to select is not left selecting.
     var taking by remember { mutableStateOf(true) }
     var had by remember { mutableStateOf(false) }
     var touched by remember { mutableStateOf(false) }
@@ -96,6 +97,7 @@ private fun SelectedWords(menu: MessageMenuState, target: MessageTarget, content
         var seen: List<String>? = null
         var same = 0
         var frames = 0
+        var userLetGo = false
         fun words(): List<String>? = try {
             state.getSelectableTexts().map { it.text }.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
         } catch (_: IllegalStateException) {
@@ -114,17 +116,24 @@ private fun SelectedWords(menu: MessageMenuState, target: MessageTarget, content
             // A blank first node is not the message. When the list changes, wait until it holds
             // again and take the whole of it, including over a selection that was not released.
             if (now == null || same < STABLE_FRAMES) continue
+            // The same words, already seen, then released: the toolbar Copy. Leave it for the
+            // settle effect. A list that just changed is still being laid out and is taken below.
+            if (had && !taken() && same > STABLE_FRAMES) {
+                userLetGo = true
+                break
+            }
             if (same == STABLE_FRAMES || !taken()) state.selectAll()
         }
         taking = false
-        if (touched || menu.selecting?.id != target.id) return@LaunchedEffect
+        if (touched || userLetGo || menu.selecting?.id != target.id) return@LaunchedEffect
         if (!taken()) {
             menu.endSelection(target.id)
             return@LaunchedEffect
         }
         // Past the bound the screen can go idle, and one more text change can still release the
-        // selection before Copy. Take it on the next frame (not inside the layout that released
-        // it). A finger is not taken back. A few failures end the selection.
+        // selection before Copy. Take the new words on the next frame (not inside the layout that
+        // released them). The same words going empty is the toolbar Copy, which the settle effect
+        // ends. A finger is not taken back. A few failures end the selection.
         var extras = 0
         while (menu.selecting?.id == target.id && !touched && extras <= 8) {
             val (finger, blank) = snapshotFlow { touched to !taken() }.first { it.first || it.second }
@@ -132,11 +141,17 @@ private fun SelectedWords(menu: MessageMenuState, target: MessageTarget, content
             withFrameNanos { }
             if (touched || menu.selecting?.id != target.id) return@LaunchedEffect
             if (taken()) continue
+            val now = words()
+            if (now == null || now == seen) {
+                if (now == null) menu.endSelection(target.id)
+                return@LaunchedEffect
+            }
             extras++
-            if (extras > 8 || words() == null) {
+            if (extras > 8) {
                 menu.endSelection(target.id)
                 return@LaunchedEffect
             }
+            seen = now
             state.selectAll()
         }
     }

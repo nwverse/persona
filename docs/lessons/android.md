@@ -15,7 +15,11 @@ later change of those words releases a selection that was already made (`updateT
 (`notifyPositionChange`). Wait until `getSelectableTexts()` lists the same non-blank words for a couple of frames before `selectAll()`. A list that
 changes after that take is not done: wait for it to hold again and take the whole of it, even when the earlier selection was
 not released (a blank or partial first node does not count as the message). Keep doing that until the frame bound. A finger
-on the message is the user (a tap, a long press) and is not taken back. When the bound runs out with nothing really selected,
+on the message is the user (a tap, a long press) and is not taken back. The toolbar's Copy is the user as well:
+Foundation 1.12.1 `SelectionManager.toolbarCopy` is `copy()` then `onRelease()`, and the touch-mode context-menu Copy
+does the same (`copy` then `onRelease` when `isInTouchMode`, which starts true). An empty selection whose words did not
+change is that release. Do not `selectAll` again, or the settle frames never see an empty selection and the message stays
+selecting (#8728). When the bound runs out with nothing really selected,
 end the selection. Stopping at the first stable reading leaves a later change: the message stays selecting, and Copy does
 nothing (#8728). A message with
 no words never lists any, and must not be left selecting.
