@@ -59,6 +59,8 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
+pi, the Cursor CLI and the Antigravity CLI have no such mapping either, so a read-only task for them is refused the same way, before a pane opens (`docs/integrations/launchers.md`, "Work agents"). The read-only line still goes into the first message, but the start never reaches it.
+
 External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
 without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
 (#3238): a plan start runs on a Paseo provider that runs Claude Code, in Paseo's `plan` mode; a non-Claude provider, no
