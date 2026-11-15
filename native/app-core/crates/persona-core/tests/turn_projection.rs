@@ -66,11 +66,12 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
             .collect();
     paths.sort();
     assert_eq!(paths.len(), 9, "the lines file set is the manifest boundary");
-    let overlay_path = std::env::var_os("PERSONA_LINES_IOS_DIFFERENCES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../spec/fixtures/lines/ios/differences.json")
-        });
+    let overlay_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../spec/fixtures/lines/ios/differences.json");
+    assert!(
+        overlay_path.is_file(),
+        "the repository's Apple replay overlay is required"
+    );
     let overlay: Value = serde_json::from_slice(&fs::read(&overlay_path).unwrap_or_else(|error| {
         panic!(
             "current Apple differences from #8239 are required at {}: {error}",
@@ -196,7 +197,8 @@ fn choosing_the_first_answer_fails_the_wake_corpus() {
 }
 
 /// Expectations below are written from current Apple source/tests, not from this Rust implementation's output.
-/// They supplement rather than rewrite the shared lines fixtures while #8239 repairs the executable Apple replay.
+/// They supplement the unchanged corpus and checked-in current-iOS overlay with source-derived edge boundaries.
+/// These assertions are not an executed Swift replay; full corpus acceptance also relies on #8429's macOS run.
 mod apple_source_regressions {
     use persona_core::turns::Input;
     use serde_json::{Value, json};
