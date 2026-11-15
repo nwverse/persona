@@ -895,6 +895,12 @@ pills keep their existing single-line layout. A separate, labelled 44 px **?** c
 hover, focus or click, with Escape/outside-click dismissal. Why inline: explanations include environment and configuration
 details that must remain readable on phones and at larger text sizes; a short tooltip or a nested button would not fit.
 
+The Main-chat agent-kind notice (#4662, `MainChatAgentNotice`) reuses the compaction strip's neutral surface, spacing,
+caption text and info icon; its explanation wraps, and the quiet **New main chat…** button stays on one line, opens
+the existing dialog and has the existing `touch-hit` 44 px coarse-pointer target without changing its drawn height. It appears only when the loaded launcher list confirms that the current main chat and its configured
+default use different agent kinds, with no conversation pick. The Models editor uses the same rule in an inset explanation
+that follows the provider draft. Same-kind, unknown and unloaded states add no warning or new action.
+
 Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
 Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
 The subtitle, not another icon vocabulary, explains what is running and its counts/phase; only a real wait with no
@@ -1514,7 +1520,11 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 
 - **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
   Android `DecisionStack` and `DecisionDock`, #4210 T6). A request that blocks the Agent stays visible there until it is
-  answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). The cards stack as they come
+  answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). A card its session does not
+  let the app answer (no `capabilities.approve`) is greyed with one line under it in `cautionText` saying why: where the
+  session can be attached live (a Codex thread on a shared app-server not joined yet), that attaching answers it here,
+  with the ⋯ menu's **Attach Live** beside it; otherwise, to answer it on the computer (iOS and iPadOS, #6868; Android
+  says the same inside the card; the web still greys it without a word). The cards stack as they come
   while they fit in half the page; past it they scroll on their own under "N pending", permissions first and then the
   newest, and a new card brings the stack back to its top. "N pending" counts the cards in the stack. With the keyboard
   up the cards take the conversation's room above the rest of the footer, the composer staying over the keyboard, and

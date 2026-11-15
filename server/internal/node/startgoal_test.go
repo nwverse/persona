@@ -227,9 +227,9 @@ func TestStartGoalOnAnAsyncStart(t *testing.T) {
 	if session == nil || session["starting"] != true {
 		t.Fatalf("an async start should answer starting in its session: %v", res)
 	}
-	for i := 0; i < 200 && len(f.trace("agent.prompt")) < 2; i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, "the async message and goal", func() bool {
+		return len(f.trace("agent.prompt")) >= 2
+	})
 	n.firstWait.Wait()
 	got := f.trace("agent.prompt")
 	if len(got) != 2 || !strings.Contains(got[0], "write the report") || !strings.Contains(got[1], "/goal "+goal) {
@@ -277,12 +277,10 @@ func TestStartGoalAfterADialogHeldFirstMessage(t *testing.T) {
 		return len(got) == 2 && strings.Contains(got[0], "fix the build") && strings.Contains(got[1], "/goal "+goal)
 	})
 	// The held mark is cleared once the first message's own check confirms it; the goal waits behind that check.
-	for i := 0; i < 100; i++ {
-		if lost, ok := n.lostFirst.get(startedID(f)); !ok || lost.why == "" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, "the held mark to clear", func() bool {
+		lost, ok := n.lostFirst.get(startedID(f))
+		return !ok || lost.why == ""
+	})
 	if lost, ok := n.lostFirst.get(startedID(f)); ok && lost.why != "" {
 		t.Fatalf("the held mark was not cleared: %+v", lost)
 	}
