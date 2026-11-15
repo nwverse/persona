@@ -667,7 +667,8 @@ nonisolated struct ModelPick: Codable, Hashable, Sendable {
 }
 
 /// A launcher or provider the main chat can't run on a machine, and why in the hub's words
-/// (`unavailable` of `GET …/machines/{id}/launchers?purpose=assistant`, #5033).
+/// (`unavailable` of `GET …/machines/{id}/launchers?purpose=assistant`, #5033). New Agent's list (`agent.new`) has
+/// the same shape for the Persona-managed providers whose own-service rule leaves them out there (#8109).
 nonisolated struct UnavailableLauncher: Codable, Identifiable, Hashable, Sendable {
     var name: String
     var displayName: String?

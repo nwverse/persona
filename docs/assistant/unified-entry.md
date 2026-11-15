@@ -1072,7 +1072,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
+| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387); in the main conversation with low-distraction mode on, Held Pushes after them, its tray in the same place (#7782, #8223) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`), `apple/Persona/Views/Assistant/Tasks/PushInterceptsView.swift` |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
@@ -1092,13 +1092,17 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
   text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
   semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
+  In the main conversation with low-distraction mode on, Held Pushes (#7782) is a third entry in the same capsule after
+  them; its tray of today's held pushes opens in the trays' place, above the row at the bar's width, and one tray is open
+  at a time (#8223; Android's `AssistantTray.HeldPushes` shares the slot the same way, the web opens a dialog).
   At the accessibility text sizes the entries (and the computer pill after them) are a `FlowLayoutRow`: one that doesn't
   fit goes on to the next line, each whole. Side by side they made the row, and with it the whole chat page, wider than
   the screen, the header and the composer cut off at both edges (#5702; `docs/design/DESIGN_SYSTEM.md` 1.2 rule 3 (c),
   wrapping rather than a sideways scroll so Needs You and its count stay in view). Below those sizes the row is as before.
   Tests: `AssistantEntriesFixtureTests` (the shared fixture), `AssistantActionBarTests`, UI `AssistantActionBarUITests`
   (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`; `testEntriesStayOnScreenAtEveryTextSize` in zh-Hans, English and Japanese at
-  the default and the largest size, light and dark).
+  the default and the largest size, light and dark), UI `PushInterceptsUITests` (`MOCK_LN=1`; the held pushes tray's
+  place and width, the three entries on one row, one tray at a time).
 - Task details have one header layer: the embedded Agent page takes over the task name, Close, and task ⋯ (#3255; see "Task details" above).
 - Screenshots: `MOCK_TASKS=1`, `MOCK_TASKS_AT`, `-showTaskDetail`, `-showTaskBoard` (`docs/operations/testing.md`).
 
