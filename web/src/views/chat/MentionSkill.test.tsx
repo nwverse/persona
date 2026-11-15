@@ -46,6 +46,14 @@ async function type(text: string) {
   });
 }
 const key = (k: string) => act(() => { box().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+async function press(k: string, extra: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...extra });
+  await act(async () => {
+    box().dispatchEvent(event);
+    await Promise.resolve();
+  });
+  return event;
+}
 beforeAll(async () => {
   await loadPages();
   await loadPages(); // the slash palette registers its skill-aware second stage while the first pass loads
@@ -84,6 +92,17 @@ it("searches name/description locally, disambiguates equal names, selects with k
   key("ArrowDown");
   expect(box().value).toBe("");
   expect(getContexts("skill-test")).toHaveLength(0);
+});
+
+it("sends on Ctrl+Enter with a highlighted @ skill instead of inserting its chip", async () => {
+  render();
+  await type("@security");
+  await waitForOptions(1);
+  expect(options()[0].getAttribute("aria-selected")).toBe("true");
+  expect((await press("Enter", { ctrlKey: true })).defaultPrevented).toBe(true);
+  expect(onSend.mock.calls.map(([message]) => message.text)).toEqual(["@security"]);
+  expect(box().value).toBe("");
+  expect(getContexts("skill-test").filter((row) => row.kind === "skill")).toHaveLength(0);
 });
 
 it("supports touch/click removal, restores edit/queue references and persists the selected identity in the draft", async () => {
@@ -254,6 +273,41 @@ it("selects a slash skill with the keyboard and retains its identity through ret
   key("ArrowUp");
   expect(box().value).toBe("Check this");
   expect(getContexts("skill-test")[0].attrs?.ref).toBe("a");
+});
+
+it.each([{ name: "Ctrl", modifier: { ctrlKey: true } }, { name: "Cmd", modifier: { metaKey: true } }])("sends the draft on $name+Enter instead of picking the highlighted slash skill", async ({ modifier }) => {
+  render(source, COMMANDS);
+  await type("/security");
+  await waitForOptions(1);
+  expect(focused()?.textContent).toContain("Inspect security boundaries");
+  expect((await press("Enter", modifier)).defaultPrevented).toBe(true);
+  expect(onSend.mock.calls.map(([message]) => message.text)).toEqual(["/security"]);
+  expect(box().value).toBe("");
+  expect(getContexts("skill-test").filter((row) => row.kind === "skill")).toHaveLength(0);
+});
+
+it("leaves Mod+Alt+Enter and Mod+Shift+Enter for the window with a slash skill highlighted", async () => {
+  render(source, COMMANDS);
+  await type("/security");
+  await waitForOptions(1);
+  const seen: KeyboardEvent[] = [];
+  const listener = (event: KeyboardEvent) => seen.push(event);
+  window.addEventListener("keydown", listener);
+  try {
+    for (const modifier of [
+      { ctrlKey: true, altKey: true }, { metaKey: true, altKey: true },
+      { ctrlKey: true, shiftKey: true }, { metaKey: true, shiftKey: true },
+    ]) {
+      expect((await press("Enter", modifier)).defaultPrevented).toBe(false);
+      expect(onSend).not.toHaveBeenCalled();
+      expect(getContexts("skill-test").filter((row) => row.kind === "skill")).toHaveLength(0);
+      expect(box().value).toBe("/security");
+      expect(focused()?.textContent).toContain("Inspect security boundaries");
+    }
+  } finally {
+    window.removeEventListener("keydown", listener);
+  }
+  expect(seen).toHaveLength(4);
 });
 
 it.each([{ name: "model", key: "Enter" }, { name: "permissions", key: "Tab" }])("picks a $name skill with $key instead of running the typed special command", async ({ name, key: pressed }) => {

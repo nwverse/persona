@@ -36,11 +36,12 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
     if (!root) return;
     const key = (e: KeyboardEvent) => {
       if (e.isComposing || e.keyCode === 229) return;
+      const modEnter = e.ctrlKey || e.metaKey;
       if ((e.key === "ArrowDown" || e.key === "ArrowUp") && entries.length) {
         e.preventDefault();
         e.stopPropagation();
         input.onHover((current + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
-      } else if ((e.key === "Enter" || e.key === "Tab") && attached(entries[current])) {
+      } else if (((e.key === "Enter" && !modEnter) || e.key === "Tab") && attached(entries[current])) {
         e.preventDefault();
         e.stopPropagation();
         pick(entries[current]);

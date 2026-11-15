@@ -401,8 +401,7 @@ export const Composer = memo(function Composer({
   // backgrounded or the screen locked — mobile WebViews often skip pagehide there), so the last words typed before
   // switching are not lost (#4591).
   const unsaved = useRef<{ key: string; text: string } | null>(null);
-  const saveDraft = useCallback((event?: Event) => {
-    if (event?.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+  const saveDraft = useCallback(() => {
     const u = unsaved.current;
     if (!u) return;
     unsaved.current = null;
@@ -421,12 +420,15 @@ export const Composer = memo(function Composer({
     return () => clearTimeout(t);
   }, [draft, draftKey, saveDraft, contexts]);
   useEffect(() => {
-    // visibilitychange to hidden reaches mobile WebViews that never fire pagehide; other visibility states save nothing
+    // visibilitychange to hidden reaches mobile WebViews that never fire pagehide; saveDraft is a no-op without unsaved words
+    const flushOnHidden = () => {
+      if (document.visibilityState === "hidden") saveDraft();
+    };
     addEventListener("pagehide", saveDraft);
-    document.addEventListener("visibilitychange", saveDraft);
+    document.addEventListener("visibilitychange", flushOnHidden);
     return () => {
       removeEventListener("pagehide", saveDraft);
-      document.removeEventListener("visibilitychange", saveDraft);
+      document.removeEventListener("visibilitychange", flushOnHidden);
       // only this conversation's: on a switch the box still holds the old words under the new key for one render
       if (unsaved.current?.key === draftKey) saveDraft();
     };
