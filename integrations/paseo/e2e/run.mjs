@@ -20,6 +20,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checks, startNode, until } from '../../runtime-sdk/testing/node-harness.mjs'
 import { daemonTarget } from '../lib/discover.js'
@@ -34,7 +35,7 @@ if (!personad || !claudeBin) {
   process.exit(2)
 }
 const keep = process.env.KEEP === '1'
-const root = mkdtempSync(join('/tmp', 'jpaseo-e2e-'))
+const root = mkdtempSync(join(tmpdir(), 'jpaseo-e2e-'))
 const paseoHome = join(root, 'paseo')
 const home = join(root, 'home') // the node's and Claude Code's HOME
 const claudeDir = join(home, '.claude')
@@ -463,6 +464,47 @@ check("a closed Agent's own worktree Paseo made: Persona's, removed through Pase
   inUse === 'worktree_in_use' && ownSt?.ours === true && ownRemoved?.removed === true && ownRemoved.branch_deleted === true &&
   !existsSync(own.path) && !(await paseoWs(own.workspace_id)) && git(repo, 'branch', '--list', own.branch) === '',
   JSON.stringify({ own, inUse, ownSt, ownRemoved }))
+
+// Paseo forking an agent's session itself, as its app does to go on after an API error (it rewinds the failed turn
+// first): an agent started in Paseo stays the session it was listed under (#6709). Seen by the bridge, its id is pinned
+// on the agent as kept; not seen (the bridge was not running), the line of its transcripts gives the same id back.
+const twoTurns = async () => {
+  const a = await inPaseo()
+  await paseo.request('send_agent_message_request', { agentId: a?.id, text: 'Now E2E_HELLO again', messageId: randomUUID() }, { timeoutMs: 60_000 }).catch(() => {})
+  await until('its second turn over', async () => {
+    const now = (await paseo.request('fetch_agent_request', { agentId: a?.id })).agent
+    const tl = await paseo.request('fetch_agent_timeline_request', { agentId: a?.id, direction: 'tail', limit: 0 })
+    return now?.status === 'idle' && (tl.entries ?? []).filter((e) => e.item?.type === 'assistant_message').length >= 2
+  }, 60_000).catch(() => {})
+  return a
+}
+const paseoRewind = async (a) => {
+  const tl = await paseo.request('fetch_agent_timeline_request', { agentId: a?.id, direction: 'tail', limit: 0 })
+  const target = (tl.entries ?? []).map((e) => e.item).find((it) => it?.type === 'user_message' && it.text === 'Now E2E_HELLO again')
+  await paseo.request('agent.rewind.request', { agentId: a?.id, messageId: target?.messageId, mode: 'conversation' }, { timeoutMs: 120_000 }).catch(() => {})
+  return until('forked', async () => {
+    const now = (await paseo.request('fetch_agent_request', { agentId: a?.id })).agent
+    return now?.persistence?.sessionId && now.persistence.sessionId !== a?.claude ? now : undefined
+  }, 30_000).catch(() => undefined)
+}
+const seen = await twoTurns()
+const seenFork = await paseoRewind(seen)
+const seenNow = await until('its id pinned', async () => {
+  const now = (await paseo.request('fetch_agent_request', { agentId: seen?.id })).agent
+  return now?.labels?.['persona.session'] ? now : undefined
+}, 20_000).catch(() => undefined)
+check("Paseo's own fork of an agent started there: the same session in Persona, its id pinned as kept", Boolean(seenFork) &&
+  seenNow?.labels?.['persona.session'] === seen?.claude && seenNow?.labels?.['persona.kept'] === '1' && row(seen, true) &&
+  !node.sessions().some((s) => s.session_id === seenFork.persistence.sessionId), JSON.stringify(seenNow?.labels))
+const unseen = await twoTurns()
+await node.call('engine.use', { engine: 'herdr' })
+await until('the bridge gone', () => !row(unseen, true), 30_000).catch(() => {})
+const unseenFork = await paseoRewind(unseen)
+await node.call('engine.use', { engine: 'paseo' })
+await until('listed again', () => row(unseen, true), 60_000).catch(() => {})
+check('a fork the bridge did not see: listed under the first session of its line, never under the fork', Boolean(unseenFork) && row(unseen, true) &&
+  !node.sessions().some((s) => s.session_id === unseenFork.persistence.sessionId) && row(seen, true),
+  `${unseen?.claude} → ${unseenFork?.persistence?.sessionId}: ${node.sessions().filter((s) => s.cwd === work).map((s) => s.session_id).join(',')}`)
 
 // ---- the engine changed: the bridge stops ----
 

@@ -11,4 +11,4 @@ ci_run 'Workflow syntax and shell lint' 180 actionlint
 # One file per step: bash -n reads only its first file, the rest become that script's arguments.
 ci_run 'Site language check shell syntax' 30 bash -n scripts/release/site_language_check.sh
 ci_run 'Publish script shell syntax' 30 bash -n scripts/release/publish.sh
-ci_run 'Website worker, release and bilingual page tests' 180 node --test site/worker.test.mjs site/releases.test.mjs site/i18n.test.mjs
+ci_run 'Website worker, release and bilingual page tests' 180 node --test site/worker.test.mjs site/releases.test.mjs site/i18n.test.mjs site/home-layout.test.mjs

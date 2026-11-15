@@ -161,6 +161,7 @@ private fun SettingsContent(
     }
     val extensionService = mine.extensions.takeUnless { services.demo }
     val extensionsAvailable by remember(extensionService) { extensionService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
+    val inboxSources by remember(extensionService) { extensionService?.inboxSourcesAvailable ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
     // Each assistant's own: a switch never shows the last one's count, not even while the new one's is read (or fails).
     val extensionSummaryState = remember(assistant.id) { mutableStateOf<String?>(null) }
     var extensionSummary by extensionSummaryState
@@ -338,7 +339,7 @@ private fun SettingsContent(
         update = update, updateMessage = updateMessage, updateSubtitle = updateSubtitle,
         updateIncompatibility = updateIncompatibility, busy = busy, installing = installing, scope = scope,
         extensionSummaryState = extensionSummaryState, extensionsAvailable = extensionsAvailable,
-        channelsAvailable = channelsAvailable, channelListState = channelListState,
+        inboxSources = inboxSources, channelsAvailable = channelsAvailable, channelListState = channelListState,
         translationValue = translationValue, hubUpdateStatusState = hubUpdateStatusState,
         slotsState = slotsState, slotCards = slotCards, detailKey = detailKey,
         back = back, openPage = ::open, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
@@ -404,6 +405,7 @@ private fun SettingsPageContent(
     scope: kotlinx.coroutines.CoroutineScope,
     extensionSummaryState: MutableState<String?>,
     extensionsAvailable: Boolean,
+    inboxSources: Boolean,
     channelsAvailable: Boolean,
     channelListState: MutableState<List<HubChannel>?>,
     translationValue: String?,
@@ -601,7 +603,7 @@ private fun SettingsPageContent(
         } else if (page.startsWith("connector/")) {
             HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
         } else SettingsHomePage(
-            services, searchQuery, { searchQuery = it }, extensionsAvailable, extensionSummary, channelsAvailable, channelList,
+            services, searchQuery, { searchQuery = it }, extensionsAvailable, inboxSources, extensionSummary, channelsAvailable, channelList,
             connection, translationValue, hubUpdateStatus,
             when {
                 busy -> stringResource(R.string.settings_update_checking)
