@@ -221,14 +221,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// The Feishu bot and the channels with pushes on (channels_handler.go).
 		s.channelsPushed(machine, self, a.Title, a.Body)
-		s.recordNotify(ctx, machine, self) // an interruption (north_star.go)
+		s.recordNotify(ctx, machine, self, notifyMissed(res)) // an interruption when a device took it (north_star.go)
 		s.promoteSupervision(self)
-		if res.Held {
-			// ln mode kept it off the phone (a non-main conversation's ordinary notice): say so, so the model does not
-			// believe the user was alerted.
-			return i18n.T(s.lang(ctx), "assistant-notify.ln_held_notice"), nil
-		}
-		return "Notification sent.", nil
+		return notifyAnswerText(s.lang(ctx), res), nil
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
 	case "conversation_read":
