@@ -20,6 +20,19 @@ import java.time.OffsetDateTime
 /** How long past its reset a usage-limit wait still counts (the hub's limitResumeGrace). */
 internal const val USAGE_LIMIT_GRACE_MS = 10 * 60 * 1000L
 
+/**
+ * The time half of a usage-limit line (iOS `usageLimitWhen`): "Resets <time>", "Resumes <time>", or "Resumes after
+ * the reset". The assistant's rows and card format it; the shared [Session.interrupted] flag does not.
+ */
+sealed class UsageLimitWhen {
+    /** "Resets <time>": nothing continues the turn on its own. */
+    data class Resets(val at: Instant) : UsageLimitWhen()
+    /** "Resumes <time>": the Agent or the hub continues it. */
+    data class Resumes(val at: Instant) : UsageLimitWhen()
+    /** No reset time, and something continues it after the reset. */
+    data object AfterReset : UsageLimitWhen()
+}
+
 val JsonCodec = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
@@ -624,12 +637,8 @@ data class Session(
         agentState != AgentState.Working && (children?.sidesUnread ?: 0) > 0 -> AgentState.Unread
         else -> agentState
     }
-    /**
-     * Stopped on a model API error ([turnError]): cut off, not finished (#1516). A subscription usage limit still in
-     * force is not this ([isUsageLimited]): its row stays in progress.
-     */
-    val interrupted: Boolean get() = !turnError.isNullOrBlank() && !isUsageLimited() &&
-        (agentState == AgentState.Unread || agentState == AgentState.Idle)
+    /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
+    val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
 
     /**
      * Stopped on a subscription usage limit whose reset is still ahead, or not known (#8237). A known reset more than
@@ -647,6 +656,23 @@ data class Session(
         if (turnErrorResumes == true) return true
         val waiting = work ?: return false
         return waiting.phase == "blocked" && parseTime(waiting.resetsAt) != null && parseTime(waiting.wakeAt) != null
+    }
+
+    /**
+     * Only the time half of a usage-limit line (iOS `usageLimitWhen`), for a row that already says "Usage Limit".
+     * Null when this is not a usage-limit wait, or nothing says when. [now] is epoch millis: callers pass the
+     * minute tick, so the line changes at the grace boundary.
+     */
+    fun usageLimitWhen(now: Long = System.currentTimeMillis()): UsageLimitWhen? {
+        if (!isUsageLimited(now)) return null
+        val goesOn = usageLimitContinues()
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)
+        return when {
+            at == null && goesOn -> UsageLimitWhen.AfterReset
+            at == null -> null
+            goesOn -> UsageLimitWhen.Resumes(at)
+            else -> UsageLimitWhen.Resets(at)
+        }
     }
     val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title

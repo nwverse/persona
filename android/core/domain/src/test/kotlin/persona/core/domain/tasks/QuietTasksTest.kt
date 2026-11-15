@@ -8,12 +8,15 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.contracts.AgentState
 import persona.core.contracts.FeedItem
 import persona.core.contracts.Session
+import persona.core.contracts.SessionKey
 import persona.core.contracts.Supervision
 import persona.core.contracts.TaskReview
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
+import persona.core.contracts.UsageLimitWhen
 import persona.core.contracts.WorkState
 
 /** #8312: receipts, reports and reviews stay in the feed and are not drawn; Just finished and a usage limit. */
@@ -64,23 +67,42 @@ class QuietTasksTest {
         assertEquals(StartFailurePlain.Details, startFailurePlain("  "))
     }
 
-    @Test fun aUsageLimitIsNotAnInterruptionUntilItsGracePasses() {
-        val clock = System.currentTimeMillis()
-        val soon = Instant.ofEpochMilli(clock + 5 * 60_000).toString()
-        val limited = Session("desk", "s", state = "idle", turnError = "limit", turnErrorKind = "usage_limit",
-            turnErrorResetsAt = soon)
-        assertFalse(limited.interrupted)
-        assertTrue(limited.isUsageLimited(clock))
+    @Test fun aUsageLimitStaysInterruptedAndLeavesInProgressWhenItsGraceEnds() {
+        val soon = Instant.ofEpochMilli(nowMs + 5 * 60_000)
+        val limited = Session("desk", "s", state = "unread", turnError = "Weekly limit reached", turnErrorKind = "usage_limit",
+            turnErrorResetsAt = soon.toString())
+        // the shared flag stays true, the same as any unread turn the model service cut off
+        assertTrue(limited.interrupted)
+        assertTrue(limited.isUsageLimited(nowMs))
         assertFalse(limited.usageLimitContinues())
-        assertTrue(limited.copy(turnErrorResumes = true).usageLimitContinues())
+        assertTrue(limited.usageLimitWhen(nowMs) is UsageLimitWhen.Resets)
+        assertTrue(limited.copy(turnErrorResumes = true).usageLimitWhen(nowMs) is UsageLimitWhen.Resumes)
         val scheduled = limited.copy(turnErrorResetsAt = null, work = WorkState(phase = "blocked",
-            resetsAt = soon, wakeAt = soon))
+            resetsAt = soon.toString(), wakeAt = soon.toString()))
         assertTrue(scheduled.usageLimitContinues())
-        val past = limited.copy(turnErrorResetsAt = Instant.ofEpochMilli(clock - 11 * 60_000).toString())
-        assertFalse(past.isUsageLimited(clock))
-        assertTrue(past.interrupted)
-        val unknown = limited.copy(turnErrorResetsAt = null)
-        assertTrue(unknown.isUsageLimited(clock))
+        assertTrue(scheduled.usageLimitWhen(nowMs) is UsageLimitWhen.Resumes)
+        val noTime = limited.copy(turnErrorResetsAt = null, turnErrorResumes = true)
+        assertEquals(UsageLimitWhen.AfterReset, noTime.usageLimitWhen(nowMs))
+        val grace = 10 * 60 * 1000L
+        val resets = soon.toEpochMilli()
+        assertTrue(limited.isUsageLimited(resets + grace))
+        assertFalse(limited.isUsageLimited(resets + grace + 1))
+        assertTrue(limited.isUsageLimited(resets + grace) && !limited.usageLimitContinues())
+        assertFalse(limited.isUsageLimited(resets + grace + 1) && !limited.usageLimitContinues())
+        val todo = Todo("t", "Wait", origin = "main", createdAt = now.toString(), updatedAt = now.toString(),
+            agents = listOf(TodoAgent("desk", "s", linkedAt = now.toString())))
+        val lookup = { _: SessionKey -> limited }
+        assertEquals(TriageStatus.UsageLimit, todo.triageStatus(lookup, resets + grace))
+        assertEquals(TriageStatus.Interrupted, todo.triageStatus(lookup, resets + grace + 1))
+        assertEquals(TaskState.Interrupted, TaskState.of(todo, listOf(AgentState.Unread), limited.interrupted))
+        fun placed(at: Long) = assistantEntries("main", "main", listOf(todo), listOf(limited), emptyList(), emptyList(), emptyList(), at)
+        val during = placed(resets + grace)
+        assertEquals(listOf("task:t"), during.running.map { it.key })
+        assertEquals(TriageStatus.UsageLimit, (during.running.single() as RunningEntry.Task).status)
+        assertTrue(during.needsYou.isEmpty())
+        val after = placed(resets + grace + 1)
+        assertTrue(after.running.isEmpty())
+        assertEquals(TriageStatus.Interrupted, (after.needsYou.single() as NeedsYouEntry.Task).status)
         val cut = Session("desk", "s", state = "idle", turnError = "The model service stopped responding.")
         assertTrue(cut.interrupted)
         assertFalse(cut.isUsageLimited(nowMs))

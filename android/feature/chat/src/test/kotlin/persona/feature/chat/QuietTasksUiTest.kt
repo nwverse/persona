@@ -72,8 +72,9 @@ class QuietTasksUiTest {
     private val at = Instant.now().minusSeconds(3600).toString()
     private val cut = Session("desk", "cut", title = "Rewrite the intro", state = "idle",
         turnError = "The model service stopped responding.")
+    private val resetAt = Instant.now().plusSeconds(3 * 3600).toString()
     private val limited = Session("desk", "limit", title = "Wait out the limit", state = "idle",
-        turnError = "Weekly limit reached", turnErrorKind = "usage_limit")
+        turnError = "Weekly limit reached", turnErrorKind = "usage_limit", turnErrorResetsAt = resetAt)
     private val failed = Todo("failed", "Publish the notes", origin = "main", startError = "rpc: connection closed",
         doneAt = at, createdAt = at, updatedAt = at)
     private val interrupted = Todo("cut", "Rewrite the intro", origin = "main", createdAt = at, updatedAt = at,
@@ -85,6 +86,7 @@ class QuietTasksUiTest {
     private val handoffs = listOf(
         AgentHandoff("cut", "Rewrite the intro", HandoffWake.Created, machineId = "desk", sessionId = "cut", todoId = "cut"),
         AgentHandoff("failed", "Publish the notes", HandoffWake.Created, todoId = "failed", failure = "rpc: connection closed"),
+        AgentHandoff("limit", "Wait out the limit", HandoffWake.Created, machineId = "desk", sessionId = "limit", todoId = "limit"),
     )
 
     private class Connection : HubConnection {
@@ -151,6 +153,9 @@ class QuietTasksUiTest {
         Snapshot.sendApplyNotifications()
         rule.waitForIdle()
         rule.onNodeWithText("Just finished").assertIsDisplayed()
+        rule.onNodeWithText("Usage Limit", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Weekly limit reached", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Resets", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Renamed the button").assertIsDisplayed()
         rule.onNodeWithText("Done").assertIsDisplayed()
         rule.onNodeWithTag("assistant-entry-running").assertIsDisplayed()
@@ -186,6 +191,9 @@ class QuietTasksUiTest {
         }
         rule.onNodeWithText("Interrupted · The model service stopped responding.").assertIsDisplayed()
         rule.onNodeWithText("Didn't start: The connection to this computer dropped").assertIsDisplayed()
+        assertTrue(rule.onAllNodesWithText("Usage Limit", substring = true).fetchSemanticsNodes().size >= 2)
+        rule.onNodeWithText("Resets", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("resets", substring = true).assertIsDisplayed()
         val output = File("build/quiet-task-shots").also { it.mkdirs() }
         val light = mutableMapOf<AppStyle, Bitmap>()
         for (s in listOf(AppStyle.Glass, AppStyle.Brief, AppStyle.Board)) for (d in listOf(false, true)) {

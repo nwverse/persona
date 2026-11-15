@@ -19,6 +19,13 @@
     <string name="chat_start_cause_denied">这台电脑没有允许</string>
     <string name="chat_start_cause_update">这台电脑上的 Persona 需要更新</string>
     <string name="chat_handoff_interrupted">中断了 · %1$s</string>
+    <string name="chat_usage_limit">用量到上限</string>
+    <string name="chat_usage_limit_resets">用量到上限 · %1$s 重置</string>
+    <string name="chat_usage_limit_resumes">用量到上限 · %1$s 继续</string>
+    <string name="chat_usage_limit_resumes_after">用量到上限 · 重置后继续</string>
+    <string name="chat_usage_resets">%1$s 重置</string>
+    <string name="chat_usage_resumes">%1$s 继续</string>
+    <string name="chat_usage_resumes_after">重置后继续</string>
     <string name="chat_handoff_gone">没有这个任务了</string>
     <string name="chat_handoff_closed">还没开 Agent 就结束了</string>
     <string name="chat_handoff_minutes_ago">%1$d 分钟前</string>

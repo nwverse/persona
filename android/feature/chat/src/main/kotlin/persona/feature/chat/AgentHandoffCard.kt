@@ -24,14 +24,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.Instant
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.contracts.UsageLimitWhen
 import persona.core.designsystem.JCard
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JStatusDot
+import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.text
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.currentLocale
+import java.time.ZoneId
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.lines.ApiErrorInfo
 import persona.core.domain.tasks.AgentHandoff
@@ -139,14 +142,23 @@ private fun HandoffBadge(wake: HandoffWake) {
 private fun HandoffMeta(handoff: AgentHandoff, session: Session?, agent: Boolean, closed: Boolean) {
     val palette = PersonaTheme.palette
     if (agent) {
+        val at = AssistantLines.time(session?.activityAt ?: session?.updatedAt)
+        // the minute tick, so a usage limit's line and Continue change when its grace ends
+        val ticking = !session?.turnError.isNullOrBlank()
+        val now by rememberNow(60_000, ticking || at != null)
+        val nowMs = now.toEpochMilli()
+        // a usage limit, the task still open: when it resets, in the caution color, not "Interrupted" (#8237)
+        if (!closed && session?.isUsageLimited(nowMs) == true) {
+            Text(usageLimitCardLine(session, nowMs), Modifier.testTag("handoff-usage-limit"), style = PersonaTheme.type.caption,
+                color = palette.cautionText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            return
+        }
         // a turn the model service cut off, the task still open: said here, in the danger color (#8237)
         if (!closed && session?.interrupted == true) {
             Text(interruptedLine(session.turnError), Modifier.testTag("handoff-interrupted"), style = PersonaTheme.type.caption,
                 color = palette.danger.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
             return
         }
-        val at = AssistantLines.time(session?.activityAt ?: session?.updatedAt)
-        val now by rememberNow(60_000, at != null)
         val status = session?.status()
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             if (at != null) {
@@ -206,6 +218,46 @@ internal fun startFailureRowLine(raw: String): String = startFailureWhy(raw) ?: 
 internal fun interruptedLine(error: String?): String {
     val why = interruptedWhy(error)
     return if (why.isEmpty()) stringResource(R.string.chat_exchange_interrupted) else stringResource(R.string.chat_handoff_interrupted, why)
+}
+
+/** The hand-off card's line for a usage limit: "Usage Limit · resets <time>", or the word alone when nothing says when. */
+@Composable
+internal fun usageLimitCardLine(session: Session, nowMs: Long): String {
+    val clock = usageLimitClock(session, nowMs)
+    return when (session.usageLimitWhen(nowMs)) {
+        is UsageLimitWhen.Resets -> stringResource(R.string.chat_usage_limit_resets, clock)
+        is UsageLimitWhen.Resumes -> stringResource(R.string.chat_usage_limit_resumes, clock)
+        UsageLimitWhen.AfterReset -> stringResource(R.string.chat_usage_limit_resumes_after)
+        null -> stringResource(R.string.chat_usage_limit)
+    }
+}
+
+/** The In progress row's second line: the limit's reason, then when it resets (iOS `usageLimitWhen`). */
+@Composable
+internal fun usageLimitRowSubtitle(session: Session, nowMs: Long): String {
+    val reason = session.turnError?.trim()?.takeIf { it.isNotEmpty() }
+    val clock = usageLimitClock(session, nowMs)
+    val whenText = when (session.usageLimitWhen(nowMs)) {
+        is UsageLimitWhen.Resets -> stringResource(R.string.chat_usage_resets, clock)
+        is UsageLimitWhen.Resumes -> stringResource(R.string.chat_usage_resumes, clock)
+        UsageLimitWhen.AfterReset -> stringResource(R.string.chat_usage_resumes_after)
+        null -> null
+    }
+    return listOfNotNull(reason, whenText).joinToString(" · ")
+}
+
+/** The clock of a usage limit: the time when that is today, the date as well on another day (iOS `usageLimitClock`). */
+@Composable
+private fun usageLimitClock(session: Session, nowMs: Long): String {
+    val at = when (val part = session.usageLimitWhen(nowMs)) {
+        is UsageLimitWhen.Resets -> part.at
+        is UsageLimitWhen.Resumes -> part.at
+        else -> return ""
+    }
+    val zone = ZoneId.systemDefault()
+    val now = Instant.ofEpochMilli(nowMs)
+    val today = at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
+    return LocalizedFormats.format(at, if (today) LocalizedFormats.TIME else LocalizedFormats.MONTH_DAY_TIME, currentLocale, zone)
 }
 
 /** The cut-off reason without the "Interrupted" word: the row already says that word. */

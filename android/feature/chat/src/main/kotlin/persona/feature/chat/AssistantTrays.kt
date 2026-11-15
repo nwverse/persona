@@ -253,11 +253,12 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     val context = LocalContext.current
     val restores = remember(context) { TodoRestores(context) }
     val scope = rememberCoroutineScope()
-    // a minute's tick moves tasks across the 48 h shelving line while nothing else changes, as on the To-dos page
+    // a minute's tick moves tasks across the 48 h shelving line, and a usage limit across its grace, while nothing else changes
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(60_000); nowMs = System.currentTimeMillis() } }
+    val clock = maxOf(nowMs, System.currentTimeMillis())
     val entries = assistantEntries(host.conversation, main, todos, host.sessions, requests, plans.values, feed.filterNot { it.id in later },
-        maxOf(nowMs, System.currentTimeMillis()), restores.read(), hierarchy)
+        clock, restores.read(), hierarchy)
     // "Later" is only a local, card-scoped choice; it never hides a newer draft for the same source item.
     // the conversation's own cards (Persona asking) are always the user's; they come first after the asking rows
     val own = requests.filter { it.sessionId == host.conversation }
@@ -391,22 +392,16 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             items(entries.running, key = { it.key }) { entry ->
                                 when (entry) {
                                     is RunningEntry.Task -> {
-                                        val projected = progressByTodo[entry.todo.id] ?: TrayProgress("todo:${entry.todo.id}", entry.todo.title, todo = entry.todo)
-                                        // Only replace the projection's state when a shared Agent's requests belong elsewhere (#7531).
-                                        val row = if (entry.hasAgentsElsewhere) projected.copy(blocked = false,
-                                            stopped = entry.status == TriageStatus.Unread || entry.status == TriageStatus.FollowUp)
-                                        else projected
-                                        val limited = host.tasks.agentsOf(entry.todo, host.sessions)
-                                            .firstOrNull { it.isUsageLimited() && !it.usageLimitContinues() }
-                                        Column(Modifier.fillMaxWidth()) {
+                                        if (entry.status == TriageStatus.UsageLimit) {
+                                            TrayUsageLimitRow(entry, host, enabled, taskBusy, clock)
+                                        } else {
+                                            val projected = progressByTodo[entry.todo.id] ?: TrayProgress("todo:${entry.todo.id}", entry.todo.title, todo = entry.todo)
+                                            // Only replace the projection's state when a shared Agent's requests belong elsewhere (#7531).
+                                            val row = if (entry.hasAgentsElsewhere) projected.copy(blocked = false,
+                                                stopped = entry.status == TriageStatus.Unread || entry.status == TriageStatus.FollowUp)
+                                            else projected
                                             TrayProgressRow(row, activity = entry.activity, waiting = entry.waiting,
                                                 working = entry.status == TriageStatus.Working, onClick = { openTask(host, entry.todo) })
-                                            if (limited != null) Row(Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.xs)) {
-                                                JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(entry.todo, host.onError) },
-                                                    size = JButtonSize.Small, enabled = enabled,
-                                                    loading = TasksStore.retryKey(entry.todo.id) in taskBusy,
-                                                    modifier = Modifier.testTag("assistant-tray-continue"))
-                                            }
                                         }
                                     }
                                     is RunningEntry.Agent -> {
@@ -688,6 +683,30 @@ private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null,
 private fun NeedsYouGroup.has(entry: NeedsYouEntry): Boolean = entries.any { it.key == entry.key }
 
 /**
+ * A usage limit still in force (#8237): in progress, caution words, and when it resets. Continue sits under the row,
+ * its own tap, only while nothing continues the turn. [nowMs] is the tray's minute tick.
+ */
+@Composable
+private fun TrayUsageLimitRow(entry: RunningEntry.Task, host: AssistantTaskHost, enabled: Boolean, taskBusy: Set<String>, nowMs: Long) {
+    val palette = PersonaTheme.palette
+    val todo = entry.todo
+    val lead = host.tasks.agentsOf(todo, host.sessions).firstOrNull { it.isUsageLimited(nowMs) }
+    val subtitle = lead?.let { usageLimitRowSubtitle(it, nowMs) }?.takeIf { it.isNotBlank() }
+    val retrying = TasksStore.retryKey(todo.id) in taskBusy
+    Column(Modifier.fillMaxWidth().testTag("assistant-tray-usage-limit")) {
+        JRow(todo.title, subtitle = subtitle, onClick = { openTask(host, todo) }, trailing = {
+            Text(stringResource(R.string.chat_usage_limit), style = PersonaTheme.type.micro, color = palette.cautionText, maxLines = 1)
+        })
+        if (lead != null && !lead.usageLimitContinues()) {
+            Row(Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.xs)) {
+                JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(todo, host.onError) },
+                    size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-continue"))
+            }
+        }
+    }
+}
+
+/**
  * A failed start or a cut-off turn (#8237): a danger wash, ink words, and its own buttons under the row. The row opens
  * the task. Retry and Remove, or Continue, are separate taps.
  */
@@ -702,7 +721,7 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.card)).background(palette.danger.tint)
         .testTag(if (failed) "assistant-tray-failed" else "assistant-tray-interrupted")) {
         JRow(todo.title, subtitle = why.takeIf { it.isNotBlank() }, onClick = { openTask(host, todo) },
-            leading = { JIcon(PhIcons.WarningCircle, decorative = true, size = Tokens.Space.l, tint = palette.danger.dot) },
+            leading = { JIcon(PhIcons.WarningCircle, decorative = true, size = Tokens.Size.iconXS, tint = palette.danger.dot) },
             trailing = {
                 Text((if (failed) TaskState.Failed else TaskState.Interrupted).label.text(),
                     style = PersonaTheme.type.micro, color = palette.ink, maxLines = 1)
@@ -742,7 +761,7 @@ private fun JustFinishedRow(todo: Todo, host: AssistantTaskHost, feed: List<Feed
             }
         }
     }, modifier = Modifier.testTag("assistant-just-finished-row"), leading = {
-        JIcon(PhIcons.Check, decorative = true, size = Tokens.Space.l, tint = palette.positive)
+        JIcon(PhIcons.Check, decorative = true, size = Tokens.Size.iconXS, tint = palette.positive)
     }, trailing = {
         Text(stringResource(R.string.chat_tray_finished_done), style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1)
     })

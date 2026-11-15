@@ -88,6 +88,7 @@ private fun Todo.entryRank(status: TriageStatus): Int {
     return when (status) {
         TriageStatus.NeedsYou -> 0
         TriageStatus.Interrupted -> 10
+        TriageStatus.UsageLimit -> 15
         TriageStatus.Failed -> 30
         TriageStatus.Working -> 40
         TriageStatus.NotStarted -> 50
@@ -130,9 +131,9 @@ fun assistantEntries(
         val active = if (todo.isDone) emptyList() else todo.activeAgents
         val own = active.filter { homes[it.key] == todo.id }
         val hasAgentsElsewhere = own.size < active.size
-        val allStatus = todo.triageStatus(lookup)
+        val allStatus = todo.triageStatus(lookup, now)
         val status = if (hasAgentsElsewhere && allStatus == TriageStatus.NeedsYou) {
-            when (val ownStatus = todo.copy(agents = own).triageStatus(lookup)) {
+            when (val ownStatus = todo.copy(agents = own).triageStatus(lookup, now)) {
                 TriageStatus.NotStarted -> TriageStatus.Working
                 else -> ownStatus
             }

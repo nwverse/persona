@@ -57,7 +57,8 @@ object AssistantTaskCards {
      * Explicit hub housekeeping, drafts and assistant-to-Agent instructions live behind the trays. With [inline] (Glass,
      * #4339 C13) the conversation draws Persona's hand-offs, message cards and the hub's notice lines, and only plans
      * and task cards stay behind (the dispatched line, [DispatchHint]). Receipts, reviews and reports are not drawn
-     * ([drawnFeed]): not among the lines, and not in the background sheet. [lines] still draws a plan the user has not
+     * ([drawnFeed]): not among the lines, and not in the background sheet. iOS `FeedLine` and the web's `FeedLineView`
+     * leave those records out of the conversation, and neither keeps a sheet that still lists them. [lines] still draws a plan the user has not
      * started ([drawnPlans]).
      */
     fun isBackgroundEvent(item: FeedItem, inline: Boolean = false): Boolean = if (inline) item.kind in inlineHidden
