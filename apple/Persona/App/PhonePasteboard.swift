@@ -45,7 +45,9 @@ struct PhonePasteboard {
         }
     )
 
-    /// Only these signatures select a raw representation; every other format keeps UIKit's decode-and-image path.
+    /// Handing the pasteboard a UIImage leaves the pasteboard service encoding it after the setter returns. The next
+    /// pasteboard call on the main thread, our observer before or the system paste button now, then waits for that work;
+    /// these original bytes leave it nothing to encode (#8198). Other formats keep UIKit's decode-and-image path.
     private nonisolated static func rawImageType(_ bytes: Data) -> UTType? {
         if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) { return .png }
         if bytes.starts(with: [0xff, 0xd8, 0xff]) { return .jpeg }
