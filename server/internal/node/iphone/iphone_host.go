@@ -84,13 +84,16 @@ func iphoneSessionErr(err error) error {
 func (s iphoneSessions) Connect(device string) error { return s.m().Connect(device) }
 func (s iphoneSessions) Pair(device string) error    { return s.m().StartPair(device) }
 func (s iphoneSessions) Forget(device string) error  { return s.m().StartForget(device) }
-func (s iphoneSessions) Cancel()                     { s.m().Cancel() }
+func (s iphoneSessions) Install(src iphone.InstallSource) error {
+	return s.m().StartInstall(src)
+}
+func (s iphoneSessions) Cancel() { s.m().Cancel() }
 
 func (s iphoneSessions) Job() *iphoneJob {
 	j := s.m().Job()
 	if j == nil {
 		return nil
 	}
-	return &iphoneJob{Kind: j.Kind, State: j.State, Step: j.Step, ErrorCode: j.Code, Error: j.Error, Waiting: j.Waiting, Device: j.UDID,
-		Started: j.Started}
+	return &iphoneJob{Kind: j.Kind, State: j.State, Step: j.Step, ErrorCode: j.Code, Error: j.Error, Waiting: j.Waiting, Stage: j.Stage,
+		Device: j.UDID, Started: j.Started}
 }

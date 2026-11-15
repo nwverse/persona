@@ -6,18 +6,20 @@ import (
 	"time"
 )
 
-// Job is the background pairing or forgetting the app started (one at a time): its state comes back with the
-// machine's phone status, as the computer extension's install job does.
+// Job is the background pairing, forgetting or installing of the bridge the app started (one at a time): its state
+// comes back with the machine's phone status, as the computer extension's install job does.
 type Job struct {
-	Kind  string `json:"kind"`  // pair / forget
-	UDID  string `json:"udid"`  // the phone it is for
+	Kind  string `json:"kind"`  // pair / forget / install
+	UDID  string `json:"udid"`  // the phone it is for ("" for install)
 	State string `json:"state"` // running / done / failed / cancelled
 	Step  string `json:"step,omitempty"`
 	Error string `json:"error,omitempty"`
-	Code  string `json:"code,omitempty"` // the failure's code (the bridge's, e.g. trust_pending)
-	// Waiting: while it runs, what it waits for from the person at the phone (CodeTrustPending, CodeLocked), "" when
-	// it waits for nothing (PairProgress).
-	Waiting string    `json:"waiting,omitempty"`
+	Code  string `json:"code,omitempty"` // the failure's code (the bridge's, e.g. trust_pending; install's, e.g. download_failed)
+	// Waiting: while a pairing runs, what it waits for from the person at the phone (CodeTrustPending, CodeLocked), ""
+	// when it waits for nothing (PairProgress).
+	Waiting string `json:"waiting,omitempty"`
+	// Stage: while an install runs, what it does (StageDownload, StageVerify, StageInstall).
+	Stage   string    `json:"stage,omitempty"`
 	Started time.Time `json:"started"`
 }
 
@@ -68,8 +70,8 @@ func (m *Manager) Cancel() {
 	}
 }
 
-func (m *Manager) startJob(kind, udid string, run func(context.Context, func(step, waiting string)) error) error {
-	if !ValidUDID(udid) {
+func (m *Manager) startJob(kind, udid string, run func(context.Context, func(step, code string)) error) error {
+	if kind != "install" && !ValidUDID(udid) {
 		return &Error{Code: "bad_request", Message: "invalid device id"}
 	}
 	m.mu.Lock()
@@ -90,14 +92,19 @@ func (m *Manager) startJob(kind, udid string, run func(context.Context, func(ste
 	go func() {
 		defer m.wg.Done()
 		defer cancel()
-		err := run(ctx, func(step, waiting string) {
+		err := run(ctx, func(step, code string) {
 			m.mu.Lock()
-			job.Step, job.Waiting = step, waiting
+			job.Step = step
+			if kind == "install" {
+				job.Stage = code
+			} else {
+				job.Waiting = code
+			}
 			m.mu.Unlock()
 		})
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		job.Waiting = ""
+		job.Waiting, job.Stage = "", ""
 		switch {
 		case err == nil:
 			job.State, job.Step = JobDone, ""
@@ -107,6 +114,9 @@ func (m *Manager) startJob(kind, udid string, run func(context.Context, func(ste
 			job.State, job.Error, job.Code = JobFailed, err.Error(), Code(err)
 			if errors.Is(err, context.DeadlineExceeded) {
 				job.Code, job.Error = "timeout", "the phone didn't confirm in time: unlock it, tap Trust and enter its passcode, then try again"
+				if kind == "install" {
+					job.Error = "the iPhone bridge didn't install in time"
+				}
 			}
 		}
 		if m.jobStop != nil && m.job == job {

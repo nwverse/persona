@@ -155,7 +155,7 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
 - **Waiting in its own UI**: while a session waits on the user in the runtime's own dialog, call `rt.waitingOnUser(sessionId)` and the returned
   release when it ends: the session lists as `blocked` meanwhile, as for a card on the phone. A dialog nobody may be looking at (a web page
   with no browser open) must also be withdrawable: pass the turn's abort signal to it, so that an interrupt ends it (#8097).
-- **Cards belong to the runtime**: node tags cards it asks with `agent` (the Agent the runtime runs) and `agent_label` (its name), and the App draws them as "another Agent's card"
+- **Cards belong to the runtime**: node tags cards it asks with `agent` (the Agent the runtime runs, or the one the session's row names) and `agent_label` (its name: the row's own `agent_label` whenever it has one, else the runtime's `name`; a runtime running several Agents under its own id names each in its rows, as Paseo's providers, #8142), and the App draws them as "another Agent's card"
   (the same kind as Codex's: "DSH Needs Your Permission", Approve / Deny, `reason` above the command). **Always Approve** only appears when the card has `always_label` (saying exactly what is always approved);
   don't send it if the runtime can't do it. `always_label` itself is just text; "always" is enforced by the runtime (opencode's save rules and Paseo's suggestions are both narrower than the whole tool).
   If a runtime can't remember session rules itself, it declares `caps.keep_always: true` in hello (the SDK's `keepAlways`; DSH does this): only then, when its `permission` card carries `always_label`,
