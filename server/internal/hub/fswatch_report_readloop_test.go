@@ -237,6 +237,51 @@ func TestFSWatchReportRecreationDoesNotLetOldUnionLandLast(t *testing.T) {
 	}
 }
 
+func TestFSWatchRecreationAfterOldCallReturnsRestoresEmptySet(t *testing.T) {
+	f := newFSReadLoopFixture(t)
+	defer f.node.release()
+	old := f.machine
+	old.managed = true
+	f.watch(t, "/old")
+	if got := onlyPath(f.node.next(t)); got != "/old" {
+		t.Fatalf("the old union = %s, want /old", got)
+	}
+	f.hub.applyDeviceStatesFrom(devicesOwner, devicewire.States{})
+	f.hub.applyDeviceStatesFrom(devicesOwner, devicewire.States{Machines: []devicewire.State{{
+		Machine: proto.Machine{ID: "m1", Name: "m1"}, Connected: false,
+	}}})
+	second := f.hub.localMachine("m1")
+	second.peer, second.online = old.peer, true
+	f.watch(t, "/new")
+	for {
+		if got := onlyPath(f.node.appliedParam(t)); got == "/new" {
+			break
+		}
+	}
+	f.hub.applyDeviceStatesFrom(devicesOwner, devicewire.States{})
+	f.node.release()
+	f.hub.applyDeviceStatesFrom(devicesOwner, devicewire.States{Machines: []devicewire.State{{
+		Machine: proto.Machine{ID: "m1", Name: "m1"}, Connected: false,
+	}}})
+	third := f.hub.localMachine("m1")
+	if third == nil || third == second {
+		t.Fatal("the third generation did not replace the second")
+	}
+	third.mu.Lock()
+	third.peer, third.online = old.peer, true
+	third.mu.Unlock()
+	f.watch(t) // C is empty, but the pending force must survive A → removed B → C.
+	f.app.pongWithin(t, "empty-union", "the browser's empty set to be applied")
+	if got := f.hub.fsWatchUnion("m1"); len(got.Dirs) != 0 || len(got.Git) != 0 {
+		t.Fatalf("the browser's empty set was not applied: %+v", got)
+	}
+	f.hub.queueFSWatchSync(third)
+	waitHubWorkers(t, f.hub)
+	if got := f.node.currentParam(); len(got.Dirs) != 0 || len(got.Git) != 0 {
+		t.Fatalf("the oldest union survived a gap and successive recreations: %+v; calls %+v", got, f.node.snapshot())
+	}
+}
+
 // Disconnect cleanup uses the same ordered queue as an explicit set. An empty trailing set after the held open must
 // therefore release the node's folders rather than racing it or being lost.
 func TestFSWatchCloseWhileHeldReleases(t *testing.T) {
