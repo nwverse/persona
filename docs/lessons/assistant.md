@@ -585,3 +585,14 @@ When `session.start` never answers, the hub lists the machine and adopts the ses
 A side conversation supervises the tasks it hands out, and "waits for review" is told once per review. A side conversation that had stopped, or whose turn ended without `task_review`, left its task awaiting review for good: the send-time fallback to the main conversation covers only a conversation that is gone, the orphan check leaves out a task waiting for review on purpose, and the stuck-queue remedy covers only the background supervisor. When a signal is told once to a reader that may never act, give it a bounded wait and a second home (`handOverUnreviewed`, `server/internal/assistant/side_handover.go`), and record the move where a restart finds it (here the ledger's `supervisor`), so it happens once.
 
 Telling the same review to another conversation is not a new signal to the deduplication window (`superviseDedupWindow`): its fingerprint is the task, the kind and the agent's last words, not who was told. A hand-over inside the window is dropped as "said the same" unless its fingerprint is forgotten first (`forgetSupervision`, as a gone background supervisor's queue does). Check "is this conversation in a turn" against the machine's list the way `backgroundThere` does: a manager that has just started has an empty list, which says nothing about a conversation being gone.
+
+## A lark-cli risk lookup can fail quietly, and then every read is a write (#8389)
+
+The node asks `lark-cli <command> --help` for each command's risk. When the hub config has no `lark.cli.bin`, the binary
+comes from an interactive login shell, and that can be a user's wrapper script that looks for the real lark-cli on `PATH`.
+The lookup runs with the node's own `PATH`, which may not contain the real lark-cli. The wrapper then exits without a
+`Risk:` line, the failure is not cached, and every shortcut, plain chat reads included, goes to the phone as an
+unknown-risk write. Stable read shortcuts are listed in `larkCLIKnownReads`, which is consulted only when the lookup gives
+nothing, so lark-cli's own answer still wins. When a card names a read as a write, check the lookup in the node's
+environment first, before changing the classifier. A literal `cd` before a command variable (`cd /tmp; L=/abs/lark-cli; $L …`)
+now resolves only absolute values: a relative one is looked up from the new directory.
