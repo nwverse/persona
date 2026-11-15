@@ -14998,7 +14998,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有子会话需要你"
+            "value" : "有分支会话需要你"
           }
         }
       }
@@ -66387,7 +66387,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "来自子会话 · %@"
+            "value" : "来自分支会话 · %@"
           }
         }
       }
@@ -94208,7 +94208,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "没有子会话"
+            "value" : "没有分支会话"
           }
         }
       }
@@ -138834,7 +138834,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子会话"
+            "value" : "分支会话"
           }
         }
       }
@@ -138856,7 +138856,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "子会话（%lld）"
+            "value" : "分支会话（%lld）"
           }
         }
       }
@@ -138901,7 +138901,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从这个会话开出的子会话会显示在这里。"
+            "value" : "从这个会话开出的分支会话会显示在这里。"
           }
         }
       }

@@ -47,7 +47,7 @@ rows).
 - **Landing**: a notification, a Needs You card or a link that names a side opens its parent with the side shown
   (`AppModel.openChat` sets `sideLanding`; a `ChatView` given a folded side opens its parent the same way).
 - **Words** (`Localizable.xcstrings`): Side Sessions, Side Sessions (N), From Side Session · <title>, A side session
-  needs you, No Side Sessions; zh-Hans 子会话, ja 子セッション (「子セッション・<title>から」).
+  needs you, No Side Sessions; zh-Hans 分支会话 (「来自分支会话 · <title>」), ja 子セッション (「子セッション・<title>から」).
 - **Not yet**: a search hit inside a side (`search_hits[<id>].hit_session_id`) lands on the parent without the side.
 - Screenshots: `-openSession <machine>/<session> -showSideSessions chip|sheet|side` hangs three sample sides under that
   session (one asking, one working, one stopped) and opens nothing, the sheet, or the first side;
