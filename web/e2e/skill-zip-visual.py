@@ -48,9 +48,15 @@ def labels():
     return json.loads((repo / "web/src/i18n/locales" / language / "settings-skills.json").read_text())
 
 
+def settle_dialog():
+    # Native edge taps need the sheet's final coordinates, including after row Undo.
+    wait_js("Array.from(document.querySelectorAll('[role=dialog]')).every(d=>d.getAnimations().every(a=>a.playState!=='running'))")
+
+
 def click_label(text):
     # Resolve a rendered accessible button, then send a real pointer click.
     js("Array.from(document.querySelectorAll('button')).find(e=>e.textContent===" + json.dumps(text) + ").scrollIntoView({block:'center'})")
+    settle_dialog()
     node = next(n for n in cdp("Accessibility.getFullAXTree")["nodes"]
                 if n.get("role", {}).get("value") == "button" and n.get("name", {}).get("value") == text)
     box = cdp("DOM.getBoxModel", backendNodeId=node["backendDOMNodeId"])["model"]["content"]
@@ -105,7 +111,7 @@ def configure(locale):
 def open_upload():
     click_label(labels()["upload"])
     wait_js("!!document.querySelector('input[type=file]')")
-    time.sleep(.2)  # The mobile sheet must finish sliding in before using its coordinates.
+    settle_dialog()
 
 
 def upload(name="example-visual"):
