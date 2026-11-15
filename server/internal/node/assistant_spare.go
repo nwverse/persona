@@ -48,6 +48,9 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 // assistantWarm makes sure a fresh spare process is waiting for the next new conversation.
 func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) error {
 	if n.assistantRuntime(launcher) != nil { // a runtime is running already: nothing to start ahead
+		if executionOption(options).SupervisionInstructions != "" {
+			return supervisionRuntimeRefusal(context.Background())
+		}
 		if executionOption(options).ConfigDir != "" {
 			return errors.New(assistantwire.ConfigDirClaudeOnly)
 		}

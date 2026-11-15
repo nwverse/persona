@@ -30305,6 +30305,29 @@
       },
       "extractionState" : "manual"
     },
+    "Clear the filters to see the whole Inbox." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear the filters to see the whole Inbox."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "絞り込みを解除すると、受信トレイ全体が表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除筛选后，可以看到整个收件箱。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
         "en" : {
@@ -33469,6 +33492,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "改截止时间…"
+          }
+        }
+      }
+    },
+    "Change Model…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change Model…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルを変更…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改模型…"
           }
         }
       }
@@ -102646,6 +102692,29 @@
         }
       }
     },
+    "Nothing Open Matches These Filters" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing Open Matches These Filters"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "絞り込みに一致する未対応の項目はありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有符合筛选的未处理条目"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Nothing recorded for %@ yet." : {
       "localizations" : {
         "en" : {
@@ -147957,6 +148026,29 @@
       },
       "extractionState" : "manual"
     },
+    "Switching from %@ to %@ needs a new conversation" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching from %@ to %@ needs a new conversation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ から %2$@ への切り替えには新しい会話が必要です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 %1$@ 换到 %2$@ 需要新开对话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Switching questions…" : {
       "localizations" : {
         "en" : {
@@ -162696,6 +162788,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这个对话正在工作，没有关闭任何东西。等它停下再试。"
+          }
+        }
+      }
+    },
+    "This conversation's launcher is no longer available. Follow the Main Chat default or choose another launcher." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation's launcher is no longer available. Follow the Main Chat default or choose another launcher."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この会話のランチャーは利用できなくなりました。メインチャットのデフォルトに戻すか、別のランチャーを選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个对话的启动器已不可用。请跟随 Main Chat 默认设置，或另选启动器。"
           }
         }
       }
