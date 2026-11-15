@@ -102,7 +102,7 @@ export function SidesPanel({ mid, sid, side, at, onClose }: { mid: string; sid: 
       ) : !kids.loaded ? (
         <div className="flex flex-1 items-center justify-center"><Loading /></div>
       ) : (
-        <div className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-ink-3">{t("chat-teampanel.no_sides")}</div>
+        <div className="flex flex-1 items-center justify-center px-6 text-center text-meta text-ink-3">{t("chat-teampanel.no_sides")}</div>
       )}
     </StripPanel>
   );

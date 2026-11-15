@@ -2613,7 +2613,7 @@ export const Header = memo(function Header({
             data-side-sessions={sides.count}
             onClick={sides.onToggle}
             className={cx(
-              "touch-hit flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-1.5 text-[12px] leading-none font-medium whitespace-nowrap tabular-nums transition-[background-color,color,transform] duration-150 active:scale-[0.94]",
+              "touch-hit flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-1.5 text-label leading-none font-medium whitespace-nowrap tabular-nums transition-[background-color,color,transform] duration-150 active:scale-[0.94]",
               sides.open ? "bg-hover text-ink" : "text-ink-3 hover:bg-hover hover:text-ink",
             )}
           >
