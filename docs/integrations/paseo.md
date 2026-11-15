@@ -86,8 +86,15 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
 - **Content**:
   - **Agents running Claude Code**: content is read directly from the Claude transcript on that computer, exactly as for herdr sessions: tool cards, sub-Agents, background tasks,
     compaction, and "what it is doing" are all available. The same transcript does not produce an extra "Not running" row. If the transcript has not been written yet (the first turn has just started), or node does not recognize its configuration directory,
-    content uses Paseo's timeline until the transcript becomes available, then switches automatically.
+    content uses Paseo's timeline until the transcript becomes available, then switches automatically. So does an old Agent whose transcript Claude Code's own cleanup removed.
   - **Other Agents**: content comes from Paseo's timeline, converted to the App's rendering format. Commands, file reads / writes, diffs, search, web access, sub-Agents, and to-dos use Claude Code tool names.
+  - **An Agent Paseo let go is read only while its chat is open** (#8132). Reading the timeline of an Agent that is `closed` (Paseo 0.15 lets one go
+    after an hour idle) or archived has Paseo load it first, which starts its provider's process again: every timeline request does, and Paseo has no read
+    that leaves the Agent stored. The bridge reads such an Agent only for the watch an App sends when it opens the chat (every App does; the web and
+    Android read their first page just before it, and the watch's backlog then brings the page), or for a send, a rewind or a mode change. Any other read
+    (the manager's after a turn, an App's background sync of its recent chats, which pulls them whenever their `rev` moves) is answered from the bridge's
+    last whole read of the Agent while that is still all of the conversation, and otherwise refused with `not_loaded`, asking Paseo nothing. A chat left
+    open reads nothing more once Paseo lets its Agent go; the next turn, a message's, is read as it runs.
 - **Agents running Codex** (#4495): the row names the Codex thread the Agent runs (`codex_thread`). Node finds that thread's rollout on its own as well; named, the chat is
   listed once, as the Paseo Agent, not a second time as a read-only Codex history row, and the thread's own Codex sub-Agents hang off the Paseo Agent's row.
   When another program takes the thread up while the Paseo Agent is not running (the Codex App runs it, a shared app-server has it loaded), that program's row is listed too,
@@ -103,7 +110,7 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
   | `idle` / `error` on an Agent another Agent created in its own workspace (below) | Seen: its creator was told, nobody else has to look |
   | Older Paseo (no `requiresAttention`): `idle` after a turn, `error` | Persona tracks Unread / Seen itself |
   | `idle`: has not run yet | Idle |
-  | `closed`: not running, process exited | Not running (Paseo reloads it when a message is sent). While Agents it created have not finished: Working (background), since their reports wake it |
+  | `closed`: not running, process exited (Paseo 0.15 also lets an Agent go after an hour idle) | Not running (Paseo reloads it when a message is sent, or when its chat is opened: "Content"). While Agents it created have not finished: Working (background), since their reports wake it |
 
   Read state goes both ways: viewed in Paseo means Seen in Persona (#2831), and seen in Persona clears Paseo's own mark (#6299): when you see a session Paseo flags
   (Unread here), the manager tells the node (`session.seen`), and the bridge clears `requiresAttention` in Paseo. A loaded agent's with `clear_agent_attention`; one Paseo
@@ -327,7 +334,8 @@ no launcher. Permission mode, workspace and the first message keep their existin
 ## Verification
 
 - Unit tests: `cd integrations/paseo && npm test`. Use a fake Paseo daemon (`test/fake-paseo.js`) and the SDK's fake node to test lists, content,
-  streaming, sending, cards, creation, takeover, mode changes, workspaces and worktrees, Paseo restart, and disconnection.
+  streaming, sending, cards, creation, takeover, mode changes, workspaces and worktrees, Paseo restart, and disconnection. The fake loads an Agent it let
+  go when its timeline is read, as Paseo does, and keeps which (`loads`).
 - End to end: first `cd server && go generate ./internal/runtimepkg && go build -o /tmp/personad ./cmd/personad`, then run
   `PERSONAD=/tmp/personad CLAUDE_BIN=<a Claude Code executable> node integrations/paseo/e2e/run.mjs`. There are 57 checks; `paseo` must be installed locally.
   Its temporary directories go under `$TMPDIR` when it is set.
@@ -348,7 +356,9 @@ no launcher. Permission mode, workspace and the first message keep their existin
   - Add `KEEP=1` to retain temporary directories, or `DEBUG=1` to print the bridge lines from node's log.
 - Codex archive lifecycle: with the same generated `personad` binary, run `PERSONAD=/tmp/personad CODEX_BIN=<a Codex executable> PASEO_BIN=<a Paseo executable> node integrations/paseo/e2e/codex.mjs`.
   It uses a real temporary Paseo daemon and Codex with a scripted local Responses API, isolated homes and synthetic data. It checks that archiving,
-  reconnecting and continuing preserve the Agent and thread identity and leave only one conversation row. It never uses the active Paseo daemon or a real model account.
+  reconnecting and continuing preserve the Agent and thread identity and leave only one conversation row, and that a read of the archived Agent no chat
+  asked for starts no Codex while opening its chat reads it (#8132). It never uses the active Paseo daemon or a real model account. Its temporary
+  directories go under `$TMPDIR` when it is set.
 - Local testing (2026-11-04, Paseo 0.14.0, Claude Code 2.1.294):
   - All 29 end-to-end checks passed (35 on 2026-11-11, with the archived sessions that keep their ID).
   - Read-only validation against a real active Paseo: the bridge connected to a fake node, allowing only read requests. Every available provider became a launcher; all Claude Code sessions pointed to their own transcripts,
