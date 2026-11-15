@@ -125,7 +125,7 @@ func acceptedByBackground(t *testing.T) (s *Service, f *fakeHub, accepted Todo, 
 	listBackground(t, s, f, bg)
 	waitFor(t, "the background supervisor's review message", func() bool { return len(f.noticesTo(bg)) == 1 })
 	if _, err := runJSON(t, s, bg, "task_review", map[string]any{"todo_id": todo.ID, "verdict": reviewAccepted,
-		"note": "Checked the PR and the screenshots"}); err != nil {
+		"note": "Checked the PR and the screenshots", "checks": completeReviewChecks(todoNow(s, todo.ID))}); err != nil {
 		t.Fatalf("the background supervisor's accept: %v", err)
 	}
 	settleService(t, s)

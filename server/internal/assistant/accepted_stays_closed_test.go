@@ -90,7 +90,11 @@ func receiptCount(t *testing.T, s *Service) int {
 // snapshot taken next counts them.
 func reviewAndWait(t *testing.T, s *Service, id, verdict string) Todo {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]any{"todo_id": id, "verdict": verdict, "note": "Checked the PR and the screenshots"})
+	args := map[string]any{"todo_id": id, "verdict": verdict, "note": "Checked the PR and the screenshots"}
+	if verdict == reviewAccepted { // an acceptance proves every current criterion (#7830)
+		args["checks"] = completeReviewChecks(todoNow(s, id))
+	}
+	raw, _ := json.Marshal(args)
 	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
 		t.Fatalf("%s: %v", verdict, err)
 	}

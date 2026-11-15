@@ -68,8 +68,18 @@ struct AssistantView: View {
     @State private var showRecordings = false
     /// The sidebar (Chat History, or a drag to the right anywhere on the page): docs/apple/ios.md「Persona top bar and sidebar」.
     @State private var drawer = AssistantDrawer()
-    /// Regular width (iPhone Duo open): the sidebar is a column beside the conversation; Chat History shows or hides it.
+    #if os(iOS)
+    /// Regular width (iPad, iPhone Duo open; the Separate layout): the sidebar is a column beside the conversation; Chat
+    /// History shows or hides it. As it was last left (`SplitListMemory`, #2624, #4206).
+    @State private var columns = SplitListMemory.startsClosed(Self.listKey) ? .detailOnly : SplitColumns.shown
+    /// Where the history column's shown state is kept.
+    private static let listKey = "assistant.list"
+    /// The history column as UIKit has it (`SplitColumnControl`).
+    @State private var columnState = SplitColumnState()
+    #else
+    /// Regular width: the sidebar is a column beside the conversation; Chat History shows or hides it.
     @State private var columns = SplitColumns.shown
+    #endif
     /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
     @Environment(\.shellRailEdge) private var railEdge
     /// A phone's tabs (iPhone Duo open): the column's own button folds it, at its top (#2623).
@@ -126,17 +136,31 @@ struct AssistantView: View {
             }
             #else
             NavigationSplitView(columnVisibility: $columns) {
-                // The system sizes the column on iPhone Duo (and moves the divide onto the fold); iPad, as the other tabs.
+                // One width, the other splits' (`SidebarWidth`, #4206).
                 sidebar(column: true)
                     .toolbarVisibility(.hidden, for: .navigationBar)
                     .modifier(SidebarWidth())
             } detail: {
                 stack
+                    #if os(iOS)
+                    // Slid by a finger, as the other splits' lists (`SplitColumnControl`, #4206).
+                    .background {
+                        SplitColumnControl(drags: true, state: columnState) { shown in
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { columns = shown ? SplitColumns.shown : .detailOnly }
+                            SplitListMemory.keep(Self.listKey, shown: shown, state: columnState)
+                        }
+                    }
+                    .modifier(SplitPageMin())
+                    #endif
             }
             .modifier(SidebarTopFill(shown: columns != .detailOnly))
             .navigationSplitViewStyle(.balanced)
-            // The line beside the history: dragged wider, narrower or closed, remembered (#2624).
-            .modifier(SplitDividerHandle(columns: $columns, key: "assistant.list"))
+            #if os(iOS)
+            // Shown or not, remembered; beside the page or over it by the width (#2624, #4206).
+            .modifier(SplitListMemory(columns: $columns, key: Self.listKey, state: columnState))
+            #endif
             #endif
         } else {
             // The sidebar takes the whole height, like ChatGPT's: the tab bar fades away as it comes out
@@ -210,6 +234,15 @@ struct AssistantView: View {
         }
     }
 
+    /// A phone's page (the iPhone, the open iPhone Duo): the iPhone's new conversation (`ShellHome`), not the iPad's.
+    private var phonePage: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
     /// Nothing pushed on the page: the sidebar's drag only works here (pushed pages have their own back swipe).
     private var atRoot: Bool {
         var pushed = showProfile || showKnowledge || showRoutines || showTodos || openedExtension != nil || showHealth || showRecordings
@@ -245,9 +278,9 @@ struct AssistantView: View {
                     // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
                     // The Sidebar layout's phone page too: the iPhone's conversation, as in the shell (#6332).
                     .environment(\.shellChat, shell != nil || ChatComposerKind.padCard || drawerPage)
-            } else if shell != nil || pageTabSwitch || drawerPage {
-                // A phone's tabs too (iPhone Duo open, #3680): the iPhone's new conversation, with what needs the user
-                // over the composer. The iPad keeps `AssistantHome`.
+            } else if shell != nil || drawerPage || phonePage {
+                // A phone's page at regular width too (iPhone Duo open, either layout; #3680, #3641): the iPhone's new
+                // conversation, with what needs the user over the composer. The iPad keeps `AssistantHome`.
                 ShellHome(pending: shownStart, error: shownFailure?.reason, launcher: $starterLauncher, mode: $starterMode,
                           effort: $starterEffort, openInbox: { navPath.wrappedValue.append($0) }, resend: resend, delete: deleteFailed) { text, images in
                     Task { await start(text, images) }
@@ -282,6 +315,7 @@ struct AssistantView: View {
                             sidebarShown: sidebarColumnShown,
                             sidebarCounts: embedded,
                             drawerTitle: drawerPage,
+                            newChatInSidebar: embedded && widthClass == .regular || padPlaces,
                             openSidebar: toggleSidebar,
                             // In a health conversation New opens Health's new conversation page, whose list has the
                             // space's past ones (#4329); elsewhere the assistant's.
@@ -490,7 +524,7 @@ struct AssistantView: View {
         #endif
         let kept = placesByValue ? places.enter(page, from: navPath.wrappedValue) : nil
         #if DEBUG
-        ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut)")
+        ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut) path=\(navPath.wrappedValue.count) kept=\(kept?.count ?? 0)")
         #endif
         underDrawer {
             backToRoot()
@@ -1155,34 +1189,29 @@ struct StarterComposer: View {
     private var textBinding: Binding<String> { Binding(get: { text }, set: { text = $0 }) }
     private var imagesBinding: Binding<[(UIImage, ImagePayload)]> { Binding(get: { images }, set: { images = $0 }) }
     private var quotesBinding: Binding<[ContextRef]> { Binding(get: { quotes }, set: { quotes = $0 }) }
-    private var uploads: FileUploads { draft.held.uploads }
+    private var files: FileAttachments { draft.held.files }
     private var videos: VideoAttachments { draft.held.videos }
 
-    /// Files to the assistant's machine, each path into the box once it is there; not into the next message's box
-    /// when this one went first (the draft outlives the page, #2626).
+    /// Files to the assistant's machine, as cards above the box until the first message carries them (#8361).
     private func upload(_ urls: [URL]) {
-        let generation = draft.generation
-        uploads.start(urls, machine: machine, model: model, dest: uploadDest) { path in
-            guard draft.generation == generation else { return }
-            text = PathInsert.edit(path, text: text, selection: $selection, focused: $focused)
-        }
+        files.start(urls, machine: machine, model: model, dest: uploadDest)
     }
 
     private var canSend: Bool {
-        !disabled && !videos.busy
-            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !videos.ready.isEmpty || !quotes.isEmpty)
+        !disabled && !draft.held.busy
+            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !draft.held.ready.isEmpty || !quotes.isEmpty)
     }
 
     private func submit() {
         if let gate { gate.action(); return } // nothing goes and nothing is queued: the draft stays
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let files = videos.ready
+        let ready = draft.held.ready
         // Nothing to send: a second ⏎ on the Mac before the field redraws (#785) would start an empty conversation.
-        guard !videos.busy, !t.isEmpty || !images.isEmpty || !files.isEmpty || !quotes.isEmpty else { return }
+        guard !draft.held.busy, !t.isEmpty || !images.isEmpty || !ready.isEmpty || !quotes.isEmpty else { return }
         // The keyboard goes down with the send: the conversation that takes over has a field of its own, and the keyboard
         // coming back up and going down again on the way moved the first message up and down with it (#1911).
         focused = false
-        send(draft.message(t, files: files), images.map(\.1))
+        send(draft.message(t, files: ready), images.map(\.1))
         draft.sent()
     }
 
@@ -1293,7 +1322,7 @@ struct StarterComposer: View {
 
     var body: some View {
         VStack(spacing: Theme.Space.s) {
-            if !uploads.items.isEmpty { UploadsBar(uploads: uploads) }
+            if !files.items.isEmpty { FileAttachmentsBar(files: files) }
             if !videos.items.isEmpty { VideoAttachmentsBar(videos: videos) }
             #if os(iOS) || os(visionOS)
             PasteImageChip(focused: focused) { add($0) }
@@ -1311,7 +1340,7 @@ struct StarterComposer: View {
             }
             if let shell {
                 ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
-                                 canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty,
+                                 canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: launchers, model: model),
                                  quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener, send: submit) {
                     #if os(iOS)
@@ -1424,17 +1453,12 @@ struct BeautifulStarterComposer: View {
     private var textBinding: Binding<String> { Binding(get: { text }, set: { text = $0 }) }
     private var imagesBinding: Binding<[(UIImage, ImagePayload)]> { Binding(get: { images }, set: { images = $0 }) }
     private var quotesBinding: Binding<[ContextRef]> { Binding(get: { quotes }, set: { quotes = $0 }) }
-    private var uploads: FileUploads { draft.held.uploads }
+    private var files: FileAttachments { draft.held.files }
     private var videos: VideoAttachments { draft.held.videos }
 
-    /// Files to the assistant's machine, each path into the box once it is there; not into the next message's box
-    /// when this one went first (the draft outlives the page, #2626).
+    /// Files to the assistant's machine, as cards above the box until the first message carries them (#8361).
     private func upload(_ urls: [URL]) {
-        let generation = draft.generation
-        uploads.start(urls, machine: machine, model: model, dest: uploadDest) { path in
-            guard draft.generation == generation else { return }
-            text = PathInsert.edit(path, text: text, selection: $selection, focused: $focused)
-        }
+        files.start(urls, machine: machine, model: model, dest: uploadDest)
     }
 
     private var launcherMachine: String { uploadDest == Session.healthSpace ? model.healthMachineID : model.assistantConfig?.machineID ?? model.hubMachineID }
@@ -1455,7 +1479,7 @@ struct BeautifulStarterComposer: View {
     var body: some View {
         VStack(spacing: Theme.Space.s) {
             if currentLauncher == nil { StarterLauncherStatus() }
-            if !uploads.items.isEmpty { UploadsBar(uploads: uploads) }
+            if !files.items.isEmpty { FileAttachmentsBar(files: files) }
             if !videos.items.isEmpty { VideoAttachmentsBar(videos: videos) }
             #if os(iOS) || os(visionOS)
             PasteImageChip(focused: focused) { img in
@@ -1472,7 +1496,7 @@ struct BeautifulStarterComposer: View {
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
             #endif
             PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused,
-                           hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty, disabled: disabled,
+                           hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty, disabled: disabled,
                            attach: PromptItems.attachments(camera: false),
                            mentions: { PromptItems.sessions(model.sessionsNow, except: nil) },
                            models: models,
@@ -1501,12 +1525,12 @@ struct BeautifulStarterComposer: View {
                                    Task { text = typed }
                                    return
                                }
-                               if videos.busy { // nothing goes; the bar clears the box right after this, so it is put back
-                                   model.toast = Toast(String(localized: "The video is still uploading. Send once it's done."))
+                               if draft.held.busy { // nothing goes; the bar clears the box right after this, so it is put back
+                                   model.toast = Toast(draft.held.waitNote)
                                    Task { text = typed }
                                    return
                                }
-                               send(draft.message(t, files: videos.ready), images.map(\.1))
+                               send(draft.message(t, files: draft.held.ready), images.map(\.1))
                                draft.sent()
                            })
         }
