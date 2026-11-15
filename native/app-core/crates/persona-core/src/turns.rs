@@ -128,17 +128,30 @@ pub struct Injected {
 
 /// `MessageSource.protectsUser`: the first leading message-source envelope is authoritative. An explicit user author,
 /// malformed JSON or a non-string/missing kind vetoes legacy injection classification, even over explicit metadata.
+fn context_prefix(text: &str) -> Option<(&'static str, &str)> {
+    for tag in CONTEXT_TAGS {
+        let Some(rest) = text.strip_prefix(&format!("<{tag}")) else {
+            continue;
+        };
+        if rest
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+        {
+            return Some((tag, rest));
+        }
+    }
+    None
+}
+
 fn protects_user(text: &str) -> bool {
     let mut rest = text.trim_start();
-    while let Some(tag) = CONTEXT_TAGS
-        .iter()
-        .find_map(|tag| rest.strip_prefix(format!("<{tag}").as_str()).map(|_| tag))
-    {
+    while let Some((tag, _)) = context_prefix(rest) {
         let Some((attributes, after_attributes)) = rest.split_once('>') else {
-            return false;
+            break;
         };
         let Some((body, after_body)) = after_attributes.split_once(&format!("</{tag}>")) else {
-            return false;
+            break;
         };
         if attributes.contains("kind=\"message-source\"") {
             let Ok(metadata) = serde_json::from_str::<Value>(body) else {
@@ -169,10 +182,7 @@ fn protects_user(text: &str) -> bool {
 
 fn leading_context_stripped(text: &str) -> &str {
     let mut rest = text.trim();
-    while let Some((tag, after_open)) = CONTEXT_TAGS.iter().find_map(|tag| {
-        rest.strip_prefix(format!("<{tag}").as_str())
-            .map(|after_open| (tag, after_open))
-    }) {
+    while let Some((tag, after_open)) = context_prefix(rest) {
         let Some((_, after_attributes)) = after_open.split_once('>') else {
             break;
         };
@@ -485,14 +495,6 @@ impl Turn {
                     .cloned()
                     .collect();
                 self.process = self.ordered.iter().filter(|row| !row.user_input()).cloned().collect();
-            } else if let Some(pick) = all.iter().rposition(Row::assistant) {
-                // With no assistant after the wake, Apple returns early. A later non-wake answer is therefore still
-                // tail, rather than a post-wake response promoted into ordered.
-                self.tail = all[pick + 1..]
-                    .iter()
-                    .filter(|row| !row.user_input())
-                    .cloned()
-                    .collect();
             }
         }
         self.steps = self.process.clone();

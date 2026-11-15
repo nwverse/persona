@@ -258,7 +258,7 @@ mod apple_source_regressions {
             {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use","ts":"2026-01-01T00:00:04Z"},
         ]));
         assert_eq!(turns[0]["answer_id"], "a2#0");
-        assert_eq!(turns[0]["tail_ids"], json!(["w3#0", "tools-t4#0"]));
+        assert_eq!(turns[0]["tail_ids"], json!([]));
         assert_eq!(turns[0]["end"], "2026-01-01T00:00:04Z");
         assert_eq!(turns[0]["has_pending_wake"], true);
 
@@ -306,7 +306,7 @@ mod apple_source_regressions {
             {"id":"t4#0","seq":4,"role":"assistant","kind":"tool_use","tool_use_id":"call4"},
         ]));
         assert_eq!(pending[0]["answer_id"], "a2#0");
-        assert_eq!(pending[0]["tail_ids"], json!(["w3#0", "tools-t4#0"]));
+        assert_eq!(pending[0]["tail_ids"], json!([]));
         assert_eq!(pending[0]["has_pending_wake"], true);
     }
 
@@ -500,6 +500,10 @@ mod apple_source_regressions {
         assert_eq!(legacy_supervision.as_array().unwrap().len(), 3);
 
         for (prefix, expected_turns) in [
+            (
+                "<persona-context-kind=\"context\">not a context block</persona-context>\n",
+                1,
+            ),
             (
                 "<persona-context kind=\"message-source\"extra>{\"kind\":42}</persona-context>\n",
                 1,
