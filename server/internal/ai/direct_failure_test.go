@@ -148,9 +148,9 @@ func TestDirectNoRetryRateLimitUsesRetryAfterAsQuota(t *testing.T) {
 	t.Run("zero cooldown is still quota", func(t *testing.T) {
 		err, requests := directAPIError(t, "chat", 429, `{"error":{"code":"future_code","message":"request rejected"}}`,
 			"X-Should-Retry", "false", "Retry-After", "0")
-		requireDirectPause(t, err, ReasonQuota)
-		if requests != 1 {
-			t.Fatalf("requests = %d, want 1", requests)
+		paused := requireDirectPause(t, err, ReasonQuota)
+		if requests != 1 || !paused.Until.Equal(now()) {
+			t.Fatalf("requests = %d, pause = %+v; want one request and a pause until now", requests, paused)
 		}
 	})
 }
@@ -193,6 +193,26 @@ func TestDirectLimitCodesBeatMisleadingWording(t *testing.T) {
 			requireDirectPause(t, err, ReasonBusy)
 			if requests != 1 {
 				t.Fatalf("requests = %d, want 1", requests)
+			}
+		})
+	}
+	for _, status := range []int{400, 422} {
+		t.Run(fmt.Sprintf("quota code on %d", status), func(t *testing.T) {
+			err, requests := directAPIError(t, "responses", status, `{"error":{"code":"budget_exhausted","message":"request rejected"}}`)
+			requireDirectPause(t, err, ReasonQuota)
+			if requests != 1 {
+				t.Fatalf("requests = %d, want 1", requests)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		status    int
+		transient bool
+	}{{400, false}, {500, true}} {
+		t.Run(fmt.Sprintf("busy code on unrelated status %d", tc.status), func(t *testing.T) {
+			err, requests := directAPIError(t, "chat", tc.status, `{"error":{"code":"rpm_limit","message":"request rejected"}}`)
+			if requests != 1 || IsPaused(err) || Transient(err) != tc.transient {
+				t.Fatalf("requests = %d, error = %v, transient = %v; want unchanged status behavior", requests, err, Transient(err))
 			}
 		})
 	}
