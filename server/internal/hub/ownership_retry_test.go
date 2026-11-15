@@ -156,6 +156,83 @@ func TestMachineListOmitsUnavailableOwner(t *testing.T) {
 	}
 }
 
+func TestKeptRecoveryRetriesEntriesRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		h := newTestHub(t)
+		seen := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+		keptStore := &startupOwnershipStore{
+			ownersStore: &ownersStore{kept: map[string]json.RawMessage{
+				machinesKeptKey: json.RawMessage(`{"kept":"m-0b0b0b"}`),
+			}},
+			failures: map[string]int{machinesKeptKey: 1},
+			reads:    map[string][]time.Time{},
+		}
+		entries := &entriesFailStore{meshStore: newMeshStore()}
+		if err := entries.PutSetting(ctx, machineEntriesKey, reportedMachines{
+			"m-0b0b0b": {"kept": {
+				Cfg:      json.RawMessage(`{"id":"kept","name":"Kept computer","kind":"ssh"}`),
+				Info:     proto.NodeInfo{Hostname: "kept-host"},
+				LastSeen: seen,
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		h.bus.idents = keptStore
+		h.store = entries
+		h.startDevices(ctx) // kept #1 fails; entries #1 succeeds but filters out the not-yet-kept machine.
+		entries.mu.Lock()
+		entries.fails = 1 // entries #2 fails after the kept-list recovery.
+		entries.mu.Unlock()
+
+		loopCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			h.machineTrustLoop(loopCtx)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+		synctest.Wait()
+		if got := len(keptStore.readTimes(machinesKeptKey)); got != 2 {
+			t.Fatalf("kept reads = %d, want 2", got)
+		}
+		if got := entries.readCount(); got != 2 {
+			t.Fatalf("entries reads after the injected failure = %d, want 2", got)
+		}
+		h.devices.mu.Lock()
+		degradedRead := h.devices.reportedRead
+		h.devices.mu.Unlock()
+
+		synctest.Sleep(trustRetryEvery)
+		synctest.Wait()
+		if got := entries.readCount(); got != 3 {
+			t.Fatalf("entries reads after the trust retry = %d, want 3", got)
+		}
+		if got := len(keptStore.readTimes(machinesKeptKey)); got != 3 {
+			t.Fatalf("kept reads after the trust retry = %d, want 3", got)
+		}
+		m, ok := listed(h, "kept")
+		if !ok || m.Manager != "m-0b0b0b" || m.Name != "Kept computer" || m.Kind != "ssh" ||
+			m.Hostname != "kept-host" || !m.LastSeen.Equal(seen) {
+			t.Fatalf("recovered kept machine = %+v, present %v", m, ok)
+		}
+		if degradedRead {
+			t.Fatal("the failed entries read left reportedRead true, allowing a degraded write-back")
+		}
+		h.devices.mu.Lock()
+		recovered := h.devices.reportedRead && h.devices.keptRead
+		h.devices.mu.Unlock()
+		if !recovered {
+			t.Fatal("recovery did not finish after the successful entries read")
+		}
+		synctest.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+	})
+}
+
 func TestLateKeptListReadReconcilesMachineList(t *testing.T) {
 	ctx := context.Background()
 	h := newTestHub(t)

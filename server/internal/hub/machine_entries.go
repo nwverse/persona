@@ -50,21 +50,27 @@ type reportedEntry struct {
 }
 
 // loadMachineEntries reads what the managers last reported (startDevices). Unreadable: nothing until they report, and
-// it is read again before the next write, which would otherwise drop the managers that did not report since.
-func (h *Hub) loadMachineEntries(ctx context.Context) {
+// it is read again before the next write, which would otherwise drop the managers that did not report since. A failed
+// read also leaves reportedRead false: an earlier partial/degraded snapshot is not safe to write back.
+func (h *Hub) loadMachineEntries(ctx context.Context) error {
 	if h.store == nil {
-		return
+		return nil
 	}
 	kept, err := h.readMachineEntries(ctx)
 	if err != nil {
 		h.logf("machines: what the managers last reported: %v", err)
-		return
+		d := &h.devices
+		d.mu.Lock()
+		d.reportedRead = false
+		d.mu.Unlock()
+		return err
 	}
 	d := &h.devices
 	d.mu.Lock()
 	d.mergeReportedLocked(kept)
 	d.reportedRead = true
 	d.mu.Unlock()
+	return nil
 }
 
 // readMachineEntries is what the setting holds, without the machines the hub hands no manager now and the managers the
