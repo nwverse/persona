@@ -2143,6 +2143,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
       session_id: sessionId, cwd, title: prompt.trim() ? snippet(prompt) : basename(cwd), status: 'idle', starting: true,
       updated_at: new Date().toISOString(), rev: Date.now(), ...placeOf(workspaceId, cwd), agent: appAgent(root), launcher: provider,
       started_by_persona: true, ...(config.model ? { model: config.model } : {}),
+      // Labelled as the listed row will be: a provider the apps do not know carries its label (#8142).
+      ...(appAgent(root) === RUNTIME && labels[provider] ? { agent_label: labels[provider] } : {}),
       ...(EFFORTS.includes(config.thinkingOptionId) ? { effort: config.thinkingOptionId } : {}),
     })
     const said = Object.keys(instead).length ? { instead } : {}
