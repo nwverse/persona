@@ -221,6 +221,44 @@ test('asking the phone marks the session as needing you, and a withdrawn ask tak
   assert.equal(interactionId('toy', 's1', 'permission', 'call-1'), id, 'stable ids')
 })
 
+test("a card up longer than the resume wait still waits for the hub that went away under it, from when it went", async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal(), { runtime: 'toy', socketPath: n.path, retryMs: 20, pushDelayMs: 5, resumeWaitMs: 400 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions'))
+  const gone = () => Promise.reject(new RpcError('node going away', 'node_gone')) // the node's hub link dropped under the card
+  let drop
+  n.resolve = () => new Promise((_, reject) => { drop = () => reject(new RpcError('node going away', 'node_gone')) })
+  const id = interactionId('toy', 's1', 'permission', 'call-1')
+  const asking = rt.ask({ id, kind: 'permission', session_id: 's1', tool_name: 'Bash' })
+  await until('on the phone', () => n.asked.length === 1 && drop)
+  await new Promise((r) => setTimeout(r, 600)) // up longer than the wait
+  n.resolve = gone
+  n.setHub(false)
+  drop()
+  await new Promise((r) => setTimeout(r, 250)) // a while with no hub
+  n.resolve = () => ({ allow: true })
+  n.setHub(true) // back: the next ask, with the same id, is answered
+  assert.deepEqual(await asking, { allow: true }, 'the next hub answers it, not a dismiss at once')
+  assert.deepEqual(n.asked.map((ix) => ix.id), [id, id], 'asked again with the same id')
+
+  // A hub that does not come back: the wait ends that long after it went, not at once and not never.
+  n.resolve = () => new Promise((_, reject) => { drop = () => reject(new RpcError('node going away', 'node_gone')) })
+  drop = undefined
+  const again = rt.ask({ id: 'toy-2', kind: 'permission', session_id: 's1', tool_name: 'Bash' })
+  await until('on the phone again', () => drop)
+  await new Promise((r) => setTimeout(r, 600))
+  n.resolve = gone
+  n.setHub(false)
+  const lostAt = Date.now()
+  drop()
+  assert.deepEqual(await again, { dismiss: true })
+  const waited = Date.now() - lostAt
+  assert.ok(waited >= 350 && waited < 1500, `dismissed ${waited} ms after the hub went`)
+})
+
 test('rewrites held while a watch catches up go out in order: to another history and back', async (t) => {
   const n = await startFakeNode(t)
   let release
