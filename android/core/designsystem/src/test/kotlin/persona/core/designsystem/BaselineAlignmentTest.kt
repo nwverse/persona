@@ -47,8 +47,8 @@ class BaselineAlignmentTest {
         assertEquals(ownText.bottom - ownText.top, oursText.bottom - oursText.top)
     }
 
-    @Test fun aBaselineTheFrameworkCannotGiveYetIsLeftToTheRowsOwnAlignment() {
-        assertEquals(AlignmentLine.Unspecified, readBaseline { throw NullPointerException("lookahead state not there yet") })
+    @Test fun theCapturedLookaheadFailureIsLeftToTheRowsOwnAlignment() {
+        assertEquals(AlignmentLine.Unspecified, readBaseline { throw missingLookaheadBaseline() })
     }
 
     @Test fun aBaselineThatCanBeReadIsReturnedAsItIs() {
@@ -56,7 +56,21 @@ class BaselineAlignmentTest {
         assertEquals(AlignmentLine.Unspecified, readBaseline { AlignmentLine.Unspecified })
     }
 
+    @Test fun aNullPointerFailureFromSomewhereElseIsNotHidden() {
+        assertThrows(NullPointerException::class.java) { readBaseline { throw NullPointerException("another failure") } }
+    }
+
     @Test fun otherFailuresAreNotHidden() {
         assertThrows(IllegalStateException::class.java) { readBaseline { error("a real failure") } }
     }
+}
+
+/** The top of the tablet capture, without relying on line numbers that a Compose patch can move. */
+private fun missingLookaheadBaseline() = NullPointerException().apply {
+    stackTrace = arrayOf(
+        StackTraceElement("androidx.compose.ui.node.LookaheadDelegate", "getAlignmentLinesOwner", "LookaheadDelegate.kt", 607),
+        StackTraceElement("androidx.compose.ui.node.InnerNodeCoordinator\$LookaheadDelegateImpl", "calculateAlignmentLine", "InnerNodeCoordinator.kt", 90),
+        StackTraceElement("androidx.compose.ui.node.InnerNodeCoordinator", "calculateAlignmentLine", "InnerNodeCoordinator.kt", 170),
+        StackTraceElement("androidx.compose.ui.node.LookaheadCapablePlaceable", "get", "LookaheadDelegate.kt", 113),
+    )
 }
