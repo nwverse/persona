@@ -461,6 +461,15 @@ for _i in range(int(os.environ.get("MOCK_PERF_MACHINES", "0"))):
     MACHINES.append(dict(MACHINES[0], id=_mid, name=f"示例机器 {_i + 1:03d}", hostname=f"example-node-{_i + 1:03d}"))
 if RESUME_TERMINAL:  # the Mac mini (#5521)
     SYSTEMS["mini"] = dict(SYSTEMS["macbook"], model="Mac mini", cpu="Apple M4", cores=10, memory=32 * GB)
+# MOCK_MACHINE_ALERTS=1 (#8037): one computer per Machines alert, fictional names; MOCK_DIAGNOSIS=… in every mode
+# (scripts/mock/machine_alerts.py).
+if os.path.dirname(os.path.abspath(__file__)) not in sys.path:  # python3 -I leaves the script's folder out
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import machine_alerts  # noqa: E402
+MACHINE_ALERT_METRICS = machine_alerts.install_machines(MACHINES, SYSTEMS) if machine_alerts.ON else {}
+# The hub's own build (hello server_version, /api/v1/health version): a dated build in that mode, so the alert sheet
+# can say how far apart a node's build is.
+SERVER_VERSION = machine_alerts.HUB_VERSION if machine_alerts.ON else "mock"
 for _m in MACHINES:
     _m["system"] = dict(SYSTEMS[_m["id"]], boot_time=int((NOW - timedelta(days=3, hours=4)).timestamp()))
 # Machines added later (MOCK_MACHINES) have no system and never sent a sample.
@@ -501,15 +510,23 @@ def metric_at(mid, t):
         mem_frac = 0.88 + 0.02 * h
     if concern_level == "critical":
         mem_frac = 0.95
+    alert_metrics = MACHINE_ALERT_METRICS.get(mid)
+    if alert_metrics:
+        cpu = alert_metrics["cpu"] + 2 * h
+        mem_frac = alert_metrics["mem"] + 0.004 * h
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
     if concern_level == "critical":
         disk_frac = 0.95
+    if alert_metrics:
+        disk_frac = alert_metrics["disk"]
+    disk_total = {"nas": 4000, "studio": 2000}.get(mid, 1000) * GB
+    disk = max(0, disk_frac * disk_total - machine_alerts.FREED.get(mid, 0))
     return {"cpu": round(cpu, 1), "load": round(load, 2), "mem": round(mem_frac * sys_["memory"]),
             "swap": round({"server": 0.0, "macbook": 1.2, "studio": 0.0, "nas": 0.4}[template] * GB),
-            "rx": round(rx, 1), "tx": round(tx, 1), "disk": round(disk_frac * {"nas": 4000, "studio": 2000}.get(mid, 1000) * GB)}
+            "rx": round(rx, 1), "tx": round(tx, 1), "disk": round(disk)}
 
 
 def metric_series(mid, span, step):
@@ -1060,6 +1077,8 @@ if MOCK_MACHINES:
 if os.environ.get("MOCK_MACHINE_CONCERNS") == "1":
     from machine_concerns import install_sessions
     install_sessions(SESSIONS, sess)
+if machine_alerts.ON:
+    machine_alerts.install_sessions(SESSIONS, sess)
 # MOCK_AGENTS=1: a long Agents list (AgentsListTests): ~120 agents, one big space with 35 finished-unread, a quiet
 # space, idle ones to fold. Sessions marked seen (WS "seen" or POST …/seen) turn idle; GET /mock/seen lists them.
 # MOCK_QUIET=1: a quiet space (two seen agents, nothing running) under "Idle spaces", for screenshots of its card
@@ -14098,6 +14117,8 @@ def machine_launchers(mid=""):
         out.append({"name": "claude-desktop", "model": "", "source": "claude_desktop", "agent": "claude", "agent_type": "claude"})
         # Its Codex App runs: its launcher starts a chat there (#5726, docs/integrations/codex.md).
         out.append({"name": "codex-app", "model": "", "source": "codex_app", "agent": "codex", "agent_type": "codex"})
+    if machine_alerts.ON:
+        return machine_alerts.with_health(mid, out)
     return launcher_health_list(out)
 
 
@@ -20476,6 +20497,13 @@ MOCK_SKILLS = [{"name": "lark-gateway", "description": "Feishu / Lark through a 
                {"name": "weekly-report", "description": "Draft the week's report from the calendar, docs and chats.", "source": "user"}]
 
 LIVE = []  # (send, subscribed session ids) of each open WebSocket
+
+
+def broadcast(msg):
+    """Sends msg to every open WebSocket."""
+    for send, _ in list(LIVE):
+        try: send(msg)
+        except Exception: pass
 # MOCK_MESSAGING=1 (#2138): the messaging extension point over the mock's Feishu (scripts/mock/lark_messaging.py):
 # GET /api/v1/messaging lists the source lark, /api/v1/messaging/lark/… answers in the protocol's shapes, the feature
 # messaging is on, every {type: lark} push goes out as {type: messaging} too.
@@ -24554,7 +24582,7 @@ class H(BaseHTTPRequestHandler):
             if len(parts) == 8 and parts[7] == "connect": return self.port_connect(parts[4], port)
             return self.send_json({"port": port, "listening": port_listening(port), "http": port_listening(port)})
         if p == "/api/v1/health":
-            return self.send_json({"ok": True, "version": "mock", "channel": "release", "build": 202611021500, "protocol": 1,
+            return self.send_json({"ok": True, "version": SERVER_VERSION, "channel": "release", "build": 202611021500, "protocol": 1,
                                    "min_app_build": 0, "features": features(), **identity(), **hub_name_field()})
         if p == "/api/v1/endpoints": return self.send_json({**identity(), **hub_name_field(), "endpoints": list(ENDPOINTS)})
         if p == "/api/v1/hub/update":
@@ -24709,6 +24737,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
             TAB_NAMES.clear()  # TerminalsRenameUITests: the tabs' own names again
+            machine_alerts.reset()  # cleaned caches and launcher checks (#8037)
             wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
@@ -25237,6 +25266,7 @@ class H(BaseHTTPRequestHandler):
                 if listing is None: return self.send_json({"error": "claude 没有登录：claude /login 之后再试"}, 502)
             return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
+        if machine_alerts.route(self, "GET", MACHINES, SYSTEMS, metric_latest, broadcast): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
             return self.send_json({"launchers": machine_launchers(p.split("/")[4])})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
@@ -25528,6 +25558,7 @@ class H(BaseHTTPRequestHandler):
         if providers_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if chat_pins_route(self, p, parse_qs(urlparse(self.path).query)): return
         if doctor_route(self, p, "POST"): return
+        if self.command == "POST" and machine_alerts.route(self, "POST", MACHINES, SYSTEMS, metric_latest, broadcast): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
         if plugins_route(self, p, self.last_body): return
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
@@ -26465,10 +26496,13 @@ class H(BaseHTTPRequestHandler):
         if saved_prompts_route(self, p, self.command):
             return
         if p == "/api/v1/assistant/places" and self.command == "POST":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改常用地点"}, 403)
             return self.send_json(*save_place(json.loads(self.last_body or b"{}"), None))
         if p.startswith("/api/v1/assistant/places/") and self.command == "PUT":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改常用地点"}, 403)
             return self.send_json(*save_place(json.loads(self.last_body or b"{}"), p.rsplit("/", 1)[1]))
         if p.startswith("/api/v1/assistant/places/") and self.command == "DELETE":
+            if is_read_only(self): return self.send_json({"error": "只读角色不能修改常用地点"}, 403)
             pid = p.rsplit("/", 1)[1]
             PLACES[:] = [x for x in PLACES if x["id"] != pid]
             return self.send_json({"ok": True})
@@ -26867,6 +26901,10 @@ class H(BaseHTTPRequestHandler):
             m = next((m for m in MACHINES if m["id"] == mid), None)
             if not m or not m.get("node_mismatch"):
                 return self.send_json({"error": "这台电脑已经是 hub 这一版"}, 409)
+            if machine_alerts.ON:  # the phases a real hub pushes (MOCK_DEPLOY_ERROR fails it while transferring)
+                machine_alerts.phased_deploy(m, lambda: broadcast({"type": "machines", "machines": out_machines()}),
+                                             os.environ.get("MOCK_DEPLOY_ERROR") or None)
+                return self.send_json({"ok": True})
             m["deploying"] = True
             def done(m=m):
                 time.sleep(3)
@@ -27311,7 +27349,7 @@ class H(BaseHTTPRequestHandler):
         SOCKETS.add(self.connection)
         subscribed = set()
         LIVE.append((send, subscribed))
-        send({"type": "hello", "server_version": "mock", "client_id": observation["id"], "channel": "release",
+        send({"type": "hello", "server_version": SERVER_VERSION, "client_id": observation["id"], "channel": "release",
               "build": 202611021500, "protocol": 1, "min_app_build": 0,
               **identity(), "endpoints": list(ENDPOINTS), **mesh_hello(),
               "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path)})
