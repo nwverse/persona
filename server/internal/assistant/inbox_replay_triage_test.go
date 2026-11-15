@@ -72,6 +72,45 @@ func TestRecoveredReplayTriagesOnlySelectedOldDMBeforeQueuing(t *testing.T) {
 	}
 }
 
+func TestRecoveredReplayQueuesCurrentRuleFallback(t *testing.T) {
+	_, client := newTriageModel(t, "fail", `{}`)
+	h, _ := admitHub(t, client)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+	ctx := context.Background()
+	if err := h.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.inbox.mu.Lock()
+	h.inbox.policies = []InboxPolicy{{Source: "larkcli", Tag: connector.TagChat, Value: "oc_example", Twin: TwinFirst}}
+	h.inbox.mu.Unlock()
+	h.inbox.srcMu.Lock()
+	h.inbox.builtin["larkcli"] = true
+	h.inbox.srcMu.Unlock()
+	at := time.Now().Add(-4 * 24 * time.Hour)
+	thing := replayWriteFailureThing("thread:rule-fallback", "last:rule-fallback", KindDM, "")
+	thing.At, thing.Context = at, "Synthetic selected direct request with a failed model"
+	thing.Tags = []connector.Tag{{Key: connector.TagChat, Value: "oc_example", Name: "Example chat"}}
+	h.inbox.handing.Lock()
+	t.Cleanup(func() { h.inbox.handing.Unlock() })
+
+	if err := h.InboxCollected(ctx, replayWriteFailureRound(thing)); err != nil {
+		t.Fatal(err)
+	}
+	id := replayWriteFailureItemID(thing)
+	waitFor(t, "selected replay rule fallback reached escalation", func() bool {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		it := h.inbox.items[id]
+		return it != nil && it.RuleOf == it.Last && it.Agent != nil && it.Agent.State == AgentQueued
+	})
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
+	it := h.inbox.items[id]
+	if it.TriagedAt == it.Last || it.Tier != TierNoise || !it.UpdatedAt.Equal(at) {
+		t.Fatalf("recovery lost the retryable rule tier or source time: %+v", it)
+	}
+}
+
 func TestRecoveredReplayIncompleteTriageBlocksPreexistingAction(t *testing.T) {
 	ai.SetBusyPauseForTest(t, 50*time.Millisecond)
 	for _, tc := range []struct {

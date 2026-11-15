@@ -646,6 +646,14 @@ class WatcherTests(unittest.TestCase):
         base_output = "--- FAIL: TestBase\nAssertionError: base defect"
         self.assertNotEqual(pr_watch_repair.failure_test_ids(pr_output), pr_watch_repair.failure_test_ids(base_output))
 
+    def test_gh_json_passes_a_continuation_payload_to_stdin(self):
+        payload = '{"title":"fix: continuation","head":"owner:branch"}'
+        with patch.object(pr_watch_common, "checked", return_value='{"number":9}') as checked:
+            result = pr_watch_common.gh_json(["api", "repos/example/one/pulls", "--input", "-"], input_text=payload)
+        self.assertEqual(result, {"number": 9})
+        self.assertEqual(checked.call_args.kwargs["input_text"], payload)
+        self.assertEqual(checked.call_args.args[0], ["gh", "api", "repos/example/one/pulls", "--input", "-"])
+
     def test_continuation_pr_links_original_issue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -654,6 +662,8 @@ class WatcherTests(unittest.TestCase):
                     if "FETCH_HEAD" in argv:
                         return SHA_BASE + "\n"
                     return SHA_B + "\n"
+                if argv[:2] == ["git", "cat-file"]:
+                    return "".join(line.strip() + " commit\n" for line in kwargs["input_text"].splitlines())
                 return ""
             with patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: pr(head=SHA_B if number == 9 else SHA_A)), \
                     patch.object(pr_watch_repair, "verify", return_value=[]), \
@@ -754,7 +764,8 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", env)
         self.assertNotIn("PR_WATCH_WEBHOOK_SECRET", env)
         self.assertIn("ANTHROPIC_API_KEY", env)
-        argv = pr_watch_repair.repair_worker_argv(["claude", "--version"], self.root)
+        with patch.object(pr_watch_repair.shutil, "which", return_value="/usr/bin/bwrap"):  # a machine without bwrap too
+            argv = pr_watch_repair.repair_worker_argv(["claude", "--version"], self.root)
         home = argv[argv.index("HOME") + 1]
         self.assertNotEqual(Path(home), self.root)
         self.assertFalse(Path(home).is_relative_to(self.root))
@@ -788,6 +799,11 @@ class WatcherTests(unittest.TestCase):
                     pr_watch_repair.merge_base_in_isolation(current, root, base)
             self.assertEqual(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(), head)
             self.assertEqual(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True), "")
+
+    def test_repair_worker_refuses_without_bwrap(self):
+        with patch.object(pr_watch_repair.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "bwrap"):
+                pr_watch_repair.repair_worker_argv(["claude", "--version"], self.root)
 
     def test_dry_run_repair_failure_never_comments(self):
         self.watcher.dry_run = True

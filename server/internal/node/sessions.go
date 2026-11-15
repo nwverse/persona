@@ -244,6 +244,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	peak := len(out)
 	j := from
+	var rowIDs map[string]bool // the runtimes' rows, where the line of a fork stops (aliasesOf)
 	for i := from; i < len(out); i++ {
 		s := &out[i]
 		if seen[s.SessionID] {
@@ -255,9 +256,23 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.PermissionMode = m
 			}
 		}
-		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes.
+		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes. Under
+		// an id of its own, the ids it went by go too, named on the row for the manager's archive (runtimealiases.go).
 		if t := n.mergeRuntimeTranscript(s); t != "" {
 			seen[t] = true
+			if t != s.SessionID {
+				if rowIDs == nil {
+					rowIDs = make(map[string]bool, len(out)-from)
+					for k := from; k < len(out); k++ {
+						rowIDs[out[k].SessionID] = true
+					}
+				}
+				aliases := n.aliasesOf(s.SessionID, t, func(id string) bool { return rowIDs[id] })
+				for _, a := range aliases {
+					seen[a] = true
+				}
+				s.SetAliases(aliases)
+			}
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -305,6 +320,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	j = 0
 	for i := range out {
 		s := &out[i]
+		if !s.Assistant && s.PaneID != "" && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+			n.observedRunning(s.SessionID)
+		}
 		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
@@ -329,7 +347,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		return nil
 	}
 	out = out[:j]
-	linkSideSessions(out, n.offlineParents()) // the desktop app's side sessions under the sessions that started them (#5935)
+	parents, origins := n.offlineDesktop()
+	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
+	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
 	sortNewestFirst(out)
 	return out
 }
@@ -376,6 +396,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.PendingSwitch = st.PendingSwitch   // launcher_switch.go
 		s.SetEngineHistory(st.EngineHistory) // engine_switch.go
 	}
+	n.decorateModelRecovery(s) // node-owned recovery marker, and the shipped fallback-card projection (#7824)
 	if s.PendingSwitch == nil {
 		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
 	}

@@ -84,7 +84,8 @@ type Placement struct {
 	// WorkMachines are configured work computers, including aliases; none may host the assistant.
 	WorkMachines []string `json:"work_machines,omitempty"`
 	// Standby: this hub is a member of a mesh group, whose center runs the scheduled tasks (docs/server/mesh.md).
-	Standby bool `json:"standby,omitempty"`
+	Standby        bool `json:"standby,omitempty"`
+	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
 }
 
 // DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
@@ -147,6 +148,12 @@ type Device struct {
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`
+	// HomeReal is Home with its links followed, when the node says it is another path (proto.NodeInfo.HomeReal).
+	HomeReal string `json:"home_real,omitempty"`
+	// Engine is the host its starts open in when they name none, as its node reports it (its default engine host:
+	// herdr, orca, paseo…); "" while it has not said. The manager holds a new Agent to what that host can run
+	// (launcher_fit.go, #8140).
+	Engine string `json:"engine,omitempty"`
 }
 
 // ClientApp is one Persona app as it last described itself in client_hello (docs/protocol/protocol.md "Client
@@ -219,6 +226,10 @@ type ModelBinding struct {
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
 	Runtime  string `json:"runtime,omitempty"` // main chat only: cli (default) or agentsdk; kept across a provider change
+	// ConfigDir is the main chat's only: the Claude profile its new conversations start in (#4633). None is Persona's
+	// own profile (the default); "legacy" is this computer's existing Claude Code setup. Kept across a provider change;
+	// an existing conversation keeps the profile it was started in.
+	ConfigDir string `json:"config_dir,omitempty"`
 }
 
 // NotifyRequest is notify.request's params.

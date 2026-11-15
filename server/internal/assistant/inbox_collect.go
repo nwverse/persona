@@ -186,8 +186,8 @@ func (s *Service) handleRecoveredInbox(ctx context.Context, ids []string) {
 			}
 			b.mu.Lock()
 			it = b.items[id]
-			// Legacy queued records also need a saved triage before the start pass can take them.
-			if it != nil && it.open() && (it.handled() || it.TriagedAt == it.Last) {
+			// Legacy queued records also need a saved model or rule tier before the start pass can take them.
+			if it != nil && it.open() && (it.handled() || it.tiered()) {
 				ready = append(ready, id)
 			}
 			b.mu.Unlock()
