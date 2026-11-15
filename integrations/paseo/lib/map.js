@@ -14,6 +14,13 @@ export const SESSION_LABEL = 'persona.session'
 export const PARENT_LABEL = 'paseo.parent-agent-id'
 /** The label on the agent a launcher check runs (bridge.js check): never a session, deleted once it answered. */
 export const CHECK_LABEL = 'persona.check'
+/**
+ * The label beside SESSION_LABEL when the bridge kept the id itself on an agent Persona neither started nor took over
+ * (Paseo moved it to another Claude session: a fork, a rewind): the id is the session's, the agent is not Persona's own.
+ */
+export const KEPT_LABEL = 'persona.kept'
+/** Where the bridge's copy of an agent holds the id it keeps for it before Paseo's record has the label (bridge.js keptIdOf). */
+export const KEPT = Symbol('persona.kept')
 /** Persona's effort levels, weakest first (proto.EffortLevels). */
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** Persona's permission modes (proto.PermissionModes): Claude Code's, which Paseo's Claude providers take as they are. */
@@ -36,6 +43,21 @@ export function personaMode(root, mode) {
   if (root === 'claude') return MODES.includes(mode) ? mode : undefined
   if (root === 'codex') return Object.keys(CODEX_MODES).find((ours) => CODEX_MODES[ours] === mode)
   return undefined
+}
+
+/** Paseo's feature that answers every permission prompt of an agent with allow: Persona's bypassPermissions there. */
+export const AUTO_ACCEPT = 'auto_accept'
+/**
+ * The built-in providers whose approval is Paseo's Auto Accept (AUTO_ACCEPT), a switch, rather than a mode: the ones it
+ * runs over ACP (`acp`, which a custom provider such as Grok's `grok agent stdio` extends, Copilot, Cursor) and OpenCode.
+ * Grok has no permission modes at all.
+ */
+export const AUTO_ACCEPT_ROOTS = new Set(['acp', 'copilot', 'cursor', 'opencode'])
+
+/** Whether an agent's Auto Accept is on; undefined when Paseo lists no such switch for it (another provider, not loaded). */
+export function autoAcceptOf(agent) {
+  const f = (agent?.features ?? []).find((x) => x?.id === AUTO_ACCEPT && x.type === 'toggle')
+  return f ? f.value === true : undefined
 }
 /** A launcher name (the node's nameRe: what a shell function may be called). */
 export const LAUNCHER_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/
@@ -125,14 +147,15 @@ export function defaultProvider(entries = [], roots = {}) {
 
 /**
  * The id a Paseo agent has in Persona, undefined while it has none: the label Persona left on it (it started or took
- * the session over); else, for Claude Code, its Claude session id — the id the same conversation has everywhere in
- * Persona ("Offline", herdr) — once Paseo has one; else paseo-<agent id>.
+ * the session over, or the bridge kept the id); else, for Claude Code, the id the bridge keeps for it (KEPT: the session
+ * it was listed under before Paseo moved it to a fork), else its Claude session id — the id the same conversation has
+ * everywhere in Persona ("Offline", herdr) — once Paseo has one; else paseo-<agent id>.
  */
 export function sessionIdOf(agent, roots = {}) {
   const l = agent?.labels?.[SESSION_LABEL]
   if (typeof l === 'string' && SESSION_ID.test(l)) return l
   if (agentRoot(agent, roots) === 'claude') {
-    const c = claudeId(agent)
+    const c = agent?.[KEPT] ?? claudeId(agent)
     return c && SESSION_ID.test(c) ? c : undefined
   }
   return typeof agent?.id === 'string' && agent.id ? `${RUNTIME}-${agent.id}` : undefined
@@ -382,7 +405,8 @@ export function agentRow(agent, o = {}) {
   if (row.agent === RUNTIME && o.labels?.[agent.provider]) row.agent_label = o.labels[agent.provider]
   const model = agent.model ?? agent.runtimeInfo?.model
   if (typeof model === 'string' && model) row.model = model
-  const mode = personaMode(root, agent.currentModeId)
+  // Auto Accept on is Allow all; off says nothing, since the agent's own settings may still approve everything (Grok's can).
+  const mode = personaMode(root, agent.currentModeId) ?? (autoAcceptOf(agent) ? 'bypassPermissions' : undefined)
   if (mode) row.permission_mode = mode
   const effort = agent.effectiveThinkingOptionId ?? agent.thinkingOptionId
   if (EFFORTS.includes(effort)) row.effort = effort
@@ -497,9 +521,65 @@ export function toolCall(name, detail) {
       return { name: appToolName(name || d.label || 'tool'), input: clipInput(dropEmpty({ text: d.text, label: d.label })) }
     default: {
       const input = d.input && typeof d.input === 'object' && !Array.isArray(d.input) ? d.input : d.input === undefined || d.input === null ? {} : { input: d.input }
+      if (typeof input.variant === 'string' && input.variant) return variantCall(input)
       return { name: appToolName(name || 'tool'), input: clipInput(input) }
     }
   }
+}
+
+/**
+ * A tool Grok CLI names in its ACP input (`variant`), which Paseo passes on as an unknown detail named `other` or after
+ * the ACP title (``List `/w` ``): drawn as the apps' tool for it, else under its own name without that argument. A
+ * listing is LS; a background task's output and its stop are Claude Code's TaskOutput and TaskStop (Monitor is Claude
+ * Code's name already); an MCP call (UseTool, `<server>__<tool>`) is the tool itself, as Claude Code names it.
+ */
+function variantCall({ variant, ...input }) {
+  switch (variant) {
+    case 'ListDir':
+      return { name: 'LS', input: dropEmpty({ path: input.target_directory }) }
+    case 'TaskOutput': {
+      const ids = Array.isArray(input.task_ids) ? input.task_ids.filter((x) => typeof x === 'string' && x) : []
+      return { name: 'TaskOutput', input: dropEmpty({ task_id: ids.join(', ') || input.task_id }) }
+    }
+    case 'KillTask':
+      return { name: 'TaskStop', input: dropEmpty({ task_id: input.task_id }) }
+    case 'UseTool': {
+      const args = input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : {}
+      if (typeof input.tool_name === 'string' && input.tool_name) return { name: `mcp__${input.tool_name}`, input: clipInput(args) }
+      break
+    }
+  }
+  return { name: appToolName(variant), input: clipInput(input) }
+}
+
+/**
+ * What a tool Grok CLI names (variantCall) gave back, as text: a listing's tree, a background task's output with its
+ * exit code after it as a command's, a stop's message, an MCP tool's text; otherwise its fields, a `key: value` line each.
+ */
+function variantOutput(o) {
+  if (o === undefined || o === null) return ''
+  if (typeof o !== 'object') return String(o)
+  if (typeof o.Content?.content === 'string') return o.Content.content
+  if (typeof o.output === 'string') return o.output
+  const r = o.Result
+  if (r && typeof r === 'object' && !Array.isArray(r)) {
+    if (typeof r.output === 'string') return r.output + exitNote(r.exit_code, r.output)
+    return typeof r.message === 'string' ? r.message : fieldLines(r)
+  }
+  // An MCP tool's answer holds one text under the outcome's name ({ OkayOutput: '…' }).
+  const texts = o.output && typeof o.output === 'object' ? Object.values(o.output).filter((v) => typeof v === 'string') : []
+  return texts.length === 1 ? texts[0] : fieldLines(o)
+}
+
+/** An object's fields but its `type`, a `key: value` line each (a nested one as JSON). */
+function fieldLines(o) {
+  return Object.entries(o).filter(([k, v]) => k !== 'type' && v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n')
+}
+
+/** A command's exit code after its output, when it failed. */
+function exitNote(code, out) {
+  return typeof code === 'number' && code !== 0 ? `${out ? '\n' : ''}（退出码 ${code}）` : ''
 }
 
 /** What a finished tool call gave back, as the text of its result. */
@@ -509,7 +589,7 @@ export function toolOutput(item) {
   switch (d.type) {
     case 'shell':
       out = d.output ?? ''
-      if (typeof d.exitCode === 'number' && d.exitCode !== 0) out += `${out ? '\n' : ''}（退出码 ${d.exitCode}）`
+      out += exitNote(d.exitCode, out)
       break
     case 'read':
     case 'write':
@@ -538,7 +618,8 @@ export function toolOutput(item) {
       out = ''
       break
     default:
-      out = d.output === undefined || d.output === null ? '' : typeof d.output === 'string' ? d.output : JSON.stringify(d.output, null, 2)
+      if (typeof d.input?.variant === 'string' && d.input.variant) out = variantOutput(d.output)
+      else out = d.output === undefined || d.output === null ? '' : typeof d.output === 'string' ? d.output : JSON.stringify(d.output, null, 2)
   }
   if (item?.status === 'failed' && item.error) {
     const e = typeof item.error === 'string' ? item.error : item.error?.message ?? JSON.stringify(item.error)

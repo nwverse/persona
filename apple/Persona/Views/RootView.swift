@@ -53,21 +53,27 @@ struct RootView: View {
     #endif
 
     #if os(iOS)
-    /// Settings › Appearance › Navigation (#6332): Separate (the default) or Sidebar.
-    @StoredValue(NavigationLayout.key) private var navigation: NavigationLayout = .separate
+    /// Settings › Appearance › Sidebar (#6332, #4206): Merged or Separate; empty, nothing picked (`NavigationLayout.effective`).
+    @StoredValue(NavigationLayout.key) private var navigation = ""
     #endif
 
-    /// The Sidebar layout instead of the tabs at regular width (#6332): where it is built (`NavigationLayout.offered`).
-    /// The iPhone-width shell stays the shell for now.
+    /// The Sidebar layout instead of the shell or the tabs (#6332): one root at every width, the drawer on a phone's
+    /// width and the column beside the page at regular width (`ChatsView` under `\.unifiedSidebar`).
     private var usesSidebar: Bool {
         #if os(iOS)
-        navigation == .sidebar && NavigationLayout.offered && !usesShell
+        // Nothing picked: Merged where wide, the shell at compact width (#4206).
+        NavigationLayout.offered
+            && NavigationLayout.effective(picked: navigation, regular: !((heldWidthClass ?? widthClass) == .compact || flipped)) == .sidebar
         #else
         false
         #endif
     }
 
-    /// The iPhone-width shell; regular-width and other platforms keep their own navigation.
+    /// The shell is the root: the iPhone's width in the Separate layout.
+    private var showsShell: Bool { usesShell && !usesSidebar }
+
+    /// The iPhone-width shell; regular-width and other platforms keep their own navigation. In the Sidebar layout the
+    /// same width is its drawer's (`showsShell`).
     private var usesShell: Bool {
         #if os(visionOS)
         // Apple Vision Pro keeps the tabs, as the system's ornament (VisionShell), whatever the window's width.
@@ -101,13 +107,13 @@ struct RootView: View {
 
     /// The shell is on screen, and with it its toast window (`ToastWindow`): not on the welcome page, the engine step or
     /// the checklist after pairing (the same branches as `body`).
-    private var shellShown: Bool { usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
+    private var shellShown: Bool { showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
 
     /// The tabs are on screen at regular width (iPad, iPhone Duo open), with a toast window of
     /// their own (`ToastWindowHook`): the same branches as `body`, with no extension page in the app's place.
     private var tabsToastWindow: Bool {
         #if os(iOS)
-        !usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
+        !showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
         #else
         false
         #endif
@@ -131,8 +137,8 @@ struct RootView: View {
                 #if os(visionOS)
                 RootTabs().visionShell()
                 #elseif os(iOS)
-                if usesShell { ShellView().modifier(BuiltTreeRoot()) }
-                else if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                else if usesShell { ShellView().modifier(BuiltTreeRoot()) }
                 else { RootTabs().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
                 #else
                 RootTabs()
@@ -204,7 +210,7 @@ struct RootView: View {
             }
             swaps.count += 1
         }
-        .onChange(of: usesShell) { swaps.rebuilt += 1 }
+        .onChange(of: showsShell) { swaps.rebuilt += 1 }
         .screenProbe("tree", swaps)
         // LookBlink drives UIWindowScene overrides, so it only exists on iOS and visionOS.
         #if os(iOS) || os(visionOS)
@@ -228,7 +234,12 @@ struct RootView: View {
         .overlay(alignment: .top) { if overlayToasts { ToastOverlay().padding(.top, toastClearance) } }
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
-        .onAppear { model.colorScheme.apply() }
+        .onAppear {
+            model.colorScheme.apply()
+            #if DEBUG || PERF_SIGNPOST
+            PerfTrace.firstFrame()
+            #endif
+        }
         #if os(iOS)
         // The interface's cap on the windows' text size, so sheets and covers are capped too (`WindowTextSize`).
         .onAppear { WindowTextSize.apply(); systemSize = WindowTextSize.system }
@@ -252,6 +263,11 @@ struct RootView: View {
             }
         }
         .screenProbe("connection", ConnectionShown(shown: "\(model.connection.shown)", network: model.connection.networkUp))
+        #if os(iOS)
+        // Hub transcription's store (#3862 phase 5): the mode, the socket, the hub's lines and the fallback, for UI tests;
+        // a view of its own, so its changes redraw only it.
+        .overlay(alignment: .topLeading) { if ScreenProbe.enabled { MeetingTranscriptionProbe() } }
+        #endif
         .htmlCardSample()
         .voiceOrbSample()
         .closeoutSample()
@@ -284,6 +300,12 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     #if os(iOS)
     @State private var pad = PadRouter()
+    /// The Separate layout's tabs in the new look (#4206): each its own part of the one sidebar's column, its own
+    /// selection, beside its own page.
+    @State private var personaPart = UnifiedSidebar(part: .persona)
+    @State private var agentsPart = UnifiedSidebar(part: .agents)
+    /// Where the system puts its bars down the side (the open iPhone Duo on its side): the columns' top margin there.
+    @State private var barEdge: HorizontalEdge?
     #endif
 
     var body: some View {
@@ -291,8 +313,13 @@ struct RootView: View {
         let _ = PerfTrace.body("RootTabs")
         #endif
         TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) })) {
+            #if os(iOS)
+            AssistantRootTab(part: personaPart)
+            AgentsRootTab(part: agentsPart)
+            #else
             AssistantRootTab()
             AgentsRootTab()
+            #endif
             #if os(iOS) || os(visionOS)
             if LarkHomePreference.shared.shows { FeishuRootTab() }
             #endif
@@ -302,6 +329,8 @@ struct RootView: View {
             #endif
         }
         #if os(iOS)
+        .environment(\.splitSideBars, barEdge != nil) // the columns' top margin under side bars (#4853)
+        .readsVerticalBarEdge($barEdge)
         .modifier(PadRoutes(router: pad))
         #endif
     }
@@ -315,6 +344,8 @@ struct RootView: View {
 @MainActor private struct SidebarRoot: View {
     @State private var pad = PadRouter(unified: true)
     @State private var unified = UnifiedSidebar()
+    /// Where the system puts its bars down the side (the open iPhone Duo on its side); nil across the top.
+    @State private var barEdge: HorizontalEdge?
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -322,6 +353,8 @@ struct RootView: View {
         #endif
         ChatsView()
             .environment(\.unifiedSidebar, unified)
+            .environment(\.splitSideBars, barEdge != nil) // the columns' top margin there (#4853)
+            .readsVerticalBarEdge($barEdge)
             .modifier(PadRoutes(router: pad))
     }
 }
@@ -389,18 +422,21 @@ struct RootView: View {
 }
 
 /// The iPad's routes (`PadRouter`) and its Settings, on the tabs: a sheet on the iPad; on a phone (iPhone Duo open) the
-/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701).
+/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701). At a
+/// phone's own width (the Sidebar layout's drawer, #6332) the sheet the shell shows it in.
 private struct PadRoutes: ViewModifier {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var width
     let router: PadRouter
     private let phone = UIDevice.current.userInterfaceIdiom == .phone
+    private var cover: Bool { phone && width == .regular }
 
     func body(content: Content) -> some View {
         @Bindable var model = model
         content
             .environment(\.padRouter, router)
-            .sheet(isPresented: phone ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
-            .fullScreenCover(isPresented: phone ? $model.shellSettings : .constant(false)) {
+            .sheet(isPresented: cover ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
+            .fullScreenCover(isPresented: cover ? $model.shellSettings : .constant(false)) {
                 settings
                     .environment(\.horizontalSizeClass, .compact)
                     .accessibilityAction(.escape) { model.shellSettings = false } // VoiceOver's scrub, as on a sheet
@@ -459,16 +495,6 @@ struct PageTabSwitchInset: ViewModifier {
     }
 }
 
-/// A phone's tabs (`pageTabSwitch`): no tab bar; the pages draw the switch.
-private struct PageTabSwitch: ViewModifier {
-    func body(content: Content) -> some View {
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            content.toolbarVisibility(.hidden, for: .tabBar).environment(\.pageTabSwitch, true)
-        } else {
-            content
-        }
-    }
-}
 #endif
 
 /// One tree RootView builds: the shell or the tabs, built again by a fold or an unfold, and by a new look.
@@ -524,6 +550,10 @@ private struct TabPage<Page: View>: View, Equatable {
 
 @MainActor private struct AssistantRootTab: TabContent {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    /// The Persona tab's part of the one sidebar (#4206).
+    let part: UnifiedSidebar
+    #endif
 
     var body: some TabContent<AppTab> {
         #if DEBUG || PERF_SIGNPOST
@@ -531,10 +561,15 @@ private struct TabPage<Page: View>: View, Equatable {
         #endif
         Tab("Persona", systemImage: Theme.Icon.ai, value: AppTab.assistant) {
             TabPage {
+                #if os(iOS)
+                // The Separate layout in the new look (#4206): the one sidebar's column with Persona's part, Persona's
+                // page beside it (the Agents page's split, as the Sidebar layout's), the system's tab bar kept.
+                ChatsView()
+                    .environment(\.unifiedSidebar, part)
+                    .modifier(TabActivityScope(tab: .assistant))
+                #else
                 AssistantView()
                     .modifier(TabActivityScope(tab: .assistant))
-                #if os(iOS)
-                    .modifier(PageTabSwitch())
                 #endif
                 #if PERF_SIGNPOST
                     .modifier(PerfTabMount("assistant"))
@@ -548,6 +583,10 @@ private struct TabPage<Page: View>: View, Equatable {
 
 @MainActor private struct AgentsRootTab: TabContent {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    /// The Agents tab's part of the one sidebar (#4206).
+    let part: UnifiedSidebar
+    #endif
 
     var body: some TabContent<AppTab> {
         #if DEBUG || PERF_SIGNPOST
@@ -556,10 +595,11 @@ private struct TabPage<Page: View>: View, Equatable {
         Tab("Agents", systemImage: Theme.Icon.agents, value: AppTab.chats) {
             TabPage {
                 ChatsView()
-                    .modifier(TabActivityScope(tab: .chats))
                 #if os(iOS)
-                    .modifier(PageTabSwitch())
+                    // The Separate layout in the new look (#4206): the one sidebar's column with the Agents' part.
+                    .environment(\.unifiedSidebar, part)
                 #endif
+                    .modifier(TabActivityScope(tab: .chats))
                 #if PERF_SIGNPOST
                     .modifier(PerfTabMount("agents"))
                 #endif
@@ -632,10 +672,9 @@ nonisolated struct ConnectionShown: Encodable, Equatable {
     var body: some TabContent<AppTab> {
         Tab(String(localized: "Messages [Quote Views 4da199]"), systemImage: Theme.Icon.feishuChats, value: AppTab.feishu) {
             TabPage {
+                // The system's tab bar on every tab, the open iPhone Duo's too (#4206): no Assistant | Agents switch drawn
+                // on the pages.
                 LarkConversationsView().modifier(TabActivityScope(tab: .feishu))
-                #if os(iOS)
-                    .modifier(PageTabSwitch())
-                #endif
             }
             .equatable()
         }
