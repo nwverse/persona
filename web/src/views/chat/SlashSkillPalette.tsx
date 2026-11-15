@@ -4,9 +4,8 @@ import { rankCommands, SLASH_LIMIT } from "../../lib/composer-commands";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import type { MentionSkill } from "../../lib/skill-mentions";
 import { SkillRow } from "./SkillRow";
-import { SkillCatalogStatus } from "./SkillCatalogStatus";
 import { useSkillCatalog } from "./useSkillCatalog";
-import { SlashPaletteView, type SlashPaletteInput } from "./SlashPalette";
+import { SlashPalette as SlashPaletteView, type SlashPaletteInput } from "./SlashPalette";
 
 type SkillCommand = Command & { skill: MentionSkill };
 const attached = (row: Command | undefined) => row && (row as SkillCommand).skill;
@@ -50,8 +49,7 @@ export function SlashSkillPalette(input: SlashPaletteInput) {
       {...input}
       entries={entries}
       onPick={pick}
-      status={<SkillCatalogStatus status={catalog.status} />}
-      skillsLoading={catalog.status === "loading"}
+      status={catalog.status}
       renderRow={(row, common) => {
         const skill = attached(row);
         return skill && <SkillRow key={skill.id} skill={skill} common={common} compact />;

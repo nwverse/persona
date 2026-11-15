@@ -5,7 +5,7 @@
 import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ComponentProps, type ReactNode, type Ref } from "react";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
 import type { MentionSkill } from "../../lib/skill-mentions";
-import { cx, EASE } from "../../ui/atoms";
+import { cx, EASE, keepFocus } from "../../ui/atoms";
 import { t } from "../../i18n";
 import type { MentionSource } from "./ComposerPanel";
 
@@ -26,7 +26,6 @@ const samePlace = (a: Place | null, b: Place) => a?.side === b.side && a.top ===
 const commandName = (c: Command) => c.word.replace(/^\//, "");
 /** What picking a command types, when that is more than the command itself (Persona's text commands, quick prompts). */
 const typed = (c: Command) => (c.text.trim() === c.word ? "" : c.text.trim());
-const keepFocus = (e: React.SyntheticEvent) => e.preventDefault();
 
 function Description({ c, id, className }: { c: Command; id?: string; className?: string }) {
   const text = typed(c);
@@ -57,10 +56,8 @@ export type SlashPaletteInput = {
   machineId?: string;
   onSkillPick?: (skill: MentionSkill) => void;
   handle?: Ref<SlashPaletteHandle>;
-  /** The skill stage's quiet chunk/catalog status. */
-  status?: ReactNode;
-  /** No final empty message before the first skill answer has had a chance to arrive. */
-  skillsLoading?: boolean;
+  /** The skill stage's chunk or catalog state; loading also suppresses a premature empty message. */
+  status?: "loading" | "error" | "partial";
 };
 
 export type SlashPaletteViewProps = SlashPaletteInput & {
@@ -69,7 +66,7 @@ export type SlashPaletteViewProps = SlashPaletteInput & {
   renderRow?: (row: Command, common: ComponentProps<"button">) => ReactNode;
 };
 
-export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick, source, status, skillsLoading, renderRow }: SlashPaletteViewProps) {
+export function SlashPalette({ rows, entries = rows, active, onHover, onPick, source, status, renderRow }: SlashPaletteViewProps) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -166,7 +163,7 @@ export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick
               );
             })}
           </div>
-        ) : !skillsLoading ? (
+        ) : status !== "loading" ? (
           <div role="status" className="flex h-10 items-center justify-center text-[13px] text-ink-3">
             {t(source?.skills ? "chat-slashpalette.no_match_skills" : "chat-slashpalette.no_match")}
           </div>
@@ -176,7 +173,11 @@ export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick
             <Description c={focused} />
           </div>
         )}
-        {status}
+        {status && (
+          <div role="status" className="mt-1.5 shrink-0 border-t border-line px-[10px] pt-2 pb-1 text-xs text-ink-3">
+            {t(`chat-composerpanel.skills_${status}`)}
+          </div>
+        )}
         {/* each row's description for assistive technology; the card and the line above only show the focused one */}
         <div hidden>
           {entries.map((c, i) => described(c) && <Description key={c.key ?? c.word} c={c} id={`${id}-${i}`} />)}
@@ -198,5 +199,3 @@ export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick
     </div>
   );
 }
-
-export const SlashPalette = SlashPaletteView;
