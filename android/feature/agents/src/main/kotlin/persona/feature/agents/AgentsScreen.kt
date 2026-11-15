@@ -78,11 +78,11 @@ internal fun AgentsScreen(
     // What the list draws: the hub's page, held still for a bounded time while it is scrolled (AgentsFeedHold.kt). The
     // controls and the window size start it over; a rebuilt window is not told apart from a new list.
     val window = androidx.compose.ui.platform.LocalConfiguration.current
-    val requestIds = remember(everyRequest, group, assistant, latestPage.sessions) {
-        requestSessions(shownRequests(everyRequest, group, assistant, latestPage.sessions))
-    }
-    val feed = rememberAgentsFeed(latestPage, requestIds, listOf(group?.namespace, assistant.id, assistant.group,
-        latestPage.settings, latestPage.preferences, PersonaTheme.style, window.screenWidthDp, window.screenHeightDp), listState)
+    // The pill counts what the Needs You section of a page would draw, from the requests the screen shows for that page.
+    val feed = rememberAgentsFeed(latestPage, { p ->
+        agentsFeedNeedsYou(p, shownRequests(everyRequest, group, assistant, p.sessions)) { key -> model.operationState.value.sessions[key]?.closed == true }
+    }, listOf(group?.namespace, assistant.id, assistant.group, latestPage.settings, latestPage.preferences, PersonaTheme.style,
+        window.screenWidthDp, window.screenHeightDp), listState)
     val page = feed.page
     LaunchedEffect(model, assistant) { model.show(assistant) }
     // The shell keeps the picked computer for the next launch: it follows the filter however that changes (a chip, or
@@ -700,7 +700,8 @@ internal fun AgentsScreen(
                 }
             }
         }
-        AgentsFeedNote(feed, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = Tokens.Space.l))
+        AgentsFeedNote(feed, latestPage, Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+            .padding(horizontal = Tokens.Space.page).padding(bottom = Tokens.Space.l))
         persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
     }
     }
