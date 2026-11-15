@@ -48,6 +48,8 @@ struct PendingCards: View {
         /// Why its session doesn't let the app answer it, said under the greyed card (#6868). Nil on one it can answer,
         /// and on a terminal dialog's step answered already (greyed until the next one comes, #2970).
         var blocked: AnswerBlock? = nil
+        /// Whose card it is when it is not the chat's own session's (a side session's, #7944): a line under its title.
+        var from: String? = nil
         var id: String { interaction.id }
     }
 
@@ -98,7 +100,7 @@ struct PendingCards: View {
                 VStack(spacing: Theme.Space.m) {
                     ForEach(over ? Self.urgentFirst(cards) : cards) { card in
                         VStack(alignment: .leading, spacing: Theme.Space.s) {
-                            InteractionPanel(interaction: card.interaction).disabled(!card.enabled)
+                            InteractionPanel(interaction: card.interaction, from: card.from).disabled(!card.enabled)
                                 .chatMark("chat.card." + card.interaction.id)
                             if let blocked = card.blocked {
                                 CardBlockedLine(block: blocked, key: card.interaction.sessionKey)
