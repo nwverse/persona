@@ -26,10 +26,12 @@ import (
 // messages) and its takeover of an archived agent with that agent's own provider (#8131: 460,362 B over main's 459,314 B,
 // with main's 35 B of headroom). Raised by 484 B for the Paseo bridge answering Persona's own tools on every provider
 // and marking Auto Accept launchers (#8141: 460,876 B over main's 460,392 B, with main's 5 B of headroom). Raised by
-// 494 B for the Paseo bridge's permission modes on launchers and rows, its providers' names, and a Codex agent's way
-// back to its own mode (#8261: 461,370 B over main's 460,876 B, with main's 5 B of headroom).
+// 784 B for the Paseo bridge reading an agent Paseo let go only while its chat is open (#8132: 461,660 B over main's
+// 460,876 B, with main's 5 B of headroom). Raised by 474 B for the Paseo bridge's permission modes on launchers and
+// rows, its providers' names, and a Codex agent's way back to its own mode (#8261: 462,134 B over main's 461,660 B,
+// with main's 5 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 461_375
+	const budget = 462_139
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

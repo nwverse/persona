@@ -31,6 +31,8 @@ type SessionCapabilities struct {
 	// its own. Here rather than on Session, which has no room left (TestSessionFitsItsSizeClass), in the bools' padding.
 	// Absent from older nodes and hubs, and wherever Modes is true.
 	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
+	// StopCause qualifies stopped-session recovery; absent/unknown never permits a supervisor resume.
+	StopCause StopCause `json:"stop_cause,omitempty"`
 	// Close is independent of terminal access. Absent on older nodes, where clients retain terminal-only closing.
 	Close *bool `json:"close,omitempty"`
 	// Rename permits session.rename's title without a terminal (a runtime's session, #6294). Absent on older nodes,

@@ -76,8 +76,9 @@ func TestPermissionModesGoAsAList(t *testing.T) {
 	if string(l) != `{"name":"grok","base_url":"","model":"","permission_modes":["default"],"display_name":"Grok"}` {
 		t.Fatalf("launcher %s", l)
 	}
-	if size := reflect.TypeFor[SessionCapabilities]().Size(); size != 64 {
-		t.Fatalf("SessionCapabilities is %d bytes, was 64", size)
+	// In the bools' padding: the first word, which the six bools leave room in, so the struct grows by nothing.
+	if f, _ := reflect.TypeFor[SessionCapabilities]().FieldByName("PermissionModes"); f.Offset+f.Type.Size() > 8 {
+		t.Fatalf("PermissionModes at byte %d, past the bools' word", f.Offset)
 	}
 	// Comparable, or this does not build: code compares launchers (models_launchers_push.go).
 	var a, b Launcher
