@@ -527,7 +527,7 @@ func messagesThinkingDisabledUnsupported(model string) bool {
 }
 
 // ApplyReasoningEffort keeps connection probes and runtime calls on the same wire format.
-// False means this protocol cannot express the requested effort; Responses validates model-specific levels upstream.
+// False means this protocol cannot express the requested effort; Chat and Responses validate model-specific levels upstream.
 func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
 	if effort == "" {
 		return true
@@ -535,7 +535,10 @@ func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(effort))
 	switch api {
 	case "chat":
-		return false
+		if normalized == "off" || normalized == "none" || normalized == "disabled" {
+			effort = "none"
+		}
+		body["reasoning_effort"] = effort
 	case "responses":
 		if normalized == "off" || normalized == "none" || normalized == "disabled" {
 			effort = "none"

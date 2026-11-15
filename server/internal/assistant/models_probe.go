@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -46,6 +47,10 @@ type probeInput struct {
 	Preset string `json:"preset"`
 	// ViaMachine: the computer the requests go through (models_via.go); nil keeps the stored one, "" this manager.
 	ViaMachine *string `json:"via_machine"`
+	// Agent: the agent the provider runs as the form has it (claude, codex, …; "" for a direct API connection), so
+	// discovery asks a gateway's capability report about the protocol it goes on (capabilityProtocol); nil (an app
+	// that doesn't send it) keeps a stored provider's own.
+	Agent *string `json:"agent"`
 }
 
 // The credential header(s) a probe sends (probeTarget.auth). A request naming none ("") gets the stored provider's
@@ -69,7 +74,8 @@ func launchAuth(auth string) string {
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
 	base, key, headers, model, effort, proxy, noProxy, api, kind, via string
-	// agent is a stored provider's agent (AgentType), "" for one not stored.
+	models                                                            []proto.ProviderModel
+	// agent is the agent the request names, else a stored provider's (AgentType); "" for neither.
 	agent string
 	// through sends the requests through via's node (models_via.go).
 	through http.RoundTripper
@@ -104,7 +110,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
 		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, effort: l.Effort, proxy: l.Proxy, noProxy: l.NoProxy, api: l.API, kind: l.Kind, via: l.ViaMachine,
-			agent: l.AgentType()}
+			models: l.Models, agent: l.AgentType()}
 		if t.kind == "" {
 			t.kind = "launcher" // Stored entries without kind are legacy launchers.
 		}
@@ -139,6 +145,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	}
 	if in.Effort != nil {
 		t.effort = strings.TrimSpace(*in.Effort)
+	}
+	if in.Agent != nil {
+		t.agent = strings.TrimSpace(*in.Agent)
 	}
 	if in.Preset != "" {
 		pr, ok := s.presetByID(ctx, in.Preset)
@@ -197,6 +206,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	t.base = strings.TrimRight(strings.TrimSpace(t.base), "/")
 	if t.via != "" {
 		t.through = viaNode{s: s, machine: t.via}
+	}
+	if t.api == "chat" {
+		t.effort = chatEffortForModel(t.models, t.model, t.effort)
 	}
 	return t, nil
 }
@@ -496,21 +508,33 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		out["code"] = "unsupported_effort"
 		return out
 	}
-	body, _ := json.Marshal(payload)
 	started := time.Now()
 	auto := t.auth == probeAuthAuto
-	res, err := t.send(ctx, http.MethodPost, t.endpoint(path), body)
-	if err == nil && t.api == "chat" && res.StatusCode == http.StatusBadRequest {
+	var res *http.Response
+	renamedTokens, droppedEffort := false, false
+	for {
+		body, _ := json.Marshal(payload)
+		res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
+		if err != nil || t.api != "chat" || res.StatusCode != http.StatusBadRequest {
+			break
+		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		if readErr == nil && ai.ChatRequiresCompletionTokens(raw) {
+		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && ai.ChatRejectsReasoningEffort(raw) {
+			droppedEffort = true
+			delete(payload, "reasoning_effort")
+			t.effort = "" // the answer did not verify the requested effort
+			s.logf("assistant: chat connection test: gateway rejected reasoning_effort; retrying once without it")
+			continue
+		}
+		if readErr == nil && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
+			renamedTokens = true
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256
-			body, _ = json.Marshal(payload)
-			res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
-		} else {
-			res.Body = io.NopCloser(bytes.NewReader(raw))
+			continue
 		}
+		res.Body = io.NopCloser(bytes.NewReader(raw))
+		break
 	}
 	if err != nil || res.StatusCode/100 != 2 {
 		msg, code := t.failure(ctx, res, err)
@@ -638,9 +662,13 @@ func chatProbeCompleted(body io.Reader) bool {
 // (applyCapabilities), its models filled in from the catalog.
 func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[string]any {
 	models := []proto.ProviderModel{}
+	guessed := map[string]bool{} // models whose "no thinking level" is only a guess (guessNoEffort)
 	enriched := func() []proto.ProviderModel {
 		out := make([]proto.ProviderModel, len(models))
 		for i, m := range models {
+			if guessed[m.ID] {
+				m = guessNoEffort(m)
+			}
 			out[i] = enrichDiscoveredModel(m)
 		}
 		return out
@@ -687,7 +715,8 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		if err != nil {
 			return failed(nil, err)
 		}
-		listed, ok := parseModelsList(raw)
+		listed, guesses, ok := parseModelsList(raw)
+		maps.Copy(guessed, guesses)
 		if !ok {
 			return fail(pt(i18n.From(ctx), "models_unreadable"))
 		}
@@ -770,7 +799,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		case meta.HasMore:
 			return fail(pt(i18n.From(ctx), "models_pagination"))
 		default:
-			models = t.applyCapabilities(ctx, models)
+			models = t.applyCapabilities(ctx, models, guessed)
 			// no auth: a model list may answer without looking at the key, so only the test says what a launch needs
 			return map[string]any{"models": enriched()}
 		}
@@ -809,7 +838,7 @@ func enrichDiscoveredModel(m proto.ProviderModel) proto.ProviderModel {
 // {"models":[…]} and a bare array, of objects or of id strings; duplicates dropped, order kept, and entries the list
 // marks as no chat model left out. An object's other metadata is read in the gateway's own words (readModelMeta),
 // which enrichDiscoveredModel settles.
-func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
+func parseModelsList(raw []byte) (models []proto.ProviderModel, guessed map[string]bool, ok bool) {
 	var list []json.RawMessage
 	if json.Unmarshal(raw, &list) != nil {
 		var wrapped struct {
@@ -817,7 +846,7 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			Models []json.RawMessage `json:"models"`
 		}
 		if json.Unmarshal(raw, &wrapped) != nil {
-			return nil, false
+			return nil, nil, false
 		}
 		switch {
 		case wrapped.Data != nil:
@@ -825,7 +854,7 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 		case wrapped.Models != nil:
 			list = wrapped.Models
 		default:
-			return nil, false
+			return nil, nil, false
 		}
 	}
 	var out []proto.ProviderModel
@@ -848,8 +877,15 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			}
 			m.ContextWindow = firstTokens(fields["max_model_len"], fields["context_length"], fields["context_window"],
 				fields["max_context_length"], fields["max_input_tokens"])
-			if !readModelMeta(fields, &m) {
+			chat, guess := readModelMeta(fields, &m)
+			if !chat {
 				continue
+			}
+			if guess {
+				if guessed == nil {
+					guessed = map[string]bool{}
+				}
+				guessed[strings.TrimSpace(id)] = true
 			}
 		}
 		id = strings.TrimSpace(id)
@@ -864,7 +900,7 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 		seen[id] = len(out)
 		out = append(out, m)
 	}
-	return out, true
+	return out, guessed, true
 }
 
 func (s *Service) providerProbeRoutes() {
