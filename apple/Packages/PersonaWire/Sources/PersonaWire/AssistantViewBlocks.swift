@@ -2,19 +2,19 @@ import Foundation
 
 /// Standalone assistant view fences, matching sdk/go/wire/assistantblocks.go.
 /// Extraction keeps invalid, oversized and excess blocks; validation belongs to the caller.
-nonisolated enum AssistantViewBlocks {
-    static let maxBlocks = 3
-    static let maxContentBytes = 64 << 10
+public nonisolated enum AssistantViewBlocks {
+    public static let maxBlocks = 3
+    public static let maxContentBytes = 64 << 10
 
-    nonisolated struct Block: Hashable, Sendable {
-        let ordinal: Int
-        let content: String
-        let closed: Bool
+    public nonisolated struct Block: Hashable, Sendable {
+        public let ordinal: Int
+        public let content: String
+        public let closed: Bool
         /// The entire original fence, including the closing line's newline, or through EOF if unclosed.
-        let range: Range<String.Index>
+        public let range: Range<String.Index>
     }
 
-    static func parse(_ text: String) -> [Block] {
+    public static func parse(_ text: String) -> [Block] {
         let scalars = text.unicodeScalars
         var blocks: [Block] = []
         var opening: Fence?
@@ -56,7 +56,7 @@ nonisolated enum AssistantViewBlocks {
     }
 
     /// Used by trailing source-tag recognition: a marker inside an unfinished example is ordinary user text.
-    static func isInsideFence(_ text: String) -> Bool {
+    public static func isInsideFence(_ text: String) -> Bool {
         let scalars = text.unicodeScalars
         var opening: Fence?, position = text.startIndex
         while position < text.endIndex {

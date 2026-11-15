@@ -1,5 +1,6 @@
 import BeautifulUI
 import SwiftUI
+import PersonaWire
 
 @MainActor final class InboxAccountState: ObservableObject {
     @Published var accounts = InboxMailAccounts.cached(AppModel.shared.assistantManagerID)

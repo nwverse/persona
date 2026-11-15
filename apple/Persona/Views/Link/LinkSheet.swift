@@ -4,6 +4,7 @@ import SwiftUI
 import UIKit
 #endif
 import WebKit
+import PersonaWire
 
 // Links open inside the app, Telegram-style (CLAUDE.md): a sheet that rises to 60%, drags up to full screen and down
 // to close, with the chat behind it still usable. Feishu docs open in the native reader and company-feed links as the

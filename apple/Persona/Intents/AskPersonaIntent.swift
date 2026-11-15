@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import PersonaWire
 
 /// "Ask Persona": sends the sentence into the assistant's main conversation (the Persona tab) and waits a little for the
 /// answer, so Siri can speak it. Runs in the background straight against the hub (Keychain.serverConfig).

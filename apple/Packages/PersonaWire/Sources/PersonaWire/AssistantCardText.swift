@@ -4,13 +4,13 @@ import Foundation
 /// what Siri says), a ```persona-view block is its `fallback`, the words the assistant wrote for exactly this, and an
 /// old ```persona-card block its title. A block with neither, one that does not parse, or one still streaming is
 /// [Card]: never its JSON. Compiled into the watch (watchOS 10 APIs only).
-nonisolated enum AssistantCardText {
-    static let view = "persona-view"
-    static let card = "persona-card"
-    static var mark: String { String(localized: "[Card]", comment: "Stands in for a card in plain text") }
+public nonisolated enum AssistantCardText {
+    public static let view = "persona-view"
+    public static let card = "persona-card"
+    public static var mark: String { String(localized: "[Card]", comment: "Stands in for a card in plain text") }
 
     /// `text` with every card block replaced by its words; anything else is left as it is.
-    static func replacingCards(_ text: String) -> String {
+    public static func replacingCards(_ text: String) -> String {
         guard text.range(of: view, options: .caseInsensitive) != nil || text.range(of: card, options: .caseInsensitive) != nil else { return text }
         var out = ""
         var inside: Fence?
@@ -51,7 +51,7 @@ nonisolated enum AssistantCardText {
     }
 
     /// The words for one block's content.
-    static func words(_ language: String, json: String) -> String {
+    public static func words(_ language: String, json: String) -> String {
         guard let data = json.data(using: .utf8),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return mark }
         if language == view, let f = nonEmpty(object["fallback"]) { return f }

@@ -2,6 +2,7 @@ import MarkdownUI
 import PDFKit
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 nonisolated struct FileContent: Decodable, Sendable {
     var path: String

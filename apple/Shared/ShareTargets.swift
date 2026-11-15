@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Where Share › Persona sends (#1460): Persona's main conversation, another of its conversations, an agent, or a new
 /// chat. The rules are here, not in the extension, so PersonaTests can hold them; the extension (`PersonaShare/`) draws

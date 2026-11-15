@@ -3,6 +3,7 @@ import BeautifulUI
 import OSLog
 import Speech
 import SwiftUI
+import PersonaWire
 
 /// The composer's box, shared by an agent's chat (`Composer`) and a new assistant conversation (`StarterComposer`):
 /// BeautifulUI's prompt bar laid out as a toolbar. The draft is on top; under it + (photos, camera, files), @, /, the
