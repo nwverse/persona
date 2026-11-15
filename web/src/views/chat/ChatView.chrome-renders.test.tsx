@@ -18,7 +18,8 @@ vi.mock("./SessionDialogs", async (load) => {
   const { createElement } = await import("react");
   return {
     ...real,
-    SessionInfoDialog: (p: Parameters<typeof real.SessionInfoDialog>[0]) => (renders.info++, createElement(real.SessionInfoDialog, p)),
+    // a lazy dialog now (its chunk loads on its first open): still drawn by the header on each of its renders
+    SessionInfoDialog: (p: ComponentProps<typeof real.SessionInfoDialog>) => (renders.info++, createElement(real.SessionInfoDialog, p)),
   };
 });
 vi.mock("./PermissionPicker", async (load) => {

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // Session info leaves out counts nobody gives (#8261): a runtime's session with no transcript on its computer says so
 // (`usage_unknown`, its zeros only standing in for older apps), and shows no "0 tokens" or "0" turns. A session that
-// lists its own permission modes runs in one of them: no mode reported is "Launcher default".
+// lists its own permission modes runs in one of them: no mode reported is "Launcher default". The chat's header draws
+// it from SessionDialogs, which loads it on its first open (its own chunk, off the first screen).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,8 @@ import { initI18n } from "../../i18n";
 import { setToken } from "../../lib/api";
 import { LAUNCHER_DEFAULT, modeTitle } from "../../lib/session-actions";
 import type { Session } from "../../lib/types";
-import { SessionInfoDialog } from "./SessionDialogs";
+import { SessionInfoDialog as LazySessionInfo } from "./SessionDialogs";
+import { SessionInfoDialog } from "./SessionInfoDialog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let info: Record<string, unknown>;
@@ -64,5 +66,15 @@ describe("Session info", () => {
     expect(rows.Context).toBe("1.2K tokens");
     expect(rows.Turns).toBe("0");
     expect(rows["Permission mode"]).toBe(modeTitle("plan"));
+  });
+
+  it("is nothing until its first open, then the same dialog from its own chunk", async () => {
+    info = { session_id: "c1", model: "claude-opus-5-5", context_tokens: 1200 };
+    await act(async () => root.render(<LazySessionInfo session={claude} machineName="Mac" open={false} onClose={() => {}} />));
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+    await act(async () => root.render(<LazySessionInfo session={claude} machineName="Mac" open onClose={() => {}} />));
+    for (let i = 0; i < 20 && !rowsOf().Context; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(rowsOf().Context).toBe("1.2K tokens");
   });
 });
