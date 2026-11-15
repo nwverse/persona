@@ -46,18 +46,24 @@ func TestWorkAgentStartTypesTheModel(t *testing.T) {
 	}
 }
 
+func newWorkAgentTestTab(t *testing.T) (n *Node, f *fakeHerdr, home string, created *host.Created) {
+	t.Helper()
+	n, f, home = herdrNode(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	created, err := n.newTab(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), home, "w1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n, f, home, created
+}
+
 // Abandoning after the start's context was cancelled still quits the work agent under its pane-derived session id,
 // without closing the terminal it leaves for the user.
 func TestAbandonStartAfterCancelQuitsAgentAndKeepsTheTab(t *testing.T) {
 	for _, kind := range []string{piAgent, cursorAgent, agyAgent} {
 		t.Run(kind, func(t *testing.T) {
-			n, f, home := herdrNode(t)
-			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
-			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
-			created, err := n.newTab(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), home, "w1", "", "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			n, f, home, created := newWorkAgentTestTab(t)
 			id := otherSession(host.Agent{Agent: kind, PaneID: "w1:p2"})
 			running := agentOf(kind, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, kind)
 			f.reply("session.snapshot", snapshot(nil, nil, []any{running}, nil))
@@ -73,6 +79,98 @@ func TestAbandonStartAfterCancelQuitsAgentAndKeepsTheTab(t *testing.T) {
 			})
 			closesNothing(t, f)
 		})
+	}
+}
+
+func TestAbandonStartWaitsForLateAgent(t *testing.T) {
+	for _, kind := range []string{piAgent, cursorAgent, agyAgent} {
+		t.Run(kind, func(t *testing.T) {
+			n, f, home, created := newWorkAgentTestTab(t)
+			id := otherSession(host.Agent{Agent: kind, PaneID: "w1:p2"})
+			running := agentOf(kind, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, kind)
+			refreshes := 0
+			f.handle("session.snapshot", func(map[string]any) any {
+				refreshes++
+				if refreshes == 1 {
+					return snapshot(nil, nil, nil, nil)
+				}
+				return snapshot(nil, nil, []any{running}, nil)
+			})
+			quitsOn(f, "w1:p2", id, nil, shellPane("w1:p2", "w1:t2", "w1", home, id))
+			withStop(t, 1, time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := n.abandonStart(ctx, created, kind, ctx.Err()); err != context.Canceled {
+				t.Fatalf("abandonStart: %v", err)
+			}
+			if refreshes < 2 {
+				t.Fatalf("only %d refresh before the agent appeared", refreshes)
+			}
+			assertTrace(t, f.trace("pane.send_keys"), []string{
+				sendKeys("w1:p2", "ctrl+c"), sendKeys("w1:p2", "ctrl+c"),
+			})
+			closesNothing(t, f)
+		})
+	}
+}
+
+func TestAbandonStartWithoutReportedAgentDoesNotInventSession(t *testing.T) {
+	n, f, _, created := newWorkAgentTestTab(t)
+	old := abandonStartWait
+	abandonStartWait = 20 * time.Millisecond
+	t.Cleanup(func() { abandonStartWait = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := n.abandonStart(ctx, created, cursorAgent, ctx.Err()); err != context.Canceled {
+		t.Fatalf("abandonStart: %v", err)
+	}
+	assertTrace(t, f.trace("pane.send_keys"), []string{sendKeys("w1:p2", "ctrl+c")})
+	closesNothing(t, f)
+}
+
+func TestAbandonStartLeavesAdoptedPaneUntouched(t *testing.T) {
+	n, f, home, created := newWorkAgentTestTab(t)
+	running := agentOf(cursorAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, cursorAgent)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{running}, nil))
+	f.reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	adoptedCtx := withAdoptedPane(ctx, created, []string{"-zsh"})
+	if err := n.abandonStart(adoptedCtx, created, cursorAgent, ctx.Err()); err != context.Canceled {
+		t.Fatalf("abandonStart: %v", err)
+	}
+	if got := f.trace("session.snapshot", "pane.send_keys"); len(got) != 0 {
+		t.Errorf("touched the adopted pane: %v", got)
+	}
+	closesNothing(t, f)
+}
+
+func TestWorkAgentLaunchRunErrorKeepsTabAndQuitsAgent(t *testing.T) {
+	n, f, home := herdrNode(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	id := otherSession(host.Agent{Agent: cursorAgent, PaneID: "w1:p2"})
+	running := agentOf(cursorAgent, "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", home, cursorAgent)
+	f.handle("pane.send_input", func(map[string]any) any {
+		return herdrFail{Code: "unavailable", Message: "response lost"}
+	})
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=cursor") {
+			f.reply("session.snapshot", snapshot(nil, nil, []any{running}, nil))
+		}
+	})
+	quitsOn(f, "w1:p2", id, nil, shellPane("w1:p2", "w1:t2", "w1", home, id))
+	withStop(t, 1, time.Millisecond)
+	_, err := n.startWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), home, cursorAgent, cursorAgent, "", "do the thing", "w1", "")
+	if err == nil || !strings.Contains(err.Error(), "run launcher") {
+		t.Fatalf("start: %v", err)
+	}
+	assertTrace(t, f.trace("pane.send_keys"), []string{
+		sendKeys("w1:p2", "ctrl+c"), sendKeys("w1:p2", "ctrl+c"),
+	})
+	closesNothing(t, f)
+	if got := f.trace("agent.prompt"); len(got) != 0 {
+		t.Errorf("delivered the first prompt: %v", got)
 	}
 }
 
