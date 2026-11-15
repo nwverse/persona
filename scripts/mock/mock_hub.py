@@ -10057,6 +10057,54 @@ def mock_notify(interaction_id):
     return {"sent": len(targets)}, 200
 
 
+def notify_ws(event):
+    """Sends a notify event to the connections that declared ws_notify, as the hub's notifyWSFrom does; how many."""
+    with FAULT_LOCK:
+        targets = [c["send"] for c in CLIENTS.values() if "ws_notify" in c["features"]]
+    for send in targets:
+        try: send(event)
+        except OSError: pass
+    return len(targets)
+
+
+def mock_assistant_ask(q):
+    """GET /mock/assistant_ask?session=<conversation>[&question=…]: an assistant conversation (the main chat, a leader's)
+    calls ask_user (#8145): its card reaches every app, and the hub pushes it as the manager asks (kind interaction, the
+    hub's words for a phone) to the connections that declared ws_notify."""
+    sid = q.get("session", [""])[0]
+    s = next((x for x in ASSISTANT if x["session_id"] == sid), None)
+    if s is None:
+        return {"error": "no assistant conversation " + sid}, 404
+    question = q.get("question", [""])[0] or "要把明早的会挪到下午吗？"  # i18n-ignore: what the assistant asks
+    with REQUEST_LOCK:
+        n = len(INTERACTIONS)
+        ix = {"id": "ix_assistant_ask_%d_%s" % (n, uuid.uuid4().hex[:6]), "machine_id": s["machine_id"], "session_id": sid,
+              "session_title": s.get("title") or "", "kind": "question", "created_at": ago(minutes=0), "expires_at": later(minutes=30),
+              "tool_name": "ask_user", "questions": [{"question": question, "header": "决定", "multi_select": False,  # i18n-ignore
+                                                      "options": [{"label": "好"}, {"label": "先不"}]}]}  # i18n-ignore
+        INTERACTIONS.append(ix)
+    for out, _ in list(LIVE):
+        try: out({"type": "interaction", "interaction": ix})
+        except Exception: pass
+    sent = notify_ws({"type": "notify", "kind": "interaction", "machine_id": ix["machine_id"], "session_id": sid,
+                      "title": "Persona 在问你", "subtitle": s.get("title") or "Persona",  # i18n-ignore: the hub's words
+                      "body": question, "interaction_id": ix["id"]})
+    return {"id": ix["id"], "sent": sent}, 200
+
+
+def mock_notify_user(q):
+    """GET /mock/notify_user?session=<conversation>&body=…[&title=…]: the assistant's notify_user from that conversation
+    (#8145): the hub's "assistant" notify (fleet_link.go deliverPushFrom, NotifyPush) to the connections that declared
+    ws_notify."""
+    sid = q.get("session", [""])[0]
+    s = next((x for x in ASSISTANT if x["session_id"] == sid), None)
+    if s is None:
+        return {"error": "no assistant conversation " + sid}, 404
+    sent = notify_ws({"type": "notify", "kind": "assistant", "machine_id": s["machine_id"], "session_id": sid,
+                      "title": q.get("title", ["Persona"])[0], "subtitle": "", "body": q.get("body", [""])[0]})
+    return {"sent": sent}, 200
+
+
 def renew_requests(minutes):
     """GET /mock/renew?minutes=30: the pending requests expire [minutes] from now again (their deadlines count from
     when the mock started) and go out to the open apps as updates, with the fleet: answering from a notification or a
@@ -24765,6 +24813,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/tool_call": return self.send_json(mock_tool_call(q.get("name", [""])[0], q.get("args", ["{}"])[0]))
         if p == "/mock/fleet": return self.send_json(*set_fleet_mode(q.get("mode", [""])[0]))
         if p == "/mock/notify": return self.send_json(*mock_notify(q.get("interaction", [""])[0]))
+        if p == "/mock/assistant_ask": return self.send_json(*mock_assistant_ask(q))
+        if p == "/mock/notify_user": return self.send_json(*mock_notify_user(q))
         if p == "/mock/renew": return self.send_json(*renew_requests(int(q.get("minutes", ["30"])[0] or 30)))
         if p == "/api/v1/auth/tokens": return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH})
         if p == "/mock/sent": return self.send_json({"sent": SENT})
