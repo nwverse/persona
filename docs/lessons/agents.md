@@ -1,5 +1,13 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## An acknowledged Enter does not confirm Codex consumed a message (#8354)
+
+Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
+and the blocked-session fallback; preserve drafts and report unknown delivery if it cannot be observed. Do not recover
+a pre-existing draft merely because it equals earlier assistant text: equality proves neither ownership nor non-delivery.
+Use an isolated fixture that acknowledges Enter without consuming the paste, and prove it fails without the production
+check. This demonstrates the confirmation gap, not the cause of any particular live incident.
+
 # A continuation must stay on its original to-do (#6820)
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.

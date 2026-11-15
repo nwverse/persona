@@ -3597,6 +3597,17 @@ final class AppModel {
     }
 
     /// Shared by native deep links and settings links supplied by channels.
+    /// This iPhone's guided setup (`persona://iphone/setup`, #8199).
+    func openIPhoneSetup() {
+        settingsPath = SettingsPage.iphoneSetupPath
+        #if os(macOS)
+        MacShellState.shared.go(.settings, self)
+        #else
+        selectedTab = .settings
+        if tabRouter != nil { shellSettings = true }
+        #endif
+    }
+
     func openSentRecords() {
         settingsPath = SettingsPage.sentPath
         #if os(macOS)
