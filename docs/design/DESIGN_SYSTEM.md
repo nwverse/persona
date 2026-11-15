@@ -731,6 +731,7 @@ A list keeps no standing search field of its own beside the app's one search (#6
 A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete.
 
 - Section headers (`JSectionHeader`) measure the complete title, count and ordinary actions in one layout pass. Only when they do not fit, the actions move into a `JMenu` and the title wraps as needed so the title and count stay fully visible; fitting layouts stay pixel-identical. The overflow decision is made during measurement, never by switching after a truncated frame. Button labels still never wrap.
+- Command rows in the composer's "/" list (`ComposerSuggestions`) measure the complete command and detail. Only when they do not fit, the detail moves below the command and wraps without a line limit; fitting rows stay pixel-identical. Quick-message and @ rows keep their single-line layout (#7322).
 
 Android's `JMenu` takes a choice list in groups: an action can open a group with a title (`JAction.section`, drawn after a rule; `JActionSheet` draws it too, over its labels' column, as the Agents ⋯'s Display) and carry a quiet line under its label (`JAction.subtitle`), as the To-dos list's Show (each choice with how many it would show) and Sort by (#3740). A status section's count can sit in a capsule of its state's tone (`JSectionHeader` `countTone`, the To-dos list's sections, #3712), as iOS `CountBadge`. A one-line notice over a list keeps its action on its line as a text button (`JNotice` `inlineAction`: "1 more waiting on you, not in This week · Show all").
 
@@ -1480,7 +1481,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
   count three things and say so: "N pending" the conversation's own cards in the stack, "N more" the tasks' other
   questions, and Needs you its rows (one for each task or Agent that asks, plus the conversation's own cards, plans and
-  drafts). An open plan is also a card among the conversation's lines (iOS `FeedLine`, Android on Glass `GlassPlanCard`), at the
+  drafts). An open plan is also a card among the conversation's lines (iOS `FeedLine`, web `FeedLineView` #8193, Android on Glass `GlassPlanCard`), at the
   end of the exchange it happened in: its tasks, where each would run, "Start these directly", then Start, Edit and Don't start;
   once started the hand-off cards take its place, and a dismissed one reads "Not started · N tasks". A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
   and its cards are; it never brings a card into the stack, which is the conversation's own. On Android the two places

@@ -121,7 +121,7 @@ The companion's `--port` / `--host` must match pi-web (default `127.0.0.1:30141`
 
 - Only sessions running in pi processes with this extension installed are visible, plus on-disk sessions from the last 7 days (with the companion). Without pi-web running, non-running sessions can be viewed but not messaged.
 - pi terminals outside herdr have no terminal display and cannot be closed from the phone; those inside herdr can.
-- The phone cannot yet create a new pi in herdr (creation goes through pi-web); stopped pi sessions in herdr can be resumed from the phone.
+- The phone cannot yet create a new pi in herdr by itself (the app's create goes through pi-web); `task_plan` and `agent_start` with `launcher: pi` do, in a herdr pane (`docs/integrations/launchers.md`, “Work agents”). Stopped pi sessions in herdr can be resumed from the phone.
 - pi itself has no plan approval, so there is no corresponding card.
 - pi-web's HTTP API is not a public, stable API (the companion uses only `POST /api/agent/new` and `POST /api/agent/<id>`). Run the end-to-end tests below after upgrading pi-web.
 
