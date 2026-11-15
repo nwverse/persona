@@ -26,14 +26,18 @@ func releaseBuild(t *testing.T, says string) ([]byte, InstallSource) {
 	return buf.Bytes(), InstallSource{Size: int64(buf.Len()), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
 }
 
+// waitJob polls the job until it is no longer running, failing after 10 seconds.
 func waitJob(t *testing.T, m *Manager) *Job {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(10 * time.Second)
 	for m.Job().State == JobRunning {
-		if time.Now().After(deadline) {
+		select {
+		case <-tick.C:
+		case <-deadline:
 			t.Fatal("the job still runs")
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 	return m.Job()
 }
