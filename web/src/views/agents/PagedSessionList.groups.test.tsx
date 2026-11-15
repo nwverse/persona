@@ -106,6 +106,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setShown(true);
   act(() => root.unmount());
   host.remove();
   vi.useRealTimers();
@@ -136,6 +137,11 @@ const rowsIn = (section: HTMLElement) => [...section.querySelectorAll<HTMLElemen
 async function toggle(section: HTMLElement) {
   await act(async () => heading(section).click());
   await settle();
+}
+const hubHint = () => { for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn(); };
+function setShown(shown: boolean) {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => shown ? "visible" : "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
 }
 async function hint() {
   await act(async () => {
@@ -269,6 +275,28 @@ describe("the list by computer", () => {
   });
 });
 
+describe("a list by group whose first read fails", () => {
+  // audit item 4: the groups come from the root list's counts, and its failed read left them on "Loading…" for good
+  it("says why with Retry instead of loading for good, and draws the groups once Retry reads them", async () => {
+    localStorage.setItem("persona.agentBrowseBy", "machine");
+    const answer = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(() => Promise.reject(new Error("HTTP 500")));
+    await list.load().catch(() => {});
+    await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list"
+      label={(_, id) => NAMES[id] ?? id} renderRow={(r) => <span data-row={r.id}>{r.id}</span>} />));
+    await settle();
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    const alerts = [...host.querySelectorAll('[role="alert"]')].map((el) => el.textContent);
+    expect(alerts).toEqual(["HTTP 500"]);
+    vi.mocked(api).mockImplementation(answer);
+    const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("sidebar.retry"))!;
+    await act(async () => retry.click());
+    await settle();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(sections().map(summary)).toEqual(["MacBook 1 3", "Windows PC 2", "Lab 1", "NAS 1"]);
+  });
+});
+
 describe("the list by project, on a hub with the catalog", () => {
   it("makes a repository on two computers one project that lists both directories and their sessions together", async () => {
     await show();
@@ -284,10 +312,10 @@ describe("the list by project, on a hub with the catalog", () => {
     // a row is told the group it is under: the sidebar names the computer on a row of a project that has several
     expect([...app.querySelectorAll<HTMLElement>("[data-row]")].map((el) => `${el.dataset.within}:${el.dataset.group}`)).toEqual(["project:app", "project:app", "project:app"]);
     // its remote, then each directory with its computer and how many of the sessions are there
-    const where = [...app.querySelectorAll(`[aria-label="${t("paged-agents.places")}"] li`)]
+    const where = [...app.querySelectorAll(`[aria-label="${t("agents-groupedsessions.places")}"] li`)]
       .map((li) => [li.querySelector("span[title]")!.textContent, li.querySelector("span[aria-hidden]")?.textContent].filter(Boolean).join(" = "));
     expect(where).toEqual(["git.example.com/team/app", "MacBook · ~/code/app = 2", "Windows PC · C:\\code\\App = 1"]);
-    expect(app.querySelector(`[aria-label="${t("paged-agents.places")}"] span[title="MacBook · /Users/me/code/app"]`)).not.toBeNull(); // the whole path on hover
+    expect(app.querySelector(`[aria-label="${t("agents-groupedsessions.places")}"] span[title="MacBook · /Users/me/code/app"]`)).not.toBeNull(); // the whole path on hover
     const read = reads("page").find((path) => params(path).getAll("place").length === 2)!;
     expect(params(read).getAll("place")).toEqual([listPair("mac", "/Users/me/code/app"), listPair("pc", "C:\\code\\App")]);
     expect(params(read).has("project")).toBe(false);
@@ -341,6 +369,22 @@ describe("the list by project, on a hub with the catalog", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
     await hint();
     expect(groupReads()).toBe(2);
+  });
+
+  it("reads nothing for the hints a hidden tab gets, and once for them all when it is shown again", async () => {
+    await show();
+    await browseBy("machine");
+    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    vi.mocked(api).mockClear();
+    await act(async () => setShown(false));
+    for (let i = 0; i < 10; i++) await act(async () => { hubHint(); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2 * SESSION_LIST_METRICS.groupsRefresh); });
+    expect(calls()).toEqual([]);
+    await act(async () => setShown(true));
+    await settle();
+    // each open section reads once, the groups once; the folded section still reads nothing
+    expect(reads("page").map((path) => params(path).get("machine_id")).sort()).toEqual(["lab", "mac", "pc"]);
+    expect(reads("counts")).toHaveLength(1);
   });
 
   it("reads a catalog again while its computers are still answering, less often as it goes on", async () => {

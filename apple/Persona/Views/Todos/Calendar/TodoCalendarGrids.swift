@@ -86,7 +86,7 @@ struct CalendarEntryBlock: View {
                     }
                     Text(verbatim: look.time)
                         .foregroundStyle(entry.overdue ? Theme.danger : Color.secondary)
-                    Color.clear.frame(width: 0, height: 0)
+                    EmptyView()
                 }
                 .font(Theme.Font.label)
                 .lineLimit(1)

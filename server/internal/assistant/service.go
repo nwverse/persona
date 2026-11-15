@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -53,6 +54,8 @@ type Options struct {
 type Service struct {
 	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
 	inboxExt inboxExtensionCache
+	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
+	extTr extTranscriptions
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
@@ -66,8 +69,10 @@ type Service struct {
 	nodeAnswering atomic.Int64
 	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
 	taskStarting atomic.Int64
-	// leaderStarts counts task leaders being started: until one is linked its agent is no leader to the hub (task_leader.go).
+	// leaderStarts counts leaders through linking: only legacy one-shot discovery waits for them (task_leader.go).
 	leaderStarts atomic.Int64
+	// mcpChanges wakes tool discovery when task membership or leader rights change.
+	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
@@ -76,6 +81,9 @@ type Service struct {
 	// (SetExtensions); nil: none (tests).
 	trans              transcribers
 	transcriptionReady transcriptionReadiness
+	// heard is told when the owner speaks in a conversation (extensions.go ownerHeard): the extensions' when they
+	// listen; nil: none.
+	heard ownerHeard
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent humanSends
 
@@ -153,21 +161,22 @@ type Service struct {
 	noBackground bool
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
-	briefsOptional  bool
-	background      backgroundBook  // supervise_background.go
-	autoRuns        autoReviewBook  // supervise_autoreview.go
-	reports         reportBook      // reports.go
-	upReports       reportRate      // agent_control.go: report_to_supervisor
-	noteRate        reportRate      // todo_decisions.go: todo_decision_add
-	dispatch        dispatchBook    // dispatch.go: dispatch_start, dispatch_read
-	admission       admissionBook   // admission.go: execution-agent resource and direction gate
-	adoptMu         sync.Mutex      // agent_control.go: one agent_supervise at a time
-	placeBook       placeBook       // places.go
-	savedPromptBook savedPromptBook // saved_prompts.go
-	accept          acceptBook      // acceptance.go
-	deploy          deployProbe     // deploy_check.go: is the work in the running hub
+	briefsOptional bool
+	background     backgroundBook // supervise_background.go
+	autoRuns       autoReviewBook // supervise_autoreview.go
+	reports        reportBook     // reports.go
+	upReports      reportRate     // agent_control.go: report_to_supervisor
+	noteRate       reportRate     // todo_decisions.go: todo_decision_add
+	dispatch       dispatchBook   // dispatch.go: dispatch_start, dispatch_read
+	admission      admissionBook  // admission.go: execution-agent resource and direction gate
+	adoptMu        sync.Mutex     // agent_control.go: one agent_supervise at a time
+	placeBook      placeBook      // places.go
+	accept         acceptBook     // acceptance.go
+	pushQuiet      quietSwitch    // push_quiet.go: the hub's low-distraction switch as last read
+	deploy         deployProbe    // deploy_check.go: is the work in the running hub
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
+	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll bool
 	later            laterBook    // later.go: questions that can wait for a briefing
@@ -196,6 +205,7 @@ type Service struct {
 	fbot       feishuBook        // feishu.go
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
+	tpush      todosPush         // todos.go: the {"type":"todos"} waiting for the rest of its write
 	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
 	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
 	dtree      directionTreeBook // direction_tree.go: the direction tree the apps were last told of
@@ -264,12 +274,14 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
+	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
+	s.dispatchPolicyRoutes() // dispatch_policy_routes.go
 	s.directionTreeRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()
@@ -284,7 +296,7 @@ func New(o Options) *Service {
 	s.workoutRoutes()
 	s.scheduleRoutes()
 	s.placeRoutes()
-	s.savedPromptRoutes()
+	saved.Register(saved.Host{Store: func() any { return s.store() }, Event: s.event, Handle: s.handle, Full: fullRole, BodyErr: writeBodyErr})
 	s.repositoryRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()
@@ -368,6 +380,18 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		id, _ := p["session_id"].(string)
+		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
+			return err
+		}
+		if method == DeviceSessionSend {
+			cfg := s.settings(ctx)
+			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+			}
+		}
+	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {
@@ -546,13 +570,21 @@ func (s *Service) kbReady(ctx context.Context) bool { return s.kbOn(ctx) }
 
 // push asks the hub to push n to the user (notify.request).
 func (s *Service) push(ctx context.Context, n Notification) {
+	_, _ = s.pushResult(ctx, n)
+}
+
+// pushResult is push with the hub's answer: Held/reason say ln mode kept the notice for the briefing instead of
+// alerting the phone (notify_user shows that to the model).
+func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult, error) {
 	n.ID, n.Kind = "ntf_"+randomHex(8), NotifyPush
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
-	if err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err != nil {
 		s.logf("assistant: push: %v", err)
 	}
+	return res, err
 }
 
 // event tells the apps what changed (ws.broadcast: the hub sends ev to them as it is).
@@ -671,6 +703,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
 	s.meetingTurnUserSpoke(r.MachineID, r.SessionID)
