@@ -2652,13 +2652,16 @@ struct ChatView: View {
     private var pendingCards: [PendingCards.Card] {
         let parentPage = style == .dev && host == nil
         var cards = model.interactions(for: key).compactMap { ix -> PendingCards.Card? in
+            // Answerable exactly when nothing blocks it (`canAnswer`); what does is said under the card (#6868).
+            let blocked = model.answerBlock(ix)
             // A side session's card (#7944), here by its `folded_under` as every folded child's: "From Side Session ·
             // <title>", and not while that side's own page is the one shown, which has it.
             if parentPage, ix.sessionKey != key, let side = model.sideChat(of: ix) {
                 guard side != sideUI.shown else { return nil }
-                return PendingCards.Card(interaction: ix, enabled: model.canAnswer(ix), from: Self.sideCardSource(side, ix, model))
+                return PendingCards.Card(
+                    interaction: ix, enabled: blocked == nil, blocked: blocked, from: Self.sideCardSource(side, ix, model))
             }
-            return PendingCards.Card(interaction: ix, enabled: model.canAnswer(ix))
+            return PendingCards.Card(interaction: ix, enabled: blocked == nil, blocked: blocked)
         }
         // A card answered in a terminal dialog of several questions stays, greyed, until the next one comes (#2970).
         if let move = model.screenMoves[key], !cards.contains(where: { $0.interaction.kind == .screen }) {
