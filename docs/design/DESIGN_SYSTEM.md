@@ -374,6 +374,13 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
+- Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
+  field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
+  about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,
+  a `well`-sized tile of the file's kind (`FileViewer.symbol`, accent tint; `danger` and the error mark once failed), its
+  name on one line truncated in the middle, and under it how far it got ("1.3 MB / 2.4 MB"), Waiting, its size, or
+  Failed · Tap to Retry, a thin accent bar along the bottom while it waits or uploads, and the photos' ✕ at the top
+  corner (hit through `tapTargetOutset(.all)`). Up to 10, three uploading at once; a tap on a failed card tries again. Send waits for them as for a video.
 - Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
   `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
   controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
@@ -502,6 +509,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   Delete). A failed one with messages sent after it sits before the first of them, at the end of the exchange it was
   written in (`ChatLines.placeFailed`; Android in every style, `placeFailed`). Android draws the bubble so on Glass
   (`OutboxBubble`, #4339 C9) and keeps its status line for a delivery the phone has to check.
+- Files sent with a message (iOS `AttachedFileCards`, #8361; web `FileCards`, Android `FileCards.kt`): above your bubble,
+  right-aligned, one card each, at most `box280` wide: a video or a recording plays (`AttachedVideoCard`), any other file
+  opens the file viewer (`AttachedDocumentCard`: an `avatarL` tile of its kind in the accent's tint, the name in
+  `secondaryMedium` truncated in the middle, its size in `label`; Copy Path on a long press). More than four show three and
+  an "N More Files" row (`tapTarget` tall) in the accent color that opens the rest in place (Show Less folds them). A file the computer no
+  longer has is dimmed to 0.6 with the missing-file mark and "No longer on the computer", and takes no tap.
 - The images a turn's work looked at (iOS `ViewedImagesRow`, docs/protocol/protocol.md "Images viewed this turn"): bare
   thumbnails between the work line and the answer, `box64` tall in a strip that scrolls sideways, one alone `box80`, each
   as wide as its picture (¾ to 1.6 of its height), with a small mark for a screenshot or a web page and nothing written
@@ -1568,7 +1581,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 
 The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
 
-- **One card per task, when it is handed out** (#8237, replacing #5569's conclusion cards): the hand-off card is a task's only card in the chat, and it updates in place: its state word follows the task, and a start that failed or a turn the model service cut off reads as such on it, in the danger color, with why in plain words (a raw error stays in the task's details; one naming no known cause reads "Didn't start. Open it for details."). Receipts (done, stopped, failed to start, interrupted), reviews and reports are not drawn, old ones in the history neither, and nothing in the chat says where progress went. The task's row says it: In Progress and Needs You below. iOS since #8237; the web still draws #5569's conclusion cards until its own PR for #8237 (they sit on `--danger-wash` with `--ink` words until then).
+- **One card per task, when it is handed out** (#8237, replacing #5569's conclusion cards): the hand-off card is a task's only card in the chat, and it updates in place: its state word follows the task, and a start that failed or a turn the model service cut off reads as such on it, in the danger color, with why in plain words (a raw error stays in the task's details; one naming no known cause reads "Didn't start. Open it for details."). Receipts (done, stopped, failed to start, interrupted), reviews and reports are not drawn, old ones in the history neither, and nothing in the chat says where progress went. The task's row says it: In Progress and Needs You below. iOS and the web since #8237 (Android: #8312). A failed start's and an interrupted task's Needs you row keeps `--danger-wash` with `--ink` words, as the conclusion cards had (contrast in D10 of `docs/design/task-cards.md`).
 - **Rows that act** (#8237): a failed start's row in Needs You carries Retry and Remove, an interrupted one Continue (so does a usage limit nothing continues by itself, in In Progress), right under its words and aligned with them, as buttons of their own, never inside the row's tap. A tap elsewhere on the row opens the task.
 - **Just Finished** (#8237): under In Progress's rows, a group of the handed-out tasks that finished in the last 24 hours and that the owner has not opened since (the To-dos page's Just Finished): the tray's group header with how many, a row each with the done mark, the title, Done and what it did (its accepting review's note, why it closed, its receipt's summary, else its Agent's last words). Not counted in the entry's number (the counts stay the To-dos page's open work, section 4.8). Opening one counts as seeing it, so it leaves the group.
 - **Accept and decision rows** stack when their container is narrow (a container query, not the viewport): the words take the whole width, the secondary buttons one row, the primary its own full-width line. Never a menu.
