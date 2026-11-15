@@ -40,7 +40,8 @@ import (
 // A session another one started (a side chat, a /btw question, a session spawned for a task) names that one in
 // spawnedFrom.sessionId (its local_<id>), and the app's sidebar nests it there. The list draws it the same way (#5935):
 // its row names the parent's current transcript in parent_agent_id while both are listed (linkSideSessions), and stays a
-// session of its own. An entry without that id, or whose parent is archived or not in the index, links nothing.
+// session of its own. An entry without that id, or whose parent is archived or not in the index, links nothing; so does
+// one the user moved to the top level (lineageDetached, which keeps the old spawnedFrom, #8522).
 
 // claudeDesktopDirs are the desktop apps' data directories under home (a variable: tests use their own).
 var claudeDesktopDirs = func(home string) []string { return desktopDataDirs(runtime.GOOS, home) }
@@ -244,6 +245,7 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 		TurnEdge    float64         `json:"lastTurnEdgeAt"`
 		Task        string          `json:"scheduledTaskId"`
 		Created     float64         `json:"createdAt"`
+		Detached    bool            `json:"lineageDetached"` // moved to the sidebar's top level: spawnedFrom stays, unnested
 	}
 	if json.Unmarshal(b, &raw) != nil || !validID(raw.Transcript) {
 		return claudeDesktopEntry{}
@@ -251,7 +253,7 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 	var spawned struct {
 		Local string `json:"sessionId"`
 	}
-	if len(raw.SpawnedFrom) > 0 && json.Unmarshal(raw.SpawnedFrom, &spawned) != nil {
+	if raw.Detached || len(raw.SpawnedFrom) > 0 && json.Unmarshal(raw.SpawnedFrom, &spawned) != nil {
 		spawned.Local = ""
 	}
 	cwd := raw.Cwd

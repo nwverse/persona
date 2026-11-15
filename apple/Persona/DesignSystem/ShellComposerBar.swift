@@ -24,6 +24,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// What the model button says, ChatGPT's "6.1 Sol Medium": the model, then the effort (`SessionModes.composerTitle`);
     /// nil: no button. Its menu says what needs saying about the permission mode (Allow Everything), not the button (#1117).
     var modesTitle: SessionModes.ComposerTitle?
+    /// Show that the model itself can be changed here, not only which model happens to be running.
+    var modesDisclosure = false
     /// What goes with the message, quoted at the top of the card (#986); quotes keep it open (`hasAttachments`).
     var quotes: Binding<[ContextRef]>? = nil
     /// Always the card, never the one line (the Mac: the field and its row of buttons stay, as a desktop app's box).
@@ -514,6 +516,13 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                     .font(Theme.Font.secondary)
                     .foregroundStyle(AppStyle.current.usesBeautifulUI ? theme.colors.ink2 : Color.secondary)
                     .fixedSize()
+            }
+            if modesDisclosure {
+                ThemedIcon(Theme.Icon.expand)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .accessibilityHidden(true)
             }
             // Claude Code's ultracode on, or a Codex thread at "ultra" (#1307): read out with the title (`spoken`).
             if title.mark != nil {
