@@ -83,7 +83,9 @@ func TestDirectNoRetryWithoutValidCooldownReturnsRaw(t *testing.T) {
 		{"503 without cooldown", 503, ""},
 		{"529 without cooldown", 529, ""},
 		{"malformed cooldown", 429, "soon"},
+		{"signed positive cooldown", 429, "+1"},
 		{"negative cooldown", 429, "-1"},
+		{"signed zero cooldown", 429, "-0"},
 		{"503 cooldown is not a quota reset", 503, "10"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
