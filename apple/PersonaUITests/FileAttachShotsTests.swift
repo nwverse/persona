@@ -27,8 +27,9 @@ final class FileAttachShotsTests: XCTestCase {
         shot(app, "1-sent")
         // The older message's file the computer no longer has, a little further up.
         let gone = app.buttons["file-card-gone"].firstMatch
-        for _ in 0..<4 where !(gone.exists && gone.isHittable) { app.swipeDown(velocity: .slow) }
         XCTAssertTrue(gone.exists, "no card for the file that is gone:\n\(app.debugDescription)")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)))
         sleep(1)
         shot(app, "1b-gone")
         for _ in 0..<4 { app.swipeUp(velocity: .fast) }
