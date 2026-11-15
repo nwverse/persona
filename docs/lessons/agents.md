@@ -553,6 +553,29 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 - Test method: start stdio `codex app-server` in a temporary `CODEX_HOME`; `thread/start` needs no login and calls no model, so it can test settings APIs. Don't touch live `~/.codex`.
   See `docs/integrations/codex.md` ("Thinking effort").
 
+## A gateway's Codex catalog replaces Codex's own list, and `personad launch` is no shell `codex` (2026-11-16, #8797)
+
+- `model_catalog_url` in a Codex provider table makes that catalog the only list Codex has: no bundled fallback. A URL
+  that answers an error at start leaves Codex with no models (or the last list in `$CODEX_HOME/models_cache.json`), and
+  a keyless provider never fetches it, so the list is empty too. Pass one only where the gateway answered with a
+  catalog, and only with `env_key`; do not let a timeout or a 5xx overwrite that answer, and do not make a start wait on
+  asking again (give the last answer and ask in the background).
+- 0.156–0.160 know the key but read it only with `api_key_model_discovery` on; 0.161 made that the default, so the node
+  needs 0.161 (`codex --version`) rather than enabling an under-development feature, whose warning a 0.160 TUI would
+  show. The node's codex (the service's `PATH`) need not be the one `personad launch` execs (the shell's): the launch
+  checks its own when they are different files.
+- `GET /v1/models` has two shapes on some gateways: Codex's catalog when the request carries `client_version`, OpenAI's
+  list without. A probe must send what Codex sends (its whole version, no prerelease) and judge the answer's shape; a
+  name or path alone says nothing. Codex itself appends `client_version`: a URL that already has one is refused there.
+- A managed launcher's codex is started by `personad launch`, which execs codex: wrappers that codexShell puts around
+  the shell's `codex` (adding `app-server`) never apply to it. The model list ran `personad launch <name>` alone, and
+  its codex started a TUI on a pipe ("stdin is not a terminal"): put the subcommand in the launch's own arguments.
+  Reproduce with a fake `personad` that is an app-server only when it gets `app-server`
+  (`TestManagedCodexModelsAskTheAppServer`).
+- Observe Codex against a local fake gateway with a temporary `CODEX_HOME`: the requests it makes (path, query,
+  `Authorization`), what `model/list` returns and whether `codex exec` warns about fallback metadata. Never point the
+  experiment at a real gateway with the user's key. See `docs/integrations/codex.md` ("Gateway model catalog").
+
 ## Interrupt (Esc) doesn't trigger Stop; pid files include procStart (2026-11-04)
 
 - Claude's `Stop` hook fires only on normal turn completion, not Esc interruption (local slash commands not measured): counting hooks alone leaves "submissions > completions" forever.
