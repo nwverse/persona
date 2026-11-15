@@ -3344,8 +3344,11 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   - **New session**: all handed to it. When the form's choice is a login-shell launcher, it carries `shell_launcher: true`.
   - **Resuming a Claude session that isn't running**: handed over with `session.start {resume}`; the session id stays the same. After the takeover, messages go over with `session.send` as usual.
   - **When the bridge isn't connected**, both new and resume return the error `engine_missing` and nothing is sent.
-  - **Detection**: Paseo in `engines` counts as available in two cases. One: the bridge is connected; then `version` is Paseo's version. Two: the address written in `paseo.pid` in the Paseo home responds;
-    in that case, if the bridge can't start, `note` gives the reason.
+  - **Detection**: Paseo in `engines` counts as available in two cases. One: the bridge is connected; then `version` is Paseo's version, and below the oldest Paseo Persona is tested with (0.15.0)
+    `note` asks to update it. Two: the address written in `paseo.pid` in the Paseo home responds; in that case `note` says why the bridge is not connected: why it could not start, the error it printed
+    when it exited, or, once it has run for 30 seconds without connecting, the last line it printed (#8134).
+    The node writes these notes in Chinese, from the hub's `node-engine` catalog; the hub words them in each reader's language in the machine list, `machines` events and the answer to
+    `PUT /api/v1/machines/{mid}/engine` (`i18n.EngineText`). Other notes (Orca's) reach the apps as the node wrote them.
 
 ## hub ↔ node RPC
 
