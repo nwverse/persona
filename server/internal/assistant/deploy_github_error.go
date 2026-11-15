@@ -7,8 +7,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Only allowlisted response metadata is retained, never request headers or the raw body.
@@ -22,8 +23,8 @@ func (e *githubReadError) Error() string {
 	return fmt.Sprintf("GitHub answered %d (%s): %s", e.status, e.kind, e.detail)
 }
 
-var githubDiagnosticSecrets = regexp.MustCompile(`(?i)(?:bearer\s+\S+|(?:github_pat_|gh[pousr]_)[a-z0-9_]+|https?://[^\s"<>]+|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})`)
-var githubDiagnosticAddresses = regexp.MustCompile(`(?i)\b(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3}|(?:[a-f0-9]{0,4}:){2,}[a-f0-9:]*)\b`)
+var githubDiagnosticSecrets = lazyre.New(`(?i)(?:bearer\s+\S+|(?:github_pat_|gh[pousr]_)[a-z0-9_]+|https?://[^\s"<>]+|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})`)
+var githubDiagnosticAddresses = lazyre.New(`(?i)\b(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3}|(?:[a-f0-9]{0,4}:){2,}[a-f0-9:]*)\b`)
 
 func githubDiagnostic(s string) string {
 	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {

@@ -36,6 +36,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 //go:embed sampler.go
@@ -341,7 +343,7 @@ func startPostgres(ctx context.Context, name string) (string, error) {
 }
 
 func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := osproc.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}
