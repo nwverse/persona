@@ -128,11 +128,15 @@ function provenanceFailure(provenance, expected) {
 }
 
 export function receiptVerdict({ commands = [], provenance, expectedProvenance, cleanup } = {}) {
-  const commandFailure = !Array.isArray(commands) || commands.length === 0 || commands.some(command => !command || command.closed !== true || command.code !== 0 || command.signal !== null || command.error || command.timedOut || command.closeTimedOut || command.escalationError || command.groupEmpty !== true);
+  const commandFailure = !Array.isArray(commands) || commands.length === 0 || commands.some(command => !command || command.closed !== true || command.code !== 0 || command.signal !== null || command.error || command.timedOut || command.closeTimedOut || command.escalationError);
+  // Original-PGID emptiness is not proof that a detached descendant exited. Generic captured commands cannot
+  // authorize removal of the whole run root; a different, separately proven descendant-liveness contract is required.
+  const descendantProofMissing = true;
   const invalidProvenance = provenanceFailure(provenance, expectedProvenance);
   return {
-    ok: !commandFailure && !invalidProvenance && cleanup?.ok === true,
-    mayRemoveRunRoot: !commandFailure && !invalidProvenance,
+    ok: false,
+    mayRemoveRunRoot: false,
+    descendantProofMissing,
     commandFailure,
     provenanceFailure: invalidProvenance,
     cleanupFailure: cleanup?.ok !== true,
@@ -194,8 +198,8 @@ function termination(child, signal) {
 
 /**
  * POSIX-only observation of one newly created process group. /proc is read only for this exact PGID;
- * no private process environment or unrelated process metadata is read. A detached descendant cannot be
- * proven terminated by this helper and therefore keeps its group receipt unsuccessful.
+ * no private process environment or unrelated process metadata is read. This proves only that the original process
+ * group is empty; it cannot detect a descendant that detached into another process group.
  */
 async function observeOwnedGroup(child, timeout) {
   if (platform() !== "linux" || !Number.isInteger(child.pid) || child.pid <= 0) {
@@ -263,8 +267,8 @@ async function observeOwnedGroup(child, timeout) {
 /**
  * Capture a real child close, including its nonzero code or signal. POSIX uses a new owned process group for bounded
  * termination, including a leader that exited while a descendant retained the captured pipes. Windows terminates only
- * the direct child and cannot approve a group receipt. Detached descendants or an unavailable /proc observation fail
- * closed; closing captured pipes is not proof all descendants exited.
+ * the direct child and cannot approve a group receipt. Detached descendants and PGID-reuse are outside what this
+ * observation can prove; closing captured pipes and an empty original group are not proof all descendants exited.
  */
 export function runCaptured(executable, args, options = {}) {
   const {
