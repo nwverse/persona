@@ -1,9 +1,9 @@
 {
-  "source_commit": "04c9cfa473986dd36745295a087765240d7e407c",
-  "captured_at": "2026-11-14T22:43:26.976836+00:00",
+  "source_commit": "b488a020b0e17fadd88ed4fc6c546870cbde4e50",
+  "captured_at": "2026-11-15T05:25:35.764052+00:00",
   "browser": "Chrome/149.0.7827.55",
   "sources": {
-    "web/src/views/settings/Skills.tsx": "ac19d5384bb7da87f34745df13d8e6eaa85655a4f360be44ab6876a47f7803e3",
+    "web/src/views/settings/Skills.tsx": "59d075fdccf3bb793edd373e25df8b7526dc8454d08dc0db440c3a6da7a09bcb",
     "server/internal/assistant/skills_import_browser_test.go": "7870bb5988071c023849ec2d99d0408496111878d48f0f7456a7171fc0dbf869",
     "web/src/i18n/locales/en/settings-skills.json": "1066b7fb83118e5cb9f29815a6eb8aff9897eb2b048f9da9749d4f6035611b8b",
     "web/src/i18n/locales/zh-Hans/settings-skills.json": "e23f6372bf653e3e0b979822cbf069f2319227505f0da47d72b4ccc450adff97",
@@ -13,7 +13,9 @@
     "Cancel initially focused; Tab reaches Install; Escape restores Upload ZIP focus",
     "Native dragover/drop cancelled during a held real preview; no navigation, second request or changed filename",
     "Explicit Install creates SKILL.md; Undo retains it in recovery and refreshes the list",
-    "The real importer rejects an empty description with the localized actionable error"
+    "The real importer rejects an empty description with the localized actionable error",
+    "Coarse-pointer targets span at least 44 px in both axes and hit-test across that area",
+    "Native taps outside the painted buttons activate Upload, Choose ZIP, Cancel, Install, Close and both Undo actions"
   ],
   "captures": [
     {
@@ -25,18 +27,28 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": false,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 26,
+          "hitHeight": 26,
+          "hits44": false
         },
         {
           "label": "Cancel",
-          "visible": true
+          "visible": true,
+          "hitWidth": 66.359375,
+          "hitHeight": 32,
+          "hits44": false
         },
         {
           "label": "Install skill",
-          "visible": true
+          "visible": true,
+          "hitWidth": 89.78125,
+          "hitHeight": 32,
+          "hits44": false
         }
       ],
       "errors": []
@@ -50,18 +62,28 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": false,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 26,
+          "hitHeight": 26,
+          "hits44": false
         },
         {
           "label": "Cancel",
-          "visible": true
+          "visible": true,
+          "hitWidth": 66.359375,
+          "hitHeight": 32,
+          "hits44": false
         },
         {
           "label": "Install skill",
-          "visible": true
+          "visible": true,
+          "hitWidth": 89.78125,
+          "hitHeight": 32,
+          "hits44": false
         }
       ],
       "errors": []
@@ -75,18 +97,28 @@
       "text_size": "large",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "Cancel",
-          "visible": true
+          "visible": true,
+          "hitWidth": 69.578125,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "Install skill",
-          "visible": true
+          "visible": true,
+          "hitWidth": 94.796875,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -100,18 +132,28 @@
       "text_size": "large",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "Cancel",
-          "visible": true
+          "visible": true,
+          "hitWidth": 69.578125,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "Install skill",
-          "visible": true
+          "visible": true,
+          "hitWidth": 94.796875,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -125,18 +167,28 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "キャンセル",
-          "visible": true
+          "visible": true,
+          "hitWidth": 87.96875,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "スキルをインストール",
-          "visible": true
+          "visible": true,
+          "hitWidth": 151.640625,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -150,18 +202,28 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "キャンセル",
-          "visible": true
+          "visible": true,
+          "hitWidth": 87.96875,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "スキルをインストール",
-          "visible": true
+          "visible": true,
+          "hitWidth": 151.640625,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -175,18 +237,28 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "安装 skill",
-          "visible": true
+          "visible": true,
+          "hitWidth": 77.15625,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -200,18 +272,28 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "安装 skill",
-          "visible": true
+          "visible": true,
+          "hitWidth": 77.15625,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -225,7 +307,16 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
-      "buttons": [],
+      "coarsePointer": false,
+      "buttons": [
+        {
+          "label": "上传 ZIP",
+          "visible": true,
+          "hitWidth": 92.765625,
+          "hitHeight": 32,
+          "hits44": false
+        }
+      ],
       "errors": []
     },
     {
@@ -237,7 +328,16 @@
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
-      "buttons": [],
+      "coarsePointer": false,
+      "buttons": [
+        {
+          "label": "上传 ZIP",
+          "visible": true,
+          "hitWidth": 92.765625,
+          "hitHeight": 32,
+          "hits44": false
+        }
+      ],
       "errors": []
     },
     {
@@ -245,22 +345,32 @@
       "state": "choose ZIP",
       "locale": "zh-Hans",
       "theme": "light",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "选择 ZIP 文件",
-          "visible": true
+          "visible": true,
+          "hitWidth": 121.734375,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -270,22 +380,32 @@
       "state": "native file drag over the zone",
       "locale": "zh-Hans",
       "theme": "dark",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "选择 ZIP 文件",
-          "visible": true
+          "visible": true,
+          "hitWidth": 121.734375,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -295,18 +415,25 @@
       "state": "pending real preview response",
       "locale": "zh-Hans",
       "theme": "dark",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -316,18 +443,25 @@
       "state": "pending real preview response",
       "locale": "zh-Hans",
       "theme": "light",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -337,22 +471,32 @@
       "state": "real importer refuses an empty description",
       "locale": "zh-Hans",
       "theme": "light",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "选择 ZIP 文件",
-          "visible": true
+          "visible": true,
+          "hitWidth": 121.734375,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -362,22 +506,32 @@
       "state": "real importer refuses an empty description",
       "locale": "zh-Hans",
       "theme": "dark",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "选择 ZIP 文件",
-          "visible": true
+          "visible": true,
+          "hitWidth": 121.734375,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "取消",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -387,22 +541,32 @@
       "state": "installed in the real temporary store",
       "locale": "zh-Hans",
       "theme": "light",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "撤回安装",
-          "visible": true
+          "visible": true,
+          "hitWidth": 94,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "关闭",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -412,22 +576,32 @@
       "state": "installed in the real temporary store",
       "locale": "zh-Hans",
       "theme": "dark",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "撤回安装",
-          "visible": true
+          "visible": true,
+          "hitWidth": 94,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "关闭",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -437,18 +611,25 @@
       "state": "real Undo; recovery path retained",
       "locale": "zh-Hans",
       "theme": "dark",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "关闭",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
@@ -458,54 +639,205 @@
       "state": "real Undo; recovery path retained",
       "locale": "zh-Hans",
       "theme": "light",
-      "width": 1280,
+      "width": 390,
       "text_size": "standard",
       "pageOverflow": false,
       "dialogOverflow": false,
+      "coarsePointer": true,
       "buttons": [
         {
           "label": "",
-          "visible": true
+          "visible": true,
+          "hitWidth": 44,
+          "hitHeight": 44,
+          "hits44": true
         },
         {
           "label": "关闭",
-          "visible": true
+          "visible": true,
+          "hitWidth": 49,
+          "hitHeight": 44,
+          "hits44": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-undo-row-dark.png",
+      "state": "post-install Undo row; coarse pointer and Large text",
+      "locale": "zh-Hans",
+      "theme": "dark",
+      "width": 390,
+      "text_size": "large",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "coarsePointer": true,
+      "buttons": [
+        {
+          "label": "上传 ZIP",
+          "visible": true,
+          "hitWidth": 96.484375,
+          "hitHeight": 44,
+          "hits44": true
+        },
+        {
+          "label": "撤回安装",
+          "visible": true,
+          "hitWidth": 97.8125,
+          "hitHeight": 44,
+          "hits44": true
+        }
+      ],
+      "errors": []
+    },
+    {
+      "file": "zh-undo-row-light.png",
+      "state": "post-install Undo row; coarse pointer and Large text",
+      "locale": "zh-Hans",
+      "theme": "light",
+      "width": 390,
+      "text_size": "large",
+      "pageOverflow": false,
+      "dialogOverflow": false,
+      "coarsePointer": true,
+      "buttons": [
+        {
+          "label": "上传 ZIP",
+          "visible": true,
+          "hitWidth": 96.484375,
+          "hitHeight": 44,
+          "hits44": true
+        },
+        {
+          "label": "撤回安装",
+          "visible": true,
+          "hitWidth": 97.8125,
+          "hitHeight": 44,
+          "hits44": true
         }
       ],
       "errors": []
     }
   ],
+  "edge_taps": [
+    {
+      "label": "ZIPをアップロード",
+      "locale": "ja",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "上传 ZIP",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "选择 ZIP 文件",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "取消",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "上传 ZIP",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "上传 ZIP",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "安装 skill",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "撤回安装",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "关闭",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "上传 ZIP",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "安装 skill",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "关闭",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "standard"
+    },
+    {
+      "label": "撤回安装",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "large"
+    },
+    {
+      "label": "关闭",
+      "locale": "zh-Hans",
+      "width": 390,
+      "text_size": "large"
+    }
+  ],
   "screenshots": {
-    "preview-light.png": "c5471e70ccb17f9df078152be55cffc97333e7af92e65f877b52bd97ab7cd47a",
-    "preview-dark.png": "238dd20c1609ca3f44d287cda02aaaeb6fee2014195aa7eee61c9b95f978358b",
-    "narrow-dark-large.png": "4b413d3f5655448908cac48b6e5e84449920640953d70f838cec13b843122d57",
-    "narrow-light-large.png": "ea40c6c9582232d58dd89f4a98633c786e97da01cff99034648537ef67a59a97",
-    "ja-preview.png": "7e699e421f41e124c2d8e6b2fd93e2f5425208f05d5b36e53d721b69a6b62b47",
-    "ja-preview-dark.png": "be965fc14f263dbdf463b5c676432f7a2758fef184c804ee09592fd091c47145",
-    "zh-preview.png": "11dfc51c65080fcbee6df4f96c96dec6c8a00e3df79717ecc71f3b8919bda7ac",
-    "zh-preview-dark.png": "a4a3aec2164cf0461e5db023c8fa5119e092b71036ffe6917566c48323d692e3",
-    "zh-group-light.png": "87b9f3e4d7dbfd1c506026eb1fe6bfa77bb77daf69b07a7a6390d008ee3c666c",
-    "zh-group-dark.png": "c4466810946a4a6a8ffc93604064cdb5a54b857ec3f9820752dcb31db6818baf",
-    "zh-choose-light.png": "1f6f460ae2914ba81288642f6267ac3f1263c70fe38c42109ab96086ff234a07",
-    "zh-drop-dark.png": "8dc8cda36a0b5560c89d01a0b815dddc38e423a90fb53b1c3725a30c673638a4",
-    "zh-checking-dark.png": "f0679b46c8318882de245bd722d2849a1511804fc3e4042abb4219289528f18b",
-    "zh-checking-light.png": "4b38e1e210e5d1544f5ef780d58571073f938ff5db70f39dc0be319a9082e952",
-    "zh-refused-light.png": "67b54dccd1196f11498e55ff74efdf0dd1aa9ad85cef54df6ef3e278cdf466b6",
-    "zh-refused-dark.png": "b8b45d1cf3a3118fbbebf2f170c274b4473a8a15feee4e4bf364d3303f1853b4",
-    "zh-installed-light.png": "1bf71a36765527605acb9b692a8d881332144e726f63ad71031b4182fe873ff4",
-    "zh-installed-dark.png": "d84ade77e5c075e312e3f2388f43c1cfbc875e58f937b54fbea1ace5c43029a5",
-    "zh-undone-dark.png": "16fc733d5569e91770892f6805228ea5fdcb50cc9bdab4fa462999b3bc558756",
-    "zh-undone-light.png": "c010a239f1e4c3d21977c361190df8a8901676fbb13fb2999cbac089da2eb118"
+    "preview-light.png": "6144f942580d816fc6be3f61afd23c0ac9a6d82739f1b242ebb7f9e3529124d9",
+    "preview-dark.png": "aaf4ef47ee9afe2c9d26ba7bdfd7381a32ae7619d072fcf9b07320f603252823",
+    "narrow-dark-large.png": "4cac05e8b6c2ab6d7bafde0128df00f1019e2fb843cb78f580c1aeae254d3e5b",
+    "narrow-light-large.png": "4287367bdf7c889a6ef8e500e099596c8ce10c4da4b25e9cb0daadb97d591707",
+    "ja-preview.png": "3bfc946205d330d8b75a17f97b1aea02232e38bff7864a992b38b5e80355a16c",
+    "ja-preview-dark.png": "8d30f67875bad363aaf72f79a38a8bd0d1bcb22b7b4d0b84b263fcebcf521c70",
+    "zh-preview.png": "7edf565ffdd1d757c9e98e0b217fe053f3601f0da042e651859db1b96eab15ce",
+    "zh-preview-dark.png": "94d105522aa3fc0c4a5a94492010fae6a8c4233e846f402315d6084574c1654c",
+    "zh-group-light.png": "fb571ac26986f117f2174116b9d64c6c876006378cc41cae821e01ebc905287d",
+    "zh-group-dark.png": "de6cf722f143049c350e1354a1694efa7c2ceba0aa2a8e83d4d68fa221df6b4c",
+    "zh-choose-light.png": "8ec4cba86d2905b56de864aaa021e71616ab2efe9fde8a2866ec02fc7ebe5d6a",
+    "zh-drop-dark.png": "c4f4457cb65cc3e1de079e92b036b8c65dfd89551622d754fc0e770b3c94175b",
+    "zh-checking-dark.png": "1eff1635ab663e58a4252869da7ce22c914bfaa5311859545652ee702eea3885",
+    "zh-checking-light.png": "91b96a77d3d63b874ac04f0b144274088934e53364f01213fae8983e114b0502",
+    "zh-refused-light.png": "fbc16c5633502cd5212cdcf30f46ff1cbde7f5340df08025c93d9ab15b87528b",
+    "zh-refused-dark.png": "3c9259f2038c54cb89d8e55265c932ade75309f8c251da037922e0dfe8258d63",
+    "zh-installed-light.png": "1c6b25f4ecd36ab044fcb990ac98e9657cf97d137094234d3433a664fc9de38a",
+    "zh-installed-dark.png": "6d49022564ef66d0cfdbc1c56558737a4c6dd45af4d78c04d6efad10cf5c1987",
+    "zh-undone-dark.png": "001c5ac96552993a369c747e86d19e4e8609cc8acb5d57fc7fd9a82445051846",
+    "zh-undone-light.png": "61b0173938074d5a6b30931feda980e5abfe2f25000d8ad09d467a4d646337f0",
+    "zh-undo-row-dark.png": "155f45e08afaf840a5d3e42a4e969de7553ba3d2b283acddc96ec6ab08d3e5c5",
+    "zh-undo-row-light.png": "4b9d92e23d4ba6dfd683fc2fe26e5d0caa25631788595f477616139260bd79ad"
   },
   "manual_inspection": {
     "reviewer": "Codex",
     "result": "pass",
-    "captures_reviewed": 20,
+    "captures_reviewed": 22,
     "observations": [
-      "Light and dark surfaces, status marks and text remain readable.",
-      "The desktop preview and 390 px Large preview keep content and footer actions visible; long install paths wrap.",
-      "Chinese and Japanese previews keep their localized primary buttons on one line.",
-      "The keyboard focus ring is visible on Install in dark mode.",
+      "Light and dark text, status marks, wrapped paths and localized buttons remain readable.",
+      "Desktop controls retain their compact appearance; every measured coarse-pointer target is at least 44 x 44 px.",
+      "The 390 px Large previews and post-install Undo row keep their controls visible without horizontal overflow.",
+      "The dark preview retains a visible keyboard focus ring.",
       "Choose, drag-over, checking, refused, installed and undone states match their state and recovery copy."
     ]
   },

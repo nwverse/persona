@@ -105,6 +105,7 @@ def configure(locale):
 def open_upload():
     click_label(labels()["upload"])
     wait_js("!!document.querySelector('input[type=file]')")
+    time.sleep(.2)  # The mobile sheet must finish sliding in before using its coordinates.
 
 
 def upload(name="example-visual"):

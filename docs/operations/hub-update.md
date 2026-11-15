@@ -363,12 +363,19 @@ Curated synthetic captures, actually inspected in a browser (not production asse
 | Refused package | [Light](../web/screenshots/skill-zip/zh-refused-light.png) | [Dark](../web/screenshots/skill-zip/zh-refused-dark.png) |
 | Installed | [Light](../web/screenshots/skill-zip/zh-installed-light.png) | [Dark](../web/screenshots/skill-zip/zh-installed-dark.png) |
 | Undone, recovery retained | [Light](../web/screenshots/skill-zip/zh-undone-light.png) | [Dark](../web/screenshots/skill-zip/zh-undone-dark.png) |
+| Post-install Undo row, 390 px Large | [Light](../web/screenshots/skill-zip/zh-undo-row-light.png) | [Dark](../web/screenshots/skill-zip/zh-undo-row-dark.png) |
 
 The 2026-11-15 capture run uses `web/e2e/skill-zip-visual.py` through Browser Use against the opt-in Go fixture above
-and Vite. Its 20 captures were opened and visually inspected by Codex: text and status marks remain readable in both
+and Vite. Its 22 captures were opened and visually inspected by Codex: text and status marks remain readable in both
 appearances, the long install and recovery paths wrap, localized buttons stay on one line, and the dark preview has a
 visible keyboard focus ring. `docs/web/screenshots/skill-zip/verification.json` records the source commit, source and
 PNG hashes, viewport checks and inspection observations. The evidence commit changes no application source.
+
+All Skills actions use `touch-hit`: the drawn buttons remain 32 px tall while their targets expand to at least
+44 x 44 px on coarse-pointer devices. The browser run measures the pseudo-element's target bounds and hit-tests
+points across that area, including the separate post-install Undo row. Native touch events below the painted button
+activate Upload ZIP, Choose ZIP, Cancel, Install, Close and both Undo actions. The file input's click is intercepted
+to keep the operating-system picker out of the automated run; CDP supplies the real ZIP afterwards.
 
 To reproduce, start an exclusively owned mock on `<mock port>`, run the fixture from `server/` with
 `SKILL_IMPORT_QA=1 SKILL_IMPORT_QA_ADDR=127.0.0.1:<manager port> SKILL_IMPORT_QA_MOCK=http://127.0.0.1:<mock port>
