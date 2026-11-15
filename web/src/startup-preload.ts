@@ -323,6 +323,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // stays; the startup catalog takes just the keys the first screen reads of five more (assistant-tasks, chat-chatview,
 // chat-sessiondialogs, lib-channels, lib-inbox), measured in one environment on that main with the hub release's
 // fixes: ja 480,730 B to 480,152 B (en 477,616 B to 477,061 B, zh-Hans 478,409 B to 477,845 B), 487 B of room.
+// With #8399 (one card per handed-out task) merged after it: ja 479,175 B (en 476,041 B, zh-Hans 476,857 B), 1,464 B.
 export const FIRST_SCREEN_BUDGET = 480_639;
 
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
