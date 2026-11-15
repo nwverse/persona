@@ -69,6 +69,8 @@ type Service struct {
 	nodeAnswering atomic.Int64
 	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
 	taskStarting atomic.Int64
+	// leaderStarts counts leaders through linking: only legacy one-shot discovery waits for them (task_leader.go).
+	leaderStarts atomic.Int64
 	// mcpChanges wakes tool discovery when task membership or leader rights change.
 	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
@@ -378,6 +380,18 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		id, _ := p["session_id"].(string)
+		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
+			return err
+		}
+		if method == DeviceSessionSend {
+			cfg := s.settings(ctx)
+			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+			}
+		}
+	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {

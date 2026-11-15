@@ -435,6 +435,8 @@ final class AppModel {
     var compactionShown: [SessionKey: MainConversationActions.Shown] = [:]
     /// New Main Chat… was picked (the top bar's menu, the sidebar's): the Persona page asks before doing it.
     var newMainAsked = false
+    /// Clear context on this device (#5100): set before the request, so the page stays the empty conversation.
+    var mainClear = MainClearState()
 
     @ObservationIgnored private(set) var chats: [SessionKey: ChatStore] = [:]
     /// The groups whose outbox is going out now (`flushOutbox`): one group sending does not hold back another.
@@ -452,6 +454,9 @@ final class AppModel {
     @ObservationIgnored private(set) var launcherCache: [MachineRef: [Launcher]] = [:]
     /// What each machine's launcher pickers run with none picked (`LauncherDefault`), loaded with `launcherCache`.
     @ObservationIgnored private(set) var launcherDefaults: [MachineRef: LauncherDefault] = [:]
+    /// What each machine's New Agent list says is left out there, with why (`unavailable`, #8109: the Persona-managed
+    /// providers whose own-service rule skips it), loaded with `launcherCache`; empty from an older hub.
+    @ObservationIgnored private(set) var launcherUnavailable: [MachineRef: [UnavailableLauncher]] = [:]
     /// The main chat's own picker (`?purpose=assistant`, #5033): its eligible launchers, the effective Main chat
     /// default, and what can't run there with why. Separate from `launcherCache`, which serves the agent.new purpose.
     @ObservationIgnored private(set) var assistantLauncherCache: [MachineRef: APIClient.LaunchersResponse] = [:]
@@ -1156,6 +1161,12 @@ final class AppModel {
             guard showsPage(of: api) else { return } // another group or manager was picked meanwhile
             let previousMain = assistantMain
             assistantConfig = st
+            // A different main for the manager that was cleared: the empty page is over, and someone looking at it
+            // sees what the hub has. Another manager's refresh does not drop this one's flag.
+            if mainClear.note(group: api.group, manager: assistantManagerID ?? "", mainSessionID: st.main),
+               assistantCurrent == nil {
+                assistantCurrent = assistantMain
+            }
             if let current = assistantCurrent {
                 assistantCurrent = Self.followingMainRoute(current: current, previous: previousMain, updated: assistantMain,
                                                            mainID: st.main)
@@ -3535,6 +3546,7 @@ final class AppModel {
     func launcherDefaultsChanged() {
         launcherCache = [:]
         launcherDefaults = [:]
+        launcherUnavailable = [:]
         assistantLauncherCache = [:]
         // Model Settings changes are launcher changes too: wake the open main-chat composer to re-read the default.
         launchersRevision += 1
@@ -3554,6 +3566,7 @@ final class AppModel {
         let r = try await api.launcherList(machine: machine.id)
         launcherCache[machine] = r.launchers
         launcherDefaults[machine] = r.default
+        launcherUnavailable[machine] = r.unavailable ?? []
         return r.launchers
     }
 

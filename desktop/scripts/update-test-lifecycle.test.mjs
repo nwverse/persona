@@ -114,6 +114,10 @@ test("cleanup gets a fresh deadline after a long main and does not start already
   assert.deepEqual(failures, []);
 });
 
+test("cleanup defaults support the production call without an options object", async () => {
+  assert.deepEqual(await finishUpdateTestCleanup(async () => []), []);
+});
+
 test("cleanup timeout returns failure only after the cancelled operation actually stops", async () => {
   let cleaned = false;
   const failures = await finishUpdateTestCleanup(async signal => {
