@@ -26,11 +26,14 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/node/clipshare"
+	"github.com/nwverse/persona/server/internal/node/machdiag"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screenlink"
 	"github.com/nwverse/persona/server/internal/streams"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -103,6 +106,11 @@ type Node struct {
 	logger   *log.Logger
 	// hubPersonaContracts is connection-local: Attach makes a fresh Node on each reconnect.
 	hubPersonaContracts atomic.Bool
+	// hubMCPWait gates the opt-in interim local-socket lines on the authenticated hub's advertised feature.
+	hubMCPWait atomic.Bool
+	// mcpWaits are only the local calls that asked for progress updates, by their opaque per-call id.
+	mcpWaitMu sync.Mutex
+	mcpWaits  map[string]*pendingMCPWait
 	// lcu drives amontlabs/lcu for the computer-use plugin when that backend is selected (lcu_mcp.go).
 	lcuMu   sync.Mutex
 	lcuSess *lcuSession
@@ -166,6 +174,7 @@ type Node struct {
 	events    *herdrEvents               // herdr's event stream (herdrevents.go)
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
+	cfiles    claudeFiles                // every claude's sessions/<pid>.json as last parsed (claudefiles.go)
 	hooks     *hookTurns                 // per-session turn counters from Persona's hooks (hookturn.go)
 	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
@@ -229,6 +238,8 @@ type Node struct {
 
 	// codexStarting: panes a Codex start is opening (codex_start.go): no thread is guessed for them meanwhile.
 	codexStarting map[string]bool
+	// codexClaims: public thread ids claimed by starting panes until bindPane and the initial state.put.
+	codexClaims map[string]string
 	// codexWaiting: Codex panes opened with no first message, by pane, until their thread is known (codex_waiting.go);
 	// codexAttached: such a row's id → the thread it became; codexWaitLooking: the look for their threads runs.
 	codexWaiting     map[string]*codexWait
@@ -296,11 +307,19 @@ type Node struct {
 	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
 	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
 
+	// dialogWait: first messages waiting for the dialog that kept them out to be answered (firstprompt.go).
+	dialogWait sync.WaitGroup
 	// screens: live-screen hardware video channel (#3954). Login binding per `pair` and the busy count (screen.go).
 	// screenStart starts the capture/encode helper (Persona Screen.app) for a stream: startScreenHelper on a Mac
 	// (screenhelper.go), nil elsewhere, where screen.dial returns video_unavailable and the screen stays RFB only.
+	// links: the screen sessions (#6398, screenlink): a live screen whose phone asked for one has its RFB and video
+	// streams as channels of one session, so they can move between routes without losing a byte. nil: never.
 	screens     *screenLogins
-	screenStart func(ctx context.Context, id, pair string, keepAwake bool, done func()) error
+	screenStart func(ctx context.Context, id, pair string, keepAwake, link bool, done func()) (linked bool, err error)
+	links       *screenlink.Registry
+	// inputs: pixel scrolling (#7775, inputhelper.go): on a Mac, each paired 5900 stream is read for the phone's scroll
+	// records, which go to Persona Input. nil elsewhere: the streams pass as they come.
+	inputs *screenInputs
 }
 
 func New(version string) (*Node, error) {
@@ -357,7 +376,16 @@ func New(version string) (*Node, error) {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
 	}
 	if runtime.GOOS == "darwin" {
-		n.screenStart = n.startScreenHelper // Persona Screen, the live screen's video helper (#3954)
+		n.screenStart = n.startScreenHelper                                         // Persona Screen, the live screen's video helper (#3954)
+		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn} // Persona Input (#7775)
+	}
+	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
+	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is
+	// live, and never when the macOS firewall would ask about it.
+	if d, err := screenlink.NewDirect(n.logger.Printf); err != nil {
+		n.logger.Printf("screen: no direct routes: %v", err)
+	} else {
+		n.links.EnableDirect(d)
 	}
 	n.configureCodex(proto.CodexConfig{})
 	n.hosts = host.NewRegistry(nodeHosts(proto.EngineHerdr, false, n.logger.Printf)...) // herdr until engine.use, botmux until the hub says
@@ -406,11 +434,11 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	defer n.streams.CloseAll()
 	defer n.closeFulls() // none of the web's full herdr clients outlives this hub connection (fullclient.go)
 	n.peer.OnEvent = func(event string, params json.RawMessage) {
-		if !n.streams.Event(event, params) && !n.onFullEvent(event, params) {
+		if !n.onMCPWait(event, params) && !n.streams.Event(event, params) && !n.onFullEvent(event, params) {
 			n.onTerminalEvent(event, params)
 		}
 	}
-	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify("fs.changed", c) })
+	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify(methodFsChanged, c) })
 	defer n.fsw.close()
 	n.cdirs.report = func(dirs []string) { _ = n.peer.Notify("claude.dirs", map[string]any{"dirs": dirs}) }
 	n.codices.report = func(cfg proto.CodexConfig) { _ = n.peer.Notify("codex.inventory", cfg) }
@@ -630,26 +658,27 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
 	}
-	switch method { // sharing the clipboard with the phone (clipshare.go)
-	case "clipboard.get":
-		return clipboardGet(ctx)
-	case "clipboard.set":
-		return clipboardSet(ctx, params)
+	switch method { // sharing the clipboard with the phone (clipshare/)
+	case methodClipboardGet:
+		return clipshare.Get(ctx)
+	case methodClipboardSet:
+		return clipshare.Set(ctx, params)
+	}
+	switch method { // the machine page's diagnosis and cache cleanup (machdiag/)
+	case proto.MethodMachineDiagnose:
+		return machdiag.Diagnose(ctx, params)
+	case proto.MethodMachineCleanup:
+		return machdiag.Cleanup(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
 	}
 	var p struct {
 		Path             string        `json:"path"`
-		Paths            []string      `json:"paths"`
-		Offset           int64         `json:"offset"`
-		Stream           bool          `json:"stream"`
-		Detail           bool          `json:"detail"` // fs.stat: the Info sheet's fields (files_info.go)
 		SessionID        string        `json:"session_id"`
 		CreationID       string        `json:"creation_id"`
 		Incarnation      string        `json:"incarnation"`
 		Cwd              string        `json:"cwd"`
-		IdentityOnly     bool          `json:"identity_only"`
 		Launcher         string        `json:"launcher"`
 		AgentType        string        `json:"agent_type"`
 		Model            string        `json:"model"`
@@ -673,9 +702,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		SinceSeq         int           `json:"since_seq"`
 		Source           string        `json:"source"`
 		Format           string        `json:"format"`
-		Staged           bool          `json:"staged"`
-		Hash             string        `json:"hash"`
-		Skip             int           `json:"skip"`
 		Turns            int           `json:"turns"`
 		LazyImages       bool          `json:"lazy_images"`
 		UserInputs       bool          `json:"user_inputs"`
@@ -691,7 +717,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Kind             string        `json:"kind"`      // tabs.*, panes.git: the host kind ("" the engine's)
 		Op               string        `json:"op"`        // panes.git: fetch, pull or push
 		Action           string        `json:"action"`    // launchers.repair: which of its fixed repairs
-		Branch           string        `json:"branch"`    // worktree.create
 		TabName          *string       `json:"tab_name"`
 		TZ               string        `json:"tz"` // the user's time zone
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
@@ -717,8 +742,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 
 		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
 
-		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
-		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -966,6 +989,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if c.HubFeatures != nil || c.MachineID != "" {
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
+			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
 		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
@@ -1100,7 +1124,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		list := n.sessionList(ctx, true)
 		// update_busy: node.update.commit would refuse now; the manager waits on it before sending a build (node_update_idle).
-		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list)}, nil
+		return map[string]any{"sessions": list, "update_busy": updateWouldCut(AssistantsBusy(), list, n.starts.listed(nil))}, nil
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, "", p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
@@ -1505,64 +1529,64 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return n.gitOp(ctx, dir, p.Op)
-	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
-		var in struct {
-			Composer bool `json:"composer"`
-		}
+	case methodWorktreePrepare: // "New worktree…": what the dialog starts from (worktree.go)
+		var in worktreePrepareParams
 		if err := json.Unmarshal(params, &in); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
 		if in.Composer {
-			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID)
+			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID)
 		}
-		return n.worktreePrepare(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd)
-	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
-		var in struct {
-			Composer bool `json:"composer"`
-		}
+		return n.worktreePrepare(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd)
+	case methodWorktreeCreate: // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
+		var in worktreeCreateParams
 		if err := json.Unmarshal(params, &in); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
 		if in.Composer {
-			return n.worktreeCompose(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
+			return n.worktreeCompose(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
 		}
 		if err := rejectComposerFields(ctx, params); err != nil {
 			return nil, err
 		}
-		if p.AutoName {
-			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
+		if in.AutoName {
+			if strings.TrimSpace(in.Branch) != "" || strings.TrimSpace(in.Path) != "" {
 				return nil, errors.New("Choose automatic naming or an explicit branch and path")
 			}
-			return n.worktreeCreateAutomatic(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
+			return n.worktreeCreateAutomatic(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
 		}
-		return n.worktreeCreate(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
-	case "worktree.source":
-		return n.worktreeSources(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
-	case "worktree.preset":
-		return n.worktreeSavePreset(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
-	case "worktree.delete":
-		return n.worktreeDelete(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, params)
-	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
-		var a struct {
-			NameHint     string `json:"name_hint"`
-			DeleteBranch bool   `json:"delete_branch"`
-			Force        bool   `json:"force"`
+		return n.worktreeCreate(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
+	case methodWorktreeSource, methodWorktreePreset, methodWorktreeDelete:
+		var in worktreeSourceParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
-		_ = json.Unmarshal(params, &a)
+		switch method {
+		case methodWorktreeSource:
+			return n.worktreeSources(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
+		case methodWorktreePreset:
+			return n.worktreeSavePreset(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
+		}
+		return n.worktreeDelete(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
+	case methodWorktreeAdd, methodWorktreeStatus, methodWorktreeRemove: // a new agent's own worktree (agentworktree.go, #6115)
 		ctx = worktreeComposerContext(ctx, params) // its refusals in the request's language (the hub sends it)
 		switch method {
-		case "worktree.add":
-			return n.worktreeAdd(ctx, p.Kind, p.Cwd, p.Branch, a.NameHint)
-		case "worktree.status":
-			return n.worktreeStatus(ctx, p.Kind, p.Cwd)
+		case methodWorktreeAdd:
+			var in worktreeAddParams
+			_ = json.Unmarshal(params, &in)
+			return n.worktreeAdd(ctx, in.Kind, in.Cwd, in.Branch, in.NameHint)
+		case methodWorktreeStatus:
+			var in worktreeStatusParams
+			_ = json.Unmarshal(params, &in)
+			return n.worktreeStatus(ctx, in.Kind, in.Cwd)
 		}
-		return n.worktreeRemove(ctx, p.Kind, p.Path, a.DeleteBranch, a.Force)
-	case "worktree.snapshot": // a reviewer's own copy of an agent's change (reviewsnapshot.go, #2173)
-		var a struct {
-			NameHint string `json:"name_hint"`
-		}
-		_ = json.Unmarshal(params, &a)
-		return n.worktreeSnapshot(ctx, p.Kind, p.Cwd, a.NameHint)
+		var in worktreeRemoveParams
+		_ = json.Unmarshal(params, &in)
+		return n.worktreeRemove(ctx, in.Kind, in.Path, in.DeleteBranch, in.Force)
+	case methodWorktreeSnapshot: // a reviewer's own copy of an agent's change (reviewsnapshot.go, #2173)
+		var in worktreeSnapshotParams
+		_ = json.Unmarshal(params, &in)
+		return n.worktreeSnapshot(ctx, in.Kind, in.Cwd, in.NameHint)
 	case "tabs.close":
 		return ok(n.closeTab(ctx, p.Kind, p.TabID))
 	case "tabs.rename":
@@ -1737,51 +1761,55 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		list, err := n.getClaudeSettings(i18n.Resolve(a.Locale))
 		return map[string]any{"settings": list}, err
-	case "file.upload.begin", "file.upload.chunk", "file.upload.end", "file.upload.abort":
+	case methodFileUploadBegin, methodFileUploadChunk, methodFileUploadEnd, methodFileUploadAbort:
 		return n.uploadCall(method, params)
-	case "file.rename", "file.move", "file.trash", "file.restore":
+	case methodFileRename, methodFileMove, methodFileTrash, methodFileRestore:
 		return n.fileEditCall(method, params)
-	case "file.mkdir", "file.write", "file.zip", "file.copy", "file.chmod", "file.operation": // new folders, text files, zips, copies, permissions and their progress (filemake.go, filecopy.go)
+	case methodFileMkdir, methodFileWrite, methodFileZip, methodFileCopy, methodFileChmod, methodFileOperation: // new folders, text files, zips, copies, permissions and their progress (filemake.go, filecopy.go)
 		return n.fileMake(ctx, method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
-	case "file.chunk":
+	case methodFileChunk:
 		var chunk proto.FileChunkRequest
 		if err := json.Unmarshal(params, &chunk); err != nil {
 			return nil, err
 		}
 		return n.readFileChunk(chunk)
-	case "git.blob":
+	case methodGitBlob:
 		var b proto.GitBlobRequest
 		if err := json.Unmarshal(params, &b); err != nil {
 			return nil, err
 		}
 		return n.gitBlob(ctx, b)
-	case "file.convert":
+	case methodFileConvert:
 		var c proto.FileConvertRequest
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
 		}
 		return n.convertFile(ctx, c)
-	case "file.thumb":
+	case methodFileThumb:
 		var t proto.FileThumbRequest
 		if err := json.Unmarshal(params, &t); err != nil {
 			return nil, err
 		}
 		return n.fileThumb(ctx, t)
-	case "file.read":
-		return n.readFile(p.Path, p.Cwd, p.Offset, p.Stream)
+	case methodFileRead:
+		var in fileReadParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.readFile(in.Path, in.Cwd, in.Offset, in.Stream)
 	case "port.dial":
 		return n.portDial(ctx, params)
 	case "screen.dial": // live-screen video channel (#3954): start the capture helper for a signed-in pair (screen.go)
 		return n.screenDial(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
-	case "preview.servers": // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
+	case methodPreviewServers: // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
 		return n.previewServersRPC(ctx, params)
-	case "preview.start": // run one of them in a new terminal tab, after the user confirmed its command
+	case methodPreviewStart: // run one of them in a new terminal tab, after the user confirmed its command
 		return n.previewStartRPC(ctx, params)
-	case "preview.open": // a headless browser tab on a port of this computer, on a stream (preview.go)
+	case methodPreviewOpen: // a headless browser tab on a port of this computer, on a stream (preview.go)
 		return n.previewOpenRPC(ctx, params)
 	// The built-in programs cua and ego by their old names, for a hub from before builtin_programs (builtin.go).
 	case "computer.status", "computer.call", "computer.install", "computer.grant", "computer.cancel", "computer.clipboard",
@@ -1789,16 +1817,24 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		"browser.status", "browser.install", "browser.open", "browser.cancel", "browser.call",
 		"browser.cookies.list", "browser.cookies.import", "browser.cookies.clear":
 		return legacyBuiltinCall(ctx, method, params, n.lcuComputerCall)
-	case "fs.stat": // detail: the Info sheet (files_info.go)
-		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd, p.Detail)}, nil
+	case methodFsStat: // detail: the Info sheet (files_info.go)
+		var in fsStatParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return map[string]any{"stats": n.statPaths(in.Paths, in.Cwd, in.Detail)}, nil
 	case "space.rename":
 		name, err := n.renameSpace(ctx, p.WorkspaceID, p.Name)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"ok": true, "name": name}, nil
-	case "worktree.rename": // its refusals in the request's language (the hub sends it)
-		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), p.Kind, p.WorkspaceID, p.Name))
+	case methodWorktreeRename: // its refusals in the request's language (the hub sends it)
+		var in worktreeRenameParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return ok(n.renameWorktree(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":
@@ -1809,33 +1845,61 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return ok(n.syncTodoTokens(ctx, in.Tokens))
-	case "fs.list":
-		return n.listDir(p.Path, p.Cwd)
-	case "fs.find": // every file under cwd, for the web palette's file search (files_find.go)
-		return n.findFiles(ctx, p.Cwd, p.Limit)
-	case "fs.watch": // the folders and Git directories the web panels have open (fswatch.go)
-		return n.fsWatch(params)
-	case "git.status":
-		if p.IdentityOnly {
-			return n.gitIdentity(ctx, p.Cwd)
+	case methodFsList:
+		var in fsListParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
-		return n.gitStatus(ctx, p.Cwd)
-	case "git.pull":
-		return n.gitPull(ctx, p.Cwd)
-	case "git.diff":
-		return n.gitDiff(ctx, p.Cwd, p.Path, p.Staged)
-	case "git.show":
-		return n.gitShow(ctx, p.Cwd, p.Hash)
-	case "git.review": // every file a scope changed, with its hunks, for the web's Review panel (gitreview.go)
+		return n.listDir(in.Path, in.Cwd)
+	case methodFsFind: // every file under cwd, for the web palette's file search (files_find.go)
+		var in fsFindParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.findFiles(ctx, in.Cwd, in.Limit)
+	case methodFsWatch: // the folders and Git directories the web panels have open (fswatch.go)
+		return n.fsWatch(params)
+	case methodGitStatus:
+		var in gitStatusParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		if in.IdentityOnly {
+			return n.gitIdentity(ctx, in.Cwd)
+		}
+		return n.gitStatus(ctx, in.Cwd)
+	case methodGitPull:
+		var in gitCwdParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.gitPull(ctx, in.Cwd)
+	case methodGitDiff:
+		var in gitDiffParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.gitDiff(ctx, in.Cwd, in.Path, in.Staged)
+	case methodGitShow:
+		var in gitShowParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.gitShow(ctx, in.Cwd, in.Hash)
+	case methodGitReview: // every file a scope changed, with its hunks, for the web's Review panel (gitreview.go)
 		var rv proto.GitReviewRequest
 		if err := json.Unmarshal(params, &rv); err != nil {
 			return nil, err
 		}
 		return n.gitReview(ctx, rv)
-	case "git.log":
-		list, err := n.gitLog(ctx, p.Cwd, p.Skip, p.Limit)
+	case methodGitLog:
+		var in gitLogParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		list, err := n.gitLog(ctx, in.Cwd, in.Skip, in.Limit)
 		return map[string]any{"commits": list}, err
-	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
+	case methodGitStage, methodGitCommit, methodGitPush, methodGitBranches, methodGitSwitch, methodGitStash, methodGitPR, methodGitPRCreate, methodGitPRMerge:
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
 	case "skills.import":
 		return n.importSkill(ctx, params)
@@ -2084,7 +2148,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramIDs,
-		Clipboard:          clipboardSupport(),
+		Clipboard:          clipshare.Support(),
 	}
 }
 

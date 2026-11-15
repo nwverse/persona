@@ -123,6 +123,10 @@ type Settings struct {
 	// review still goes to the main conversation (#3128, supervise_sample.go); the rest the judge closes. nil is 100:
 	// every finished task waits for task_review, as before.
 	ReviewSamplePercent *int `json:"review_sample_percent,omitempty"`
+	// DispatchPolicy is the optional organization policy restricting which conversation classes may hand out work or
+	// relay to the main or a leader conversation (dispatch_policy.go). nil or expired: every conversation behaves as
+	// without it.
+	DispatchPolicy *DispatchPolicy `json:"dispatch_policy,omitempty"`
 	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
 	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
 	Leaders []string `json:"leaders,omitempty"`
@@ -692,7 +696,7 @@ func (s *Service) warm(launcher string) {
 	// started in the main chat's, on a carried pick too (startMain, startOn).
 	profiled := s.withNewConversationProfile(ctx, machine, "assistant", params)
 	err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
-	if profiled && nodeOutdated(err) {
+	if profiled && (nodeOutdated(err) || profileRefused(err)) { // as startOn: an old node, or another agent than Claude Code
 		delete(params, "config_dir")
 		err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
 	}

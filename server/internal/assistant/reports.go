@@ -170,6 +170,14 @@ var generalTaskWords = lazyre.New(`(?i)\b(research|investigate|report|plan|triag
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
 	stage, pr := stageOf(text)
 	d, marked := deliveryMark(text)
+	if pr != "" {
+		s.learnRepoRoot(ctx, machine, session, pr)
+	} else if pr = s.prFromNumber(ctx, t, machine, session, text); pr != "" && stage == "develop" && !marked {
+		stage = "review" // as stageOf has it for a linked PR (#7921)
+		if said(mergedWords, text) {
+			stage = "merge"
+		}
+	}
 	if !marked && stageIndex(stage) < stageIndex("merge") && pr == "" && t.PRURL != "" && said(mergedWords, text) {
 		stage = "merge" // later replies need not repeat the link already kept on the task
 	}
@@ -427,6 +435,7 @@ func (s *Service) sendReports() {
 		return
 	}
 	var keep, asks []*reportItem // asks: decisions whose own card goes out without a line in the report (only_conclusions)
+	quiet := s.quietModeOn(ctx)
 	for _, it := range items {
 		t, ok := s.todoNow(it.todo)
 		if !ok {
@@ -440,6 +449,14 @@ func (s *Service) sendReports() {
 		}
 		if t.Quiet && f.Sync && it.state != reportClosed {
 			continue // told in the main conversation, whose turns the chat mirrors (sync); closing is not told there
+		}
+		if quiet {
+			// Low-distraction mode (push_quiet.go): no progress, stuck or conclusion lines in the chat; the briefing and the
+			// board have them. A decision still gets its own answerable card.
+			if it.state == reportNeeds && it.ix != nil {
+				asks = append(asks, it)
+			}
+			continue
 		}
 		if !f.ReportSteps {
 			if it.state == reportNeeds && it.ix != nil {
