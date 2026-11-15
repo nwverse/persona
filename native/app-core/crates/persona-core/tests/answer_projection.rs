@@ -141,3 +141,22 @@ fn disallowed_operations_leave_the_form_unchanged() {
         assert_eq!(transition.resolution, None);
     }
 }
+
+#[test]
+fn apple_whitespace_sets_include_zero_width_space_but_display_preserves_newlines() {
+    // CoreFoundation's isWhitespace covers U+2000...U+200B; its newline set is separate.
+    let input: Input = serde_json::from_value(json!({
+        "interaction":{"kind":"question","questions":[{
+            "question":"One","multi_select":false,"options":[{"label":"Yes"}],
+        }]},
+        "operation":{"action":"submit","page":0,"picks":{},"other":{"One":" \u{200b} "},"sending":false},
+    }))
+    .unwrap();
+    let transition = persona_core::answer::project(&input).unwrap();
+    assert!(!transition.allowed);
+    assert_eq!(transition.resolution, None);
+
+    let shown = persona_core::answer::display("\u{200b} A\n (Recommended)");
+    assert_eq!(shown.text, "A\n");
+    assert!(shown.recommended);
+}

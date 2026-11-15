@@ -76,13 +76,35 @@ pub struct Display {
     pub recommended: bool,
 }
 
+/// CoreFoundation's whitespace set includes U+2000...U+200B, not Unicode White_Space alone.
+fn is_apple_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        ' ' | '\t' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200b}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
+    )
+}
+
+fn trim_display(text: &str) -> &str {
+    text.trim_matches(is_apple_whitespace)
+}
+
+fn trim_answer(text: &str) -> &str {
+    text.trim_matches(|character| {
+        is_apple_whitespace(character)
+            || matches!(
+                character,
+                '\n' | '\u{000b}' | '\u{000c}' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+            )
+    })
+}
+
 /// Display-only suffix removal. The submitted answer always retains the original option label.
 pub fn display(label: &str) -> Display {
     // i18n-ignore: exact suffixes written by the agent in protocol option labels.
     for suffix in [" (Recommended)", "(Recommended)", "（推荐）", "(推荐)"] {
         if let Some(text) = label.strip_suffix(suffix) {
             return Display {
-                text: text.trim_matches(char::is_whitespace).to_owned(),
+                text: trim_display(text).to_owned(),
                 recommended: true,
             };
         }
@@ -100,7 +122,7 @@ fn answer(
 ) -> Option<String> {
     let custom = other
         .get(&question.question)
-        .map(|text| text.trim_matches(char::is_whitespace))
+        .map(|text| trim_answer(text))
         .unwrap_or_default();
     if !custom.is_empty() {
         return Some(custom.to_owned());
