@@ -20696,7 +20696,8 @@ def net_control(path, q):
 # MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned: the hub's version and its updating itself
 # (docs/operations/hub-update.md): a newer release to install (auto-update off), an update waiting for two busy agents, "Automatic updates enabled"
 # told for the first time, a newer release auto-update holds back (its code does not contain the hub's commit, with
-# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). Unset:
+# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). behind
+# (#8108): up to date against a build-time source whose newest release is older than the hub (source_behind). Unset:
 # GET /api/v1/hub/update is 404 (a hub from before), no line anywhere.
 HUB_UPDATE_MODE = os.environ.get("MOCK_HUB_UPDATE", "")
 HUB_UPDATE = {}
@@ -20719,6 +20720,10 @@ def hub_update_state():
         elif HUB_UPDATE_MODE == "notice":
             HUB_UPDATE.update(state="idle", auto=True, auto_notice=True)
             HUB_UPDATE["latest"] = dict(latest, version=HUB_UPDATE["version"], build=HUB_UPDATE["build"], newer=False)
+        elif HUB_UPDATE_MODE == "behind":
+            HUB_UPDATE.update(state="idle", auto=True, update_url="https://site.example.com/dl", update_url_from="build", source_behind=True)
+            HUB_UPDATE["latest"] = {"version": "v0.1.17-177-g563f7fde5b-202611071005", "build": 202611071005,
+                                    "released": "2026-11-07T10:05:00Z", "newer": False, "bad": False}
         elif HUB_UPDATE_MODE in ("docker", "docker-pinned"):
             pinned = HUB_UPDATE_MODE == "docker-pinned"
             HUB_UPDATE.update(version="0.3.0", build=0, channel="docker", can_update=False, auto=False,
