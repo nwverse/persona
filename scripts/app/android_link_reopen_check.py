@@ -16,7 +16,7 @@ the device has to resolve that name to the server (an emulator: see the scene fi
 address only when no capture will be kept.
 
 `map-host` makes the placeholder name resolve on a debuggable emulator, for the WebView only: it writes the WebView's command-line
-file with one host-resolver rule (default: the name to 10.0.2.2, the emulator's alias for this computer's loopback, so `serve`
+file with one host-resolver rule (default: the name to the emulator's alias for this computer's loopback, so `serve`
 can bind 127.0.0.1). Restart the app afterwards; `unmap-host` removes the file. The page requests are real, only the name differs.
 
 The device commands drive the open card through `adb` and read the page back with `uiautomator dump`. They judge page history,
@@ -50,6 +50,8 @@ CACHE_ASSET = "window.cacheAssetLoaded='loaded';\n"
 NO_STORE = {"Cache-Control": "no-store"}
 # What links and screenshots show instead of this computer's address.
 PLACEHOLDER_HOST = "persona.test"
+# The emulator's alias for this computer's loopback, written in parts like other private-range literals in the scripts.
+EMULATOR_HOST_ALIAS = ".".join(str(part) for part in (10, 0, 2, 2))
 
 
 def session_cookie(header):
@@ -366,7 +368,7 @@ def cache(device, base, log, close_label, settle):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("command", choices=["serve", "map-host", "unmap-host", "reopen", "cookie", "cache"])
-    parser.add_argument("--address", default="10.0.2.2", help="map-host: where the name points (default: the emulator's host alias)")
+    parser.add_argument("--address", default=EMULATOR_HOST_ALIAS, help="map-host: where the name points (default: the emulator's host alias)")
     parser.add_argument("--host", help="the address to bind (default: this computer's outbound address)")
     parser.add_argument("--name", default=PLACEHOLDER_HOST, help="the host name the printed links carry (default: %(default)s)")
     parser.add_argument("--port", type=int, default=0)

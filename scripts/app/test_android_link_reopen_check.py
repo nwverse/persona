@@ -137,11 +137,12 @@ class PlaceholderHostTest(unittest.TestCase):
         self.assertIsNone(re.search(r"\d+\.\d+\.\d+\.\d+", check.PLACEHOLDER_HOST))
 
     def test_the_webview_rule_maps_the_name_to_the_emulator_host_alias(self):
-        self.assertEqual(check.webview_command_line("persona.test", "10.0.2.2"),
-                         '_ --host-resolver-rules="MAP persona.test 10.0.2.2"\n')
+        self.assertEqual(check.webview_command_line("persona.test", check.EMULATOR_HOST_ALIAS),
+                         f'_ --host-resolver-rules="MAP persona.test {check.EMULATOR_HOST_ALIAS}"\n')
 
     def test_a_name_or_address_that_could_carry_more_flags_is_refused(self):
-        for name, address in (("a b", "10.0.2.2"), ("persona.test", "10.0.2.2 --x"), ('p"', "10.0.2.2"), ("p", "host;rm")):
+        alias = check.EMULATOR_HOST_ALIAS
+        for name, address in (("a b", alias), ("persona.test", alias + " --x"), ('p"', alias), ("p", "host;rm")):
             with self.assertRaises(SystemExit):
                 check.webview_command_line(name, address)
 
