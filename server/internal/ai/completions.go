@@ -106,9 +106,9 @@ func readCompletions(body io.Reader) (Reply, error) {
 			return nil
 		}
 		var chunk struct {
-			Type    string    `json:"type"`
-			Model   string    `json:"model"`
-			Error   *struct{} `json:"error"`
+			Type    string          `json:"type"`
+			Model   string          `json:"model"`
+			Error   json.RawMessage `json:"error"`
 			Choices []struct {
 				Index int `json:"index"`
 				Delta struct {
@@ -128,7 +128,9 @@ func readCompletions(body io.Reader) (Reply, error) {
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			return fmt.Errorf("ai: decode stream: %w", err)
 		}
-		if chunk.Error != nil || chunk.Type == "error" {
+		rawError := bytes.TrimSpace(chunk.Error)
+		hasError := len(rawError) > 0 && !bytes.Equal(rawError, []byte("null"))
+		if hasError || chunk.Type == "error" {
 			code, msg := gatewayErrorDetails([]byte(payload))
 			return streamFailureError("stream error", code, msg)
 		}

@@ -106,6 +106,7 @@ func failureKindFor(status int, code, message string) FailureKind {
 }
 
 type errorEnvelope struct {
+	Type    string          `json:"type"`
 	Code    string          `json:"code"`
 	Message string          `json:"message"`
 	Error   json.RawMessage `json:"error"`
@@ -114,11 +115,21 @@ type errorEnvelope struct {
 // gatewayErrorDetails reads OpenAI- and Anthropic-shaped envelopes. error.code is more specific than a top-level
 // code; either may carry the message. Non-JSON bodies remain available to the established wording fallback.
 func gatewayErrorDetails(raw []byte) (code, message string) {
+	code, message, _, _ = gatewayErrorDetailsWithType(raw)
+	return code, message
+}
+
+// gatewayErrorDetailsWithType also retains the most specific envelope type and whether raw was a JSON envelope.
+// The latter keeps plain-text log fallback distinct from an envelope that happens to carry only a message.
+func gatewayErrorDetailsWithType(raw []byte) (code, message, typ string, envelope bool) {
 	var body errorEnvelope
 	if json.Unmarshal(raw, &body) != nil {
-		return "", string(raw)
+		return "", string(raw), "", false
 	}
-	code, message = strings.TrimSpace(body.Code), body.Message
+	code, message, typ, envelope = strings.TrimSpace(body.Code), body.Message, body.Type, true
+	if typ == "error" { // the outer Messages envelope marker, not the nested error's type
+		typ = ""
+	}
 	var errorText string
 	if json.Unmarshal(body.Error, &errorText) == nil && errorText != "" {
 		message = errorText
@@ -130,6 +141,9 @@ func gatewayErrorDetails(raw []byte) (code, message string) {
 		if json.Unmarshal(current, &nested) != nil {
 			break
 		}
+		if nested.Type != "" {
+			typ = nested.Type
+		}
 		if c := strings.TrimSpace(nested.Code); c != "" {
 			code = c
 		}
@@ -138,5 +152,5 @@ func gatewayErrorDetails(raw []byte) (code, message string) {
 		}
 		current = nested.Error
 	}
-	return code, message
+	return code, message, typ, envelope
 }

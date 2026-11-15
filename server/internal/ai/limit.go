@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -405,8 +404,8 @@ func (g *gate) changed() {
 	g.wake = make(chan struct{})
 }
 
-// httpError is an answer other than 200. body keeps the established clipped text; code and message retain the
-// semantics from the full body for failure classification and the gate.
+// httpError is an answer other than 200. body keeps the established clipped text; the full parsed envelope is retained
+// for failure classification and gate logs.
 type httpError struct {
 	status          int
 	body            string
@@ -414,14 +413,17 @@ type httpError struct {
 	retryAfterGiven bool
 	code            string
 	message         string
+	errorType       string
+	envelope        bool
 	noRetry         bool
 }
 
 func newHTTPError(resp *http.Response, raw []byte) *httpError {
-	code, message := gatewayErrorDetails(raw)
+	code, message, errorType, envelope := gatewayErrorDetailsWithType(raw)
+	after, validAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),
-		retryAfter: retryAfter(resp.Header.Get("Retry-After")), retryAfterGiven: strings.TrimSpace(resp.Header.Get("Retry-After")) != "",
-		code: code, message: message, noRetry: NoRetry(resp.Header)}
+		retryAfter: after, retryAfterGiven: validAfter, code: code, message: message, errorType: errorType,
+		envelope: envelope, noRetry: NoRetry(resp.Header)}
 }
 
 // NoRetry reports whether the gateway explicitly forbids retrying this response.
@@ -467,19 +469,28 @@ func Transient(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.As(err, &n)
 }
 
-// retryAfter reads Retry-After: seconds or an HTTP date.
-func retryAfter(v string) time.Duration {
+// parseRetryAfter reads syntactically valid Retry-After seconds or an HTTP date. Malformed and absent values are not
+// a cooldown; valid zero remains distinct so an explicit reset can expire immediately.
+func parseRetryAfter(v string) (time.Duration, bool) {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return 0
+		return 0, false
 	}
 	var d time.Duration
 	if n, err := strconv.Atoi(v); err == nil {
 		d = time.Duration(n) * time.Second
 	} else if t, err := http.ParseTime(v); err == nil {
 		d = t.Sub(now())
+	} else {
+		return 0, false
 	}
-	return min(max(d, 0), afterMost)
+	return min(max(d, 0), afterMost), true
+}
+
+// retryAfter reads Retry-After: seconds or an HTTP date, returning zero when it is absent or malformed.
+func retryAfter(v string) time.Duration {
+	d, _ := parseRetryAfter(v)
+	return d
 }
 
 var quotaWords = lazyre.New(`quota|usage limit|exhaust|insufficient|credit|billing`)
@@ -600,21 +611,28 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 	if !errors.As(err, &h) {
 		return "", 0, ""
 	}
-	code, message := h.code, h.message
-	if code == "" && message == "" { // also support the package's direct httpError test fixtures
-		code, message = gatewayErrorDetails([]byte(h.body))
+	code, message, errorType, envelope := h.code, h.message, h.errorType, h.envelope
+	if code == "" && message == "" && errorType == "" && !envelope { // also support direct httpError test fixtures
+		code, message, errorType, envelope = gatewayErrorDetailsWithType([]byte(h.body))
 	}
 	body := strings.ToLower(h.body)
 	codedReason, coded := limitReasonForCode(code, message)
+	if _, typed := failureKindForCode(code); typed {
+		// Model, context and endpoint semantics are more specific than any status-based gate action.
+		return "", 0, ""
+	}
 	switch {
+	case coded && codedReason == ReasonQuota:
+		// Explicit quota exhaustion wins on any status, including an otherwise non-retryable response.
+		reason = ReasonQuota
 	case h.status == http.StatusPaymentRequired:
 		reason = ReasonQuota
-	case h.status == http.StatusTooManyRequests && h.noRetry && (h.retryAfterGiven || h.retryAfter > 0):
-		// This is an explicit cooldown, not a busy answer to back off from exponentially.
+	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven:
+		// A valid explicit cooldown is a quota reset, not a busy answer to back off from exponentially.
 		reason = ReasonQuota
-	case coded && codedReason == ReasonQuota:
-		// Quota exhaustion is explicit on any status; recognized busy codes still only affect the established statuses.
-		reason = ReasonQuota
+	case h.noRetry:
+		// Every other explicit no-retry response returns its raw error without a busy pause, cap or probe.
+		return "", 0, ""
 	case h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
 		return "", 0, ""
 	case coded:
@@ -627,19 +645,12 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 		reason = ReasonBusy
 	}
 	detail = fmt.Sprintf("HTTP %d", h.status)
-	var e struct {
-		Error struct {
-			Code    string `json:"code"`
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal([]byte(h.body), &e) == nil && (e.Error.Code != "" || e.Error.Message != "") {
-		code := e.Error.Code
-		if code == "" {
-			code = e.Error.Type
+	if envelope && (code != "" || message != "" || errorType != "") {
+		label := code
+		if label == "" {
+			label = errorType
 		}
-		detail += " " + strings.TrimSpace(code+": "+e.Error.Message)
+		detail += " " + strings.TrimSpace(label+": "+message)
 	} else if h.body != "" {
 		detail += " " + h.body[:min(len(h.body), 120)]
 	}
