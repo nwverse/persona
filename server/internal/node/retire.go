@@ -164,6 +164,12 @@ func (n *Node) quitAgent(ctx context.Context, id, pane string) (bool, error) {
 // With only and requireFresh, an abandoned start uses the same primitive but every verification refresh must succeed
 // for that pane's host; the ordinary quitAgent keeps its tolerant multi-round refresh behavior.
 func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Host, requireFresh bool) (bool, error) {
+	if requireFresh {
+		// Do not let a successful discovery followed by an outage turn the first Ctrl+C pair into an unverified interrupt.
+		if err := n.refreshHosts(ctx, only); err != nil {
+			return false, err
+		}
+	}
 	_ = n.sendKeys(ctx, pane, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
 	if err := n.sendKeys(ctx, pane, "ctrl+c"); err != nil {
