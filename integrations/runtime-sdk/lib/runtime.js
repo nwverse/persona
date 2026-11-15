@@ -113,13 +113,12 @@ export function defaultSocketPath() {
  *   listen?: { port?: number, host?: string, path?: string, token: string | (() => string) } | boolean,
  *   token?: string | (() => string), package?: { name: string, hash: string }, instance?: string,
  *   onUpdate?: (offer: { name: string, hash: string, version?: string }) => void,
- *   launchers?: { name: string, model?: string, agent?: string, models?: object[], auto_accept?: boolean }[], resume?: boolean,
+ *   launchers?: { name: string, model?: string, agent?: string, models?: object[] }[], resume?: boolean,
  *   keepAlways?: boolean, readonly?: boolean, modelSwitch?: boolean }} options -
  *   launchers: more entries for the new-session form than options.launcher (a runtime running several agents: one
- *   per provider, each with the agent it starts and its models; auto_accept: its agents ask unless a switch is on, which
- *   a start in bypassPermissions turns on, so the manager starts its own Agents there in it, #8141); rt.launchersChanged
- *   replaces them. resume: start takes {resume: <Claude session id>} — taking a session it does not have over, under
- *   that id (caps.resume; the machine's engine continuing a session not running anywhere). keepAlways: the runtime keeps no "always allow" rule
+ *   per provider, each with the agent it starts and its models); rt.launchersChanged replaces them. resume: start
+ *   takes {resume: <Claude session id>} — taking a session it does not have over, under that id (caps.resume; the
+ *   machine's engine continuing a session not running anywhere). keepAlways: the runtime keeps no "always allow" rule
  *   itself; a permission card with an always_label then gets the hub's "Always allow in this session" for that session and tool
  *   (caps.keep_always, #3974). A runtime whose always is a rule of its own (narrower than the tool) leaves it off.
  *   readonly: start with permission_mode "plan" runs in a read-only mode from the first prompt or throws

@@ -118,8 +118,7 @@ export function formModel(m) {
 
 /**
  * The new-session form's launchers: one per provider that can start an agent (enabled, not failing, named like a
- * launcher), with the agent it starts and its models. One whose approval is Paseo's Auto Accept switch says so
- * (`auto_accept`): the Agents Persona itself starts there run with it on, as Claude Code's run in bypassPermissions (#8141).
+ * launcher), with the agent it starts and its models; `auto_accept` when its approval is Auto Accept (#8141).
  */
 export function launchersOf(entries = [], roots = {}) {
   const out = []
@@ -753,15 +752,13 @@ function alwaysLabel(suggestions) {
   return snippet(`${where}不再问：${rules}`)
 }
 
-/** The tool Codex 0.167 names in the MCP approval it asks for: `Allow the <server> MCP server to run tool "<tool>"?`. */
+/** Codex 0.167's MCP approval: `Allow the <server> MCP server to run tool "<tool>"?`. */
 const CODEX_MCP_TOOL = / to run tool "([^"\n]+)"\?/
 
 /**
- * Whether a permission request asks for the MCP tool Claude Code calls `name` (`mcp__<server>__<tool>`), whichever
- * provider asks (#8141). Claude Code asks by that name. OpenCode asks by its own name for the tool, `<server>_<tool>`
- * (what Paseo's tool policy grants it), and Codex through an approval of the server (Paseo's CodexMcpElicitation)
- * whose message names the tool. Any other provider asks for the call its card shows (toolCall: Grok's UseTool names
- * `<server>__<tool>`). A request that names the tool no way here is not it.
+ * Whether a permission request asks for MCP tool `name` (`mcp__<server>__<tool>`), whichever provider asks (#8141):
+ * Claude Code by that name, OpenCode as `<server>_<tool>`, Codex in an approval of the server naming the tool, any
+ * other by the call its card shows (Grok's UseTool).
  */
 export function asksForTool(request, name) {
   const r = request ?? {}

@@ -13,9 +13,10 @@ import (
 // 445,466 B on untouched main and 447,388 B after its ordering, marker and linear-accounting fixes; the budget is the latter
 // plus the same 334 B of headroom main had. Raised by 2,405 B for pi's ask_user that never hangs on an unseen dialog,
 // an interrupt that waits for the turn to end, and the SDK's queued / settled / runtime.driven (#8097: 449,837 B over
-// main's 447,432 B, with main's 290 B of headroom).
+// main's 447,432 B, with main's 290 B of headroom). Raised by 490 B for the Paseo bridge answering Persona's own tools
+// on every provider and marking Auto Accept launchers (#8141: 450,327 B over main's 449,837 B, the same 290 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 450_127
+	const budget = 450_617
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

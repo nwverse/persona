@@ -816,11 +816,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
   }
 
   /**
-   * Whether request asks for one of the Agent's own Persona tools (allowTools) in an Agent Persona started (it carries
-   * SESSION_LABEL), whichever provider runs it (asksForTool: Claude Code, an ACP agent such as Grok, OpenCode, Codex;
-   * #8141): those run without a card, as the node allows them in the Claude Agents it starts
-   * (docs/integrations/claude-integration.md "Persona tools Agents call without a card"). An agent made in Paseo's own
-   * app (one whose id the bridge kept, KEPT_LABEL, too) and every other tool still go to the phone.
+   * Whether request asks for one of the Agent's own Persona tools (allowTools; any provider, asksForTool) in an Agent
+   * Persona started (it carries SESSION_LABEL): those run without a card, as the node allows them in the Claude Agents
+   * it starts (docs/integrations/claude-integration.md "Persona tools Agents call without a card"). An agent made in
+   * Paseo's own app (one whose id the bridge kept, KEPT_LABEL, too) and every other tool still go to the phone.
    */
   function ownTool(agentId, request) {
     if (request.kind === 'question' || request.kind === 'plan') return false
@@ -832,9 +831,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
 
   /**
    * The Agent's own Persona tools (allowTools) as Paseo's preapproval for a new Claude Code agent (toolPolicy): those
-   * of the servers it is given, by server and tool (`mcp__<server>__<tool>`). Undefined when there are none. Not for
-   * Codex, where Paseo would limit that server to the listed tools, nor OpenCode, whose Auto Accept Paseo 0.15 leaves off
-   * for an agent with a tool policy; their asks for these tools are answered here (ownTool).
+   * of the servers it is given, by server and tool (`mcp__<server>__<tool>`). Undefined when there are none. Never for
+   * Codex or OpenCode (docs/lessons/paseo.md): ownTool answers their asks.
    */
   function preapproved(mcpServers) {
     const grants = []
