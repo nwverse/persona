@@ -907,6 +907,20 @@ iPhone's side comes next.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
+- **Relays replaced (#8709)**: the relays leave on the phone's interface too, so turning Wi-Fi off under a direct LAN
+  route takes them with it, often without a word from their sockets. The session opens a channel's relay again, beside
+  the old one, when:
+  - the relays' interface changes (`setRelayVia`; the app's first report only replaces the guess);
+  - a relay's oldest unanswered ping is 3 s old, or four of its round trips if longer, with at least two pings
+    unanswered (`relaySilentAfter`), as on Wi-Fi with no way out. A shorter hiccup costs nothing.
+
+  The new relay is the channel's relay once it attaches. The channel moves onto it once, with `use`, if a relay or
+  nothing carried it (a direct route keeps it), and the old relay closes. If the old relay spoke again meanwhile, it
+  stays and the new one closes, so nothing moves.
+
+  A channel whose relay ends with nothing else attached waits up to 8 s for a relay opened again (`relayGrace`, within
+  the node's 10 s `Grace`), asking every 3 s, and keeps what the app sends meanwhile; then it ends, and the RFB
+  channel's end ends the session. A gap still ends it at once.
 
 ### Video over UDP (#7873)
 
