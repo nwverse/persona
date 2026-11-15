@@ -7,6 +7,55 @@ use std::path::{Path, PathBuf};
 use persona_core::turns::Input;
 use serde_json::Value;
 
+fn current_apple_expected(case: &Value, overlay: &Value) -> Value {
+    let mut expected = case["expected"].clone();
+    let wake = &overlay["turn_wake_state"];
+    for turn in expected["turns"].as_array_mut().unwrap() {
+        let pending = overlay["turn_wake_state"]["pending"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["case"] == case["name"] && entry["turn"] == turn["id"]);
+        let object = turn.as_object_mut().unwrap();
+        object.remove(wake["drop"].as_str().unwrap());
+        object.insert(wake["set"].as_str().unwrap().to_owned(), Value::Bool(pending));
+    }
+    let name = case["name"].as_str().unwrap();
+    if let Some(entry) = overlay["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == name)
+    {
+        for (key, value) in entry["replace"].as_object().into_iter().flatten() {
+            assert!(
+                expected.get(key).is_some_and(|old| old != value),
+                "stale replace: {name}.{key}"
+            );
+            expected[key] = value.clone();
+        }
+        for (id, fields) in entry["turn_fields"].as_object().into_iter().flatten() {
+            let indices: Vec<usize> = expected["turns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, turn)| (turn["id"] == *id).then_some(index))
+                .collect();
+            assert_eq!(indices.len(), 1, "one {name}/{id} turn");
+            let turn = &mut expected["turns"][indices[0]];
+            for (key, value) in fields.as_object().unwrap() {
+                assert!(
+                    turn.get(key).is_some_and(|old| old != value),
+                    "stale field: {name}/{id}.{key}"
+                );
+                turn[key] = value.clone();
+            }
+        }
+    }
+    expected["turns"].clone()
+}
+
 #[test]
 fn exact_static_turn_manifest_and_full_expected_objects() {
     let mut paths: Vec<PathBuf> =
@@ -17,6 +66,18 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
             .collect();
     paths.sort();
     assert_eq!(paths.len(), 9, "the lines file set is the manifest boundary");
+    let overlay_path = std::env::var_os("PERSONA_LINES_IOS_DIFFERENCES")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../spec/fixtures/lines/ios/differences.json")
+        });
+    let overlay: Value = serde_json::from_slice(&fs::read(&overlay_path).unwrap_or_else(|error| {
+        panic!(
+            "current Apple differences from #8239 are required at {}: {error}",
+            overlay_path.display()
+        )
+    }))
+    .unwrap();
     let mut replayed = BTreeSet::new();
     let mut total = 0;
     for path in paths {
@@ -27,27 +88,12 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
                 continue;
             }
             let name = case["name"].as_str().unwrap().to_owned();
-            if matches!(
-                name.as_str(),
-                "regular_user_images"
-                    | "absorbed_user_images"
-                    | "live_tail_runs_behind_chip"
-                    | "photos_after_wake_stay_with_message"
-                    | "tool_images_belong_to_call"
-            ) {
-                // Current Apple treats these user images as input, never process, and does not re-associate different
-                // seqs; pending wakes also no longer duplicate ordered rows into tail. #8239 owns current-Apple replay.
-                continue;
-            }
             let input: Input = serde_json::from_value(case["input"].clone()).expect(&name);
-            let mut actual = persona_core::turns::project(&input);
-            for turn in actual.as_array_mut().unwrap() {
-                turn.as_object_mut().unwrap().remove("has_pending_wake");
-            }
+            let actual = persona_core::turns::project(&input);
             assert_eq!(
                 actual,
-                case["expected"]["turns"],
-                "static turn corpus uses the legacy image/after-wake shape; #8239 owns the current Apple replay: {}/{}",
+                current_apple_expected(case, &overlay),
+                "current Apple turn projection from #8239's replay: {}/{}",
                 path.display(),
                 name
             );
@@ -56,6 +102,7 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
     }
     assert_eq!(total, 61, "actual lines corpus size");
     let expected: BTreeSet<String> = [
+        "absorbed_user_images",
         "background_running_badge",
         "closed_work_identity",
         "compaction_stays_inside_work",
@@ -72,6 +119,7 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
         "live_empty_work",
         "live_queued_message_keeps_position",
         "live_reply_stays_after_work",
+        "live_tail_runs_behind_chip",
         "long_answer_after_wake",
         "menu_owner_per_message",
         "missing_start_time_hides_duration",
@@ -89,9 +137,11 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
         "orphan_tool_result_is_not_a_row",
         "orphan_wake_opens_with_notice",
         "ordinary_user_starts_next_turn",
+        "photos_after_wake_stay_with_message",
         "plain_exchange",
         "queued_without_existing_turn",
         "recap_separates_turns",
+        "regular_user_images",
         "short_reply_after_wake_is_the_answer",
         "single_interaction_in_footer",
         "standalone_empty_thinking_hidden",
@@ -103,6 +153,7 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
         "thinking_narration_preserved",
         "three_users_apart_without_steps",
         "timed_work_ends_at_answer",
+        "tool_images_belong_to_call",
         "trailing_tool_after_answer",
         "unknown_item_is_ignored",
         "wake_after_recap_reopens_turn",
@@ -114,9 +165,9 @@ fn exact_static_turn_manifest_and_full_expected_objects() {
     .collect();
     assert_eq!(
         replayed, expected,
-        "exact legacy-compatible turn set; four operations and five source-disproved turn shapes are excluded"
+        "exact static turn set with the current-Apple differences applied; only four operation cases are excluded"
     );
-    assert_eq!(replayed.len(), 52);
+    assert_eq!(replayed.len(), 57);
     assert!(replayed.contains("wake_after_recap_reopens_turn"));
     assert!(replayed.contains("finished_queued_messages_apart"));
     eprintln!(

@@ -514,12 +514,6 @@ impl Turn {
 
     fn json(&self) -> Value {
         let ids = |rows: &[Row]| rows.iter().map(|row| Value::String(row.id.clone())).collect::<Vec<_>>();
-        let after_wake = self.wakes.first().and_then(|wake| {
-            self.ordered
-                .iter()
-                .position(|row| row.id == wake.id)
-                .map(|index| ids(&self.ordered[index..]))
-        });
         serde_json::json!({
             "id": self.id,
             "user_ids": ids(&self.users),
@@ -528,10 +522,6 @@ impl Turn {
             "trailing_ids": ids(&self.trailing),
             "wake_ids": ids(&self.wakes),
             "has_pending_wake": self.has_pending_wake,
-            "after_wake_ids": after_wake.unwrap_or_default().into_iter().filter(|id| {
-                let id = id.as_str().unwrap_or_default();
-                !self.users.iter().any(|row| row.id == id) && !id.starts_with("message#")
-            }).collect::<Vec<_>>(),
             "tail_ids": ids(&self.tail),
             "ordered_ids": ids(&self.ordered),
             "tool_count": self.process.iter().map(|row| row.tools).sum::<i64>(),
