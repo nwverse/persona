@@ -134,7 +134,6 @@ import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type Readin
 import { codedFailure, knownAction, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
 import { BASE } from "../../lib/base";
-import { ModelFallbackCard } from "./ModelFallbackCard";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
@@ -164,6 +163,8 @@ const LazyWrapUpChips = lazy(() => import("../assistant/HandoffCard").then((m) =
 const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ default: m.NotFoundNotice })));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
+// Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
+const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
 
 const NO_FEED: FeedItem[] = [];
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
@@ -2074,7 +2075,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           </>
         )}
         {pendingCards}
-        {!assistant && session?.model_fallback && <ModelFallbackCard session={session} headless={false} />}
+        {!assistant && session?.model_fallback && <Suspense fallback={null}><ModelFallbackCard session={session} headless={false} /></Suspense>}
         {assistant && session && <CompactionStrip session={session} />}
         {/* the failed bubble above has the one Retry; the card says what to set up first */}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} /> : <ReadinessCard gate={gate} />}
