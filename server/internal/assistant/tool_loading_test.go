@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -151,6 +152,63 @@ func TestLoadAllToolsSetting(t *testing.T) {
 	}
 	if get() != fmt.Sprint(true) || deferred() {
 		t.Fatalf("after the change: %s, deferred %v", get(), deferred())
+	}
+}
+
+// Changing assistant.load_all_tools reaches a running conversation at once: the watch its personad mcp keeps (the
+// revision it last listed with) is answered with the new list, without a task-link change or a process restart.
+func TestLoadAllToolsReachesRunningConversations(t *testing.T) {
+	ft := newFleetTest(t)
+	ft.f.hello.Assistant.MachineID = "mac"
+	s := ft.s
+	ctx := context.Background()
+	// poll is one call of the watch as personad mcp makes it: how many tools are listed and how many of them deferred,
+	// and the revision to watch from next; listed is 0 when the call ran out of time unchanged.
+	poll := func(revision string) (listed, deferred int, next string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		raw, _ := json.Marshal(map[string]any{"assistant": true, "session_id": "o1", "revision": revision})
+		out, handled, err := s.NodeRequest(ctx, "mac", "mcp.tools", raw)
+		if err != nil || !handled {
+			t.Fatal(err, handled)
+		}
+		b, _ := json.Marshal(out)
+		var res struct {
+			Tools    []proto.Tool `json:"tools"`
+			Revision string       `json:"revision"`
+		}
+		if err := json.Unmarshal(b, &res); err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range res.Tools {
+			if tool.DeferLoading {
+				deferred++
+			}
+		}
+		return len(res.Tools), deferred, res.Revision
+	}
+	set := func(on bool) {
+		t.Helper()
+		change, err := s.setLoadAllTools(ctx, json.RawMessage(fmt.Sprint(on)))
+		if err != nil || change.apply == nil {
+			t.Fatalf("set %v: %v, %+v", on, err, change)
+		}
+		if _, err := change.apply(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed, deferred, rev := poll("")
+	if listed == 0 || deferred == 0 {
+		t.Fatalf("first list: %d tools, %d deferred", listed, deferred)
+	}
+	set(true)
+	if listed, deferred, rev = poll(rev); listed == 0 || deferred != 0 {
+		t.Fatalf("load_all_tools on: %d tools, %d deferred (no tools: the running conversation was not told)", listed, deferred)
+	}
+	set(false)
+	if listed, deferred, _ = poll(rev); listed == 0 || deferred == 0 {
+		t.Fatalf("load_all_tools off: %d tools, %d deferred (no tools: the running conversation was not told)", listed, deferred)
 	}
 }
 

@@ -171,8 +171,9 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.load_all_tools", Title: "Load every Persona tool up front", Actions: getSet,
 			About: "off (the default): only the Persona tools conversations use often are sent in full with every request; the " +
 				"others are listed by name and loaded with ToolSearch when needed, which keeps every request smaller. on: every " +
-				"Persona tool is sent in full with every request, as before. Applies to conversation processes started from now on: " +
-				"a running conversation keeps its tools until its process restarts",
+				"Persona tool is sent in full with every request, as before. Applies at once: running conversations are sent their " +
+				"new tool list and new ones start with it (a conversation on a computer whose Persona is older than tool refresh " +
+				"keeps its tools until its process restarts)",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.loadAllTools(ctx)), nil },
 			set: s.setLoadAllTools},

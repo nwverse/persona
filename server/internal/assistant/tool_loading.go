@@ -13,7 +13,9 @@ import (
 // alwaysLoad in full with every request; any other it lists by name only, and the model loads it with ToolSearch when
 // it needs it (the assistant's --tools has ToolSearch, node/assistant.go). Every Persona tool used to be marked, about
 // 22K tokens a request for tools most conversations never call; now only coreTools are, unless
-// assistant.load_all_tools is on. A tool list is read once per process, so a change applies from its next start.
+// assistant.load_all_tools is on. Changing it wakes every running personad mcp's tool watch (mcp_tools_changes.go), so a
+// running conversation is sent its new list at once; one whose personad mcp is older than tool refresh lists its tools
+// only when its process starts, and keeps them until it restarts.
 
 // coreTools are the tools assistant conversations call often: those called at least 5 times in 30 days of one
 // install's assistant conversations, less the ones whose every call failed for want of setup (mail_accounts with no
@@ -48,8 +50,22 @@ func (s *Service) loadAllTools(ctx context.Context) bool {
 }
 
 func (s *Service) setLoadAllTools(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	return s.setBoolSetting(ctx, v, s.loadAllTools, "assistant.load_all_tools is unchanged", func(l i18n.Lang, before, after string) string {
+	change, err := s.setBoolSetting(ctx, v, s.loadAllTools, "assistant.load_all_tools is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_load_all_tools", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.LoadAllTools },
-		"assistant.load_all_tools is %v for conversation processes started from now on (a running one keeps its tools until it restarts).")
+		"assistant.load_all_tools is %v: running conversations are sent their new tool list now, and new ones start with it "+
+			"(a conversation on a computer whose Persona is older than tool refresh keeps its tools until its process restarts).")
+	if err != nil || change.apply == nil {
+		return change, err
+	}
+	apply := change.apply
+	change.apply = func(ctx context.Context) (string, error) {
+		out, err := apply(ctx)
+		if err == nil {
+			// Saved first, so every watch this wakes lists its tools with the new setting.
+			s.mcpChanges.notify()
+		}
+		return out, err
+	}
+	return change, nil
 }

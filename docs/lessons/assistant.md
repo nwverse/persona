@@ -484,9 +484,11 @@ two as well, about 23K (estimated). The manager sets the flag on every list itse
 (a connector program's own `defer_loading`) still loads up front for a guest, an agent or while
 `assistant.load_all_tools` is on. A guest conversation is never deferred: its `--tools ""` has no `ToolSearch` to load
 one with. A deferred tool the model calls by name before loading it fails; `assistant.load_all_tools` puts every tool
-back up front from each conversation's next process start. `inbox_suggest`, which the inbox's processing conversations
-must call every round, is deferred too (it had few calls on the measured install), so each such conversation spends one
-ToolSearch call before its first suggestion. It cannot stay up front for those conversations only: a process lists its
+back up front, in running conversations too: changing it wakes every `personad mcp`'s tool watch
+(`assistant/mcp_tools_changes.go`), so it does not wait for a process restart or for the next task-link change, which
+would otherwise refresh the list at a time nobody can predict. `inbox_suggest`, which the inbox's processing
+conversations must call every round, is deferred too (it had few calls on the measured install), so each such
+conversation spends one ToolSearch call before its first suggestion. It cannot stay up front for those conversations only: a process lists its
 tools when it starts (a spare before it has a conversation), before the manager notes where the conversation came from
 (`originSet`, which `assistant/start.go` calls once the node has answered). Add it to `coreTools` if the AI twin's
 conversations show failed or extra calls.
