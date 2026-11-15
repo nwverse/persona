@@ -11,6 +11,7 @@ import { Composer } from "./Composer";
 const chunk = vi.hoisted(() => {
   let reject!: (error: Error) => void;
   const promise = new Promise<never>((_, r) => { reject = r; });
+  void promise.catch(() => {}); // this chunk is expected to fail; every consumer still receives the same rejection
   return { promise, fail: () => reject(new Error("stale skill chunk")) };
 });
 vi.mock("./SlashSkillPalette", () => chunk.promise);

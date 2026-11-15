@@ -25,7 +25,7 @@ import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote
 import type { EditedImage } from "../../lib/image-edit";
 import { mentionAt, replaceToken, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
 import { machineWithHub } from "../../lib/mesh";
-import { skillContext, skillDraft, splitSkillDraft, type MentionSkill } from "../../lib/skill-mentions";
+import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
 import { getState } from "../../lib/store";
 import { AttachmentTray } from "../../ui/AttachmentTray";
 import { cx, EASE, Spinner, toast } from "../../ui/atoms";
@@ -34,8 +34,6 @@ import { ContextChips } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
-import { OverlayBoundary } from "../LazyOverlay";
-import type { SlashPaletteHandle } from "./SlashPalette";
 import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
@@ -54,7 +52,6 @@ const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel")
 const HistorySearch = lazyPage(() => import("./HistorySearch").then((m) => m.HistorySearch));
 // The command palette is idle-preloaded as before; only its optional skill-aware stage waits for "/" intent.
 const SlashPalette = lazyPage(() => import("./SlashPalette").then((m) => m.SlashPalette), { idle: true });
-const SlashSkillPalette = lazyPage(() => import("./SlashSkillPalette").then((m) => m.SlashSkillPalette));
 /** How long "Not sent yet" stays under the box after Enter was pressed while blocked. */
 const NUDGE_MS = 4000;
 
@@ -218,7 +215,6 @@ export const Composer = memo(function Composer({
   // the + panel (#5324): open while its search box has the keys
   const [plusOpen, setPlusOpen] = useState(false);
   const panel = useRef<ComposerPanelHandle>(null);
-  const slashPanel = useRef<SlashPaletteHandle>(null);
   const [editing, setEditing] = useState<Attachment | null>(null);
   // Enter while blocked (#4480): a line says why nothing went, the button and the card light up; it fades after a while
   const [nudge, setNudge] = useState(0);
@@ -253,6 +249,7 @@ export const Composer = memo(function Composer({
   const skillEnvironment = JSON.stringify([machineId, mention?.cwd, mention?.skills]);
   const previousSkillEnvironment = useRef(skillEnvironment);
   useEffect(() => {
+    setActive(0);
     if (previousSkillEnvironment.current !== skillEnvironment && getContexts(draftKey).some((r) => r.kind === "skill")) {
       toast(t("chat-composer.skills_changed"), "error");
     }
@@ -476,18 +473,10 @@ export const Composer = memo(function Composer({
   // A /loop draft gets a line under the box saying what it will do (only where the menu offers /loop: Claude agents).
   const loop = commands.some((c) => c.text === LOOP_TEXT) ? loopHint(draft) : null;
   // the "/" palette opens on a lone "/word" wherever there are commands or this chat can offer skills
-  const slashOpen = query !== null && (allCommands.length > 0 || Boolean(mention?.skills));
-  const rows = useMemo(() => (slashOpen ? rankCommands(allCommands, query) : []), [slashOpen, query, allCommands]);
-  useEffect(() => setActive(0), [query, skillEnvironment]);
+  const slashOpen = query !== null && (allCommands.length > 0 || !!mention?.skills);
   const closeSlash = useCallback(() => setDismissed(true), []);
-  useEffect(() => {
-    if (!slashOpen) return;
-    const down = (e: Event) => {
-      if (!box.current?.contains(e.target as Node)) closeSlash();
-    };
-    document.addEventListener("pointerdown", down, true);
-    return () => document.removeEventListener("pointerdown", down, true);
-  }, [slashOpen, closeSlash]);
+  const rows = useMemo(() => (slashOpen ? rankCommands(allCommands, query) : []), [slashOpen, query, allCommands]);
+  useEffect(() => setActive(0), [query]);
 
   // @: the token just before the caret (lib/mentions.ts)
   const token = mention && focused && !dismissed && query === null && caret <= draft.length ? mentionAt(draft, caret) : null;
@@ -787,7 +776,13 @@ export const Composer = memo(function Composer({
     }
   };
 
-  const pick = (c: Command) => {
+  const pick = (c: Command | MentionRow) => {
+    if ("kind" in c) {
+      setDismissed(true);
+      // The lone /word is the same kind of token as @word: replace it with no text and keep the exact opaque reference.
+      pickRow(c, { start: 0, end: draft.length, query: "" });
+      return;
+    }
     if (c.confirm && !confirm(c.confirm)) return;
     // `/permissions` opens the permission menu at once; where the chat has no picker it goes in the box as any command
     if (c.text === PERMISSIONS_COMMAND && requestPermissionPicker(draftKey)) {
@@ -799,14 +794,7 @@ export const Composer = memo(function Composer({
     setDismissed(true);
     input.current?.focus({ preventScroll: true });
   };
-  const pickSlashSkill = (skill: MentionSkill) => {
-    setDismissed(true);
-    // The lone /word is the same kind of token as @word: replace it with no text and keep the exact opaque reference.
-    pickRow({ kind: "skill", id: `skill:${skill.id}`, skill }, { start: 0, end: draft.length, query: query ?? "" });
-  };
 
-  const slashProps = { rows, active, onHover: setActive, onPick: pick, query: query ?? "", source: mention, machineId, onSkillPick: pickSlashSkill, handle: slashPanel };
-  const commandPalette = (status?: "loading" | "error") => <SlashPalette {...slashProps} status={status} />;
   const MentionPanel = mention?.skills ? AssistantComposerPanel : ComposerPanel;
   return (
     <div
@@ -831,13 +819,7 @@ export const Composer = memo(function Composer({
     >
       {slashOpen && (
         <Suspense fallback={null}>
-          {mention?.skills ? (
-            <OverlayBoundary open onClose={closeSlash} fallback={commandPalette("error")}>
-              <Suspense fallback={commandPalette("loading")}>
-                <SlashSkillPalette {...slashProps} />
-              </Suspense>
-            </OverlayBoundary>
-          ) : commandPalette()}
+          <SlashPalette rows={rows} active={active} onHover={setActive} onPick={pick} onClose={closeSlash} query={query} source={mention} machineId={machineId} within={box} />
         </Suspense>
       )}
 
@@ -952,16 +934,14 @@ export const Composer = memo(function Composer({
               if (e.key === "Escape") e.stopPropagation();
               return;
             }
-            // A highlighted skill wins over the text shortcuts: /model and /permissions are also valid skill names.
-            const slashSkillActive = slashOpen && slashPanel.current?.skillActive();
             // `/model` alone opens the model panel instead of sending (where the agent switches models)
-            if (!slashSkillActive && enterSends(e, hasFinePointer()) && isModelCommand(draft) && requestModelPicker(draftKey)) {
+            if (enterSends(e, hasFinePointer()) && isModelCommand(draft) && requestModelPicker(draftKey)) {
               e.preventDefault();
               setDraft("");
               return;
             }
             // so does `/permissions` alone: the permission menu (#6476)
-            if (!slashSkillActive && enterSends(e, hasFinePointer()) && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
+            if (enterSends(e, hasFinePointer()) && isPermissionsCommand(draft) && requestPermissionPicker(draftKey)) {
               e.preventDefault();
               setDraft("");
               return;
@@ -987,12 +967,7 @@ export const Composer = memo(function Composer({
               }
             }
             if (slashOpen) {
-              // Once its lazy chunk is ready, the palette owns keys across both command and skill rows.
-              if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === "Tab") && slashPanel.current?.key(e.key)) {
-                e.preventDefault();
-                return;
-              }
-              // The command-only fallback keeps the keys working while that chunk is on its way.
+              // The command-only fallback keeps the keys working while the skill chunk is on its way.
               if ((e.key === "ArrowDown" || e.key === "ArrowUp") && rows.length) {
                 e.preventDefault();
                 setActive((a) => (a + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length);

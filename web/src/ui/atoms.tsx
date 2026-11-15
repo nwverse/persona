@@ -34,9 +34,6 @@ export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
 }
 
-/** Keep keyboard focus in the composer while its pointer controls handle a press. */
-export const keepFocus = (e: React.SyntheticEvent) => e.preventDefault();
-
 // A light sweep across a label: work in progress.
 export function Shimmer({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (

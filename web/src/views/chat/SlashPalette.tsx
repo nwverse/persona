@@ -2,12 +2,13 @@
 // 320 px panel at the composer's left edge, one 36 px row per command with where it comes from on the right, and the
 // focused row's description in a 280 px card beside the panel (inside it on a phone). Commands keep their existing
 // ranking and cap priority; matching session skills follow them (#6171). Its base chunk is idle-preloaded and drawn only once "/" is typed.
-import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ComponentProps, type ReactNode, type Ref } from "react";
+import { Suspense, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { ComposerCommand as Command } from "../../lib/extension-prompts";
-import type { MentionSkill } from "../../lib/skill-mentions";
-import { cx, EASE, keepFocus } from "../../ui/atoms";
+import { cx, EASE } from "../../ui/atoms";
 import { t } from "../../i18n";
-import type { MentionSource } from "./ComposerPanel";
+import { lazyPage } from "../../lib/lazy-page";
+import { OverlayBoundary } from "../LazyOverlay";
+import type { MentionRow, MentionSource } from "./ComposerPanel";
 
 const PANEL_W = 320;
 const CARD_W = 280;
@@ -26,6 +27,8 @@ const samePlace = (a: Place | null, b: Place) => a?.side === b.side && a.top ===
 const commandName = (c: Command) => c.word.replace(/^\//, "");
 /** What picking a command types, when that is more than the command itself (Persona's text commands, quick prompts). */
 const typed = (c: Command) => (c.text.trim() === c.word ? "" : c.text.trim());
+const keepFocus = (e: React.SyntheticEvent) => e.preventDefault();
+const SlashSkillPalette = lazyPage(() => import("./SlashSkillPalette").then((m) => m.SlashSkillPalette));
 
 function Description({ c, id, className }: { c: Command; id?: string; className?: string }) {
   const text = typed(c);
@@ -37,25 +40,19 @@ function Description({ c, id, className }: { c: Command; id?: string; className?
   );
 }
 
-export interface SlashPaletteHandle {
-  /** A key pressed in the message box: arrows move, Enter / Tab pick. False leaves the key to the composer. */
-  key: (key: string) => boolean;
-  /** Whether Enter / Tab should pick a skill rather than run a special command typed in the box. */
-  skillActive: () => boolean;
-}
-
 export type SlashPaletteInput = {
   /** Commands already ranked by the composer, with the existing whole-list cap applied first. */
   rows: Command[];
   active: number;
   onHover: (i: number) => void;
-  onPick: (c: Command) => void;
+  onPick: (c: Command | MentionRow) => void;
+  /** A press outside `within` (the composer) closes it. */
+  onClose: () => void;
   /** What follows the slash; the catalog is read once for this opening, not for each query. */
-  query?: string;
+  query?: string | null;
   source?: MentionSource;
   machineId?: string;
-  onSkillPick?: (skill: MentionSkill) => void;
-  handle?: Ref<SlashPaletteHandle>;
+  within: React.RefObject<HTMLElement | null>;
   /** The skill stage's chunk or catalog state; loading also suppresses a premature empty message. */
   status?: "loading" | "error" | "partial";
 };
@@ -66,7 +63,21 @@ export type SlashPaletteViewProps = SlashPaletteInput & {
   renderRow?: (row: Command, common: ComponentProps<"button">) => ReactNode;
 };
 
-export function SlashPalette({ rows, entries = rows, active, onHover, onPick, source, status, renderRow }: SlashPaletteViewProps) {
+/** Commands are drawn by the idle palette; its optional skill stage can load or fail without replacing them. */
+export function SlashPalette(input: SlashPaletteViewProps) {
+  const [failed, setFailed] = useState(false);
+  if (!input.source?.skills) return <SlashPaletteView {...input} />;
+  if (failed) return <SlashPaletteView {...input} status="error" />;
+  return (
+    <OverlayBoundary open onClose={() => setFailed(true)}>
+      <Suspense fallback={<SlashPaletteView {...input} status="loading" />}>
+        <SlashSkillPalette {...input} />
+      </Suspense>
+    </OverlayBoundary>
+  );
+}
+
+export function SlashPaletteView({ rows, entries = rows, active, onHover, onPick, onClose, within, source, status, renderRow }: SlashPaletteViewProps) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -80,10 +91,19 @@ export function SlashPalette({ rows, entries = rows, active, onHover, onPick, so
   const current = Math.min(active, entries.length - 1);
   const focused = entries[current];
 
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
+    const down = (e: Event) => {
+      if (!within.current?.contains(e.target as Node)) close.current();
+    };
+    document.addEventListener("pointerdown", down, true);
     addEventListener("resize", remeasure);
-    return () => removeEventListener("resize", remeasure);
-  }, []);
+    return () => {
+      document.removeEventListener("pointerdown", down, true);
+      removeEventListener("resize", remeasure);
+    };
+  }, [within]);
 
   // the focused row into the list's view, on a key or a new filter only: the wheel may leave it
   useLayoutEffect(() => {

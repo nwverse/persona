@@ -37,7 +37,7 @@ const render = (rows: ComposerCommand[], active = 0) =>
   act(() => root.render(
     <div>
       <textarea />
-      <SlashPalette rows={rows} active={active} onHover={onHover} onPick={onPick} />
+      <SlashPalette rows={rows} active={active} onHover={onHover} onPick={onPick} onClose={() => {}} within={{ current: null }} />
     </div>,
   ));
 
