@@ -14323,7 +14323,9 @@ def machine_launchers(mid=""):
         out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source", "pi") if l.get(k)}
-                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api" and l["name"] != OWN_SERVICE_PROVIDER["name"]]
+    if OWN_SERVICE_SKIP and not own_service_skips(OWN_SERVICE_PROVIDER, mid):  # #8109: listed where its rule lets it run
+        out.append({k: OWN_SERVICE_PROVIDER[k] for k in ("name", "display_name", "base_url", "model", "source")})
     if os.environ.get("MOCK_DESKTOP_APPS") and mid == "macbook":
         # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,
         # docs/integrations/claude-integration.md "New sessions in the desktop app").
@@ -24785,6 +24787,7 @@ def model_defaults_launchers(h, p, q):
             default["runtime"] = b.get("runtime") or "cli"
     out = {"launchers": machine_launchers(p.split("/")[4]), "default": default}
     if pid == "agent.new":
+        out = with_own_service_unavailable(out, p.split("/")[4], h.headers.get("Accept-Language"))
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
         out["tiers_profile"] = {"id": "performance", "name": "Performance"}
@@ -24845,6 +24848,49 @@ if LAUNCHER_HEALTH:
                          "weather-app", 2, "agent-3", 3, 1, "", launcher="work_gw",
                          **launcher_health_refusal(next((m["name"] for m in MACHINES if m["id"] == "macbook"), "macbook"))))
 # ---------- end of area: launcher health ----------
+
+
+# ---------- area: a provider its own-service rule leaves out (#8109) ----------
+# MOCK_OWN_SERVICE_SKIP=1: a Persona-managed provider added with the defaults (DeepSeek: share all, own_service skip) and
+# the MacBook's Claude Code signed in on its own. New Agent's list (GET /api/v1/machines/{mid}/launchers, agent.new or no
+# purpose) leaves it out on the MacBook and says why in `unavailable` (code launcher_own_service, the hub's sentence in
+# the request's language); the server and the Mac Studio, without a sign-in of their own, list it. Settings › Model
+# providers has it, so How to fix opens its page.
+OWN_SERVICE_SKIP = os.environ.get("MOCK_OWN_SERVICE_SKIP") == "1"
+OWN_SERVICE_PROVIDER = {"name": "deepseek", "display_name": "DeepSeek", "source": "persona",
+                        "base_url": "https://api.deepseek.example.com/anthropic", "model": "deepseek-v4", "has_key": True,
+                        "auth": "bearer", "share": "all", "delivery": "on_demand", "own_service": "skip"}
+OWN_SERVICE_SIGNED_IN = ("macbook",)  # computers whose Claude Code has a sign-in of its own
+
+
+def own_service_skips(launcher, mid):
+    """The provider's own-service rule leaves it out on computer mid."""
+    return launcher.get("own_service") == "skip" and mid in OWN_SERVICE_SIGNED_IN
+
+
+def own_service_unavailable(mid, accept_language):
+    """New Agent's `unavailable` on computer mid (hub ownServiceSkipped): absent (None) when there is none."""
+    if not OWN_SERVICE_SKIP or mid not in OWN_SERVICE_SIGNED_IN:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+    machine = next((m["name"] for m in MACHINES if m["id"] == mid), mid)
+    l = OWN_SERVICE_PROVIDER
+    reason = readiness_mock.t(readiness_mock.lang_of(accept_language), "assistant-models_launchers.err_own_service",
+                              machine=machine, harness="Claude Code", provider=l["display_name"])
+    return [{"name": l["name"], "display_name": l["display_name"], "kind": "launcher", "agent": "claude",
+             "code": "launcher_own_service", "reason": reason}]
+
+
+def with_own_service_unavailable(out, mid, accept_language):
+    """A launcher list's answer with `unavailable` added where the rule leaves the provider out (MOCK_OWN_SERVICE_SKIP)."""
+    skipped = own_service_unavailable(mid, accept_language)
+    return dict(out, unavailable=skipped) if skipped else out
+
+
+if OWN_SERVICE_SKIP:
+    LAUNCHERS.insert(0, dict(OWN_SERVICE_PROVIDER))
+# ---------- end of area: a provider its own-service rule leaves out ----------
 
 
 # ---------- HTTP ----------
@@ -25820,7 +25866,8 @@ class H(BaseHTTPRequestHandler):
         if doctor_route(self, p, "GET"): return
         if machine_alerts.route(self, "GET", MACHINES, SYSTEMS, metric_latest, broadcast): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": machine_launchers(p.split("/")[4])})
+            mid = p.split("/")[4]
+            return self.send_json(with_own_service_unavailable({"launchers": machine_launchers(mid)}, mid, self.headers.get("Accept-Language")))
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
