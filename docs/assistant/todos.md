@@ -889,9 +889,12 @@ line; a link shows its retained full title as the hyperlink, falling back to the
 localized type and number when no title is known. The association store holds no
 physical workspace path, so a row shows no filesystem path; directory aliases
 are not paths, and physical paths belong to the workspace preparation service.
-Source options are disclosed per repository. No alias or base branch is required:
-an empty alias means no directory override and a missing ref means the remote
-default branch. This feature does no Git or remote issue lookup.
+Opening the editor holds the draft and the revision it began from: a to-do
+version change while it is open never replaces them, and the newest store is
+read again when the dialog closes. Source options are disclosed per repository.
+No alias or base branch is required: an empty alias means no directory override
+and a missing ref means the remote default branch. This feature does no Git or
+remote issue lookup.
 An issue/PR URL must belong to the saved provider, instance and target repository;
 links retain numeric string IDs, including IDs beyond JavaScript's integer range.
 
