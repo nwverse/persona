@@ -845,11 +845,11 @@ describe("Composer suggestion chunk", () => {
       expect(pill()).toBeNull();
       await vi.waitFor(() => expect(chunk.calls).toBe(1));
 
-      chunk.open();
-      for (let i = 0; i < 50 && !pill(); i++) await act(async () => {
-        await new Promise((resolve) => setImmediate(resolve));
-      });
-      expect(pill()).not.toBeNull();
+      await act(async () => { chunk.open(); });
+      await vi.waitFor(async () => {
+        await act(async () => { await Promise.resolve(); });
+        expect(pill()).not.toBeNull();
+      }, { timeout: 10_000 });
       act(() => pill()!.querySelector("button")!.click());
       expect(host.querySelector("textarea")!.value).toBe("late suggestion");
       expect(pill()).toBeNull();

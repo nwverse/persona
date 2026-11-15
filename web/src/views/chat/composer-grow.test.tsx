@@ -237,11 +237,11 @@ describe("the expanded composer chunk", () => {
 
       await act(async () => { control.click(); });
       expect(editor()).toBeNull();
-      chunk.open();
-      for (let i = 0; i < 50 && !editor(); i++) await act(async () => {
-        await new Promise((resolve) => setImmediate(resolve));
-      });
-      expect(editor()).not.toBeNull();
+      await act(async () => { chunk.open(); });
+      await vi.waitFor(async () => {
+        await act(async () => { await Promise.resolve(); });
+        expect(editor()).not.toBeNull();
+      }, { timeout: 10_000 });
       const field = editor()!.querySelector<HTMLTextAreaElement>("textarea")!;
       expect(field.value).toBe(lines(9));
       expect([field.selectionStart, field.selectionEnd]).toEqual([5, 9]);
