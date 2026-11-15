@@ -209,10 +209,10 @@ describe("Settings › Notifications › Low-distraction mode (#8157)", () => {
     expect(text.indexOf("对你所有的设备生效")).toBeGreaterThan(text.indexOf("这些设置跟着这个浏览器走"));
   });
 
-  it("is not there on a hub without the switch", async () => {
+  it("has no switch on a hub without it, and says to update the hub", async () => {
     await render();
     await act(async () => lnMode[0].reject(Object.assign(new Error("not found"), { status: 404 })));
     expect(named("低打扰模式")).toBeUndefined();
-    expect(host.textContent).not.toContain("对你所有的设备生效");
+    expect(host.textContent).toContain("这台 hub 还不支持低打扰模式，更新 hub 后可以在这里开启");
   });
 });

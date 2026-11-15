@@ -66,5 +66,6 @@
   "low_distraction": "Low-distraction mode",
   "low_distraction_hint": "Only what needs you notifies you; the rest waits for the briefing",
   "low_distraction_footer": "For all your devices. When on, questions, approvals, decisions only you can make, your reminders and the main conversation's notices still notify you; task results, “Please verify” requests and other conversations' notices wait for the briefing and Held pushes, and finished agents stay silent.",
-  "low_distraction_load_failed": "Couldn't load low-distraction mode"
+  "low_distraction_load_failed": "Couldn't load low-distraction mode",
+  "low_distraction_unsupported": "This hub doesn't support low-distraction mode yet. Update the hub to turn it on here."
 }

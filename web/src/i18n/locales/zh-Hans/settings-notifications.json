@@ -64,5 +64,6 @@
   "low_distraction": "低打扰模式",
   "low_distraction_hint": "只提醒要你处理的事，其余留给简报",
   "low_distraction_footer": "对你所有的设备生效。开启后，要你回答、批准或拍板的事、你设的提醒和主对话的通知照常提醒；任务结论、「请验收」和其他对话的通知留给简报和「被拦推送」，Agent 做完不再提醒。",
-  "low_distraction_load_failed": "读不到低打扰模式"
+  "low_distraction_load_failed": "读不到低打扰模式",
+  "low_distraction_unsupported": "这台 hub 还不支持低打扰模式，更新 hub 后可以在这里开启"
 }

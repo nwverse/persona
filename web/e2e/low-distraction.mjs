@@ -1,7 +1,8 @@
 // Settings › Notifications › Low-distraction mode (#8157) against the fake hub: the hub's switch is the page's last group,
 // after the note that the rows above are this browser's; it reads what GET /api/v1/push/ln-mode says, a tap writes it
 // (the fake hub keeps it, so its GET answers the new value), and a second tap puts it back. Wide (1280) and narrow
-// (390), light and dark, in Chinese, plus English wide and light; --shots saves the group off and on.
+// (390), light and dark, in Chinese, plus English wide and light; --shots saves the group off and on. Last, a hub without
+// the route (the page's ln-mode request answered 404 in the browser): the group is there and says to update the hub.
 //
 //   PORT=18797 python3 scripts/mock/mock_hub.py &
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18797 npx vite --port 5197 --strictPort &)
@@ -34,8 +35,8 @@ function fail(msg) {
 }
 
 const TEXT = {
-  "zh-Hans": { label: "低打扰模式", note: "这些设置跟着这个浏览器走", footer: "对你所有的设备生效" },
-  en: { label: "Low-distraction mode", note: "These settings belong to this browser", footer: "For all your devices" },
+  "zh-Hans": { label: "低打扰模式", note: "这些设置跟着这个浏览器走", footer: "对你所有的设备生效", older: "这台 hub 还不支持低打扰模式" },
+  en: { label: "Low-distraction mode", note: "These settings belong to this browser", footer: "For all your devices", older: "This hub doesn't support low-distraction mode yet" },
 };
 
 async function hubSwitch(body) {
@@ -94,10 +95,40 @@ async function run(browser, lang, theme, width) {
   await ctx.close();
 }
 
+async function olderHub(browser, lang, theme, width) {
+  const t = TEXT[lang];
+  const tag = `${lang}-${width}-${theme}-older-hub`;
+  const ctx = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 2, colorScheme: theme, locale: lang === "en" ? "en-US" : "zh-CN" });
+  const page = await ctx.newPage();
+  await page.route("**/api/v1/push/ln-mode", (route) => route.fulfill({ status: 404, contentType: "application/json", body: '{"error":"not found"}' }));
+  await page.goto(`${base}/?token=mock`);
+  await page.waitForSelector("main", { timeout: 20000 });
+  await page.evaluate(([th, l]) => {
+    localStorage.setItem("persona.theme", th);
+    localStorage.setItem("persona.language", l);
+  }, [theme, lang]);
+  await page.goto(`${base}/settings?tab=notifications`);
+  const group = page.locator('[data-settings-group="low-distraction"]');
+  try {
+    await group.getByText(t.older).waitFor({ state: "visible", timeout: 15000 });
+  } catch {
+    fail(`${tag}: the group does not say to update the hub`);
+  }
+  if (await page.getByRole("switch", { name: t.label, exact: true }).count()) fail(`${tag}: a switch on a hub without one`);
+  await group.scrollIntoViewIfNeeded();
+  ok(`${tag}: the group is there with no switch, and says to update the hub`);
+  if (shots) {
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(shots, `web-low-distraction-${tag}.png`) });
+  }
+  await ctx.close();
+}
+
 const browser = await chromium.launch(executablePath ? { executablePath, headless: true } : { channel: "chrome", headless: true });
 try {
   for (const theme of ["light", "dark"]) for (const width of [1280, 390]) await run(browser, "zh-Hans", theme, width);
   await run(browser, "en", "light", 1280);
+  for (const theme of ["light", "dark"]) await olderHub(browser, "zh-Hans", theme, 1280);
   console.log("PASS low-distraction");
 } finally {
   await hubSwitch({ enabled: false }).catch(() => {});
