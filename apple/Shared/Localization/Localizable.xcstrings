@@ -2046,6 +2046,29 @@
       },
       "extractionState" : "manual"
     },
+    "%@ is available again; your next message switches back" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ is available again; your next message switches back"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ が再び利用できます。次のメッセージで元のモデルに戻ります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已恢复，下一条消息会切回"
+          }
+        }
+      }
+    },
     "%@ is connected" : {
       "localizations" : {
         "zh-Hans" : {
@@ -26724,6 +26747,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Available again: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Available again: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用再開：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复时间：%1$@"
+          }
+        }
+      }
     },
     "Available · Direct to APNs" : {
       "extractionState" : "manual",
@@ -61573,6 +61619,29 @@
         }
       }
     },
+    "Every model tried failed: %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every model tried failed: %1$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試したすべてのモデルが失敗しました：%1$@。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试过的模型都失败了：%1$@。"
+          }
+        }
+      }
+    },
     "Every pane in the tab closes, and the agents running in them end too." : {
       "localizations" : {
         "en" : {
@@ -88449,6 +88518,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "モデル"
+          }
+        }
+      }
+    },
+    "Models tried: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Models tried: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試したモデル：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试过的模型：%1$@"
           }
         }
       }
@@ -159255,6 +159347,29 @@
         }
       }
     },
+    "The upstream refused this request, so it switched to %@ (%@)." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The upstream refused this request, so it switched to %1$@ (%2$@)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上流がこのリクエストを拒否したため、%1$@ に切り替えました（%2$@）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上游拒绝了这次请求，已改用 %1$@（%2$@）。"
+          }
+        }
+      }
+    },
     "The upstream refused this request, so it switched to %@." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -188900,6 +189015,29 @@
         }
       }
     },
+    "model unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "model unavailable"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルを利用できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型不可用"
+          }
+        }
+      }
+    },
     "needs a name" : {
       "localizations" : {
         "en" : {
@@ -189452,6 +189590,52 @@
         }
       }
     },
+    "rate limited" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "rate limited"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レート制限されました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "被限流了"
+          }
+        }
+      }
+    },
+    "quota exhausted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "quota exhausted"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用枠を使い切りました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "额度耗尽"
+          }
+        }
+      }
+    },
     "requested changes" : {
       "localizations" : {
         "en" : {
@@ -189724,6 +189908,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "发送消息"
+          }
+        }
+      }
+    },
+    "service error" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "service error"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サービスエラー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务出错"
           }
         }
       }
@@ -190649,6 +190856,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "the model refused" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the model refused"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルが拒否しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型拒绝了"
+          }
+        }
+      }
     },
     "the other end" : {
       "comment" : "The channel, when its name is unknown",
