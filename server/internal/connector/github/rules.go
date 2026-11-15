@@ -465,7 +465,7 @@ func (c *Connector) Settle(ctx context.Context, threads []string) map[string]str
 		if why := c.over(t, o); why != "" {
 			out[t] = why
 		} else if closing && st.things[t] == nil {
-			out[t] = i18n.T(i18n.From(ctx), "hub-connectors.github_account_changed")
+			out[t] = i18n.T(i18n.From(ctx), "hub-connectors.github_account_before")
 		}
 	}
 	if closing {
