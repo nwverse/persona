@@ -128,6 +128,11 @@ public nonisolated enum UsageWindows {
         /// Where use would be if it were spread evenly over the window, 0-100.
         public var expected: Double
         public var state: PaceState
+
+        public init(expected: Double, state: PaceState) {
+            self.expected = expected
+            self.state = state
+        }
     }
 
     /// How use compares with an even spread: expected% = elapsed / length; over when use is more than 5 points above it,

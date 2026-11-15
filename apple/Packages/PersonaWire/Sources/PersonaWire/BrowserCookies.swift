@@ -72,6 +72,12 @@ public nonisolated enum BrowserSiteList {
         public var count: Int
         public var first: Date?
         public var expired: Int
+
+        public init(count: Int, first: Date?, expired: Int) {
+            self.count = count
+            self.first = first
+            self.expired = expired
+        }
     }
 
     /// The sites whose domain holds `query` (any case, the spaces around it ignored), in `order`.

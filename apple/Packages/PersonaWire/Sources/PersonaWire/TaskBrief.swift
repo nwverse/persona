@@ -25,6 +25,12 @@ public nonisolated struct TaskBrief: Decodable, Hashable, Sendable {
         public var text: String
         public var truncated: Bool?
         public var at: Date?
+
+        public init(text: String, truncated: Bool? = nil, at: Date? = nil) {
+            self.text = text
+            self.truncated = truncated
+            self.at = at
+        }
     }
 
     public var request: Request?

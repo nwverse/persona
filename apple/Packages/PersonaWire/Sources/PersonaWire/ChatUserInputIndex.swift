@@ -11,6 +11,11 @@ public nonisolated struct ChatUserInputIndex: Decodable, Equatable, Sendable {
     public nonisolated struct Position: Decodable, Equatable, Sendable {
         public var id: String
         public var seq: Int
+
+        public init(id: String, seq: Int) {
+            self.id = id
+            self.seq = seq
+        }
     }
 
     public var total: Int
