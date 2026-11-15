@@ -587,7 +587,10 @@ To-do ID. A one-To-do scan can mistake a leader waiting on an active worker for 
 on each other. Join the persisted links in both directions, require every current member to be observed, and reuse
 `supersededAgents` before checking inactivity. A background label is not evidence of recent activity; use timestamps and
 state the start-time approximation when a shell has no activity field. Include the resulting group key in semantic
-deduplication so identical last words do not erase a later, genuinely new period of inactivity.
+deduplication so identical last words do not erase a later, genuinely new period of inactivity. The short semantic
+fingerprint window cannot guarantee once per stopped group across restarts: keep only the latest group key until the
+task closes. A failed state read must remain retryable, not become a moot signal marked sent. Runtime children need the
+same starting, queued-input and summary-only-background guards as their parent, even when their row says idle.
 
 ## A signal told once needs somewhere to go when its reader never acts (#8043)
 

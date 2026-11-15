@@ -317,7 +317,7 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 	if len(groups) > 0 {
 		group = groups[0]
 	}
-	if g, ok := allStoppedSignal(t, group.tasks, group.sessions, now); ok {
+	if g, ok := allStoppedSignal(t, group.tasks, group.sessions, now); ok && !group.unknown {
 		return []superviseSignal{g} // one group diagnosis, not another silent signal for each member
 	}
 	if v.state(t) == reviewNeedsUser {
@@ -403,6 +403,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.pruneTurns(ctx) // the turns' ledger: read before the first signal (what was told before a restart is not told again), closed tasks off it
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
+	s.pruneAllStoppedDedup(ctx)
 	lists := machineSessions{}   // each machine listed once for all the supervised tasks (#3029)
 	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)

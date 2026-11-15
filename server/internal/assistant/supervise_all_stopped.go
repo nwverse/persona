@@ -16,6 +16,7 @@ const superviseAllStoppedAfter = 30 * time.Minute
 type superviseGroup struct {
 	tasks    []Todo
 	sessions []proto.Session
+	unknown  bool // a failed read, not evidence that the signal no longer holds
 }
 
 // allStoppedTasks follows persisted worker links in both directions, including
@@ -149,7 +150,9 @@ func allStoppedSignal(t Todo, tasks []Todo, sessions []proto.Session, now time.T
 			if child.MachineID != key[0] || child.ParentSessionID != key[1] && child.RootSessionID != key[1] {
 				continue
 			}
-			if child.PendingInteractions > 0 || child.State == proto.StateNeedsYou || child.AwaitsReply ||
+			if child.Starting || len(child.Queued) > 0 ||
+				(child.BackgroundWorking || child.BackgroundWaiting) && !backgroundRunning(child) ||
+				child.PendingInteractions > 0 || child.State == proto.StateNeedsYou || child.AwaitsReply ||
 				child.Loop != nil || child.TurnErrorResumes || child.Work != nil &&
 				(child.Work.InteractionID != "" || child.Work.WakeAt != nil && child.Work.WakeAt.After(now)) {
 				return superviseSignal{}, false
@@ -286,28 +289,40 @@ type allStoppedChecks map[string]superviseSignal
 // Validate a digest batch before its first delivery. Waking the leader with one
 // copy must not invalidate the copy its own supervisor is about to receive.
 // The context lasts only for this dispatch; retries and queue drains check again.
-func (s *Service) allStoppedBatch(ctx context.Context, signals []superviseSignal) context.Context {
+func (s *Service) allStoppedBatch(ctx context.Context, signals []superviseSignal) (context.Context, []superviseSignal, []superviseSignal) {
 	checks := allStoppedChecks{}
 	if !slices.ContainsFunc(signals, func(g superviseSignal) bool { return g.Kind == sigAllStopped }) {
-		return ctx
+		return ctx, signals, nil
 	}
+	known := s.ensureTodosLoaded(ctx) == nil
+	var ready, retry []superviseSignal
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
 	groups := allStoppedTaskGroups(tasks)
 	lists := machineSessions{}
 	now := time.Now()
 	for _, g := range signals {
 		if g.Kind != sigAllStopped {
+			ready = append(ready, g)
+			continue
+		}
+		if !known {
+			retry = append(retry, g)
 			continue
 		}
 		checks[g.id()] = superviseSignal{}
 		if t, ok := s.todoNow(g.Todo); ok {
 			group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
+			if group.unknown {
+				retry = append(retry, g)
+				continue
+			}
 			if fresh, holds := allStoppedSignal(t, group.tasks, group.sessions, now); holds && fresh.Key == g.Key {
 				checks[g.id()] = fresh
 			}
 		}
+		ready = append(ready, g)
 	}
-	return context.WithValue(ctx, allStoppedBatchKey{}, checks)
+	return context.WithValue(ctx, allStoppedBatchKey{}, checks), ready, retry
 }
 
 func (s *Service) checkedAllStopped(ctx context.Context, t Todo, g superviseSignal) (superviseSignal, bool) {
@@ -319,20 +334,27 @@ func (s *Service) checkedAllStopped(ctx context.Context, t Todo, g superviseSign
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
 	group := s.allStoppedGroup(ctx, t, tasks, machineSessions{})
 	fresh, holds := allStoppedSignal(t, group.tasks, group.sessions, time.Now())
-	return fresh, holds && fresh.Key == g.Key
+	return fresh, !group.unknown && holds && fresh.Key == g.Key
 }
 
 // allStoppedGroup shares the watch's machine-list cache. Overlay the manager's
 // ledger: a node list can predate a newly scheduled wake or a decision card.
 func (s *Service) allStoppedGroup(ctx context.Context, t Todo, tasks []Todo, lists machineSessions) superviseGroup {
 	group := superviseGroup{tasks: allStoppedTasks(t, tasks)}
+	for _, task := range group.tasks {
+		if task.Supervision != nil && (task.Supervision.state(task) == reviewParked || task.Supervision.state(task) == reviewPending) {
+			return group // already known to be ineligible; no read is needed
+		}
+	}
 	if !s.loadWork(ctx) {
+		group.unknown = true
 		return group // no evidence, not "no wakes"
 	}
 	s.accept.mu.Lock()
 	cardsKnown := s.loadAcceptLocked(ctx)
 	s.accept.mu.Unlock()
 	if !cardsKnown {
+		group.unknown = true
 		return group // a failed card-ledger read is not "no pending answers"
 	}
 	machines := map[string]bool{}
@@ -356,6 +378,7 @@ func (s *Service) allStoppedGroup(ctx context.Context, t Todo, tasks []Todo, lis
 	for machine := range machines {
 		list := lists[machine]
 		if list.err != nil {
+			group.unknown = true
 			continue
 		}
 		for i := range list.list {

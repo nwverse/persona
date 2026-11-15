@@ -67,9 +67,6 @@ func (s *Service) sendDigest(ctx context.Context) {
 		return
 	}
 	b.pending = map[string]superviseSignal{}
-	for _, g := range list {
-		b.sent[g.id()] = g.Key
-	}
 	prev := b.last
 	b.last = now
 	b.mu.Unlock()
@@ -90,13 +87,22 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 		if lost := s.backgroundLost(ctx, was, cmp.Or(id, here.Main), web); len(lost) > 0 { // what waited for the one that is gone goes out with these
 			list = mergeSignals(lost, list)
-			b.mu.Lock()
-			for _, g := range list {
-				b.sent[g.id()] = g.Key
-			}
-			b.mu.Unlock()
 		}
 	}
+	var retry []superviseSignal
+	ctx, list, retry = s.allStoppedBatch(ctx, list)
+	if len(retry) > 0 {
+		s.restoreDigest(retry, now, prev) // unknown is retried, never marked sent or told
+	}
+	if len(list) == 0 {
+		return
+	}
+	b.mu.Lock()
+	for _, g := range list {
+		b.sent[g.id()] = g.Key
+	}
+	b.last = now
+	b.mu.Unlock()
 	for _, g := range list {
 		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
 			if reachable {
@@ -134,7 +140,6 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 		groups[to] = append(groups[to], g)
 	}
-	ctx = s.allStoppedBatch(ctx, list)
 	delivered := false
 	for _, lead := range leaderOrder {
 		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[[2]string{lead.MachineID, lead.SessionID}], web, now, prev) || delivered

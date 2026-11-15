@@ -35,7 +35,10 @@ alive; the message tells the supervisor to verify before restarting anything. No
 The latest state, transcript, activity, work-turn, past wake or background-activity timestamp starts each participant's
 interval. A sorted `machine/session@timestamp` list is the group's key: unchanged inactivity is told once, and actual
 new activity rearms it. Delivery rechecks the whole group and key, dropping a message invalidated by progress, a card,
-a wake or a parked task. Existing signal and persisted fingerprint deduplication are reused.
+a wake or a parked task. Failed session, work-ledger or card-ledger reads stay pending for retry and are not marked sent.
+Existing signal and persisted fingerprint deduplication are reused: the inactivity fingerprint does not expire with the
+30-minute text-deduplication window. Each task and destination keeps only its latest group key, removed by the watch
+when the task closes or is deleted. A failed delivery rolls the reservation back.
 
 ## Automatic session names (#4812)
 
