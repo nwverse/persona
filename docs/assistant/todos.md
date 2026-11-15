@@ -46,10 +46,18 @@ as the owner decided (#8141, `docs/integrations/paseo.md` "Agents Persona starts
 `本任务只读：不改项目文件、不提交、不对外写入` after its own prompt, without changing the saved prompt or duplicating the
 constraint on retries. Codex read-only tasks keep `permission: plan` and the hard read-only sandbox. traex and omp take no
 permission mode or effort, so their tasks start with neither and a read-only one has only the first-message constraint (#7559);
-one the call names is refused. pi, cursor and agy start the same way, but one the call names is dropped rather than
-refused, as the node ignores it for them (#8151). Planning, card edits,
+one the call names is refused. pi, cursor and agy start a writable task the same way, but one the call names is dropped
+rather than refused, as the node ignores it for them (#8151); a read-only task for them is refused (below). Planning, card edits,
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
+
+A read-only task whose launcher starts pi, the Cursor CLI or the Antigravity CLI in a terminal is refused when it is
+planned (#8316, `assistant/tasks_placement.go` `readonlyLauncherRefusal`): these agents have no read-only mode, so
+`task_plan` answers `readonly_unsupported` with the launchers on that computer that do take a read-only task (Claude
+Code's and Codex's), and nothing is saved or started. The model may plan the task writable or on one of those; no other
+launcher is put in its place. The same check runs again before a start (a card edited to one of them, a plan saved
+before this). A launcher whose agent the computer's list does not say goes to the node with `plan`, as before, and the
+node refuses a plan-mode start it cannot hold read-only (below); a start an engine runtime runs is the runtime's to refuse.
 
 Ordinary plan-mode starts keep their existing behavior. For Codex read-only tasks, the node must honor `plan` or refuse
 the start. Terminal starts and supported terminal resumes use `--sandbox read-only
@@ -62,7 +70,7 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
-pi, the Cursor CLI and the Antigravity CLI have no such mapping either, so a read-only task for them is refused the same way, before a pane opens (`docs/integrations/launchers.md`, "Work agents"). The read-only line still goes into the first message, but the start never reaches it.
+pi, the Cursor CLI and the Antigravity CLI have no such mapping either: a read-only task for one of them is refused when it is planned (above), and the node refuses a plan-mode start of theirs that still reaches it, before a pane opens (`docs/integrations/launchers.md`, "Work agents").
 
 External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
 without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
