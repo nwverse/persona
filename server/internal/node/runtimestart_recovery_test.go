@@ -91,6 +91,27 @@ func TestRuntimeRowsSayWhichSessionsPersonaStarted(t *testing.T) {
 	}
 }
 
+// A session a runtime listed only while starting it, or after that start failed, is not remembered as the runtime's
+// once it leaves the list: a Claude session whose takeover failed is this machine's again (its next message takes it
+// over again, its pages are its transcript's). One it listed as its own is remembered as before.
+func TestRuntimeRowsOnlyStartingAreNotRemembered(t *testing.T) {
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, paseoEngineHello())
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": sdkSession, "status": "idle", "starting": true},
+		{"session_id": "paseo-failed", "status": "offline", "start_error": "Paseo did not start this session: no"},
+		{"session_id": "paseo-ran", "status": "idle"},
+	}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["paseo-ran"]; return ok })
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{}})
+	waitFor(t, "off the list", func() bool { _, ok := listed(t, n)["paseo-ran"]; return !ok })
+	for id, want := range map[string]bool{sdkSession: false, "paseo-failed": false, "paseo-ran": true} {
+		if _, _, known := n.runtimes.belongs(id); known != want {
+			t.Errorf("%s remembered as the runtime's: %v, want %v", id, known, want)
+		}
+	}
+}
+
 // "Branch to new chat" of a runtime's session keeps the launcher it ran on (Paseo: its provider), and the branch's
 // first message has the runtime take it over with that launcher: not with whichever provider ran last, maybe another
 // account's.

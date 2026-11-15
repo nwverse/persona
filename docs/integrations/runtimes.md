@@ -70,7 +70,9 @@ session of the runtime's has it, so that a start whose answer the hub never got 
 `docs/protocol/protocol.md` ("Runtime ↔ node"). A `start` that takes longer than the node waits (30 s) may answer with the row the session
 will have, `starting: true`, and finish in the background: keep listing that row until the session runs, and should it fail, list it
 as `offline` with `start_error` for a while rather than letting it vanish; a message sent to it meanwhile waits for it (resolve to
-`{queued: true}` when it goes later than the call's wait), and is refused once the start failed (Paseo, `docs/integrations/paseo.md`). `readonly: true` (`caps.readonly`): a `start` with `permission_mode: "plan"` (an ordinary
+`{queued: true}` when it goes later than the call's wait), and is refused once the start failed (Paseo, `docs/integrations/paseo.md`).
+The node does not take a session it saw listed only as starting or as failed for one of the runtime's once it leaves the list: a
+Claude session whose takeover failed is the machine's again, sent to as a session not running. `readonly: true` (`caps.readonly`): a `start` with `permission_mode: "plan"` (an ordinary
 plan-mode start, or a read-only task on a non-Claude runtime, #3238) runs in a read-only mode before its first prompt, or throws `readonly_unsupported` — never falling back to a writable
 provider, and a takeover that cannot set the mode refuses too. Without it the node refuses plan starts for the runtime itself. Claude task dispatches use `bypassPermissions` and do not require this capability.
 

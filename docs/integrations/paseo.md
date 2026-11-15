@@ -330,7 +330,9 @@ no launcher. Permission mode, workspace and the first message keep their existin
     conversation, a provider slow to start), the takeover answers with the session's row, `starting`, its transcript still the
     conversation, and goes on in the background (up to 10 minutes). The message that follows (node sends it right after the
     takeover) waits for the import and goes to the Agent once Paseo has it; a second takeover meanwhile is the same import. One
-    Paseo fails after the wait leaves the row not running with `start_error`, and the message that waited is not sent. An import
+    Paseo fails after the wait leaves the row not running with `start_error`, and the message that waited is not sent; the next
+    message takes the session over again, and once the row is gone it is a session not running again (node does not take a session
+    a runtime listed only while starting it for one of the runtime's). An import
     asked again after a dropped connection takes the Agent Paseo's directory has for the session by then (Paseo imports a session
     once, and refuses the next import of it). Before, a 25-second limit failed the takeover while Paseo went on, and the message was lost.
 

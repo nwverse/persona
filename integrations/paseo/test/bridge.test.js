@@ -46,7 +46,7 @@ async function setup(t, o = {}) {
   const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, log: (m) => logs.push(m) })
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
     { socketPath: node.path, mcpConfig: o.mcpConfig, allowTools: o.allowTools, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500,
-      listMax: o.listMax, pageSize: o.pageSize, closedChecks: o.closedChecks, sweepMs: o.sweepMs ?? 0 })
+      startGiveUp: o.startGiveUp, listMax: o.listMax, pageSize: o.pageSize, closedChecks: o.closedChecks, sweepMs: o.sweepMs ?? 0 })
   bridge.start()
   t.after(() => bridge.stop())
   await node.ready
@@ -895,10 +895,11 @@ test('a takeover Paseo takes long to import: listed as starting; the message wai
   await until("the agent's own row", () => row() && !row().starting)
 })
 
-test('a takeover Paseo fails after the wait: its row says why, and the message that waited is not sent (#8130)', async (t) => {
+test('a takeover Paseo fails after the wait: its row says why, the message that waited is not sent, the next one takes it over again (#8130)', async (t) => {
   const { fake, node, rows } = await setup(t)
   let fail
   fake.handlers.import_agent_request = (msg, c) => {
+    if (fail) return undefined // taken over again: Paseo imports it
     fail = () => answerWith(c, 'status', { status: 'agent_create_failed', requestId: msg.requestId, error: 'Import requires cwd from the selected provider session' })
     return null
   }
@@ -906,10 +907,43 @@ test('a takeover Paseo fails after the wait: its row says why, and the message t
   await call(node, 'session.start', { cwd: '/tmp', resume: other })
   assert.deepEqual(await call(node, 'session.send', { session_id: other, text: 'carry on', client_msg_id: 'cm-take' }), { ok: true, queued: true })
   fail()
-  await until('its row says why', () => rows().find((r) => r.session_id === other)?.start_error)
-  assert.match(rows().find((r) => r.session_id === other).start_error, /Import requires cwd/)
+  const row = () => rows().find((r) => r.session_id === other)
+  await until('its row says why', () => row()?.start_error)
+  assert.match(row().start_error, /Import requires cwd/)
   await sleep(100)
   assert.equal(fake.requestsOf('send_agent_message_request').length, 0)
+  // Still the user's conversation: the next message takes it over again, and goes to it.
+  assert.deepEqual(await call(node, 'session.send', { session_id: other, text: 'once more', client_msg_id: 'cm-again' }), { ok: true })
+  assert.equal(fake.requestsOf('import_agent_request').length, 2)
+  const agent = [...fake.agents.values()].find((e) => e.agent.persistence?.sessionId === other)?.agent
+  assert.deepEqual(fake.requestsOf('send_agent_message_request').map((m) => [m.agentId, m.text]), [[agent.id, 'once more']])
+  await until("the agent's own row", () => row() && !row().start_error && !row().starting)
+})
+
+test('a creation Paseo never answers is given up after a while: its row says so (#8130)', async (t) => {
+  const { fake, node, rows } = await setup(t, { startGiveUp: 2500 })
+  fake.handlers['agent.create.request'] = () => null // never answered, the connection up all along
+  const res = await call(node, 'session.start', { cwd: '/tmp', prompt: 'hi', launcher: 'my-codex' })
+  const row = () => rows().find((r) => r.session_id === res.session.session_id)
+  await until('given up', () => row()?.start_error, 6000)
+  assert.deepEqual([row().status, row().starting], ['offline', undefined])
+  assert.match(row().start_error, /agent\.create\.request/)
+})
+
+test('a start that failed late, whose agent Paseo makes after all: the agent is the session, and nothing of the failure stays (#8130)', async (t) => {
+  const { fake, node, bridge, rows } = await setup(t)
+  let refuse
+  fake.handlers['agent.create.request'] = (msg, c) => {
+    refuse = () => answerWith(c, 'agent.create.response', { requestId: msg.requestId, agent: null, error: 'agent_request_outcome_unknown' })
+    return null
+  }
+  const res = await call(node, 'session.start', { cwd: '/tmp', prompt: 'hi', launcher: 'my-codex' })
+  const sid = res.session.session_id
+  refuse()
+  await until('its row says why', () => rows().find((r) => r.session_id === sid)?.start_error)
+  fake.upsert(agentSnapshot({ id: sid.slice('paseo-'.length), provider: 'my-codex', cwd: '/tmp', status: 'running', labels: { 'persona.session': sid } }), PROJECT)
+  await until("the agent's row", () => rows().find((r) => r.session_id === sid && !r.start_error && r.status === 'working'))
+  assert.equal(bridge.state.inFlight.has(sid), false, 'the failure is not kept behind the agent')
 })
 
 test("a project's worktrees are one space; a new session at a worktree goes into Paseo's workspace there", async (t) => {

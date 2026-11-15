@@ -138,7 +138,9 @@ func (n *Node) listStarted(h *runtimeConn, started proto.Session, transcript str
 	}
 	h.mu.Unlock()
 	b.recomputeOwners()
-	b.remember(h, s.SessionID, time.Now())
+	if startedHere(s) { // not while it is only starting: a takeover that fails leaves the session this machine's (#8130)
+		b.remember(h, s.SessionID, time.Now())
+	}
 	b.noteStarted(h, s.SessionID, time.Now())
 	var tell *runtimeConn // runs it already, and is to hear that the hub started it (runtime.driven)
 	if o := b.owner[s.SessionID]; o != nil && o != h {
