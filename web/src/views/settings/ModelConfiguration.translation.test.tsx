@@ -44,6 +44,7 @@ const api = async (input: RequestInfo | URL, init?: RequestInit) => {
     return response({ purpose: all.find((p) => p.id === id), providers });
   }
   if (path.endsWith("/model-config")) return response({ purposes: all, providers });
+  if (path.endsWith("/launchers/discover")) return response({ models: [{ id: "translation-default", name: "Translation default" }] });
   if (path.endsWith("/models")) return response({ agent: "claude", models: [{ id: "translation-default", name: "Translation default" }] });
   if (path.includes("/purposes/")) return response({ purpose: all.find((p) => path.endsWith(`/${p.id}`)), providers });
   throw new Error(`Unexpected request: ${path}`);
@@ -75,10 +76,12 @@ describe("independent translation model setting", () => {
     await act(async () => translationRow!.querySelector("button")!.click()); await flush();
     const provider = dialog().querySelector<HTMLSelectElement>("select")!;
     await act(async () => { provider.value = "api.translation"; provider.dispatchEvent(new Event("change", { bubbles: true })); }); await flush();
-    const model = dialog().querySelector<HTMLInputElement>(`input[aria-label="${t("settings-modelconfiguration.specific_model")}"]`)!;
+    const label = [...dialog().querySelectorAll("label")].find((node) => node.textContent?.includes(t("settings-modelconfiguration.api_model_id")));
+    const model = label?.querySelector<HTMLInputElement>("input");
+    expect(model).toBeInstanceOf(HTMLInputElement);
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(model, "chosen-translation-model");
-      model.dispatchEvent(new Event("input", { bubbles: true }));
+      model!.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => button(t("common.save"), dialog()).click()); await flush();
     expect(writes).toEqual([{ path: "/api/v1/model-config/purposes/translate", body: {

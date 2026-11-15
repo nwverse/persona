@@ -590,6 +590,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/retry
 -                    POST /api/v1/translate
 -                    POST /api/v1/translate/mail
+-                    POST /api/v1/translate/message
 -                    POST /api/v1/workspace-board
 -                    POST {adminUploadPath}
 -                    POST {base}/catalog/preview
