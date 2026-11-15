@@ -2161,6 +2161,15 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 - Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.
 - The same happens to a type built as one slice per pass (2026-11-12, #5188). #5150 added three fold fields to `sessionlist.Item` (208 to 240 bytes); the hub reads a machine's 150 items as one `[]Item` each pass, and 36,000 B is past the largest size class (32 KiB), so it took whole pages, 40 KiB, 8 KB more a pass. Moving the fields behind one pointer (`Item.Fold`, nil for a row without a hierarchy) brought it back to 216 bytes. Then allocate the pointer only where it is new: `return &fold` moves `fold` to the heap where it is declared, for every row, even on the paths that return nil; copy it in the branch that returns it (`go build -gcflags=-m` says `moved to heap`). A later sparse to-do id rode in that same optional pointer rather than taking `Item` past the class again (#7200); `TestItemBatchFitsItsSizeClass` now checks the 150-row batch beside the type, with no architecture-specific struct size.
 
+- A small list on every runtime row (2026-11-15, #8261). `proto.Session` had no byte left (1,528 of 1,528), so a row's
+  permission modes went into `SessionCapabilities`, which the node allocates for every runtime row. As a `[]string` it
+  took that struct from 64 to 88 bytes, the 96-byte class: a push of 300 rows allocated 9,600 B more and
+  `TestRuntimeSessionsPushAllocatesOneList` failed. It also made `proto.Launcher` uncomparable, and the manager compares
+  launcher lists (`slices.Equal` in `models_launchers_push.go`), so the build broke there and in three tests. A set of
+  at most eight known ids fits one byte: `proto.PermissionModeSet`, sent as the same JSON list, sits in the padding after
+  the six bools, so neither struct grew nor stopped being comparable. Read leniently: anything that is not a list of
+  strings is an empty set, never an error that would lose the rest of the row.
+
 ## A fact about a directory does not go on every row in it (2026-11-13, #994)
 
 - #4637 put a project identity on each session (`inventory` on `proto.Session`, more attributes on `sessionlist.Item`) so the paged list could group a repository across computers. `Item` went from 200 to 328 bytes, a 150-row reindex allocated 17% more, two allocation guards failed, and it was reverted the same day (#4744). `proto.Session` is at 1,528 bytes with one spare byte, so a new string there costs every row copied anywhere 256 bytes.
@@ -2400,3 +2409,16 @@ nothing ran the old build after the new one.
 - Do not write the old record from a start that failed to read it: its list may be shorter than what is stored.
 - Test the round trip with the old build's reader: upgrade, deliver, old build (reads only the old record), deliver,
   upgrade again, the same counts at each step (`TestPushSentSurvivesSwitchBackAndForward`).
+
+## A 409 from start options is not always "confirm this computer" (2026-11-14, #7425)
+
+- New work session's `start-options` answers 409 for two different reasons: the manager's `machine_pending` (the hub
+  keeps the computer out of its list) and every refusal the node's strict work-session check makes
+  (`work_launcher_unavailable`, `apierr.Call` maps a coded node error to 409). The hub's log line is the same; the web
+  dialog tells them apart (its "This launcher cannot start a session…" line is only the node's). Read that code before
+  tracing trust or ownership. A fast answer says nothing either: the node refuses from its cached launcher list
+  before any login shell runs.
+- A list the manager shows is not the node's own list: the pickers add plain `claude` back on a computer whose shell
+  has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
+  and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
+  `knownLauncher` does.

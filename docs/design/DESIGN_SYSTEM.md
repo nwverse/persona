@@ -1033,6 +1033,23 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   The header's mode button moved into the composer beside the pill (decision 11). The divider uses the model mark (no
   arrows-left-right glyph in Android's set yet). Not yet: the other engine's switch and its dialog (#5054), Codex's Fast,
   quota bars and prices, forgetting a typed id.
+- Apple main-chat equivalent (#6542, `AssistantModelSheet`): the composer's existing Model row opens a system sheet with
+  medium and large detents and a visible drag indicator, reusing the assistant-eligible launcher list and the same
+  conversation PUT/DELETE. Only the hub-named main conversation gets it, on the computer named by `main_machine_id` (or
+  `machine_id` on an older hub). If the confirmed route moves, the open conversation follows it only when the user was
+  already viewing that main chat; a deliberately opened side conversation stays put. Siri, Share and CarPlay use that
+  same confirmed key. The composer's current-model entry shows a disclosure chevron; its first menu row is
+  explicitly **Change Model…**, with the effective model as its detail, so the conversation page itself shows how to
+  reach the sheet. The macOS BeautifulUI prompt bar uses the same Change Model… action; other macOS styles use the shell composer.
+  Each launcher's catalog supplies its rows; an empty or older-node 404 catalog falls back to its configured model, a
+  locked launcher keeps only its valid Default choice, and a Default row sends no model ID so it follows later default
+  changes. When Default and a concrete alias resolve to the same model, the concrete alias is ticked; choosing the
+  current row is a no-op, never a new pick that pins the default. Resolved aliases use a lookup built when the catalog
+  loads. A refresh failure keeps the last good rows beside Retry, and a provider removed from both lists is named as
+  unavailable with the follow-default recovery path. An existing Claude/Codex conversation marks the other engine as
+  needing a new conversation instead of offering a pick the hub would refuse. Typed IDs require `typed_models`,
+  independently of `assistant_model_pick`. The sheet refreshes every catalog on pull-to-refresh; the composer's effective label redraws
+  from fresh hub answers and Model Settings/assistant snapshots, never from a per-second transcript-revision poll. No new token, style, component or navigation pattern.
 
 ### 3.9 Empty states
 
@@ -2414,6 +2431,33 @@ effort fields are gone. What the panel gained for it, each part optional and abs
 Reason: one place to choose a model for chats and new Agents (principle 4), the engine visible without a field of its
 own (principle 2), the default as one row that can always be gone back to (principles 1 and 3). The deviations from
 Cindy are listed in `docs/web/web.md` "New Agent's model choice (#5104)"; iOS and Android follow in #5117.
+
+## Permission modes a provider lists (#8261)
+
+Who it serves: people starting and steering coding Agents (the Agents side) on providers other than Claude Code, such as
+Paseo's Grok, OpenCode or Codex. Claude Code's five modes mean nothing there: the bridge refuses Plan, drops the rest,
+and the provider's own settings decide what it asks. One rule on every client (web, Android, iOS), read from the wire
+rather than from provider names:
+
+- **New Agent**, for a launcher that lists `permission_modes` (`docs/protocol/protocol.md`, `launchers.list`): the
+  Permission mode field offers **Launcher default** (the launcher's own approval, sent as no mode) and **Allow all**
+  only where it lists both, in each client's existing words for its follow-the-launcher choice and for bypassPermissions
+  (the web: Launcher default, Full access; Android: Follow launcher, Allow everything; iOS: Use Launcher's, Allow
+  Everything); a launcher with its own approval alone shows no field. The pick is made on the sheet and never
+  remembered, so a mode left from a Claude Code start never reaches such a start. The effort offers only the levels its
+  model lists, none while that is not known. A Claude Code launcher keeps its five modes and remembered choice.
+- **A running chat**, for a session that lists `capabilities.permission_modes` with two: the client's existing mode
+  control (the web's composer permission picker, Android's and iOS's mode menu) with those two rows alone. "Launcher
+  default" carries a neutral mark (the plain shield, never the raised hand of "asks first"), since the provider's own
+  settings may approve everything; no mode reported is Launcher default. Going into Allow all asks first, as it does for
+  Claude Code; leaving it does not, since it can be turned on again. No Plan mode row.
+- **Session info** leaves out counts nobody gives (`usage_unknown`) rather than showing zeros.
+
+Reason: the same start and the same running chat behave the same on every client and entry point (principle 4), the
+default is the launcher's own and nothing is sent unless the user picks it (principle 1), and Allow all stays a
+confirmed, reversible choice (principle 3). It reuses each client's mode field, picker, menu rows, warning text and
+confirmation; it adds no component, token or motion. `capabilities.modes` stays false on these rows, so clients
+older than the list show no Claude Code chips there.
 
 ## Minutes cards (#5026)
 

@@ -1,17 +1,20 @@
 package node
 
 import (
+	"cmp"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // Claude's desktop app keeps an index of its Claude Code sessions, one JSON per session:
@@ -40,7 +43,8 @@ import (
 // A session another one started (a side chat, a /btw question, a session spawned for a task) names that one in
 // spawnedFrom.sessionId (its local_<id>), and the app's sidebar nests it there. The list draws it the same way (#5935):
 // its row names the parent's current transcript in parent_agent_id while both are listed (linkSideSessions), and stays a
-// session of its own. An entry without that id, or whose parent is archived or not in the index, links nothing.
+// session of its own. An entry without that id, or whose parent is archived or not in the index, links nothing; so does
+// one the user moved to the top level (lineageDetached, which keeps the old spawnedFrom, #8522).
 
 // claudeDesktopDirs are the desktop apps' data directories under home (a variable: tests use their own).
 var claudeDesktopDirs = func(home string) []string { return desktopDataDirs(runtime.GOOS, home) }
@@ -72,6 +76,7 @@ type claudeDesktopEntry struct {
 	archived   bool     // isArchived
 	prior      []string // priorCliSessionIds
 	title, cwd string   // as the sidebar shows it, and where it runs
+	origin     string   // originCwd: the folder the session was started in (a worktree's main checkout), "" when not absolute
 	local      string   // the app's own id of the session (sessionId, local_<uuid>): its link opens it (claudedesktop_open.go)
 	parent     string   // the local_<uuid> of the session that started this one (spawnedFrom.sessionId), or ""
 	task       string   // the scheduled task this session is a run of (scheduledTaskId), or ""
@@ -103,6 +108,9 @@ type claudeDesktopIndex struct {
 	// parents: an unarchived session's current transcript → the current transcript of the unarchived session that
 	// started it (spawnedFrom), for linkSideSessions.
 	parents map[string]string
+	// origins: an unarchived session's current transcript → the folder it was started in (originCwd), for
+	// placeClaudeDesktop.
+	origins map[string]string
 	seen    map[string]claudeDesktopSeen // an unarchived session's current transcript → its two times (claudedesktop_unread.go)
 	// lastShown (ms) is the latest time the app brought any unarchived session into view: the session it shows now
 	// was brought into view then (claudeDesktopIndex.shown).
@@ -131,7 +139,7 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		paths = append(paths, found...)
 	}
 	x := claudeDesktopIndex{visible: map[string]bool{}, earlier: map[string][]claudeDesktopNow{}, about: map[string]claudeDesktopAbout{},
-		parents: map[string]string{}, seen: map[string]claudeDesktopSeen{}, named: map[string]bool{}, deleted: deletedMarkers(home)}
+		parents: map[string]string{}, origins: map[string]string{}, seen: map[string]claudeDesktopSeen{}, named: map[string]bool{}, deleted: deletedMarkers(home)}
 	claudeDesktopFiles.Lock()
 	defer claudeDesktopFiles.Unlock()
 	current := make(map[string]bool, len(paths))
@@ -170,6 +178,9 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		x.visible[e.transcript] = x.visible[e.transcript] || !e.archived
 		if !e.archived {
 			x.about[e.transcript] = claudeDesktopAbout{e.title, e.cwd, e.local}
+			if e.origin != "" {
+				x.origins[e.transcript] = e.origin
+			}
 			x.seen[e.transcript] = claudeDesktopSeen{focused: e.focused, turnEdge: e.turnEdge}
 			x.lastShown = max(x.lastShown, e.focused)
 			if e.parent != "" {
@@ -237,6 +248,7 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 		Prior      []string `json:"priorCliSessionIds"`
 		Title      string   `json:"title"`
 		Cwd        string   `json:"cwd"`
+		Origin     string   `json:"originCwd"`
 		Local      string   `json:"sessionId"`
 		// Read on its own: a spawnedFrom of another shape leaves the entry readable, with no parent.
 		SpawnedFrom json.RawMessage `json:"spawnedFrom"`
@@ -244,6 +256,7 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 		TurnEdge    float64         `json:"lastTurnEdgeAt"`
 		Task        string          `json:"scheduledTaskId"`
 		Created     float64         `json:"createdAt"`
+		Detached    bool            `json:"lineageDetached"` // moved to the sidebar's top level: spawnedFrom stays, unnested
 	}
 	if json.Unmarshal(b, &raw) != nil || !validID(raw.Transcript) {
 		return claudeDesktopEntry{}
@@ -251,14 +264,17 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 	var spawned struct {
 		Local string `json:"sessionId"`
 	}
-	if len(raw.SpawnedFrom) > 0 && json.Unmarshal(raw.SpawnedFrom, &spawned) != nil {
+	if raw.Detached || len(raw.SpawnedFrom) > 0 && json.Unmarshal(raw.SpawnedFrom, &spawned) != nil {
 		spawned.Local = ""
 	}
-	cwd := raw.Cwd
+	cwd, origin := raw.Cwd, raw.Origin
 	if !filepath.IsAbs(cwd) {
 		cwd = ""
 	}
-	return claudeDesktopEntry{transcript: raw.Transcript, archived: raw.Archived, prior: raw.Prior, title: raw.Title, cwd: cwd,
+	if !filepath.IsAbs(origin) {
+		origin = ""
+	}
+	return claudeDesktopEntry{transcript: raw.Transcript, archived: raw.Archived, prior: raw.Prior, title: raw.Title, cwd: cwd, origin: origin,
 		local: localID(raw.Local), parent: localID(spawned.Local), focused: int64(raw.Focused), turnEdge: int64(raw.TurnEdge),
 		task: raw.Task, created: int64(raw.Created)}
 }
@@ -344,6 +360,43 @@ func linkSideSessions(list []proto.Session, parents map[string]string) {
 		if p := parents[s.SessionID]; p != "" && listed[p] && !loopsBack(s.SessionID, parents) {
 			s.SetParentAgentID(p)
 		}
+	}
+}
+
+// placeClaudeDesktop puts each of the desktop app's sessions in its project, as the app's sidebar groups them and as
+// the Codex App's chats are placed (decorateCodexSession). Without a space a session was in no project in every
+// client's list by project, a session in a worktree the app made (<repo>/.claude/worktrees/<name>) included (#8521).
+// The project is the repository the session works in, a linked worktree's main checkout (repo_root, fillGitPlace);
+// until that is read, and for a folder that is no repository, the folder the app started the session in (origins, the
+// index's originCwd). The home folder, or one above it, is no project (as the apps' lists by app have it). The space is
+// the one the Codex App's chats of the same repository are in (projectSpace), so a repository is one project on a
+// computer whichever app works in it. Nothing here runs git: repo_root comes from the list's own cache of Git places.
+// The app's sessions are the ones a claude of the app runs (claude_desktop) and the transcripts it ran that nothing
+// runs now (the desktop surface, no source, no pane); a session some host placed keeps its place.
+func placeClaudeDesktop(list []proto.Session, origins map[string]string, home string) {
+	homes := []string{} // the home folder as written and by its physical path: a root may name it either way
+	if home != "" {
+		home = filepath.Clean(home)
+		homes = append(homes, home)
+		if real := physicalDirs.lookup(home).root; real != "" && real != home {
+			homes = append(homes, real)
+		}
+	}
+	for i := range list {
+		s := &list[i]
+		resting := s.SourceKind == "" && s.AgentSurface == transcript.SurfaceDesktop && s.PaneID == "" && s.Agent == "claude"
+		if s.SourceKind != proto.SourceClaudeDesktop && !resting || s.SpaceID != "" || s.Assistant {
+			continue
+		}
+		root := cmp.Or(s.RepoRoot, origins[s.SessionID])
+		if !filepath.IsAbs(root) {
+			continue
+		}
+		root = filepath.Clean(root)
+		if slices.ContainsFunc(homes, func(h string) bool { return pathWithin(h, root) }) {
+			continue
+		}
+		s.SpaceKind, s.SpaceID, s.SpaceName = proto.SourceClaudeDesktop, projectSpace+root, filepath.Base(root)
 	}
 }
 
