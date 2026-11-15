@@ -1,6 +1,6 @@
 # Lessons: assistant (headless Claude / Codex)
 
-- A GitHub number is not proof of a delivery PR (#8248). Resolve number-only references through issue metadata before recording them; an ordinary issue has no `pull_request` object. Recover old false PR records on acceptance, but do not turn a masked permission 404 into proof of absence: confirm PR access, preserve real historical PRs, and persist removal before publishing it. Item-level misses must not put unrelated PR checks on an outage cooldown.
+- A GitHub number is not proof of a delivery PR (#8248). Resolve number-only references through issue metadata before recording them; an ordinary issue has no `pull_request` object. Prefer an explicit closeout PR artifact over incidental references, and recover a PR hidden by a clipped preview from the linked agent's full closeout when repairing a false record. Do not turn a masked permission 404 into proof of absence: confirm PR access, preserve real historical PRs, and persist correction before publishing it. Item-level misses must not put unrelated PR checks on an outage cooldown.
 
 - A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
   five-minute `relayDecisionMax` cap let queued relayed/decision messages start new rounds behind the owner's back
@@ -412,6 +412,18 @@ the only line between tool calls was English to a Chinese owner. The node now al
 user's language in process text too.
 
 - Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions. A URL-only Agent must still obey the age limit before its first automatic handling; creating its task association is not permission to process old backlog. On load, seed previously linked items' signal cursors from the stored snapshot so a restart is not paid-for news; count only batches observed after that snapshot.
+
+## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
+
+Every `{"type":"todos"}` makes every app read the whole `GET /api/v1/todos` (about 1 MB at ~500 to-dos), and one step of
+a task writes its to-do from several places milliseconds apart (the to-do, its report, its check, its supervision, its
+leader): one supervised task sent 16 events. The event now goes through `todosPushSoon` and waits `todosSettle` (100 ms)
+for the rest of the write, so each step sends one. Two traps: `askChanged` and the orphan pass broadcast `todos` on
+their own and kept a step at two until they used the same path, so never call `s.event` with `todos` directly; and tests
+that count events right after a write must wait with `todosTold` first. A pass that runs on a timer and looks only at
+open tasks takes them with `todosWhere`, not `todosOf(ctx, "*")`, which deep-copies every finished one too (27 MB per
+30 s at 4,000). The direction tree is not such a pass: a finished task decides whether a failed start in its row
+still counts, so it reads them all.
 
 ## Disable ToolSearch per server, not for the whole assistant process (#5838)
 
