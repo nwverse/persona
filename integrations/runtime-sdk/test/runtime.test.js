@@ -593,20 +593,25 @@ test('a runtime running several agents: launchers in hello and when they change,
   const rt = createRuntime(minimal({
     start: async (p) => {
       got.push(['start', p])
-      return { session: { session_id: p.resume ?? 'new', status: 'idle' } }
+      // What it asked for and does not run with goes back with the row (caps.same_kind).
+      return { session: { session_id: p.resume ?? 'new', status: 'idle' }, ...(p.resume ? {} : { instead: { launcher: p.launcher } }) }
     },
     modes: async (p) => got.push(['modes', p]),
-  }), { runtime: 'paseo', socketPath: n.path, retryMs: 20, launchers, resume: true, readonly: true })
+  }), { runtime: 'paseo', socketPath: n.path, retryMs: 20, launchers, resume: true, readonly: true, sameKind: true })
   t.after(() => rt.stop())
   rt.start()
   await n.ready
   assert.equal(n.hello.caps.modes, true)
   assert.equal(n.hello.caps.resume, true)
   assert.equal(n.hello.caps.readonly, true)
+  assert.equal(n.hello.caps.same_kind, true)
   assert.deepEqual(n.hello.launchers, launchers)
   await n.peer.call('session.modes', { session_id: 's1', permission_mode: 'plan', effort: 'high' })
   const res = await n.peer.call('session.start', { cwd: '/w', resume: 'cccccccc-0000-0000-0000-000000000001', launcher: 'paseo-claude', model: 'opus' })
   assert.equal(res.session.session_id, 'cccccccc-0000-0000-0000-000000000001')
+  const fresh = await n.peer.call('session.start', { cwd: '/w', launcher: 'cc-gateway', agent_type: 'claude' })
+  assert.deepEqual(fresh.instead, { launcher: 'cc-gateway' })
+  assert.equal(got.at(-1)[1].agent_type, 'claude')
   assert.deepEqual(got[0], ['modes', { session_id: 's1', permission_mode: 'plan', effort: 'high' }])
   assert.equal(got[1][1].model, 'opus')
   rt.launchersChanged([{ name: 'paseo-codex', agent: 'paseo' }])
