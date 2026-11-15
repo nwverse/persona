@@ -968,6 +968,7 @@ fun AssistantScreen(
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
+                            uploadDestination = if (onHealthChat) "health" else null,
                             onSend = { submit() }, onCommand = { composer.insert(it, composer.focused) },
                             onNotice = { message ->
                                 if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
@@ -1022,7 +1023,8 @@ fun AssistantScreen(
                                 (if (onMain && mainActions.newMain) ({ newMainOpen = true }) else null),
                                 persona.feature.chat.LocalMainChatClear provides (if (onMain && mainActions.clear) persona.feature.chat.MainChatClear(::clearMain) else null),
                                 persona.feature.chat.LocalComposerFocusAsk provides focusAsk) {
-                                if (assistantChatContent != null) assistantChatContent(active, AssistantChatOptions(readOnlyNote = managers.offline))
+                                if (assistantChatContent != null) assistantChatContent(active,
+                                    AssistantChatOptions(readOnlyNote = managers.offline, healthChat = onHealthChat))
                                 else chatContent?.invoke(active)
                             }
                         }

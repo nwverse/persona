@@ -132,8 +132,13 @@ class NewAgentAttachmentsShotsTest {
         uploads = NewAgentUploads(
             service = { composer },
             // The service gets the picked name; staging the JPEG (ImageDecoder) is the composer's, and Robolectric has none.
-            upload = { service, session, attachment -> service.upload(session, attachment.name, File(attachment.name)) },
+            upload = { service, session, attachment, onStaged ->
+                onStaged(attachment.size ?: 0)
+                service.upload(session, attachment.name, File(attachment.name))
+            },
             photosOnly = { "Please look at the photos" },
+            filesOnly = { "Please look at the attached files" },
+            errorText = { name, error -> "$name: ${error.message}" },
             discard = { persona.feature.chat.deleteCapture(context, it.uri) },
     ))
 
@@ -224,16 +229,22 @@ class NewAgentAttachmentsShotsTest {
         assertEquals(R.string.agents_attach_uploading_hold, model.state.value.attachmentsHold?.id)
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             rule.runOnIdle { style = s; dark = d }
-            // A file that fails: a toast says why and its row goes (iOS `FileUploads.run`).
-            rule.runOnIdle { model.attach(listOf(ComposerAttachment("f$s$d", "build.log", "content://docs/build.log", image = false, size = 4096))) }
+            // A failed file stays with its reason and Retry; only the separate removal action takes it out.
+            val failedId = "f$s$d"
+            rule.runOnIdle { model.attach(listOf(ComposerAttachment(failedId, "build.log", "content://docs/build.log", image = false, size = 4096))) }
+            rule.waitUntil(30_000) {
+                model.state.value.attachments.firstOrNull { it.id == failedId }?.uploadState == DraftUploadState.Failed
+            }
             rule.waitForIdle()
             rule.onNodeWithText("Couldn't send “build.log”", substring = true).assertExists()
-            assertEquals(listOf("notes.txt"), model.state.value.attachments.filterNot { it.image }.map { it.name })
+            assertEquals(listOf("notes.txt", "build.log"), model.state.value.attachments.filterNot { it.image }.map { it.name })
+            rule.onNodeWithText("Retry").assertExists()
             rule.onNodeWithText("Uploading", substring = true).assertExists()
             rule.onNodeWithTag("newAgent.attachHold").assertExists()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             File(out(), "attachments-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream()
                 .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            rule.runOnIdle { model.removeAttachment(failedId) }
         }
     }
 
