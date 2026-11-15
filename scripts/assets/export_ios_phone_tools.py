@@ -118,7 +118,11 @@ def workout_activity_keys():
         raise ValueError("WorkoutReader.activities not found in WorkoutTool.swift")
     open_at = start.end() - 1
     body = text[open_at:matching(text, open_at)]
-    return sorted(re.findall(r'^\s*"(\w+)"\s*:', body, re.M))
+    # Each entry is "key": [types]; match anywhere, so several entries on one line are all kept.
+    keys = re.findall(r'"(\w+)"\s*:\s*\[', body)
+    if not keys:
+        raise ValueError("WorkoutReader.activities has no entries the exporter can read")
+    return sorted(keys)
 
 
 def schema_object(call):
