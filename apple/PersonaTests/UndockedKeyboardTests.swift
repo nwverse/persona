@@ -56,9 +56,11 @@ struct UndockedKeyboardTests {
     private let floating = CGRect(x: 250, y: 712.5, width: 334, height: 334)
     private let away = CGRect(x: 0, y: 1210, width: 834, height: 0)
 
-    private func after(_ notes: [(KeyboardState.Note, CGRect)], from state: (up: Bool, undocked: Bool))
-        -> (up: Bool, undocked: Bool) {
-        notes.reduce(state) { KeyboardState.after($1.0, frame: $1.1, screen: portrait, up: $0.up, undocked: $0.undocked) }
+    private func after(_ notes: [(KeyboardState.Note, CGRect)], on screen: CGRect? = nil,
+                       from state: (up: Bool, undocked: Bool)) -> (up: Bool, undocked: Bool) {
+        notes.reduce(state) {
+            KeyboardState.after($1.0, frame: $1.1, screen: screen ?? portrait, up: $0.up, undocked: $0.undocked)
+        }
     }
 
     /// Up docked, undocked while up, put away and focused again while it floats, docked again: the notifications an iPad
@@ -79,6 +81,47 @@ struct UndockedKeyboardTests {
         state = after([(.change, suggestionsComing)], from: state)
         #expect(state.up == true && state.undocked == false)
         state = after([(.show, suggestionsComing), (.change, docked), (.show, docked)], from: state)
+        #expect(state.up == true && state.undocked == false)
+    }
+
+    /// Turned to landscape and back with the docked keyboard up: the notifications an iPad sent in two runs, in order,
+    /// with the screen's bounds at each. On the way the docked keyboard says Will Show with frames that end above the
+    /// bottom of the screen: the landscape frame while the screen is still portrait, or the keyboard scaled to the
+    /// other orientation. Read by the frame they float; Will Show says the keyboard is docked, so it stays docked and up
+    /// (counted as floating, the page lost the keyboard's room until the next frame).
+    @Test func turningWithTheDockedKeyboardUp() {
+        let wide = CGRect(x: 0, y: 406, width: 1210, height: 428)
+        let narrow = CGRect(x: 0, y: 406, width: 834, height: 428)
+        let scaledDown = CGRect(x: 0, y: 340.49, width: 574.84, height: 234.35)
+        let scaledUp = CGRect(x: 0, y: 539, width: 834, height: 295)
+        #expect(KeyboardState.undocked(wide, screen: portrait) == true)
+        #expect(KeyboardState.undocked(scaledDown, screen: landscape) == true)
+        #expect(KeyboardState.undocked(scaledUp, screen: portrait) == true)
+        let up = after([(.change, docked), (.show, docked)], from: (false, false))
+
+        // First run: the landscape frame before the screen turns.
+        var state = after([(.change, wide), (.show, wide)], from: up)
+        #expect(state.up == true && state.undocked == false)
+        state = after([(.change, away), (.hide, away)], on: landscape, from: state)
+        #expect(state.up == false && state.undocked == false)
+        state = after([(.change, narrow), (.show, narrow), (.change, wide), (.show, wide)], on: landscape, from: state)
+        #expect(state.up == true && state.undocked == false)
+        let gone = CGRect(x: 0, y: 834, width: 1210, height: 0)
+        state = after([(.change, gone), (.hide, gone), (.change, away), (.show, away)], from: state)
+        #expect(state.up == false && state.undocked == false)
+        state = after([(.change, docked), (.show, docked)], from: state)
+        #expect(state.up == true && state.undocked == false)
+
+        // Second run: the keyboard scaled to the other orientation, each way.
+        let flat = CGRect(x: 0, y: 834, width: 574.84, height: 0)
+        state = after([(.change, flat), (.hide, flat), (.change, scaledDown), (.show, scaledDown)], on: landscape, from: up)
+        #expect(state.up == true && state.undocked == false)
+        state = after([(.change, wide), (.show, wide)], on: landscape, from: state)
+        #expect(state.up == true && state.undocked == false)
+        let low = CGRect(x: 0, y: 574.84, width: 834, height: 0)
+        state = after([(.change, low), (.hide, low), (.change, scaledUp), (.show, scaledUp)], from: state)
+        #expect(state.up == true && state.undocked == false)
+        state = after([(.change, docked), (.show, docked)], from: state)
         #expect(state.up == true && state.undocked == false)
     }
 

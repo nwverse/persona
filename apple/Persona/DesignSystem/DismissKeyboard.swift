@@ -51,20 +51,21 @@ enum Keyboard {
     /// The state after a keyboard notification, from its end frame in the coordinates of the screen it is on. What an
     /// iPad (iOS 27.2) says: undocking, Will Change Frame and Will Hide with the floating frame; putting the floating
     /// keyboard away and bringing it back, only Will Change Frame (no size, then the floating frame); docking it again,
-    /// Will Change Frame and Will Show with the docked frame.
-    /// - Will Show: up unless the keyboard is a hardware keyboard's bar or undocked.
+    /// Will Change Frame and Will Show with the docked frame. Turning with the docked keyboard up, Will Change Frame and
+    /// Will Show with frames on the way, some ending above the bottom of the screen, then with the docked frame.
+    /// - Will Show: docked and up, unless the keyboard is a hardware keyboard's bar. An undocked keyboard never says Will
+    ///   Show, so its frame does not decide: the in-between frames of a turn read as floating.
     /// - Will Hide: down, and still undocked if it was: undocking itself says Will Hide, and a floating keyboard comes
     ///   back floating. The next frame on the screen says where it is.
     /// - Will Change Frame: undocked or docked, as the frame says (nothing for a keyboard going away). Undocked counts as
     ///   down; a docked frame after a floating one is the keyboard docked again, up, whether Will Show follows or not.
     nonisolated static func after(_ note: Note, frame: CGRect, screen: CGRect?, up: Bool,
                                   undocked: Bool) -> (up: Bool, undocked: Bool) {
-        let floats = Self.undocked(frame, screen: screen)
         switch note {
-        case .show: return (frame.height > least && floats != true, undocked)
+        case .show: return frame.height > least ? (true, false) : (false, undocked)
         case .hide: return (false, undocked)
         case .change:
-            guard let floats else { return (up, undocked) }
+            guard let floats = Self.undocked(frame, screen: screen) else { return (up, undocked) }
             return (!floats && (up || (undocked && frame.height > least)), floats)
         }
     }
