@@ -31,7 +31,7 @@ import { runStep, sameStep, turnDone, type RunStep } from "../../lib/run-step";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox } from "../../lib/outbox";
+import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, registerOutboxRecheck, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
 import { conversationKey, pickedLauncher, pickedModel, usePickedLauncher } from "../../lib/assistant-chat";
@@ -351,6 +351,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   trNow.current = { ...tr, hasMore: earlier.liveHasMore };
   const railChat = useRef(`${mid}/${sid}`);
   railChat.current = `${mid}/${sid}`;
+  // The mounted conversation owns late Check refreshes, including a Check started before leaving and returning.
+  const recheckTranscript = useCallback(() => {
+    if (railChat.current === `${mid}/${sid}`) trNow.current.reload();
+  }, [mid, sid]);
+  useEffect(() => registerOutboxRecheck(mid, sid, recheckTranscript), [mid, sid, recheckTranscript]);
   const railRun = useRef(0);
   useEffect(() => () => { railRun.current++; }, [mid, sid]);
   const fine = useFinePointer();

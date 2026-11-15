@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
+import { loadPages } from "../../lib/lazy-page";
 import { segments, type Segment } from "../../lib/turns";
 import type { Item, Session } from "../../lib/types";
 import { CloseoutCard } from "./CloseoutCard";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// The evidence row is a chunk of its own (CloseoutEvidence, #8118); these tests draw it without waiting for it.
+beforeAll(() => loadPages(), 60_000);
 
 let host: HTMLDivElement;
 let root: Root;
@@ -58,7 +62,7 @@ describe("CloseoutCard command evidence", () => {
     await draw(exchange("cd web; npm test", { is_error: true, outcome: { status: "failed", exit_code: 1 } }));
     const line = host.querySelector("[data-closeout-command-evidence='exit']");
     expect(line?.textContent).toContain("cd web; npm test");
-    expect(line?.textContent).toContain(t("chat-chatview.closeout_evidence_exit", { code: 1 }));
+    expect(line?.textContent).toContain(t("chat-closeoutevidence.exit", { code: 1 }));
     expect(line?.textContent).toContain("is_error");
     expect(host.querySelector("[data-closeout-evidence] .text-green")).toBeNull();
   });
@@ -67,15 +71,15 @@ describe("CloseoutCard command evidence", () => {
     await draw(exchange("npm test", { is_error: false }));
     const line = host.querySelector("[data-closeout-command-evidence='error']");
     expect(line?.textContent).toContain("is_error");
-    expect(line?.textContent).toContain(t("chat-chatview.closeout_evidence_no_exit"));
-    expect(line?.textContent).not.toContain(t("chat-chatview.closeout_evidence_exit", { code: 0 }));
+    expect(line?.textContent).toContain(t("chat-closeoutevidence.no_exit"));
+    expect(line?.textContent).not.toContain(t("chat-closeoutevidence.exit", { code: 0 }));
   });
 
   it("says not-found only for this segment, and unavailable without its segment", async () => {
     await draw(exchange("npm run build"));
-    expect(host.querySelector("[data-closeout-command-evidence='not_found']")?.textContent).toContain(t("chat-chatview.closeout_evidence_not_found"));
+    expect(host.querySelector("[data-closeout-command-evidence='not_found']")?.textContent).toContain(t("chat-closeoutevidence.not_found"));
     await draw(undefined);
-    expect(host.querySelector("[data-closeout-command-evidence='unavailable']")?.textContent).toContain(t("chat-chatview.closeout_evidence_unavailable"));
+    expect(host.querySelector("[data-closeout-command-evidence='unavailable']")?.textContent).toContain(t("chat-closeoutevidence.unavailable"));
     expect(host.querySelector("[data-closeout-command-evidence='not_found']")).toBeNull();
   });
 
