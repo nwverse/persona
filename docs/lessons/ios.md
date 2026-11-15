@@ -31,6 +31,20 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## A value that changes every scroll frame, read where a closure's content is built (#8781)
+
+The Agent chat's header folds with the finger: `chrome.collapse` changes on every frame of a drag. `ChromeHeader.body`
+read it and built `ChatRegion(content: full)`; a closure is never equal to the last one, so SwiftUI evaluated the whole
+open header (tabs, chips, glass) again on every frame, half of the long-history scroll test's hitches. Read such a value
+only in a small `ViewModifier` that moves or fades its `content`: the content is passed through, not rebuilt.
+
+Finding it: Time Profiler cannot name SwiftUI's work by view on a lazy list (about nine samples in ten had no app frame on
+the stack), and the SwiftUI instrument does not record on the simulator ("not supported on the Simulator"). What worked
+was a local diagnostic build with a switch per suspect part, measured with `scripts/app/perf-test.sh` and a fresh install
+before every run: the app's data container otherwise carried state from run to run, and the long-history test came out
+at either ~25 or ~50 ms/s by turns whatever was switched off. A build on the same Mac during a run moves the numbers more
+than most fixes; alternate before and after, and log the load average.
+
 ## A reversed range traps on the audio tap's thread (#7740)
 
 A TestFlight iPhone crashed with `EXC_BREAKPOINT` (`brk 1`) on the recorder's input-tap queue, an `NSLock` and a

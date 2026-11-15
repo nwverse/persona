@@ -225,7 +225,8 @@ func TestChatEffortUsesDeclaredModelCapabilities(t *testing.T) {
 	defer gateway.Close()
 	saved, _ := json.Marshal(map[string]any{
 		"name": "chat", "kind": "api", "api": "chat", "base_url": gateway.URL, "model": "limited", "effort": "high",
-		"models": []proto.ProviderModel{{ID: "limited", Efforts: []string{"low"}}, {ID: "unknown"}},
+		"models": []proto.ProviderModel{{ID: "limited", Efforts: []string{"low"}}, {ID: "unknown"}, {ID: "none", NoEffort: true},
+			{ID: "direct-off", Efforts: []string{"low"}, AllEfforts: []string{"none", "low"}}},
 	})
 	if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers", string(saved)); code != http.StatusOK {
 		t.Fatal(raw)
@@ -238,6 +239,9 @@ func TestChatEffortUsesDeclaredModelCapabilities(t *testing.T) {
 		{name: "off is a separate control", model: "limited", effort: "off", resolved: "off", wire: "none"},
 		{name: "empty list is unknown", model: "unknown", effort: "high", resolved: "high", wire: "high"},
 		{name: "unlisted model is unknown", model: "unlisted", effort: "max", resolved: "max", wire: "max"},
+		{name: "explicit no effort suppresses a level", model: "none", effort: "high"},
+		{name: "explicit no effort suppresses off", model: "none", effort: "off"},
+		{name: "direct levels include none", model: "direct-off", effort: "off", resolved: "off", wire: "none"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			config, err := s.apiConfig(context.Background(), ModelBinding{Provider: "launcher.chat", Model: tc.model, Effort: tc.effort})

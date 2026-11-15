@@ -223,21 +223,35 @@ func launcherProvider(name string) string {
 }
 
 // chatEffortForModel applies the provider's declared model capabilities without treating an empty list as a
-// declaration of "no efforts" (empty currently means unknown). Keep that future distinction here so both probes and
-// real calls adopt it together. Disabling thinking is a separate control and maps to Chat's "none" downstream.
+// declaration of "no efforts" (empty currently means unknown). NoEffort is explicit and always wins. AllEfforts is
+// the direct API's complete list when present; older Efforts-only entries keep off as a separate control.
 func chatEffortForModel(models []proto.ProviderModel, model, effort string) string {
 	if effort == "" {
 		return ""
-	}
-	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "off", "none", "disabled":
-		return effort
 	}
 	for _, candidate := range models {
 		if candidate.ID != model {
 			continue
 		}
-		if len(candidate.Efforts) == 0 || slices.Contains(candidate.Efforts, effort) {
+		if candidate.NoEffort {
+			return ""
+		}
+		levels, direct := candidate.Efforts, len(candidate.AllEfforts) > 0
+		if direct {
+			levels = candidate.AllEfforts
+		}
+		if len(levels) == 0 {
+			return effort
+		}
+		wanted := effort
+		switch strings.ToLower(strings.TrimSpace(effort)) {
+		case "off", "none", "disabled":
+			if !direct {
+				return effort
+			}
+			wanted = "none"
+		}
+		if slices.Contains(levels, wanted) {
 			return effort
 		}
 		return ""
