@@ -16726,6 +16726,28 @@ if os.environ.get("MOCK_REPLY_MARKDOWN") == "1":
     mock_reply_markdown()
 
 
+# MOCK_CJK_PATHS=1 (#8386): a reply naming files whose names are Chinese or Japanese, written without backticks, and
+# those files (so …/stat says they are there; their folders are too). Before the fix only the ASCII start of each path
+# linked: the folder. In an Agents chat of its own and at the end of Persona's conversation. Made-up content.
+CJK_PATHS = "a1f3c2d4-0000-4000-8000-000000008386"
+CJK_PATHS_TEXT = ("报表整理好了：\n\n"
+                  "- 报表：/Users/me/code/weather/reports/报表_2026H2.xlsx\n"
+                  "- 说明：~/文档/项目说明.md，改动记在 /Users/me/code/weather/docs/变更记录.md里了。\n"
+                  "- 会议纪要：/Users/me/code/weather/notes/会議メモ.txtを参照してください。\n\n"
+                  "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。")
+
+
+def mock_cjk_paths():
+    for f in ("/Users/me/code/weather/reports/报表_2026H2.xlsx", "/Users/me/文档/项目说明.md", "/Users/me/code/weather/docs/变更记录.md",
+              "/Users/me/code/weather/notes/会議メモ.txt", "/Users/me/code/weather/data/2026年/sales-売上_v2.csv"):
+        FILES[f] = "placeholder\n".encode()
+    ITEMS[CJK_PATHS] = [it("user", "text", 6, text="报表放哪了？"), it("assistant", "text", 5, text=CJK_PATHS_TEXT)]
+    SESSIONS.append(sess("macbook", CJK_PATHS, "报表整理", "/Users/me/code/weather", "done", "unread", "weather", 1, "cjk-paths", 21, 5,
+                         "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="报表放哪了？"), it("assistant", "text", 1, text=CJK_PATHS_TEXT)]
+
+
+
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
@@ -18089,6 +18111,8 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long m
     for _f in ("docs/review-queue.md", "notes/status.md", "docs/brief.md", "notes/runs/20261110T165351Z/snapshot.json"):
         FILES["/Users/me/code/shop-app/" + _f] = b"# placeholder\n"
     FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
+if os.environ.get("MOCK_CJK_PATHS") == "1":  # its files are there (#8386)
+    mock_cjk_paths()
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
@@ -20672,7 +20696,8 @@ def net_control(path, q):
 # MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned: the hub's version and its updating itself
 # (docs/operations/hub-update.md): a newer release to install (auto-update off), an update waiting for two busy agents, "Automatic updates enabled"
 # told for the first time, a newer release auto-update holds back (its code does not contain the hub's commit, with
-# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). Unset:
+# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). behind
+# (#8108): up to date against a build-time source whose newest release is older than the hub (source_behind). Unset:
 # GET /api/v1/hub/update is 404 (a hub from before), no line anywhere.
 HUB_UPDATE_MODE = os.environ.get("MOCK_HUB_UPDATE", "")
 HUB_UPDATE = {}
@@ -20695,6 +20720,10 @@ def hub_update_state():
         elif HUB_UPDATE_MODE == "notice":
             HUB_UPDATE.update(state="idle", auto=True, auto_notice=True)
             HUB_UPDATE["latest"] = dict(latest, version=HUB_UPDATE["version"], build=HUB_UPDATE["build"], newer=False)
+        elif HUB_UPDATE_MODE == "behind":
+            HUB_UPDATE.update(state="idle", auto=True, update_url="https://site.example.com/dl", update_url_from="build", source_behind=True)
+            HUB_UPDATE["latest"] = {"version": "v0.1.17-177-g563f7fde5b-202611071005", "build": 202611071005,
+                                    "released": "2026-11-07T10:05:00Z", "newer": False, "bad": False}
         elif HUB_UPDATE_MODE in ("docker", "docker-pinned"):
             pinned = HUB_UPDATE_MODE == "docker-pinned"
             HUB_UPDATE.update(version="0.3.0", build=0, channel="docker", can_update=False, auto=False,
@@ -22461,9 +22490,23 @@ IPHONE_MODES = ("one", "several", "none", "pair", "setup")
 # 2 × MOCK_COMPUTER_STEP); this simulator on MacBook's cable once MacBook is turned on (Pair waits for Trust a step,
 # then pairs); Developer Mode off until 2 steps after pairing (as if the user turned it on and the phone restarted), then
 # the developer disk image missing until Prepare (2 steps); Mac Studio a Mac without Xcode (ddi_present false); the
-# server a Linux computer. POST /api/v1/iphone/try answers a screenshot and Weather opened. GET /mock/iphone shows it,
-# GET /mock/iphone?reset=1 starts it over.
+# server a Linux computer (listed as the hub lists one, without the bridge or a developer disk image). Forget unpairs.
+# The install job's step is in MOCK_LANG (en, ja, zh-Hans), as the hub words it for the web (#8217). POST
+# /api/v1/iphone/try answers a screenshot and Weather opened. GET /mock/iphone shows it, GET /mock/iphone?reset=1
+# starts it over.
 IPHONE_SETUP = {"ext": MOCK_IPHONE != "setup", "installed": {"studio"}, "paired_at": None, "prepared_at": None, "tried": 0}
+
+
+IPHONE_SETUP_STEPS = {
+    "zh-Hans": {"install": "正在下载 iPhone 助手程序", "pair": "在这台 iPhone 上点「信任」，再输入锁屏密码", "prepare": "正在准备这台 iPhone，大约一分钟"},
+    "en": {"install": "Downloading the iPhone helper", "pair": "On the iPhone, tap Trust, then enter its passcode", "prepare": "Getting the iPhone ready, about a minute"},
+    "ja": {"install": "iPhoneヘルパーをダウンロードしています", "pair": "iPhoneで「信頼」をタップしてからパスコードを入力してください", "prepare": "iPhoneを準備しています（1分ほど）"},
+}
+
+
+def iphone_system(machine):
+    """A computer the hub lists iPhone control for: a Mac, and in the setup mode a Linux computer too (as the hub does)."""
+    return machine.get("os") == "darwin" or (MOCK_IPHONE == "setup" and machine.get("os") == "linux")
 
 
 def iphone_setup_job(machine_id):
@@ -22476,10 +22519,12 @@ def iphone_setup_job(machine_id):
     if job.get("cancelled"):
         return {"kind": kind, "state": "cancelled", "started": job["started"]}
     if t <= 2 * COMPUTER_STEP:
-        steps = {"install": "正在下载 iPhone 助手程序", "pair": "在这台 iPhone 上点「信任」，再输入锁屏密码", "prepare": "正在准备这台 iPhone，大约一分钟"}
+        steps = IPHONE_SETUP_STEPS.get(LAUNCHER_HEALTH_LANG, IPHONE_SETUP_STEPS["zh-Hans"])
         out = {"kind": kind, "state": "running", "started": job["started"], "step": steps.get(kind, "")}
         if kind == "pair":
             out.update(code="trust_pending", device="dev-mock-1")
+        elif kind == "prepare":
+            out["device"] = "dev-mock-1"
         return out
     if kind == "install":
         IPHONE_SETUP["installed"].add(machine_id)
@@ -22534,7 +22579,8 @@ def iphone_of(machine):
         job = iphone_setup_job(machine["id"])
         devices = [{**d, "allowed": enabled and d["id"] in IPHONE_CONSENT} for d in iphone_setup_devices(machine["id"])]
         installed = machine["id"] in IPHONE_SETUP["installed"]
-        out = {"enabled": enabled, "installed": installed, "devices": devices, "ddi_present": machine["id"] != "studio"}
+        out = {"enabled": enabled, "installed": installed, "devices": devices,
+               "ddi_present": machine.get("os") == "darwin" and machine["id"] != "studio"}
         if installed:
             out["version"] = "0.1.0"
         else:
@@ -22571,7 +22617,7 @@ def iphone_list():
 def refresh_iphones():
     if MOCK_IPHONE in IPHONE_MODES:
         for m in MACHINES:
-            if m.get("os") == "darwin":
+            if iphone_system(m):
                 if IPHONE_SETUP["ext"]:
                     m["iphone"] = iphone_of(m)
                 else:
@@ -22585,7 +22631,7 @@ if MOCK_IPHONE in IPHONE_MODES:
     if MOCK_IPHONE == "setup":
         IPHONE_ON.clear()  # nothing turned on yet
     for _m in MACHINES:
-        if _m.get("os") == "darwin" and IPHONE_SETUP["ext"]:
+        if iphone_system(_m) and IPHONE_SETUP["ext"]:
             _m["iphone"] = iphone_of(_m)
 
 # Every fixture, including machines added by optional modes, follows the engine contract.
@@ -26460,6 +26506,9 @@ class H(BaseHTTPRequestHandler):
                 IPHONE_JOBS[machine["id"]] = {"at": time.time(), "started": ago()}
             elif action == "cancel":
                 if machine["id"] in IPHONE_JOBS: IPHONE_JOBS[machine["id"]]["cancelled"] = True
+            elif action == "forget" and MOCK_IPHONE == "setup":
+                IPHONE_SETUP.update(paired_at=None, prepared_at=None)
+                IPHONE_CONSENT.discard("dev-mock-1")
             elif action != "forget":
                 return self.send_json({"error": "unknown action"}, 404)
             refresh_iphones()
