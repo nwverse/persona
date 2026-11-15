@@ -207,13 +207,15 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     }
 
     #if os(iOS)
-    /// Under side bars both columns start lower, together (#4853): at least `Theme.Space.l`, as ChatGPT's open Duo, and
-    /// as low as the lower of their own tops (the system gives the page room for its bar there), so the column's head and
-    /// the page's top stay on one line. Set inside each column: the split's columns do not take a safe area given
-    /// around it.
+    /// Under side bars both columns start lower (#4853): at least `Theme.Space.l`, as ChatGPT's open Duo, so the column's
+    /// head and the conversation's top bar stay on one line. Never from the page's own top (#8359): that is the root's
+    /// navigation bar, 0 on the conversation (its bar floats over it), 82 pt on a place, 24 on an Agent's chat, and the
+    /// column's head followed it down on every page but the conversation. The column's head stays where the conversation
+    /// has it; a page with a bar of its own takes no more. Set inside each column: the split's columns do not take a safe
+    /// area given around it.
     private func topPad(_ own: CGFloat) -> CGFloat {
         guard sideBars else { return 0 }
-        return max(0, max(Theme.Space.l, listSafeTop, pageSafeTop) - own)
+        return max(0, max(Theme.Space.l, listSafeTop) - own)
     }
 
     /// A column's own top safe area, for `topPad`: read under side bars only, by a clear view behind the column, which comes

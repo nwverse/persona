@@ -42,7 +42,7 @@ final class SidebarRootsUITests: XCTestCase {
     @MainActor private func settled(_ root: String, _ step: String) -> Page {
         var last: Page?
         var stableSince = Date.now
-        let deadline = Date.now.addingTimeInterval(10)
+        let deadline = Date.now.addingTimeInterval(20) // a page with live charts (Machines) slows every query
         while Date.now < deadline {
             let now = page()
             if now?.root != last?.root || now?.path != last?.path || now?.transitions != last?.transitions { stableSince = .now }
@@ -147,10 +147,18 @@ final class SidebarRootsUITests: XCTestCase {
         // A drill-down pushes, with Back.
         pick("sidebar-machines", "Machines")
         now = settled("machines", "Machines")
-        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'MacBook'")).firstMatch
-        _ = card.waitForExistence(timeout: 10)
-        for _ in 0..<6 where !(card.exists && card.isHittable) { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(card.exists && card.isHittable, "no MacBook card:\n\(app.debugDescription)")
+        // The machine's card on the page, not a row in the column that names the same computer.
+        let cards = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'MacBook'"))
+        _ = cards.firstMatch.waitForExistence(timeout: 10)
+        let pageStart = column.exists && column.isHittable ? column.frame.maxX : 0
+        func onPage() -> XCUIElement? {
+            cards.allElementsBoundByIndex.first { $0.exists && $0.isHittable && $0.frame.minX >= pageStart }
+        }
+        for _ in 0..<6 where onPage() == nil {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7))
+                .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.4)))
+        }
+        guard let card = onPage() else { return XCTFail("no MacBook card on the page:\n\(app.debugDescription)") }
         card.tap()
         next = settled("machines", "a machine")
         XCTAssertEqual(next.path, 1, "the machine's page was not pushed: \(next)")
@@ -186,5 +194,55 @@ final class SidebarRootsUITests: XCTestCase {
             .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: min(edge + 0.5, 0.95), dy: 0.5)))
         let afterSwipe = settled("machines", "an edge swipe at Machines' root")
         XCTAssertEqual(afterSwipe.path, 0)
+    }
+
+    /// Where the column's head and its list start: the assistant's name in the head, the fold button, the main
+    /// conversation held over the list, and the first heading (Pages), once the column is at its top.
+    @MainActor private func head(_ step: String) -> [String: CGRect] {
+        let main = element("sidebar-main"), fold = element("sidebar-fold-column"), pages = element("sidebar-fold-places")
+        reveal(main)
+        for _ in 0..<4 where !(pages.exists && pages.isHittable) { column.swipeDown(velocity: .fast) }
+        // A list let go after a swipe settles a moment later.
+        Thread.sleep(forTimeInterval: 1.0)
+        // The head's title is the assistant's name, which the main conversation's row starts with.
+        let name = main.label.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? ""
+        let title = app.staticTexts.matching(NSPredicate(format: "label == %@", name)).allElementsBoundByIndex
+            .first { $0.exists && $0.frame.maxY <= main.frame.minY && $0.frame.minX < main.frame.maxX }
+        XCTAssertTrue(title != nil && pages.exists, "\(step): no head title (\(name)) or Pages heading:\n\(app.debugDescription)")
+        return ["the head's title": title?.frame ?? .zero, "the fold button": fold.exists ? fold.frame : .zero,
+                "the main conversation": main.frame, "the Pages heading": pages.frame]
+    }
+
+    @MainActor private func assertSame(_ a: CGRect, _ b: CGRect, _ what: String, _ step: String) {
+        let off = max(abs(a.minX - b.minX), abs(a.minY - b.minY), abs(a.width - b.width), abs(a.height - b.height))
+        XCTAssertLessThanOrEqual(off, 1, "\(step): \(what) moved: \(a) on the main conversation, \(b) here")
+    }
+
+    /// The column's head and where its list starts do not depend on the root beside it (#8359): the persona's face, the
+    /// fold button and the Pages heading are where they are on the main conversation, on Recordings, Inbox and an
+    /// Agent's chat, within 1 pt.
+    @MainActor func testTheSidebarHeadStaysPutOnEveryRoot() {
+        continueAfterFailure = true // every root's offsets, not only the first
+        launch()
+        _ = settled("conversation", "launch")
+        let main = head("the main conversation")
+        shot("head-0-conversation")
+        func check(_ root: String) {
+            let here = head(root)
+            shot("head-\(root)")
+            for (what, frame) in main.sorted(by: { $0.key < $1.key }) { assertSame(frame, here[what] ?? .zero, what, root) }
+        }
+        for (id, root) in [("sidebar-meeting-recording", "recordings"), ("sidebar-inbox", "inbox")] {
+            pick(id, root)
+            _ = settled(root, root)
+            check(root)
+        }
+        let row = app.buttons.matching(identifier: "agents.row").firstMatch
+        reveal(element("sidebar-main"))
+        for _ in 0..<10 where !(row.exists && row.isHittable) { column.swipeUp(velocity: .slow) }
+        XCTAssertTrue(row.exists && row.isHittable, "no Agent's row:\n\(app.debugDescription)")
+        row.tap()
+        _ = settled("agent", "an Agent")
+        check("agent")
     }
 }

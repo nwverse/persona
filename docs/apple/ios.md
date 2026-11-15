@@ -934,8 +934,12 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   styles whose list paints the page's own color: three bands down the column.
 - **Under side bars** (the open iPhone Duo on its side, `SidebarRoot` reading `readsVerticalBarEdge` into
   `\.splitSideBars`): nothing is above the columns there, so the column's head and the page's top bar sat at the
-  display's edge, the mark under its rounded corner (#4853). Both columns start `Theme.Space.l` lower, or as low as the
-  lower of their own tops (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the page's top stay on one line.
+  display's edge, the mark under its rounded corner (#4853). Both columns start at least `Theme.Space.l` lower
+  (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the conversation's top bar stay on one line. The
+  column's head never follows the page's own top (#8359): that is the root's navigation bar (0 on the conversation,
+  82 pt on a place, 24 on an Agent's chat), and the head dropped by that much on every root but the conversation.
+  `SidebarRootsUITests.testTheSidebarHeadStaysPutOnEveryRoot` holds the head, the main conversation and the Pages
+  heading within 1 pt on the conversation, Recordings, Inbox and an Agent.
 - **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`;
   the Persona tab's in the Separate layout too). **Switching area replaces the page's root; only drilling down pushes**
   (#8359, docs/design/sidebar-navigation.md section 6): each sidebar item is a root of its own, the main conversation, a
