@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -404,6 +405,81 @@ func TestALiveSendNeverAnsweredEndsWithItsWait(t *testing.T) {
 			}
 			waitFor(t, "the review again", func() bool { return todoNow(s, accepted.ID).Supervision.State == reviewPending })
 			waitFor(t, "the next review message", func() bool { return supervisionOf(s, f, accepted.ID).notices > before.notices })
+		})
+	}
+}
+
+// A live agent's node never answers agent_send while its link stays up. Only a send of more for an accepted task holds
+// a turn of the agent for its answer, so only it ends with its own wait, and tells the model the text may still
+// arrive. Any other send to a running agent (to one with no task, or another conversation's to the accepted task's
+// agent) waits as long as its caller, as before #7539, and ends with it.
+func TestOnlyASendOfMoreForAnAcceptedTaskEndsWithItsOwnWait(t *testing.T) {
+	for _, c := range []struct {
+		name, from string
+		accepted   bool // the agent works for an accepted task of conv1 (else for no task)
+		bounded    bool // the send ends with its own wait
+	}{
+		{"more for the accepted task", "conv1", true, true},
+		{"another conversation's send to the accepted task's agent", "conv7", true, false},
+		{"an agent with no task", "conv1", false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			shortSends(t, 200*time.Millisecond, time.Minute)
+			var s *Service
+			var f *fakeHub
+			if c.accepted {
+				s, f, _ = acceptedPlanTask(t, nil)
+			} else {
+				s, f = newQuietService(t)
+				longRow(f, proto.StatusIdle, "Fixed it")
+			}
+			out := make(chan struct{})
+			f.mu.Lock()
+			f.sendHangs = true
+			f.mu.Unlock()
+			beforeSend(f, func() { close(out) })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			raw, _ := json.Marshal(map[string]any{"machine": "box", "session_id": longAgent, "text": "Please cover the landscape case too"})
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.runTool(ctx, "server", c.from, "agent_send", raw)
+				done <- err
+			}()
+			select {
+			case <-out:
+			case err := <-done:
+				t.Fatalf("the send ended before it went out: %v", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("the send never went out")
+			}
+			wentOut := time.Now()
+			if c.bounded {
+				select {
+				case err := <-done:
+					if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "check with agent_read before sending again") {
+						t.Fatalf("the send of more no node answered: %v, want its own wait run out, saying it may still arrive", err)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("the send of more no node answered never ended")
+				}
+				return
+			}
+			clockPast(t, wentOut.Add(5*liveSendWait))
+			select {
+			case err := <-done:
+				t.Fatalf("the send ended (%v) while its caller still waited", err)
+			default:
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("the send its caller stopped waiting for: %v, want cancelled", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the send did not end with its caller")
+			}
 		})
 	}
 }

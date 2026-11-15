@@ -339,14 +339,23 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		sending, _ := params["text"].(string)
 		if c.Status != proto.StatusOffline {
-			// A running agent takes it at once: bounded however long the caller waits (a runtime's tool call has no
-			// deadline), so the send is answered, and a turn held for it is not held for good.
+			// A running agent takes it at once. A send of more for an accepted task holds a turn of the agent that
+			// starts meanwhile for its answer, so it is bounded however long the caller waits (a runtime's tool call
+			// has no deadline) and the turn is not held for good; any other send waits as long as its caller (#7539).
 			lctx, cancel := context.WithTimeout(ctx, liveSendWait)
 			defer cancel()
 			note := s.noteAgentSend(lctx, self, am.ID, c.SessionID, "", sending) // more from its task's conversation reopens an accepted task (#6726, #7539)
+			if !note.reopens() {
+				lctx = ctx
+			}
 			err := s.call(lctx, am.ID, DeviceSessionSend, params, nil)
 			note.sent(lctx, err) // an unknown answer counts for a turn that starts soon: it may still arrive
 			if err != nil {
+				if note.reopens() && sendUnknown(err) {
+					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads
+					// the agent before it sends the text twice.
+					err = fmt.Errorf("%w (it may still arrive; check with agent_read before sending again)", err)
+				}
 				return "", task.sendFailed(ctx, s, err)
 			}
 			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
@@ -660,8 +669,8 @@ func sendUnknown(err error) bool {
 	return startResultUnknown(err) && !errors.Is(err, rpc.ErrNotSent)
 }
 
-// liveSendWait bounds a send to an agent that runs (agent_send, the owner's message on a task's card): its node types
-// it in at once. A var so tests shorten it.
+// liveSendWait bounds a send to an agent that runs when the send may reopen its accepted task (agent_send), and the
+// owner's message on a task's card: its node types it in at once. A var so tests shorten it.
 var liveSendWait = 90 * time.Second
 
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
