@@ -337,14 +337,14 @@ function QuestionCard({ ix, canApprove }: { ix: Interaction; canApprove: boolean
   const toggle = (label: string) => {
     if (localOnly && !q.options?.some((o) => o.label === label && o.action === "defer")) return;
     const singleChoice = qs.length === 1 && !q.multi_select;
-    const preserveCustom = singleChoice && Boolean(custom[qi]?.trim());
-    if (!preserveCustom) setCustom((c) => ({ ...c, [qi]: "" }));
+    const hasCustomAnswer = singleChoice && Boolean(custom[qi]?.trim());
+    setCustom((c) => ({ ...c, [qi]: "" }));
     setPicked((cur) => {
       const have = cur[qi] ?? [];
       const next = q.multi_select ? (have.includes(label) ? have.filter((x) => x !== label) : [...have, label]) : [label];
       return { ...cur, [qi]: next };
     });
-    if (singleChoice && !preserveCustom) void send(label);
+    if (singleChoice && !hasCustomAnswer) void send(label);
     else if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
   };
 

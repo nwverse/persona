@@ -69,7 +69,7 @@ describe("question card submission", () => {
     expect(calls).toEqual([{ path: "/interactions/q_single/resolve", body: { answers: { "Which library?": "A" } } }]);
   });
 
-  it("keeps a nonblank custom answer unsubmitted when an option is picked", async () => {
+  it("clears a nonblank custom answer and waits for explicit submission when an option is picked", async () => {
     act(() => root.render(<InteractionCard ix={single} />));
     const field = customAnswer();
     act(() => {
@@ -80,10 +80,10 @@ describe("question card submission", () => {
     await flush();
     expect(option("A").getAttribute("aria-pressed")).toBe("true");
     expect(calls).toEqual([]);
-    expect(customAnswer().value).toBe("  Custom library  ");
+    expect(customAnswer().value).toBe("");
     act(() => sendArrow().click());
     await flush();
-    expect(calls).toEqual([{ path: "/interactions/q_single/resolve", body: { answers: { "Which library?": "Custom library" } } }]);
+    expect(calls).toEqual([{ path: "/interactions/q_single/resolve", body: { answers: { "Which library?": "A" } } }]);
   });
 
   it("keeps a multi-select answer unsubmitted until the send arrow", async () => {
