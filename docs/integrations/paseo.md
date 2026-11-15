@@ -196,7 +196,7 @@ and the engine's note under Settings › Machines asks to update it.
 | List sessions and show state | ✅ | Pushed immediately when Paseo's catalog changes |
 | Send messages and images | ✅ | While an Agent is working, messages steer the current turn (Paseo's `steer`, like typing while Claude Code works); resending the same message delivers it only once |
 | Interrupt | ✅ | |
-| Permission, question, and plan cards | ✅ | Both the phone and Paseo App can answer; the first answer wins. Answering in Paseo removes the phone's card. Tapping "Return to computer" on the phone leaves the answer to the Paseo App |
+| Permission, question, and plan cards | ✅ | Both the phone and Paseo App can answer; the first answer wins. Answering in Paseo removes the phone's card. Tapping "Return to computer" on the phone leaves the answer to the Paseo App. A card stays on the phone across link drops and goes up again after its 30 minutes while Paseo still waits (Mapping, "Cards") |
 | Create sessions from the phone | ✅ | Each available Paseo provider is a launcher, with its models, reasoning effort, and permission modes (permission modes: Claude Code's five; for providers on Codex, `bypassPermissions` starts Paseo's `full-access`; for providers whose approval is Paseo's Auto Accept switch (`auto_accept`: the ones on ACP, such as Grok, and OpenCode, #7758), `bypassPermissions` starts it with Auto Accept on; the others leave Paseo's default). A read-only start (`plan`, #3238) runs only on a provider running Claude Code, in Paseo's `plan` mode: a launcher Paseo lacks falls back to such a provider, a non-Claude one is refused (`readonly_unsupported`), and an agent Paseo reports in another mode is archived and refused. Workspace selection: use the workspace explicitly named in the form if it exists in Paseo; otherwise, if the directory is exactly a worktree, use that worktree's workspace (prefer one under the main-repository project, then the most recent), matching Paseo's own directory-based lookup. For a main checkout or ordinary directory, Paseo creates a new workspace under that project |
 | Resume a "Not running" Claude session | ✅ | Paseo imports the chat without changing its session ID. If Paseo already has it, reuse it, restoring it first if archived. An archived Agent that keeps its own ID (above) is restored under that ID. Reject if another claude process outside Paseo is using it, to prevent two processes writing at once |
 | Rename | ✅ | Changes the Agent's title in Paseo. iOS, Android and web show Rename on a Paseo session from its row's `capabilities.rename` (#6294; not on an Agent another Agent started), with the session's name only (no tab) |
@@ -299,15 +299,32 @@ no launcher. Permission mode, workspace and the first message keep their existin
 - **Cards**:
   - Paseo `question` → question card. Answers for Claude Code use the original question text as the key; other Agents use the `header` from Paseo's card.
   - `plan` → plan card:
-    - Approval selects Paseo's `implement`, then switches to the mode selected on the phone. If the previous mode was bypass / auto, use `implement_resume` to return to it.
+    - Approval selects Paseo's `implement`, then switches to the mode selected on the phone. Paseo's `implement_resume`, offered when the agent was in bypass or auto
+      before it planned, goes back to that earlier mode, whatever the phone chose: it is used only when the phone chose that same mode (its label names it, #8128).
     - Rejection sends the feedback as the denial reason.
   - One of the Agent's own Persona tools (`--allow-tools`: `report_to_supervisor`, the to-do decision tools, a leader's `task_plan` / `task_review`) asked by Claude Code in an Agent Persona started (it carries the `persona.session` label) → allowed by the bridge once, with no card, no rule kept and no mode changed (#4966, `docs/integrations/claude-integration.md` "Persona tools Agents call without a card"). An agent made in Paseo's own app (also one whose ID the bridge kept, `persona.kept`), and every other tool, still ask.
     Claude Code Agents created since #6293 do not ask at all: they are created with these tools preapproved (below); this answer covers the Agents created before.
   - Everything else → permission card:
     - If Claude Code provides a suggested rule, the card offers "Always allow," stating which rule will be added and where it applies.
     - Denial includes the reason you entered.
-  - Card IDs are derived from Paseo request IDs, reconnecting to the original card after a bridge restart.
+  - Card IDs are derived from Paseo request IDs: after a node restart the next bridge asks with the same ID, and the hub hangs that on the card the phone already shows.
+    A card put up again (below) has an ID of its own.
   - Plan requests Claude Code gives Paseo contain no plan body (`ExitPlanMode` input is empty). The bridge reads the body from that tool call in the timeline.
+  - **Across link drops** (#8128): while Paseo waits on a request, its card is on the phone, whatever happened to the links in between ("each pending request has one
+    home", `docs/design/DESIGN_SYSTEM.md`).
+    - **The hub link drops** (the computer sleeps, its network changes): the card stays on the phone. It carries the bridge's own ID, so the hub keeps it as `resumable`
+      (Codex, ACP, OpenCode and pi cards too, which have no `toolUseId`), and the node answers the bridge `node_gone`, not a dismiss. The bridge asks the next hub
+      with the same card for 2 minutes from the drop, however long the card was up before, and an answer given meanwhile reaches Paseo. A request that comes up
+      while there is no hub goes to the phone once the hub is back. If the hub was away longer than it keeps a card (3 minutes), it ended the card: its answer for
+      it comes at once, and the bridge puts up a new card.
+    - **The bridge's link to Paseo drops**: an answer given meanwhile waits in the bridge and goes to Paseo when it is back, if Paseo still asks; the card does not go
+      up a second time. A card stays pending until Paseo confirms its answer (`agent_permission_resolved`), so an update of the agent in between does not show it again.
+    - **Nobody answers for 30 minutes**: the card's time on the phone runs out, but Paseo keeps waiting, so the bridge puts up a new card (and the phone is notified
+      again) while Paseo still lists the request. DSH instead keeps the phone's card when its own timed question runs out first and hands a late answer back to its
+      agent (`docs/integrations/runtimes.md` ("Interactions")); here the phone's card is the one with a time limit, so it is the one renewed.
+    - **"Return to computer"** is the only dismissal that leaves a request to Paseo's app: one made while the card is up, the hub there since it went up and before
+      its 30 minutes are over. A dismissal that comes at once is the hub's answer for a card it had ended (a person takes longer), so the bridge puts up a new card,
+      except for a card it has just made, which was never on the hub. A hand-back holds until the request is answered.
 - **Create**: use Paseo's `agent.create`. The bridge chooses the Agent ID and includes the form's selected model, permission mode (Allow all on an Auto Accept provider as `featureValues.auto_accept`, "Capabilities"), and reasoning effort. The first message is `initialPrompt`.
   - Creating from a workspace places it in that Paseo workspace, Agents in it or not; one Paseo no longer has is refused (above).
   - If Paseo does not finish creation within 25 seconds, return the session row first and keep waiting in the background.
@@ -342,6 +359,9 @@ no launcher. Permission mode, workspace and the first message keep their existin
 - New worktree, Rename and Delete worktree are on the web only: iOS and Android offer them for herdr and Orca workspaces. Android's Rename space renames a
   Paseo space too (by the session's workspace); the web's chat ⋯ offers Rename space for terminal spaces only.
 - Images in Paseo's timeline are not displayed. Claude Code sessions are unaffected; their images come from the transcript.
+- The bridge keeps "Return to computer" in memory: after it restarts (a node update restarts it), a request handed back before goes to the phone once more,
+  since the hub's answer for the old card, at once, reads like that for a card it ended ("Cards" above). A card the next bridge takes up again after a node
+  restart ends at the first bridge's 30 minutes, which the next one does not know: if nobody answers until then, that end counts as a hand-back.
 - Paseo's own plugins, scheduled tasks, and hub execution are not integrated.
 
 ## Verification
