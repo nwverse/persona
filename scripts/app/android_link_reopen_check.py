@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Device check for ordinary link reopening (android/feature/chat/LINKS.md, "Reopening a link").
 
-    android_link_reopen_check.py serve [--host ADDRESS] [--port PORT] [--log FILE]
+    android_link_reopen_check.py serve [--host ADDRESS] [--name HOSTNAME] [--port PORT] [--log FILE]
+    android_link_reopen_check.py map-host --serial SERIAL [--name HOSTNAME] [--address ADDRESS]
+    android_link_reopen_check.py unmap-host --serial SERIAL
     android_link_reopen_check.py reopen --serial SERIAL --base URL --log FILE
     android_link_reopen_check.py cookie --serial SERIAL --base URL --log FILE
     android_link_reopen_check.py cache --serial SERIAL --base URL --log FILE
 
 `serve` runs the test pages on this computer and logs every request with a timestamp. Bind it to an address the phone can reach
 that is not loopback (`adb reverse` would turn it into a forwarded port, a different code path); with no --host it uses this
-computer's outbound address. It prints the links to send, one per message, so the chat shows them.
+computer's outbound address. It prints the links to send, one per message, so the chat shows them. The links carry a placeholder
+host name (`persona.test`, or --name) and never this computer's address, so a screenshot of the card shows no real network address;
+the device has to resolve that name to the server (an emulator: see the scene file's `localServer`). Pass `--name` with a real
+address only when no capture will be kept.
+
+`map-host` makes the placeholder name resolve on a debuggable emulator, for the WebView only: it writes the WebView's command-line
+file with one host-resolver rule (default: the name to 10.0.2.2, the emulator's alias for this computer's loopback, so `serve`
+can bind 127.0.0.1). Restart the app afterwards; `unmap-host` removes the file. The page requests are real, only the name differs.
 
 The device commands drive the open card through `adb` and read the page back with `uiautomator dump`. They judge page history,
 response sequence and request timestamps, the identity of the session cookie, and whether a cacheable script returns to the server.
@@ -39,6 +48,8 @@ CACHE_PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="
 <script>document.getElementById('state').textContent='cache load={load} asset='+window.cacheAssetLoaded;</script>"""
 CACHE_ASSET = "window.cacheAssetLoaded='loaded';\n"
 NO_STORE = {"Cache-Control": "no-store"}
+# What links and screenshots show instead of this computer's address.
+PLACEHOLDER_HOST = "persona.test"
 
 
 def session_cookie(header):
@@ -129,6 +140,16 @@ def make_server(host, port, log_path):
     handler = type("Handler", (Pages,), {"sequence": 0, "lock": threading.Lock(), "log_path": log_path,
                                         "session_token": uuid.uuid4().hex, "cache_token": uuid.uuid4().hex})
     return Server((host, port), handler)
+
+
+WEBVIEW_COMMAND_LINE = "/data/local/tmp/webview-command-line"
+
+
+def webview_command_line(name, address):
+    """The file a debuggable WebView reads at start: a placeholder program name, then one resolver rule."""
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", name) or not re.fullmatch(r"[0-9a-fA-F:.]+", address):
+        raise SystemExit("map-host: the name and the address must be a host name and an IP address")
+    return f'_ --host-resolver-rules="MAP {name} {address}"\n'
 
 
 def read_log(path):
@@ -344,8 +365,10 @@ def cache(device, base, log, close_label, settle):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("command", choices=["serve", "reopen", "cookie", "cache"])
-    parser.add_argument("--host")
+    parser.add_argument("command", choices=["serve", "map-host", "unmap-host", "reopen", "cookie", "cache"])
+    parser.add_argument("--address", default="10.0.2.2", help="map-host: where the name points (default: the emulator's host alias)")
+    parser.add_argument("--host", help="the address to bind (default: this computer's outbound address)")
+    parser.add_argument("--name", default=PLACEHOLDER_HOST, help="the host name the printed links carry (default: %(default)s)")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--log", default="link-reopen-requests.jsonl")
     parser.add_argument("--serial")
@@ -356,8 +379,8 @@ def main(argv=None):
     if args.command == "serve":
         host = args.host or outbound_address()
         server = make_server(host, args.port, args.log)
-        base = f"http://{host}:{server.server_address[1]}"
-        print(f"Serving {base}; requests are logged to {args.log}")
+        base = f"http://{args.name}:{server.server_address[1]}"
+        print(f"Serving {base} (bound to port {server.server_address[1]} of the chosen address); requests are logged to {args.log}")
         print("Send each link as its own message. Use an Agent reply for /a to check first-open preload; send the other links")
         print("as your own messages so /whoami cannot be preloaded before login and the first cache asset request is observable:")
         for path in ("/a", "/login", "/whoami", "/cache"):
@@ -366,6 +389,18 @@ def main(argv=None):
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        return 0
+    if args.command in ("map-host", "unmap-host"):
+        if not args.serial:
+            parser.error("--serial is required")
+        device = Device(args.serial)
+        if args.command == "map-host":
+            line = webview_command_line(args.name, args.address)
+            device.adb("shell", f"printf '%s' '{line}' > {WEBVIEW_COMMAND_LINE} && chmod 644 {WEBVIEW_COMMAND_LINE}")
+            print(f"{args.name} now resolves to {args.address} in the WebView of {args.serial}; restart the app")
+        else:
+            device.adb("shell", "rm", "-f", WEBVIEW_COMMAND_LINE)
+            print(f"the WebView host mapping of {args.serial} is removed; restart the app")
         return 0
     if not (args.serial and args.base):
         parser.error("--serial and --base are required")

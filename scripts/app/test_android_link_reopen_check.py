@@ -1,5 +1,6 @@
 """The link device helper's server and pure judgments; no device, adb or WebView is involved."""
 import importlib.util
+import re
 from pathlib import Path
 import tempfile
 import threading
@@ -128,6 +129,21 @@ class CacheJudgmentTest(unittest.TestCase):
         self.assertTrue(check.judge_cache(1, 2, produced, one_asset * 2, 11))
         self.assertTrue(check.judge_cache(1, 1, produced, one_asset, 11))
         self.assertTrue(check.judge_cache(1, 2, None, one_asset, 11))
+
+
+class PlaceholderHostTest(unittest.TestCase):
+    def test_links_carry_a_placeholder_name_not_an_address(self):
+        self.assertEqual(check.PLACEHOLDER_HOST, "persona.test")
+        self.assertIsNone(re.search(r"\d+\.\d+\.\d+\.\d+", check.PLACEHOLDER_HOST))
+
+    def test_the_webview_rule_maps_the_name_to_the_emulator_host_alias(self):
+        self.assertEqual(check.webview_command_line("persona.test", "10.0.2.2"),
+                         '_ --host-resolver-rules="MAP persona.test 10.0.2.2"\n')
+
+    def test_a_name_or_address_that_could_carry_more_flags_is_refused(self):
+        for name, address in (("a b", "10.0.2.2"), ("persona.test", "10.0.2.2 --x"), ('p"', "10.0.2.2"), ("p", "host;rm")):
+            with self.assertRaises(SystemExit):
+                check.webview_command_line(name, address)
 
 
 if __name__ == "__main__":
