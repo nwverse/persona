@@ -80,13 +80,14 @@ fun PairingScreen(
     /** The main conversation's steps on the checklist that follows a pairing (docs/assistant/onboarding.md 4.5). */
     mainReadiness: AssistantReadinessSource? = null,
     /**
-     * The public getting-started page for people with no hub, from the build config ([GettingStarted]); null: the welcome page
-     * has no "No hub yet?" link. Opened through the host's link handler, which shows it inside the app.
+     * The public getting-started page for people with no hub, from the build config ([GettingStarted]); null (or not an https
+     * address): the welcome page has no "No hub yet?" link and no link host. Opened through the host's link handler, which shows it inside the app.
      */
     gettingStartedUrl: String? = rememberGettingStartedUrl(),
 ) {
     val context = LocalContext.current
-    val links = LocalUriHandler.current
+    // Only a usable https address counts (whatever a caller passes in): without one the page has no link and no link host.
+    val guideUrl = remember(gettingStartedUrl) { GettingStarted.parse(gettingStartedUrl) }
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val paired by pairing.isPaired.collectAsState()
@@ -340,7 +341,7 @@ fun PairingScreen(
         ReadinessScreen(sessions, diagnostics, notificationsOnly = false,
             onDiagnostics = onDiagnostics, onDone = { records.pending(false); onReady() }, onLater = later, onBack = null,
             readiness = mainReadiness, footer = footer)
-    } else PairingLinkHost(hosted = !skipWelcome) { PairingListPage(page, onBack = back, state = key(page) { rememberLazyListState() }) {
+    } else PairingLinkHost(hosted = !skipWelcome && guideUrl != null) { PairingListPage(page, onBack = back, state = key(page) { rememberLazyListState() }) {
         when (page) {
             PairingPage.Welcome -> {
                 item {
@@ -364,7 +365,9 @@ fun PairingScreen(
                 // Without a hub there is nothing else to see: the guide (when this build has one), then the typed and command-line ways.
                 item {
                     Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.m), horizontalAlignment = Alignment.CenterHorizontally) {
-                        gettingStartedUrl?.let { url ->
+                        guideUrl?.let { url ->
+                            // Read here, inside the link host's content: outside it this is the activity's handler, which opens the system browser.
+                            val links = LocalUriHandler.current
                             JTextButton(stringResource(R.string.settings_pairing_welcome_guide), { links.openUri(url) }, Modifier.fillMaxWidth())
                         }
                         JTextButton(stringResource(R.string.settings_pairing_other_ways), ::showOtherWays, Modifier.fillMaxWidth())
@@ -516,7 +519,9 @@ fun PairingScreen(
 /**
  * The root pairing page sits outside the shell, so no link host exists for the welcome page's guide link; this one gives it
  * the app's usual link card (full screen, dragged to 0.6 it stops blocking, further down it closes). Pages inside the shell
- * (Settings › Pairing, Add hub: [hosted] false) already have the shell's host and are not wrapped twice.
+ * (Settings › Pairing, Add hub: [hosted] false) already have the shell's host and are not wrapped twice. A build with no guide
+ * address is not hosted either: the host starts the WebView renderer, and that page has no link to open. The link handler is
+ * the one read inside [content], never outside it.
  */
 @Composable
 private fun PairingLinkHost(hosted: Boolean, content: @Composable () -> Unit) {
