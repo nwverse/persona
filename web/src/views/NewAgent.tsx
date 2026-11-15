@@ -854,7 +854,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                   </Choice>
                 ))}
               </div>
-              <p className={cx("mt-1.5 text-[11.5px]", providerMode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
+              <p className={cx("mt-1.5 text-submeta", providerMode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
                 {providerMode === BYPASS_MODE ? BYPASS_WARNING : t("newagent.provider_mode_hint")}
               </p>
             </Field>

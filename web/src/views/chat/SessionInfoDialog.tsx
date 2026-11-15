@@ -103,7 +103,7 @@ export function SessionInfoDialog({ session, machineName, open, onClose }: { ses
           if (!rows.length) return null;
           return (
             <section key={g.title}>
-              <h3 className="mb-1 text-[11.5px] font-medium text-ink-3">{g.title}</h3>
+              <h3 className="mb-1 text-submeta font-medium text-ink-3">{g.title}</h3>
               <div className="divide-y divide-line overflow-hidden rounded-[10px] bg-inset shadow-hairline">
                 {rows.map(([k, v, mono]) => (
                   <div key={k} className="flex items-center gap-3 px-3 py-1.5 text-[12.5px]">
