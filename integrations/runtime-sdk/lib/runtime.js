@@ -19,7 +19,9 @@ import { Peer, RpcError } from './wire.js'
 export const PROTOCOL = 1
 
 const PHONE_DRIVEN_FOR = 6 * 60 * 60 * 1000 // a session the phone sent to or started recently: it answers first
-const RESUME_WAIT = 2 * 60 * 1000 // how long a pending ask waits for the next node (personad node.ResumeWait)
+// How long a pending ask waits for the next node (personad's nodeclient.ResumeWait), counted from when the node or its
+// hub went away, as nodeclient.DialResumable counts it: not from when the card went up.
+const RESUME_WAIT = 2 * 60 * 1000
 const APPEND_WINDOW = 80 // ms: committed content within this window goes out as one batch
 const STREAM_EVERY = 120 // ms: live text at most this often (the whole text so far each time)
 const RETRY_PRESENT = 1000 // ms: retry this often while the socket file is there (a node is, or is restarting)
@@ -109,7 +111,7 @@ export function defaultSocketPath() {
  * @param {{ runtime: string, name?: string, agent?: string, version?: string, launcher?: string, launcherModel?: string,
  *   socketPath?: string, answerFirst?: 'auto'|'phone'|'local', log?: (msg: string) => void,
  *   connect?: (path: string) => import('node:net').Socket, pushDelayMs?: number, retryMs?: number,
- *   refreshMs?: number, requires?: string[], onHub?: (connected: boolean) => void, assistant?: boolean,
+ *   refreshMs?: number, resumeWaitMs?: number, requires?: string[], onHub?: (connected: boolean) => void, assistant?: boolean,
  *   listen?: { port?: number, host?: string, path?: string, token: string | (() => string) } | boolean,
  *   token?: string | (() => string), package?: { name: string, hash: string }, instance?: string,
  *   onUpdate?: (offer: { name: string, hash: string, version?: string }) => void,
@@ -128,6 +130,8 @@ export function defaultSocketPath() {
  *   features (runtime.hello's features) this runtime cannot do without; on a node lacking one it does not stay
  *   connected, and tries again once the node restarts (its socket file is replaced) or after 10 minutes. onHub: called
  *   after every hello and whenever the node's hub comes or goes (a runtime fetching the hub's tools does it then).
+ *   resumeWaitMs: how long an ask whose node or hub went away waits for the next one before it answers {dismiss: true}
+ *   (default 2 minutes, the node's own; tests shorten it).
  *   listen: be a daemon (docs/integrations/daemons.md) — the node dials this runtime's WebSocket endpoint instead of the runtime
  *   dialing runtime.sock. With a port ({port, host, path, token}; port 0 picks one) start() serves the endpoint
  *   itself (host 127.0.0.1 and path /persona/runtime by default); without one ({token}, or `true` with
@@ -150,6 +154,7 @@ export function createRuntime(driver, options) {
   const answerFirst = options.answerFirst ?? 'auto'
   const pushDelay = options.pushDelayMs ?? 300
   const baseRetry = options.retryMs ?? 1000
+  const resumeWait = options.resumeWaitMs ?? RESUME_WAIT
   const log = options.log ?? (() => {})
   const connect = options.connect ?? ((path) => createConnection(path))
   // This process's identity on the node (runtime.hello's instance): a reconnect is the same instance, another process
@@ -192,6 +197,9 @@ export function createRuntime(driver, options) {
   }
   // Whether the node has a hub connected (runtime.hello's hub, then runtime.hub). Older nodes do not say: assume so.
   let hubConnected = true
+  // Bumped each time a node with a hub is there (again): a hello saying so, or runtime.hub. An ask whose node or hub went
+  // away counts its wait for the next one from its latest loss, so a hub that came back in between starts it over.
+  let hubBacks = 0
   // What the node does beyond the first protocol (runtime.hello's features; empty from older nodes).
   let nodeFeatures = []
   // Features this runtime cannot do without (options.requires): it does not stay on a node lacking one.
@@ -335,6 +343,7 @@ export function createRuntime(driver, options) {
     try {
       const res = await p.call('runtime.hello', hello(), { timeoutMs: 10_000 })
       setHub(res?.hub !== false)
+      if (hubConnected) hubBacks++ // a node with a hub: a new node too, where setHub saw no change (the last one had one)
       nodeFeatures = Array.isArray(res?.features) ? res.features.filter((f) => typeof f === 'string') : []
       const missing = requires.filter((f) => !nodeFeatures.includes(f))
       if (missing.length > 0) {
@@ -684,6 +693,7 @@ export function createRuntime(driver, options) {
   function setHub(connected) {
     if (connected === hubConnected) return false
     hubConnected = connected
+    if (connected) hubBacks++
     log(`persona: the node's hub ${connected ? 'is back' : 'is gone'}`)
     return true
   }
@@ -726,19 +736,27 @@ export function createRuntime(driver, options) {
   /**
    * Put a question / plan / permission card on the phone and wait for the answer: the Resolution, or {dismiss: true}
    * when nobody answers there (handed back to the computer, expired, no hub). The session shows as needing you
-   * meanwhile. Rejects only when signal aborts (the runtime withdrew it: the card is taken off).
+   * meanwhile. Rejects only when signal aborts (the runtime withdrew it: the card is taken off). A node or hub that goes
+   * away under the card is waited for (resumeWaitMs from then, however long the card was up before): the next node is
+   * asked with the same id, and the hub hangs that on the card the phone already shows.
    */
   async function ask(interaction, { signal, timeoutSeconds } = {}) {
     const sessionId = interaction.session_id
     pending.set(sessionId, (pending.get(sessionId) ?? 0) + 1)
     schedulePush(50)
     try {
-      const deadline = Date.now() + RESUME_WAIT
+      // When the node or its hub went away under this card, and how many times a hub was back by then: one that comes
+      // back since makes the next loss a new one, with a wait of its own.
+      let lost
+      const resumable = () => {
+        if (!lost || lost.backs !== hubBacks) lost = { at: Date.now(), backs: hubBacks }
+        return Date.now() - lost.at < resumeWait
+      }
       for (;;) {
         if (signal?.aborted) throw signal.reason ?? new Error('aborted')
         const p = peer
         if (!p) {
-          if (Date.now() > deadline) return { dismiss: true }
+          if (!resumable()) return { dismiss: true }
           await sleep(1000, signal)
           continue
         }
@@ -750,8 +768,8 @@ export function createRuntime(driver, options) {
           return await p.call('interaction.create', params, { timeoutMs: 0, signal })
         } catch (err) {
           if (signal?.aborted) throw err
-          if (err instanceof RpcError && (err.code === 'node_gone' || err.code === 'closed') && Date.now() < deadline) {
-            await sleep(1000, signal) // the node restarts: ask the next one with the same id
+          if (err instanceof RpcError && (err.code === 'node_gone' || err.code === 'closed') && resumable()) {
+            await sleep(1000, signal) // the node restarts, or its hub reconnects: ask the next one with the same id
             continue
           }
           log(`persona: ask the phone: ${err.message}`)
