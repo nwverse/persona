@@ -103,4 +103,22 @@ final class ExtensionNavEntryTests: XCTestCase {
         }
         XCUIDevice.shared.orientation = .portrait
     }
+
+    /// Landscape evidence uses simctl rather than app.screenshot(), which can be rotated or black-framed on this runtime.
+    @MainActor func testTheIPadUsagePageInLandscapeViaSimctl() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "the iPad's persistent sidebar")
+        guard let dir = env["PERSONA_SHOTS"] else { throw XCTSkip("PERSONA_SHOTS chooses the evidence directory") }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = try launch(["-tab", "assistant"])
+        checkEntry(app, "landscape-simctl")
+        let window = app.windows.firstMatch
+        XCTAssertGreaterThan(window.frame.width, window.frame.height)
+        let udid = try XCTUnwrap(env["PERSONA_SIM_UDID"], "the task-owned simulator id")
+        let capture = Process()
+        capture.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        capture.arguments = ["simctl", "io", udid, "screenshot", dir + "/ipad-usage-landscape-simctl.png"]
+        try capture.run()
+        capture.waitUntilExit()
+        XCTAssertEqual(capture.terminationStatus, 0)
+    }
 }
