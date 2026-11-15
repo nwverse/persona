@@ -448,10 +448,16 @@ Phase 3 lands in several PRs.
   - All 57 static turn cases compare complete `turns` arrays after applying the checked-in current-iOS overlay
     (`spec/fixtures/lines/ios/differences.json`, #8429). The independent maintainer's macOS replay passed the 59
     executable content cases and its properties; this Rust PR does not run Swift or claim that replay itself.
+  - The Kotlin `projectTurns` declaration reaches the same pure projection through the real host JNI (#8756). Its
+    replay independently applies the repository overlay and compares all 57 complete expected `turns` arrays: 54
+    cases contain 62 complete turn objects after the overlay; `empty_session` and the two empty-turn layout cases
+    compare empty arrays only. It checks malformed input plus a wrong expected value. This is host-JNI evidence, not
+    a production Android adapter.
   - The four operation-sequence cases, two source-order layout cases, rendered lines, task indexes, incremental
-    rebuilds, production adapters and shared FFI/JNI/NAPI are outside this slice. The Rust comparison deliberately
-    ignores rendered `lines` and `task_index` even where an overlay replaces them. No physical-device or performance
-    claim is made. `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
+    rebuilds, production adapters and turn C/NAPI/Swift boundaries are outside this slice. Both turn comparisons
+    deliberately ignore rendered `lines` and `task_index` even where an overlay replaces them. No physical-device or
+    performance claim is made. `spec/README.md` continues to name the shared corpus, not Rust, as the reference until
+    migration.
 
 - **Question answers and recommendation labels (#8460).**
   - `persona_core::answer` constructs the `ios_current` synchronous question answers and display-only recommendation
