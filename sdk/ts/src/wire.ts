@@ -891,8 +891,8 @@ export interface SettingsCheckResult {
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | "inbox_group_state" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
@@ -3502,12 +3502,34 @@ export interface ConnectorCallParams {
 export interface ConnectorCallResult {
   text?: string;
   /**
+   * tools.call only (actions.do and catalog.call ignore it): pictures for the model after the text, on a hub whose
+   * initialize lists the capability tool_images (an older hub ignores them; the text must stand on its own). At most
+   * 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
+   * pixels; the hub leaves out any over a limit and says so after the text.
+   */
+  images?: ConnectorToolImage[];
+  /**
    * actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
    * service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
    * sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
    * Leave it out when there is none.
    */
   message_ref?: string;
+}
+
+/**
+ * One picture of a tools.call answer (ConnectorCallResult.images).
+ */
+export interface ConnectorToolImage {
+  /** image/jpeg, image/png or image/webp: a hint, the hub reads the type from the bytes. */
+  mime?: string;
+  /** The bytes, base64 (standard, with padding). */
+  data: string;
+  /**
+   * One short line for the model and for people, shown before the picture (a time in a video, a picture's place in a
+   * post); the hub keeps the first 200 characters of its first line.
+   */
+  caption?: string;
 }
 
 /**

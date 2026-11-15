@@ -915,10 +915,11 @@ var HubRoles = []string{"center", "member"}
 const (
 	HubCapabilityInboxGroup      = "inbox_group"
 	HubCapabilityInboxGroupState = "inbox_group_state"
+	HubCapabilityToolImages      = "tool_images"
 )
 
 // HubCapabilities are the values of HubCapability, in order.
-var HubCapabilities = []string{"inbox_group", "inbox_group_state"}
+var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images"}
 
 // InitializeParams: what the hub sends first. The extension is under extension; hubs before the rename (#1844) send
 // it as plugin, newer hubs send both.
@@ -3385,11 +3386,27 @@ type ConnectorCallParams struct {
 // ConnectorCallResult: tools.call and actions.do.
 type ConnectorCallResult struct {
 	Text string `json:"text,omitempty"`
+	// tools.call only (actions.do and catalog.call ignore it): pictures for the model after the text, on a hub whose
+	// initialize lists the capability tool_images (an older hub ignores them; the text must stand on its own). At most
+	// 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
+	// pixels; the hub leaves out any over a limit and says so after the text.
+	Images []ConnectorToolImage `json:"images,omitempty"`
 	// actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
 	// service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
 	// sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
 	// Leave it out when there is none.
 	MessageRef string `json:"message_ref,omitempty"`
+}
+
+// ConnectorToolImage: one picture of a tools.call answer (ConnectorCallResult.images).
+type ConnectorToolImage struct {
+	// image/jpeg, image/png or image/webp: a hint, the hub reads the type from the bytes.
+	Mime string `json:"mime,omitempty"`
+	// The bytes, base64 (standard, with padding).
+	Data string `json:"data"`
+	// One short line for the model and for people, shown before the picture (a time in a video, a picture's place in a
+	// post); the hub keeps the first 200 characters of its first line.
+	Caption string `json:"caption,omitempty"`
 }
 
 // ConnectorAction: A write as the card names it: visible says who will see it.
@@ -6228,6 +6245,7 @@ var newDef = map[string]func() any{
 	"ConnectorTools":                func() any { return new(ConnectorTools) },
 	"ConnectorCallParams":           func() any { return new(ConnectorCallParams) },
 	"ConnectorCallResult":           func() any { return new(ConnectorCallResult) },
+	"ConnectorToolImage":            func() any { return new(ConnectorToolImage) },
 	"ConnectorAction":               func() any { return new(ConnectorAction) },
 	"ConnectorDescribeResult":       func() any { return new(ConnectorDescribeResult) },
 	"ConnectorDoParams":             func() any { return new(ConnectorDoParams) },
