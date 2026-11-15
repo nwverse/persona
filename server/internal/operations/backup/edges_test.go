@@ -3,12 +3,15 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	mathrand "math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateRefusesActiveDatabaseConnections(t *testing.T) {
@@ -746,32 +749,48 @@ func TestParkedDatabaseWhoseCheckFailsStaysNamed(t *testing.T) {
 	}
 }
 
-// plainlyAbsentBeside says yes only when it established that the name is gone
-// and the other exists.
-func TestPlainlyAbsentBesideNeedsBothFactsEstablished(t *testing.T) {
-	fixture := newBackupFixture(t, "persona_manager")
-	backend := fixture.backend
-	operator := fixture.operator()
-	target := fixture.hub
-	server := backend.server(target)
-	check := func(label string, want bool) {
-		t.Helper()
-		if got := operator.plainlyAbsentBeside(context.Background(), target, "gone", "persona"); got != want {
-			t.Errorf("%s: plainlyAbsentBeside = %v, want %v", label, got, want)
-		}
+// What the swap knows only narrows on established facts: a check that fails,
+// or a rename that reports an error, rules nothing out; a rename that works
+// rules out every layout it could not have been done from.
+func TestSwapKnowledgeNarrowsOnlyOnEstablishedFacts(t *testing.T) {
+	installing := knowing(func(l layout) bool { return l == layout{atAside, atStage} })
+	unknown := installing.renamed(atStage, atTarget, errors.New("connection lost"))
+	if unknown != installing|knowing(func(l layout) bool { return l == layout{atAside, atTarget} }) {
+		t.Fatalf("an install rename that reports an error leaves %b", unknown)
 	}
-	check("name absent, other present", true)
-	delete(server, "persona")
-	check("both absent", false)
-	server["persona"] = &fakeDatabase{}
-	server["gone"] = &fakeDatabase{}
-	check("name present", false)
-	delete(server, "gone")
-	backend.existsFailures = 1
-	check("the check of the name fails", false)
-	backend.existsFailures = 0
-	backend.commitThenFired, backend.existsErrName = true, "persona"
-	check("the check of the other fails", false)
+	if got := installing.renamed(atStage, atTarget, nil); !got.surely(bundleAt(atTarget)) {
+		t.Errorf("an install rename that works leaves %b", got)
+	}
+	// Putting the previous database back works only if the name was free: no
+	// bundle database can be installed under it.
+	if got := unknown.renamed(atAside, atTarget, nil); !got.surely(back) {
+		t.Errorf("a previous database renamed back leaves %b", got)
+	}
+	// Renamed back with an error: then the staged copy existing proves the
+	// install never happened, and the target existing that the original is back.
+	maybe := unknown.renamed(atAside, atTarget, errors.New("connection lost"))
+	if !maybe.may(bundleAt(atTarget)) || !maybe.may(back) {
+		t.Fatalf("a rename back that reports an error leaves %b", maybe)
+	}
+	if got := maybe.observed(atStage, true).observed(atTarget, true); !got.surely(back) {
+		t.Errorf("staged copy and target present leave %b", got)
+	}
+	if got := maybe.observed(atStage, true); !got.surely(bundleAt(atStage)) || !got.unsure(originalAt(atAside)) {
+		t.Errorf("the staged copy present leaves %b", got)
+	}
+	// A failed check is not an observation: probe leaves the knowledge alone.
+	fixture := newBackupFixture(t, "persona_manager")
+	part := &swapPart{target: fixture.hub, label: "hub", stage: "persona_staged_h_x", aside: "persona_previous_h_x", known: maybe}
+	fixture.backend.existsFailures = 3
+	fixture.operator().probe(part, false)
+	if part.known != maybe || part.confused {
+		t.Errorf("failed checks changed the knowledge to %b", part.known)
+	}
+	// A result no layout explains is not trusted either.
+	part.learn(maybe.observed(atStage, false).observed(atTarget, false).observed(atAside, false))
+	if !part.confused || !part.known.may(bundleAt(atTarget)) || !part.known.may(originalAt(atAside)) {
+		t.Errorf("a contradiction leaves %b (confused %v)", part.known, part.confused)
+	}
 }
 
 // No external knowledge base existed before the restore: nothing was kept, so
@@ -801,5 +820,237 @@ func TestRestoreLeavesNoEmptyPreviousExternalKnowledgeBase(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(external, "fact.md")); string(raw) != "external original" {
 		t.Errorf("the knowledge base was not restored: %q", raw)
+	}
+}
+
+// The previous database's rename back commits and then reports an error
+// (or works), after the install rename failed without happening and every
+// check of the part failed: the install is not known to have failed. For
+// either part, the result must be settled from what is then checked, not from
+// the failed undo of the install: no bundle database is live, so the files go
+// back and the staged copy is dropped. If the checks keep failing it cannot be
+// told, and then the files stay and everything that may hold something is
+// named.
+func TestUncertainPreviousUndoIsSettledForEitherPart(t *testing.T) {
+	for _, part := range []string{"hub", "manager"} {
+		for _, mode := range []string{"commits-then-errors", "works", "checks-keep-failing"} {
+			t.Run(part+"/"+mode, func(t *testing.T) {
+				fixture := newBackupFixture(t, "persona_manager")
+				operator := fixture.operator()
+				if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+					t.Fatal(err)
+				}
+				fixture.mutate(t)
+				target, role := fixture.hub, "h"
+				if part == "manager" {
+					target, role = fixture.manager, "m"
+				}
+				stagePrefix, asidePrefix := "persona_staged_"+role+"_", "persona_previous_"+role+"_"
+				ours := func(name string) bool {
+					return name == target.Database || strings.HasPrefix(name, stagePrefix) || strings.HasPrefix(name, asidePrefix)
+				}
+				blind, putBack := false, false
+				backend := &scriptedBackend{fakeBackend: fixture.backend}
+				backend.decide = func(op, from, to string) int {
+					switch {
+					case op == "rename" && strings.HasPrefix(from, stagePrefix) && to == target.Database:
+						blind = true
+						return callFails
+					case op == "rename" && from == target.Database && strings.HasPrefix(to, stagePrefix):
+						return callFails
+					case op == "rename" && strings.HasPrefix(from, asidePrefix) && to == target.Database:
+						putBack = mode != "checks-keep-failing"
+						if mode == "commits-then-errors" || mode == "checks-keep-failing" {
+							return callCommitsThen
+						}
+					case op == "exists" && blind && !putBack && ours(from):
+						return callFails
+					}
+					return callWorks
+				}
+				_, err := (&Operator{backend: backend, now: time.Now, random: rand.Reader}).Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+				if err == nil || !strings.Contains(err.Error(), "scripted") {
+					t.Fatalf("restore error = %v", err)
+				}
+				assertDatabases(t, fixture, "hub-two", "manager-two")
+				if mode != "checks-keep-failing" {
+					if got := readNote(t, fixture); got != "changed knowledge" {
+						t.Errorf("files were kept although both live databases are the install's own: %q", got)
+					}
+					if strings.Contains(err.Error(), "may be") || strings.Contains(err.Error(), "left as restored") {
+						t.Errorf("the error claims a bundle database may be live: %v", err)
+					}
+					assertNoTemporaryDatabases(t, fixture.backend)
+					return
+				}
+				if got := readNote(t, fixture); got != "original knowledge" {
+					t.Errorf("files were rolled back although it cannot be told whether the bundle's %s database is live: %q", part, got)
+				}
+				previousFiles, _ := filepath.Glob(filepath.Join(fixture.home, ".persona-backup-previous-*"))
+				wanted := append([]string{"the " + map[string]string{"hub": "hub", "manager": "built-in manager"}[part] + " database " + target.Database + " may be the bundle's"}, previousFiles...)
+				for name := range fixture.backend.server(target) {
+					if strings.HasPrefix(name, stagePrefix) {
+						wanted = append(wanted, name)
+					}
+				}
+				if len(wanted) != 3 {
+					t.Fatalf("expected the previous files and the staged copy, have %v", wanted)
+				}
+				for _, want := range wanted {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("the error does not name %q: %v", want, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Fault scripts through the whole Restore, files included: the files are kept
+// exactly when a bundle database is live or it cannot be told, the error then
+// names the previous files and every possibly-live database, every original
+// and every staged copy left is named, and a second restore converges.
+func TestRestoreFaultScriptsKeepFilesOnlyWithTheBundle(t *testing.T) {
+	random := mathrand.New(mathrand.NewSource(5951))
+	runs, kept, unknowable := 0, 0, 0
+	// One bundle and install serve every run: each run ends with a converged
+	// restore, and the next starts from the install's own databases and files
+	// again, without the previous run's leftovers.
+	fixture := newBackupFixture(t, "persona_manager")
+	if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 120; run++ {
+		script := make([]int, 24)
+		density := 0.1 + 0.7*random.Float64()
+		for i := range script {
+			if random.Float64() < density {
+				script[i] = 1 + random.Intn(2)
+			} else if random.Intn(15) == 0 {
+				script[i] = callServerDown
+			}
+		}
+		label := fmt.Sprint(script)
+		for _, server := range fixture.backend.servers {
+			for name := range server {
+				delete(server, name)
+			}
+		}
+		leftovers, _ := filepath.Glob(filepath.Join(fixture.home, ".persona-backup-previous-*"))
+		for _, leftover := range leftovers {
+			if err := os.RemoveAll(leftover); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fixture.mutate(t)
+		// The script starts with the swap (its first call checks the hub's
+		// name); staging works.
+		backend := &scriptedBackend{fakeBackend: fixture.backend}
+		backend.decide = func(op, from, to string) int {
+			if backend.script == nil && op == "exists" && from == fixture.hub.Database {
+				backend.script, backend.decide = script, nil
+				return backend.outcome(op, from, to)
+			}
+			return callWorks
+		}
+		operator := &Operator{backend: backend, now: time.Now, random: rand.Reader}
+		_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+		runs++
+		hubLive := fixture.backend.server(fixture.hub)[fixture.hub.Database]
+		managerLive := fixture.backend.server(fixture.manager)[fixture.manager.Database]
+		live := (hubLive != nil && hubLive.dump == "hub-one") || (managerLive != nil && managerLive.dump == "manager-one")
+		filesKept := readNote(t, fixture) == "original knowledge"
+		if err == nil {
+			if !filesKept || hubLive == nil || hubLive.dump != "hub-one" || managerLive == nil || managerLive.dump != "manager-one" {
+				t.Fatalf("script %s: success with files kept %v and %+v, %+v", label, filesKept, hubLive, managerLive)
+			}
+			continue
+		}
+		message := err.Error()
+		if live && !filesKept {
+			t.Fatalf("script %s: a bundle database is live and the files were rolled back: %v", label, err)
+		}
+		if filesKept != strings.Contains(message, "left as restored") {
+			t.Fatalf("script %s: files kept %v, but the error says otherwise: %v", label, filesKept, err)
+		}
+		if filesKept {
+			kept++
+			previousFiles, _ := filepath.Glob(filepath.Join(fixture.home, ".persona-backup-previous-*"))
+			if len(previousFiles) != 1 || !strings.Contains(message, previousFiles[0]) {
+				t.Fatalf("script %s: the previous files %v are not named: %v", label, previousFiles, err)
+			}
+			if !live {
+				unknowable++
+				if !strings.Contains(message, " may be the bundle's") {
+					t.Fatalf("script %s: files kept, no bundle database live, and no possibly-live one named: %v", label, err)
+				}
+			}
+		}
+		for _, part := range []Target{fixture.hub, fixture.manager} {
+			for name, database := range fixture.backend.server(part) {
+				parked := strings.HasSuffix(database.dump, "-two") && name != fixture.hub.Database && name != fixture.manager.Database
+				if (parked || strings.HasPrefix(name, "persona_staged_")) && !strings.Contains(message, name) {
+					t.Fatalf("script %s: %s (%s) is left and not named: %v", label, name, database.dump, err)
+				}
+			}
+		}
+		if _, err := fixture.operator().Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
+			t.Fatalf("script %s: a second restore does not converge: %v", label, err)
+		}
+		assertDatabases(t, fixture, "hub-one", "manager-one")
+		for _, dump := range []string{"hub-two", "manager-two"} {
+			found := false
+			for _, server := range fixture.backend.servers {
+				for _, database := range server {
+					found = found || database.dump == dump
+				}
+			}
+			if !found {
+				t.Fatalf("script %s: the original %s is lost", label, dump)
+			}
+		}
+	}
+	if kept < 5 || unknowable == 0 {
+		t.Fatalf("scripts too tame: %d runs, %d kept the files, %d unknowable", runs, kept, unknowable)
+	}
+	t.Logf("%d restores, %d kept the files, %d of them while no bundle database was live (unknowable)", runs, kept, unknowable)
+}
+
+// A staged copy that cannot be dropped when the restore fails before the swap
+// is named, so it can be dropped by hand.
+func TestStagedCopyLeftBeforeTheSwapIsNamed(t *testing.T) {
+	fixture := newBackupFixture(t, "persona_manager")
+	operator := fixture.operator()
+	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mutate(t)
+	fixture.backend.restoreErr, fixture.backend.restorePart = errors.New("injected manager restore failure"), "manager"
+	backend := &scriptedBackend{fakeBackend: fixture.backend}
+	backend.decide = func(op, from, to string) int {
+		if op == "drop" && strings.HasPrefix(from, "persona_staged_h_") {
+			return callFails
+		}
+		return callWorks
+	}
+	_, err := (&Operator{backend: backend, now: time.Now, random: rand.Reader}).Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
+	if err == nil || !strings.Contains(err.Error(), "injected manager restore failure") {
+		t.Fatalf("restore error = %v", err)
+	}
+	left := 0
+	for name := range fixture.backend.server(fixture.hub) {
+		if strings.HasPrefix(name, "persona_staged_") {
+			left++
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("the staged copy %s is left and not named: %v", name, err)
+			}
+		}
+	}
+	if left != 1 {
+		t.Errorf("%d staged copies are left, want the hub's only", left)
+	}
+	assertDatabases(t, fixture, "hub-two", "manager-two")
+	if got := readNote(t, fixture); got != "changed knowledge" {
+		t.Errorf("files = %q", got)
 	}
 }

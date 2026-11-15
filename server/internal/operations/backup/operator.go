@@ -142,7 +142,7 @@ func (o *Operator) Verify(ctx context.Context, opts Options) (Result, error) {
 	return Result{Bundle: bundle, Verified: true}, nil
 }
 
-func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
+func (o *Operator) Restore(ctx context.Context, opts Options) (_ Result, err error) {
 	if !opts.WritesQuiesced {
 		return Result{}, errors.New("restore requires --writes-quiesced after stopping the hub and built-in manager")
 	}
@@ -189,16 +189,23 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 			return Result{}, err
 		}
 	}
+	// Staged databases are restore's to drop until the swap takes them over.
+	var staged []stagedCopy
+	defer func() {
+		for _, stage := range staged {
+			err = errors.Join(err, o.dropStage(stage.target, stage.name))
+		}
+	}()
 	hubStage, err := o.stageDatabase(ctx, hub, filepath.Join(staging, hubDumpPath), manifest.Hub, manifest.HubKeyFingerprint, nil, "h")
 	if err != nil {
 		return Result{}, err
 	}
-	defer o.discardStage(hub, hubStage)
+	staged = append(staged, stagedCopy{hub, hubStage})
 	managerStage, err := o.stageDatabase(ctx, manager, filepath.Join(staging, managerDumpPath), manifest.Manager, manifest.ManagerKeyFingerprint, managerKeys, "m")
 	if err != nil {
 		return Result{}, err
 	}
-	defer o.discardStage(manager, managerStage)
+	staged = append(staged, stagedCopy{manager, managerStage})
 	id, err := o.identifier()
 	if err != nil {
 		return Result{}, err
@@ -213,22 +220,23 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (Result, error) {
 			return Result{}, errors.Join(err, rollbackFiles())
 		}
 	}
-	previous, err := o.swapDatabases(ctx, hub, manager, hubStage, managerStage)
-	var undoFailed *undoFailedError
-	if errors.As(err, &undoFailed) && undoFailed.bundleMayBeLive {
-		// A bundle database may be live because it could not be renamed back
-		// (the server went away after its install rename). Putting the files
-		// back under it would make the install inconsistent: keep the restored
-		// files, and say where everything previous is. Nothing is lost;
-		// running restore again converges.
-		return Result{}, fmt.Errorf("%w; a database from the bundle may be live and could not be rolled back (%v), so the runtime files were left as restored to match it. "+
-			"Previous hub database: %s; previous built-in manager database: %s (a name is only a database that may still exist; (none) was put back or never made); previous runtime files: %s; previous external knowledge base: %s. "+
+	staged = nil // the swap installs them or disposes of them
+	outcome, err := o.swapDatabases(ctx, hub, manager, hubStage, managerStage)
+	if err != nil && outcome.bundleMayBeLive() {
+		// A database from the bundle may be live: the rollback could not move
+		// it back, or could not establish that it is not installed. Putting the
+		// files back under it would make the install inconsistent, so they stay
+		// as restored, and the error says where everything previous is. Nothing
+		// is lost; running restore again converges.
+		return Result{}, fmt.Errorf("%w; a database from the bundle may be live and could not be rolled back, so the runtime files were left as restored to match it; "+
+			"previous runtime files: %s; previous external knowledge base: %s. "+
 			"Check the server, then run restore again, or rename the previous databases back by hand",
-			undoFailed.cause, undoFailed.undo, nameOrNone(previous[0]), nameOrNone(previous[1]), nameOrNone(previousFiles), nameOrNone(previousKB))
+			err, nameOrNone(previousFiles), nameOrNone(previousKB))
 	}
 	if err != nil {
 		return Result{}, errors.Join(err, rollbackFiles())
 	}
+	previous := outcome.previous()
 	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: keptPassword, PreviousExternalKB: previousKB}, nil
 }
 
@@ -283,47 +291,46 @@ func resolveExisting(name string) string {
 	}
 }
 
-type stagedDatabase struct {
+type stagedCopy struct {
+	target Target
 	name   string
-	active bool
 }
 
-func (o *Operator) discardStage(target Target, staged *stagedDatabase) {
-	if staged == nil || !staged.active {
-		return
-	}
+// dropStage drops a staged copy of a bundle database that was never
+// installed; one that cannot be dropped is named, so it can be dropped by hand.
+func (o *Operator) dropStage(target Target, name string) error {
 	ctx, cancel := cleanupContext()
 	defer cancel()
-	_ = o.backend.Drop(ctx, target, staged.name)
+	if err := o.backend.Drop(ctx, target, name); err != nil {
+		return fmt.Errorf("the staged copy %s of the bundle's %s database may remain, not in use and safe to drop: %w", name, target.Part, err)
+	}
+	return nil
 }
 
-func (o *Operator) stageDatabase(ctx context.Context, target Target, dump string, expected DatabaseIdentity, keyFingerprint string, keys [][]byte, role string) (*stagedDatabase, error) {
+func (o *Operator) stageDatabase(ctx context.Context, target Target, dump string, expected DatabaseIdentity, keyFingerprint string, keys [][]byte, role string) (_ string, err error) {
 	name, err := o.uniqueName(ctx, target, "persona_staged_"+role+"_")
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	staged := &stagedDatabase{name: name, active: true}
 	if err := o.backend.Create(ctx, target, name); err != nil {
-		return nil, err
+		return "", err
 	}
-	keep := false
 	defer func() {
-		if !keep {
-			o.discardStage(target, staged)
+		if err != nil {
+			err = errors.Join(err, o.dropStage(target, name))
 		}
 	}()
 	if err := o.backend.Restore(ctx, target, name, dump); err != nil {
-		return nil, err
+		return "", err
 	}
 	actual, err := o.backend.Identity(ctx, target, target.Part, name)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if err := compareIdentity(expected, actual, target.Part, keyFingerprint, keys); err != nil {
-		return nil, err
+		return "", err
 	}
-	keep = true
-	return staged, nil
+	return name, nil
 }
 
 func verifyPayloadKeyFiles(staging string, manifest *Manifest) error {
@@ -459,171 +466,6 @@ func (o *Operator) checkClients(hub, manager Target, programs ...string) error {
 		}
 	}
 	return nil
-}
-
-func (o *Operator) swapDatabases(ctx context.Context, hub, manager Target, hubStage, managerStage *stagedDatabase) ([2]string, error) {
-	var previous [2]string // the previous databases still parked under their temporary names
-	type swapRecord struct {
-		target        Target
-		staged        *stagedDatabase
-		previous      string
-		previousMoved bool
-		installed     bool
-		index         int
-	}
-	var records []*swapRecord
-	// notInstalled: the staged database still exists and the target does not,
-	// both established, so an install rename taken for committed did not happen.
-	notInstalled := func(ctx context.Context, record *swapRecord) bool {
-		stagedExists, err := o.backend.Exists(ctx, record.target, record.staged.name)
-		if err != nil || !stagedExists {
-			return false
-		}
-		targetExists, err := o.backend.Exists(ctx, record.target, record.target.Database)
-		return err == nil && !targetExists
-	}
-	rollback := func() error {
-		ctx, cancel := cleanupContext()
-		defer cancel()
-		var errs []error
-		for i := len(records) - 1; i >= 0; i-- {
-			record := records[i]
-			if record.installed {
-				if err := o.backend.Rename(ctx, record.target, record.target.Database, record.staged.name); err != nil {
-					// The install is only assumed when its result was unknown: if the
-					// staged database is plainly still there and the target is not,
-					// it never happened.
-					if notInstalled(ctx, record) {
-						record.installed = false
-						record.staged.active = true
-					} else {
-						errs = append(errs, fmt.Errorf("undo the install of staged database %s: %w", record.staged.name, err))
-					}
-				} else {
-					record.installed = false
-					record.staged.active = true
-				}
-			}
-			if record.previousMoved {
-				if err := o.backend.Rename(ctx, record.target, record.previous, record.target.Database); err != nil {
-					// Nothing to put back when the previous database is plainly not
-					// there and the target is: its rename never happened.
-					if o.plainlyAbsentBeside(ctx, record.target, record.previous, record.target.Database) {
-						previous[record.index] = ""
-					} else {
-						errs = append(errs, fmt.Errorf("rename the previous database %s back (it may not exist if its rename never took effect): %w", record.previous, err))
-					}
-				} else {
-					previous[record.index] = ""
-					// The target name was free, so no bundle database can be
-					// installed under it, whatever an unresolved check said. What
-					// is left of the stage is discarded.
-					if record.installed {
-						record.installed = false
-						if exists, err := o.backend.Exists(ctx, record.target, record.staged.name); err == nil && exists {
-							record.staged.active = true
-						}
-					}
-				}
-			}
-		}
-		return errors.Join(errs...)
-	}
-	fail := func(err error) error {
-		if undo := rollback(); undo != nil {
-			live := false
-			for _, record := range records {
-				live = live || record.installed
-			}
-			return &undoFailedError{cause: err, undo: undo, bundleMayBeLive: live}
-		}
-		return err
-	}
-	for index, item := range []struct {
-		target Target
-		staged *stagedDatabase
-		role   string
-	}{{hub, hubStage, "h"}, {manager, managerStage, "m"}} {
-		if err := ctx.Err(); err != nil {
-			return previous, fail(err)
-		}
-		exists, err := o.backend.Exists(ctx, item.target, item.target.Database)
-		if err != nil {
-			return previous, fail(err)
-		}
-		record := &swapRecord{target: item.target, staged: item.staged, index: index}
-		records = append(records, record)
-		if exists {
-			record.previous, err = o.uniqueName(ctx, item.target, "persona_previous_"+item.role+"_")
-			if err != nil {
-				return previous, fail(err)
-			}
-			err := o.backend.Rename(ctx, item.target, item.target.Database, record.previous)
-			if err != nil {
-				// An error does not prove the rename did not commit.
-				record.previousMoved = o.renameMayHaveCommitted(item.target, item.target.Database, record.previous)
-				if record.previousMoved {
-					previous[index] = record.previous
-				}
-				return previous, fail(err)
-			}
-			record.previousMoved = true
-			previous[index] = record.previous
-		}
-		if err := o.backend.Rename(ctx, item.target, item.staged.name, item.target.Database); err != nil {
-			if o.renameMayHaveCommitted(item.target, item.staged.name, item.target.Database) {
-				// The staged database may now be the installed one: never drop
-				// it as a stage; rollback renames it back first.
-				item.staged.active = false
-				record.installed = true
-			}
-			return previous, fail(err)
-		}
-		item.staged.active = false
-		record.installed = true
-	}
-	return previous, nil
-}
-
-// undoFailedError: a swap failed, and putting the databases back failed too.
-type undoFailedError struct {
-	cause, undo error
-	// bundleMayBeLive: an install rename may have taken effect and could not be
-	// undone, so a database from the bundle may be the live one.
-	bundleMayBeLive bool
-}
-
-func (e *undoFailedError) Error() string   { return e.cause.Error() + "; rollback: " + e.undo.Error() }
-func (e *undoFailedError) Unwrap() []error { return []error{e.cause, e.undo} }
-
-// plainlyAbsentBeside: name does not exist and other does, both established.
-func (o *Operator) plainlyAbsentBeside(ctx context.Context, target Target, name, other string) bool {
-	nameExists, err := o.backend.Exists(ctx, target, name)
-	if err != nil || nameExists {
-		return false
-	}
-	otherExists, err := o.backend.Exists(ctx, target, other)
-	return err == nil && otherExists
-}
-
-// renameMayHaveCommitted reconciles a failed rename against the server: it is
-// treated as not committed only when the source still exists and the
-// destination does not. When that cannot be established (the check fails, or
-// both or neither name exist) it is treated as committed, so rollback tries to
-// undo it; an undo of a rename that never happened fails harmlessly and is
-// reported, whereas dropping or abandoning an installed database is not.
-func (o *Operator) renameMayHaveCommitted(target Target, from, to string) bool {
-	ctx, cancel := cleanupContext()
-	defer cancel()
-	fromExists, err := o.backend.Exists(ctx, target, from)
-	if err != nil {
-		return true
-	}
-	toExists, err := o.backend.Exists(ctx, target, to)
-	if err != nil {
-		return true
-	}
-	return !(fromExists && !toExists)
 }
 
 func (o *Operator) uniqueName(ctx context.Context, target Target, prefix string) (string, error) {
