@@ -734,12 +734,28 @@ inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose 
 the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
 `JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
 
-## A held list page must read its controls from the live page, not from what it draws
+## A held list page: read its controls from the live page, let what needs the user through, and hold again
 
-The Agents list holds the page it drew while it scrolls (`AgentsFeedHold.kt`). Everything the screen derives from that
-held page also reads old controls: the scope that decides whether the hold still applies, and what the pill compares, must
-come from the page the hub last sent. Taken from the drawn one, a tapped fold or a changed grouping would never release the
-hold, since the held page still shows the old setting. The screen therefore keeps `latestPage` for scope, requests and the
-pill and uses the held page only as `page` for drawing. A paged list also needs its own exit: a fetched page appends rows
-that were never live, so it lands at once (`growsPage`) or it leaves a gap under the finger. Write the hold's release
-conditions as a pure function (`holdsAgainst`) so each can be tested without a list.
+The Agents list holds the page it drew while it scrolls (`AgentsFeedHold.kt`). Four things went wrong in the first version, and
+each is a rule for the next one:
+
+- Everything the screen derives to decide whether the hold still applies, and what the pill compares, must come from the page
+  the hub last sent. Taken from the drawn page, a tapped fold or a changed grouping would never release the hold, since the held
+  page still shows the old setting.
+- What needs the user (and what is offline) must not wait with the rest. Holding the whole page left a row saying Working
+  after it needed the user, and a pill is no substitute for a row that says so. `landCritical` gives those rows their state and
+  leaves the order and the rest of the page held; it is a copy of a few fields, not a second projection.
+- A release is not the end of the scroll. A release by the cap, a changed control or a fetched page, with the list still moving,
+  must hold again from the page that landed, or every later push lands under the finger until the next gesture. The
+  `isScrollInProgress` flow only reports a change, so the code that releases has to re-hold itself. The same goes for a scroll
+  the screen starts itself (the jump to the latest): it is not the user reading and holds nothing, and a user who takes the list
+  over mid-way gets a hold from that moment.
+- Which page is held must not be Compose state read where the page is drawn. A state read there composes the whole screen at the
+  start and end of every scroll, the moment the finger is most sensitive; keep it a plain field and bump one counter only when a
+  landing changes what is drawn.
+
+A paged list also needs its own exit: a fetched page appends rows that were never live, so it lands at once, but only when the old
+window is the start of the new one in the same order (`growsPage`); a session a push put in front is a live insertion. Write the
+release conditions as pure functions (`holdsAgainst`, `landCritical`) so each can be tested without a list. A restoration test must
+change the hub's data when the old screen is taken down (`DisposableEffect.onDispose`), not while it is alive, or the old screen
+saves the new place and the test passes on the wrong thing.
