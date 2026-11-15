@@ -312,6 +312,37 @@ func TestTailSettleDoesNotInheritHiddenResume(t *testing.T) {
 	}
 }
 
+func TestTailSkippedTurnStartKeepsVisibleState(t *testing.T) {
+	const failure = "API Error: 529 Overloaded"
+	for _, kind := range []string{"wake", "image"} {
+		t.Run(kind, func(t *testing.T) {
+			var m Meta
+			var tail Tail
+			for i, line := range []string{prompt("u1", "A"), apiErrorLine(t, "e1", failure, map[string]any{"error": "server_error"}), turnEndLine} {
+				tail.Line(&m, ParseLine(i, []byte(line), &m))
+			}
+			if kind == "wake" {
+				tail.Skipped([]byte(`{"type":"user","uuid":"bigw","timestamp":"2026-01-01T12:00:00Z","message":{"role":"user","content":"<task-notification><task-id>w</task-id><status>completed</status><summary>` + strings.Repeat("x", 9<<10) + `</summary></task-notification>"}}`))
+			} else {
+				tail.Skipped([]byte(`{"type":"user","uuid":"img","parentUuid":"p","timestamp":"2026-01-01T12:00:00Z","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + strings.Repeat("A", 20<<10) + `"}}]}}`))
+			}
+			tail.Rewound([]string{"ub", "r", "d"})
+			for i, line := range []string{prompt("ub", "B"), replyLine, turnEndLine} {
+				tail.Line(&m, ParseLine(i+3, []byte(line), &m))
+			}
+			if !tail.Settle(&m) {
+				t.Fatalf("%s skipped turn start did not settle", kind)
+			}
+			if !m.TurnOpen || m.TurnClosed || m.TurnError != "" {
+				t.Fatalf("%s: open=%v closed=%v error=%q; want a new visible turn with no inherited failure", kind, m.TurnOpen, m.TurnClosed, m.TurnError)
+			}
+			if got, want := m.LastTurnWake, kind == "wake"; got != want {
+				t.Fatalf("%s: LastTurnWake=%v, want %v", kind, got, want)
+			}
+		})
+	}
+}
+
 // Whether Claude Code still goes on by itself once the limit resets: its notices say it and take it back, a wake
 // leaves it, a message cancels it, a reply or another kind of failure ends it.
 func TestClaudeLimitResumes(t *testing.T) {
