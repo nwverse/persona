@@ -110,6 +110,14 @@ final class ShellPlacesUITests: XCTestCase {
         assertPlaceRoot(machines, "Machines after Back")
         shot("2-machines-root-after-back")
 
+        // Re-enter from the root: only Back on the child again, then settle on the root before opening its drawer.
+        see(card, "MacBook after Back").tap()
+        XCTAssertTrue(detail.waitForExistence(timeout: 5), "the machine did not reopen from its root")
+        assertSubPage(detail, "Machine reopened from root")
+        detail.buttons["BackButton"].firstMatch.tap()
+        XCTAssertTrue(detail.waitForNonExistence(timeout: 5), "the second Back did not settle on Machines")
+        assertPlaceRoot(machines, "Machines after reopening and Back")
+
         // Back to the conversation is a drawer choice, not a second button beside ☰.
         openDrawer("shell-place-sidebar")
         pick("sidebar-main")
