@@ -600,6 +600,15 @@ test("a refusal that comes after the start was answered keeps the session id the
   assert.equal(rows().filter((r) => !known.has(r.session_id) && r.session_id !== placeholder).length, 0, 'no second session id')
 })
 
+test("the row of an agent Paseo is still creating names its provider as its listed row will (#8142)", async (t) => {
+  const { fake, node } = await setup(t)
+  fake.handlers['agent.create.request'] = () => null // Paseo still starting the provider: past the bridge's wait (callWait)
+  const grok = (await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' })).session
+  assert.deepEqual([grok.agent, grok.agent_label, grok.launcher], ['paseo', 'Grok', 'grok'], "a provider the apps don't know: its label, not the engine's name")
+  const claude = (await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })).session
+  assert.deepEqual([claude.agent, claude.agent_label, claude.launcher], ['claude', undefined, 'my-claude'], 'Claude Code: the apps name it themselves')
+})
+
 test('a new session without a usable MCP config is created as before, and the log says why', async (t) => {
   const dir = mkdtempSync('/tmp/ppaseo-mcp-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))

@@ -18,6 +18,9 @@ PORT = int(os.environ.get("PORT", "18760"))
 # MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
 if os.environ.get("MOCK_CHILD_SESSIONS"):
     os.environ.setdefault("MOCK_PASEO", "1")
+# MOCK_PASEO_PROVIDERS=1 (#8142) builds on it too: two of its providers the apps have no id for (Grok, Cursor).
+if os.environ.get("MOCK_PASEO_PROVIDERS"):
+    os.environ.setdefault("MOCK_PASEO", "1")
 # MOCK_TEAM=1 (#5180) builds on MOCK_TAB_PANES's tab of three: it adds a worker's request, a third worker and a stopped pane.
 MOCK_TEAM = bool(os.environ.get("MOCK_TEAM"))
 if MOCK_TEAM:
@@ -1247,6 +1250,24 @@ if os.environ.get("MOCK_PASEO"):
                started_at=ago(minutes=2), model="gpt-5.4-mini"),
         _paseo("9a5e0000-0000-4000-8000-000000000006", "Profile the CSV parser", "Speed up the importer", "calm-owl", "perf/importer",
                "done", "unread", 12, "The parser is three times faster on the sample files."),
+    ]
+# MOCK_PASEO_PROVIDERS=1 (#8142, on the Paseo computer): two of Paseo's providers the apps have no id for, as its bridge
+# lists them: under Paseo's own id (agent "paseo"), each with its provider as launcher and the provider's label
+# (agent_label). Grok waits for an approval (its card names Grok); Cursor, whose mark the web has, is idle. The model
+# capability is the node's for a runtime that switches models (Paseo); their launchers are on the server's list
+# (machine_launchers).
+PASEO_GROK, PASEO_CURSOR = "paseo-9a5e0000-0000-4000-8000-000000000010", "paseo-9a5e0000-0000-4000-8000-000000000011"
+PASEO_PROVIDERS = bool(os.environ.get("MOCK_PASEO_PROVIDERS"))
+if PASEO_PROVIDERS:
+    _provider_caps = {"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False,
+                      "close": True, "rename": True, "model": True}
+    SESSIONS += [
+        _paseo(PASEO_GROK, "Check the release notes", "Triage", None, "main", "blocked", "needs_you", 1,
+               "May I run the release script?", agent="paseo", agent_label="Grok", launcher="grok", model="grok-4",
+               pending_interactions=1, capabilities=_provider_caps),
+        _paseo(PASEO_CURSOR, "Tidy the settings page", "Triage", None, "main", "idle", "idle", 20,
+               "Moved the toggles into one group.", agent="paseo", agent_label="Cursor", launcher="cursor", model="auto",
+               capabilities=_provider_caps),
     ]
 # MOCK_CHILD_SESSIONS=1 (#5120): the Paseo agent that created two agents created two more, both finished (one of them
 # failed), and an agent whose creator is not listed stays a row of its own. With the hub's folding (fold_hierarchy) the
@@ -9834,6 +9855,13 @@ if os.environ.get("MOCK_PASEO"):
          "cwd": "/home/me/.paseo/worktrees/1a2b3c4d/brave-fox", "kind": "permission", "agent": "claude",
          "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
          "summary": "npm run migrate -- --env test", "tool_input": {"command": "npm run migrate -- --env test"}})
+# MOCK_PASEO_PROVIDERS=1: Grok's card, named by the row's label as the node names it (#8142).
+if PASEO_PROVIDERS:
+    INTERACTIONS.append(
+        {"id": "paseo_grok_release", "machine_id": "server", "session_id": PASEO_GROK, "session_title": "Check the release notes",
+         "cwd": PASEO_ROOT, "kind": "permission", "agent": "paseo", "agent_label": "Grok",
+         "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "Bash",
+         "summary": "./scripts/release.sh --dry-run", "tool_input": {"command": "./scripts/release.sh --dry-run"}})
 
 # Keep the exported demo fixtures unchanged; only the HTTP mock serves the expanded request inbox.
 # A conversation permission and remembered grants for scope/revocation UI checks (#5867).
@@ -13907,6 +13935,13 @@ LAUNCHER_MODELS["sonnetcc"] = dict(LAUNCHER_MODELS["claude"], locked="启动器�
 # (server/internal/node/launcher_models.go), as for the Claude desktop app's.
 LAUNCHER_MODELS["codex-app"] = {"agent": "codex", "models": [], "locked": "Codex App 用它自己选的模型运行这个对话。"}
 LAUNCHER_MODELS["claude-desktop"] = {"agent": "claude", "models": [], "locked": "Claude 桌面版用它自己选的模型运行这个会话。"}
+# MOCK_PASEO_PROVIDERS=1 (#8142): Paseo's Grok and Cursor providers, as the node lists a runtime's launcher models (agent
+# "paseo": the runtime's own id, for an agent the apps have no id for).
+if PASEO_PROVIDERS:
+    LAUNCHER_MODELS["grok"] = {"agent": "paseo", "models": [{"id": "grok-4", "name": "Grok 4", "default": True},
+                                                            {"id": "grok-4-fast", "name": "Grok 4 Fast"}]}
+    LAUNCHER_MODELS["cursor"] = {"agent": "paseo", "models": [{"id": "auto", "name": "Auto", "default": True},
+                                                              {"id": "grok-4", "name": "Grok 4"}]}
 # MOCK_NEW_AGENT_PANEL=1 (#5104, web/e2e/new-agent-model.mjs): the gateway behind claude's glm-5.3 also serves Codex, so
 # codex lists the same model ID and New Agent's flyout offers that model under both engines; and the Mac Studio has no
 # codex launcher, so a Codex pick made on another computer falls back to the default there.
@@ -14192,6 +14227,9 @@ def machine_launchers(mid=""):
         out.append({"name": "claude-desktop", "model": "", "source": "claude_desktop", "agent": "claude", "agent_type": "claude"})
         # Its Codex App runs: its launcher starts a chat there (#5726, docs/integrations/codex.md).
         out.append({"name": "codex-app", "model": "", "source": "codex_app", "agent": "codex", "agent_type": "codex"})
+    if PASEO_PROVIDERS and mid == "server":
+        # Paseo's providers the apps have no id for (#8142): the runtime's own id as their agent, the runtime as source
+        out += [{"name": n, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo"} for n, m in (("grok", "Grok 4"), ("cursor", "Auto"))]
     if machine_alerts.ON:
         return machine_alerts.with_health(mid, out)
     return launcher_health_list(out)
