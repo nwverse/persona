@@ -1426,7 +1426,9 @@ nonisolated struct APIClient: Sendable {
         /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
         var backgroundFolded: Bool { mainBackgroundFolded ?? true }
     }
-    func assistant() async throws -> AssistantState { owned(try await get("/api/v1/assistant")) }
+    /// Decoded off the main actor: it holds every conversation, and the app reads it again each time it comes back to
+    /// the front (#8324).
+    func assistant() async throws -> AssistantState { owned(try await getDecodedOffMain("/api/v1/assistant")) }
     /// A direction as `GET /api/v1/assistant/leaders` lists it (#3519, #3695): its leader conversation's id and the name
     /// the hub gives the direction (the name set, else its project's, else the title without its "MMDD | kind | " prefix).
     struct LeaderInfo: Codable, Sendable, Equatable {

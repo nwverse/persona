@@ -53,18 +53,32 @@ final class RecentTaskChatsUITests: XCTestCase {
         XCTFail("the hub's recent_task_chats is not \(on)")
     }
 
-    /// The drawer's button on the phone; the iPad's column is there already. Returns the All Chats row.
-    @MainActor private func openSidebar(timeout: TimeInterval = 20) -> XCUIElement {
+    /// Opens the drawer on the phone (the iPad's column is there already) and waits for the newest chat in Recent.
+    @MainActor private func showSidebar(timeout: TimeInterval = 20) {
         let menu = app.buttons["assistant-sidebar-button"].firstMatch
-        let all = app.buttons["sidebar-all-chats"].firstMatch
+        let newest = conversation("1105 | 收件箱 | 回复韩梅梅")
         let end = Date().addingTimeInterval(timeout)
-        while Date() < end && !menu.exists && !all.exists { usleep(250_000) }
-        if all.exists && all.isHittable { return all }
-        XCTAssertTrue(menu.exists, "no sidebar button:\n\(app.debugDescription)")
-        sleep(1)
-        menu.tapCenter()
-        XCTAssertTrue(all.waitForExistence(timeout: 10), "no 全部对话 row:\n\(app.debugDescription)")
+        while Date() < end && !menu.exists && !newest.exists { usleep(250_000) }
+        if !(newest.exists && newest.isHittable) {
+            XCTAssertTrue(menu.exists, "no sidebar button:\n\(app.debugDescription)")
+            sleep(1)
+            menu.tapCenter()
+        }
+        XCTAssertTrue(newest.waitForExistence(timeout: 10), "the newest chat is not in 最近:\n\(app.debugDescription)")
+    }
+
+    /// The All Chats row, scrolled to where it is at large text sizes.
+    @MainActor private func allChatsRow() -> XCUIElement {
+        let all = app.buttons["sidebar-all-chats"].firstMatch
+        for _ in 0..<8 where !(all.exists && all.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(all.exists, "no 全部对话 row:\n\(app.debugDescription)")
         return all
+    }
+
+    /// The sidebar back at its top, where Recent is.
+    @MainActor private func sidebarTop() {
+        let fold = app.buttons["sidebar-recent-fold"].firstMatch
+        for _ in 0..<8 where !(fold.exists && fold.isHittable) { app.swipeDown(velocity: .slow) }
     }
 
     @MainActor private func conversation(_ prefix: String) -> XCUIElement {
@@ -92,12 +106,11 @@ final class RecentTaskChatsUITests: XCTestCase {
         let hubHasIt = try assistant()["recent_task_chats"] != nil
         if hubHasIt { try assistant(["recent_task_chats": false]) } // every run starts from the default
         launch()
-        let all = openSidebar()
-        XCTAssertTrue(conversation("1105 | 收件箱 | 回复韩梅梅").waitForExistence(timeout: 10), "the newest chat is not in 最近:\n\(app.debugDescription)")
+        showSidebar()
         let task = conversation("1105 | 定时 | 晨间简报")
         XCTAssertFalse(task.exists, "the scheduled task's chat is in 最近 while the switch is off (#6228)")
         shot("sidebar-off")
-        all.tap()
+        allChatsRow().tap()
         XCTAssertTrue(app.buttons["auto-filter-all"].firstMatch.waitForExistence(timeout: 10), "All Chats did not open")
         let options = app.buttons["auto-display-options"].firstMatch
         let profileSwitch = app.switches["assistant-recent-task-chats"].firstMatch
@@ -107,9 +120,11 @@ final class RecentTaskChatsUITests: XCTestCase {
             shot("all-chats-older-hub")
             app.terminate()
             launch(["-openAssistantPage", "profile"])
-            let fold = app.switches["assistant-main-background-folded"].firstMatch
-            scroll(to: fold)
-            XCTAssertTrue(fold.exists, "the profile did not open:\n\(app.debugDescription)")
+            // where the switch would be: under Task Notifications, over Suggest the Next Message
+            let quiet = app.switches["assistant-main-tasks-quiet"].firstMatch
+            scroll(to: quiet)
+            XCTAssertTrue(quiet.exists, "the profile did not open:\n\(app.debugDescription)")
+            app.swipeUp(velocity: .slow)
             XCTAssertFalse(profileSwitch.exists, "Assistant Profile has the switch with a hub that has no such setting")
             shot("profile-older-hub")
             return
@@ -124,7 +139,10 @@ final class RecentTaskChatsUITests: XCTestCase {
         XCTAssertTrue(item.waitForNonExistence(timeout: 5), "the menu stayed open")
         try hubHolds(true)
         app.navigationBars.buttons["完成"].firstMatch.tap()
-        _ = openSidebar(timeout: 10)
+        showSidebar(timeout: 10)
+        sidebarTop()
+        // at the largest text sizes the fifth row is further down the drawer
+        for _ in 0..<6 where !(task.exists && task.isHittable) { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(task.waitForExistence(timeout: 10), "最近 did not list the scheduled task's chat once it was on:\n\(app.debugDescription)")
         XCTAssertEqual(app.buttons.matching(identifier: "sidebar-conversation").count, 5, "最近 lists five")
         shot("sidebar-on")
