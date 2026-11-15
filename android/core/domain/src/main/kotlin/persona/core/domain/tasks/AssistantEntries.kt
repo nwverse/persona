@@ -72,6 +72,20 @@ fun Todo.awaitsDecision(): Boolean {
     return !isDone && (supervision?.state == "pending_review" || supervision?.state == "needs_user")
 }
 
+/** The review a decision belongs to (web `decisionRound`): the latest review's time, else the hub's, else the ask's. */
+internal fun Todo.decisionRound(): Instant? =
+    listOf(supervision?.reviews?.lastOrNull()?.at, decisionReview?.reviewAt, ask?.askedAt)
+        .firstOrNull { !it.isNullOrBlank() }?.let(::parseTime)
+
+/** The owner chose Don't handle for this decision's current review (#4874): the main chat no longer waits on them for it.
+ *  A new review is a new round and shows it again. */
+fun Todo.decisionDismissed(): Boolean {
+    val review = decisionReview ?: return false
+    if (review.dismissalId.isNullOrBlank()) return false
+    val at = parseTime(review.reviewAt) ?: return false
+    return at == decisionRound()
+}
+
 /** The web's `todoRank` (what the user must act on first), on the triage status. */
 private fun Todo.entryRank(status: TriageStatus): Int {
     if ((supervision?.state == "pending_review" || openAsk != null) &&
@@ -134,7 +148,11 @@ fun assistantEntries(
             else !todo.isDone && (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted)
         when {
             asks.isNotEmpty() -> asking += NeedsYouEntry.Task(todo, status, asks)
-            waits || todo.awaitsDecision() -> deciding += NeedsYouEntry.Task(todo, status, asks) to todo.entryRank(status)
+            waits || todo.awaitsDecision() -> {
+                // Only the review decision is hidden once dismissed (web `assistantEntries`, #8262): an Agent that asks still shows.
+                val dismissed = status != TriageStatus.NeedsYou && todo.awaitsDecision() && todo.decisionDismissed()
+                if (!dismissed) deciding += NeedsYouEntry.Task(todo, status, asks) to todo.entryRank(status)
+            }
             bucket == TodoBucket.Open -> {
                 val activity = todo.backgroundWork(lookup)
                 val waiting = activity == null && todo.activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() || it.waitsInBackground }
