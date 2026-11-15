@@ -197,10 +197,12 @@ Chat page:
   (polling fallback only: list 90 seconds, chat 60); while a Feishu list is in front, changed Inbox chats fetch the newest page into `lark-chat-<id>` cache, and with none in front they are only noted, the newest 20 fetched when one comes back (#4693; a chat opened before that shows its cached page until its own fetch lands); on hub connection catch up latest 20;
   unread chats open from cache if it reaches the first unread message.
 - Settings › Storage (`StorageView`): space used on this phone, size and share bars by category (Agent chats, chat images, Lark images/files, lists/Lark chats, websites,
-  network cache, other, App data); swipe left / long-press clears a category, or Clear all caches (settings and pairing retained; websites clear cache, not login).
+  network cache, other, App data); tapping a category asks to clear it, saying how much it frees and what comes back (#8355; a left swipe and the long press are shortcuts), or Clear all caches (settings and pairing retained; websites clear cache, not login).
   Memory copies clear too; background sync refetches. DEBUG `-tab settings -openStorage YES`.
+  Without the user: the first time the app goes to the background in a process, `CacheBudget` trims `chat-images` and `lark-media`
+  oldest first from over 200 MB to 150 MB and clears WebKit's disk cache over 200 MB (links `WebViewPool` preloads; logins stay), #8341.
 - Lazy images: history pages and pushes omit image bytes (`lazy_images`, reducing pages from MB to hundreds of KB), dimensions only; visible rows fetch through
-  `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid forever),
+  `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid until `CacheBudget` trims them),
   reserving dimensions before arrival to avoid jumps. Thumbnails and full viewer share it; locally sent images retain inline base64.
   A failed load (hub unreachable, download failed) does not spin forever (#182): tool-result and file-page images (`Base64Image`) say
   "Image didn't load. Tap to retry" on the placeholder, and the viewer's page says so with Retry, keeping its bars (and Close) and the
