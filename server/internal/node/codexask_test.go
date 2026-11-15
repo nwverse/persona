@@ -577,3 +577,29 @@ func TestCodexAnsweredApprovalAskedAgainIsListedAtOnce(t *testing.T) {
 		t.Fatalf("listed during its hold without the dialog having gone: %q", n.cx.sent)
 	}
 }
+
+func TestCodexAnswerAsyncWithWorkingFooter(t *testing.T) {
+	for _, hint := range []string{"  tab to queue message", "                              ⚠ 2 warnings · f2 to view"} {
+		t.Run(hint, func(t *testing.T) {
+			for _, draft := range []string{"", "keep my draft"} {
+				n, f, path := codexNode(t, proto.StatusWorking, cxAsyncCall, cxAsyncOut)
+				f.setScreen(cxPane, "• Working (5s • esc to interrupt)\n› "+draft+
+					"\n  GPT-6.1-Sol xhigh · ~/project · Review project\n"+hint+"\n")
+				sent := codexTUI(t, f, path)
+				card := onlyCard(t, n)
+				err := n.codexAnswer(context.Background(), cxID, card.ix.ID,
+					proto.Resolution{Answers: map[string]string{"Which color should the banner be?": "Green"}})
+				if draft != "" {
+					if refusalCode(err) != screen.InputDraft || len(f.trace("pane.send_text", "pane.send_keys")) != 0 {
+						t.Fatalf("genuine draft changed: err=%v calls=%v", err, f.trace("pane.send_text", "pane.send_keys"))
+					}
+					continue
+				}
+				want := transcript.CodexReplyMessage([]transcript.CodexReply{{QuestionItemID: transcript.QuestionItemID("call_a1", 0), Question: "Which color should the banner be?", Answer: "Green"}})
+				if err != nil || len(*sent) != 1 || (*sent)[0] != want {
+					t.Fatalf("answer with empty composer: err=%v sent=%q", err, *sent)
+				}
+			}
+		})
+	}
+}

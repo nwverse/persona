@@ -104,28 +104,36 @@ func (h *orcaHost) Read(ctx context.Context, pane host.PaneRef, o host.ReadOpts)
 	if o.ANSI {
 		return "", fmt.Errorf("%w: Orca reads screens as plain text only", host.ErrUnsupported)
 	}
-	t, err := h.terminal(ctx, pane.ID, false)
+	s, err := h.readScreen(ctx, pane)
 	if err != nil {
-		return "", orcaErr(err)
+		return "", err
 	}
-	var text string
-	err = h.onTerminal(ctx, t, false, func(tg orcart.Target) error {
-		s, err := h.c.Read(ctx, tg)
-		if err != nil {
-			return err
-		}
-		text = s.Text()
-		return nil
-	})
-	if err != nil {
-		return "", orcaErr(err)
-	}
+	text := s.Text()
 	if o.Lines > 0 {
 		if rows := strings.Split(strings.TrimRight(text, "\n"), "\n"); len(rows) > o.Lines {
 			text = strings.Join(rows[len(rows)-o.Lines:], "\n") + "\n"
 		}
 	}
 	return text, nil
+}
+
+// readScreen retains the separate composer draft as well as the public screen
+// rows. Driving a Codex composer needs both from the same terminal read.
+func (h *orcaHost) readScreen(ctx context.Context, pane host.PaneRef) (*orcart.Screen, error) {
+	t, err := h.terminal(ctx, pane.ID, false)
+	if err != nil {
+		return nil, orcaErr(err)
+	}
+	var result *orcart.Screen
+	err = h.onTerminal(ctx, t, false, func(tg orcart.Target) error {
+		var err error
+		result, err = h.c.Read(ctx, tg)
+		return err
+	})
+	if err != nil {
+		return nil, orcaErr(err)
+	}
+	return result, nil
 }
 
 // SendText types text as is (terminal.send without enter writes the bytes), once the agent is in front.

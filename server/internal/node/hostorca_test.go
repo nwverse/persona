@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screen"
 	"github.com/nwverse/persona/server/internal/terncli"
 )
 
@@ -403,6 +404,99 @@ func TestOrcaScreenIsPlain(t *testing.T) {
 		!strings.HasPrefix(err.Error(), "unsupported") {
 		t.Errorf("terminal.watch = %v", err)
 	}
+}
+
+// Newer Orca versions remove composer text from the screen rows and report it
+// separately. A marker-only screen must not hide the user's unfinished input.
+func TestOrcaCodexReportedDraft(t *testing.T) {
+	n, _, o, _, _ := orcaNode(t)
+	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", "codex"))
+	o.Handle("terminal.read", func(map[string]any) any {
+		return map[string]any{"terminal": map[string]any{
+			"source": "screen", "tail": []string{"›", "  GPT-6.1-Sol xhigh · ~/project", "  tab to queue message"},
+			"draft": "keep my unfinished message\nand this line",
+		}}
+	})
+	s, err := n.codexScreen(context.Background(), "orca:tab1:leaf1")
+	if err != nil || s.Draft != "keep my unfinished message\nand this line" {
+		t.Fatalf("reported draft lost: screen=%+v err=%v", s, err)
+	}
+	if err := n.codexReady(context.Background(), "orca:tab1:leaf1", true); refusalCode(err) != screen.InputDraft {
+		t.Fatalf("reported draft was not protected: %v", err)
+	}
+	if calls := o.Trace("terminal.send"); len(calls) != 0 {
+		t.Fatalf("typed into a reported draft: %v", calls)
+	}
+	for _, tc := range []struct {
+		name, text, want string
+		draft            *string
+	}{
+		{"older host", "› keep this draft\n  tab to queue message\n", "keep this draft\ntab to queue message", nil},
+		{"explicit empty", "› stale public text\n", "", new("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o.Handle("terminal.read", func(map[string]any) any {
+				row := map[string]any{"source": "screen", "tail": strings.Split(strings.TrimSuffix(tc.text, "\n"), "\n")}
+				if tc.draft != nil {
+					row["draft"] = *tc.draft
+				}
+				return map[string]any{"terminal": row}
+			})
+			s, err := n.codexScreen(t.Context(), "orca:tab1:leaf1")
+			if err != nil || s.View != screen.CodexComposer || s.Draft != tc.want {
+				t.Fatalf("draft %q, screen=%+v err=%v", tc.want, s, err)
+			}
+		})
+	}
+	o.Handle("terminal.read", func(map[string]any) any {
+		return map[string]any{"terminal": map[string]any{"source": "screen", "tail": []string{
+			"Would you like to run the following command?", "  $ git status", "› 1. Yes, proceed (y)",
+			"  2. No, and tell Codex what to do differently (esc)",
+			"  Press enter to confirm or esc to cancel",
+		}, "draft": "unfinished message"}}
+	})
+	s, err = n.codexScreen(t.Context(), "orca:tab1:leaf1")
+	if err != nil || s.View != screen.CodexApproval || s.Draft != "" {
+		t.Fatalf("composer draft overrode approval: screen=%+v err=%v", s, err)
+	}
+}
+
+func TestOrcaCodexTypeConfirmsReportedDraft(t *testing.T) {
+	n, _, o, procs, _ := orcaNode(t)
+	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", "codex"))
+	procs.set("tab1:leaf1", orcaProc{pid: 4242, agent: "codex"})
+	o.SetAgentStatus("term_1", true, "working")
+	var mu sync.Mutex
+	draft := ""
+	o.Handle("terminal.read", func(map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		return map[string]any{"terminal": map[string]any{
+			"source": "screen", "tail": []string{"›", "  GPT-6.1-Sol xhigh · ~/project", "  tab to queue message"},
+			"draft": draft,
+		}}
+	})
+	o.Handle("terminal.send", func(p map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		text := str(p["text"])
+		if strings.HasPrefix(text, pasteStart) {
+			draft = unpaste(text)
+		} else if text == "\r" {
+			draft = ""
+		}
+		return map[string]any{"send": map[string]any{"accepted": true, "bytesWritten": len(text)}}
+	})
+	if err := n.codexReady(context.Background(), "orca:tab1:leaf1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.codexType(context.Background(), "orca:tab1:leaf1", "answer envelope", func(d string) bool { return d == "answer envelope" }); err != nil {
+		t.Fatal(err)
+	}
+	assertTrace(t, o.Trace("terminal.send"), []string{
+		orcarttest.SendCall("term_1", map[string]any{"text": pasteStart + "answer envelope" + pasteEnd}),
+		orcarttest.SendCall("term_1", map[string]any{"text": "\r"}),
+	})
 }
 
 // A handle Orca no longer knows (the terminal came back under a new one) is looked up again by the pane key.

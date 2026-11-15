@@ -132,13 +132,14 @@ func (q *CodexQuestionDialog) Selected() *CodexOption {
 const CodexPlaceholder = "Ask Codex to do anything"
 
 var (
-	codexOptionRE   = lazyre.New(`^(\s*)(›\s+)?(\d+)\.\s+(\S.*)$`)
-	codexShortcutRE = lazyre.New(`\s+\((?:[a-z]|esc)\)$`)
-	codexQuestionRE = lazyre.New(`^\s*Question (\d+)/(\d+)\b`)
-	codexColumnsRE  = lazyre.New(`^(.*?\S)\s{2,}(\S.*)$`)
-	codexNumberedRE = lazyre.New(`^›\s*\d+\.\s`)
-	codexStatusRE   = lazyre.New(`^\s{2,}\S.*\s·\s(?:~[/\\]|/|[A-Za-z]:[/\\])`)
-	codexWarningRE  = lazyre.New(`\s⚠\s+\d+\s+warnings?\s+·\s+f2 to view$`)
+	codexOptionRE      = lazyre.New(`^(\s*)(›\s+)?(\d+)\.\s+(\S.*)$`)
+	codexShortcutRE    = lazyre.New(`\s+\((?:[a-z]|esc)\)$`)
+	codexQuestionRE    = lazyre.New(`^\s*Question (\d+)/(\d+)\b`)
+	codexColumnsRE     = lazyre.New(`^(.*?\S)\s{2,}(\S.*)$`)
+	codexNumberedRE    = lazyre.New(`^›\s*\d+\.\s`)
+	codexStatusRE      = lazyre.New(`^\s{2,}\S.*\s·\s(?:~[/\\]|/|[A-Za-z]:[/\\])`)
+	codexWarningRE     = lazyre.New(`\s⚠\s+\d+\s+warnings?\s+·\s+f2 to view$`)
+	codexWorkingHintRE = lazyre.New(`^(?:tab to queue message(?:\s+⚠ \d+ warnings? · f2 to view)?|⚠ \d+ warnings? · f2 to view)$`)
 )
 
 // ReadCodex reads a Codex screen, best read with its colors: without them a draft the user typed cannot be told from
@@ -226,9 +227,9 @@ func codexDraft(raw, plain []string, i int, noColor bool) string {
 		end--
 	} else if end > i+2 {
 		last := strings.TrimSpace(plain[end-1])
-		if (strings.HasPrefix(last, "? for shortcuts") || strings.HasPrefix(last, "← for agents · ? for shortcuts")) &&
+		if (strings.HasPrefix(last, "? for shortcuts") || strings.HasPrefix(last, "← for agents · ? for shortcuts") || codexWorkingHintRE.MatchString(last)) &&
 			codexStatusRE.MatchString(plain[end-2]) {
-			// Match the status/path and shortcut footer together at the bottom, not model names or hint text
+			// Match the status/path and hint footer together at the bottom, not model names or hint text
 			// inside a multiline draft. Real text above this pair remains protected from remote input.
 			end -= 2
 		}

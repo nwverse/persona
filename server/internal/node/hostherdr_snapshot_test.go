@@ -94,17 +94,17 @@ func TestHerdrTruncatedSnapshotKeepsNodeLayout(t *testing.T) {
 	n, f, _ := herdrNode(t)
 	largeHerdrSnapshot(t, f)
 	h := n.hosts.Get(host.Herdr)
-	want, full, err := n.lookAt(context.Background(), h, n.engEpoch)
-	if err != nil || !full {
-		t.Fatalf("whole snapshot: full=%v, err=%v", full, err)
+	if err := n.refreshHosts(context.Background(), h); err != nil {
+		t.Fatal(err)
 	}
+	want := n.hostAgents[host.Herdr]
 	wantLayout := n.layouts[host.Herdr]
 	f.limitReplies(8192)
 	f.reset()
-	got, full, err := n.lookAt(context.Background(), h, n.engEpoch)
-	if err != nil || !full {
-		t.Fatalf("cut snapshot: full=%v, err=%v", full, err)
+	if err := n.refreshHosts(context.Background(), h); err != nil {
+		t.Fatal(err)
 	}
+	got := n.hostAgents[host.Herdr]
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("reconstructed agents differ from the whole snapshot")
 	}
@@ -137,9 +137,12 @@ func TestHerdrTruncatedSnapshotFallsBackToAgentsWhenSmallCallFails(t *testing.T)
 				n, f, _ := herdrNode(t)
 				largeHerdrSnapshot(t, f)
 				h := n.hosts.Get(host.Herdr)
-				want, full, err := n.lookAt(context.Background(), h, n.engEpoch)
-				if err != nil || !full {
-					t.Fatalf("whole snapshot: full=%v, err=%v", full, err)
+				if err := n.refreshHosts(context.Background(), h); err != nil {
+					t.Fatal(err)
+				}
+				want := n.hostAgents[host.Herdr]
+				if len(n.layouts[host.Herdr].spaces) == 0 {
+					t.Fatal("whole snapshot did not establish a layout")
 				}
 				previous := n.layouts[host.Herdr]
 				f.limitReplies(8192)
@@ -148,7 +151,9 @@ func TestHerdrTruncatedSnapshotFallsBackToAgentsWhenSmallCallFails(t *testing.T)
 					f.reply(method, map[string]any{"padding": strings.Repeat("x", 9000)})
 				}
 				f.reset()
-				got, full, err := n.lookAt(context.Background(), h, n.engEpoch)
+				err := n.refreshHosts(context.Background(), h)
+				got := n.hostAgents[host.Herdr]
+				full := !n.layouts[host.Herdr].at.Equal(previous.at)
 				if err != nil || full || !reflect.DeepEqual(got, want) {
 					t.Fatalf("agent fallback: full=%v, err=%v, agents match=%v", full, err, reflect.DeepEqual(got, want))
 				}
