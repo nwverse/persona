@@ -170899,6 +170899,29 @@
         }
       }
     },
+    "Two devices are already watching this Mac’s video. Showing VNC for now." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Two devices are already watching this Mac’s video. Showing VNC for now."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac のビデオはすでに 2 台のデバイスで表示中です。いったん VNC で表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 已经有两台设备在看视频，先用 VNC。"
+          }
+        }
+      }
+    },
     "Two Lines [Agent Row Style]" : {
       "extractionState" : "manual",
       "localizations" : {
