@@ -404,19 +404,21 @@ function messageOperation(op: ClientOperation, mid: string, sid: string, id: str
 }
 
 /** The original HTTP reason on a definite receipt, without putting the operation's internals in the bubble. */
-function operationFailure(op: ClientOperation): string {
+function operationFailure(op: ClientOperation): Pick<OutboxEntry, "error" | "code"> {
   const saved = op.result;
   if (saved?.body && typeof saved.status === "number") {
     try {
       const bytes = Uint8Array.from(atob(saved.body), (c) => c.charCodeAt(0));
       const body = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
       const message = typeof body.error === "string" && body.error ? body.error : `HTTP ${saved.status}`;
-      return failureText(new ApiError(saved.status, message, body));
+      const err = new ApiError(saved.status, message, body);
+      // the receipt's code too: a dialog_open refusal found by a Check lights the terminal button as a live one does
+      return { error: failureText(err), code: err.code };
     } catch {
       // A receipt without readable original JSON still has its authoritative state below.
     }
   }
-  return t("lib-outbox.delivery_failed");
+  return { error: t("lib-outbox.delivery_failed"), code: undefined };
 }
 
 /** Read-only reconciliation of an uncertain send: query its original operation, then let the open transcript's ordinary
@@ -461,7 +463,7 @@ export function checkOutbox(mid: string, sid: string, id: string): Promise<Outbo
     if (op.state === "failed") {
       reread();
       if (!current()) return "stale";
-      update(key, id, { inDoubt: false, newId: true, error: operationFailure(op), code: undefined });
+      update(key, id, { inDoubt: false, newId: true, ...operationFailure(op) });
       return "not_applied";
     }
     reread(); // pending and unknown stay uncertain: never a new message id, never an ordinary Retry.

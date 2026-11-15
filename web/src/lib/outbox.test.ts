@@ -296,6 +296,22 @@ describe("checking an uncertain send", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  // An uncertain send the receipt says a dialog refused (#7343): the failed bubble carries dialog_open, as a live
+  // refusal does, so the terminal button shows the dialog waits; a receipt without a code leaves none.
+  it("keeps the code of a definite failure the receipt saved", async () => {
+    failed();
+    const body = (b: Record<string, unknown>) => Buffer.from(JSON.stringify(b)).toString("base64");
+    const fetcher = vi.fn().mockResolvedValueOnce(receipt("failed", { result: { status: 409, body: body({ error: "a dialog is open", code: "dialog_open", delivered: "none" }) } }));
+    vi.stubGlobal("fetch", fetcher);
+    expect(await checkOutbox("m", "s", id)).toBe("not_applied");
+    expect(outbox()["m/s"][0]).toMatchObject({ id, state: "failed", inDoubt: false, newId: true, code: "dialog_open" });
+    delete outbox()["m/s"];
+    failed();
+    fetcher.mockResolvedValueOnce(receipt("failed", { result: { status: 400, body: body({ error: "会话已结束", delivered: "none" }) } }));
+    expect(await checkOutbox("m", "s", id)).toBe("not_applied");
+    expect(outbox()["m/s"][0].code).toBeUndefined();
+  });
+
   it("a definite failure restores ordinary Retry, which then uses a new id", async () => {
     failed();
     const body = Buffer.from(JSON.stringify({ error: "会话已结束", delivered: "none" })).toString("base64");
