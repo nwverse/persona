@@ -55,12 +55,12 @@ func (n *Node) startKeys(ctx context.Context, pane, text string, keys []string) 
 	if utf8.RuneCountInString(text) > startKeysText || len(keys) > startKeysCount {
 		return refusal("too_large", "start.keys types at most 32 characters and 8 keys", nil)
 	}
-	if _, ok := n.keptStartTab(pane); !ok {
-		return errStartTabGone
-	}
 	// start.keys must not type into a pane that another request claims as a fresh start while it waits.
 	unlock := n.typing.lock(workAgentPaneLockPrefix + pane)
 	defer unlock()
+	if _, ok := n.keptStartTab(pane); !ok {
+		return errStartTabGone
+	}
 	h, ref, err := n.paneHost(pane)
 	if err != nil {
 		return err
