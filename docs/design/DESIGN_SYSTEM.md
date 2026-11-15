@@ -352,6 +352,12 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 ### 3.1 Composer
 
+The web model panel's current Codex row keeps the session's recorded thinking effort, independently of whether it can
+change the model. When only effort can change, tapping the row opens its existing setup flyout instead of presenting
+a grey, inert choice. Unsupported effort has a visible reason (offline, read-only, parent-controlled, terminal-only,
+or unsupported by the model); supported changes say they apply to the next turn. These details belong to the Agent's
+on-demand model panel, not the everyday Assistant home (#6887).
+
 - Use: the one message input for Assistant and Agents chats on iPhone, iPad and Mac.
 - Anatomy: collapsed line `[+] field [mic] [voice/stop]`; expanded card with the field on top and a row `[+] ... [model/effort] [mic] [send]`. Both shapes share one text field so focus and IME text survive the change, and one +, mic, voice and stop (`ComposerBoxLayout`, #7278): they sit at the box's bottom corners and move with it between the shapes, in the box's own motion, rather than one copy leaving as another arrives. Only what the card alone has (Hide Keyboard, model, send) fades in and out where it stands.
 - Tokens: radius 32, min field height 44, iOS grows from one through six lines then scrolls (`Theme.Shell.composerPhoneMaximumLines`); Mac retains its eight-line cap. Fill and stroke come from `Shell`.
@@ -688,6 +694,7 @@ sending identity or confirmation behavior.
 - Tiles (an extension's `grid` and `carousel`, `ExtensionTiles.swift`, #827): `Theme.Radius.card` on the chip fill, `Theme.Size.tileMin` / `tileHeight` / `tileNarrow` / `tileRegular`; one that is on takes its named color's tint and a ring of it, the words never take the color.
 
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.
+- A row without a background that reaches the edges of an inset-grouped cell (`listRowInsets` leading 0 and `listRowBackground(Color.clear)`, such as the Knowledge kind bar) adds `.unclippedListRow()` (`apple/Persona/DesignSystem/UnclippedListRow.swift`): the cell's 26 pt rounded corners clip it otherwise, and its first chips lose a corner (#7735). A row with a background keeps the clipping, or its square corners show.
 - Row height at least 44. Sidebar rows use `Theme.Sidebar`. The iOS Agents list (#3753): `Theme.Size.tapTarget` is its least row height in every grouping and display; a row that is one plain button takes taps on its label alone, so the row gives its room above and below to the label (`ButtonRowInsets`, `ButtonRowLabel` in `apple/Persona/Views/Chats/RepoTreeRows.swift`) and the label is the whole row; folding headings are `TouchHeight` tall and fold chevrons `tapTargetFrame` squares. The Mac keeps its sizes.
 - Chip family: `Chip` (label), `FilterChip` (toggle), `LinkBadge`, `CountBadge`, plus 50+ lookalikes in feature code (DS-21).
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
