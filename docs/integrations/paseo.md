@@ -286,7 +286,8 @@ no launcher. Permission mode, workspace and the first message keep their existin
     while the pages are read (a turn that ended, one made, archived or deleted) wins over a page's copy, which can be older (#8129): Paseo sends what changed while it
     built the first page right after that page, and the end of a turn leaves an Agent's `updatedAt` as it was, so the copies cannot be told apart by time.
   - Every 2 minutes the directory is read again: an Agent whose copy differs from Paseo's is taken as Paseo has it then (an update lost), unless Paseo said something
-    of that Agent while the pages were read.
+    of that Agent while the pages were read. A page lists no features of an Agent Paseo has not loaded, so the features last seen stand in for the comparison too
+    (otherwise every read would take such an Agent again).
 - **Paseo stopped for over 30 seconds**: the bridge leaves node, and the engine shows as not detected. Claude Code sessions fall back to "Not running," with transcripts preserved.
   Sending a message then reports that Paseo is not connected; nothing is sent.
 

@@ -19,11 +19,11 @@ import (
 // computer without a models.json runs pi (#8194: 455,573 B over main's 452,848 B, with main's 290 B of headroom). Raised
 // by 1,337 B for the Paseo bridge's rows of closed and archived agents: Unread kept across an unload, archived rows'
 // capabilities, the features last seen, efforts, its own words named for the hub (#8133: 456,910 B over main's 455,573 B,
-// with main's 290 B of headroom). Raised by 1,731 B for the Paseo bridge's state across a reconnect: no page older than
+// with main's 290 B of headroom). Raised by 1,846 B for the Paseo bridge's state across a reconnect: no page older than
 // what Paseo said meanwhile, the archive read again, live text ended, archived agents' deletions, a keepalive that sleep
-// does not trip (#8129: 458,889 B over main's 457,158 B, with main's 42 B of headroom).
+// does not trip (#8129: 459,004 B over main's 457,158 B, with main's 42 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 458_931
+	const budget = 459_046
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

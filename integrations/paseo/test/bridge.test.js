@@ -1629,6 +1629,23 @@ test('the directory read again takes what Paseo has now when an update was lost,
   assert.equal(status(), 'working')
 })
 
+test('the directory read again takes nothing that is the same as kept: an unloaded agent still has the features last seen', async (t) => {
+  const { fake, node, a, rows } = await setup(t, { sweepMs: 40 })
+  // Grok's agent loaded with Allow all on, then let go (closed: Paseo's projection of its record lists no features).
+  fake.update(a.grok.id, { status: 'idle', features: [autoAcceptFeature(true)] })
+  await until('Allow all', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.permission_mode === 'bypassPermissions')
+  const { features: _, ...unloaded } = fake.agents.get(a.grok.id).agent
+  fake.upsert({ ...unloaded, status: 'closed', updatedAt: new Date(Date.now() + 2).toISOString() })
+  await until('closed', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.status === 'offline')
+  // And an agent the bridge does not list: a launcher check's probe (another bridge's, still in Paseo's directory).
+  fake.upsert(agentSnapshot({ provider: 'my-claude', cwd: '/tmp', labels: { 'persona.check': '1' } }))
+  await new Promise((r) => setTimeout(r, 150)) // the sweeps after it, the list told
+  const pushes = node.all('runtime.sessions').length
+  await new Promise((r) => setTimeout(r, 400)) // ten sweeps: nothing differs, nothing is told
+  assert.equal(node.all('runtime.sessions').length, pushes, 'no sweep takes an agent again for what its page does not list')
+  assert.equal(rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.permission_mode, 'bypassPermissions')
+})
+
 test("a failed read of Paseo's archive tells the node nothing, not that there are none; the sweep reads it again", async (t) => {
   const OLD = 'cccccccc-0000-4000-8000-000000000009'
   const at = new Date().toISOString()

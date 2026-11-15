@@ -481,9 +481,12 @@ export function createPaseoBridge(deps = {}, options = {}) {
             const id = e?.agent?.id
             if (!id) continue
             there.add(id)
-            if (reading.told.has(id) || JSON.stringify(agents.get(id)?.agent) === JSON.stringify(e.agent)) continue
+            // As upsert keeps it: a page lists no features of an agent Paseo has not loaded, and those here stand (withFeatures).
+            const was = agents.get(id)
+            const now = Array.isArray(was?.agent.features) && !Array.isArray(e.agent.features) ? { ...e.agent, features: was.agent.features } : e.agent
+            if (reading.told.has(id) || JSON.stringify(was?.agent) === JSON.stringify(now)) continue
             upsert(e.agent, e.project ?? undefined)
-            changed = true
+            if (agents.get(id) !== was) changed = true // one upsert refuses (a launcher check's probe) is no change
           }
           if (!p.pageInfo?.hasMore || !p.pageInfo.nextCursor) {
             whole = true
