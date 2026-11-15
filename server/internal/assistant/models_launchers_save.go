@@ -503,7 +503,7 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 		}
 	}
 	if l.API == "chat" && (l.EnvSealed != "" || l.TimeoutMS != 0 || l.CompactWindow != 0 || l.MaxContext != 0 ||
-		l.Effort != "" || l.OpusModel != "" || l.SonnetModel != "" || l.HaikuModel != "" || l.FableModel != "" || l.SubagentForce) {
+		l.OpusModel != "" || l.SonnetModel != "" || l.HaikuModel != "" || l.FableModel != "" || l.SubagentForce) {
 		return storedLauncher{}, errChatLaunchSettings
 	}
 	if err := in.applyScope(&l, old == nil, len(in.Assign) > 0); err != nil {

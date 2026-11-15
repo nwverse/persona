@@ -324,6 +324,31 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - **A normalizer applied twice must be idempotent**: the hub stores its result and the node applies it again at launch. Dropping only one `/v1` made `https://gw/v1/v1` test as `/v1/v1/messages` and launch as `/v1/messages`; the function drops a whole run.
 - **Not every base is an `ANTHROPIC_BASE_URL`**: Responses / Chat Completions bases and Codex's `OPENAI_BASE_URL` include `/v1` by convention (`https://api.openai.com/v1`), and the web sends `api: "messages"` for every launcher, Codex ones included. What is stored, delivered to nodes and launched is decided by the agent and protocol together (`ManagedLauncher.LaunchBaseURL`), never by `api` alone; only the connection test, which sends a Messages request whenever `api` says so, goes by the protocol.
 
+## Behind a gateway, read what Claude Code sends, not what its docs or other clients say (2026-11-16, #8798)
+
+- **Measure the request, on the version you ship against**: a local fake gateway that logs each body (`model`,
+  `max_tokens`, `thinking`, `output_config`, `safeguards`, `anthropic-beta`), with `claude -p`, `HOME` and
+  `CLAUDE_CONFIG_DIR` in a temporary directory, a fake key and `env -i`, so neither the user's settings nor the shell
+  of the session running the test leaks in. On 2.1.325 this showed what no page says: an unknown model is sent
+  `output_config.effort: high` with no `--effort`, and auto mode behind a gateway with nonessential traffic off refuses
+  every reviewed action when no review comes back, where the permission-modes page describes a fall-back to the local
+  classifier. Another open-source client's notes were right about the variables but describe a different launch
+  (`CLAUDE_CODE_USE_GATEWAY`), where the 2.1.325 code gives an unknown model no thinking level by default.
+- **A working variable is not a supported one**: `CLAUDE_CODE_MODEL_CAPABILITIES` does what it should behind
+  `ANTHROPIC_BASE_URL`, but it is missing from the official reference, while the documented
+  `ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES` are ignored there. Writing an undocumented variable into every
+  launch ties every provider to its current format; record what it does and leave it to a provider's own `env`.
+- **A per-process value must hold for every model of the process**: `CLAUDE_CODE_MAX_OUTPUT_TOKENS` serves the
+  session, its tiers, the small model and sub-Agents at once. Taking the session model's limit alone would ask a
+  smaller tier for more than it writes, so the launch takes the least reported limit and sets nothing when one of them
+  reports none (`outputTokens`). And the session's model is the start's `--model`, not the provider's default the
+  node's env and the settings file are written for: a value pinned in the settings file would beat the one worked out
+  for the start, so `personad launch` works it out again and the settings file leaves it out (`sessionOutput`,
+  `docs/integrations/claude-integration.md`, "What a gateway reports about a model").
+- **Check a doc's side effect in the code before acting on it**: the reference says raising the reply limit "reduces
+  the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
+  from 32,000 to 128,000 reserves exactly as much as before.
+
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 
 Deleting a meeting room stopped its `claude -p` and removed the transcript at once; a moment later the file was back
@@ -527,6 +552,29 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   Bind remembered selections to that connection and thread; invalidate on change.
 - Test method: start stdio `codex app-server` in a temporary `CODEX_HOME`; `thread/start` needs no login and calls no model, so it can test settings APIs. Don't touch live `~/.codex`.
   See `docs/integrations/codex.md` ("Thinking effort").
+
+## A gateway's Codex catalog replaces Codex's own list, and `personad launch` is no shell `codex` (2026-11-16, #8797)
+
+- `model_catalog_url` in a Codex provider table makes that catalog the only list Codex has: no bundled fallback. A URL
+  that answers an error at start leaves Codex with no models (or the last list in `$CODEX_HOME/models_cache.json`), and
+  a keyless provider never fetches it, so the list is empty too. Pass one only where the gateway answered with a
+  catalog, and only with `env_key`; do not let a timeout or a 5xx overwrite that answer, and do not make a start wait on
+  asking again (give the last answer and ask in the background).
+- 0.156–0.160 know the key but read it only with `api_key_model_discovery` on; 0.161 made that the default, so the node
+  needs 0.161 (`codex --version`) rather than enabling an under-development feature, whose warning a 0.160 TUI would
+  show. The node's codex (the service's `PATH`) need not be the one `personad launch` execs (the shell's): the launch
+  checks its own when they are different files.
+- `GET /v1/models` has two shapes on some gateways: Codex's catalog when the request carries `client_version`, OpenAI's
+  list without. A probe must send what Codex sends (its whole version, no prerelease) and judge the answer's shape; a
+  name or path alone says nothing. Codex itself appends `client_version`: a URL that already has one is refused there.
+- A managed launcher's codex is started by `personad launch`, which execs codex: wrappers that codexShell puts around
+  the shell's `codex` (adding `app-server`) never apply to it. The model list ran `personad launch <name>` alone, and
+  its codex started a TUI on a pipe ("stdin is not a terminal"): put the subcommand in the launch's own arguments.
+  Reproduce with a fake `personad` that is an app-server only when it gets `app-server`
+  (`TestManagedCodexModelsAskTheAppServer`).
+- Observe Codex against a local fake gateway with a temporary `CODEX_HOME`: the requests it makes (path, query,
+  `Authorization`), what `model/list` returns and whether `codex exec` warns about fallback metadata. Never point the
+  experiment at a real gateway with the user's key. See `docs/integrations/codex.md` ("Gateway model catalog").
 
 ## Interrupt (Esc) doesn't trigger Stop; pid files include procStart (2026-11-04)
 
