@@ -45,7 +45,7 @@ The prototype is the UI and interaction standard; compare screen by screen durin
   ones remembered before keep matching. `persona_settings` key `tasks.trust` lists them (`get`) and adds or removes one
   (`add` / `remove`, `{"machine", "directory", "access": "edit" | "read"}`) after the owner approves its card; `add` refuses those three
   too-broad directories.
-  A task in a Git repository is remembered by the repository, named by its main checkout, so every worktree of it and its main checkout are one kind (#8259): the hub asks the task's computer (`worktree.status`) when the plan is made and again at Start, and keeps the answer as the task's hub-owned `repo`, never what `task_plan` or a card edit says. A folder in no repository, or one whose computer cannot say (offline, an older node), is remembered as that folder, as every entry was before. A task starts without asking when an entry covers its repository or its own folder; different repositories, different computers, and reading versus file changes stay separate kinds.
+  A task in a Git repository is remembered by the repository, named by its main checkout, so every worktree of it and its main checkout are one kind (#8259): the hub asks the task's computer (`worktree.status`) about the folder the task runs in (the workspace it resolved to, which can be in another repository than the plan's `cwd`) when the plan is made and again at Start, and keeps the answer as the task's hub-owned `repo`, never what `task_plan` or a card edit says. The box is remembered once the task's workspace is admitted: the hub resolves `repo` again from the admitted folder (an existing workspace, or the checkout the engine made), saves it with that `cwd`, and remembers that repository, or that exact folder when the computer names none; never the repository the plan was made from. A folder in no repository, or one whose computer cannot say (offline, an older node), is remembered as that folder, as every entry was before. A task starts without asking when an entry covers its repository or its own folder; different repositories, different computers, and reading versus file changes stay separate kinds.
 - Read-only tasks keep `permission: bypassPermissions` for Claude and an Auto Accept provider, and `permission: plan` for Codex, after card edits and on retries. Their first prompt says not to change files, commit, or write externally. Health-space plans still wait for Start. Runtime support and the current card labels are described in [To-dos](todos.md#read-only-planned-tasks).
 - `task_plan` **does not block**: once the plan is handed to you, the turn ends immediately and you can continue talking about something else. When you tap Start, hub starts the Agents directly; Persona sees the result in the next message's live snapshot.
 
@@ -185,7 +185,7 @@ rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
-the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; Android's Glass style draws receipts, reviews, reports, Persona's hand-offs, message cards and the hub's notice lines in the chat as iOS does (`docs/plans/android-ios-alignment/chats.md` C13).
+the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; receipts, reviews and reports are not drawn at all on iOS since #8237 ("Receipts" below); Android's Glass style still draws them, with Persona's hand-offs, message cards and the hub's notice lines, as iOS did before (`docs/plans/android-ios-alignment/chats.md` C13).
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
@@ -220,7 +220,7 @@ verdict and reason on the to-do (`check`, [To-dos](todos.md#automatic-completion
 done and that check is current with a verdict other than `done` / `unsure`, the web (`ProgressTaskRow`) and Android
 (`trayProgress`) row reads "Stopped, not done yet · <reason>" ("停下了，还没完成 · …"), in place of the supervisor's or the
 Agent's last line; an Agent's open question still comes first. A new turn or a reopen clears the check, so the row goes back
-to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-trays.py` (the stopped task), Android
+to the live text. iOS reads the same check (`TodoItem.stoppedReason`, the row's second line in `AssistantActionBar`) since #8237. Screenshots: `web/e2e/assistant-task-trays.py` (the stopped task), Android
 `AssistantTraysShotsTest.aStoppedTaskSaysWhyItIsNotDoneInEveryStyle`, and the mock hub with `MOCK_TASKS=1 MOCK_TASK_CHECK=1`
 (the blog move waits for its deploy).
 
@@ -244,7 +244,7 @@ to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-tra
   List changes (including new `activity`) are pushed to hub immediately, hub broadcasts directly, and web replaces on receipt. There is no model-generated summary in this path: cards and snapshots use original text; completion receipts also truncate the Agent's final text block.
 - Cards read sessions through `AppModel.sessionWithLine`, not `session(_:)`. To reduce redraws, the latter ignores pushes changing only `last_text` / `updated_at` / `rev`,
   which would leave the card stuck on the message from the last state change (`docs/lessons/ios.md`).
-- Progress **does not insert new chat messages**. Only three cases append at the bottom: needs your answer (question card), answered (collapsed line), finished (receipt).
+- Progress **does not insert new chat messages**. Only two cases append at the bottom: needs your answer (question card) and answered (collapsed line); how a task ended is its row, not a receipt card (#8237, "Receipts" below).
 - Card footers offer "Message" (targeting this task; see "Routing" below) and "Stop" (interrupt, with confirmation first). Tapping the card opens task details.
 - When the to-do has a PR URL (`pr_url`, #2768), the card adds a "PR #N" line under the current step; tapping it opens the PR in the in-app link sheet, matching "Open PR" on the Feishu task report card (#5033). Cards without a PR are unchanged.
 - Task cards from previous days collapse to one line (state dot + title + result); tap to expand.
@@ -258,6 +258,36 @@ to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-tra
 - Pushes remain unchanged: the title is the task name; opening the notification goes to the main chat at the question card.
 
 ### Receipts
+
+**Written, not drawn (#8237, 2026-11-15).** A long-running task whose Agent stops to wait for its own work ends a turn
+many times, and each turn's receipt was a card: the main chat filled with "<task> stopped, not done yet". Now, in every
+assistant conversation (the main one, side ones and leaders, history included), a task has one card in the chat, the
+hand-off or plan card from when it was handed out, and that card updates in place: its state word follows the task, a
+failed start reads "Didn't start: <why>" and a turn the model service cut off "Interrupted · <why>", in the danger color.
+A failed start's why is in plain words (`StartFailureWords`): a raw error naming a known cause becomes the cause ("rpc:
+connection closed" → "The connection to this computer dropped"; a computer offline, a start that timed out, one the
+computer refused, a Persona that needs an update), a sentence the hub already wrote for people stays, and anything else
+reads "Didn't start. Open it for details."; the raw error is only in the task's details.
+Receipts, reviews and reports are no longer drawn, nothing in the chat says where progress went, and no push or prompt
+changed. The hub writes every receipt as before: the completion judgment, supervision signals, the "Today" card, the
+interruption bookkeeping below and the trays' order still read them. How a task goes on is its row:
+
+- **In Progress** lists each open task with its state and latest line ("Stopped, not done yet · <why>" from its completion
+  check, else its Agent's last words), and under its rows a **Just Finished** group: the handed-out tasks that finished in
+  the last 24 hours and that the owner has not opened since (the To-dos page's rule, `TodoTriageLogic`), newest first,
+  uncounted, each with what it did (its accepting review's note, why it closed, its receipt's summary, else its Agent's
+  last words). Opening one shows the task and counts as seeing it (`seen_at`, #5707), so it leaves the group.
+- **Needs You** keeps a failed start's row with its reason, **Retry** and **Remove**, and an interrupted task's with its
+  reason and **Continue** (`POST /api/v1/todos/{id}/retry`), which only the receipt card had; a usage limit nothing
+  continues by itself gets Continue on its In Progress row. A tap on the row opens the task's details, where a receipt's
+  **Look** went.
+- iOS since #8237 (`ChatLines.drawnFeed`, `AssistantEntries.Result.justFinished`, `DispatchHandoffCard.interruption`);
+  the web follows in its own PR, Android in its own issue. Mock: `MOCK_TASKS=1 MOCK_TASKS_FINISHED=1` (two finished
+  tasks for Just Finished), with `MOCK_TASK_CHECK=1` (a stopped task's reason), `MOCK_TASKS_CUT=1` (an interrupted one) and `MOCK_MANAGERS=1` (one
+  manager, so the MacBook's Agents are the default page's), with `MOCK_TASKS_NO_ASKS=1` for a chat no question card
+  covers; `QuietReceiptsUITests` checks and shoots them.
+
+What follows is what the hub writes and how the clients drew receipts before #8237 (Android and, until its PR, the web):
 
 - When a task finishes (an attached Agent ends a turn with no pending interaction), append a green receipt at the bottom: task name, what was done (summary of the Agent's final text block),
   number of changed files, tests, PR, and next actions below: review changes, merge, tell the person who asked, etc.
@@ -296,7 +326,7 @@ keeps one outage from filling the chat:
   receipt in `group`. The first receipt carries `batch` (`total`, `pending`, `resolved`, `machine` when all ran on one
   computer, and `tasks` with each task's resolution), recomputed on every read; a page read with `since` after the first
   receipt still brings it along.
-- **Drawing** (all three clients, `interruptLook`): a receipt that names another in `group` is not drawn; a batch is one card,
+- **Drawing** (`interruptLook`; Android and, until its PR, the web: iOS draws no receipt since #8237, "Receipts" above): a receipt that names another in `group` is not drawn; a batch is one card,
   "<computer> <cause>, N tasks interrupted → handled a / pending b", opening to each task with its result, each opening the
   task; a handled single receipt is a grey line "“<title>” was interrupted · <result>" that opens the task; a pending one is
   the red card as before. Only a batch with something pending, or a pending receipt, uses the danger color. In the main chat,
