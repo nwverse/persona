@@ -1322,13 +1322,13 @@ CLOSEOUT_REPLIES = {
                     "did: 给导出接口补了 50 万行的压测用例\n"
                     "artifact: pr https://github.com/example/app/pull/31\n"
                     "artifact: commit 4f2a91c\n"
-                    "verified: 线上导出 50 万行，用时 11 秒（之前 94 秒超时）\n"
+                    "verified: `go test ./export/...`\n"
                     "</closeout>"),
     CLOSEOUT_DISPROVED: ("支付 SDK 升到 v4 了，回调验签换成了新接口，PR 已经合并。\n\n"
                          '<closeout status="done" merged="yes" deployed="no">\n'
                          "did: 支付 SDK 从 v3 升到 v4，回调验签换成新接口\n"
                          "artifact: pr https://github.com/example/app/pull/32\n"
-                         "verified: 单元测试 212 个全过；沙箱环境没有测\n"
+                         "verified: `npm test`；沙箱环境没有测\n"
                          "missing: 上线前要有人在沙箱里走一遍真实支付\n"
                          "</closeout>"),
     CLOSEOUT_BLOCKED: ("迁移脚本写好了，在预发库上跑过一遍。正式库要等 DBA 给迁移窗口，我先停在这里。\n\n"
@@ -1336,7 +1336,7 @@ CLOSEOUT_REPLIES = {
                        "did: 写了用户表拆分的迁移脚本，可重复执行\n"
                        "artifact: branch feat/split-users\n"
                        "artifact: doc docs/migrations/split-users.md\n"
-                       "verified: 预发库跑通，120 万行用时 3 分 40 秒\n"
+                       "verified: `./scripts/migrate.sh --env staging`\n"
                        "waiting: DBA 批准正式库的迁移窗口\n"
                        "</closeout>"),
     CLOSEOUT_NOT_DONE: ('<closeout status="not_done">\n'
@@ -1353,14 +1353,14 @@ if MOCK_CLOSEOUT:
                    "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/31"}, {"kind": "commit", "ref": "4f2a91c"}],
                    "closeout": {"status": "done", "merged": "yes", "deployed": "yes",
                                 "did": ["报表导出改成分页流式写出，不再一次读进内存", "给导出接口补了 50 万行的压测用例"],
-                                "verified": "线上导出 50 万行，用时 11 秒（之前 94 秒超时）",
+                                "verified": "`go test ./export/...`",
                                 "checked": {"merged": "yes", "deployed": "yes"}}}),
         sess("server", CLOSEOUT_DISPROVED, "升级支付 SDK", "/home/me/code/app", "done", "unread", "app", 7, "pay", 4, 5,
              CLOSEOUT_REPLIES[CLOSEOUT_DISPROVED],
              work={"phase": "", "by": "rule", "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/32"}],
                    "closeout": {"status": "done", "merged": "yes", "deployed": "no",
                                 "did": ["支付 SDK 从 v3 升到 v4，回调验签换成新接口"],
-                                "verified": "单元测试 212 个全过；沙箱环境没有测",
+                                "verified": "`npm test`；沙箱环境没有测",
                                 "missing": "上线前要有人在沙箱里走一遍真实支付",
                                 "checked": {"merged": "no"}}}),
         sess("server", CLOSEOUT_BLOCKED, "拆分用户表", "/home/me/code/app", "done", "unread", "app", 7, "migrate", 5, 8,
@@ -1369,7 +1369,7 @@ if MOCK_CLOSEOUT:
                    "artifacts": [{"kind": "branch", "ref": "feat/split-users"}, {"kind": "doc", "ref": "docs/migrations/split-users.md"}],
                    "closeout": {"status": "blocked", "waiting": "DBA 批准正式库的迁移窗口", "merged": "no",
                                 "did": ["写了用户表拆分的迁移脚本，可重复执行"],
-                                "verified": "预发库跑通，120 万行用时 3 分 40 秒"}}),
+                                "verified": "`./scripts/migrate.sh --env staging`"}}),
         sess("server", CLOSEOUT_NOT_DONE, "搜索结果高亮", "/home/me/code/app", "done", "unread", "app", 7, "search", 6, 10,
              CLOSEOUT_REPLIES[CLOSEOUT_NOT_DONE],
              work={"phase": "blocked", "on": "user", "line": "等你确认用哪个分词库", "by": "model",
@@ -7849,10 +7849,16 @@ if os.environ.get("MOCK_MODEL_CHANGE") == "1":
     )
 if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
     for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
-                             (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "npm test"),
-                             (CLOSEOUT_BLOCKED, "把用户表按地区拆开", "./scripts/migrate.sh --env staging"),
+                             (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "cd app; npm test"),
+                             (CLOSEOUT_BLOCKED, "把用户表按地区拆开", "./scripts/migrate.sh --env sandbox"),
                              (CLOSEOUT_NOT_DONE, "搜索结果里把命中的词标出来", "npm run build")):
-        ITEMS[_sid] = ([it("user", "text", 30, text=_ask)] + tool("Bash", {"command": _cmd, "description": "跑一遍"}, "ok", 12)
+        _first = it("user", "text", 13, text=_ask)
+        _items = tool("Bash", {"command": _cmd, "description": "跑一遍"}, "ok", 12)
+        # Closeout command evidence: success, a failed wrapped command, and a different scope that cannot match.
+        _items[1]["outcome"] = {"status": "failed" if _sid == CLOSEOUT_DISPROVED else "ok",
+                                "exit_code": 1 if _sid == CLOSEOUT_DISPROVED else 0}
+        _items[1]["is_error"] = _sid == CLOSEOUT_DISPROVED
+        ITEMS[_sid] = ([_first] + _items
                        + [it("assistant", "text", 3, text=CLOSEOUT_REPLIES[_sid])])
 
 ITEMS[ASK1] = (
