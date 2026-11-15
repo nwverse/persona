@@ -847,7 +847,8 @@ private fun ChatPage(
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
         LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames,
-        LocalReplyUsage provides replyUsage, LocalChatChildren provides childCards) {
+        LocalReplyUsage provides replyUsage, LocalChatChildren provides childCards,
+        LocalSubagentHarness provides session?.let { subagentHarness(it, res) }) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
             .then(if (embedded) Modifier else Modifier.imePadding())
@@ -1073,6 +1074,10 @@ private fun ChatPage(
                                         clear = canSend && LocalMainChatClear.current != null, resources = res).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
+                                // Brief and Board's "Mode" sheet: a permission mode, an effort or a model to change (a
+                                // listed model needs the computer's launcher lists).
+                                val modeSheet = session != null && (session.canChangeModes || session.canChangeEffortOnly ||
+                                    (chrome.worktrees != null && SessionModes.listsModels(session)))
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
@@ -1093,14 +1098,16 @@ private fun ChatPage(
                                         glass -> if (session != null && SessionModes.showsInComposer(session)) ({
                                             HeaderModeButton(session, controls, connection == null || connection == ConnectionState.Online) { modeOverlay = it }
                                         }) else null
-                                        session?.canChangeModes == true || session?.canChangeEffortOnly == true -> ({
+                                        // Brief and Board: also an agent whose model the node switches itself (a Paseo
+                                        // provider's), its launcher's models listed in the sheet (#8143).
+                                        modeSheet -> ({
                                             ChatModeBar(session, controls, connection == null || connection == ConnectionState.Online,
                                                 onOverlay = { modeOverlay = it }, onPickModel = { model -> send("/model $model") },
-                                                openRequested = openModes, onOpenHandled = { openModes = false })
+                                                openRequested = openModes, onOpenHandled = { openModes = false }, creation = chrome.worktrees)
                                         })
                                         else -> null
                                     },
-                                    modeHint = if (glass) null else chatModeHint(session, includeModes = session?.canChangeModes == true || session?.canChangeEffortOnly == true),
+                                    modeHint = if (glass) null else chatModeHint(session, includeModes = modeSheet),
                                     // The model pill (#5055, the web's ModelPill): Glass's, in an Agent's chat and a Persona chat.
                                     modelPill = if (!glass || switchSession == null) null else ({ width ->
                                         val online = connection == null || connection == ConnectionState.Online
