@@ -105,17 +105,18 @@ final class PerfStarterTests: PerfTestCase {
         save("mic", runs: runs)
     }
 
-    /// Type plain letters into the focused starter; clearing the draft is outside the measured window.
+    /// Type plain letters into the focused starter; the entered value is checked and clearing is outside the window.
     @MainActor func testStarterTyping() throws {
         var runs: [[String: Any]] = []
         for index in 0...iterations {
             openStarter()
             field.tap()
-            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no software keyboard")
             sleep(1)
             runs.append(sample("typing", index: index) {
                 field.typeText(Self.typed)
             })
+            // The simulator may use its hardware keyboard, so a software-keyboard element is not the entry check.
+            XCTAssertEqual(field.value as? String, Self.typed, "the measured text did not reach the starter field")
             field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: Self.typed.count + 2))
             app.terminate()
         }
