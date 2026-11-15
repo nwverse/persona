@@ -43,6 +43,7 @@ func (s *Service) startTaskSuccessor(ctx context.Context, t Todo, last proto.Ses
 	defer cancel()
 	prompt := prompts.RenderTaskSuccessor(prompts.TaskSuccessor{Previous: agentLabel(last), PreviousID: last.SessionID,
 		LastReply: clip(last.LastText, 2000), Text: text})
+	prompt = s.withTodoDecisions(sctx, t.ID, prompt)
 	params := map[string]any{"cwd": last.Cwd, "launcher": last.Launcher, "model": "", "effort": "", "tab_name": t.Title,
 		"prompt": prompt}
 	if last.PermissionMode != "" {
