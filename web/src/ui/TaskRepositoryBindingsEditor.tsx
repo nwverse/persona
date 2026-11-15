@@ -40,8 +40,8 @@ function RepositoryRow({ identity, name, children }: { identity: RepositoryIdent
     <RepositoryMark provider={identity.provider} />
     <a href={identity.canonical_url} target="_blank" rel="noreferrer noopener" title={identity.canonical_url}
       className="flex touch-hit min-w-0 flex-1 items-center gap-2">
-      {name && <span className="min-w-0 max-w-1/2 shrink-0 truncate text-[13px] text-ink">{name}</span>}
-      <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">{repositoryAddress(identity)}</span>
+      {name && <span className="min-w-0 max-w-1/2 shrink-0 truncate text-meta text-ink">{name}</span>}
+      <span className="min-w-0 flex-1 truncate text-submeta text-ink-3">{repositoryAddress(identity)}</span>
     </a>
     {children}
   </div>;
@@ -55,7 +55,7 @@ function LinkRow({ identity, view, onRemove, disabled }: { identity: RepositoryI
   return <div className="flex items-start gap-2 py-2 pr-4 pl-10" data-repository-link>
     <span data-link-icon={icon} className="mt-0.5 shrink-0 text-ink-3"><Icon name={icon} size={14} /></span>
     <a href={view.url} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}${view.title ? ` · ${view.title}` : ""}`}
-      className="flex touch-hit min-w-0 flex-1 items-start gap-2 text-[12.5px] leading-snug text-ink-3 hover:underline">
+      className="flex touch-hit min-w-0 flex-1 items-start gap-2 text-meta leading-snug text-ink-3 hover:underline">
       {view.title
         ? <><span className="min-w-0 break-words">{view.title}</span><span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span></>
         : <><span className="shrink-0">{kind}</span><span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span></>}
@@ -78,7 +78,7 @@ function AddLink({ identity, links, pending, onAdd }: { identity: RepositoryIden
   };
   if (!adding) return <Button icon="plus" tone="quiet" disabled={pending || (links?.length ?? 0) >= 50} onClick={() => setAdding(true)}>{t("task-repositories.add_link")}</Button>;
   return <div className="space-y-2">
-    <label className="block text-[11.5px] text-ink-3">{t("task-repositories.link_url")}
+    <label className="block text-submeta text-ink-3">{t("task-repositories.link_url")}
       <input className={`${settingsInputClass} mt-1 min-h-11`} type="url" autoFocus inputMode="url" autoComplete="off" spellCheck={false}
         value={input} placeholder={t("task-repositories.link_placeholder")} aria-invalid={invalid} disabled={pending}
         onChange={(e) => { setInput(e.target.value); setInvalid(false); }}
@@ -88,7 +88,7 @@ function AddLink({ identity, links, pending, onAdd }: { identity: RepositoryIden
           else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setAdding(false); setInvalid(false); }
         }} />
     </label>
-    {invalid && <p role="alert" className="text-[11.5px] text-red">{t("task-repositories.link_invalid")}</p>}
+    {invalid && <p role="alert" className="text-submeta text-red">{t("task-repositories.link_invalid")}</p>}
     <div className="flex flex-wrap justify-end gap-2">
       <Button tone="quiet" onClick={() => { setAdding(false); setInvalid(false); }}>{t("common.cancel")}</Button>
       <Button disabled={pending || !input.trim()} onClick={add}>{t("task-repositories.add_link")}</Button>
@@ -123,10 +123,10 @@ function RepositoryDraftRow({ row, entry, saved, pending, onChange, onRemove }: 
       })}
     </div>
     <div className="py-2 pr-4 pl-10"><AddLink identity={identity} links={links} pending={pending} onAdd={(link) => onChange({ links: [...links, link] })} /></div>
-    {!!saved?.catalog_state && saved.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-[11.5px] leading-snug text-ink-3">
+    {!!saved?.catalog_state && saved.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-submeta leading-snug text-ink-3">
       {t(saved.catalog_state === "removed" ? "task-repositories.catalog_removed" : saved.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
     </p>}
-    <details className="pr-4 pl-10 text-[11.5px] text-ink-3">
+    <details className="pr-4 pl-10 text-submeta text-ink-3">
       <summary className="flex min-h-11 cursor-pointer items-center gap-2">
         <Icon name="branch" size={13} />
         <span className="min-w-0 flex-1 truncate">{t("task-repositories.source_options")}</span>
@@ -191,12 +191,12 @@ function RepositoryPicker({ catalog, selected, disabled, onPick }: { catalog: Re
             className="flex min-h-11 w-full items-center gap-3 rounded-control px-3 py-2 text-left transition-colors hover:bg-hover focus-visible:bg-hover">
             <RepositoryMark provider={row.provider} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12.5px] font-medium text-ink">{row.name || row.path}</span>
-              <span className="block truncate text-[11.5px] text-ink-3">{row.path} · {hostOf(row)}</span>
+              <span className="block truncate text-meta font-medium text-ink">{row.name || row.path}</span>
+              <span className="block truncate text-submeta text-ink-3">{row.path} · {hostOf(row)}</span>
             </span>
             <Icon name="plus" size={13} className="shrink-0 text-ink-3" />
           </button>)}
-          {!rows.length && <p className="px-3 py-4 text-[11.5px] text-ink-3">{t(available.length ? "task-repositories.no_match" : "task-repositories.empty")}</p>}
+          {!rows.length && <p className="px-3 py-4 text-submeta text-ink-3">{t(available.length ? "task-repositories.no_match" : "task-repositories.empty")}</p>}
         </div>
       </div>
     </Collapse>
@@ -409,7 +409,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
               const view = repositoryLinkView(repository.source_snapshot.identity, link);
               return view ? <LinkRow key={`${link.kind}:${link.number}`} identity={repository.source_snapshot.identity} view={view} /> : null;
             })}
-            {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-[11.5px] leading-snug text-ink-3">
+            {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-submeta leading-snug text-ink-3">
               {t(repository.catalog_state === "removed" ? "task-repositories.catalog_removed" : repository.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
             </p>}
           </Fragment>)}
@@ -425,11 +425,11 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
         <Button disabled={busy} onClick={() => setEditing(false)}>{t("common.cancel")}</Button>
         <Button tone="primary" busy={busy} disabled={!catalog || !dirty || !draft.every((r) => validRepositoryAlias(r.directory_alias ?? ""))} onClick={() => void save()}>{t("common.save")}</Button>
       </>}>
-      <p className="mb-4 text-[11.5px] leading-relaxed text-ink-3">{t("task-repositories.hint")}</p>
+      <p className="mb-4 text-submeta leading-relaxed text-ink-3">{t("task-repositories.hint")}</p>
       {catalog && <TaskRepositoryBindingsEditor catalog={catalog} value={draft} snapshots={saved?.repositories} pending={busy} onChange={setDraft} />}
       {busy && !catalog && <Loading />}
       {error && <div className="mt-3 space-y-2">
-        <p role="alert" className="text-[11.5px] text-red">{error}</p>
+        <p role="alert" className="text-submeta text-red">{error}</p>
         <Button tone="quiet" disabled={busy} onClick={() => void reloadForEdit()}>{t("task-repositories.reload")}</Button>
       </div>}
     </Dialog>
@@ -462,7 +462,7 @@ export function NewTodoRepositoryBindings({ context, value, onChange, pending }:
       {busy && <Loading />}
       {catalog && <TaskRepositoryBindingsEditor catalog={catalog} value={rows} pending={pending}
         onChange={(next) => onChange(next.length ? { catalog_revision: catalog.catalog_revision, repositories: next } : undefined)} />}
-      {error && <><p role="alert" className="text-[11.5px] text-red">{error}</p><Button tone="quiet" onClick={() => void load()}>{t("task-repositories.retry")}</Button></>}
+      {error && <><p role="alert" className="text-submeta text-red">{error}</p><Button tone="quiet" onClick={() => void load()}>{t("task-repositories.retry")}</Button></>}
     </>}
   </div>;
 }

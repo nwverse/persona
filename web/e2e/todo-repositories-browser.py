@@ -249,6 +249,16 @@ def run(theme, width, suffix=""):
     check(abs(child_icon - repo_text) <= 1, f"{where}: the editor indents links under their repository")
     check(js(f"{dialog}.scrollWidth <= {dialog}.clientWidth"), f"{where}: the editor has no horizontal overflow")
     shot(f"dialog-{width}-{theme}{suffix}")
+    press("Add repository")
+    eventually("!!document.querySelector('[data-repository-picker]')")
+    settle()
+    check("Docs" in js("document.querySelector('[data-repository-picker]').innerText"),
+          f"{where}: the picker lists a repository not yet linked")
+    check(js("document.querySelector('[data-repository-picker]').scrollWidth <= document.querySelector('[role=dialog]').clientWidth"),
+          f"{where}: the picker has no horizontal overflow")
+    shot(f"picker-{width}-{theme}{suffix}")
+    press("Add repository")
+    eventually("[...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Add repository' && b.getAttribute('aria-expanded') === 'false')")
     press("Add issue or PR")
     eventually("!!document.querySelector('[role=dialog] input[type=url]')")
     type_url("https://github.com/example/docs/pull/9")
@@ -256,6 +266,7 @@ def run(theme, width, suffix=""):
     eventually("!!document.querySelector('[role=dialog] [role=alert]')")
     check("Use an issue or pull request link from this repository." in js("document.querySelector('[role=dialog]').innerText"),
           f"{where}: another repository's URL is refused inline")
+    shot(f"dialog-invalid-{width}-{theme}{suffix}")
     type_url("https://github.com/example/web/pull/3213")
     js("document.querySelector('[role=dialog] input[type=url]').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); true")
     eventually("document.querySelector('[role=dialog]').innerText.includes('#3213')")
@@ -265,6 +276,9 @@ def run(theme, width, suffix=""):
     press("Save")
     eventually("document.querySelector('[role=dialog] [role=alert]') && document.querySelector('[role=dialog]').innerText.includes('#3213')")
     check("Your edits are kept" in js("document.querySelector('[role=dialog]').innerText"), f"{where}: a revision conflict keeps the draft")
+    alert_size = js("parseFloat(getComputedStyle(document.querySelector('[role=dialog] [role=alert]')).fontSize)")
+    scale = 14 / 13 if suffix else 1
+    check(abs(alert_size - 11.5 * scale) <= 0.2, f"{where}: the error text uses the submeta token ({alert_size:.2f}px)")
     shot(f"dialog-conflict-{width}-{theme}{suffix}")
     js("window.repoFixture.revision = 9; window.repoFixture.numbers = [3211, 3214]; true")
     press("Discard edits and reload")
@@ -337,6 +351,13 @@ def run_rich(theme, width, suffix=""):
     check(js(f"{section}.querySelector('a[href$=\"/pull/7\"]') !== null"), f"{where}: the PR title is one hyperlink")
     check(js(f"{section}.querySelector('a[href$=\"/issues/8\"]') !== null"), f"{where}: an untitled issue falls back to its number")
     check(js("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), f"{where}: no horizontal overflow")
+    # Named type tokens: the link title is text-meta (13 px) and the address text-submeta (11.5 px), both scaled by
+    # the same Small/Standard/Large ratio as the rest of the page.
+    scale = 14 / 13 if suffix else 1
+    meta_size = js(f"parseFloat(getComputedStyle({section}.querySelector('[data-repository-link] a > span')).fontSize)")
+    submeta_size = js(f"parseFloat(getComputedStyle({section}.querySelector('[data-repository-row] a span')).fontSize)")
+    check(abs(meta_size - 13 * scale) <= 0.2, f"{where}: the title uses the meta token ({meta_size:.2f}px)")
+    check(abs(submeta_size - 11.5 * scale) <= 0.2, f"{where}: the address uses the submeta token ({submeta_size:.2f}px)")
     # Hierarchy: a child row's mark sits under the repository's name/address, and its title starts beyond that mark.
     repo_text = js(f"{section}.querySelector('[data-repository-row] a span').getBoundingClientRect().left")
     child_icon = js(f"{section}.querySelector('[data-repository-link] [data-link-icon]').getBoundingClientRect().left")
