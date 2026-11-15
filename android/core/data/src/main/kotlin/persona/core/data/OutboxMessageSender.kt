@@ -329,9 +329,16 @@ class OutboxMessageSender(
 
     /**
      * Manual refusal retries must update the durable outbox as well as the composer overlay. [opId] is the operation
-     * id the retry goes under (a new one: the refused one would be answered from its first try).
+     * id the retry goes under (a new one: the refused one would be answered from its first try). [result] is the actual
+     * transport outcome, or null while sending or when cancellation leaves it unknown; only explicit acceptance is
+     * authoritative hand-off delivery. In particular, a Sent overlay can instead carry an HTTP delivered=yes hint.
      */
-    suspend fun recordComposerDelivery(id: String, delivery: ComposerDelivery, opId: String? = null) = lifecycle.withLock {
+    suspend fun recordComposerDelivery(
+        id: String,
+        delivery: ComposerDelivery,
+        opId: String? = null,
+        result: MessageTransportResult? = null,
+    ) = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
         val entry = store.entries.first().firstOrNull { it.clientMessageId == id } ?: error("Message state changed")
         val attempt = request(entry).copy(opId = opId ?: entry.operationId)
@@ -349,6 +356,7 @@ class OutboxMessageSender(
         if (state == OutboxState.Sending) receiptState.begin(attempt, entry.mainTarget)
         else receiptState.result(attempt, if (state in setOf(OutboxState.Sent, OutboxState.Shown))
             MessageTransportResult.Accepted else MessageTransportResult.NoReceipt)
+        if (result == MessageTransportResult.Accepted) publishAuthoritative(entry)
     }
 
     /** Attachments need the same durably bound target before uploading machine-local files. */

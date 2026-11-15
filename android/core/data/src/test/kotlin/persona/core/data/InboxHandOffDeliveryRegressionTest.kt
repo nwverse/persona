@@ -1,10 +1,14 @@
 package persona.core.data
 
 import persona.core.contracts.HubScope
+import persona.core.contracts.Endpoint
+import persona.core.contracts.Health
 import persona.core.contracts.Interaction
 import persona.core.contracts.Item
 import persona.core.contracts.Resolution
 import persona.core.contracts.SessionKey
+import persona.core.contracts.api.ChatComposerService
+import persona.core.contracts.api.DeliveryState
 import persona.core.contracts.api.InboxAssistantConnection
 import persona.core.contracts.api.InboxAssistantTransport
 import persona.core.contracts.api.InteractionCenter
@@ -15,20 +19,37 @@ import persona.core.contracts.api.MessageSender
 import persona.core.contracts.api.MessageTransport
 import persona.core.contracts.api.MessageTransportResult
 import persona.feature.inbox.InboxHandOffRequest
+import persona.core.hub.HttpChatComposerService
+import persona.core.hub.HubConnectionConfig
+import persona.core.hub.HubNetwork
+import persona.core.hub.HubRoute
+import persona.core.hub.OkHttpHubConnection
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -37,6 +58,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 
 /**
  * Delivery, not a local outbox write, gates an Agent hand-off's record. These tests use the real repository and the
@@ -365,6 +387,114 @@ class InboxHandOffDeliveryRegressionTest {
         }
     }
 
+    @Test fun acceptedComposerRefusalRetryRecordsOriginalClientIdOnce() = runBlocking {
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val fixture = HandOffFixture(owner, pairing, online = true)
+        val http = ComposerHttpFixture(fixture, pairing)
+        try {
+            val composer = http.connect()
+            http.server.enqueue(MockResponse().setResponseCode(409).setBody(
+                """{"error":"draft","code":"input_draft","delivered":"none","draft":"draft","clearable":"draft"}""",
+            ))
+            val handOff = async { fixture.repository.handOff(request) }
+            assertEquals(agent, handOff.await())
+            withTimeout(5_000) {
+                fixture.store.entries.first { entries ->
+                    entries.any { it.clientMessageId == operationId && it.state == OutboxState.Refused }
+                }
+            }
+            val initial = http.takeRequest()
+            assertEquals(operationId, initial.getHeader("X-Persona-Op-Id"))
+
+            http.server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+            assertEquals(DeliveryState.Sent, composer.retryRefused(operationId, clearDraft = true).state)
+            val retry = http.takeRequest()
+            val retryOperationId = retry.getHeader("X-Persona-Op-Id")
+            assertNotEquals(operationId, retryOperationId)
+            assertEquals(OutboxState.Sent, fixture.store.state(operationId))
+            withTimeoutOrNull(5_000) { fixture.inbox.recordVersions.first { it > 0 } }
+            assertEquals(
+                "an accepted composer retry must record under the original client id",
+                listOf(RecordedHandOff("item", agent, "Example agent", operationId)), fixture.inbox.records,
+            )
+
+            // Transcript evidence for the same visible message must not record the accepted retry a second time.
+            fixture.sender.observeTranscript(agent, listOf(
+                Item("retry-echo", 1, role = "user", kind = "text", text = request.text, clientMsgId = operationId),
+            ))
+            assertEquals(OutboxState.Shown, fixture.store.state(operationId))
+            assertEquals(2, http.server.requestCount)
+            assertEquals(listOf(RecordedHandOff("item", agent, "Example agent", operationId)), fixture.inbox.records)
+        } finally {
+            http.close()
+            fixture.close()
+            owner.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test fun httpDeliveredYesComposerRetryDoesNotRecord() = runBlocking {
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val fixture = HandOffFixture(owner, pairing, online = true)
+        val http = ComposerHttpFixture(fixture, pairing)
+        try {
+            http.server.enqueue(refusalResponse())
+            val composer = connectRefusedComposer(fixture, http)
+            http.server.enqueue(MockResponse().setResponseCode(500).setBody(
+                """{"error":"HTTP 500","code":"internal","delivered":"yes"}""",
+            ))
+            assertEquals(DeliveryState.Sent, composer.retryRefused(operationId, clearDraft = true).state)
+            assertNotEquals(operationId, http.takeRequest().getHeader("X-Persona-Op-Id"))
+            assertEquals("the outbox keeps the HTTP delivery hint", OutboxState.Sent, fixture.store.state(operationId))
+            assertNoHandOffRecord(fixture, "HTTP delivered=yes is not an Accepted transport result")
+            assertEquals(2, http.server.requestCount)
+        } finally {
+            http.close()
+            fixture.close()
+            owner.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test fun sendingAndCancelledComposerRetryDoNotRecord() = runBlocking {
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val fixture = HandOffFixture(owner, pairing, online = true)
+        val http = ComposerHttpFixture(fixture, pairing)
+        val retryStarted = CompletableDeferred<Unit>()
+        val releaseRetry = CompletableDeferred<Unit>()
+        var retry: Job? = null
+        try {
+            http.server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    if (request.getHeader("X-Persona-Op-Id") == operationId) return refusalResponse()
+                    retryStarted.complete(Unit)
+                    return runBlocking {
+                        releaseRetry.await()
+                        MockResponse().setResponseCode(200).setBody("{}")
+                    }
+                }
+            }
+            val composer = connectRefusedComposer(fixture, http)
+            val attempt = async { composer.retryRefused(operationId, clearDraft = true) }
+            retry = attempt
+            withTimeout(5_000) { retryStarted.await() }
+            assertEquals(OutboxState.Sending, fixture.store.state(operationId))
+            assertNoHandOffRecord(fixture, "Sending is not authoritative delivery")
+
+            attempt.cancel()
+            withTimeout(5_000) { attempt.join() }
+            assertTrue(attempt.isCancelled)
+            assertEquals(OutboxState.Unknown, fixture.store.state(operationId))
+            assertNoHandOffRecord(fixture, "cancellation has no Accepted transport result")
+            assertEquals(2, http.server.requestCount)
+        } finally {
+            retry?.cancel()
+            releaseRetry.complete(Unit)
+            retry?.cancelAndJoin()
+            http.close()
+            fixture.close()
+            owner.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
     @Test fun acceptedResultLosingATransitionToSentStillPublishes() = runTest {
         val fixture = HandOffFixture(backgroundScope, pairing, online = true)
         val accepted = CompletableDeferred<MessageTransportResult>()
@@ -500,6 +630,66 @@ class InboxHandOffDeliveryRegressionTest {
         }
     }
 
+    private suspend fun connectRefusedComposer(
+        fixture: HandOffFixture,
+        http: ComposerHttpFixture,
+    ): ChatComposerService {
+        val composer = http.connect()
+        assertEquals(agent, fixture.repository.handOff(request))
+        withTimeout(5_000) {
+            fixture.store.entries.first { entries ->
+                entries.any { it.clientMessageId == operationId && it.state == OutboxState.Refused }
+            }
+        }
+        assertEquals(operationId, http.takeRequest().getHeader("X-Persona-Op-Id"))
+        return composer
+    }
+
+    private fun refusalResponse() = MockResponse().setResponseCode(409).setBody(
+        """{"error":"draft","code":"input_draft","delivered":"none","draft":"draft","clearable":"draft"}""",
+    )
+
+    private suspend fun assertNoHandOffRecord(fixture: HandOffFixture, message: String) {
+        // Let any erroneously buffered publication reach the real repository before asserting its absence.
+        withTimeoutOrNull(250) { fixture.inbox.recordVersions.first { it > 0 } }
+        assertTrue(message, fixture.inbox.records.isEmpty())
+    }
+
+    private class ComposerHttpFixture(
+        private val fixture: HandOffFixture,
+        private val pairing: HubScope,
+    ) {
+        val server = MockWebServer().apply { start() }
+        private val endpoint = Endpoint(server.url("/").toString(), "lan")
+        private val connection = OkHttpHubConnection(
+            HubConnectionConfig(pairing.hubId, null, "test-token", listOf(endpoint), "test"),
+            HubNetwork("offline", available = false),
+        )
+
+        init {
+            // The public composer constructor needs the pairing's selected route. Keep the connection offline and
+            // install only that route; message POSTs still go through the production OkHttp request path.
+            val field = OkHttpHubConnection::class.java.getDeclaredField("_route")
+            field.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            val route = field.get(connection) as MutableStateFlow<HubRoute?>
+            route.value = HubRoute(endpoint, Health(ok = true, hubId = pairing.hubId))
+        }
+
+        suspend fun connect(): ChatComposerService = fixture.sender.connectComposer { transport ->
+            HttpChatComposerService(pairing, transport, connection, "test-token",
+                onRetryDelivery = fixture.sender::recordComposerDelivery,
+                onPairingExpired = {})
+        }
+
+        fun takeRequest(): RecordedRequest = checkNotNull(server.takeRequest(1, TimeUnit.SECONDS))
+
+        fun close() {
+            connection.close()
+            server.shutdown()
+        }
+    }
+
     private class HandOffFixture(
         owner: CoroutineScope,
         pairing: HubScope,
@@ -565,6 +755,7 @@ class InboxHandOffDeliveryRegressionTest {
         private val events: MutableList<String>,
     ) : InboxAssistantTransport {
         val records = mutableListOf<RecordedHandOff>()
+        val recordVersions = MutableStateFlow(0)
         var onRecord: suspend (String, SessionKey, String, String) -> JsonObject = { _, _, _, _ -> JsonObject(emptyMap()) }
 
         override suspend fun recordAgentHandOff(
@@ -574,6 +765,7 @@ class InboxHandOffDeliveryRegressionTest {
             clientId: String,
         ): JsonObject {
             records += RecordedHandOff(itemId, session, title, clientId)
+            recordVersions.value = records.size
             events += "record:$clientId"
             return onRecord(itemId, session, title, clientId)
         }
