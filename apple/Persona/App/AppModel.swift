@@ -1659,8 +1659,6 @@ final class AppModel {
     }
 
     func refreshSessionDetail(_ key: SessionKey, listHint: String? = nil) async {
-        // A prior missing answer must not flash while this lookup is out (#8748).
-        clearMissingSessionDetail(key)
         forgetRetainedIfUnheld(key)
         // Paged hubs refresh complete metadata for every open chat. Complete hubs fetch when the opened row is missing
         // from the filtered index, or when it was only kept by `retainHeldSessionRows` (another manager's Agent, #8748):
