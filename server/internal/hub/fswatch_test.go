@@ -162,6 +162,23 @@ func TestFSWatchGenerationAdvancesAcrossHubs(t *testing.T) {
 	}
 }
 
+func TestFSWatchEpochPersistsAcrossRestart(t *testing.T) {
+	store := newMeshStore()
+	first := newTestHub(t)
+	first.store = store
+	before := first.nextFSWatchGeneration("m1")
+	second := newTestHub(t)
+	second.store = store
+	after := second.nextFSWatchGeneration("m1")
+	if after <= before {
+		t.Fatalf("a same-store restart reused generation: %d → %d", before, after)
+	}
+	var saved uint64
+	if ok, err := store.Setting(context.Background(), fsWatchEpochKey, &saved); !ok || err != nil || saved != second.fsWatchEpoch {
+		t.Fatalf("saved epoch = %d (ok %v err %v), want %d", saved, ok, err, second.fsWatchEpoch)
+	}
+}
+
 // A browser that opened folders with the id an absorbed hub.json entry used to have reaches the computer, so the
 // node is told to watch them and the changes come back to it under the id it asked with: the set is kept under the
 // computer's own id, the event echoes the browser's.
