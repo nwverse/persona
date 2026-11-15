@@ -45,7 +45,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
 			// reject stream_options. Retry only those rejected requests without an explicit no-retry signal; arbitrary
 			// 400s and already-started streams must never be replayed.
-			noRetry := explicitNoRetry(resp.Header)
+			noRetry := NoRetry(resp.Header)
 			if !noRetry && !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
 				renamedTokens = true
 				delete(body, "max_tokens")

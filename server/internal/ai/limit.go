@@ -421,10 +421,11 @@ func newHTTPError(resp *http.Response, raw []byte) *httpError {
 	code, message := gatewayErrorDetails(raw)
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),
 		retryAfter: retryAfter(resp.Header.Get("Retry-After")), retryAfterGiven: strings.TrimSpace(resp.Header.Get("Retry-After")) != "",
-		code: code, message: message, noRetry: explicitNoRetry(resp.Header)}
+		code: code, message: message, noRetry: NoRetry(resp.Header)}
 }
 
-func explicitNoRetry(header http.Header) bool {
+// NoRetry reports whether the gateway explicitly forbids retrying this response.
+func NoRetry(header http.Header) bool {
 	return strings.EqualFold(strings.TrimSpace(header.Get("X-Should-Retry")), "false")
 }
 
