@@ -3,7 +3,9 @@ package node
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -139,6 +141,60 @@ func TestKnownDirsWithoutRunningClaude(t *testing.T) {
 	n.setKnownClaudeDirs([]string{"~/" + mustRel(t, n.home, profile)})
 	if n.transcriptPath("bbbbbbbb-0000-0000-0000-000000000002") == "" {
 		t.Fatal("a directory from the hub (config or remembered) is searched")
+	}
+}
+
+// TestClaudeScanHelper is a claude of the machine's own for TestClaudeScanOff: it waits to be killed.
+func TestClaudeScanHelper(t *testing.T) {
+	if os.Getenv("PERSONA_TEST_CLAUDE_SCAN_HELPER") == "1" {
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+}
+
+// PERSONA_CLAUDE_SCAN=off (claudeScanEnv): the node takes no running claude's config directory, so a node that must see
+// only its own (the Paseo end-to-end check's) lists none of the transcripts of the machine's other claudes.
+func TestClaudeScanOff(t *testing.T) {
+	for v, off := range map[string]bool{"off": true, "0": true, " False ": true, "no": true, "": false, "on": false, "1": false} {
+		t.Setenv(claudeScanEnv, v)
+		if claudeScanOff() != off {
+			t.Errorf("%s=%q: off %v, want %v", claudeScanEnv, v, !off, off)
+		}
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("the node walks /proc for running claudes only on Linux")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A claude of the machine's own (its program named claude), with a config directory of its own.
+	profile := t.TempDir()
+	cmd := exec.Command(exe, "-test.run=^TestClaudeScanHelper$")
+	cmd.Args[0] = "claude"
+	cmd.Env = []string{"PERSONA_TEST_CLAUDE_SCAN_HELPER=1", "CLAUDE_CONFIG_DIR=" + profile}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	dirs := func() []string {
+		procSnapshot.Lock()
+		procSnapshot.argv = nil // walked again: the last walk may be from before that claude started
+		procSnapshot.Unlock()
+		n := &Node{home: t.TempDir(), paths: map[string]string{}, cdirs: newClaudeDirs()}
+		return n.claudeConfigDirs()
+	}
+	t.Setenv(claudeScanEnv, "")
+	if got := dirs(); !slices.Contains(got, profile) {
+		t.Fatalf("scanned, the node's directories are %v: want %s among them", got, profile)
+	}
+	t.Setenv(claudeScanEnv, "off")
+	if got := dirs(); slices.Contains(got, profile) {
+		t.Fatalf("with %s=off the node's directories are %v: want no other claude's", claudeScanEnv, got)
 	}
 }
 
