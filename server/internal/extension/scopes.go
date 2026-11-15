@@ -39,9 +39,12 @@ var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRea
 	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeModels, ScopeTranscription}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
-// that gets one of every scope instead) has scope s: all but agents.permission_mode, which an extension gets only when
-// its manifest names it.
-func InEveryScope(s string) bool { return s != ScopeAgentsPermissionMode }
+// that gets one of every scope instead) has scope s: all but the ones an extension gets only when its manifest names
+// them, agents.permission_mode and assistant.start_defaults (which can raise what task Agents spend: a preset, effort
+// max, ultracode), so neither comes to an extension installed the old way without the owner agreeing to it.
+func InEveryScope(s string) bool {
+	return s != ScopeAgentsPermissionMode && s != ScopeAssistantStartDefaults
+}
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.
 func EveryScope() []string {
