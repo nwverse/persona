@@ -44,6 +44,21 @@ class ReadableMarkdownTableTest {
         assertEquals(listOf("Area", "Finding", "中文说明", "Next step", "Network", "A complete English sentence that wraps.",
             "一句需要合适列宽才能阅读的中文。", "Retry", "Layout", "Another complete sentence that wraps.", "第二句中文内容。", "Read"),
             cellTexts())
+
+        val table = rule.onAllNodes(collection, useUnmergedTree = true).fetchSemanticsNodes().single()
+        val collectionInfo = table.config[SemanticsProperties.CollectionInfo]
+        assertEquals(3, collectionInfo.rowCount)
+        assertEquals(4, collectionInfo.columnCount)
+        val cells = rule.onAllNodes(cell, useUnmergedTree = true).fetchSemanticsNodes()
+        assertEquals(12, cells.size)
+        val positions = cells.map { it.config[SemanticsProperties.CollectionItemInfo] }
+        assertEquals(List(3) { row -> List(4) { column -> row to column } }.flatten(),
+            positions.sortedWith(compareBy({ it.rowIndex }, { it.columnIndex })).map { it.rowIndex to it.columnIndex })
+        cells.forEach { node ->
+            val item = node.config[SemanticsProperties.CollectionItemInfo]
+            assertEquals("heading at row ${item.rowIndex}, column ${item.columnIndex}", item.rowIndex == 0,
+                node.config.getOrNull(SemanticsProperties.Heading) != null)
+        }
     }
 
     @Test fun fittingTableHasNoScrollRangeAndKeepsCellSemantics() {
@@ -125,6 +140,8 @@ class ReadableMarkdownTableTest {
 
     private companion object {
         val horizontal = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val collection = SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo)
+        val cell = SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionItemInfo)
         val text = SemanticsMatcher.keyIsDefined(SemanticsProperties.Text)
         val wide = """
             | Area | Finding | 中文说明 | Next step |

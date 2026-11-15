@@ -2,7 +2,9 @@ package persona.feature.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -14,11 +16,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -27,6 +32,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -125,6 +131,49 @@ class ChatTableInteractionTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithText("Final row", substring = true).fetchSemanticsNodes().isNotEmpty() }
         assertEquals(120f, horizontalRange().value())
     }
+
+    @Test fun sharePictureKeepsUpstreamFixedColumnsAndNoInteractiveScroll() {
+        // At 2x, the interactive minimum overflows 640 dp while upstream's four fixed 160 dp columns fit exactly.
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
+                    Column(Modifier.requiredWidth(640.dp)) {
+                        Box(Modifier.testTag("normal")) {
+                            ChatMarkdown(wide, id = "normal", selectable = false)
+                        }
+                        Box(Modifier.testTag("picture")) {
+                            CompositionLocalProvider(LocalInPicture provides true) {
+                                ChatMarkdown(wide, id = "picture", selectable = false)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitUntil(10_000) { tableCells("normal").size == 12 && tableCells("picture").size == 12 }
+        assertTrue("the interactive table has real horizontal scrolling",
+            horizontalRanges("normal").any { it.maxValue() > 0f })
+        val pictureRanges = horizontalRanges("picture")
+        assertTrue("the share picture has no interactive horizontal scroll range: ${pictureRanges.map { it.maxValue() }}",
+            pictureRanges.none { it.maxValue() > 0f })
+
+        val interactiveWidths = tableCells("normal").map { it.boundsInRoot.width }
+        assertTrue("interactive columns are content-derived: $interactiveWidths", interactiveWidths.distinct().size > 1)
+        val pictureWidths = tableCells("picture").map { it.boundsInRoot.width }
+        pictureWidths.forEach { width ->
+            assertEquals("share picture keeps the library's equal fixed columns", pictureWidths.first(), width, 1f)
+        }
+    }
+
+    private fun tableCells(tag: String) = rule.onAllNodes(
+        SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionItemInfo) and hasAnyAncestor(hasTestTag(tag)),
+        useUnmergedTree = true,
+    ).fetchSemanticsNodes()
+
+    private fun horizontalRanges(tag: String) = rule.onAllNodes(
+        horizontal and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true,
+    ).fetchSemanticsNodes().map { it.config[SemanticsProperties.HorizontalScrollAxisRange] }
 
     private fun waitForTable() {
         rule.waitUntil(10_000) {
