@@ -155,7 +155,7 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
         )}
         {lastInstall && !view && (
           <Row icon="check" label={t("settings-skills.installed", { name: lastInstall.name })} hint={t("settings-skills.undo_hint")} wrapHint stackOnNarrow>
-            <Button icon="undo" onClick={() => void write("undo", lastInstall)}>{t("settings-skills.undo")}</Button>
+            <Button className="touch-hit" icon="undo" onClick={() => void write("undo", lastInstall)}>{t("settings-skills.undo")}</Button>
           </Row>
         )}
       </Group>
@@ -168,16 +168,16 @@ function SkillsForManager({ manager, owner }: { manager: string; owner: string }
         footer={
           <div className="flex flex-1 items-center gap-2">
             {phase === "success" || phase === "undoing" ? (
-              <Button tone="quiet" icon="undo" busy={phase === "undoing"} onClick={() => result && void write("undo", result)}>{t("settings-skills.undo")}</Button>
+              <Button className="touch-hit" tone="quiet" icon="undo" busy={phase === "undoing"} onClick={() => result && void write("undo", result)}>{t("settings-skills.undo")}</Button>
             ) : !done && (
-              <Button ref={cancelButton} tone="quiet" disabled={committing} onClick={close}>{t("common.cancel")}</Button>
+              <Button ref={cancelButton} className="touch-hit" tone="quiet" disabled={committing} onClick={close}>{t("common.cancel")}</Button>
             )}
             <span className="flex-1" />
             {(phase === "preview" || phase === "installing") && result && (
-              <Button tone="primary" busy={phase === "installing"} onClick={() => void write("install", result, view?.archive)}>{t("settings-skills.install")}</Button>
+              <Button className="touch-hit" tone="primary" busy={phase === "installing"} onClick={() => void write("install", result, view?.archive)}>{t("settings-skills.install")}</Button>
             )}
             {(done || phase === "undoing") && (
-              <Button tone="primary" disabled={committing} onClick={close}>{t("settings-skills.close")}</Button>
+              <Button className="touch-hit" tone="primary" disabled={committing} onClick={close}>{t("settings-skills.close")}</Button>
             )}
             {committing && <span role="status" className="sr-only">{t(phase === "installing" ? "settings-skills.installing" : "settings-skills.undoing")}</span>}
           </div>
@@ -243,7 +243,7 @@ function PickZip({ view, onPick }: { view: ImportView; onPick: (file?: File) => 
             <span className="flex size-14 items-center justify-center rounded-full bg-field text-ink-3">
               <Icon name="archive" size={24} />
             </span>
-            <Button tone="secondary" icon="upload" onClick={() => input.current?.click()}>{t("settings-skills.file_label")}</Button>
+            <Button className="touch-hit" tone="secondary" icon="upload" onClick={() => input.current?.click()}>{t("settings-skills.file_label")}</Button>
             <p className="max-w-72 text-submeta leading-relaxed text-ink-3">{t("settings-skills.drop_hint")}</p>
           </>
         )}

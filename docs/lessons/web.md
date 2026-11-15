@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## Compact buttons need their touch targets when moved into a dialog (#7446)
+
+The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-picker and Undo action when replacing
+an older `min-h-11` button. Its pseudo-element expands the target without changing the drawn box: browser acceptance
+must check coarse-pointer hit testing and actual edge taps, rather than the button's bounding rectangle alone.
+
 ## File drop targets must cancel navigation even while busy (#7446)
 
 Cancel file `dragover` and `drop` defaults before a busy-state guard: ignoring a second file must not let the browser
