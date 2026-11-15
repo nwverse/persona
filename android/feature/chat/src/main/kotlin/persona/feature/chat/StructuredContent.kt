@@ -266,6 +266,9 @@ internal fun diffText(line: DiffLine, word: Color): AnnotatedString = buildAnnot
 /** How many rows a long diff shows until Show All; unchanged runs fold into one row each before the cap. */
 private const val DiffPreviewRows = 40
 
+/** The old and new line numbers' column. */
+private val DiffNumberColumn = 64.dp
+
 @Composable
 internal fun DiffView(diff: ToolDiff, id: String) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
@@ -291,13 +294,13 @@ internal fun DiffView(diff: ToolDiff, id: String) {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 // The sign column as on iOS: dotXL wide, growing with the font, then sm before the code.
                 val signColumn = Tokens.Size.dotXL * density.fontScale + Tokens.Space.sm
-                val codeWidth = maxOf(maxWidth - 64.dp - signColumn, with(density) { measured.toDp() } + Tokens.Space.s)
+                val codeWidth = maxOf(maxWidth - DiffNumberColumn - signColumn, with(density) { measured.toDp() } + Tokens.Space.s)
                 // Keyed by the line's place in the whole diff, so rows stay put when the diff grows or Show All opens.
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp), state = list) {
                     items(rows, key = { row -> when (row) { is DiffRow.Line -> "l${row.index}"; is DiffRow.Fold -> "f${row.from}" } }) { row ->
                         when (row) {
                             is DiffRow.Fold -> Text(pluralStringResource(R.plurals.chat_diff_unchanged_lines, row.count, row.count),
-                                Modifier.fillMaxWidth().background(palette.sunken).padding(start = 64.dp + signColumn),
+                                Modifier.fillMaxWidth().background(palette.sunken).padding(start = DiffNumberColumn + signColumn),
                                 style = style, color = palette.ink3, maxLines = 1)
                             is DiffRow.Line -> DiffCodeLine(row.line, style, codeWidth, signColumn, horizontal)
                         }
@@ -318,7 +321,7 @@ internal fun DiffView(diff: ToolDiff, id: String) {
 private fun DiffCodeLine(line: DiffLine, style: TextStyle, codeWidth: Dp, signColumn: Dp, horizontal: ScrollState) {
     val palette = PersonaTheme.palette
     val density = LocalDensity.current
-    val fill = when (line.sign) { '+' -> palette.diffAddFill; '-' -> palette.diffDelFill; else -> Color.Transparent }
+    val fill = when (line.sign) { '+' -> palette.diffAddFill; '-' -> palette.diffDelFill; else -> null }
     val word = when (line.sign) { '+' -> palette.diffAddWord; '-' -> palette.diffDelWord; else -> Color.Unspecified }
     val text = remember(line, word) { diffText(line, word) }
     val state = when (line.sign) {
@@ -326,9 +329,9 @@ private fun DiffCodeLine(line: DiffLine, style: TextStyle, codeWidth: Dp, signCo
         '-' -> stringResource(R.string.chat_diff_line_removed)
         else -> null
     }
-    Row(Modifier.fillMaxWidth().background(palette.sunken).background(fill), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().background(palette.sunken).let { if (fill != null) it.background(fill) else it }, verticalAlignment = Alignment.CenterVertically) {
         DisableSelection {
-            Text("${line.old ?: ""}  ${line.new ?: ""}", Modifier.width(64.dp), style = style, color = palette.ink2, maxLines = 1)
+            Text("${line.old ?: ""}  ${line.new ?: ""}", Modifier.width(DiffNumberColumn), style = style, color = palette.ink2, maxLines = 1)
             // A hunk header or a note of a unified diff ('@') reads quietly, with no sign.
             Text(if (line.sign == '@') " " else line.sign.toString(),
                 Modifier.padding(end = Tokens.Space.sm).width(Tokens.Size.dotXL * density.fontScale)

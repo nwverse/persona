@@ -733,3 +733,13 @@ modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up
 inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
 the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
 `JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
+
+## A folded diff's rows are not its lines
+
+`DiffView` shows an edit's long runs of unchanged lines as one row each until Show All, so the preview's row index is no
+longer the line's index (it used to be, when the preview was just the first 40 lines). Anything that jumps to a line
+(`DiffNavigation`'s next / previous change) must wait until the list is open in full (`totalItemsCount == lines.size`)
+before `scrollToItem(line index)`, and the lazy list's keys must come from the line's place in the whole diff (`l<index>`,
+`f<first folded index>`), not from the row's position, or a growing diff re-keys its rows and the open state and scroll
+position drift. Word ranges are in the line's own UTF-16 offsets: widen tabs piece by piece (`diffText`), never on the
+whole line first.
