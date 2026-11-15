@@ -249,15 +249,16 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			Detail: fmt.Sprintf("PR %s at head %s is open and has merge conflicts.", status.URL, status.HeadOID)})
 	}
 	if terminal && (wasOpen || legacyHold) && t.Supervision != nil {
-		// Only the hold that waits on this PR wakes: a park waiting on an outside event or someone else, the same park
-		// (its review's time) as when the PR was read, and the stage's PR still this one. Anything else (ongoing work,
-		// rework, a review in progress, a later park, a replaced PR) stays as it is.
+		// Only the hold that waits on this PR wakes: a park waiting on an outside event or someone else whose reason
+		// names this PR (parkWaitsOnPR), the same park (its review's time) as when the PR was read, and the stage's PR
+		// still this one. Anything else (ongoing work, rework, a review in progress, a park for something else, a later
+		// park, a replaced PR) stays as it is, and a park comes due at its own time.
 		held := t.Supervision.parking()
-		if held != nil && (held.WaitingOn == parkExternalEvent || held.WaitingOn == parkSomeoneElse) {
+		if parkWaitsOnPR(held, status.URL) {
 			at := held.At
 			v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 				p := v.parking()
-				if p == nil || !p.At.Equal(at) || p.WaitingOn != parkExternalEvent && p.WaitingOn != parkSomeoneElse {
+				if p == nil || !p.At.Equal(at) || !parkWaitsOnPR(p, status.URL) {
 					return false
 				}
 				if now, ok := s.todoNow(t.ID); !ok || now.DoneAt != nil || now.PRURL != status.URL || s.stagePR(t.ID) != status.URL {
@@ -275,7 +276,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		}
 	}
 	if status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
-		s.setTaskStage(ctx, t.ID, "merge", "")
+		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
 	return nil
 }
@@ -286,4 +287,29 @@ func (s *Service) stagePR(id string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.stages[id].PR
+}
+
+// parkWaitsOnPR says whether park r waits on the PR at url: it waits on an outside event or someone else, and its
+// reason names that PR, by its link or as "#N" with its number. A park for anything else (a design decision, another
+// PR, a release) is not this PR's merge wait, even while the PR is open.
+func parkWaitsOnPR(r *TaskReview, url string) bool {
+	if r == nil || r.WaitingOn != parkExternalEvent && r.WaitingOn != parkSomeoneElse {
+		return false
+	}
+	m := ciPRURL.FindStringSubmatch(url)
+	if m == nil {
+		return false
+	}
+	reason := strings.ToLower(r.Reason)
+	for _, link := range ciPRURL.FindAllStringSubmatch(reason, -1) {
+		if strings.EqualFold(link[1], m[1]) && link[2] == m[2] {
+			return true
+		}
+	}
+	for _, ref := range prBareRef.FindAllStringSubmatch(reason, -1) {
+		if ref[1] == m[2] {
+			return true
+		}
+	}
+	return false
 }

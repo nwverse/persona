@@ -111,7 +111,7 @@ func TestPRStatusPollReturnsTerminalPRToSupervision(t *testing.T) {
 			ctx, now := context.Background(), time.Now()
 			url := "https://github.com/example/app/pull/12"
 			s.setTaskStage(ctx, task.ID, "review", url)
-			if _, err := reviewErr(s, task.ID, waitingPark()); err != nil {
+			if _, err := reviewErr(s, task.ID, mergePark(url)); err != nil {
 				t.Fatal(err)
 			}
 			f := &statusForge{status: TodoPRStatus{State: "open", Checks: "success", Review: "required"}}
@@ -210,7 +210,7 @@ func TestPRStatusIgnoresAReplacedPR(t *testing.T) {
 	oldURL, newURL := "https://github.com/example/app/pull/12", "https://github.com/example/app/pull/13"
 	s.setTaskStage(ctx, task.ID, "review", oldURL)
 	old := todoNow(s, task.ID)
-	if _, err := reviewErr(s, task.ID, waitingPark()); err != nil {
+	if _, err := reviewErr(s, task.ID, mergePark(oldURL)); err != nil {
 		t.Fatal(err)
 	}
 	s.setTaskStage(ctx, task.ID, "review", newURL)
@@ -219,6 +219,85 @@ func TestPRStatusIgnoresAReplacedPR(t *testing.T) {
 	}
 	if got := todoNow(s, task.ID); got.PRStatus != nil || got.Supervision.State != reviewParked || got.PRURL != newURL {
 		t.Fatalf("a stale response changed the replacement PR's task: %+v", got)
+	}
+}
+
+// mergePark parks a task on the maintainers merging the PR at url, naming it as a supervisor does.
+func mergePark(url string) map[string]any {
+	return map[string]any{"verdict": "parked", "reason": "Waiting for the maintainers to review and merge " + url,
+		"waiting_on": "someone_else", "until": "3d"}
+}
+
+func TestParkWaitsOnPR(t *testing.T) {
+	url := "https://github.com/example/app/pull/12"
+	for reason, want := range map[string]bool{
+		"Waiting for the maintainers to merge " + url:                   true,
+		"Waiting for review of https://github.com/Example/App/pull/12":  true,
+		"PR #12 waits for the maintainer":                               true,
+		"The design team has to pick the icon set first":                false,
+		"Waiting for https://github.com/example/app/pull/120 to merge":  false,
+		"Waiting for https://github.com/example/other/pull/12 to merge": false,
+		"Release 2.1 has to ship first (#120)":                          false,
+	} {
+		if got := parkWaitsOnPR(&TaskReview{Verdict: reviewParked, WaitingOn: parkSomeoneElse, Reason: reason}, url); got != want {
+			t.Errorf("%q: %v, want %v", reason, got, want)
+		}
+	}
+	if parkWaitsOnPR(&TaskReview{Verdict: reviewParked, WaitingOn: parkDate, Reason: "PR #12"}, url) {
+		t.Error("a date park waits on the PR")
+	}
+}
+
+// A park for something else, made before the PR was seen open or after, is not the PR's merge wait: the PR merging
+// or closing leaves it parked and queues no review (#7614 review).
+func TestPRStatusTerminalPRLeavesAnUnrelatedParkAlone(t *testing.T) {
+	for _, when := range []string{"before", "after"} {
+		t.Run(when, func(t *testing.T) {
+			s, _, task := newSupervisedService(t)
+			ctx, now := context.Background(), time.Now()
+			s.setTaskStage(ctx, task.ID, "review", "https://github.com/example/app/pull/12")
+			park := func() {
+				if _, err := reviewErr(s, task.ID, waitingPark()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if when == "before" {
+				park()
+			}
+			f := &statusForge{status: TodoPRStatus{State: "open", Checks: "success"}}
+			s.deploy.forge = f
+			s.sweepPRStatuses(ctx, now)
+			if when == "after" {
+				park()
+			}
+			f.status.State = "merged"
+			s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+			got := todoNow(s, task.ID)
+			if got.PRStatus == nil || got.PRStatus.State != "merged" {
+				t.Fatalf("merged PR facts not kept: %+v", got.PRStatus)
+			}
+			if got.Supervision.State != reviewParked || pendingReviewSignal(s, task.ID) {
+				t.Fatalf("a merged PR woke a park for something else: %+v", got.Supervision)
+			}
+		})
+	}
+}
+
+// A merged observation moves the stage only while the open to-do and its stage still name that PR: one replaced, or a
+// to-do closed, between the facts being kept and the stage update stays where it is (#7614 review).
+func TestPRStatusMergedStageNeedsTheSamePR(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx := context.Background()
+	oldURL, newURL := "https://github.com/example/app/pull/12", "https://github.com/example/app/pull/13"
+	s.setTaskStage(ctx, task.ID, "review", oldURL)
+	s.setTaskStage(ctx, task.ID, "review", newURL) // the replacement lands after the old PR's facts were applied
+	s.setTaskStageOn(ctx, task.ID, "merge", "", "", false, oldURL)
+	if got := todoNow(s, task.ID); got.Stage != "review" || got.PRURL != newURL {
+		t.Fatalf("a replaced PR's merge moved the stage: %q (%s)", got.Stage, got.PRURL)
+	}
+	s.setTaskStageOn(ctx, task.ID, "merge", "", "", false, newURL)
+	if got := todoNow(s, task.ID); got.Stage != "merge" {
+		t.Fatalf("the current PR's merge did not move the stage: %q", got.Stage)
 	}
 }
 
@@ -263,7 +342,7 @@ func TestPRStatusReplacedInFlightDoesNotWakeTheSupervisor(t *testing.T) {
 	ctx := context.Background()
 	oldURL, newURL := "https://github.com/example/app/pull/12", "https://github.com/example/app/pull/13"
 	s.setTaskStage(ctx, task.ID, "review", oldURL)
-	if _, err := reviewErr(s, task.ID, waitingPark()); err != nil {
+	if _, err := reviewErr(s, task.ID, mergePark(oldURL)); err != nil {
 		t.Fatal(err)
 	}
 	old := todoNow(s, task.ID)
