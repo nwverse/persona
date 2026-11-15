@@ -21,6 +21,9 @@ if os.environ.get("MOCK_CHILD_SESSIONS"):
 # MOCK_PASEO_PROVIDERS=1 (#8142) builds on it too: two of its providers the apps have no id for (Grok, Cursor).
 if os.environ.get("MOCK_PASEO_PROVIDERS"):
     os.environ.setdefault("MOCK_PASEO", "1")
+# MOCK_PASEO_NOT_LOADED=1 (#8321) as well: a Grok agent Paseo let go, read only once its chat is watched.
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):
+    os.environ.setdefault("MOCK_PASEO", "1")
 # MOCK_TEAM=1 (#5180) builds on MOCK_TAB_PANES's tab of three: it adds a worker's request, a third worker and a stopped pane.
 MOCK_TEAM = bool(os.environ.get("MOCK_TEAM"))
 if MOCK_TEAM:
@@ -1270,6 +1273,18 @@ if PASEO_PROVIDERS:
                "Moved the toggles into one group.", agent="paseo", agent_label="Cursor", launcher="cursor", model="auto",
                capabilities=_provider_caps),
     ]
+# MOCK_PASEO_NOT_LOADED=1 (#8321, on the Paseo computer): a Grok agent Paseo let go (closed after an hour idle, listed
+# offline). As its bridge does since #8132, every read of its chat is refused as not_loaded until a subscribe watches
+# it: then "Paseo" loads it, which takes MOCK_PASEO_LOAD_SECONDS (default 3), and the backlog brings its history.
+# GET /mock/paseo-unload lets it go again.
+PASEO_CLOSED = "paseo-9a5e0000-0000-4000-8000-000000000012"
+PASEO_LOADED = {"on": False}
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):
+    SESSIONS.append(_paseo(PASEO_CLOSED, "Sort the holiday photos", "Triage", None, "main", "offline", "offline", 90,
+                           "Done: 212 photos in 9 albums, one per town.", agent="paseo", agent_label="Grok", launcher="grok",
+                           model="grok-4", capabilities={"read": True, "send": True, "interrupt": True, "approve": True,
+                                                         "terminal": False, "attach": False, "close": True, "rename": True,
+                                                         "model": True}))
 # MOCK_CHILD_SESSIONS=1 (#5120): the Paseo agent that created two agents created two more, both finished (one of them
 # failed), and an agent whose creator is not listed stays a row of its own. With the hub's folding (fold_hierarchy) the
 # web lists none of the children: the lead's row needs you (its waiting child) and its chat draws a card for each.
@@ -2554,7 +2569,7 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # Knowledge points by topic (#3783), on by default; MOCK_KB_TOPICS_OFF=1 starts it off (#7251's empty map).
                     "kb_topics": os.environ.get("MOCK_KB_TOPICS_OFF") != "1",
                     # The sidebar's Recent lists the scheduled tasks' chats too (#8324), off by default;
-                    # MOCK_RECENT_TASK_CHATS=1 starts on. Left out with MOCK_LEGACY_HUB.
+                    # MOCK_RECENT_TASK_CHATS=1 starts on; =absent is a hub from before it. Left out with MOCK_LEGACY_HUB.
                     "recent_task_chats": os.environ.get("MOCK_RECENT_TASK_CHATS") == "1"}
 # What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
 RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
@@ -2579,7 +2594,7 @@ def assistant_state(space="", archived=False):
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
-                   recent_task_chats=cfg["recent_task_chats"])
+                   **({} if os.environ.get("MOCK_RECENT_TASK_CHATS") == "absent" else {"recent_task_chats": cfg["recent_task_chats"]}))
         if BACKGROUND_SUPERVISOR and not space:  # once the hub has made it (#4927)
             out.update(background_supervisor=BACKGROUND_SUPERVISOR, background_supervisor_machine_id=cfg["machine_id"])
     if cfg["notes"] is not None:
@@ -7606,6 +7621,11 @@ if os.environ.get("MOCK_CHILD_SESSIONS"):  # #5120: the lead's two exchanges, an
     ITEMS[PASEO_GRANDCHILD] = (
         [it("user", "text", 2, text="Trace why a refresh after a retry returns 401.")]
         + [it("assistant", "text", 0.2, text="Following the 401 through the retry.")])
+if os.environ.get("MOCK_PASEO_NOT_LOADED"):  # #8321: what the closed Grok agent did before Paseo let it go
+    ITEMS[PASEO_CLOSED] = (
+        [it("user", "text", 95, text="Sort the holiday photos by place, one album per town.")]
+        + tool("Bash", {"command": "exiftool -GPSPosition -csv ~/Pictures/Holiday"}, "212 photos, 9 places", 94)
+        + [it("assistant", "text", 90, text="Done: 212 photos in 9 albums, one per town.")])
 if os.environ.get("MOCK_ORCA_CHILDREN"):
     ITEMS["c2073000-0000-4000-8000-000000000006"] = [
         it("user", "text", 61, text="Review the prior work in this workspace."),
@@ -16726,6 +16746,28 @@ if os.environ.get("MOCK_REPLY_MARKDOWN") == "1":
     mock_reply_markdown()
 
 
+# MOCK_CJK_PATHS=1 (#8386): a reply naming files whose names are Chinese or Japanese, written without backticks, and
+# those files (so …/stat says they are there; their folders are too). Before the fix only the ASCII start of each path
+# linked: the folder. In an Agents chat of its own and at the end of Persona's conversation. Made-up content.
+CJK_PATHS = "a1f3c2d4-0000-4000-8000-000000008386"
+CJK_PATHS_TEXT = ("报表整理好了：\n\n"
+                  "- 报表：/Users/me/code/weather/reports/报表_2026H2.xlsx\n"
+                  "- 说明：~/文档/项目说明.md，改动记在 /Users/me/code/weather/docs/变更记录.md里了。\n"
+                  "- 会议纪要：/Users/me/code/weather/notes/会議メモ.txtを参照してください。\n\n"
+                  "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。")
+
+
+def mock_cjk_paths():
+    for f in ("/Users/me/code/weather/reports/报表_2026H2.xlsx", "/Users/me/文档/项目说明.md", "/Users/me/code/weather/docs/变更记录.md",
+              "/Users/me/code/weather/notes/会議メモ.txt", "/Users/me/code/weather/data/2026年/sales-売上_v2.csv"):
+        FILES[f] = "placeholder\n".encode()
+    ITEMS[CJK_PATHS] = [it("user", "text", 6, text="报表放哪了？"), it("assistant", "text", 5, text=CJK_PATHS_TEXT)]
+    SESSIONS.append(sess("macbook", CJK_PATHS, "报表整理", "/Users/me/code/weather", "done", "unread", "weather", 1, "cjk-paths", 21, 5,
+                         "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="报表放哪了？"), it("assistant", "text", 1, text=CJK_PATHS_TEXT)]
+
+
+
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
@@ -18089,6 +18131,8 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long m
     for _f in ("docs/review-queue.md", "notes/status.md", "docs/brief.md", "notes/runs/20261110T165351Z/snapshot.json"):
         FILES["/Users/me/code/shop-app/" + _f] = b"# placeholder\n"
     FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
+if os.environ.get("MOCK_CJK_PATHS") == "1":  # its files are there (#8386)
+    mock_cjk_paths()
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
@@ -20672,7 +20716,8 @@ def net_control(path, q):
 # MOCK_HUB_UPDATE=available|waiting|notice|held|docker|docker-pinned: the hub's version and its updating itself
 # (docs/operations/hub-update.md): a newer release to install (auto-update off), an update waiting for two busy agents, "Automatic updates enabled"
 # told for the first time, a newer release auto-update holds back (its code does not contain the hub's commit, with
-# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). Unset:
+# the held line in the history), or a Docker hub with a newer image (on :latest, or on a pinned version tag). behind
+# (#8108): up to date against a build-time source whose newest release is older than the hub (source_behind). Unset:
 # GET /api/v1/hub/update is 404 (a hub from before), no line anywhere.
 HUB_UPDATE_MODE = os.environ.get("MOCK_HUB_UPDATE", "")
 HUB_UPDATE = {}
@@ -20695,6 +20740,10 @@ def hub_update_state():
         elif HUB_UPDATE_MODE == "notice":
             HUB_UPDATE.update(state="idle", auto=True, auto_notice=True)
             HUB_UPDATE["latest"] = dict(latest, version=HUB_UPDATE["version"], build=HUB_UPDATE["build"], newer=False)
+        elif HUB_UPDATE_MODE == "behind":
+            HUB_UPDATE.update(state="idle", auto=True, update_url="https://site.example.com/dl", update_url_from="build", source_behind=True)
+            HUB_UPDATE["latest"] = {"version": "v0.1.17-177-g563f7fde5b-202611071005", "build": 202611071005,
+                                    "released": "2026-11-07T10:05:00Z", "newer": False, "bad": False}
         elif HUB_UPDATE_MODE in ("docker", "docker-pinned"):
             pinned = HUB_UPDATE_MODE == "docker-pinned"
             HUB_UPDATE.update(version="0.3.0", build=0, channel="docker", can_update=False, auto=False,
@@ -22461,9 +22510,23 @@ IPHONE_MODES = ("one", "several", "none", "pair", "setup")
 # 2 × MOCK_COMPUTER_STEP); this simulator on MacBook's cable once MacBook is turned on (Pair waits for Trust a step,
 # then pairs); Developer Mode off until 2 steps after pairing (as if the user turned it on and the phone restarted), then
 # the developer disk image missing until Prepare (2 steps); Mac Studio a Mac without Xcode (ddi_present false); the
-# server a Linux computer. POST /api/v1/iphone/try answers a screenshot and Weather opened. GET /mock/iphone shows it,
-# GET /mock/iphone?reset=1 starts it over.
+# server a Linux computer (listed as the hub lists one, without the bridge or a developer disk image). Forget unpairs.
+# The install job's step is in MOCK_LANG (en, ja, zh-Hans), as the hub words it for the web (#8217). POST
+# /api/v1/iphone/try answers a screenshot and Weather opened. GET /mock/iphone shows it, GET /mock/iphone?reset=1
+# starts it over.
 IPHONE_SETUP = {"ext": MOCK_IPHONE != "setup", "installed": {"studio"}, "paired_at": None, "prepared_at": None, "tried": 0}
+
+
+IPHONE_SETUP_STEPS = {
+    "zh-Hans": {"install": "正在下载 iPhone 助手程序", "pair": "在这台 iPhone 上点「信任」，再输入锁屏密码", "prepare": "正在准备这台 iPhone，大约一分钟"},
+    "en": {"install": "Downloading the iPhone helper", "pair": "On the iPhone, tap Trust, then enter its passcode", "prepare": "Getting the iPhone ready, about a minute"},
+    "ja": {"install": "iPhoneヘルパーをダウンロードしています", "pair": "iPhoneで「信頼」をタップしてからパスコードを入力してください", "prepare": "iPhoneを準備しています（1分ほど）"},
+}
+
+
+def iphone_system(machine):
+    """A computer the hub lists iPhone control for: a Mac, and in the setup mode a Linux computer too (as the hub does)."""
+    return machine.get("os") == "darwin" or (MOCK_IPHONE == "setup" and machine.get("os") == "linux")
 
 
 def iphone_setup_job(machine_id):
@@ -22476,10 +22539,12 @@ def iphone_setup_job(machine_id):
     if job.get("cancelled"):
         return {"kind": kind, "state": "cancelled", "started": job["started"]}
     if t <= 2 * COMPUTER_STEP:
-        steps = {"install": "正在下载 iPhone 助手程序", "pair": "在这台 iPhone 上点「信任」，再输入锁屏密码", "prepare": "正在准备这台 iPhone，大约一分钟"}
+        steps = IPHONE_SETUP_STEPS.get(LAUNCHER_HEALTH_LANG, IPHONE_SETUP_STEPS["zh-Hans"])
         out = {"kind": kind, "state": "running", "started": job["started"], "step": steps.get(kind, "")}
         if kind == "pair":
             out.update(code="trust_pending", device="dev-mock-1")
+        elif kind == "prepare":
+            out["device"] = "dev-mock-1"
         return out
     if kind == "install":
         IPHONE_SETUP["installed"].add(machine_id)
@@ -22534,7 +22599,8 @@ def iphone_of(machine):
         job = iphone_setup_job(machine["id"])
         devices = [{**d, "allowed": enabled and d["id"] in IPHONE_CONSENT} for d in iphone_setup_devices(machine["id"])]
         installed = machine["id"] in IPHONE_SETUP["installed"]
-        out = {"enabled": enabled, "installed": installed, "devices": devices, "ddi_present": machine["id"] != "studio"}
+        out = {"enabled": enabled, "installed": installed, "devices": devices,
+               "ddi_present": machine.get("os") == "darwin" and machine["id"] != "studio"}
         if installed:
             out["version"] = "0.1.0"
         else:
@@ -22571,7 +22637,7 @@ def iphone_list():
 def refresh_iphones():
     if MOCK_IPHONE in IPHONE_MODES:
         for m in MACHINES:
-            if m.get("os") == "darwin":
+            if iphone_system(m):
                 if IPHONE_SETUP["ext"]:
                     m["iphone"] = iphone_of(m)
                 else:
@@ -22585,7 +22651,7 @@ if MOCK_IPHONE in IPHONE_MODES:
     if MOCK_IPHONE == "setup":
         IPHONE_ON.clear()  # nothing turned on yet
     for _m in MACHINES:
-        if _m.get("os") == "darwin" and IPHONE_SETUP["ext"]:
+        if iphone_system(_m) and IPHONE_SETUP["ext"]:
             _m["iphone"] = iphone_of(_m)
 
 # Every fixture, including machines added by optional modes, follows the engine contract.
@@ -25672,6 +25738,10 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"settings": CODEX_SETTINGS.setdefault(p.split("/")[4], _codex_settings())})
         if p.startswith("/api/v1/sessions/") and p.endswith("/items"):
             sid = unquote(p.split("/")[5])  # a subagent's is "<session>@<agent>" (the web app sends %40)
+            if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:  # MOCK_PASEO_NOT_LOADED: no watch has loaded it yet
+                LOG.write("  items %s refused: not_loaded\n" % sid); LOG.flush()
+                return self.send_json({"error": "This agent isn’t running in Paseo. Its conversation loads while its chat is open.",
+                                       "code": "not_loaded"}, 409)
             items = find_items(sid)
             last = items[-1]["seq"] if items else 0
             if "after_seq" in q:
@@ -25695,6 +25765,9 @@ class H(BaseHTTPRequestHandler):
             served(sid, "page", out)
             live_step_page_sent(sid)
             return self.send_json(out)
+        if p == "/mock/paseo-unload":  # MOCK_PASEO_NOT_LOADED: Paseo lets the Grok agent go again
+            PASEO_LOADED["on"] = False
+            return self.send_json({"ok": True})
         if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
             q = parse_qs(urlparse(self.path).query)
             if q.get("asked") != ["1"]: IMAGES_FAIL["on"] = q.get("ok", [""])[0] != "1"
@@ -26460,6 +26533,9 @@ class H(BaseHTTPRequestHandler):
                 IPHONE_JOBS[machine["id"]] = {"at": time.time(), "started": ago()}
             elif action == "cancel":
                 if machine["id"] in IPHONE_JOBS: IPHONE_JOBS[machine["id"]]["cancelled"] = True
+            elif action == "forget" and MOCK_IPHONE == "setup":
+                IPHONE_SETUP.update(paired_at=None, prepared_at=None)
+                IPHONE_CONSENT.discard("dev-mock-1")
             elif action != "forget":
                 return self.send_json({"error": "unknown action"}, 404)
             refresh_iphones()
@@ -27278,7 +27354,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main"] = "" if body["main"] == "-" else body["main"]
             if isinstance(body.get("main_tasks_quiet"), bool):
                 ASSISTANT_CONFIG["main_tasks_quiet"] = body["main_tasks_quiet"]
-            if isinstance(body.get("recent_task_chats"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
+            if isinstance(body.get("recent_task_chats"), bool) and not os.environ.get("MOCK_LEGACY_HUB") \
+                    and os.environ.get("MOCK_RECENT_TASK_CHATS") != "absent":
                 ASSISTANT_CONFIG["recent_task_chats"] = body["recent_task_chats"]
             if MEETING_ATTENDANCE and "meeting_attendance_default" in body:
                 ASSISTANT_CONFIG["meeting_attendance_default"] = body["meeting_attendance_default"]
@@ -28034,7 +28111,17 @@ class H(BaseHTTPRequestHandler):
                                         except Exception:
                                             pass
                         threading.Thread(target=stream, daemon=True).start()
-                    if since:
+                    if sid == PASEO_CLOSED and not PASEO_LOADED["on"]:
+                        # MOCK_PASEO_NOT_LOADED: the watch loads the agent, and the hub's backlog read waits for it
+                        def load(sid=sid, mid=mid, fold=bool(msg.get("fold_work"))):
+                            time.sleep(float(os.environ.get("MOCK_PASEO_LOAD_SECONDS", "3")))
+                            PASEO_LOADED["on"] = True
+                            history = find_items(sid)
+                            page, more = last_turns(history, 2) if PAGING["on"] else (history, False)
+                            send({"type": "items", "machine_id": mid, "session_id": sid, "backlog": True, "has_more": more, **span(history),
+                                  "items": lazy_images(fold_work(page) if fold else page)})
+                        threading.Thread(target=load, daemon=True).start()
+                    elif since:
                         newer = [x for x in items if x["seq"] > since]
                         send({"type": "items", "machine_id": mid, "session_id": sid, "items": lazy_images(newer), "backlog": True,
                               **span(items, since, max(since, items[-1]["seq"] if items else 0))})
