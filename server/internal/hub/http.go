@@ -757,6 +757,9 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		PermissionMode string `json:"permission_mode,omitempty"`
 		Effort         string `json:"effort,omitempty"`
 		Ultracode      *bool  `json:"ultracode,omitempty"`
+		// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
+		// start it cannot take there answers 409 start_goal_unsupported before anything starts.
+		Goal string `json:"goal,omitempty"`
 		// TabName names the herdr tab; empty: one made from the first message (tabName, assistant/agents_start.go),
 		// else agent-<n>.
 		TabName string `json:"tab_name,omitempty"`
@@ -1538,6 +1541,9 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			// calls still reach this connection, but nothing is saved under a credential about to disappear.
 			return
 		}
+		// Its app reaches the hub: what the hub push-starts there is answered again (#7641). Off the read loop, as the
+		// tools' write. By its push id, which starts are claimed under; not deviceID above, which falls back to the credential.
+		h.live.phoneConnectedLater(msg.DeviceID, c.device)
 		h.setPhoneTools(db.PhoneToolRegistration{DeviceID: deviceID, Platform: msg.Platform, CredentialID: c.device, Tools: tools})
 	case "register_desktop":
 		h.registerDesktop(c, msg.DeviceName, msg.DeviceID)
