@@ -55,7 +55,7 @@ func (s iphoneSessions) Devices(ctx context.Context) []iphoneLink {
 	out := make([]iphoneLink, 0, len(devices))
 	for _, d := range devices {
 		out = append(out, iphoneLink{ID: d.UDID, Name: d.Name, ProductType: d.ProductType, IOS: d.OSVersion, Paired: d.Paired,
-			USB: d.USB, State: d.State, Transport: d.Transport, ErrorCode: d.LastErrorCode, Info: d.Info})
+			USB: d.USB, State: d.State, Transport: d.Transport, ErrorCode: d.LastErrorCode, Info: d.Info, DeveloperMode: d.DeveloperMode})
 	}
 	return out
 }
@@ -91,5 +91,6 @@ func (s iphoneSessions) Job() *iphoneJob {
 	if j == nil {
 		return nil
 	}
-	return &iphoneJob{Kind: j.Kind, State: j.State, Step: j.Step, ErrorCode: j.Code, Error: j.Error, Started: j.Started}
+	return &iphoneJob{Kind: j.Kind, State: j.State, Step: j.Step, ErrorCode: j.Code, Error: j.Error, Waiting: j.Waiting, Device: j.UDID,
+		Started: j.Started}
 }
