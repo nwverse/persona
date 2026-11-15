@@ -2046,6 +2046,29 @@
       },
       "extractionState" : "manual"
     },
+    "%@ is available again; your next message switches back" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ is available again; your next message switches back"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ が再び利用できます。次のメッセージで元のモデルに戻ります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已恢复，下一条消息会切回"
+          }
+        }
+      }
+    },
     "%@ is connected" : {
       "localizations" : {
         "zh-Hans" : {
@@ -15016,6 +15039,28 @@
         }
       }
     },
+    "A side session needs you" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A side session needs you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッションが対応を待っています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有分支会话需要你"
+          }
+        }
+      }
+    },
     "A start with it that works clears this; otherwise it clears by itself after 6 hours." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26702,6 +26747,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Available again: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Available again: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用再開：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复时间：%1$@"
+          }
+        }
+      }
     },
     "Available · Direct to APNs" : {
       "extractionState" : "manual",
@@ -61551,6 +61619,29 @@
         }
       }
     },
+    "Every model tried failed: %@." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every model tried failed: %1$@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試したすべてのモデルが失敗しました：%1$@。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试过的模型都失败了：%1$@。"
+          }
+        }
+      }
+    },
     "Every pane in the tab closes, and the agents running in them end too." : {
       "localizations" : {
         "en" : {
@@ -66516,6 +66607,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "根据 Persona 自己过去 7 天的记录算出，写明了自己时间范围的那一项除外。什么都没有改动：下面每一项在你自己改动之前都保持原样。"
+          }
+        }
+      }
+    },
+    "From Side Session · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From Side Session · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッション・%@から"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自分支会话 · %@"
           }
         }
       }
@@ -88409,6 +88522,29 @@
         }
       }
     },
+    "Models tried: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Models tried: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "試したモデル：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试过的模型：%1$@"
+          }
+        }
+      }
+    },
     "Modified" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -94433,6 +94569,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No Side Sessions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Side Sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッションはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有分支会话"
+          }
+        }
+      }
     },
     "No Skills Yet" : {
       "localizations" : {
@@ -139107,6 +139265,50 @@
       },
       "extractionState" : "manual"
     },
+    "Side Sessions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Side Sessions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支会话"
+          }
+        }
+      }
+    },
+    "Side Sessions (%lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Side Sessions (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子セッション（%lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支会话（%lld）"
+          }
+        }
+      }
+    },
     "Side by Side" : {
       "localizations" : {
         "en" : {
@@ -139129,6 +139331,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Side sessions started from this session show up here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Side sessions started from this session show up here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このセッションから始めた子セッションがここに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从这个会话开出的分支会话会显示在这里。"
+          }
+        }
+      }
     },
     "Sidebar [Appearance]" : {
       "extractionState" : "manual",
@@ -159123,6 +159347,29 @@
         }
       }
     },
+    "The upstream refused this request, so it switched to %@ (%@)." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The upstream refused this request, so it switched to %1$@ (%2$@)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上流がこのリクエストを拒否したため、%1$@ に切り替えました（%2$@）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上游拒绝了这次请求，已改用 %1$@（%2$@）。"
+          }
+        }
+      }
+    },
     "The upstream refused this request, so it switched to %@." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -160777,6 +161024,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This agent uses its own approval settings unless you choose Allow Everything." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This agent uses its own approval settings unless you choose Allow Everything."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「すべて許可」を選ばない限り、このエージェントは自身の承認設定で動作します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "除非选「全部放行」，这个 Agent 按它自己的审批设置运行。"
+          }
+        }
+      }
     },
     "This agent wasn't started with Allow Everything, so it can't be switched back to it from here." : {
       "localizations" : {
@@ -180395,6 +180665,29 @@
       },
       "extractionState" : "manual"
     },
+    "What should the agent do? (Optional)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What should the agent do? (Optional)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "エージェントに何をさせますか？（空欄でも可）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想让 Agent 做什么？（可以留空）"
+          }
+        }
+      }
+    },
     "What the assistant found" : {
       "localizations" : {
         "en" : {
@@ -188722,6 +189015,29 @@
         }
       }
     },
+    "model unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "model unavailable"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルを利用できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型不可用"
+          }
+        }
+      }
+    },
     "needs a name" : {
       "localizations" : {
         "en" : {
@@ -189274,6 +189590,52 @@
         }
       }
     },
+    "rate limited" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "rate limited"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レート制限されました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "被限流了"
+          }
+        }
+      }
+    },
+    "quota exhausted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "quota exhausted"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用枠を使い切りました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "额度耗尽"
+          }
+        }
+      }
+    },
     "requested changes" : {
       "localizations" : {
         "en" : {
@@ -189546,6 +189908,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "发送消息"
+          }
+        }
+      }
+    },
+    "service error" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "service error"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サービスエラー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务出错"
           }
         }
       }
@@ -190471,6 +190856,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "the model refused" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the model refused"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルが拒否しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型拒绝了"
+          }
+        }
+      }
     },
     "the other end" : {
       "comment" : "The channel, when its name is unknown",
