@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -108,6 +109,38 @@ func TestRuntimeRowsOnlyStartingAreNotRemembered(t *testing.T) {
 	for id, want := range map[string]bool{sdkSession: false, "paseo-failed": false, "paseo-ran": true} {
 		if _, _, known := n.runtimes.belongs(id); known != want {
 			t.Errorf("%s remembered as the runtime's: %v, want %v", id, known, want)
+		}
+	}
+}
+
+// A takeover the runtime had under way when it left (Paseo still importing the session, or the import failed) stays
+// listed as the conversation it is, not running: not as starting, nor as a start that failed, for as long as the node
+// keeps the rows of a runtime that left.
+func TestRuntimeAwayDropsATakeoverUnderWay(t *testing.T) {
+	const (
+		importing = "5d510000-0000-4000-8000-0000000000d1"
+		failed    = "5d510000-0000-4000-8000-0000000000d2"
+	)
+	t.Setenv("PERSONA_HOME", "")
+	n, _ := runtimeNode(t)
+	t.Cleanup(freshOffline)
+	dir := filepath.Join(n.home, ".claude", "projects", "-src-app")
+	writeClaudeRun(t, dir, importing, time.Minute, "sdk-cli", "sdk-cli")
+	writeClaudeRun(t, dir, failed, 2*time.Minute, "sdk-cli", "sdk-cli")
+	host := dialRuntime(t, n, paseoHello())
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": importing, "transcript": importing, "agent": "claude", "cwd": "/src/app", "status": "idle", "starting": true},
+		{"session_id": failed, "transcript": failed, "agent": "claude", "cwd": "/src/app", "status": "offline",
+			"start_error": "Paseo did not start this session: no"},
+	}, "unlisted_transcripts": []string{}})
+	waitFor(t, "listed by Paseo", func() bool { return listed(t, n)[importing].Starting })
+	_ = host.conn.Close()
+	waitFor(t, "the runtime left", func() bool { return runtimeGone(n, "paseo") && !listed(t, n)[importing].Starting })
+	freshOffline()
+	got := listed(t, n)
+	for _, id := range []string{importing, failed} {
+		if s, ok := got[id]; !ok || s.Status != proto.StatusOffline || s.Starting || s.StartError != "" {
+			t.Fatalf("%s while Paseo is away: listed %v, %+v", id, ok, s)
 		}
 	}
 }

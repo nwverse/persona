@@ -537,14 +537,26 @@ struct InboxPage: View {
         ToolbarItem(placement: .principal) {
             Text("\(chosen.count) Selected").font(Theme.Font.heading).lineLimit(1)
         }
-        ToolbarItemGroup(placement: .bottomBar) {
-            // Select All adds what is in sight (a folded group picked whole stays picked); Deselect All clears all.
-            Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
-                self.picked = all ? [] : picked.union(pickable.map(\.key))
+        if shell != nil {
+            // iPhone's place root has one leading button, ☰, so Select All belongs with the other selection actions below.
+            ToolbarItemGroup(placement: .bottomBar) {
+                // Select All adds what is in sight (a folded group picked whole stays picked); Deselect All clears all.
+                Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
+                    self.picked = all ? [] : picked.union(pickable.map(\.key))
+                }
+                .disabled(pickable.isEmpty)
+                .accessibilityIdentifier("inbox.selectAll")
+                Spacer()
             }
-            .disabled(pickable.isEmpty)
-            .accessibilityIdentifier("inbox.selectAll")
-            Spacer()
+        } else {
+            // The iPad and other non-shell layouts keep their original leading Select All beside Back or the hub picker.
+            ToolbarItem(placement: .topBarLeading) {
+                Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
+                    self.picked = all ? [] : picked.union(pickable.map(\.key))
+                }
+                .disabled(pickable.isEmpty)
+                .accessibilityIdentifier("inbox.selectAll")
+            }
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button("Done") { withAnimation(Theme.Motion.standard) { self.picked = nil } }
