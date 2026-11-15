@@ -13,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // fakeIPhones is an iphoneHost whose bridge, devices and answers the test sets.
 type fakeIPhones struct {
+	ddi       bool // the developer disk image is on this computer
 	installed bool
 	links     []iphoneLink
 	info      map[string]string // device_info's answer by device
@@ -31,6 +33,7 @@ type fakeIPhones struct {
 }
 
 func (f *fakeIPhones) Bridge(context.Context) (bool, string) { return f.installed, "0.1.0" }
+func (f *fakeIPhones) DDIPresent() bool                      { return f.ddi }
 func (f *fakeIPhones) Devices(context.Context) []iphoneLink  { return f.links }
 func (f *fakeIPhones) Call(ctx context.Context, device, op string, args json.RawMessage) (json.RawMessage, error) {
 	f.mu.Lock()
@@ -60,6 +63,16 @@ func (f *fakeIPhones) Pair(device string) error {
 }
 func (f *fakeIPhones) Forget(device string) error {
 	f.jobs = append(f.jobs, "forget "+device)
+	return nil
+}
+func (f *fakeIPhones) Prepare(device string) error {
+	f.jobs = append(f.jobs, "prepare "+device)
+	f.job = &iphoneJob{Kind: "prepare", State: "running", Stage: "mount", Device: device, Step: "mounting the developer disk image"}
+	return nil
+}
+func (f *fakeIPhones) Install(src iphone.InstallSource) error {
+	f.jobs = append(f.jobs, "install "+strings.Join(src.URLs, " "))
+	f.job = &iphoneJob{Kind: "install", State: "running", Stage: "download", Step: "downloading the iPhone bridge"}
 	return nil
 }
 func (f *fakeIPhones) Cancel()         { f.job = nil }
@@ -165,8 +178,13 @@ func TestIPhoneReadyWithoutElementTree(t *testing.T) {
 func TestIPhoneStatusSaysWhatIsMissing(t *testing.T) {
 	ctx := context.Background()
 	useIPhones(t, &fakeIPhones{}, nil)
-	if p := Status(ctx); p.Installed || p.Note != iphoneNoteNoBridge || p.Code != "bridge_missing" || p.Devices == nil || p.Checked.IsZero() {
+	if p := Status(ctx); p.Installed || p.Note != iphoneNoteNoBridge || p.Code != "bridge_missing" || p.Devices == nil || p.Checked.IsZero() ||
+		p.DDIPresent == nil || *p.DDIPresent {
 		t.Fatalf("no bridge: %+v", p)
+	}
+	useIPhones(t, &fakeIPhones{ddi: true}, nil)
+	if p := Status(ctx); p.DDIPresent == nil || !*p.DDIPresent {
+		t.Fatalf("with the developer disk image: %+v", p)
 	}
 	useIPhones(t, &fakeIPhones{installed: true, links: []iphoneLink{{ID: "u1", Name: "Phone", USB: true}}}, nil)
 	if p := Status(ctx); p.Note != iphoneNoteNonePaired || p.Code != "none_paired" || len(p.Devices) != 1 || p.Devices[0].Note != iphoneNoteUSB ||
@@ -437,6 +455,69 @@ func TestIPhonePairStartsAJob(t *testing.T) {
 		t.Fatal("cancel kept the job")
 	}
 	if strings.Join(f.jobs, ",") != "pair u1,forget u1" {
+		t.Fatalf("jobs %v", f.jobs)
+	}
+}
+
+// TestIPhoneInstallStartsAJob: the app's Install starts the job with the release's build, and the status says each
+// stage, and why it failed, in words the hub translates (#8199).
+func TestIPhoneInstallStartsAJob(t *testing.T) {
+	f := &fakeIPhones{}
+	useIPhones(t, f, nil)
+	out, err := Install(context.Background(), json.RawMessage(`{"urls":["https://example.com/dl/b.gz"],"size":3,"sha256":"x","binary_sha256":"y"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Job == nil || out.Job.Kind != "install" || out.Job.Step != iphoneInstallSteps["download"] || out.Job.Code != "" {
+		t.Fatalf("status %+v", out.Job)
+	}
+	if strings.Join(f.jobs, ",") != "install https://example.com/dl/b.gz" {
+		t.Fatalf("jobs %v", f.jobs)
+	}
+	for stage, step := range iphoneInstallSteps {
+		f.job = &iphoneJob{Kind: "install", State: "running", Stage: stage, Step: "english words"}
+		if j := Status(context.Background()).Job; j.Step != step {
+			t.Fatalf("stage %s: %+v", stage, j)
+		}
+	}
+	for code, note := range iphoneInstallErrors {
+		f.job = &iphoneJob{Kind: "install", State: "failed", ErrorCode: code, Error: "english words"}
+		if j := Status(context.Background()).Job; j.Error != note || j.Code != code {
+			t.Fatalf("failed with %s: %+v", code, j)
+		}
+	}
+	if _, err := Install(context.Background(), json.RawMessage(`[]`)); err == nil {
+		t.Fatal("unreadable params")
+	}
+}
+
+// TestIPhonePrepareStartsAJob: Prepare starts the job for that iPhone; the status says it in words the hub translates
+// and why it failed, and each iPhone says whether its owner allowed this computer to prepare it again (#8199).
+func TestIPhonePrepareStartsAJob(t *testing.T) {
+	f := &fakeIPhones{installed: true, links: []iphoneLink{{ID: "u1", Paired: true, State: "backoff", ErrorCode: "ddi_not_mounted", AutoPrepare: true}}}
+	useIPhones(t, f, nil)
+	out, err := Pair(context.Background(), "prepare", json.RawMessage(`{"device":"u1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Job == nil || out.Job.Kind != "prepare" || out.Job.Step != iphonePrepareStep || out.Job.Device != "u1" {
+		t.Fatalf("status %+v", out.Job)
+	}
+	if d := out.Devices[0]; !d.AutoPrepare || d.Code != "ddi_not_mounted" {
+		t.Fatalf("device %+v", d)
+	}
+	for code, note := range iphonePrepareErrors {
+		f.job = &iphoneJob{Kind: "prepare", State: "failed", ErrorCode: code, Error: "english words", Device: "u1"}
+		if j := Status(context.Background()).Job; j.Error != note || j.Code != code {
+			t.Fatalf("failed with %s: %+v", code, j)
+		}
+	}
+	// A code the phone's notes word already: developer Mode off.
+	f.job = &iphoneJob{Kind: "prepare", State: "failed", ErrorCode: "developer_mode_off", Error: "english words"}
+	if j := Status(context.Background()).Job; j.Error != iphoneNotes["developer_mode_off"] {
+		t.Fatalf("developer mode off: %+v", j)
+	}
+	if strings.Join(f.jobs, ",") != "prepare u1" {
 		t.Fatalf("jobs %v", f.jobs)
 	}
 }

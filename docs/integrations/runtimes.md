@@ -62,8 +62,10 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `renameWorkspace({workspace_id, title})` / `renameWorkspace({space_id, title})`, `archiveWorkspace({workspace_id})` | With `caps.workspaces`: a workspace's title (resolves to `{workspace}`, its row now) or a space's name (resolves to `{space_name}`, the name it shows now) / the workspace archived, a worktree it made removed from the disk (its branch kept). Without them those requests are `unsupported`; see "Workspaces" below |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
-In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models}]`: besides `launcher`, the new-session form then has these entries, one per provider,
-each with the Agent and models it starts; when they change later, call `rt.launchersChanged(list)`. `resume: true`: `start` accepts `{resume: <Claude session id>}` to take over a Claude session it doesn't have
+In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models, auto_accept}]`: besides `launcher`, the new-session form then has these entries, one per provider,
+each with the Agent and models it starts; when they change later, call `rt.launchersChanged(list)`. `auto_accept: true` marks an entry whose Agents ask for approval
+unless a switch is on, which its `start` turns on for `permission_mode: "bypassPermissions"` (Paseo's Auto Accept): the manager starts its own Agents there in
+`bypassPermissions`, as it starts Claude Code's (#8141). `resume: true`: `start` accepts `{resume: <Claude session id>}` to take over a Claude session it doesn't have
 and keep that id (`caps.resume`, for runtimes acting as the engine to continue "Not running" sessions). `start` also receives the form's choices (`launcher`, `model`, `permission_mode`, `effort`,
 `workspace_id`); see `docs/protocol/protocol.md` ("Runtime ↔ node"). `readonly: true` (`caps.readonly`): a `start` with `permission_mode: "plan"` (an ordinary
 plan-mode start, or a read-only task on a non-Claude runtime, #3238) runs in a read-only mode before its first prompt, or throws `readonly_unsupported` — never falling back to a writable
@@ -155,7 +157,7 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
 - **Waiting in its own UI**: while a session waits on the user in the runtime's own dialog, call `rt.waitingOnUser(sessionId)` and the returned
   release when it ends: the session lists as `blocked` meanwhile, as for a card on the phone. A dialog nobody may be looking at (a web page
   with no browser open) must also be withdrawable: pass the turn's abort signal to it, so that an interrupt ends it (#8097).
-- **Cards belong to the runtime**: node tags cards it asks with `agent` (the Agent the runtime runs) and `agent_label` (its name), and the App draws them as "another Agent's card"
+- **Cards belong to the runtime**: node tags cards it asks with `agent` (the Agent the runtime runs, or the one the session's row names) and `agent_label` (its name: the row's own `agent_label` whenever it has one, else the runtime's `name`; a runtime running several Agents under its own id names each in its rows, as Paseo's providers, #8142), and the App draws them as "another Agent's card"
   (the same kind as Codex's: "DSH Needs Your Permission", Approve / Deny, `reason` above the command). **Always Approve** only appears when the card has `always_label` (saying exactly what is always approved);
   don't send it if the runtime can't do it. `always_label` itself is just text; "always" is enforced by the runtime (opencode's save rules and Paseo's suggestions are both narrower than the whole tool).
   If a runtime can't remember session rules itself, it declares `caps.keep_always: true` in hello (the SDK's `keepAlways`; DSH does this): only then, when its `permission` card carries `always_label`,
