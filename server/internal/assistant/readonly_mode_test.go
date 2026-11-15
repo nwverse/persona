@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestReadonlyModeSettingsHTTP(t *testing.T) {
@@ -193,6 +195,37 @@ func TestReadonlyModeTaskPlan(t *testing.T) {
 					})
 				})
 			}
+		}
+	}
+}
+
+func TestReadonlyModeKeepsUnsupportedLaunchersRefused(t *testing.T) {
+	for _, mode := range []string{readonlySandbox, readonlyPrompt} {
+		for _, launcher := range []string{"pi", "cursor", "agy"} {
+			t.Run(mode+"/"+launcher, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					s, f := readonlyTaskService(t)
+					f.launcherList = readonlyEngineLaunchers()
+					setSettings(t, s, func(v *Settings) { v.ReadonlyMode = mode })
+					task := readonlyTestTask("")
+					task.Launcher = launcher
+					ctx := context.Background()
+					_, err := s.toolTaskPlan(ctx, "readonly-chat", readonlyTaskArgs(t, task))
+					var refusal *rpc.Error
+					if !errors.As(err, &refusal) || refusal.Code != "readonly_unsupported" {
+						t.Fatalf("mode %s, launcher %s: got %v, want readonly_unsupported", mode, launcher, err)
+					}
+					synctest.Wait()
+					if _, plans, err := s.feed(ctx, "readonly-chat", time.Time{}); err != nil || len(plans) != 0 {
+						t.Fatalf("refused task was saved: %v, error = %v", plans, err)
+					}
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					if len(f.starts) != 0 {
+						t.Fatalf("refused task started: %v", f.starts)
+					}
+				})
+			})
 		}
 	}
 }
