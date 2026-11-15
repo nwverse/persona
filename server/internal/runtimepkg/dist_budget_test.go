@@ -13,9 +13,11 @@ import (
 // 445,466 B on untouched main and 447,388 B after its ordering, marker and linear-accounting fixes; the budget is the latter
 // plus the same 334 B of headroom main had. Raised by 2,405 B for pi's ask_user that never hangs on an unseen dialog,
 // an interrupt that waits for the turn to end, and the SDK's queued / settled / runtime.driven (#8097: 449,837 B over
-// main's 447,432 B, with main's 290 B of headroom).
+// main's 447,432 B, with main's 290 B of headroom). Raised by 3,011 B for the Paseo bridge keeping cards and their
+// answers across link drops, and the SDK's wait for the next node counted from the drop (#8128: 452,848 B over main's
+// 449,837 B, with main's 290 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 450_127
+	const budget = 453_138
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
