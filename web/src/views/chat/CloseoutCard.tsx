@@ -4,22 +4,25 @@
 // looked itself: confirmed, contradicted (in the caution color, with the warning mark: color is never the only signal)
 // or not checked. It is not part of the transcript: the reply that carried the raw block shows without it while this
 // card is there (lib/closeout.ts stripCloseout).
-// Verified commands get only the facts recorded in this closeout's own exchange (lib/closeout-commands.ts), never a badge.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Verified commands get only the facts recorded in this closeout's own exchange, never a badge: CloseoutEvidence, a chunk
+// of its own that loads when a card with a Verified claim draws, so its matching code and strings stay off the first
+// screen (#8118).
+import { Suspense, useState } from "react";
 import { t } from "../../i18n";
 import { closeoutClaim, shownCloseout, type Claim } from "../../lib/closeout";
-import { closeoutCommandClaims, closeoutCommandEvidence, type CloseoutCommandEvidence } from "../../lib/closeout-commands";
+import { lazyPage } from "../../lib/lazy-page";
 import { clickLink, linkHref } from "../../lib/links";
 import type { Segment } from "../../lib/turns";
 import type { Item, Session } from "../../lib/types";
-import { Button, Collapse, cx } from "../../ui/atoms";
+import { Collapse, cx } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { prLink } from "../TodoStageBar";
 
 const KIND_ICON: Record<string, IconName> = { pr: "pullRequest", commit: "commit", branch: "branch", doc: "file", build: "tool", url: "link" };
 
+const CloseoutEvidence = lazyPage(() => import("./CloseoutEvidence").then((m) => m.CloseoutEvidence));
+
 type ExpandFold = (fold: Item) => Promise<boolean | void>;
-type ReadState = { scope: string; foldsKey: string; folds: Item[]; status: "loading" | "done" | "failed" };
 
 /** An artifact's reference as a web link, when it is one (http or https only). */
 function webLink(ref: string): string | undefined {
@@ -34,31 +37,6 @@ function webLink(ref: string): string | undefined {
 export function CloseoutCard({ session, segment, expandFold }: { session: Session; segment?: Segment; expandFold?: ExpandFold }) {
   const c = shownCloseout(session);
   const [open, setOpen] = useState(true);
-  const claims = useMemo(() => closeoutCommandClaims(c?.verified ?? ""), [c?.verified]);
-  const scope = `${session.machine_id}/${session.session_id}:${segment?.id ?? "unknown"}:${claims.join(" || ")}`;
-  const foldsKey = segment?.folds.map((fold) => fold.id).join(" || ") ?? "";
-  const [read, setRead] = useState<ReadState | null>(null);
-  const request = useRef(0);
-  useEffect(() => () => { request.current++; }, []);
-  const load = useCallback(async (folds: Item[]) => {
-    const ticket = ++request.current;
-    const next = { scope, foldsKey: folds.map((fold) => fold.id).join(" || "), folds, status: "loading" as const };
-    setRead(next);
-    let status: ReadState["status"] = "done";
-    try {
-      if (!expandFold) throw new Error("fold reader unavailable");
-      for (const fold of folds) if (await expandFold(fold) === false) throw new Error("fold read incomplete");
-    } catch {
-      status = "failed";
-    }
-    if (request.current === ticket) setRead({ ...next, status });
-  }, [expandFold, scope]);
-  useEffect(() => {
-    if (!open || !claims.length || !segment?.folds.length) return;
-    if (read?.scope === scope && (read.status === "failed" || read.foldsKey === foldsKey)) return;
-    void load(segment.folds);
-  }, [open, claims.length, segment, foldsKey, scope, read, load]);
-
   if (!c) return null;
   const merged = closeoutClaim(c, "merged");
   const deployed = closeoutClaim(c, "deployed");
@@ -67,14 +45,6 @@ export function CloseoutCard({ session, segment, expandFold }: { session: Sessio
   const did = c.did ?? [];
   const status = c.status === "blocked" && c.waiting ? t("chat-chatview.closeout_blocked_on", { waiting: c.waiting }) : t(`chat-chatview.closeout_status_${c.status}`);
   const hasBody = did.length > 0 || artifacts.length > 0 || Boolean(merged || deployed || c.verified || c.missing);
-  const failed = read?.scope === scope && read.status === "failed";
-  const loading = read?.scope === scope && read.status === "loading";
-  const unavailable = failed || loading || !segment || Boolean(segment?.folds.length);
-  const evidence = closeoutCommandEvidence(c.verified ?? "", segment).map((item) => unavailable ? { ...item, state: "unavailable" as const } : item);
-  const retry = () => {
-    const folds = failed && read ? read.folds : segment?.folds;
-    if (folds?.length) void load(folds);
-  };
   return (
     // the chat column's own width and side padding, so the card lines up with the transcript under it
     <div className="mx-auto w-full max-w-[880px] shrink-0 px-5 pt-3 sm:px-8">
@@ -115,14 +85,10 @@ export function CloseoutCard({ session, segment, expandFold }: { session: Sessio
               {merged && <Field label={t("chat-chatview.closeout_merged")}><ClaimLine what="merged" claim={merged} /></Field>}
               {deployed && <Field label={t("chat-chatview.closeout_deployed")}><ClaimLine what="deployed" claim={deployed} /></Field>}
               {c.verified && <Field label={t("chat-chatview.closeout_verified")}>{c.verified}</Field>}
-              {claims.length > 0 && (
-                <Field label={t("chat-chatview.closeout_evidence")}>
-                  <CommandEvidence
-                    items={evidence}
-                    loading={loading}
-                    retry={(failed || Boolean(segment?.folds.length)) && expandFold ? retry : undefined}
-                  />
-                </Field>
+              {c.verified && (
+                <Suspense fallback={null}>
+                  <CloseoutEvidence session={session} verified={c.verified} open={open} segment={segment} expandFold={expandFold} />
+                </Suspense>
               )}
               {c.missing && <Field label={t("chat-chatview.closeout_missing")}>{c.missing}</Field>}
             </dl>
@@ -130,45 +96,6 @@ export function CloseoutCard({ session, segment, expandFold }: { session: Sessio
         )}
       </section>
     </div>
-  );
-}
-
-function CommandEvidence({ items, loading, retry }: { items: CloseoutCommandEvidence[]; loading: boolean; retry?: () => void }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-2" data-closeout-evidence>
-      {loading && <span role="status" className="text-ink-3">{t("chat-chatview.closeout_evidence_loading")}</span>}
-      <ul className="flex min-w-0 flex-col gap-2">
-        {items.map((item) => <CommandEvidenceLine key={item.claim} item={item} />)}
-      </ul>
-      {retry && <Button size="sm" tone="quiet" icon="retry" busy={loading} onClick={retry}>{t("chat-chatview.retry")}</Button>}
-    </div>
-  );
-}
-
-function CommandEvidenceLine({ item }: { item: CloseoutCommandEvidence }) {
-  const facts: string[] = [];
-  if (item.exitCode !== undefined) facts.push(t("chat-chatview.closeout_evidence_exit", { code: item.exitCode }));
-  if (item.isError !== undefined) facts.push(t("chat-chatview.closeout_evidence_is_error", { value: String(item.isError) }));
-  if (item.state === "running") facts.push(t("chat-chatview.closeout_evidence_running"));
-  else if (item.background) facts.push(t("chat-chatview.closeout_evidence_background"));
-  if (item.state === "not_found") facts.push(t("chat-chatview.closeout_evidence_not_found"));
-  else if (item.state === "unavailable") {
-    facts.push(t(item.reason === "no_result" ? "chat-chatview.closeout_evidence_no_result" : item.reason === "truncated" ? "chat-chatview.closeout_evidence_truncated" : "chat-chatview.closeout_evidence_unavailable"));
-  } else if (item.exitCode === undefined && !item.background) facts.push(t("chat-chatview.closeout_evidence_no_exit"));
-  return (
-    <li data-closeout-command-evidence={item.state} className="flex min-w-0 flex-col gap-0.5">
-      <span className="flex min-w-0 items-baseline gap-1.5">
-        <span className="shrink-0 text-ink-3">{t("chat-chatview.closeout_evidence_claimed")}</span>
-        <code className="min-w-0 font-mono text-[12px] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{item.claim}</code>
-      </span>
-      {item.command && (
-        <span className="flex min-w-0 items-baseline gap-1.5">
-          <span className="shrink-0 text-ink-3">{t("chat-chatview.closeout_evidence_recorded")}</span>
-          <code className="min-w-0 font-mono text-[12px] whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{item.command}</code>
-        </span>
-      )}
-      <span className={item.isError ? "text-orange" : "text-ink-3"}>{facts.join(" · ")}</span>
-    </li>
   );
 }
 

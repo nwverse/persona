@@ -69,8 +69,9 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Interrupt || then != "" && !c.Capabilities.Send) {
 		return "", fmt.Errorf("this agent can only be read: %s", c.ReadOnlyReason)
 	}
-	if stoppedAgent(c) { // read-only (#4754): nothing runs to stop, and nothing here starts it again
-		return "", fmt.Errorf("%s has already stopped and is read-only: nothing to interrupt, and nothing was sent", agentLabel(c))
+	if stoppedAgent(c) { // read-only (#4754): nothing runs to stop; a resume is agent_send's (#8099)
+		return "", fmt.Errorf("%s has already stopped: nothing to interrupt, and nothing was sent. To go on with it and its "+
+			"context, use agent_send with resume true and resume_why; for unrelated work start a new agent with agent_start", agentLabel(c))
 	}
 	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil { // refused before the turn is stopped or the user asked
 		return "", err
@@ -431,7 +432,7 @@ func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.
 	}
 	if made {
 		wake := wakeActive
-		if c.Status == proto.StatusOffline { // closed: the send resumes it first
+		if c.Status == proto.StatusOffline || stoppedAgent(c) { // closed: the send (or its resume, #8099) starts it first
 			wake = wakeResumed
 		}
 		return &handedTask{todo: todo, made: true, self: self, wake: wake}, nil

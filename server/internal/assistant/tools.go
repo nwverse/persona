@@ -304,6 +304,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			RawTask json.RawMessage `json:"task"`
 			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
 			Attachments []string `json:"attachments"`
+			// Resume: resume a stopped agent with its context, as the user's Resume does, with ResumeWhy said to the
+			// user (agent_resume.go, #8099). Ignored for an agent that runs.
+			Resume    bool   `json:"resume"`
+			ResumeWhy string `json:"resume_why"`
 		}
 		_ = json.Unmarshal(args, &a)
 		a.Task = givenTask(a.RawTask)
@@ -321,14 +325,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
 		}
-		if stoppedAgent(c) { // read-only (#4754): nothing here starts it again
+		resume := ""
+		if stoppedAgent(c) { // read-only (#4754): a message does not start it; only a resume asked for does (#8099)
 			if exitText(a.Text) {
 				return fmt.Sprintf("%s has already stopped: nothing was sent.", agentLabel(c)), nil
 			}
-			return "", fmt.Errorf("%s has stopped and is read-only: its conversation and terminal stay, it takes no messages, "+
-				"and nothing here starts it again. Read it with agent_read; to go on, start a new agent with agent_start in its "+
-				"directory (with the task when it worked on one) and give it what it needs. Only the user can resume it, with "+
-				"Resume on its terminal page. Nothing was sent", agentLabel(c))
+			if !a.Resume {
+				return "", stoppedRefusal(c)
+			}
+			resume = cleanWhy(a.ResumeWhy)
+			if err := s.resumeAllowed(ctx, self, am, c, resume, a.Task); err != nil {
+				return "", err
+			}
 		}
 		atts, err := cleanAttachments(a.Attachments)
 		if err == nil {
@@ -344,7 +352,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		} else if err := s.exitAllowed(ctx, self, am, c, a.Text, len(atts)); err != nil {
 			return "", err
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, agentLabel(c)+" · "+am.Name+"\n\n"+a.Text, args); err != nil {
+		summary := agentLabel(c) + " · " + am.Name + "\n\n" + a.Text
+		if resume != "" { // the phone says it resumes the agent, and why
+			summary = s.resumeNote(ctx, c, am, resume) + "\n\n" + a.Text
+		}
+		if ok, err := s.confirmOutbound(ctx, machine, self, name, summary, args); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: nothing was sent to that agent.", nil
@@ -382,6 +394,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			params["text"] = withAttachments(text, handed)
 		}
 		unsent := s.noteAgentSend(self, am.ID, c.SessionID) // more from its task's conversation reopens an accepted task (#6726)
+		// A resume goes through the user's Resume's node call, the text as its first message (agent_resume.go).
+		if resume != "" {
+			return s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task, unsent)
+		}
 		if c.Status != proto.StatusOffline {
 			var sent struct {
 				Queued bool `json:"queued"` // the runtime holds it behind the turn under way (#8097)
