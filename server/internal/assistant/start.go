@@ -334,6 +334,10 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
+	if main && p.Space == "" && p.GuestTools == nil {
+		cfg := s.settings(ctx)
+		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
 	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
 		// A node too old to be told a profile starts it where it always has; a launcher running another agent than
@@ -1057,6 +1061,9 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
+	if err := s.putSupervisionInstructions(ctx, p.MachineID, p.SessionID, params); err != nil {
+		return nil, false, err
+	}
 	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
 		return nil, false, err // an ended room: 409 meeting_ended (meeting_room.go)
 	}

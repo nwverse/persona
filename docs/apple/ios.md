@@ -408,8 +408,8 @@ Chat page:
   and quotes above the text. While typing in `ShellComposerBar`, a Hide Keyboard button (`Theme.Icon.dismissKeyboard`, `shell-composer-dismiss-keyboard`, accessibility label `Hide Keyboard`) appears beside `+` in the card's bottom row (`ComposerRow` also offers `composer-row-dismiss-keyboard` on iOS when focused), committing any active IME marked text and dismissing the software keyboard while keeping the draft intact. It edits the same draft (`text` binding, `model.drafts` still the sole source); pending images and files remain in the composer below and send with the message as usual.
   The page owns its cursor (takes the caller's `selection` on opening, returns it on closing; directly binding to the caller sent every cursor update through it with delayed returns, occasionally losing characters on iPad).
   While open, the composer's own field binds to an idle `parkedSelection`, so it cannot move the caller's cursor underneath the sheet. Focus bindings cannot cross into sheets, so the page has its own `@FocusState`:
-  requests to focus the composer while open (uploaded file paths via `PathInsert.edit`, ⌘I) forward to the page, without showing a keyboard underneath. The composer is not treated as editing then;
-  paths append to the draft, and the page cursor follows them (only when the caller's cursor changed; ⌘I alone does not move it).
+  requests to focus the composer while open (⌘I) forward to the page, without showing a keyboard underneath. The composer is not treated as editing then;
+  the page cursor follows the caller's only when that changed (⌘I alone does not move it).
   Collapsing, swiping down or replacing the page (chat switch, tree replacement) first commits marked input (`TypedText.commitFocused`, #2203); returning to the composer preserves keyboard and cursor positions.
   Sending from the page (toolbar ⌘⏎ shortcut) is identical to composer Send and happens once; the composer's ⌘⏎ is disabled while the page is open, preventing another send underneath. Hidden line measurement lays out at most 4 lines from the first 600 draft characters, counts trailing newlines, and stops while the page is open.
   The button belongs in the button row, not over the input corner: a corner overlay either covers text or rewraps it when appearing. iOS only; Mac unchanged.
@@ -669,6 +669,7 @@ Chat page:
   watch summary leaves them out (`Interaction.showsOnWatch`: an older watch build would fail to decode the whole summary). Not pushed while the app is closed (#2433).
   `ElicitationCardTests` mock `MOCK_ELICITATION=1` / `=unsupported`.
 - Input: above (at most 4 photos, resized 1600px; library videos uploaded as files to computer, message file card, protocol.md ("Sending videos"); / shortcuts; Send becomes red Interrupt while working).
+- Files (#8361, protocol.md "Sending files"): + › Files and a scan's PDF become cards above the box (`FileAttachments`, `FileAttachmentsBar` in `Views/Chat/FileAttach.swift`), never words in the draft. Each is copied out of the picker first (`FileUploads.stage`), up to 10 per message, three uploading at once; ✕ cancels or removes, a failed card stays (tap to try again). They live in `ComposerAttachments.files` beside the videos, so a draft rebuilt (#2626) or a queued message taken back (#3022) keeps them. Sent, each is a `<persona-file kind="file">` tag after the words; the bubble draws it as `AttachedDocumentCard` (`Views/Chat/VideoCards.swift`; videos and recordings keep `AttachedVideoCard`), folding past four, opening the file viewer, dimmed when `FilePresence` says the computer no longer has it.
 - Navigation subtitle: Machine · Model · State.
 
 ## New shell (ChatGPT-style, 2026-11-01)
@@ -1198,7 +1199,7 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
 - **Even reveal** (#6651): the model's text comes in bursts (a few dozen characters about every 350 ms, up to 2 s apart), so drawing what
   arrived showed a jump per burst. `StreamingText` reveals it a few characters a frame (`StreamReveal` in PersonaKit, driven by
-  `StreamRevealClock`'s display link, which runs only while text waits, at most 30 Hz: each change re-measures the chat list, #7135): a little slower than the stream's average so far,
+  `StreamRevealClock`'s display link, which runs only while text waits, 10 times a second: each change re-measures the chat list, so the rate is the owner's trade-off between smoothness and power, #7135): a little slower than the stream's average so far,
   faster when more waits (waiting / 0.6 s), never slower than 20 characters a second. Only that view redraws per frame; the store and the
   list see the deltas as before. A first text over 80 characters (a chat opened mid-stream) shows at once; when the stream ends
   (`ChatStore.liveDone`), or the user holds the list, or the reply's item replaces it, the whole text shows at once. The Mac shows text as
