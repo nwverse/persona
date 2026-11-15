@@ -424,6 +424,16 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		if text == "" {
 			return nil
 		}
+		if items, ok := paseoInput(func(n int, role, kind string) proto.Item { return mk(n, it.ID, role, kind) }, 0, text); ok {
+			if meta.codexUserID == "" && len(items) > 0 { // it started the turn: its notices woke the agent
+				markWake(items)
+				meta.codexUserID = items[0].ID
+			}
+			if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {
+				meta.FirstUser = items[0].Text
+			}
+			return items
+		}
 		u := mk(0, it.ID, "user", proto.KindText)
 		u.Text = clip(text)
 		if meta.codexUserID == "" {
