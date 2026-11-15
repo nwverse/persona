@@ -41,6 +41,10 @@ export interface AssistantEntries {
   shelved: RunningItem[];
   /** Fresh open PRs with no active agent, separate from In progress; still open tasks. */
   pr: RunningItem[];
+  /** Handed-out tasks that finished in the last 24 hours and that the owner has not opened since (the To-dos page's Just
+   *  finished, todo-triage), newest first: a group under In progress, not counted (#8237). How a task ended is told
+   *  here, not by a card in the chat. */
+  justFinished: RunningItem[];
 }
 
 export interface AssistantEntriesInput {
@@ -125,6 +129,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
   const pr: { item: RunningItem; at: string }[] = [];
+  const finished: { item: RunningItem; at: number }[] = [];
   const folded = new Set<string>();
   const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
   const activeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at));
@@ -172,7 +177,12 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     else if (triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "pr") pr.push({ item: { kind: "task", key, card, todo, status, countsOpen }, at: card.at });
     else if (bucket === "open" || reviewState(todo) === "parked") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup), countsOpen }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: card.at });
-    else continue;
+    else {
+      // finished work a conversation handed out (a failed start a related to-do finished is history, not news)
+      const tr = triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
+      if (tr.section === "just_done" && status !== "failed" && todo.origin) finished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: tr.last });
+      continue;
+    }
     for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
   }
 
@@ -204,6 +214,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     running: [...open.sort(newest).map((row) => row.item), ...agentsRunning],
     shelved: shelved.sort(newest).map((row) => row.item),
     pr: pr.sort(newest).map((row) => row.item),
+    justFinished: finished.sort((a, b) => b.at - a.at).map((row) => row.item),
   };
 }
 
