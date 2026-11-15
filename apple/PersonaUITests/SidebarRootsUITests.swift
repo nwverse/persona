@@ -244,8 +244,47 @@ final class SidebarRootsUITests: XCTestCase {
         reveal(element("sidebar-main"))
         for _ in 0..<10 where !(row.exists && row.isHittable) { column.swipeUp(velocity: .slow) }
         XCTAssertTrue(row.exists && row.isHittable, "no Agent's row:\n\(app.debugDescription)")
-        row.tap()
+        // A row tapped while the list still glides after the scroll can be missed: again, until the Agent is the root.
+        for _ in 0..<3 where page()?.root != "agent" {
+            if !(row.exists && row.isHittable) { reveal(element("sidebar-main")) }
+            row.tap()
+            _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.page()?.root == "agent" }, object: nil)], timeout: 5)
+        }
         _ = settled("agent", "an Agent")
         check("agent")
     }
+
+    /// The Separate layout at regular width (#8359): the Persona tab's column and the Agents tab's have the same head, so
+    /// the assistant's name (beside its face) and the fold button sit at the same place on both, across and down.
+    @MainActor func testThePersonaAndAgentsTabsHeadsLineUp() throws {
+        app = XCUIApplication()
+        app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES", "-tab", "assistant", "-dev.openChat", "",
+                               "-app.navigation", "separate", "-probes", "YES"]
+        app.launchPinned(navigation: false)
+        let persona = app.buttons["Persona"].firstMatch, agents = app.buttons["Agents"].firstMatch
+        XCTAssertTrue(persona.waitForExistence(timeout: 20) && agents.exists, "no Persona | Agents tabs:\n\(app.debugDescription)")
+        guard app.windows.firstMatch.frame.width > 600 else { throw XCTSkip("the Separate layout's tabs at regular width") }
+        continueAfterFailure = true
+        persona.tap()
+        let main = element("sidebar-main"), fold = element("sidebar-fold-column")
+        reveal(main)
+        let name = main.label.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? ""
+        func head(_ step: String) -> (title: CGRect, fold: CGRect) {
+            reveal(fold)
+            Thread.sleep(forTimeInterval: 1.0)
+            let title = app.staticTexts.matching(NSPredicate(format: "label == %@", name)).allElementsBoundByIndex
+                .first { $0.exists && $0.isHittable && abs($0.frame.midY - fold.frame.midY) < 30 && $0.frame.maxX < fold.frame.minX }
+            XCTAssertTrue(title != nil, "\(step): no head title (\(name)):\n\(app.debugDescription)")
+            return (title?.frame ?? .zero, fold.frame)
+        }
+        let p = head("Persona")
+        shot("tabs-persona")
+        agents.tap()
+        XCTAssertTrue(fold.waitForExistence(timeout: 10), "the Agents tab has no column head:\n\(app.debugDescription)")
+        let a = head("Agents")
+        shot("tabs-agents")
+        assertSame(p.title, a.title, "the head's name (beside the face)", "the Agents tab")
+        assertSame(p.fold, a.fold, "the fold button", "the Agents tab")
+    }
 }
+

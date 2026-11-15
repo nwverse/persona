@@ -1732,6 +1732,14 @@ private struct AgentsList: View {
         .padding(.trailing, Theme.Space.s)
         .padding(.top, Theme.Space.s)
         .scaledFrame(minHeight: Theme.Size.tapTarget)
+        // The Separate layout's Agents tab has no Pages heading for the head to place its face by (`rowsLeading`): this
+        // heading gives the same line, its row's start plus the Persona rows' extra inset. Without it the face sat
+        // `Theme.Space.xl` in, 4 pt left of the Persona tab's (#8359).
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(UnifiedSidebar.columnSpace)).minX } action: { x in
+            guard sidebarRows == nil, let unified, x >= 0 else { return }
+            let leading = x + Theme.Space.s
+            if unified.ui.rowsLeading != leading { unified.ui.rowsLeading = leading }
+        }
         .id(UnifiedSidebar.agentsAnchor)
     }
     #endif
