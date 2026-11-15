@@ -1,8 +1,8 @@
 // A session's items: the newest page over HTTP, then live over the WebSocket (docs/protocol/protocol.md "Continuity of items").
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorText, isAbort, sessionPath } from "../../lib/api";
+import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionPath } from "../../lib/api";
 import { sessionLoadError } from "../../lib/session-link";
-import { getState, listenSession, send, type ItemsEvent } from "../../lib/store";
+import { getState, listenSession, onHubEvent, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
 import { mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
@@ -19,6 +19,11 @@ const lastPulls = new Map<string, number>();
 /** After an older page fails, loadEarlier waits this long before asking again (scrolling at the top calls it on every tick), doubling up to the cap. */
 const EARLIER_RETRY_MS = 3000;
 const EARLIER_RETRY_MAX_MS = 30_000;
+
+/** The first page refused because reading it would start the agent: one its engine let go (Paseo's closed and archived
+ *  agents), which only a watched chat reads (docs/integrations/paseo.md "Content", #8132). The subscribe that follows
+ *  loads it, and its backlog brings the page. */
+const isNotLoaded = (e: unknown) => e instanceof ApiError && e.code === "not_loaded";
 
 /** Tests only: forget the asks, as a fresh page load does (each sync case starts its clock at the same moment again). */
 export function resetStalePullsForTests() {
@@ -154,6 +159,19 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     let latestMore = cached?.hasMore ?? false;
     let pendingItems: Item[] = []; // pushes after the HTTP request started win over its answer
     let pendingHistory = "";
+    // The first read was refused as not_loaded (isNotLoaded): the chat keeps loading until the subscribe's items come,
+    // instead of showing the refusal for the second or three the load takes (#8321). Its words, for when the hub's
+    // backlog fails (its `error` for the session) or nothing comes within a read's time.
+    let refused = "";
+    let refusedTimer: number | undefined;
+    const endRefused = (error: string) => {
+      if (!refused) return;
+      refused = "";
+      clearTimeout(refusedTimer);
+      setError(error);
+      setLoading(false);
+      setFirstRead(true);
+    };
     const memoryScope = cacheScope ? null : feedCacheScope();
     // The newest page may start after everything the cached one holds, with turns missing between them: showing both
     // would hide that hole, so the page takes over and older history loads on scroll.
@@ -238,9 +256,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     };
     const fillGap = async () => void (await pull());
 
-    // The safety net (lib/stale-page.ts): the list says the transcript grew past what we hold and no push came.
+    // The safety net (lib/stale-page.ts): the list says the transcript grew past what we hold and no push came. Not while
+    // a refused first read waits for the backlog: that read is the one asked for, and the runtime refuses this one too.
     const checkStale = () => {
-      if (dead || !ready) return;
+      if (dead || !ready || refused) return;
       const now = Date.now();
       const asked = updatedAt.current;
       if (!shouldPull({
@@ -273,6 +292,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       }
       if (e.history) history.current = e.history;
       if (!ready && e.history) pendingHistory = e.history;
+      endRefused(""); // the watch brings the chat its first read could not
       if (e.has_more !== undefined) {
         // The replay of a subscribe without since_seq (the first read failed) stands in for that read.
         latestMore = e.has_more;
@@ -325,6 +345,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         if (ready) subscribe();
       },
     });
+    // The hub could not send the backlog of a subscribe either: an `error` for the session in its words, instead of items.
+    const offError = onHubEvent("error", (msg) => {
+      if (dead || !refused || msg.machine_id !== mid || msg.session_id !== sid) return;
+      endRefused(typeof msg.error === "string" && msg.error ? sessionLoadError(msg.error) : refused);
+    });
 
     (async () => {
       try {
@@ -349,22 +374,30 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       } catch (e) {
         if (dead) return;
         // a session that is still starting has no transcript yet
-        if (!opts.starting) setError(sessionLoadError(errorText(e)));
+        if (!opts.starting) {
+          if (isNotLoaded(e)) refused = sessionLoadError(errorText(e));
+          else setError(sessionLoadError(errorText(e)));
+        }
       } finally {
-        if (!dead) {
+        if (!dead && !refused) {
           setLoading(false);
           setFirstRead(true);
         }
         lastArrival = Date.now();
         ready = true;
       }
-      if (!dead) subscribe();
+      if (dead) return;
+      subscribe();
+      // The hub's own limits for a backlog (the watch, then the read) end within a read's time, and its error comes first.
+      if (refused) refusedTimer = window.setTimeout(() => endRefused(refused), READ_TIMEOUT_MS);
     })();
 
     return () => {
       dead = true;
       ctl.abort();
       off();
+      offError();
+      clearTimeout(refusedTimer);
       deltas.current.cancel();
       clearTimeout(gapTimer.current);
       gapTimer.current = undefined; // the next session's first gap starts its own

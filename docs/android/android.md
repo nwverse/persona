@@ -723,7 +723,15 @@ The budgets don't cover the outbox, drafts or persistent preferences. Inline Lar
 Chat message bodies synchronize only while their repository flow has an observer, for 60 seconds after it closes (the chat
 stays subscribed, so switching tabs and back reopens it warm), and while the outbox waits to see a message sent from it in its
 transcript. Session-list metadata still updates unread counts and status for other chats; reopening after the release verifies
-the latest folded page before resuming. Four other idle chat entries retain warm navigation, keeping the most recently closed;
+the latest folded page before resuming, then subscribes (from what it has, or for the whole backlog when that read failed).
+Until the hub has answered for a chat (a page, items or its error) and nothing of it is cached, the chat is loading
+(`HubChatRepository` `firstPagePending`): Glass's skeleton rows, Brief and Board's spinner, never an empty chat ("No messages
+yet" while the first page was on its way, until #8321). A first read refused as `not_loaded` (an agent Paseo let go, which its
+bridge reads only while the chat is watched, `docs/integrations/paseo.md` "Content", #8132) keeps it loading while the
+subscribe loads the agent (`awaitWatch`): the first items event ends the wait, the hub's error for the chat says why it could
+not, and 45 s with neither (the web's read time, past the hub's own limits for a backlog) says the chat could not sync; a
+catch-up the runtime refuses alike meanwhile says nothing. Tests `ChatNotLoadedOpenTest`; shots `PaseoNotLoadedShotsTest`
+(`build/paseo-not-loaded-shots/`). Four other idle chat entries retain warm navigation, keeping the most recently closed;
 active observers remain protected. The continuity reducer reuses its sorted item list until the
 transcript changes; duration metadata and realtime display rows also reuse unchanged inputs instead of rebuilding per
 session-list event. Item aliases and live overlays invalidate the display projection whenever they change.

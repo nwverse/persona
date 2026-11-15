@@ -113,7 +113,8 @@ and the engine's note under Settings › Machines asks to update it.
   - **An Agent Paseo let go is read only while its chat is open** (#8132). Reading the timeline of an Agent that is `closed` (Paseo 0.15 lets one go
     after an hour idle) or archived has Paseo load it first, which starts its provider's process again: every timeline request does, and Paseo has no read
     that leaves the Agent stored. The bridge reads such an Agent only for the watch an App sends when it opens the chat (every App does; the web and
-    Android read their first page just before it, and the watch's backlog then brings the page), or for a send, a rewind or a mode change. Any other read
+    Android read their first page just before it, which is refused, and the watch's backlog then brings the page: both keep the chat loading until it
+    comes, and say the refusal only when the hub's backlog fails too or 45 s pass, #8321), or for a send, a rewind or a mode change. Any other read
     (the manager's after a turn, an App's background sync of its recent chats, which pulls them whenever their `rev` moves) is answered from the bridge's
     last whole read of the Agent while that is still all of the conversation, and otherwise refused with `not_loaded`, asking Paseo nothing. A chat left
     open reads nothing more once Paseo lets its Agent go; the next turn, a message's, is read as it runs.
