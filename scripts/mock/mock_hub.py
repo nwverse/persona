@@ -20238,13 +20238,14 @@ if os.environ.get("MOCK_FILE_LINKS"):
 if os.environ.get("MOCK_FILE_ATTACH"):
     import mock_office
     _day = "/Users/me/.persona/uploads/2026-11-15/"
-    _attached = [("q3-report.pdf", mock_pdf()), ("budget-2026.xlsx", quarterly_xlsx()), ("sales-by-region.xlsx", quarterly_xlsx()),
+    _pdf = base64.b64decode(mock_pdf())  # bytes: FILES serves them as a file, a str as text
+    _attached = [("q3-report.pdf", _pdf), ("budget-2026.xlsx", quarterly_xlsx()), ("sales-by-region.xlsx", quarterly_xlsx()),
                  ("meeting-notes.docx", mock_office.docx("Meeting notes", ["Made-up notes for screenshots."])),
-                 ("logs-1114.zip", b"PK\x05\x06" + b"\0" * 18), ("contract-draft.pdf", mock_pdf()),
+                 ("logs-1114.zip", b"PK\x05\x06" + b"\0" * 18), ("contract-draft.pdf", _pdf),
                  ("季度汇总.xlsx", quarterly_xlsx()), ("screenshots.zip", b"PK\x05\x06" + b"\0" * 18)]  # i18n-ignore: a made-up file name
     _sizes = [2411724, 88123, 1153434, 245760, 19608371, 655360, 317440, 44354765]
     for (_name, _bytes) in _attached:
-        FILES[_day + _name] = _bytes
+        FILES[_day + _name] = _bytes if isinstance(_bytes, bytes) else _bytes.encode()
     _tags = "\n".join('<persona-file kind="file" path="%s" name="%s" size="%d"/>' % (_day + n, n, z) for (n, _), z in zip(_attached, _sizes))
     ITEMS[WIDGET] = ITEMS[WIDGET] + [
         it("user", "text", 0, text='上周导出的数据也看一下\n\n<persona-file kind="file" path="/tmp/old-export-20261110-140200.csv" name="old-export.csv" size="12288"/>'),  # i18n-ignore

@@ -375,7 +375,8 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
 - Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
-  field that scrolls sideways like the photos' strip: `box56` tall and `box150` wide on `Fill.well` with the card radius,
+  field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
+  about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,
   a `well`-sized tile of the file's kind (`FileViewer.symbol`, accent tint; `danger` and the error mark once failed), its
   name on one line truncated in the middle, and under it how far it got ("1.3 MB / 2.4 MB"), Waiting, its size, or
   Failed · Tap to Retry, a thin accent bar along the bottom while it waits or uploads, and the photos' ✕ at the top

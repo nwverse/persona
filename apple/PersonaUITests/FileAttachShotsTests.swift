@@ -53,7 +53,7 @@ final class FileAttachShotsTests: XCTestCase {
         field.typeText(Self.typed)
         let busy = app.descendants(matching: .any)["file-attachment-busy"].firstMatch
         XCTAssertTrue(busy.waitForExistence(timeout: 20), "no card on its way:\n\(app.debugDescription)")
-        sleep(4)
+        sleep(3)
         shot(app, "5-uploading")
         XCTAssertTrue(wait(timeout: 180) { !busy.exists }, "the uploads did not end")
         let hide = app.buttons["shell-composer-dismiss-keyboard"].firstMatch

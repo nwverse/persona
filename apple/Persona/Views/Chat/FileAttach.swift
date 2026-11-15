@@ -456,7 +456,7 @@ struct FileAttachmentsBar: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Theme.Space.m) {
+            HStack(spacing: Theme.Space.sm) {
                 ForEach(files.items) { item in FileAttachmentCard(item: item, files: files) }
             }
             .padding(.top, Theme.Space.sm) // room for the ✕ above each card, as over a photo
@@ -491,7 +491,7 @@ struct FileAttachmentCard: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Space.s)
-        .scaledFrame(width: Theme.Size.box150, height: Theme.Size.box56)
+        .scaledFrame(width: Theme.Size.box160, height: Theme.Size.box56)
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(alignment: .bottom) {
             if let progress = Self.progress(item) {
