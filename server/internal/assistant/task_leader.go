@@ -41,6 +41,10 @@ const (
 	leaderWorkersMost = 8
 )
 
+// leaderListWait bounds only legacy one-shot/direct discovery while a leader start reaches its link. Revision-aware
+// watches use their cursor and heartbeat instead.
+var leaderListWait = 8 * time.Second
+
 func (a TodoAgent) active() bool { return a.ReleasedAt == nil && a.DismissedAt == nil }
 
 // linkSource is the todo_agents source and via the agent of plan task t is linked with.
@@ -202,7 +206,24 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 	if _, _, ok := s.leaderTask(ctx, machine, session); ok {
 		return leaderToolList()
 	}
-	// Linking later wakes MCP discovery; no startup timing assumption grants rights.
+	if revision, _ := ctx.Value(revisionDiscoveryKey{}).(bool); revision {
+		return nil // a revision-aware peer recovers through its cursor, never through the legacy startup wait
+	}
+	// A legacy one-shot peer asks before the start returns and has no cursor with which to recover later. Wait only
+	// while a leader is actually starting, and only until that leader's real link grants the tools.
+	if _, ok := s.taskOf(ctx, s.canonical(machine), session); ok {
+		return nil
+	}
+	for deadline := time.Now().Add(leaderListWait); s.leaderStarts.Load() > 0 && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(100 * time.Millisecond):
+		}
+		if _, _, ok := s.leaderTask(ctx, machine, session); ok {
+			return leaderToolList()
+		}
+	}
 	return nil
 }
 
