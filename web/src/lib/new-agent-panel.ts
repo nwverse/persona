@@ -6,7 +6,7 @@
 import { t } from "../i18n";
 import { agentId, providerAgent } from "./agent-kind";
 import {
-  ALL_EFFORTS, defaultModel, effortChoices, followedBinding, launcherAgent, modelName, takesEffort, typedModelOffered, type AgentModel, type LauncherModels, type PickerTier,
+  ALL_EFFORTS, defaultModel, effortChoices, effortRule, followedBinding, launcherAgent, modelName, takesEffort, typedModelOffered, type AgentModel, type LauncherModels, type PickerTier,
 } from "./launcher-models";
 import { launcherBlock } from "./launcher-health";
 import type { ModelBinding } from "./model-config";
@@ -104,7 +104,10 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     // a list that couldn't be read says why, with Retry; the launcher still starts with its default, and Claude Code and
     // Codex still take a typed ID (the old picker's "Enter model ID…" beside the error)
     if (list === undefined && e.error) p.error = e.error;
-    const effortsOf = (m: AgentModel | undefined): string[] => (!takesEffort(agent) ? [] : m && !m.custom ? (m.efforts ?? []) : ALL_EFFORTS);
+    // the efforts a start on it takes: its models' own, all of them for a model whose levels nobody lists, except on a
+    // launcher that lists its permission modes (Paseo's other providers, #8261), which takes only what its model lists
+    const rule = effortRule(agent, l);
+    const effortsOf = (m: AgentModel | undefined): string[] => (rule === "none" ? [] : m && !m.custom ? (m.efforts ?? []) : rule === "listed" ? [] : ALL_EFFORTS);
     const all = list?.models ?? [];
     const d = defaultModel(all);
     // Claude Code's `default` entry is folded into the Default row; a real model marked default stays a row of its own
@@ -116,7 +119,7 @@ export function newAgentPanel({ launchers, listOf, choice, configured, runs, tie
     const first: PanelModel = {
       id: DEFAULT_ROW,
       name: runsModel ? t("lib-launcher-models.default_named", { name: runsModel }) : t("lib-launcher-models.default"),
-      efforts: takesEffort(agent) ? effortChoices(list, "", followed) : [],
+      efforts: effortChoices(list, "", followed, rule),
       providerDefault: true,
     };
     const note = locked || folded?.description;
@@ -196,7 +199,7 @@ export function newAgentPill(o: { launchers: Launcher[]; runs: string; list: Mod
     failed: list === undefined && Boolean(e.error),
   };
   if (model) out.model = model;
-  const effort = takesEffort(agent) ? choice.effort || followed.effort : "";
+  const effort = takesEffort(agent, l) ? choice.effort || followed.effort : "";
   if (effort) out.effort = effort;
   return out;
 }

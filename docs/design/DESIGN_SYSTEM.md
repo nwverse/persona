@@ -2415,6 +2415,33 @@ Reason: one place to choose a model for chats and new Agents (principle 4), the 
 own (principle 2), the default as one row that can always be gone back to (principles 1 and 3). The deviations from
 Cindy are listed in `docs/web/web.md` "New Agent's model choice (#5104)"; iOS and Android follow in #5117.
 
+## Permission modes a provider lists (#8261)
+
+Who it serves: people starting and steering coding Agents (the Agents side) on providers other than Claude Code, such as
+Paseo's Grok, OpenCode or Codex. Claude Code's five modes mean nothing there: the bridge refuses Plan, drops the rest,
+and the provider's own settings decide what it asks. One rule on every client (web, Android, iOS), read from the wire
+rather than from provider names:
+
+- **New Agent**, for a launcher that lists `permission_modes` (`docs/protocol/protocol.md`, `launchers.list`): the
+  Permission mode field offers **Launcher default** (the launcher's own approval, sent as no mode) and **Allow all**
+  only where it lists both, in each client's existing words for its follow-the-launcher choice and for bypassPermissions
+  (the web: Launcher default, Full access; Android: Follow launcher, Allow everything; iOS: Use Launcher's, Allow
+  Everything); a launcher with its own approval alone shows no field. The pick is made on the sheet and never
+  remembered, so a mode left from a Claude Code start never reaches such a start. The effort offers only the levels its
+  model lists, none while that is not known. A Claude Code launcher keeps its five modes and remembered choice.
+- **A running chat**, for a session that lists `capabilities.permission_modes` with two: the client's existing mode
+  control (the web's composer permission picker, Android's and iOS's mode menu) with those two rows alone. "Launcher
+  default" carries a neutral mark (the plain shield, never the raised hand of "asks first"), since the provider's own
+  settings may approve everything; no mode reported is Launcher default. Going into Allow all asks first, as it does for
+  Claude Code; leaving it does not, since it can be turned on again. No Plan mode row.
+- **Session info** leaves out counts nobody gives (`usage_unknown`) rather than showing zeros.
+
+Reason: the same start and the same running chat behave the same on every client and entry point (principle 4), the
+default is the launcher's own and nothing is sent unless the user picks it (principle 1), and Allow all stays a
+confirmed, reversible choice (principle 3). It reuses each client's mode field, picker, menu rows, warning text and
+confirmation; it adds no component, token or motion. `capabilities.modes` stays false on these rows, so clients
+older than the list show no Claude Code chips there.
+
 ## Minutes cards (#5026)
 
 A recording's page on iPhone, once its minutes are ready (`docs/apple/recording.md`, "Minutes"): a segmented
