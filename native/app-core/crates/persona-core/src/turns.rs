@@ -257,7 +257,7 @@ impl Row {
 fn row(item: &Item) -> Option<Row> {
     let timestamp = || item.ts.as_deref().and_then(utc_timestamp);
     let kind = match item.kind.as_str() {
-        "text" if item.role == "user" && item.kind == "text" => Kind::User,
+        "text" if item.role == "user" => Kind::User,
         "text" => Kind::Assistant,
         "thinking" => Kind::Thinking,
         "notice" => Kind::Notice,
