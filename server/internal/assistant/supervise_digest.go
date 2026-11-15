@@ -50,12 +50,34 @@ func (s *Service) sendDigest(ctx context.Context) {
 	if here.Main == "" || here.MachineID == "" {
 		// Nowhere to tell them now (no main conversation yet, or no machine: the hub's hello while the bus is down).
 		// They stay pending and untold, and go out on a later try (#5420).
-		retry := s.superviseTimings().urgent
-		s.logf("supervise: no main conversation; trying again in %s", retry)
+		// Said once when it starts and then hourly: the watch's next pass tries again, and logging each try filled
+		// the hub's log with a line every 30 seconds while the main conversation was away.
 		b.mu.Lock()
-		s.retryDigestLocked(retry)
+		first := b.noMainSince.IsZero()
+		if first {
+			b.noMainSince = now
+		}
+		logIt := first || now.Sub(b.noMainLogged) >= superviseNoMainLogEvery
+		if logIt {
+			b.noMainLogged = now
+		}
+		since, waiting := now.Sub(b.noMainSince), len(b.pending)
+		s.retryDigestLocked(s.superviseTimings().urgent)
 		b.mu.Unlock()
+		switch {
+		case first:
+			s.logf("supervise: no main conversation; %d signal(s) wait for one", waiting)
+		case logIt:
+			s.logf("supervise: still no main conversation after %s; %d signal(s) waiting", since.Round(time.Second), waiting)
+		}
 		return
+	}
+	b.mu.Lock()
+	away := b.noMainSince
+	b.noMainSince, b.noMainLogged = time.Time{}, time.Time{}
+	b.mu.Unlock()
+	if !away.IsZero() {
+		s.logf("supervise: main conversation found after %s; telling what waited", now.Sub(away).Round(time.Second))
 	}
 	b.mu.Lock()
 	list = list[:0]

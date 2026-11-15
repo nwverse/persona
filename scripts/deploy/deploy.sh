@@ -30,9 +30,13 @@ ADMIN_CIDRS="${PERSONA_ADMIN_CIDRS:-}"
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --admin-access) ADMIN_ACCESS="${2:-}"; shift ;;
+    --admin-access)
+      [ $# -ge 2 ] || { echo "--admin-access needs a value" >&2; exit 2; }
+      ADMIN_ACCESS="$2"; shift ;;
     --admin-access=*) ADMIN_ACCESS="${1#*=}" ;;
-    --admin-cidrs) ADMIN_CIDRS="${2:-}"; shift ;;
+    --admin-cidrs)
+      [ $# -ge 2 ] || { echo "--admin-cidrs needs a value" >&2; exit 2; }
+      ADMIN_CIDRS="$2"; shift ;;
     --admin-cidrs=*) ADMIN_CIDRS="${1#*=}" ;;
     *) ARGS+=("$1") ;;
   esac

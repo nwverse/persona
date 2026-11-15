@@ -13,6 +13,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screen"
 )
 
 var planIDRe = regexp.MustCompile(`plan_[0-9a-f]+`)
@@ -1189,6 +1191,137 @@ func TestUndeliveredMessageWithNobodyAboveIsRetried(t *testing.T) {
 	})
 	if got := f.notices(); len(got) != 0 {
 		t.Fatalf("with nobody above, something was told to the main conversation: %q", got)
+	}
+}
+
+// stopLeader lists task leader s1 on box as an agent that has stopped (read-only: closed, or cut off by a restart, node
+// stopped.go) beside its working worker, and has the node refuse every send to it as it refuses a stopped agent's:
+// agent_stopped, nothing typed.
+func stopLeader(f *fakeHub, worker string) {
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusInterrupted, Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}, UpdatedAt: time.Now()},
+		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking,
+			UpdatedAt: time.Now()})
+	f.mu.Lock()
+	f.failSend = &rpc.Error{Code: proto.CodeAgentStopped, Message: "这个 Agent 已经停了，这次没有发送",
+		Data: json.RawMessage(`{"delivered":"none"}`)}
+	f.mu.Unlock()
+}
+
+// leaderEscalations counts the decisions the main conversation got saying a worker's task leader cannot be reached.
+func leaderEscalations(f *fakeHub) int {
+	n := 0
+	for _, m := range f.notices() {
+		n += strings.Count(m, "联系不上")
+	}
+	return n
+}
+
+// blockedReport has worker report that it is blocked, which goes to its leader.
+func blockedReport(t *testing.T, s *Service, worker string) {
+	t.Helper()
+	res := s.agentTool(context.Background(), "box", worker, "report_to_supervisor",
+		json.RawMessage(`{"kind":"blocked","text":"登录页卡在设计评审"}`))
+	if res.IsError {
+		t.Fatalf("the worker's report: %+v", res)
+	}
+}
+
+// A listed task leader whose agent has stopped (#8518): the node refuses the message. That goes as a failed resume
+// does: the conversation above the leader hears of it once, and the leader is not sent the message again at every
+// digest (its next try waits leaderResume, here longer than the test).
+func TestStoppedLeaderIsEscalatedOnceNotRetriedEveryDigest(t *testing.T) {
+	s, f := newQuietService(t)
+	s.leaderResume = time.Hour
+	ctx := context.Background()
+	startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	stopLeader(f, w.Agents[0].SessionID)
+	blockedReport(t, s, w.Agents[0].SessionID)
+	waitFor(t, "the send the stopped leader's node refuses", func() bool { return len(sendsTo(f, "box", "s1")) > 0 })
+	for range 5 {
+		s.sendDigest(ctx) // the digests that follow, every 30 seconds on a running hub
+	}
+	if got := sendsTo(f, "box", "s1"); len(got) != 1 {
+		t.Fatalf("the stopped leader was sent the message %d times: at every digest", len(got))
+	}
+	waitFor(t, "the conversation above the leader to hear of it", func() bool { return leaderEscalations(f) > 0 })
+	for range 5 {
+		s.sendDigest(ctx)
+	}
+	if n := leaderEscalations(f); n != 1 {
+		t.Fatalf("the conversation above the leader heard of it %d times:\n%s", n, strings.Join(f.notices(), "\n---\n"))
+	}
+	if n := f.notices()[0]; !strings.Contains(n, w.ID) || !strings.Contains(n, "改登录页") || !strings.Contains(n, "登录页卡在设计评审") {
+		t.Fatalf("the escalation must name the worker and say what it reported:\n%s", n)
+	}
+	if got := sendsTo(f, "box", "s1"); len(got) != 1 {
+		t.Fatalf("the stopped leader was sent the message %d times", len(got))
+	}
+	if cur := todoNow(s, w.ID); cur.DoneAt != nil {
+		t.Fatalf("the worker was closed by the escalation: %+v", cur)
+	}
+}
+
+// The stopped leader is still tried again, after a wait, though no digest sends it the message any more: once it runs
+// again (the user's Resume) the message reaches it, and the conversation above was told only the once.
+func TestStoppedLeaderGetsTheMessageOnceItRunsAgain(t *testing.T) {
+	s, f := newQuietService(t)
+	s.leaderResume = 50 * time.Millisecond
+	startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	stopLeader(f, w.Agents[0].SessionID)
+	blockedReport(t, s, w.Agents[0].SessionID)
+	waitFor(t, "the conversation above the leader to hear of it", func() bool { return leaderEscalations(f) > 0 })
+	waitFor(t, "the leader to be tried again after its wait", func() bool { return len(sendsTo(f, "box", "s1")) > 1 })
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusIdle, UpdatedAt: time.Now()},
+		proto.Session{SessionID: w.Agents[0].SessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
+			Status: proto.StatusWorking, UpdatedAt: time.Now()})
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	waitFor(t, "the message to reach the leader that runs again", func() bool {
+		for _, m := range deliveredTo(f, "s1") {
+			if strings.Contains(m, "登录页卡在设计评审") {
+				return true
+			}
+		}
+		return false
+	})
+	if n := leaderEscalations(f); n != 1 {
+		t.Fatalf("the conversation above the leader heard of it %d times:\n%s", n, strings.Join(f.notices(), "\n---\n"))
+	}
+}
+
+// A send to a running leader that fails for any other reason (here a dialog in its box) is still put back for the
+// next digest, and nothing goes up: the leader is there, only not now.
+func TestLeaderSendFailingOtherwiseIsRetriedByTheDigest(t *testing.T) {
+	s, f := newQuietService(t)
+	s.leaderResume = time.Hour
+	ctx := context.Background()
+	startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	f.mu.Lock()
+	f.failSend = &rpc.Error{Code: screen.DialogOpen, Message: "a dialog has the keyboard", Data: json.RawMessage(`{"delivered":"none"}`)}
+	f.mu.Unlock()
+	blockedReport(t, s, w.Agents[0].SessionID)
+	waitFor(t, "the refused send", func() bool { return len(sendsTo(f, "box", "s1")) > 0 })
+	s.sendDigest(ctx)
+	waitFor(t, "the next digest to try the leader again", func() bool { return len(sendsTo(f, "box", "s1")) > 1 })
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	waitFor(t, "the message to reach the leader", func() bool {
+		for _, m := range deliveredTo(f, "s1") {
+			if strings.Contains(m, "登录页卡在设计评审") {
+				return true
+			}
+		}
+		return false
+	})
+	if n := leaderEscalations(f); n != 0 {
+		t.Fatalf("a leader that is there was escalated:\n%s", strings.Join(f.notices(), "\n---\n"))
 	}
 }
 
