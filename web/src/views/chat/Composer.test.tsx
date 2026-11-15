@@ -3,7 +3,8 @@
 // conversation (#2378), including ones still being read or a send that fails after the box moved on.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import { addQuote, getQuotes, sendDraft, setQuotes } from "../../lib/drafts";
 import { toast } from "../../ui/atoms";
 import { Composer, type Outgoing } from "./Composer";
@@ -29,6 +30,10 @@ const create = vi.fn(() => `blob:test/${++urls}`);
 const revoke = vi.fn();
 let host: HTMLDivElement;
 let root: Root;
+
+beforeAll(async () => {
+  await loadPages();
+});
 
 beforeEach(() => {
   urls = 0;
@@ -818,4 +823,38 @@ describe("the / palette", () => {
     });
     expect(palette()).toBeNull();
   });
+});
+
+describe("Composer suggestion chunk", () => {
+  it("appears and fills the box after its chunk resolves", async () => {
+    const chunk = { calls: 0, open: () => {} };
+    vi.resetModules();
+    vi.doMock("./ComposerOverlays", async () => {
+      chunk.calls++;
+      await new Promise<void>((resolve) => { chunk.open = resolve; });
+      return vi.importActual<typeof import("./ComposerOverlays")>("./ComposerOverlays");
+    });
+    try {
+      const { initI18n } = await import("../../i18n");
+      await initI18n("zh-Hans");
+      const { Composer: DeferredComposer } = await import("./Composer");
+      await act(async () => {
+        root.render(<DeferredComposer draftKey="deferred-pill" placeholder="" suggestion="late suggestion" onSend={async () => true} />);
+      });
+      const pill = () => host.querySelector('[data-testid="composer-suggestion"]');
+      expect(pill()).toBeNull();
+      await vi.waitFor(() => expect(chunk.calls).toBe(1));
+
+      await act(async () => { chunk.open(); });
+      await vi.waitFor(async () => {
+        await act(async () => { await Promise.resolve(); });
+        expect(pill()).not.toBeNull();
+      }, { timeout: 10_000 });
+      act(() => pill()!.querySelector("button")!.click());
+      expect(host.querySelector("textarea")!.value).toBe("late suggestion");
+      expect(pill()).toBeNull();
+    } finally {
+      vi.doUnmock("./ComposerOverlays");
+    }
+  }, 20_000);
 });
