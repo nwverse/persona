@@ -1069,7 +1069,8 @@ private fun ChatPage(
                                 if (assistantChat) pendingCards(stackCards, false, keyboard)
                                 // Persona's queue: its own messages, then those relayed from elsewhere, under its entries and right
                                 // above the composer, as iOS's footer has it (every style: it is behaviour; each draws its own strip, #4339 C6).
-                                if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
+                                if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.mainSuggestions(composer.value.text,
+                                        clear = canSend && LocalMainChatClear.current != null, resources = res).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
