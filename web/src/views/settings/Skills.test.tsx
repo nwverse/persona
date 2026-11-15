@@ -121,6 +121,20 @@ it("checks a ZIP dropped on the drop zone like a chosen one", async () => {
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain(preview.destination);
 });
 
+it.each(["text/uri-list", "text/plain"])("cancels %s drags without highlighting or starting a ZIP check", async (type) => {
+  await click("settings-skills.upload");
+  const zone = document.querySelector<HTMLElement>('[data-testid="skill-zip-drop"]')!;
+  for (const name of ["dragover", "drop"]) {
+    const event = new Event(name, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: { files: [], types: [type] } });
+    await act(async () => { zone.dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(true);
+    expect(zone.className).not.toContain("border-accent");
+  }
+  expect(writes).toHaveLength(0);
+  expect(button("settings-skills.file_label")).toBeTruthy();
+});
+
 it.each(["dragover", "drop"])("prevents browser navigation on %s while keeping the pending ZIP check", async (type) => {
   hold = () => {};
   await click("settings-skills.upload");

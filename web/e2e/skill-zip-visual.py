@@ -151,6 +151,18 @@ configure("en")
 appearance(False)
 open_upload()
 print(js("document.querySelector('[role=dialog]').innerText"))
+for mime, text in (("text/uri-list", "https://example.com/"), ("text/plain", "Synthetic dragged text")):
+    zone = js("document.querySelector('[data-testid=skill-zip-drop]').getBoundingClientRect().toJSON()")
+    x, y = zone["x"] + zone["width"] / 2, zone["y"] + zone["height"] / 2
+    data = dict(items=[dict(mimeType=mime, data=text)], files=[], dragOperationsMask=1)
+    for event in ("dragEnter", "dragOver", "drop"):
+        cdp("Input.dispatchDragEvent", type=event, x=x, y=y, data=data)
+    assert js("__visual.events.slice(-2)") == [{"type": "dragover", "prevented": True}, {"type": "drop", "prevented": True}]
+    assert page_info()["url"] == origin + "/assistant"
+    assert js("__visual.calls.length") == 0
+    assert not js("document.querySelector('[data-testid=skill-zip-drop]').className.includes('border-accent')")
+    assert js("!!document.querySelector('input[type=file]')")
+checks.append("Native link/text dragover and drop cancelled without navigation, highlight or upload")
 upload()
 preview()
 assert js("document.activeElement.textContent") == "Cancel"
@@ -277,7 +289,7 @@ wait_js("!document.querySelector('[data-settings-group=skills]').textContent.inc
 checks.append("Coarse-pointer targets span at least 44 px in both axes and hit-test across that area")
 checks.append("Native taps outside the painted buttons activate Upload, Choose ZIP, Cancel, Install, Close and both Undo actions")
 
-sources = ["web/src/views/settings/Skills.tsx", "server/internal/assistant/skills_import_browser_test.go"]
+sources = ["web/src/views/settings/Skills.tsx", "web/e2e/skill-zip-visual.py", "server/internal/assistant/skills_import_browser_test.go"]
 sources += ["web/src/i18n/locales/" + lang + "/settings-skills.json" for lang in ("en", "zh-Hans", "ja")]
 report = dict(source_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               captured_at=datetime.now(timezone.utc).isoformat(),

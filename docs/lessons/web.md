@@ -6,11 +6,12 @@ The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-
 an older `min-h-11` button. Its pseudo-element expands the target without changing the drawn box: browser acceptance
 must check coarse-pointer hit testing and actual edge taps, rather than the button's bounding rectangle alone.
 
-## File drop targets must cancel navigation even while busy (#7446)
+## Drop targets must cancel navigation before filtering drag types or busy states (#7446)
 
-Cancel file `dragover` and `drop` defaults before a busy-state guard: ignoring a second file must not let the browser
-open it and leave the app. Keep the busy guard on the upload and drag highlight. `Skills.test.tsx` checks both events
-while a ZIP preview is pending, including that the first check completes and no second check starts.
+Cancel every `dragover` and `drop` default before filtering for files or a busy state: ignoring a link, text or a
+second file must not let the browser navigate away from the app. Keep the file-type and busy guards on the upload
+and drag highlight. `Skills.test.tsx` checks link/text drags without upload or highlight, and both file events while
+a ZIP preview is pending, including that the first check completes and no second check starts.
 
 ## A paging hub pushes no sessions: a computer's Agents are not in `sessions[mid]` (web audit items 3 and 30)
 

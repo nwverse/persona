@@ -393,6 +393,8 @@ After inspecting the PNGs, record the observations in `verification.json`; the c
 inspection pending. POST `/_qa/stop` to the manager fixture, then stop the owned Vite and mock processes. The browser
 check delays one real preview response to exercise the busy state; native CDP file drag events must still cancel the
 browser defaults without another preview request. The real importer supplies all validation, install and Undo replies.
+Native link and plain-text drags also cancel `dragover` and `drop` without navigating, highlighting the zone or
+starting an upload; only file drags can highlight it.
 The screenshot report is evidence for review, not an automated-review credential: the maintainer's watcher still needs
 its trusted `ui_evidence_command` adapter (`docs/operations/pr-review-automation.md`, "Configure").
 

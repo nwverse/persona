@@ -210,9 +210,8 @@ function PickZip({ view, onPick }: { view: ImportView; onPick: (file?: File) => 
   const checking = view.phase === "checking";
   const drop = {
     onDragOver: (e: React.DragEvent) => {
-      if (![...e.dataTransfer.types].includes("Files")) return;
       e.preventDefault();
-      if (!checking) setOver(true);
+      if (!checking && [...e.dataTransfer.types].includes("Files")) setOver(true);
     },
     onDragLeave: () => setOver(false),
     onDrop: (e: React.DragEvent) => {
