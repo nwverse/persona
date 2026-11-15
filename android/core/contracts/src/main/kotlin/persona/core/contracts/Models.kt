@@ -383,8 +383,19 @@ data class Session(
     @SerialName("asking_parent_session_id") val askingParentSessionId: String? = null,
     /** The listed ancestor whose chat owns this child (sessions_hierarchy). */
     @SerialName("folded_under") val foldedUnder: String? = null,
+    /** Why a row that is no child folds: [FoldedAs.WORKER] (a tab's worker, #5180) or [FoldedAs.SIDE] (#7944). */
     @SerialName("folded_as") val foldedAs: String? = null,
+    /**
+     * The nearest side session a folded row belongs to when it folds through one and is not that side itself (a side's
+     * own Codex children, #7944): its card and child card are that side's chat's, not the topmost parent's.
+     */
+    @SerialName("folded_side") val foldedSide: String? = null,
     val children: SessionChildren? = null,
+    /**
+     * The session on the same machine this one was started from while staying a conversation of its own (a Claude
+     * desktop app's side chat or /btw question, #5935). Whether it folds is the hub's [foldedAs], never this.
+     */
+    @SerialName("parent_agent_id") val parentAgentId: String? = null,
     @WireTime @SerialName("started_at") val startedAt: String? = null,
     /** Why the source only lets the phone read this session. */
     @SerialName("read_only_reason") val readOnlyReason: String? = null,
@@ -493,6 +504,8 @@ data class Session(
     @SerialName("can_fork") val canFork: Boolean = false,
     @SerialName("rev") val rev: Long? = null,
     @SerialName("suggestion") val suggestion: String? = null,
+    /** The suggested message must be reviewed in the composer, never sent in one action; absent on older hubs. */
+    @SerialName("suggestion_risky") val suggestionRisky: Boolean = false,
     /** Persona is still opening its tab and starting the agent (docs/protocol/protocol.md "New session"); sends wait for it. */
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
@@ -579,11 +592,16 @@ data class Session(
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
     val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
     val agentState: AgentState get() = AgentState.of(state, status)
-    /** The list state of this session and its folded children; its own wire state stays intact. */
+    /**
+     * The list state of this session and its folded children; its own wire state stays intact. A side session's result
+     * not looked at yet makes it unread (`sides_unread`, #7944: sides only; Codex children and workers do not), unless it
+     * works itself.
+     */
     val foldedState: AgentState get() = when {
         agentState == AgentState.NeedsYou || (children?.needsYou ?: 0) > 0 -> AgentState.NeedsYou
         (children?.working ?: 0) > 0 && agentState != AgentState.Unread &&
             !(agentState == AgentState.Idle && awaitsReply) -> AgentState.Working
+        agentState != AgentState.Working && (children?.sidesUnread ?: 0) > 0 -> AgentState.Unread
         else -> agentState
     }
     /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
@@ -655,7 +673,22 @@ data class SessionChildren(
     val working: Int = 0,
     @SerialName("needs_you") val needsYou: Int = 0,
     val workers: Int = 0,
+    /**
+     * The side sessions among them (`folded_as: "side"`, sessions_side_fold, #7944), by their own states, also counted in
+     * the fields above. The app reads them only for a row whose sides it does not hold (core:domain `foldRows`).
+     */
+    val sides: Int = 0,
+    @SerialName("sides_working") val sidesWorking: Int = 0,
+    @SerialName("sides_needs_you") val sidesNeedsYou: Int = 0,
+    @SerialName("sides_unread") val sidesUnread: Int = 0,
 )
+
+/** The hub's `folded_as` values. */
+object FoldedAs {
+    const val WORKER = "worker"
+    /** A side session (a Claude desktop app's side chat or /btw question), folded under its topmost listed parent (#7944). */
+    const val SIDE = "side"
+}
 
 @KeepGeneratedSerializer
 @Serializable(with = SessionCompactionSerializer::class)
@@ -769,6 +802,12 @@ data class Item(
  * A Claude Code model_refusal_* record as the hub gives it (server proto.ModelRefusal, #2528): its known fields with
  * values as recorded (unknown ones included) and [text], the refusal's own words. Never the record's line: older hubs
  * also sent it as `raw`, which is not decoded, so it is never shown or kept.
+ *
+ * The recovery fields are present only when the node projects its own bounded recovery onto this shape (#7824): a
+ * runtime-written record never sets them, so they decode to their defaults and older records render unchanged.
+ * [recoveryReset] says when the configured model is available again; [recoveryExhausted] marks an exhausted chain
+ * (then [fallbackModel] is empty); [recoveryReturning] that the configured model answered a probe and the next request
+ * runs on it again; [recoveryTried] lists every model tried, in order, joined by arrows.
  */
 @KeepGeneratedSerializer
 @Serializable(with = ModelRefusalSerializer::class)
@@ -780,6 +819,10 @@ data class ModelRefusal(
     val scope: String? = null,
     val explanation: String? = null,
     val text: String? = null,
+    @WireTime @SerialName("recovery_reset") val recoveryReset: String? = null,
+    @SerialName("recovery_exhausted") val recoveryExhausted: Boolean = false,
+    @SerialName("recovery_returning") val recoveryReturning: Boolean = false,
+    @SerialName("recovery_tried") val recoveryTried: String? = null,
 )
 
 object ModelRefusalSerializer : WireSerializer<ModelRefusal>(ModelRefusal.generatedSerializer())
@@ -957,6 +1000,8 @@ data class Interaction(
     @SerialName("session_title") val sessionTitle: String? = null,
     @SerialName("folded_under") val foldedUnder: String? = null,
     @SerialName("folded_as") val foldedAs: String? = null,
+    /** The side session whose chat this card belongs to when it comes from a row folded through one (#7944). */
+    @SerialName("folded_side") val foldedSide: String? = null,
     /** The task its agent works for (docs/assistant/unified-entry.md), named by the hub. */
     @SerialName("task_title") val taskTitle: String? = null,
     @SerialName("cwd") val cwd: String? = null,
