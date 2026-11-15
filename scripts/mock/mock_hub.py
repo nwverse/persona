@@ -57,7 +57,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
@@ -17998,6 +17998,18 @@ def paged_sessions(query):
     fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
+    scope = query.get("agents_only", ["0"])
+    if len(scope) != 1 or scope[0] not in ("0", "1", "false", "true"):
+        return {"error": "agents_only must be true, false, 1, or 0", "code": "invalid_query"}, 400
+    agents_only = scope[0] in ("1", "true")
+
+    def agent_row(s):
+        cwd = posixpath.normpath((s.get("cwd") or "").replace("\\", "/"))
+        parts = cwd.split("/")
+        health_dir = any(parent in (".persona", ".jarvis") and re.fullmatch(r"health(?:-m-[0-9a-f]+)?", name)
+                         for parent, name in zip(parts, parts[1:]))
+        return not (s.get("assistant") or s.get("space") == "health" or health_dir)
+
     # sessions_hierarchy (#5120): roots=1 leaves the folded children out and counts each parent by its folded state;
     # parent_session_id=<id> (with machine_id) lists the sessions folded under it.
     roots, under = query.get("roots", [""])[0] == "1", query.get("parent_session_id", [""])[0]
@@ -18025,7 +18037,8 @@ def paged_sessions(query):
     origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
 
     def matching(rows):
-        rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
+        rows = [s for s in rows if (not agents_only or agent_row(s))
+                and (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
                 and (not query.get("state", [""])[0] or query["state"][0] == state_of(s))
                 and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
@@ -24737,7 +24750,8 @@ if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice
 
 
 # ---------- area: model defaults (#2455) ----------
-# MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none),
+# MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none)
+# and "New chats' Claude profile" (#4633: private / legacy, saved in its binding; "private" is stored as none),
 # GET /api/v1/machines/{mid}/launchers carries `default` (?purpose=, "New Agent"'s agent.new when absent), and the main
 # conversation asked for the Agent SDK but runs on the CLI (runtime_fallback).
 MODEL_DEFAULTS = os.environ.get("MOCK_MODEL_DEFAULTS") == "1"
@@ -24757,6 +24771,11 @@ def model_configuration(include_uses=False):
                 binding.pop("runtime")
         purpose["runtimes"] = ["cli", "agentsdk"]
         purpose["fields"] = purpose["fields"] + ["runtime"]
+        for binding in (purpose["override"], purpose["effective"]):
+            if binding.get("config_dir") == "private":
+                binding.pop("config_dir")
+        purpose["config_dirs"] = ["private", "legacy"]
+        purpose["fields"] = purpose["fields"] + ["config_dir"]
     return catalog
 
 

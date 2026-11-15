@@ -244,7 +244,7 @@ final class InboxCollapsedSourceTests: XCTestCase {
         acceptIconAlert()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "no app window")
         regularWidth = app.windows.firstMatch.frame.width > 600
-        requireHittable(element("inbox.detail.done"), "the \(item) detail")
+        requireHittable(element("inbox.detail.more"), "the \(item) detail")
     }
 
     /// The default mock's mail 501 carries the body this case looks for; MOCK_MAIL gives it another. Said plainly

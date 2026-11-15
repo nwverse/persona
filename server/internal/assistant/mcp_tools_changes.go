@@ -34,11 +34,15 @@ func (c *mcpToolChanges) notify() {
 	c.cursor, c.changed = randomHex(16), make(chan struct{})
 }
 
-// The heartbeat lets the node re-resolve a pane whose identity arrived after its
-// first list, and bounds a watch across a lost link. It is not a discovery deadline.
+// mcpToolsHeartbeat is a discovery heartbeat, not a legacy startup wait. Revision-aware calls never use leaderListWait.
 const mcpToolsHeartbeat = 30 * time.Second
 
+type revisionDiscoveryKey struct{}
+
 func (s *Service) sessionMCPToolsSince(ctx context.Context, machine, session string, assistant, guest bool, since string) map[string]any {
+	if since != "" {
+		ctx = context.WithValue(ctx, revisionDiscoveryKey{}, true)
+	}
 	cursor, changed := s.mcpChanges.snapshot()
 	if since == cursor {
 		timer := time.NewTimer(mcpToolsHeartbeat)

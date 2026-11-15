@@ -892,6 +892,9 @@ type CodexMemory struct {
 
 func RenderCodexMemory(m CodexMemory) string { return render("assistant/codex_memory", m) }
 
+// RenderMemoryDream asks the background pass to consolidate durable preferences.
+func RenderMemoryDream() string { return render("assistant/memory_dream", nil) }
+
 // RuntimeInstructions is what the assistant on an agent runtime (DSH…) gets with a new conversation's first message
 // (assistant/runtime_instructions): the shared memory, and the skills' gated commands it runs as tools.
 type RuntimeInstructions struct {

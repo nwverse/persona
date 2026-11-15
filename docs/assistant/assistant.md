@@ -714,7 +714,7 @@ In the assistant's composer (web, and the iPhone/iPad shell composer's `Composer
 - **Another process replaces node's socket file** (2026-11-05): another node listened on the same path and didn't unlink on exit (`SetUnlinkOnClose(false)`), leaving an unserved socket;
   every `personad launch <Persona-managed launcher>` and hook got `connection refused`. The watchdog once checked only existence; now every 15 seconds it checks ownership (`os.SameFile`),
   dials if different, and recreates only when unanswered (`sockGone`). A responding newer node keeps the socket; don't take it back.
-- In Chinese locales, `.hour(.twoDigits(amPM: .omitted))` is 12-hour (17:00 appears "05:00"); always use `AssistantScheduleText.hm` (fixed `HH:mm`).
+- In Chinese locales, `.hour(.twoDigits(amPM: .omitted))` is 12-hour (17:00 appears "05:00"); always use `AssistantScheduleText.hm` (fixed `HH:mm`), and `AssistantScheduleText.clock` for a daily task's `HH:MM` (#7499).
 
 ## Live snapshots and prefix caching
 
@@ -1528,6 +1528,21 @@ The apps find an assistant chat by what was said in it through `GET /api/v1/assi
 - **Reading it again** (#6340): `personad assistant search-reindex` (the built-in manager; `persona-manager assistant search-reindex`) or `personad manager search-reindex [--dir D]` (a manager made in the app, `--dir` left out when the computer has one) empties both tables in the database the manager runs on and counts the reset (`db.ResetSearch`, the manager setting `assistant_search.reset`). The built-in manager's database is its own once its data moved there, else the hub's (`builtinDatabaseNow`, as `builtinDatabase` decides at its start); another manager's is its `manager.json`'s, never the hub's. A running manager sees the count move at its next sweep (`searchLoad`): it empties what it wrote meanwhile from its old cursors, drops the cursors it held and reads every chat again from the start, so it need not be stopped; a stopped one reads them when it starts. A database without the index (a manager from before chat search) is left as it is. There is no separate `--purge`: the manager always fills the index again from the transcripts, so emptying it and rebuilding it are the same act.
 - **Not yet**: the earlier stretches of a chat that moved between Claude Code and Codex are not indexed, only the session it runs in now.
 
+## Memory dreaming
+
+Set `"assistant": {"memory_dreaming": true}` in the assistant manager's `manager.json` to enable a background pass inspired by
+[pi-memory-dreaming](https://github.com/yukukotani/pi-memory-dreaming). Every five minutes the manager checks whether the main
+chat on the selected personal computer is idle. It makes at most one attempt per day when it finds new user-authored text
+in the latest eight turns. It sends those messages, the memory index and the previous dreaming note to Persona's configured
+Data processing model. The pass excludes Health, other conversations, tool output and automated messages.
+It reads eligible messages from oldest to newest, up to 12,000 bytes of user text per pass. Long messages are sent as
+marked excerpts of up to 3,000 bytes. A message that does not fit in the remaining batch waits for the next pass
+while it is within the latest eight turns.
+
+The model consolidates durable preferences and explicit corrections into `dreaming.md` in the existing assistant memory,
+visible and editable in the app. It may return no change. The node updates the dedicated note and its index link only if
+the note and index still match the version reviewed by the model. The assistant stores the last attempt time and checkpoints processed messages so they survive a restart. If the transcript is replaced, the new history starts a fresh checkpoint.
+
 ## Codex (2026-11-01, `codex app-server`)
 
 Selecting a Codex launcher in Settings › Assistant (or top-bar menu / scheduled tasks) replaces `claude -p` with Codex's persistent IDE JSON-RPC service,
@@ -1602,7 +1617,7 @@ DSH details (permission preset mapping, persistent `dsh web`): `docs/integration
   proactive work (scheduled tasks, run history), knowing you (About Me, memory), settings (Skills, Run on, Working directory;
   next-message suggestions on a supporting hub, off by default and hidden when the field is absent; model in Settings › Model
   Configuration › Main chat, #1291), accessible data. Settings › Assistant opens the same page.
-- Scheduled tasks: "Up Next" timeline (large times on the left, like Reminders), "Scheduled tasks" (daily / interval, natural rules "Every weekday at 9:00 AM", "Every 30 minutes"),
+- Scheduled tasks: "Up Next" timeline (large times on the left, like Reminders), "Scheduled tasks" (daily / interval, natural rules "Every weekday at 09:00", "Every 30 minutes"; a daily rule's time is 24-hour in every language, like the next run under it and the web, #7499),
   "One-time follow-ups"; rows show icon, next run, nondefault execution ("claude-fast · Auto · Low effort", Allow Everything red), last result, switch; swipe delete, long-press Run now,
   recent runs. Shared editor: repeat (Once / Daily / Interval), prompt, execution (model, permission, effort), Continue original chat (toggle off for new chats each run),
   Run now, history.
