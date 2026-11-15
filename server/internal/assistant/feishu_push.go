@@ -28,7 +28,6 @@ func (s *Service) feishuPush(machine, session, title, body string) {
 // while the hub is away, a card Feishu did not take for now), nil when it went or has nowhere to go (no bot, the
 // pushes switch off, a card Feishu refuses however often it is sent).
 func (s *Service) feishuPushKeyed(ctx context.Context, machine, session, title, body, key string) error {
-	ctx = feishuSendAs(ctx, "push", machine, session)
 	st, err := s.feishuStatus(ctx)
 	ready := err == nil && st.Ready
 	s.workbenchOn(st.Features, ready) // as feishuFeatures
@@ -41,6 +40,7 @@ func (s *Service) feishuPushKeyed(ctx context.Context, machine, session, title, 
 	// The body laid out like the bot's answers (answerCards: sections, tables, link buttons, more cards when long, at
 	// most botAnswerCards); the push's title heads the first card, the open button goes under the last.
 	l := s.botLang(ctx)
+	ctx = feishuSendAs(ctx, "push", machine, session)
 	cards := answerCards(l, body, false, nil, "")
 	head := feishubot.NewCard("", "", title)
 	for i, ac := range cards {
