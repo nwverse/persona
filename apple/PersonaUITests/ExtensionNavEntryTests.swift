@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 /// Extensions' main-navigation pages (nav_page) opened straight from the navigation (#2961): the new shell's drawer on
