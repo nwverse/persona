@@ -4,45 +4,63 @@ import Foundation
 /// docs/plans/plan-ego-browser.md「Importing cookies」): parsed here on the device, grouped by site for the user to tick, and sent
 /// straight to the hub, which passes them to the Mac and keeps nothing. Nothing here stores, logs or shows a value. The web's lib/cookies.ts does
 /// the same; BrowserCookiesTests holds them to the same cases.
-nonisolated struct BrowserCookie: Codable, Hashable, Sendable {
-    var name: String
-    var value: String
-    var domain: String
-    var path: String? = nil
-    /// Unix seconds; nil for a session cookie.
-    var expires: Double? = nil
-    var secure: Bool? = nil
-    var httpOnly: Bool? = nil
-    var sameSite: String? = nil // Strict | Lax | None
-    var hostOnly: Bool? = nil
+public nonisolated struct BrowserCookie: Codable, Hashable, Sendable {
+    public init(name: String, value: String, domain: String, path: String? = nil, expires: Double? = nil, secure: Bool? = nil, httpOnly: Bool? = nil, sameSite: String? = nil, hostOnly: Bool? = nil) {
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.path = path
+        self.expires = expires
+        self.secure = secure
+        self.httpOnly = httpOnly
+        self.sameSite = sameSite
+        self.hostOnly = hostOnly
+    }
 
-    enum CodingKeys: String, CodingKey {
+    public var name: String
+    public var value: String
+    public var domain: String
+    public var path: String? = nil
+    /// Unix seconds; nil for a session cookie.
+    public var expires: Double? = nil
+    public var secure: Bool? = nil
+    public var httpOnly: Bool? = nil
+    public var sameSite: String? = nil // Strict | Lax | None
+    public var hostOnly: Bool? = nil
+
+    public enum CodingKeys: String, CodingKey {
         case name, value, domain, path, expires, secure
         case httpOnly = "http_only", sameSite = "same_site", hostOnly = "host_only"
     }
 }
 
 /// A site with cookies in ego lite now (GET …/browser/cookies): never a name or a value.
-nonisolated struct BrowserCookieSite: Codable, Hashable, Sendable, Identifiable {
-    var domain: String
-    var count: Int
-    var expires: Date? = nil
-    var id: String { domain }
+public nonisolated struct BrowserCookieSite: Codable, Hashable, Sendable, Identifiable {
+    public init(domain: String, count: Int, expires: Date? = nil) {
+        self.domain = domain
+        self.count = count
+        self.expires = expires
+    }
+
+    public var domain: String
+    public var count: Int
+    public var expires: Date? = nil
+    public var id: String { domain }
 }
 
-extension BrowserCookieSite {
+public extension BrowserCookieSite {
     /// Every cookie of the site has expired: its latest one is past.
-    nonisolated func expired(at now: Date = .now) -> Bool { expires.map { $0 <= now } ?? false }
+    public nonisolated func expired(at now: Date = .now) -> Bool { expires.map { $0 <= now } ?? false }
 }
 
 /// A computer's sign-ins on its page (#5821, docs/design/DESIGN_SYSTEM.md「Long lists on a detail page」): a few are
 /// listed in place, more fold behind one summary row that opens the whole list, searched by domain and in an order. The
 /// web's lib/cookies.ts (`SITES_IN_PLACE`, `siteList`, `siteSummary`) does the same; BrowserCookiesTests holds this one.
-nonisolated enum BrowserSiteList {
+public nonisolated enum BrowserSiteList {
     /// How many sites the page lists in place.
-    static let inPlace = 3
+    public static let inPlace = 3
 
-    enum Order: String, CaseIterable, Sendable {
+    public enum Order: String, CaseIterable, Sendable {
         /// By domain.
         case name
         /// The soonest to expire first: expired ones on top, those that end with the browser last.
@@ -50,14 +68,20 @@ nonisolated enum BrowserSiteList {
     }
 
     /// What the folded row says: how many sites, when the first still signed in expires, how many have expired.
-    struct Summary: Equatable, Sendable {
-        var count: Int
-        var first: Date?
-        var expired: Int
+    public struct Summary: Equatable, Sendable {
+        public var count: Int
+        public var first: Date?
+        public var expired: Int
+
+        public init(count: Int, first: Date?, expired: Int) {
+            self.count = count
+            self.first = first
+            self.expired = expired
+        }
     }
 
     /// The sites whose domain holds `query` (any case, the spaces around it ignored), in `order`.
-    static func shown(_ sites: [BrowserCookieSite], query: String, order: Order) -> [BrowserCookieSite] {
+    public static func shown(_ sites: [BrowserCookieSite], query: String, order: Order) -> [BrowserCookieSite] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let found = q.isEmpty ? sites : sites.filter { $0.domain.lowercased().contains(q) }
         switch order {
@@ -71,7 +95,7 @@ nonisolated enum BrowserSiteList {
         }
     }
 
-    static func summary(_ sites: [BrowserCookieSite], now: Date = .now) -> Summary {
+    public static func summary(_ sites: [BrowserCookieSite], now: Date = .now) -> Summary {
         var out = Summary(count: sites.count, first: nil, expired: 0)
         for s in sites {
             guard let at = s.expires else { continue }
@@ -82,26 +106,39 @@ nonisolated enum BrowserSiteList {
 }
 
 /// What the hub answers about the sign-ins: the sites now, and what an import or a clear did.
-nonisolated struct BrowserCookies: Codable, Sendable {
-    var sites: [BrowserCookieSite]
-    var imported: Int? = nil
-    var skipped: Int? = nil
-    var removed: Int? = nil
+public nonisolated struct BrowserCookies: Codable, Sendable {
+    public init(sites: [BrowserCookieSite], imported: Int? = nil, skipped: Int? = nil, removed: Int? = nil) {
+        self.sites = sites
+        self.imported = imported
+        self.skipped = skipped
+        self.removed = removed
+    }
+
+    public var sites: [BrowserCookieSite]
+    public var imported: Int? = nil
+    public var skipped: Int? = nil
+    public var removed: Int? = nil
 }
 
 /// A site in a picked file: its cookies, how many had already expired (not imported), when the last one expires.
-nonisolated struct CookieFileSite: Hashable, Sendable, Identifiable {
-    var site: String
-    var cookies: [BrowserCookie] = []
-    var expired = 0
-    var expires: Double? = nil
-    var id: String { site }
+public nonisolated struct CookieFileSite: Hashable, Sendable, Identifiable {
+    public init(site: String, cookies: [BrowserCookie] = [], expires: Double? = nil) {
+        self.site = site
+        self.cookies = cookies
+        self.expires = expires
+    }
+
+    public var site: String
+    public var cookies: [BrowserCookie] = []
+    public var expired = 0
+    public var expires: Double? = nil
+    public var id: String { site }
 }
 
-nonisolated enum CookieFile {
-    enum Failure: LocalizedError {
+public nonisolated enum CookieFile {
+    public enum Failure: LocalizedError {
         case unreadable, empty(json: Bool)
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .unreadable: String(localized: "Can't read this file: it's neither cookies.txt nor JSON")
             case .empty(let json): json ? String(localized: "No cookies in the JSON") : String(localized: "No cookies in the file (expected cookies.txt: 7 tab-separated columns per line)")
@@ -111,7 +148,7 @@ nonisolated enum CookieFile {
 
     /// A cookie file: JSON (Cookie-Editor / EditThisCookie, or `{cookies: [...]}`) when it looks like JSON, else
     /// Netscape cookies.txt. `bad`: lines or entries that are no cookie.
-    static func parse(_ text: String) throws -> (cookies: [BrowserCookie], bad: Int) {
+    public static func parse(_ text: String) throws -> (cookies: [BrowserCookie], bad: Int) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
         let isJSON = t.hasPrefix("[") || t.hasPrefix("{")
         let out = isJSON ? try json(t) : netscape(t)
@@ -177,7 +214,7 @@ nonisolated enum CookieFile {
 
     /// The site a cookie domain belongs to, as people know it: example.com for .www.example.com; two-part suffixes
     /// (example.co.uk, example.com.cn) keep three labels. The node groups the same way with the public suffix list.
-    static func site(of domain: String) -> String {
+    public static func site(of domain: String) -> String {
         let host = (domain.hasPrefix(".") ? String(domain.dropFirst()) : domain).lowercased()
         let parts = host.split(separator: ".").map(String.init)
         guard parts.count > 2, Int(parts.last ?? "") == nil else { return host }
@@ -187,7 +224,7 @@ nonisolated enum CookieFile {
     }
 
     /// The file's cookies by site, the sites by name; expired ones counted, not kept.
-    static func sites(_ cookies: [BrowserCookie], now: Date = .now) -> [CookieFileSite] {
+    public static func sites(_ cookies: [BrowserCookie], now: Date = .now) -> [CookieFileSite] {
         var by: [String: CookieFileSite] = [:]
         let t = now.timeIntervalSince1970
         for c in cookies {

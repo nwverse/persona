@@ -640,7 +640,7 @@ Grep counts are across `apple/` without tests; they are leads to read, not each 
 - `apple/Shared/Models.swift:2505`: `storageText` creates a `ByteCountFormatter` on each read; 35 callers, many in rows and in a progress label (`apple/Persona/Views/Chat/VideoFileView.swift:145`).
 - `apple/Persona/Views/Session/ReviewPage.swift:267-283`: rebuilds a file's diff rows, scans them for the widest line number and filters the drafts once per line, on every `body`.
 - Counts: 22 `DateFormatter()`, 13 `ISO8601DateFormatter()`.
-- Good: `ChatScratch`'s memoized lines (`apple/Persona/Views/Chat/ChatView.swift:880`), `TextMemo` (`apple/Shared/TextMemo.swift`), `InboxProjectionMemo`.
+- Good: `ChatScratch`'s memoized lines (`apple/Persona/Views/Chat/ChatView.swift:880`), `TextMemo` (`apple/Packages/PersonaWire/Sources/PersonaWire/TextMemo.swift`), `InboxProjectionMemo`.
 
 **P5 / P7: reads and high-frequency updates**
 

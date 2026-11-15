@@ -2,8 +2,8 @@ import Foundation
 import PersonaWire
 
 /// The Inbox display clock. DEBUG screenshot launches can pin it to one reproducible moment.
-nonisolated enum AppClock {
-    static var now: Date {
+public nonisolated enum AppClock {
+    public static var now: Date {
         #if DEBUG
         pinnedAtLaunch ?? Date()
         #else
@@ -33,7 +33,7 @@ nonisolated enum AppClock {
     }
 
     /// Lets unit tests model separate launches. App code never resets the cached launch argument.
-    static func resetForTests() {
+    public static func resetForTests() {
         lock.withLock { cache = Cache() }
     }
     #endif

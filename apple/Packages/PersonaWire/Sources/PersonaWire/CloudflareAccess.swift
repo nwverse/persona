@@ -3,14 +3,14 @@ import Foundation
 /// A Cloudflare Access service token for one paired hub (docs/operations/network.md "Behind Cloudflare Access"): the hub
 /// is published through Cloudflare Tunnel with Access in front, which lets the apps through only with these two values as
 /// headers. Kept with the pairing in the keychain, like the hub token; never printed (its descriptions redact the secret).
-nonisolated struct HubAccess: Codable, Hashable, Sendable {
-    var clientID: String
-    var clientSecret: String
+public nonisolated struct HubAccess: Codable, Hashable, Sendable {
+    public var clientID: String
+    public var clientSecret: String
 
-    enum CodingKeys: String, CodingKey { case clientID = "client_id", clientSecret = "client_secret" }
+    public enum CodingKeys: String, CodingKey { case clientID = "client_id", clientSecret = "client_secret" }
 
     /// The two values as typed, trimmed; nil when either is empty (no token).
-    init?(clientID: String, clientSecret: String) {
+    public init?(clientID: String, clientSecret: String) {
         let id = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty, !secret.isEmpty else { return nil }
@@ -20,18 +20,18 @@ nonisolated struct HubAccess: Codable, Hashable, Sendable {
 }
 
 nonisolated extension HubAccess: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
-    var description: String { "HubAccess(clientID: \(clientID), clientSecret: <redacted>)" }
-    var debugDescription: String { description }
-    var customMirror: Mirror { Mirror(self, children: ["clientID": clientID, "clientSecret": "<redacted>"]) }
+    public var description: String { "HubAccess(clientID: \(clientID), clientSecret: <redacted>)" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { Mirror(self, children: ["clientID": clientID, "clientSecret": "<redacted>"]) }
 }
 
 /// Where the service token goes and what Access turning a request away looks like.
-nonisolated enum CloudflareAccess {
-    static let idHeader = "CF-Access-Client-Id"
-    static let secretHeader = "CF-Access-Client-Secret"
+public nonisolated enum CloudflareAccess {
+    public static let idHeader = "CF-Access-Client-Id"
+    public static let secretHeader = "CF-Access-Client-Secret"
 
     /// A URL's origin: scheme (a WebSocket's as http / https), host and port.
-    static func origin(_ url: URL?) -> String? {
+    public static func origin(_ url: URL?) -> String? {
         guard let url, let scheme = url.scheme?.lowercased(),
               let host = url.host(percentEncoded: false)?.lowercased(), !host.isEmpty else { return nil }
         let s = scheme == "wss" ? "https" : scheme == "ws" ? "http" : scheme
@@ -39,31 +39,31 @@ nonisolated enum CloudflareAccess {
         return "\(s)://\(host):\(port)"
     }
 
-    static func sameOrigin(_ a: URL?, _ b: URL?) -> Bool {
+    public static func sameOrigin(_ a: URL?, _ b: URL?) -> Bool {
         guard let a = origin(a) else { return false }
         return a == origin(b)
     }
 
     /// The token's headers for a request to `url`: only on `hub`'s own origin, never another hub, a mesh peer, a
     /// tunnel's loopback address or a third party.
-    static func headers(_ access: HubAccess?, for url: URL?, hub: URL) -> [String: String] {
+    public static func headers(_ access: HubAccess?, for url: URL?, hub: URL) -> [String: String] {
         guard let access, sameOrigin(url, hub) else { return [:] }
         return [idHeader: access.clientID, secretHeader: access.clientSecret]
     }
 
-    static func apply(_ access: HubAccess?, to request: inout URLRequest, hub: URL) {
+    public static func apply(_ access: HubAccess?, to request: inout URLRequest, hub: URL) {
         for (name, value) in headers(access, for: request.url, hub: hub) { request.setValue(value, forHTTPHeaderField: name) }
     }
 
     /// Access's login (`<team>.cloudflareaccess.com`).
-    static func isLogin(_ url: URL?) -> Bool {
+    public static func isLogin(_ url: URL?) -> Bool {
         guard let host = url?.host(percentEncoded: false)?.lowercased() else { return false }
         return host == "cloudflareaccess.com" || host.hasSuffix(".cloudflareaccess.com")
     }
 
     /// The redirect to follow, nil to stop at the redirect's own answer: never to Access's login page, and a request
     /// carrying the token never leaves its origin (the token would go along).
-    static func follow(_ next: URLRequest, from original: URLRequest?) -> URLRequest? {
+    public static func follow(_ next: URLRequest, from original: URLRequest?) -> URLRequest? {
         if isLogin(next.url) { return nil }
         if original?.value(forHTTPHeaderField: secretHeader) != nil, !sameOrigin(next.url, original?.url) { return nil }
         return next
@@ -71,7 +71,7 @@ nonisolated enum CloudflareAccess {
 
     /// Access turned the request away, not the hub: a redirect to its login, its login page, or its own HTML answer
     /// (the hub answers JSON, never a page naming Access).
-    static func blocked(_ response: URLResponse?, body: Data = Data()) -> Bool {
+    public static func blocked(_ response: URLResponse?, body: Data = Data()) -> Bool {
         guard let http = response as? HTTPURLResponse else { return false }
         if isLogin(http.url) { return true }
         if (300..<400).contains(http.statusCode), let location = http.value(forHTTPHeaderField: "Location"),
@@ -90,27 +90,31 @@ nonisolated enum CloudflareAccess {
 }
 
 /// Cloudflare Access stopped a request to the hub: no service token set for it, or the one set was refused.
-nonisolated struct CloudflareAccessError: LocalizedError, Equatable, Sendable {
+public nonisolated struct CloudflareAccessError: LocalizedError, Equatable, Sendable {
     /// A token went with the request.
-    var tokenSent: Bool
+    public var tokenSent: Bool
 
-    var errorDescription: String? {
+    public init(tokenSent: Bool) { self.tokenSent = tokenSent }
+
+    public var errorDescription: String? {
         tokenSent ? String(localized: "Cloudflare Access rejected the service token")
                   : String(localized: "This hub is behind Cloudflare Access and needs a service token")
     }
 
     /// Throws when `response` is Access turning the request away.
-    static func check(_ response: URLResponse?, body: Data = Data(), access: HubAccess?) throws {
+    public static func check(_ response: URLResponse?, body: Data = Data(), access: HubAccess?) throws {
         if CloudflareAccess.blocked(response, body: body) { throw CloudflareAccessError(tokenSent: access != nil) }
     }
 }
 
 /// The task delegate of requests to a hub: redirects as `CloudflareAccess.follow` allows. A subclass adds its own
 /// callbacks (upload and download progress).
-nonisolated class HubRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    static let shared = HubRedirects()
+open nonisolated class HubRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    public static let shared = HubRedirects()
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+    public override init() { super.init() }
+
+    open func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(CloudflareAccess.follow(request, from: task.originalRequest))
     }

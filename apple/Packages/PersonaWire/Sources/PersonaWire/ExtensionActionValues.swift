@@ -1,8 +1,8 @@
 import Foundation
 import PersonaWire
 
-nonisolated enum ExtensionActionValues {
-    static func map(_ place: ExtensionShortcutPlace, text: String?, number: Double?, toggle: Bool?, choice: String?, json: String?) throws -> [String: String] {
+public nonisolated enum ExtensionActionValues {
+    public static func map(_ place: ExtensionShortcutPlace, text: String?, number: Double?, toggle: Bool?, choice: String?, json: String?) throws -> [String: String] {
         let params = place.params ?? []
         var values: [String: String] = [:]
         if let json, !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -34,6 +34,6 @@ nonisolated enum ExtensionActionValues {
     }
 }
 
-nonisolated struct ExtensionActionInputError: LocalizedError {
-    var errorDescription: String? { String(localized: "Check the extension action's required values and JSON parameters.") }
+public nonisolated struct ExtensionActionInputError: LocalizedError {
+    public var errorDescription: String? { String(localized: "Check the extension action's required values and JSON parameters.") }
 }

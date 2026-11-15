@@ -6,20 +6,20 @@ import PersonaWire
 // is used. The types and the pure helpers (pace, countdown, sample age, which accounts the bars show) are here, as the
 // web's lib/usage-windows.ts has them; the views are UsageWindowsViews.swift.
 
-nonisolated struct UsageWindow: Decodable, Hashable, Sendable {
-    var label: String
-    var windowMinutes: Int
-    var usedPercent: Double
-    var resetsAt: Date?
+public nonisolated struct UsageWindow: Decodable, Hashable, Sendable {
+    public var label: String
+    public var windowMinutes: Int
+    public var usedPercent: Double
+    public var resetsAt: Date?
     /// An allowance a provider keeps for one model next to the plan's own (#2595); nil for the plan's window.
-    var model: String?
+    public var model: String?
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey {
         case label, model
         case windowMinutes = "window_minutes", usedPercent = "used_percent", resetsAt = "resets_at"
     }
 
-    init(label: String, windowMinutes: Int, usedPercent: Double, resetsAt: Date?, model: String? = nil) {
+    public init(label: String, windowMinutes: Int, usedPercent: Double, resetsAt: Date?, model: String? = nil) {
         self.label = label
         self.windowMinutes = windowMinutes
         self.usedPercent = usedPercent
@@ -27,7 +27,7 @@ nonisolated struct UsageWindow: Decodable, Hashable, Sendable {
         self.model = model
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
         windowMinutes = try c.decodeIfPresent(Int.self, forKey: .windowMinutes) ?? 0
@@ -38,35 +38,35 @@ nonisolated struct UsageWindow: Decodable, Hashable, Sendable {
     }
 
     /// Unique within an account (the same length may come twice: the plan's and one model's).
-    var key: String { "\(label):\(windowMinutes):\(model ?? "")" }
+    public var key: String { "\(label):\(windowMinutes):\(model ?? "")" }
 }
 
-nonisolated struct UsageAccount: Decodable, Hashable, Sendable, Identifiable {
-    var id: String
-    var provider: String
-    var name: String
-    var plan: String?
-    var windows: [UsageWindow]
-    var sampledAt: Date?
-    var stale: Bool
+public nonisolated struct UsageAccount: Decodable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var provider: String
+    public var name: String
+    public var plan: String?
+    public var windows: [UsageWindow]
+    public var sampledAt: Date?
+    public var stale: Bool
     /// When it turns stale if nothing newer comes (#1905): kept numbers are judged again against it (`live`).
-    var staleAt: Date?
+    public var staleAt: Date?
     /// Where the numbers came from (#2595): an agent's files on one of the computers, and/or gateways by name.
-    var local: Bool
-    var sources: [String]
+    public var local: Bool
+    public var sources: [String]
     /// The computers (by name) that read it (#1907); an older hub only says `local`.
-    var machines: [String]
+    public var machines: [String]
     /// Why a gateway's numbers are old: "error" (it could not read this account just now) or, when its own last read
     /// failed, "rejected" (the key was turned away), "unreachable" or "failed" (docs/server/usage-windows.md).
-    var problem: String?
+    public var problem: String?
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey {
         case id, provider, name, plan, windows, stale, local, sources, machines, problem
         case sampledAt = "sampled_at"
         case staleAt = "stale_at"
     }
 
-    init(id: String, provider: String, name: String, plan: String? = nil, windows: [UsageWindow], sampledAt: Date?,
+    public init(id: String, provider: String, name: String, plan: String? = nil, windows: [UsageWindow], sampledAt: Date?,
          stale: Bool = false, staleAt: Date? = nil, local: Bool = false, sources: [String] = [], machines: [String] = [], problem: String? = nil) {
         self.id = id
         self.provider = provider
@@ -82,7 +82,7 @@ nonisolated struct UsageAccount: Decodable, Hashable, Sendable, Identifiable {
         self.problem = problem
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
         provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? ""
@@ -100,20 +100,20 @@ nonisolated struct UsageAccount: Decodable, Hashable, Sendable, Identifiable {
 }
 
 /// The pure part of the subscription windows: what to show and how it reads (the web's lib/usage-windows.ts).
-nonisolated enum UsageWindows {
+public nonisolated enum UsageWindows {
     /// Samples older than this are dropped (a source that went quiet for days says nothing about now).
-    static let sampleMaxAge: TimeInterval = 3 * 24 * 3600
+    public static let sampleMaxAge: TimeInterval = 3 * 24 * 3600
     /// From this used percentage a bar turns to the caution colour.
-    static let warnPercent: Double = 80
+    public static let warnPercent: Double = 80
     /// The pace is not judged in the first part of a window: a few minutes in, any use is "ahead".
-    static let paceQuietFraction: Double = 0.05
+    public static let paceQuietFraction: Double = 0.05
     /// How far (percentage points) the actual use may be from the expected before it is over / under.
-    static let paceTolerance: Double = 5
+    public static let paceTolerance: Double = 5
     /// How often the bars ask the hub again while they are on screen.
-    static let pollInterval: Duration = .seconds(60)
+    public static let pollInterval: Duration = .seconds(60)
 
     /// The window's length in minutes from its label ("5h", "7d", "45m"); the given minutes when the label is not one.
-    static func minutes(_ w: UsageWindow) -> Int {
+    public static func minutes(_ w: UsageWindow) -> Int {
         let s = w.label.trimmingCharacters(in: .whitespaces).lowercased()
         if let unit = s.last, let mult = ["m": 1.0, "h": 60, "d": 1440, "w": 10080][String(unit)],
            let n = Double(s.dropLast().trimmingCharacters(in: .whitespaces)), n > 0 {
@@ -122,17 +122,22 @@ nonisolated enum UsageWindows {
         return max(0, w.windowMinutes)
     }
 
-    enum PaceState: Equatable, Sendable { case over, under, on }
+    public enum PaceState: Equatable, Sendable { case over, under, on }
 
-    struct Pace: Equatable, Sendable {
+    public struct Pace: Equatable, Sendable {
         /// Where use would be if it were spread evenly over the window, 0-100.
-        var expected: Double
-        var state: PaceState
+        public var expected: Double
+        public var state: PaceState
+
+        public init(expected: Double, state: PaceState) {
+            self.expected = expected
+            self.state = state
+        }
     }
 
     /// How use compares with an even spread: expected% = elapsed / length; over when use is more than 5 points above it,
     /// under when more than 5 below. nil with no reset time or length, and in the first 5% of the window.
-    static func pace(_ w: UsageWindow, now: Date = .now) -> Pace? {
+    public static func pace(_ w: UsageWindow, now: Date = .now) -> Pace? {
         let total = Double(minutes(w)) * 60
         guard total > 0, let resets = w.resetsAt else { return nil }
         let elapsed = total - resets.timeIntervalSince(now)
@@ -142,7 +147,7 @@ nonisolated enum UsageWindows {
         return Pace(expected: expected, state: diff > paceTolerance ? .over : diff < -paceTolerance ? .under : .on)
     }
 
-    static func paceLabel(_ s: PaceState) -> String {
+    public static func paceLabel(_ s: PaceState) -> String {
         switch s {
         case .over: String(localized: "Ahead of pace")
         case .under: String(localized: "Behind pace")
@@ -152,7 +157,7 @@ nonisolated enum UsageWindows {
 
     /// When a window starts over, as a phrase: "resets in 45m" within the hour, "resets 13:05" when it is today, otherwise
     /// "resets in 2d 3h"; "resets soon" when it is due, "" without a time.
-    static func resetLabel(_ resetsAt: Date?, now: Date = .now, calendar: Calendar = .current) -> String {
+    public static func resetLabel(_ resetsAt: Date?, now: Date = .now, calendar: Calendar = .current) -> String {
         guard let at = resetsAt else { return "" }
         let secs = at.timeIntervalSince(now)
         if secs <= 0 { return String(localized: "resets soon") }
@@ -168,7 +173,7 @@ nonisolated enum UsageWindows {
     }
 
     /// How long ago a sample was taken ("12 s ago"), coarser past a minute; "" without a time.
-    static func sampleAge(_ at: Date?, now: Date = .now) -> String {
+    public static func sampleAge(_ at: Date?, now: Date = .now) -> String {
         guard let at, at.isMeaningful else { return "" }
         let s = max(0, Int(now.timeIntervalSince(at).rounded()))
         if s < 60 { return String(localized: "\(s) seconds ago") }
@@ -178,12 +183,12 @@ nonisolated enum UsageWindows {
     }
 
     /// The age as the account's header says it: "Outdated · 3 hr ago" when stale.
-    static func ageLabel(_ a: UsageAccount, now: Date = .now) -> String {
+    public static func ageLabel(_ a: UsageAccount, now: Date = .now) -> String {
         a.stale ? staleLabel(a.sampledAt, now: now) : sampleAge(a.sampledAt, now: now)
     }
 
     /// "Outdated · 3 hr ago" (just "Outdated" without a time): numbers the hub marked out of date, wherever they are shown.
-    static func staleLabel(_ sampledAt: Date?, now: Date = .now) -> String {
+    public static func staleLabel(_ sampledAt: Date?, now: Date = .now) -> String {
         let age = sampleAge(sampledAt, now: now)
         return age.isEmpty ? String(localized: "Outdated [Usage Windows 2fe0e3]") : String(localized: "Outdated · \(age)")
     }
@@ -191,7 +196,7 @@ nonisolated enum UsageWindows {
     /// The accounts worth showing: samples within three days, windows that have not reset, accounts that still have one;
     /// each stale once its `staleAt` has passed, however long ago the hub said it (#1905: a group whose refresh fails
     /// keeps its last answer, and that answer's own stale mark was the hub's at that moment).
-    static func live(_ accounts: [UsageAccount], now: Date = .now) -> [UsageAccount] {
+    public static func live(_ accounts: [UsageAccount], now: Date = .now) -> [UsageAccount] {
         accounts.compactMap { a in
             if let t = a.sampledAt, t.isMeaningful, now.timeIntervalSince(t) > sampleMaxAge { return nil }
             var a = a
@@ -203,28 +208,28 @@ nonisolated enum UsageWindows {
 
     /// The used percentage of an account's fullest window. A per-model allowance does not count while the plan's own
     /// windows are there: one model running out is not the account running out.
-    static func fullest(_ a: UsageAccount) -> Double {
+    public static func fullest(_ a: UsageAccount) -> Double {
         let plan = a.windows.filter { $0.model == nil }
         return (plan.isEmpty ? a.windows : plan).map(\.usedPercent).max() ?? 0
     }
 
     /// Where an account was seen, for people: the computers that read it by name (an older hub only says "a computer"),
     /// then the gateways'. Never "this device": the numbers were read on a node, not on the device in hand (#1907).
-    static func sourceNames(_ a: UsageAccount) -> [String] {
+    public static func sourceNames(_ a: UsageAccount) -> [String] {
         let machines = !a.machines.isEmpty ? a.machines
             : a.local ? [String(localized: "usage.source.local", defaultValue: "Computer", comment: "Usage numbers read from an agent's own files on one of the user's computers, when the hub doesn't say which")] : []
         return machines + a.sources
     }
 
     /// The plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro").
-    static func planNote(_ a: UsageAccount) -> String {
+    public static func planNote(_ a: UsageAccount) -> String {
         let plan = (a.plan ?? "").trimmingCharacters(in: .whitespaces)
         return !plan.isEmpty && !a.name.lowercased().contains(plan.lowercased()) ? plan : ""
     }
 
     /// What the gateway could not do, in words; "" when nothing went wrong or the hub sends a reason this build doesn't
     /// know. A key the gateway turned away says where to fix it: it is not a network problem (#1902).
-    static func problemText(_ a: UsageAccount) -> String {
+    public static func problemText(_ a: UsageAccount) -> String {
         switch a.problem {
         case "rejected": String(localized: "The gateway turned the key away; update it in Admin → Usage sources. Showing the last numbers")
         case "unreachable": String(localized: "Can't reach the gateway right now; showing the last numbers")
@@ -235,7 +240,7 @@ nonisolated enum UsageWindows {
     }
 
     /// The accounts the bars are drawn for: the `n` with the fullest window, stale ones last. Stable for equal ones.
-    static func top(_ accounts: [UsageAccount], n: Int = 2) -> [UsageAccount] {
+    public static func top(_ accounts: [UsageAccount], n: Int = 2) -> [UsageAccount] {
         accounts.enumerated()
             .sorted { l, r in
                 if l.element.stale != r.element.stale { return !l.element.stale }
@@ -246,11 +251,11 @@ nonisolated enum UsageWindows {
             .map(\.element)
     }
 
-    static func isWarn(_ percent: Double) -> Bool { percent >= warnPercent }
+    public static func isWarn(_ percent: Double) -> Bool { percent >= warnPercent }
 
     /// "86%".
-    static func percentText(_ p: Double) -> String { "\(Int(p.rounded()))%" }
+    public static func percentText(_ p: Double) -> String { "\(Int(p.rounded()))%" }
 
     /// 0…1 for a bar.
-    static func fraction(_ p: Double) -> Double { min(100, max(0, p)) / 100 }
+    public static func fraction(_ p: Double) -> Double { min(100, max(0, p)) / 100 }
 }
