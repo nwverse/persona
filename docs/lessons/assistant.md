@@ -1,10 +1,5 @@
 # Lessons: assistant (headless Claude / Codex)
 
-- An owner's bot handoff is not a third-party task update (#8351). Exclude it in the shared task-link policy, not by
-  asking the judge to pick no task. Apply that policy when admitting supervisor signals and following task
-  continuations too: a persisted association can outlive the router that created it. A link-only correction must
-  preserve ordinary human messages and the handoff's handling, suggestions and history.
-
 - A GitHub number is not proof of a delivery PR (#8248). Resolve number-only references through issue metadata before recording them; an ordinary issue has no `pull_request` object. Prefer an explicit closeout PR artifact over incidental references, and recover a PR hidden by a clipped preview from the linked agent's full closeout when repairing a false record. Do not turn a masked permission 404 into proof of absence: confirm PR access, preserve real historical PRs, and persist correction before publishing it. Item-level misses must not put unrelated PR checks on an outage cooldown.
 
 - A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
@@ -22,6 +17,11 @@
   automatic naming but does not hide a chat, and `titleFixed` still gives it the item's subject. Apply default
   archiving in the common session snapshot, not only after starting or finishing: restored chats and follow-up
   instructions must stay hidden too. Preserve item-chain links and the main conversation.
+
+- An owner's bot handoff is not a third-party task update (#8351). Exclude it in the shared task-link policy, not by
+  asking the judge to pick no task. Apply that policy when admitting supervisor signals and following task
+  continuations too: a persisted association can outlive the router that created it. A link-only correction must
+  preserve ordinary human messages and the handoff's handling, suggestions and history.
 
 - Count repeated conditional instructions at the runtime-send boundary, not just in a prompt golden (#5665).
   Two adjacent decision blocks repeated the same handling rules, but the newer one also required recording the choice.
