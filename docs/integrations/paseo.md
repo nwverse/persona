@@ -216,13 +216,13 @@ and the engine's note under Settings › Machines asks to update it.
 **Agents Persona starts** (#8141, the owner's decision of 2026-11-14): the assistant's `agent_start` and its planned tasks (the plan
 card, the start, retries) run their Agents with Allow all wherever a Paseo provider can: in `bypassPermissions` on a provider running
 Claude Code, as everywhere, and with Auto Accept on for a provider whose approval is that switch (its launcher says `auto_accept`),
-read-only tasks too, held to reading by their first message as Claude Code's are (`docs/assistant/todos.md` "Read-only planned
-tasks"). Such an Agent would otherwise stop for every tool, `LS` and `report_to_supervisor` included, on a card the assistant never
-answers. Paseo's Codex providers start as Codex does in a terminal: in the task's settled mode (`docs/assistant/todos.md` "Permission of
-a planned task"), so in `full-access` only when that mode is `bypassPermissions`, and a read-only one keeps `plan`, which only a
-provider running Claude Code holds here. A provider with neither modes nor the switch (pi) keeps its own approval: nothing Persona
-sends reaches it. An Agent a person starts from New Agent keeps the mode they chose, and Persona's own tools never ask in any Agent
-Persona started ("Cards").
+read-only tasks too, held to reading by their first message as Claude Code's are
+(`docs/assistant/todos.md` "Read-only planned tasks"). Such an Agent would otherwise stop for every tool, `LS` and
+`report_to_supervisor` included, on a card the assistant never answers. Paseo's Codex providers start as Codex does in a terminal:
+in the task's settled mode (`docs/assistant/todos.md` "Permission of a planned task"), so in `full-access` only when that mode is
+`bypassPermissions`, and a read-only one keeps `plan`, which only a provider running Claude Code holds here. A provider with neither
+modes nor the switch (pi) keeps its own approval: nothing Persona sends reaches it. An Agent a person starts from New Agent keeps
+the mode they chose, and Persona's own tools never ask in any Agent Persona started ("Cards").
 
 Login-shell launchers (those in `~/.zshrc`) still appear in the creation form. If selected, use the Paseo provider with the same name if one exists;
 otherwise use Paseo's default provider (its built-in Claude Code provider if enabled, otherwise the first provider running Claude Code).
