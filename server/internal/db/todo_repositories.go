@@ -40,6 +40,8 @@ func (d *DB) TodoRepositories(ctx context.Context, id string) (repository.TaskSe
 // ReadTodoRepositoriesTx locks the Todo, including an empty association set. Preparation
 // consumers can read this value and persist their own selected snapshot in the same
 // transaction. It never seals business associations or changes legacy execution paths.
+// Transactions needing both locks take the Todo before the catalog; ordinary EditTodo
+// takes only the Todo lock, and catalog CAS updates never lock a Todo.
 func ReadTodoRepositoriesTx(ctx context.Context, tx pgx.Tx, id string, expected *int64) (repository.TaskSet, error) {
 	var todo string
 	if err := tx.QueryRow(ctx, `SELECT id FROM todos WHERE id=$1 FOR UPDATE`, id).Scan(&todo); err != nil {

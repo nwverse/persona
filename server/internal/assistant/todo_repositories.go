@@ -106,6 +106,8 @@ func (s *Service) readTodoRepositories(ctx context.Context, id string) (reposito
 	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
 		return repository.TaskSet{}, err
 	}
+	// Import may have committed a new revision. The first response must describe that
+	// committed state, just like later reads, rather than a pre-import snapshot.
 	set, err := st.TodoRepositories(ctx, id)
 	if err != nil {
 		return set, err
